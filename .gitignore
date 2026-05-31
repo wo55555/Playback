@@ -1,0 +1,55 @@
+# Build outputs
+bin/
+build/
+.xmake/
+compile_commands.json
+.cache/
+.deps/
+.objs/
+*.pdb
+*.lib
+*.dll
+*.exe
+*.exp
+*.ilk
+
+# Shared repository automation should stay tracked
+
+# IDE and editor files
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+.vs/
+*.user
+*.suo
+*.vcxproj.user
+*.vcxproj.filters
+
+# C++ / MSVC artifacts
+*.obj
+*.o
+*.a
+*.lib
+*.dll
+*.exe
+*.exp
+*.ilk
+*.pdb
+*.idb
+*.ipch
+*.tlog
+*.lastbuildstate
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swn
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
