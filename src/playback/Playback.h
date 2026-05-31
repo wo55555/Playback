@@ -1,18 +1,33 @@
 #pragma once
 
-#include "ll/api/event/ListenerBase.h"
+#include "playback/Config.h"
 
+#include "ll/api/event/ListenerBase.h"
 #include "ll/api/mod/NativeMod.h"
 
-namespace replay {
+#include <memory>
 
-class MyMod {
+namespace playback {
+
+class Playback {
+    struct Impl;
+    std::unique_ptr<Impl> impl;
 
 public:
-    static MyMod& getInstance();
+    Playback();
+    ~Playback();
 
-    MyMod() : mSelf(*ll::mod::NativeMod::current()) {}
+    static Playback& getInstance();
 
+    [[nodiscard]] config::Config& getConfig();
+
+    [[nodiscard]] std::set<ll::event::ListenerPtr>& getEventListeners();
+
+    void setupCommands();
+
+    void unhook();
+
+public:
     [[nodiscard]] ll::mod::NativeMod& getSelf() const { return mSelf; }
 
     /// @return True if the mod is loaded successfully.
@@ -29,13 +44,8 @@ public:
     // bool unload();
 
 private:
-    void registerCommands();
-    bool startMinimalRecording();
-    bool stopMinimalRecording();
-
-private:
     ll::mod::NativeMod& mSelf;
-    ll::event::ListenerPtr mCommandRegisterListener;
 };
 
-} // namespace replay
+
+} // namespace playback
