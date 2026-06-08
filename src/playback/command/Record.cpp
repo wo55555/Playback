@@ -27,27 +27,27 @@ void registerRecordCommand(config::CommandConfigStruct& config) {
     logger.debug("Start to register Record commands");
 
     auto& recordCommand =
-        ll::command::CommandRegistrar::getClientInstance().getOrCreateCommand(config.command, "控制录制状态");
+        ll::command::CommandRegistrar::getClientInstance().getOrCreateCommand(config.command, "录制状态控制");
 
     recordCommand.overload().text("start").execute([](CommandOrigin const&, CommandOutput& output) {
         auto& recorder = functions::Recorder::getInstance();
         recorder.start();
 
-        output.success("录制已开始");
+        output.success("开始录制");
     });
 
     recordCommand.overload().text("pause").execute([](CommandOrigin const&, CommandOutput& output) {
         auto& recorder = functions::Recorder::getInstance();
         recorder.pause();
 
-        output.success("录制暂停");
+        output.success("暂停录制");
     });
 
     recordCommand.overload().text("stop").execute([](CommandOrigin const&, CommandOutput& output) {
         auto& recorder = functions::Recorder::getInstance();
         recorder.stop();
 
-        output.success("录制结束");
+        output.success("结束录制");
     });
 
     playback::functions::hookNetwork(true);

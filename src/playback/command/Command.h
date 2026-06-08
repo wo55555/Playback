@@ -6,5 +6,6 @@ namespace playback::command {
 
 void registerPlaybackCommand();
 void registerRecordCommand(config::CommandConfigStruct&);
+void registerReplayCommand(config::CommandConfigStruct&);
 
 } // namespace playback::command
