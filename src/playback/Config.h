@@ -11,6 +11,7 @@ struct CommandConfigStruct {
 
 struct CommandStruct {
     CommandConfigStruct record = {true, "record"};
+    CommandConfigStruct replay = {true, "replay"};
 };
 
 struct Config {
