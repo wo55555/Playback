@@ -1,25 +1,49 @@
 #pragma once
 
-#include "playback/functions/replay/ReplaySession.h"
+#include "mc/deps/core/utility/BinaryStream.h"
 
-#include <string_view>
+#include <memory>
+#include <string>
+#include <unordered_map>
 
 namespace playback::functions {
 
-class Action {
+class ReplaySession;
+
+struct Action {
 public:
+    std::string name;
+
+    explicit Action(std::string name) : name(std::move(name)) {}
     virtual ~Action() = default;
 
-    [[nodiscard]] virtual std::string_view name() const                                         = 0;
-    virtual void                           handle(functions::ReplaySession replaySession) const = 0;
+    virtual void handle(functions::ReplaySession& replaySession, BinaryStream& data) = 0;
+};
+
+class ActionRegistry {
+private:
+    std::vector<std::unique_ptr<Action>>     mActions;
+    std::unordered_map<std::string, Action*> mNameToAction;
+
+public:
+    void                                                      registerAction(std::unique_ptr<Action> action);
+    [[nodiscard]] Action*                                     getAction(std::string name) const;
+    [[nodiscard]] std::vector<std::unique_ptr<Action>> const& getActions() const { return mActions; };
+
+private:
+    ~ActionRegistry() = default;
+
+public:
+    [[nodiscard]] static ActionRegistry& getInstance() {
+        static ActionRegistry instance;
+        return instance;
+    }
 };
 
 class ActionNextTick : Action {
 public:
-    [[nodiscard]] std::string_view name() const override { return "action/next_tick"; };
-    void                           handle(functions::ReplaySession replaySession) const override;
+    ActionNextTick() : Action("next_tick") {}
+    void handle(functions::ReplaySession& replaySession, BinaryStream& data) override;
 };
-
-inline const ActionNextTick ACTIION_NEXT_TICK;
 
 } // namespace playback::functions
