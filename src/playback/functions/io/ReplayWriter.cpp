@@ -15,8 +15,8 @@ namespace playback::functions {
 
 void ReplayWriter::writeHeader() {
     // write file metadata
-    mStream.writeType(MAGIC_NUMBER);
-    mStream.writeType(FILE_VERSION);
+    mStream.writeVarInt(MAGIC_NUMBER, nullptr, nullptr);
+    mStream.writeVarInt(FILE_VERSION, nullptr, nullptr);
 
     // write registry actions
     mActionNameToId.clear();
@@ -27,9 +27,9 @@ void ReplayWriter::writeHeader() {
         mActionNameToId[actions[i]->name] = i;
         names.push_back(actions[i]->name);
     }
-    mStream.writeType(static_cast<int32_t>(names.size()));
+    mStream.writeVarInt(static_cast<int32_t>(names.size()), nullptr, nullptr);
     for (auto name : names) {
-        mStream.writeType(name);
+        mStream.writeString(name, nullptr, nullptr);
     }
 
     mState = STATE_EMPTY;
@@ -42,7 +42,7 @@ void ReplayWriter::startSnapshot() {
     mState = STATE_WRITING_SNAPSHOT;
 
     mSnapshotSizePos = static_cast<int32_t>(mBuffer.size());
-    mStream.writeType(static_cast<int32_t>(0xDEADBEEF));
+    mStream.writeVarInt(static_cast<int32_t>(0xDEADBEEF), nullptr, nullptr);
 }
 
 void ReplayWriter::endSnapshot() {
@@ -70,8 +70,8 @@ void ReplayWriter::startAndFinishAction(Action& action) {
     }
     int32_t actionId = it->second;
 
-    mStream.writeType(actionId);
-    mStream.writeType(static_cast<int32_t>(0));
+    mStream.writeVarInt(actionId, nullptr, nullptr);
+    mStream.writeVarInt(static_cast<int32_t>(0), nullptr, nullptr);
 
     mActionSizePos = -1;
 }
@@ -88,9 +88,9 @@ void ReplayWriter::startAction(Action& action) {
     }
     int32_t actionId = it->second;
 
-    mStream.writeType(actionId);
+    mStream.writeVarInt(actionId, nullptr, nullptr);
     mActionSizePos = static_cast<int32_t>(mBuffer.size());
-    mStream.writeType(static_cast<int32_t>(0));
+    mStream.writeVarInt(static_cast<int32_t>(0), nullptr, nullptr);
 }
 
 void ReplayWriter::finishAction(Action& action) {
