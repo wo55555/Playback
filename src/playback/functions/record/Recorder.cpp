@@ -5,7 +5,6 @@
 #include "ll/api/chrono/GameChrono.h"
 #include "ll/api/service/TargetedBedrock.h"
 
-
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/network/packet/LevelChunkPacket.h"
@@ -21,7 +20,6 @@
 #include <mutex>
 #include <string>
 #include <vector>
-
 
 namespace playback::functions {
 
