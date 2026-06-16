@@ -33,6 +33,9 @@ void registerRecordCommand(config::CommandConfigStruct& config) {
         auto& recorder = functions::Recorder::getInstance();
         recorder.start();
 
+        auto& logger = getLogger();
+        logger.debug("name={}", Playback::getInstance().getSelf().getName());
+
         output.success("开始录制");
     });
 

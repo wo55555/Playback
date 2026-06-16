@@ -10,7 +10,6 @@
 #include "mc/network/NetworkStatistics.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 
-
 namespace playback::functions {
 
 namespace {
@@ -51,12 +50,7 @@ LL_TYPE_INSTANCE_HOOK(
 
     if (!recorder.isPaused() && packet) {
         // 将原生网络数据包缓存到 Recorder，供快照时使用
-        recorder.cacheChunkPacket(
-            packet->mPos,
-            packet->mDimensionId,
-            packet->mSubChunksCount,
-            std::string(packet->mSerializedChunk)
-        );
+        recorder.cacheChunkPacket(*packet);
     }
     origin(source, packet);
 }

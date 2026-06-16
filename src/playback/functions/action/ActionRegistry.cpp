@@ -1,4 +1,5 @@
 #include "Action.h"
+
 #include <string>
 
 namespace playback::functions {
@@ -15,7 +16,7 @@ void ActionRegistry::registerAction(std::unique_ptr<Action> action) {
     mActions.push_back(std::move(action));
 }
 
-Action* ActionRegistry::getAction(std::string name) const {
+Action* ActionRegistry::getAction(std::string& name) const {
     auto it = mNameToAction.find(name);
     return (it != mNameToAction.end()) ? it->second : nullptr;
 }

@@ -1,11 +1,35 @@
+#include <ios>
+#include <stdexcept>
+#include <system_error>
+#define UUID_SYSTEM_GENERATOR
+
 #include "AsyncReplaySaver.h"
 
+#include "playback/functions/action/Action.h"
+#include "playback/functions/io/cache/CachedChunkPacket.h"
+
+#include "mc/network/packet/LevelChunkPacket.h"
+
+#include "snappy.h"
+#include <uuid.h>
+
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <memory>
 #include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace playback::functions {
 
 AsyncReplaySaver::AsyncReplaySaver() {
+    auto id     = uuids::uuid_system_generator()();
+    mRecordPath = utils::PathUtils::createTemp(uuids::to_string(id));
+
+    mReplayWriter.writeHeader();
+
     mRunning      = true;
     mFinished     = false;
     mWorkerThread = std::thread(&AsyncReplaySaver::workerLoop, this);
@@ -18,8 +42,6 @@ AsyncReplaySaver::~AsyncReplaySaver() {
 }
 
 void AsyncReplaySaver::workerLoop() {
-    auto& writer = ReplayWriter::getInstance();
-
     while (true) {
         WriteTask task;
 
@@ -38,7 +60,7 @@ void AsyncReplaySaver::workerLoop() {
         }
 
         if (task) {
-            task(writer);
+            task(mReplayWriter);
         }
     }
 
@@ -82,10 +104,121 @@ void AsyncReplaySaver::cancel() {
     }
 }
 
-void AsyncReplaySaver::writeGamePackets() {}
+void AsyncReplaySaver::writeGamePackets(std::vector<std::unique_ptr<Packet>> packets) {
+    auto sharedPackets = std::make_shared<std::vector<std::unique_ptr<Packet>>>(std::move(packets));
 
-void AsyncReplaySaver::writeChunkCacheFile() {}
+    submit([packets = std::move(sharedPackets), this](ReplayWriter& writer) {
+        PlaybackBuffer chunkCacheOutput;
+        int            lastChunkCacheIndex = -1;
 
-void AsyncReplaySaver::writeReplayChunk() {}
+        for (auto& packet : *packets) {
+            if (auto* levelChunkPacket = dynamic_cast<const LevelChunkPacket*>(packet.get())) {
+                int index = -1;
+
+                auto cachedChunkPacket = CachedChunkPacket(*levelChunkPacket, -1);
+                bool add               = true;
+
+                std::vector<CachedChunkPacket>& cached = mCachedChunkPackets[cachedChunkPacket.mLongHashCode];
+                for (const auto& existingChunkPacket : cached) {
+                    if (cachedChunkPacket == existingChunkPacket) {
+                        add   = false;
+                        index = existingChunkPacket.mIndex;
+                        break;
+                    }
+                }
+
+                if (add) {
+                    index                     = totalWrittenChunkPackets;
+                    totalWrittenChunkPackets += 1;
+
+                    int cacheIndex = index / CHUNK_CACHE_SIZE;
+                    if (lastChunkCacheIndex >= 0 && cacheIndex != lastChunkCacheIndex) {
+                        writeChunkCacheFile(chunkCacheOutput, lastChunkCacheIndex);
+                        chunkCacheOutput.clear();
+                    }
+                    lastChunkCacheIndex = cacheIndex;
+
+                    uint64_t startWriterIndex = chunkCacheOutput.getWritePointer();
+                    chunkCacheOutput.writeVarInt(-1, nullptr, nullptr);
+
+                    packet->write(chunkCacheOutput);
+                    uint64_t endWriterIndex = chunkCacheOutput.getWritePointer();
+
+                    int32_t size = static_cast<int32_t>(endWriterIndex - startWriterIndex) - 4;
+                    chunkCacheOutput.writeAt(startWriterIndex, size);
+
+                    cachedChunkPacket.mIndex = index;
+                    cached.push_back(cachedChunkPacket);
+                }
+
+                writer.startAction(ActionLevelChunkCached::getInstance());
+                writer.mStream.writeVarInt(index, nullptr, nullptr);
+                writer.finishAction(ActionLevelChunkCached::getInstance());
+
+                continue;
+            }
+        }
+
+        if (lastChunkCacheIndex >= 0) {
+            writeChunkCacheFile(chunkCacheOutput, lastChunkCacheIndex);
+        }
+    });
+}
+
+void AsyncReplaySaver::writeChunkCacheFile(PlaybackBuffer const& chunkCacheOutput, int index) {
+    if (chunkCacheOutput.mBuffer.empty() || chunkCacheOutput.getWritePointer() == 0) return;
+
+    std::error_code ec;
+    auto            levelChunkCachePath = mRecordPath / "level_chunk_caches";
+    std::filesystem::create_directories(levelChunkCachePath, ec);
+    if (ec) return;
+
+    std::string compressed;
+    snappy::Compress(chunkCacheOutput.mBuffer.data(), chunkCacheOutput.mBuffer.size(), &compressed);
+
+    std::ofstream file(levelChunkCachePath / (std::to_string(index) + ".bin"), std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) return;
+
+    file.write(compressed.data(), static_cast<std::streamsize>(compressed.size()));
+}
+
+void AsyncReplaySaver::writeReplayChunk(std::string chunkName, std::string metadata) {
+    submit([chunkName = std::move(chunkName), metadata = std::move(metadata), this](ReplayWriter& writer) {
+        std::error_code       ec;
+        std::filesystem::path chunkFile = mRecordPath / chunkName;
+
+        std::ofstream chunk(chunkFile, std::ios::binary | std::ios::trunc);
+        if (!chunk) {
+            throw std::runtime_error("Failed to open chunk file");
+        }
+        chunk.write(writer.mStream.mBuffer.data(), static_cast<std::streamsize>(writer.mStream.mBuffer.size()));
+        if (!chunk) {
+            throw std::runtime_error("Failed to write chunk data");
+        }
+        writer.mStream.clear();
+
+        std::filesystem::path metaFile = mRecordPath / "metadata.json";
+        if (std::filesystem::exists(metaFile, ec)) {
+            std::filesystem::path oldMeta = mRecordPath / "metadata.json.old";
+            std::filesystem::remove(oldMeta, ec);
+            if (ec) {
+                throw std::runtime_error("Failed to remove old metadata backup");
+            }
+            std::filesystem::rename(metaFile, oldMeta, ec);
+            if (ec) {
+                throw std::runtime_error("Failed to rename metadata.json to .old");
+            }
+        }
+
+        std::ofstream meta(metaFile, std::ios::binary | std::ios::trunc);
+        if (!meta) {
+            throw std::runtime_error("Failed to open metadata file");
+        }
+        meta.write(metadata.data(), static_cast<std::streamsize>(metadata.size()));
+        if (!meta) {
+            throw std::runtime_error("Failed to write metadata");
+        }
+    });
+}
 
 } // namespace playback::functions

@@ -1,15 +1,17 @@
 #pragma once
 
-#include "mc/network/Packet.h"
+#include "playback/functions/io/AsyncReplaySaver.h"
+
 #include "mc/world/level/ChunkPos.h"
-#include "mc/world/level/dimension/Dimension.h"
 
 #include <atomic>
-#include <list>
+#include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
-#include <string_view>
 #include <unordered_map>
+
+class LevelChunkPacket;
 
 namespace playback::functions {
 
@@ -22,40 +24,44 @@ struct PlaybackMeta {
 
 class Recorder {
 private:
-    struct ChunkPacketData {
-        ChunkPos      pos;
-        DimensionType dimId;
-        uint64        subChunksCount;
-        std::string   serializedChunk;
-    };
+    AsyncReplaySaver mAsyncReplaySaver;
 
-    std::unordered_map<ChunkPos, ChunkPacketData> mChunkCache;
-    std::mutex                                    mChunkCacheMutex;
+    std::unordered_map<ChunkPos, std::shared_ptr<LevelChunkPacket>> mChunkCache;
+    std::mutex                                                      mChunkCacheMutex;
+
+    PlaybackMeta mMetadata = PlaybackMeta();
 
     std::atomic_bool mIsPaused  = false;
     std::atomic_bool mWasPaused = false;
 
 private:
-    void writeChunkDataSnapshot(std::list<std::unique_ptr<Packet>>& gamePackets);
+    void writeSnapshot();
+
+    void writeChunkDataSnapshot(std::vector<std::unique_ptr<Packet>>& gamePackets);
 
 public:
+    Recorder();
+
     [[nodiscard]] bool isPaused() const { return mIsPaused; }
 
     void start();
     void pause();
     void stop();
 
-    /// @brief 缓存来自网络的原生 LevelChunk 数据包，供快照时使用
-    void cacheChunkPacket(ChunkPos pos, DimensionType dimId, uint64 subChunksCount, std::string&& serializedChunk);
-
-private:
-    Recorder() = default;
+    void cacheChunkPacket(LevelChunkPacket& packet);
 
 public:
     [[nodiscard]] static Recorder& getInstance() {
         static Recorder instance;
         return instance;
     }
+};
+
+class ReplayExporter {
+public:
+    static bool saveReplayData(std::filesystem::path const& replayPath);
+
+    static bool writePlaybackMeta(std::filesystem::path const& replayPath, PlaybackMeta const& meta);
 };
 
 void hookNetwork(bool);

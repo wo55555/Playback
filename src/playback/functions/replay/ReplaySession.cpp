@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/functions/action/Action.h"
+#include "playback/util/PathUtil.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/Listener.h"
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <system_error>
 
 namespace playback::functions {
@@ -51,7 +53,7 @@ void ReplaySession::tryAutoStart(Level& level) {
     std::string const& levelId = level.getLevelId();
     if (levelId.empty()) return;
 
-    auto replayPath = Playback::getInstance().getSelf().getDataDir() / "exports" / (levelId + ".playback");
+    auto replayPath = util::PathUtil::getReplaysDir() / (levelId + ".playback");
     if (!std::filesystem::exists(replayPath)) return;
 
     session.start(replayPath);
@@ -96,24 +98,6 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     return true;
 }
 
-// bool ReplaySession::createTemporaryWorld() {
-//     auto dataPath       = Playback::getInstance().getSelf().getDataDir();
-//     auto mTempWorldPath = dataPath / "temp" / mMeta.worldName;
-
-//     std::filesystem::create_directories(mTempWorldPath);
-//     std::filesystem::create_directories(mTempWorldPath / "db");
-
-//     std::ofstream nameFile(mTempWorldPath / "levelname.txt");
-//     nameFile << "Replay: " << mMeta.worldName;
-//     nameFile.close();
-
-//     std::ofstream markerFile(mTempWorldPath / ".playback_world");
-//     markerFile << "replay_session";
-//     markerFile.close();
-
-//     return true;
-// }
-
 void ReplaySession::onWorldReady() {
     applyInitialSnapshot();
     mWorldReady = true;
@@ -128,8 +112,17 @@ void ReplaySession::cleanupTempWorld() {
     }
 }
 
-void ReplaySession::handleNextTick() {}
+void ReplaySession::handleNextTick() {
+    if (mIsProcessingSnapshot) {
+        throw std::runtime_error("Can't go to next tick while processing snapshot");
+    }
+    // TODO: Flash pending entities
 
-void ReplaySession::handleSnapShot() {}
+    mCurrentTick += 1;
+}
+
+void ReplaySession::handleLevelChunkCached(int index) {
+    // TODO: Handle cached level chunk at the given index
+}
 
 } // namespace playback::functions

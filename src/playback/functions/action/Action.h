@@ -1,7 +1,5 @@
 #pragma once
 
-#include "mc/deps/core/utility/BinaryStream.h"
-
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -9,15 +7,15 @@
 namespace playback::functions {
 
 class ReplaySession;
+class PlaybackBuffer;
 
 struct Action {
-public:
     std::string name;
 
     explicit Action(std::string name) : name(std::move(name)) {}
     virtual ~Action() = default;
 
-    virtual void handle(functions::ReplaySession& replaySession, BinaryStream& data) = 0;
+    virtual void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) = 0;
 };
 
 class ActionRegistry {
@@ -27,7 +25,7 @@ private:
 
 public:
     void                                                      registerAction(std::unique_ptr<Action> action);
-    [[nodiscard]] Action*                                     getAction(std::string name) const;
+    [[nodiscard]] Action*                                     getAction(std::string& name) const;
     [[nodiscard]] std::vector<std::unique_ptr<Action>> const& getActions() const { return mActions; };
 
 private:
@@ -40,10 +38,26 @@ public:
     }
 };
 
-class ActionNextTick : Action {
-public:
+struct ActionNextTick : Action {
     ActionNextTick() : Action("next_tick") {}
-    void handle(functions::ReplaySession& replaySession, BinaryStream& data) override;
+    void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionNextTick& getInstance() {
+        static ActionNextTick instance;
+        return instance;
+    }
+};
+
+struct ActionLevelChunkCached : Action {
+    ActionLevelChunkCached() : Action("level_chunk_cached") {}
+    void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionLevelChunkCached& getInstance() {
+        static ActionLevelChunkCached instance;
+        return instance;
+    }
 };
 
 } // namespace playback::functions
