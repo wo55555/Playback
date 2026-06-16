@@ -15,6 +15,10 @@ add_requires("levilamina", {configs = {target_type = get_config("target_type")}}
 
 add_requires("levibuildscript")
 
+add_requires("stduuid")
+add_requires("xxhash")
+add_requires("openssl")
+
 if not has_config("vs_runtime") then
     set_runtimes("MD")
 end
@@ -25,6 +29,9 @@ target("playback") -- Change this to your mod name.
     add_cxflags( "/EHa", "/utf-8", "/W4", "/w44265", "/w44289", "/w44296", "/w45263", "/w44738", "/w45204")
     add_defines("NOMINMAX", "UNICODE")
     add_packages("levilamina")
+    add_packages("stduuid")
+    add_packages("xxhash")
+    add_packages("openssl")
     set_exceptions("none") -- To avoid conflicts with /EHa.
     set_kind("shared")
     set_languages("c++20")

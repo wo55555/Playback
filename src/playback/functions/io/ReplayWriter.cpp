@@ -2,12 +2,9 @@
 
 #include "playback/functions/action/Action.h"
 
-#include "mc/deps/core/utility/BinaryStream.h"
-
 #include <cstdint>
 #include <format>
 #include <stdexcept>
-#include <string>
 #include <string_view>
 #include <vector>
 
@@ -16,14 +13,14 @@ namespace playback::functions {
 void ReplayWriter::writeHeader() {
     // write file metadata
     mStream.writeVarInt(MAGIC_NUMBER, nullptr, nullptr);
-    mStream.writeVarInt(FILE_VERSION, nullptr, nullptr);
 
     // write registry actions
-    mActionNameToId.clear();
     auto&                         actions = functions::ActionRegistry::getInstance().getActions();
     std::vector<std::string_view> names;
+
+    mActionNameToId.clear();
     names.reserve(actions.size());
-    for (int i = 0; i < static_cast<int>(actions.size()); ++i) {
+    for (int32_t i = 0; i < static_cast<int32_t>(actions.size()); ++i) {
         mActionNameToId[actions[i]->name] = i;
         names.push_back(actions[i]->name);
     }
@@ -41,7 +38,7 @@ void ReplayWriter::startSnapshot() {
     }
     mState = STATE_WRITING_SNAPSHOT;
 
-    mSnapshotSizePos = static_cast<int32_t>(mBuffer.size());
+    mSnapshotSizePos = static_cast<int32_t>(mStream.getWritePointer());
     mStream.writeVarInt(static_cast<int32_t>(0xDEADBEEF), nullptr, nullptr);
 }
 
@@ -55,8 +52,8 @@ void ReplayWriter::endSnapshot() {
         throw std::runtime_error(std::format("Snapshot size pos wasn't set ({})", this->mSnapshotSizePos));
     }
 
-    int32_t snapshotSize = static_cast<int32_t>(mBuffer.size()) - mSnapshotSizePos - 4;
-    *reinterpret_cast<int32_t*>(mBuffer.data() + mSnapshotSizePos) = snapshotSize;
+    int32_t snapshotSize = static_cast<int32_t>(mStream.getWritePointer() - mSnapshotSizePos) - 4;
+    mStream.writeAt(mSnapshotSizePos, snapshotSize);
 }
 
 void ReplayWriter::startAndFinishAction(Action& action) {
@@ -89,7 +86,7 @@ void ReplayWriter::startAction(Action& action) {
     int32_t actionId = it->second;
 
     mStream.writeVarInt(actionId, nullptr, nullptr);
-    mActionSizePos = static_cast<int32_t>(mBuffer.size());
+    mActionSizePos = static_cast<int32_t>(mStream.getWritePointer());
     mStream.writeVarInt(static_cast<int32_t>(0), nullptr, nullptr);
 }
 
@@ -112,8 +109,8 @@ void ReplayWriter::finishAction(Action& action) {
         throw std::runtime_error(std::format("Action size pos wasn't set ({})", mActionSizePos));
     }
 
-    int32_t dataSize = static_cast<int32_t>(mBuffer.size()) - mActionSizePos - 4;
-    *reinterpret_cast<int32_t*>(mBuffer.data() + mActionSizePos) = dataSize;
+    int32_t actionSize = static_cast<int32_t>(mStream.getWritePointer() - mActionSizePos) - 4;
+    mStream.writeAt(mActionSizePos, actionSize);
 
     mActionSizePos = -1;
 }

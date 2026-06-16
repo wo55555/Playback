@@ -15,7 +15,7 @@ static constexpr uint64 MAX_STRING_LENGTH = 65536;
 ReplayReader::ReplayReader(std::string_view data) : mBuffer(data) {
     int32_t magic = mStream.getVarInt().value();
     if (magic != MAGIC_NUMBER) {
-        // ll::makeError("ReplayReader: invalid magic number");
+        throw std::runtime_error("ReplayReader: invalid magic number");
         return;
     }
 
@@ -33,15 +33,17 @@ ReplayReader::ReplayReader(std::string_view data) : mBuffer(data) {
 
     mSnapshotSize   = mStream.getVarInt().value();
     mSnapshotOffset = mStream.mReadPointer;
-    mActionOffset   = mSnapshotOffset + mSnapshotSize;
+    mActionsOffset  = mSnapshotOffset + static_cast<uint64>(mSnapshotSize);
 
-    mStream.mReadPointer = mActionOffset;
+    mStream.mReadPointer = mActionsOffset;
 }
 
 void ReplayReader::handleSnapshot(ReplaySession& session) {
     mStream.mReadPointer = mSnapshotOffset;
 
-    while (mStream.mReadPointer < mActionOffset) {
+    session.mIsProcessingSnapshot = true;
+
+    while (mStream.mReadPointer < mActionsOffset) {
         int32_t id = mStream.getVarInt().value();
         auto    it = mActionMap.find(id);
         if (it == mActionMap.end()) {
@@ -50,29 +52,30 @@ void ReplayReader::handleSnapshot(ReplaySession& session) {
         Action* action  = it->second;
         mLastActionName = action->name;
 
-        int32_t dataSize = mStream.getVarInt().value();
+        int32_t        dataSize = mStream.getVarInt().value();
+        std::string    buf(mStream.mView.data() + mStream.mReadPointer, dataSize);
+        PlaybackBuffer stream(buf);
+        action->handle(session, stream);
 
-        if (mStream.mReadPointer + dataSize > mStream.mView.size()) {
+        if (stream.mReadPointer < stream.getWritePointer()) {
             throw std::runtime_error(
                 std::format(
                     "Action {} failed to fully read. Had {} bytes available, only read {}",
                     mLastActionName,
-                    mStream.mView.size(),
+                    mStream.getWritePointer(),
                     mStream.mReadPointer
                 )
             );
         }
-
-        std::string  buf(mStream.mView.data() + mStream.mReadPointer, dataSize);
-        BinaryStream stream(buf);
-        action->handle(session, stream);
     }
+
+    session.mIsProcessingSnapshot = false;
 }
 
 bool ReplayReader::handleNextAction(ReplaySession& session) {
-    if (mStream.mReadPointer >= mStream.mView.size()) return false;
-    if (mStream.mReadPointer < mActionOffset) {
-        mStream.mReadPointer = mActionOffset;
+    if (mStream.mReadPointer >= mStream.getWritePointer()) return false;
+    if (mStream.mReadPointer < mActionsOffset) {
+        mStream.mReadPointer = mActionsOffset;
     }
 
     int32_t id = mStream.getVarInt().value();
@@ -84,10 +87,9 @@ bool ReplayReader::handleNextAction(ReplaySession& session) {
     mLastActionName = action->name;
 
     int32_t dataSize = mStream.getVarInt().value();
-    if (mStream.mReadPointer + dataSize > mStream.mView.size()) return false;
 
-    std::string  buf(mStream.mView.data() + mStream.mReadPointer, dataSize);
-    BinaryStream stream(buf);
+    std::string    buf(mStream.mView.data() + mStream.mReadPointer, dataSize);
+    PlaybackBuffer stream(buf);
     action->handle(session, stream);
 
     mStream.mReadPointer += dataSize;

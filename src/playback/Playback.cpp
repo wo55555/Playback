@@ -78,7 +78,6 @@ bool Playback::enable() {
     const auto& logger = getSelf().getLogger();
     logger.debug("Enabling...");
 
-    auto dataDir = getSelf().getWorldDataDir();
     return true;
 }
 

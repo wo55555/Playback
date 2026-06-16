@@ -1,27 +1,55 @@
 #pragma once
 
-#include "ll/api/base/StdInt.h"
-#include "playback/Playback.h"
+#include "playback/utils/PathUtils.h"
 
 #include "mc/deps/core/utility/BinaryStream.h"
 
 #include <atomic>
+#include <concepts>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <vector>
+
+class Packet;
 
 namespace playback::functions {
 
-static constexpr int32_t MAGIC_NUMBER = 0x4C4C5042; // "LLPB" refer levilamina playback
-static constexpr int32_t FILE_VERSION = 1;
+static constexpr int32_t MAGIC_NUMBER     = 0x4C4C5042; // "LLPB" refer levilamina playback
+static constexpr int32_t CHUNK_CACHE_SIZE = 10000;
 
 class Action;
 class ReplaySession;
+class CachedChunkPacket;
+
+class PlaybackBuffer : public BinaryStream {
+public:
+    using BinaryStream::BinaryStream;
+
+    [[nodiscard]] uint64_t getWritePointer() const { return mBuffer.size(); }
+
+    void writeAt(uint64_t pos, void const* data, size_t size) {
+        if (pos + size > mBuffer.size()) {
+            mBuffer.resize(pos + size);
+        }
+        std::memcpy(mBuffer.data() + pos, data, size);
+    }
+
+    template <std::integral T>
+    void writeAt(uint64_t pos, T value) {
+        writeAt(pos, &value, sizeof(T));
+    }
+
+    void clear() {
+        mBuffer.clear();
+        mReadPointer = 0;
+    }
+};
 
 class ReplayWriter {
 private:
@@ -29,15 +57,18 @@ private:
 
     State mState = STATE_EMPTY;
 
-    std::string  mBuffer;
-    BinaryStream mStream{mBuffer};
-
     int32_t mSnapshotSizePos = -1;
     int32_t mActionSizePos   = -1;
 
     Action* mWritingAction = nullptr;
 
     std::unordered_map<std::string, int32_t> mActionNameToId;
+
+public:
+    ReplayWriter()  = default;
+    ~ReplayWriter() = default;
+
+    PlaybackBuffer mStream;
 
 public:
     void writeHeader();
@@ -51,25 +82,15 @@ public:
     void startAction(Action& action);
 
     void finishAction(Action& action);
-
-private:
-    ReplayWriter() = default;
-
-public:
-    [[nodiscard]] static ReplayWriter& getInstance() {
-        static ReplayWriter instance;
-        return instance;
-    }
 };
 
 class ReplayReader {
 private:
-    std::string  mBuffer;
-    BinaryStream mStream{mBuffer};
-    int32_t      mVersion        = 0;
-    int32_t      mSnapshotSize   = 0;
-    uint64       mSnapshotOffset = 0;
-    uint64       mActionOffset   = 0;
+    std::string    mBuffer;
+    PlaybackBuffer mStream{mBuffer};
+    int32_t        mSnapshotSize   = 0;
+    uint64_t       mSnapshotOffset = 0;
+    uint64_t       mActionsOffset  = 0;
 
     std::string mLastActionName;
 
@@ -77,18 +98,16 @@ private:
 
 public:
     explicit ReplayReader(std::string_view data);
+    ~ReplayReader() = default;
 
     ReplayReader(ReplayReader const&)            = delete;
     ReplayReader& operator=(ReplayReader const&) = delete;
 
-    void resetToStart() { mStream.mReadPointer = mActionOffset; };
+    void resetToStart() { mStream.mReadPointer = mActionsOffset; };
 
     void handleSnapshot(ReplaySession& replaySession);
 
     bool handleNextAction(ReplaySession& replaySession);
-
-private:
-    ~ReplayReader() = default;
 };
 
 class AsyncReplaySaver {
@@ -96,7 +115,9 @@ public:
     using WriteTask = std::function<void(ReplayWriter&)>;
 
 private:
-    std::filesystem::path mRecordPath = Playback::getInstance().getSelf().getDataDir() / "record/temp";
+    ReplayWriter mReplayWriter;
+
+    std::filesystem::path mRecordPath = utils::PathUtils::getSharedTempDir();
 
     std::vector<WriteTask>  mQueue;
     std::mutex              mQueueMutex;
@@ -104,6 +125,10 @@ private:
     std::thread             mWorkerThread;
     std::atomic<bool>       mRunning{false};
     std::atomic<bool>       mFinished{false};
+
+    std::unordered_map<uint64_t, std::vector<CachedChunkPacket>> mCachedChunkPackets;
+
+    int totalWrittenChunkPackets = 0;
 
 private:
     void workerLoop();
@@ -123,17 +148,11 @@ public:
 
     [[nodiscard]] bool isRunning() const { return mRunning; }
 
-    void writeGamePackets();
+    void writeGamePackets(std::vector<std::unique_ptr<Packet>> packets);
 
-    void writeChunkCacheFile();
+    void writeChunkCacheFile(PlaybackBuffer const& chunkCacheOutput, int index);
 
-    void writeReplayChunk();
-
-public:
-    [[nodiscard]] static AsyncReplaySaver& getInstance() {
-        static AsyncReplaySaver instance;
-        return instance;
-    }
+    void writeReplayChunk(std::string chunkName, std::string metadata);
 };
 
 } // namespace playback::functions

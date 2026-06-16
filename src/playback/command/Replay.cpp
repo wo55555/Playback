@@ -3,6 +3,7 @@
 #include "playback/Config.h"
 #include "playback/Playback.h"
 #include "playback/functions/replay/ReplaySession.h"
+#include "playback/util/PathUtil.h"
 
 #include "ll/api/command/CommandHandle.h"
 #include "ll/api/command/CommandRegistrar.h"
@@ -39,7 +40,7 @@ void registerReplayCommand(config::CommandConfigStruct& config) {
         .text("start")
         .required("filename")
         .execute([](CommandOrigin const&, CommandOutput& output, ReplayStartParam const& param) {
-            auto replayPath = Playback::getInstance().getSelf().getDataDir() / "records" / param.filename;
+            auto replayPath = util::PathUtil::getReplaysDir() / param.filename;
 
             if (!functions::ReplaySession::getInstance().start(replayPath)) {
                 // output.error("Failed to start replay session");
