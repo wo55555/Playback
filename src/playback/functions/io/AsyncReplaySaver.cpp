@@ -1,8 +1,3 @@
-#include <ios>
-#include <stdexcept>
-#include <system_error>
-#define UUID_SYSTEM_GENERATOR
-
 #include "AsyncReplaySaver.h"
 
 #include "playback/functions/action/Action.h"
@@ -16,16 +11,24 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <ios>
 #include <memory>
 #include <mutex>
+#include <random>
+#include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
+
 
 namespace playback::functions {
 
 AsyncReplaySaver::AsyncReplaySaver() {
-    auto id     = uuids::uuid_system_generator()();
+    static std::random_device randomDevice;
+    static std::mt19937       generator(randomDevice());
+
+    auto id     = uuids::uuid_random_generator(generator)();
     mRecordPath = utils::PathUtils::createTemp(uuids::to_string(id));
 
     mReplayWriter.writeHeader();

@@ -2,7 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/functions/action/Action.h"
-#include "playback/util/PathUtil.h"
+#include "playback/utils/PathUtils.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/Listener.h"
@@ -53,7 +53,7 @@ void ReplaySession::tryAutoStart(Level& level) {
     std::string const& levelId = level.getLevelId();
     if (levelId.empty()) return;
 
-    auto replayPath = util::PathUtil::getReplaysDir() / (levelId + ".playback");
+    auto replayPath = utils::PathUtils::getReplaysDir() / (levelId + ".playback");
     if (!std::filesystem::exists(replayPath)) return;
 
     session.start(replayPath);

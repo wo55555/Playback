@@ -18,6 +18,7 @@ add_requires("levibuildscript")
 add_requires("stduuid")
 add_requires("xxhash")
 add_requires("openssl")
+add_requires("libzip")
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -32,6 +33,7 @@ target("playback") -- Change this to your mod name.
     add_packages("stduuid")
     add_packages("xxhash")
     add_packages("openssl")
+    add_packages("libzip")
     set_exceptions("none") -- To avoid conflicts with /EHa.
     set_kind("shared")
     set_languages("c++20")

@@ -3,12 +3,14 @@
 #include "playback/functions/io/AsyncReplaySaver.h"
 
 #include "mc/world/level/ChunkPos.h"
+#include "playback/utils/container/LinkedHashMap.h"
 
 #include <atomic>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 class LevelChunkPacket;
@@ -16,7 +18,10 @@ class LevelChunkPacket;
 namespace playback::functions {
 
 struct PlaybackMeta {
+    std::string name = "Unnamed";
     std::string worldName;
+
+    utils::container::LinkedHashMap<std::string, PlaybackMeta> chunks;
 
     static PlaybackMeta       fromJson(std::string_view json);
     [[nodiscard]] std::string toJson() const;
@@ -58,10 +63,15 @@ public:
 };
 
 class ReplayExporter {
-public:
-    static bool saveReplayData(std::filesystem::path const& replayPath);
+private:
+    static std::optional<PlaybackMeta> tryReadMeta(std::filesystem::path const& file);
 
-    static bool writePlaybackMeta(std::filesystem::path const& replayPath, PlaybackMeta const& meta);
+public:
+    static bool exportReplay(
+        std::filesystem::path const& recordDir,
+        std::filesystem::path const& outputFile,
+        std::string_view             name
+    );
 };
 
 void hookNetwork(bool);
