@@ -62,7 +62,7 @@ void Recorder::pause() {}
 void Recorder::stop() {
     auto replayPath = mAsyncReplaySaver.finish();
 
-    if (!ReplayExporter::saveReplayData(replayPath)) {
+    if (!ReplayExporter::exportReplay(replayPath, replayPath / "text.zip", "")) {
         getLogger().error("Failed to save replay data after recording stopped");
         return;
     }
