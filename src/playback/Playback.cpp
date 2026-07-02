@@ -5,15 +5,20 @@
 #include "playback/command/Command.h"
 #include "playback/functions/record/Recorder.h"
 #include "playback/functions/replay/ReplaySession.h"
+#include "playback/functions/tick/ClientTickHooks.h"
+#include "playback/utils/PathUtils.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
 #include "ll/api/event/command/ClientCommandRegisterEvent.h"
-#include "ll/api/event/world/ServerLevelTickEvent.h"
 #include "ll/api/io/LogLevel.h"
 #include "ll/api/io/Logger.h"
 #include "ll/api/mod/RegisterHelper.h"
+#include "ll/api/service/Bedrock.h"
 
+#include "mc/world/level/Level.h"
+
+#include <filesystem>
 #include <memory>
 
 namespace playback {
@@ -21,6 +26,7 @@ namespace playback {
 struct Playback::Impl {
     config::Config                   mConfig;
     std::set<ll::event::ListenerPtr> mEventListeners;
+    PlaybackMode                     mMode = PlaybackMode::Unknown;
 };
 
 Playback::Playback() : impl(std::make_unique<Impl>()), mSelf(*ll::mod::NativeMod::current()) {}
@@ -44,9 +50,34 @@ void Playback::setupCommands() {
 }
 
 void Playback::unhook() {
+    functions::hookClientTick(false);
     functions::hookNetwork(false);
     getEventListeners().clear();
 }
+
+bool Playback::refreshMode() {
+    auto level = ll::service::getMultiPlayerLevel();
+    if (!level) return false;
+
+    refreshMode(level.value());
+    return impl->mMode != PlaybackMode::Unknown;
+}
+
+void Playback::refreshMode(Level& level) {
+    auto const& levelId = level.getLevelId();
+    if (levelId.empty()) return;
+
+    const auto replayPath = utils::PathUtils::getReplaysDir() / (levelId + ".playback");
+    impl->mMode           = std::filesystem::exists(replayPath) ? PlaybackMode::Replay : PlaybackMode::Record;
+
+    if (impl->mMode == PlaybackMode::Replay) {
+        functions::hookNetwork(false);
+    }
+}
+
+PlaybackMode Playback::getMode() const { return impl->mMode; }
+
+bool Playback::isReplayMode() const { return impl->mMode == PlaybackMode::Replay; }
 
 void configurationLog() {
     auto& logger = Playback::getInstance().getSelf().getLogger();
@@ -66,11 +97,7 @@ bool Playback::load() {
             setupCommands();
         })
     );
-    getEventListeners().emplace(
-        ll::event::EventBus::getInstance().emplaceListener<ll::event::ServerLevelTickEvent>(
-            [](ll::event::ServerLevelTickEvent& ev) { functions::ReplaySession::tryAutoStart(ev.level()); }
-        )
-    );
+    functions::hookClientTick(true);
     return true;
 }
 

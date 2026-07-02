@@ -7,7 +7,11 @@
 
 #include <memory>
 
+class Level;
+
 namespace playback {
+
+enum class PlaybackMode { Unknown, Record, Replay };
 
 class Playback {
     struct Impl;
@@ -26,6 +30,14 @@ public:
     void setupCommands();
 
     void unhook();
+
+    bool refreshMode();
+
+    void refreshMode(Level& level);
+
+    [[nodiscard]] PlaybackMode getMode() const;
+
+    [[nodiscard]] bool isReplayMode() const;
 
 public:
     [[nodiscard]] ll::mod::NativeMod& getSelf() const { return mSelf; }

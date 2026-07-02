@@ -50,6 +50,19 @@ Recorder::Recorder() {
 }
 
 void Recorder::start() {
+    auto& playback = playback::Playback::getInstance();
+    if (playback.isReplayMode()) {
+        hookNetwork(false);
+        mIsRecording = false;
+        getLogger().debug("Skip recording because current save is a replay save");
+        return;
+    }
+
+    hookNetwork(true);
+
+    mIsRecording = true;
+    mIsPaused    = false;
+
     const auto& time =
         ll::service::getMultiPlayerLevel()
             .transform([](auto& level) { return ll::chrono::GameTickClock::fromTick(level.getCurrentTick()); })
@@ -57,15 +70,25 @@ void Recorder::start() {
     getLogger().debug("current game tick={}", time.time_since_epoch());
 }
 
-void Recorder::pause() {}
+void Recorder::pause() { mIsPaused = true; }
 
 void Recorder::stop() {
+    mIsRecording = false;
+    hookNetwork(false);
+
     auto replayPath = mAsyncReplaySaver.finish();
 
     if (!ReplayExporter::exportReplay(replayPath, replayPath / "text.zip", "")) {
         getLogger().error("Failed to save replay data after recording stopped");
         return;
     }
+}
+
+void Recorder::recordTickPacket() {
+    if (!mIsRecording || mIsPaused) return;
+
+    // TODO(Recorder::recordTickPacket): capture the packet data for the current client tick
+    // and store it through AsyncReplaySaver once the per-tick packet format is finalized.
 }
 
 void Recorder::cacheChunkPacket(LevelChunkPacket& packet) {

@@ -4,9 +4,6 @@
 #include "playback/functions/action/Action.h"
 #include "playback/utils/PathUtils.h"
 
-#include "ll/api/event/EventBus.h"
-#include "ll/api/event/Listener.h"
-#include "ll/api/event/world/ServerLevelTickEvent.h"
 #include "ll/api/service/Bedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
@@ -81,18 +78,14 @@ bool ReplaySession::init(std::filesystem::path filePath) {
 
     auto clientMinecraft = ll::service::getMinecraft(true);
     auto serverMinecraft = ll::service::getMinecraft(false);
-    if (!clientMinecraft || !serverMinecraft) return false;
+    if (!clientMinecraft) return false;
     mClientMinecraft = &clientMinecraft.value();
-    mServerMinecraft = &serverMinecraft.value();
-
-    auto listener =
-        ll::event::Listener<ll::event::ServerLevelTickEvent>::create([this](ll::event::ServerLevelTickEvent&) {
-            if (!mWorldReady) {
-                mPacketSender = mServerMinecraft->getLevel()->getPacketSender();
-            }
-            tick();
-        });
-    ll::event::EventBus::getInstance().addListener<ll::event::ServerLevelTickEvent>(listener);
+    if (serverMinecraft) {
+        mServerMinecraft = &serverMinecraft.value();
+        if (auto* level = mServerMinecraft->getLevel()) {
+            mPacketSender = level->getPacketSender();
+        }
+    }
 
     mActive = true;
     return true;
@@ -119,6 +112,14 @@ void ReplaySession::handleNextTick() {
     // TODO: Flash pending entities
 
     mCurrentTick += 1;
+}
+
+bool ReplaySession::sendRecordedTickPacket() {
+    if (!mActive || !mWorldReady || mIsPaused) return false;
+
+    // TODO(ReplaySession::sendRecordedTickPacket): read the packet recorded for mCurrentTick
+    // and send it through mPacketSender, then advance replay tick state as needed.
+    return true;
 }
 
 void ReplaySession::handleLevelChunkCached(int index) {

@@ -53,6 +53,8 @@ public:
 
     void handleNextTick();
 
+    bool sendRecordedTickPacket();
+
     void handleLevelChunkCached(int index);
 
 private:

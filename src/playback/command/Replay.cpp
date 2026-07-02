@@ -43,7 +43,7 @@ void registerReplayCommand(config::CommandConfigStruct& config) {
             auto replayPath = utils::PathUtils::getReplaysDir() / param.filename;
 
             if (!functions::ReplaySession::getInstance().start(replayPath)) {
-                // output.error("Failed to start replay session");
+                output.error("Failed to start replay session");
                 return;
             }
         });

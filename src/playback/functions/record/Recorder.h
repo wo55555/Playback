@@ -1,9 +1,9 @@
 #pragma once
 
 #include "playback/functions/io/AsyncReplaySaver.h"
+#include "playback/utils/container/LinkedHashMap.h"
 
 #include "mc/world/level/ChunkPos.h"
-#include "playback/utils/container/LinkedHashMap.h"
 
 #include <atomic>
 #include <filesystem>
@@ -36,8 +36,9 @@ private:
 
     PlaybackMeta mMetadata = PlaybackMeta();
 
-    std::atomic_bool mIsPaused  = false;
-    std::atomic_bool mWasPaused = false;
+    std::atomic_bool mIsPaused    = false;
+    std::atomic_bool mWasPaused   = false;
+    std::atomic_bool mIsRecording = false;
 
 private:
     void writeSnapshot();
@@ -52,6 +53,8 @@ public:
     void start();
     void pause();
     void stop();
+
+    void recordTickPacket();
 
     void cacheChunkPacket(LevelChunkPacket& packet);
 
