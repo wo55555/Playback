@@ -24,12 +24,20 @@
 
 namespace playback::functions {
 
-AsyncReplaySaver::AsyncReplaySaver() {
+namespace {
+
+std::filesystem::path createRecordPath() {
     static std::random_device randomDevice;
     static std::mt19937       generator(randomDevice());
 
-    auto id     = uuids::uuid_random_generator(generator)();
-    mRecordPath = utils::PathUtils::createTemp(uuids::to_string(id));
+    auto id = uuids::uuid_random_generator(generator)();
+    return utils::PathUtils::createTemp(uuids::to_string(id));
+}
+
+} // namespace
+
+AsyncReplaySaver::AsyncReplaySaver() {
+    mRecordPath = createRecordPath();
 
     mReplayWriter.writeHeader();
 
@@ -66,6 +74,8 @@ void AsyncReplaySaver::workerLoop() {
             task(mReplayWriter);
         }
     }
+
+    flushCurrentChunkCacheFile();
 
     mFinished = true;
 }
@@ -107,14 +117,13 @@ void AsyncReplaySaver::cancel() {
     }
 }
 
-void AsyncReplaySaver::writeGamePackets(std::vector<std::unique_ptr<Packet>> packets) {
-    auto sharedPackets = std::make_shared<std::vector<std::unique_ptr<Packet>>>(std::move(packets));
+void AsyncReplaySaver::writeGamePackets(std::vector<std::shared_ptr<Packet>> packets) {
+    auto sharedPackets = std::make_shared<std::vector<std::shared_ptr<Packet>>>(std::move(packets));
 
     submit([packets = std::move(sharedPackets), this](ReplayWriter& writer) {
-        PlaybackBuffer chunkCacheOutput;
-        int            lastChunkCacheIndex = -1;
-
         for (auto& packet : *packets) {
+            if (!packet) continue;
+
             if (auto* levelChunkPacket = dynamic_cast<const LevelChunkPacket*>(packet.get())) {
                 int index = -1;
 
@@ -131,24 +140,23 @@ void AsyncReplaySaver::writeGamePackets(std::vector<std::unique_ptr<Packet>> pac
                 }
 
                 if (add) {
-                    index                     = totalWrittenChunkPackets;
-                    totalWrittenChunkPackets += 1;
+                    index                      = mTotalWrittenChunkPackets;
+                    mTotalWrittenChunkPackets += 1;
 
                     int cacheIndex = index / CHUNK_CACHE_SIZE;
-                    if (lastChunkCacheIndex >= 0 && cacheIndex != lastChunkCacheIndex) {
-                        writeChunkCacheFile(chunkCacheOutput, lastChunkCacheIndex);
-                        chunkCacheOutput.clear();
+                    if (mCurrentChunkCacheIndex >= 0 && cacheIndex != mCurrentChunkCacheIndex) {
+                        flushCurrentChunkCacheFile();
                     }
-                    lastChunkCacheIndex = cacheIndex;
+                    mCurrentChunkCacheIndex = cacheIndex;
 
-                    uint64_t startWriterIndex = chunkCacheOutput.getWritePointer();
-                    chunkCacheOutput.writeVarInt(-1, nullptr, nullptr);
+                    uint64_t startWriterIndex = mChunkCacheOutput.getWritePointer();
+                    mChunkCacheOutput.writeVarInt(-1, nullptr, nullptr);
 
-                    packet->write(chunkCacheOutput);
-                    uint64_t endWriterIndex = chunkCacheOutput.getWritePointer();
+                    packet->write(mChunkCacheOutput);
+                    uint64_t endWriterIndex = mChunkCacheOutput.getWritePointer();
 
                     int32_t size = static_cast<int32_t>(endWriterIndex - startWriterIndex) - 4;
-                    chunkCacheOutput.writeAt(startWriterIndex, size);
+                    mChunkCacheOutput.writeAt(startWriterIndex, size);
 
                     cachedChunkPacket.mIndex = index;
                     cached.push_back(cachedChunkPacket);
@@ -161,11 +169,15 @@ void AsyncReplaySaver::writeGamePackets(std::vector<std::unique_ptr<Packet>> pac
                 continue;
             }
         }
-
-        if (lastChunkCacheIndex >= 0) {
-            writeChunkCacheFile(chunkCacheOutput, lastChunkCacheIndex);
-        }
     });
+}
+
+void AsyncReplaySaver::flushCurrentChunkCacheFile() {
+    if (mCurrentChunkCacheIndex < 0) return;
+
+    writeChunkCacheFile(mChunkCacheOutput, mCurrentChunkCacheIndex);
+    mChunkCacheOutput.clear();
+    mCurrentChunkCacheIndex = -1;
 }
 
 void AsyncReplaySaver::writeChunkCacheFile(PlaybackBuffer const& chunkCacheOutput, int index) {
@@ -194,11 +206,12 @@ void AsyncReplaySaver::writeReplayChunk(std::string chunkName, std::string metad
         if (!chunk) {
             throw std::runtime_error("Failed to open chunk file");
         }
-        chunk.write(writer.mStream.mBuffer.data(), static_cast<std::streamsize>(writer.mStream.mBuffer.size()));
+
+        std::string chunkData = writer.popBuffer();
+        chunk.write(chunkData.data(), static_cast<std::streamsize>(chunkData.size()));
         if (!chunk) {
             throw std::runtime_error("Failed to write chunk data");
         }
-        writer.mStream.clear();
 
         std::filesystem::path metaFile = mRecordPath / "metadata.json";
         if (std::filesystem::exists(metaFile, ec)) {

@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -82,6 +84,8 @@ public:
     void startAction(Action& action);
 
     void finishAction(Action& action);
+
+    std::string popBuffer();
 };
 
 class ReplayReader {
@@ -127,11 +131,15 @@ private:
     std::atomic<bool>       mFinished{false};
 
     std::unordered_map<uint64_t, std::vector<CachedChunkPacket>> mCachedChunkPackets;
+    PlaybackBuffer                                               mChunkCacheOutput;
 
-    int totalWrittenChunkPackets = 0;
+    int mTotalWrittenChunkPackets = 0;
+    int mCurrentChunkCacheIndex   = -1;
 
 private:
     void workerLoop();
+
+    void flushCurrentChunkCacheFile();
 
 public:
     AsyncReplaySaver();
@@ -148,7 +156,7 @@ public:
 
     [[nodiscard]] bool isRunning() const { return mRunning; }
 
-    void writeGamePackets(std::vector<std::unique_ptr<Packet>> packets);
+    void writeGamePackets(std::vector<std::shared_ptr<Packet>> packets);
 
     void writeChunkCacheFile(PlaybackBuffer const& chunkCacheOutput, int index);
 

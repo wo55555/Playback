@@ -9,17 +9,23 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <queue>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 class LevelChunkPacket;
+class Packet;
 
 namespace playback::functions {
 
 struct PlaybackMeta {
     std::string name = "Unnamed";
     std::string worldName;
+    int         duration   = 0;
+    int         totalTicks = 0;
 
     utils::container::LinkedHashMap<std::string, PlaybackMeta> chunks;
 
@@ -29,34 +35,71 @@ struct PlaybackMeta {
 
 class Recorder {
 private:
-    AsyncReplaySaver mAsyncReplaySaver;
+    enum class State { Idle, Recording, Paused, Closing };
+    enum class PacketPhase { Game };
+
+    struct PacketWithPhase {
+        std::shared_ptr<Packet> packet;
+        PacketPhase             phase = PacketPhase::Game;
+    };
+
+    std::unique_ptr<AsyncReplaySaver> mAsyncReplaySaver;
 
     std::unordered_map<ChunkPos, std::shared_ptr<LevelChunkPacket>> mChunkCache;
     std::mutex                                                      mChunkCacheMutex;
 
+    std::queue<PacketWithPhase> mPendingPackets;
+    std::mutex                  mPendingPacketsMutex;
+
     PlaybackMeta mMetadata = PlaybackMeta();
 
-    std::atomic_bool mIsPaused    = false;
-    std::atomic_bool mWasPaused   = false;
-    std::atomic_bool mIsRecording = false;
+    std::atomic<State> mState{State::Idle};
+    std::atomic_bool   mNeedsInitialSnapshot = true;
+    std::atomic_bool   mWasPaused            = false;
+
+    int mChunkIndex          = 0;
+    int mTicksInCurrentChunk = 0;
+    int mWrittenTicks        = 0;
+
+    bool mHasOpenChunk     = false;
+    bool mOpenChunkHasData = false;
+    bool mFinishedPausing  = false;
 
 private:
+    static constexpr int RECORD_CHUNK_TICKS = 20 * 60 * 5;
+
+    [[nodiscard]] bool readyToWrite() const;
+
+    void resetStateForNewRecording();
+
+    void writeInitialSnapshotIfNeeded();
+
     void writeSnapshot();
 
-    void writeChunkDataSnapshot(std::vector<std::unique_ptr<Packet>>& gamePackets);
+    void writeChunkDataSnapshot(std::vector<std::shared_ptr<Packet>>& gamePackets);
+
+    bool flushPendingPackets();
+
+    void writeTickBoundary();
+
+    void finishCurrentChunk(bool close);
 
 public:
     Recorder();
 
-    [[nodiscard]] bool isPaused() const { return mIsPaused; }
+    [[nodiscard]] bool isPaused() const { return mState.load() == State::Paused; }
 
     void start();
     void pause();
     void stop();
 
-    void recordTickPacket();
+    void recordGamePacket(std::shared_ptr<Packet> packet);
 
-    void cacheChunkPacket(LevelChunkPacket& packet);
+    void cacheChunkPacket(LevelChunkPacket const& packet);
+
+    void clearChunkCache();
+
+    void endTick(bool close);
 
 public:
     [[nodiscard]] static Recorder& getInstance() {

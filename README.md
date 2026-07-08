@@ -4,9 +4,9 @@ Playback 是一个基于 [LeviLamina](https://github.com/LiteLDev/LeviLamina) �
 
 ## 特性
 
-- **录制系统**：通过网络层 Hook 截获 `LevelChunkPacket`，缓存区块数据并写入录制快照。
+- **录制区块**：通过网络层 Hook 截获 `LevelChunkPacket`，缓存区块数据，按 tick 写入初始快照、分片和区块缓存文件。
 - **异步保存**：使用后台写入线程生成录制分片、元数据和区块缓存文件，降低录制过程阻塞。
-- **回放导出**：通过 `libzip` 将录制目录导出为 `.playback` 压缩回放文件。
+- **回放导出**：已接入通过 `libzip` 将录制目录导出为 `.playback` 压缩回放文件的流程，导出与打包结果仍待实机验证。
 - **回放系统**：支持回放会话生命周期、自动检测回放文件和世界就绪后的初始快照入口。
 - **动作系统**：基于 Action 抽象的回放动作框架，已包含 `ActionNextTick` 与 `ActionLevelChunkCached`。
 - **可配置命令**：支持通过配置文件启用/禁用录制与回放命令，自定义命令名称。
@@ -40,7 +40,7 @@ xmake
 
 控制录制流程：
 
-- `record start` — 开始录制，激活网络层 Hook 并记录游戏状态
+- `record start` — 开始或恢复录制，记录当前世界的区块快照与后续区块变化
 - `record pause` — 暂停录制
 - `record stop`  — 结束录制
 
@@ -84,17 +84,19 @@ src/playback/
 | --------- | -------- | ----------------------------------------------- |
 | 命令系统  | ✅ 完成   | playback / record / replay 命令                 |
 | 网络 Hook | ✅ 完成   | LevelChunkPacket 拦截与区块缓存                 |
-| 录制引擎  | 🚧 进行中 | 支持区块快照、元数据结构和停止录制导出流程      |
-| I/O 层    | 🚧 进行中 | 已实现 ReplayWriter / ReplayReader / 异步保存器 |
-| 导出系统  | 🚧 进行中 | 已支持 metadata、分片和区块缓存打包到 zip       |
+| 录制引擎  | ✅ 已实现 | 已支持录制区块快照、tick 分片、暂停恢复和元数据写入 |
+| I/O 层    | 🚧 待验证 | ReplayWriter / ReplayReader / 异步保存器已接入，完整写入链路待实测 |
+| 导出系统  | 🚧 待验证 | 已接入 metadata、分片和区块缓存打包到 zip / `.playback` 的流程 |
 | 回放引擎  | 🚧 进行中 | 会话生命周期与世界就绪检测已接入，调度待完善    |
 | 动作系统  | 🚧 进行中 | 已实现基础动作与动作注册，更多回放动作待补齐    |
 
 ## 已知待办
 
+- 导出 `.playback` 文件与 zip 打包内容仍需实机验证。
+- 打包产物的 metadata、录制分片和区块缓存文件完整性仍需校验。
 - 回放文件读取与 `.playback` 解包流程仍需接入 `ReplaySession`。
 - `ActionLevelChunkCached` 的区块恢复逻辑仍待实现。
-- 录制分片元数据写入与回放时间轴调度仍需完善。
+- 回放时间轴调度仍需完善。
 
 ## 许可证
 

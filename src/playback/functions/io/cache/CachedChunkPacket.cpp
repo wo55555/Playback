@@ -31,7 +31,8 @@ std::array<uint8_t, 64> CachedChunkPacket::computePacketBigHash(const LevelChunk
 
     EVP_DigestUpdate(ctx, &packet.mPos->x, sizeof(packet.mPos->x));
     EVP_DigestUpdate(ctx, &packet.mPos->z, sizeof(packet.mPos->z));
-    EVP_DigestUpdate(ctx, &packet.mDimensionId, sizeof(packet.mDimensionId));
+    const auto dimensionId = *packet.mDimensionId;
+    EVP_DigestUpdate(ctx, &dimensionId, sizeof(dimensionId));
     EVP_DigestUpdate(ctx, packet.mSerializedChunk->data(), packet.mSerializedChunk->size());
 
     unsigned char hashBuf[EVP_MAX_MD_SIZE];

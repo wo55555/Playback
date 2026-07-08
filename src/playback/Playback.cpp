@@ -3,6 +3,7 @@
 #include "playback/Config.h"
 #include "playback/Playback.h"
 #include "playback/command/Command.h"
+#include "playback/functions/action/Action.h"
 #include "playback/functions/record/Recorder.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/functions/tick/ClientTickHooks.h"
@@ -10,6 +11,9 @@
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
+#include "ll/api/event/client/ClientExitLevelEvent.h"
+#include "ll/api/event/client/ClientJoinLevelEvent.h"
+#include "ll/api/event/client/ClientStartJoinLevelEvent.h"
 #include "ll/api/event/command/ClientCommandRegisterEvent.h"
 #include "ll/api/io/LogLevel.h"
 #include "ll/api/io/Logger.h"
@@ -18,15 +22,18 @@
 
 #include "mc/world/level/Level.h"
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
+#include <string>
 
 namespace playback {
 
 struct Playback::Impl {
     config::Config                   mConfig;
     std::set<ll::event::ListenerPtr> mEventListeners;
-    PlaybackMode                     mMode = PlaybackMode::Unknown;
+    std::atomic<PlaybackMode>        mMode{PlaybackMode::Unknown};
+    std::string                      mLevelId;
 };
 
 Playback::Playback() : impl(std::make_unique<Impl>()), mSelf(*ll::mod::NativeMod::current()) {}
@@ -49,6 +56,13 @@ void Playback::setupCommands() {
     command::registerReplayCommand(commandConfig.replay);
 }
 
+void Playback::registerActions() {
+    auto& registry = functions::ActionRegistry::getInstance();
+
+    registry.registerAction(std::make_unique<functions::ActionNextTick>());
+    registry.registerAction(std::make_unique<functions::ActionLevelChunkCached>());
+}
+
 void Playback::unhook() {
     functions::hookClientTick(false);
     functions::hookNetwork(false);
@@ -57,10 +71,17 @@ void Playback::unhook() {
 
 bool Playback::refreshMode() {
     auto level = ll::service::getMultiPlayerLevel();
-    if (!level) return false;
+    if (!level) {
+        if (impl->mMode.load() != PlaybackMode::Unknown) {
+            functions::Recorder::getInstance().clearChunkCache();
+            impl->mLevelId.clear();
+            impl->mMode.store(PlaybackMode::Unknown);
+        }
+        return false;
+    }
 
     refreshMode(level.value());
-    return impl->mMode != PlaybackMode::Unknown;
+    return impl->mMode.load() != PlaybackMode::Unknown;
 }
 
 void Playback::refreshMode(Level& level) {
@@ -68,16 +89,21 @@ void Playback::refreshMode(Level& level) {
     if (levelId.empty()) return;
 
     const auto replayPath = utils::PathUtils::getReplaysDir() / (levelId + ".playback");
-    impl->mMode           = std::filesystem::exists(replayPath) ? PlaybackMode::Replay : PlaybackMode::Record;
+    auto       mode       = std::filesystem::exists(replayPath) ? PlaybackMode::Replay : PlaybackMode::Record;
 
-    if (impl->mMode == PlaybackMode::Replay) {
-        functions::hookNetwork(false);
+    if (impl->mLevelId != levelId) {
+        if (!impl->mLevelId.empty() || mode == PlaybackMode::Replay) {
+            functions::Recorder::getInstance().clearChunkCache();
+        }
+        impl->mLevelId = levelId;
     }
+
+    impl->mMode.store(mode);
 }
 
-PlaybackMode Playback::getMode() const { return impl->mMode; }
+PlaybackMode Playback::getMode() const { return impl->mMode.load(); }
 
-bool Playback::isReplayMode() const { return impl->mMode == PlaybackMode::Replay; }
+bool Playback::isReplayMode() const { return impl->mMode.load() == PlaybackMode::Replay; }
 
 void configurationLog() {
     auto& logger = Playback::getInstance().getSelf().getLogger();
@@ -95,9 +121,30 @@ bool Playback::load() {
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
             setupCommands();
+            registerActions();
+            functions::hookNetwork(true);
+            functions::hookClientTick(true);
         })
     );
-    functions::hookClientTick(true);
+    getEventListeners().emplace(
+        ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientStartJoinLevelEvent>([this](auto&&) {
+            functions::Recorder::getInstance().clearChunkCache();
+            impl->mLevelId.clear();
+            impl->mMode.store(PlaybackMode::Unknown);
+        })
+    );
+    getEventListeners().emplace(
+        ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
+            [this](ll::event::ClientJoinLevelEvent& event) { refreshMode(event.player().getLevel()); }
+        )
+    );
+    getEventListeners().emplace(
+        ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientExitLevelEvent>([this](auto&&) {
+            functions::Recorder::getInstance().clearChunkCache();
+            impl->mLevelId.clear();
+            impl->mMode.store(PlaybackMode::Unknown);
+        })
+    );
     return true;
 }
 

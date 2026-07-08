@@ -52,8 +52,6 @@ void registerRecordCommand(config::CommandConfigStruct& config) {
 
         output.success("结束录制");
     });
-
-    playback::functions::hookNetwork(true);
 }
 
 } // namespace playback::command

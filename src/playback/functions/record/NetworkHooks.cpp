@@ -27,40 +27,23 @@ LL_TYPE_INSTANCE_HOOK(
     NetworkIdentifier const&          source,
     std::shared_ptr<LevelChunkPacket> packet // NOLINT
 ) {
-    auto& recorder = functions::Recorder::getInstance();
-    if (packet) {
-        int dimId = *packet->mDimensionId;
-        // getLogger().debug(
-        //     "[LevelChunk] pos=({},{}) dimId={} subChunksCount={} cacheEnabled={} tickRange={} "
-        //     "clientPacket={} needRequestSubchunks={} requestSubChunkLimit={} "
-        //     "serializedChunkSize={} cacheMetadataCount={}",
-        //     packet->mPos->x,
-        //     packet->mPos->z,
-        //     dimId,
-        //     packet->mSubChunksCount,
-        //     packet->mCacheEnabled,
-        //     packet->mIsChunkInTickRange,
-        //     packet->isClientPacket,
-        //     packet->mClientNeedsToRequestSubchunks,
-        //     packet->mClientRequestSubChunkLimit,
-        //     packet->mSerializedChunk->size(),
-        //     packet->mCacheMetadata->size()
-        // );
-    }
-
-    if (!recorder.isPaused() && packet) {
+    if (!playback::Playback::getInstance().isReplayMode() && packet) {
         // 将原生网络数据包缓存到 Recorder，供快照时使用
-        recorder.cacheChunkPacket(*packet);
+        functions::Recorder::getInstance().cacheChunkPacket(*packet);
     }
     origin(source, packet);
 }
 
 void hookNetwork(bool enable) {
+    static bool hooked = false;
+    if (hooked == enable) return;
+
     if (enable) {
         PlaybackLevelChunkHook::hook();
     } else {
         PlaybackLevelChunkHook::unhook();
     }
+    hooked = enable;
 }
 
 } // namespace playback::functions

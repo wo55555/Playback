@@ -29,6 +29,8 @@ public:
 
     void setupCommands();
 
+    void registerActions();
+
     void unhook();
 
     bool refreshMode();

@@ -6,6 +6,7 @@
 #include <format>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace playback::functions {
@@ -57,7 +58,7 @@ void ReplayWriter::endSnapshot() {
 }
 
 void ReplayWriter::startAndFinishAction(Action& action) {
-    if (mWritingAction == nullptr) {
+    if (mWritingAction != nullptr) {
         throw std::runtime_error(std::format("startAndFinishAction() called while still writing {}", action.name));
     }
 
@@ -113,6 +114,19 @@ void ReplayWriter::finishAction(Action& action) {
     mStream.writeAt(mActionSizePos, actionSize);
 
     mActionSizePos = -1;
+}
+
+std::string ReplayWriter::popBuffer() {
+    if (mWritingAction != nullptr) {
+        throw std::runtime_error(std::format("popBuffer() called while still writing action {}", mWritingAction->name));
+    }
+
+    std::string data = std::move(mStream.mBuffer);
+    mStream.clear();
+
+    writeHeader();
+
+    return data;
 }
 
 } // namespace playback::functions

@@ -5,43 +5,45 @@
 #include "playback/functions/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
-#include "ll/api/service/Bedrock.h"
 
-#include "mc/client/game/ClientInstance.h"
-#include "mc/world/level/Level.h"
+#include "mc/client/multiplayer/MultiPlayerLevel.h"
 
 namespace playback::functions {
 
+namespace {
+
+void tickPlayback() {
+    switch (playback::Playback::getInstance().getMode()) {
+    case playback::PlaybackMode::Record:
+        Recorder::getInstance().endTick(false);
+        break;
+    case playback::PlaybackMode::Replay:
+        ReplaySession::getInstance().tick();
+        break;
+    case playback::PlaybackMode::Unknown:
+    default:
+        break;
+    }
+}
+
+} // namespace
+
 LL_TYPE_INSTANCE_HOOK(
-    PlaybackClientTickHook,
+    PlaybackClientLevelTickHook,
     ll::memory::HookPriority::Normal,
-    ClientInstance,
-    &ClientInstance::$tick,
+    MultiPlayerLevel,
+    &MultiPlayerLevel::$_subTick,
     void
 ) {
-    // auto& playback = playback::Playback::getInstance();
-    // if (playback.refreshMode()) {
-    //     if (auto level = ll::service::getMultiPlayerLevel()) {
-    //         ReplaySession::tryAutoStart(level.value());
-    //     }
-    // }
-
-    // ReplaySession::getInstance().tick();
-
-    // if (ReplaySession::getInstance().sendRecordedTickPacket()) {
-    //     return;
-    // }
-
-    Recorder::getInstance().recordTickPacket();
-
     origin();
+    tickPlayback();
 }
 
 void hookClientTick(bool enable) {
     if (enable) {
-        PlaybackClientTickHook::hook();
+        PlaybackClientLevelTickHook::hook();
     } else {
-        PlaybackClientTickHook::unhook();
+        PlaybackClientLevelTickHook::unhook();
     }
 }
 
