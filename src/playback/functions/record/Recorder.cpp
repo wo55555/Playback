@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/functions/action/Action.h"
 #include "playback/functions/io/AsyncReplaySaver.h"
+#include "playback/utils/PathUtils.h"
 
 #include "ll/api/chrono/GameChrono.h"
 #include "ll/api/service/Bedrock.h"
@@ -19,12 +20,21 @@
 #include "nlohmann/json.hpp"
 #include "nlohmann/json_fwd.hpp"
 
+#include <uuid.h>
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <ctime>
+#include <filesystem>
+#include <iomanip>
 #include <memory>
 #include <mutex>
+#include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -34,6 +44,72 @@ namespace {
 
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
 
+std::string sanitizeFileName(std::string name) {
+    for (auto& ch : name) {
+        auto byte = static_cast<unsigned char>(ch);
+        if (byte < 32 || ch == '<' || ch == '>' || ch == ':' || ch == '"' || ch == '/' || ch == '\\' || ch == '|'
+            || ch == '?' || ch == '*') {
+            ch = '_';
+        }
+    }
+
+    while (!name.empty() && (name.back() == ' ' || name.back() == '.')) {
+        name.pop_back();
+    }
+
+    return name.empty() ? "replay" : name;
+}
+
+std::string currentReplayTimestampName() {
+    auto now  = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+
+    std::tm localTime{};
+#ifdef _WIN32
+    localtime_s(&localTime, &time);
+#else
+    localtime_r(&time, &localTime);
+#endif
+
+    std::ostringstream stream;
+    stream << std::put_time(&localTime, "%Y-%m-%dT%H-%M-%S");
+    return stream.str();
+}
+
+std::string uuidReplayName() {
+    static std::random_device randomDevice;
+    static std::mt19937       generator(randomDevice());
+
+    auto id = uuids::uuid_random_generator(generator)();
+    return uuids::to_string(id);
+}
+
+std::string findAvailableReplayName(std::filesystem::path const& replayDir, std::string baseName) {
+    constexpr std::string_view extension = ".zip";
+
+    baseName = sanitizeFileName(std::move(baseName));
+
+    for (int index = 0; index < 10000; ++index) {
+        std::string filename = baseName;
+        if (index > 0) {
+            filename += " (" + std::to_string(index) + ")";
+        }
+        filename += extension;
+
+        std::error_code ec;
+        bool            exists = std::filesystem::exists(replayDir / filename, ec);
+        if (ec) {
+            getLogger().error("Error while trying to determine replay filename: {}", ec.message());
+            break;
+        }
+        if (!exists) {
+            return filename;
+        }
+    }
+
+    return uuidReplayName() + std::string(extension);
+}
+
 nlohmann::ordered_json metaToJson(PlaybackMeta const& meta) {
     auto chunks = nlohmann::ordered_json::object();
     for (auto const& [chunkName, chunkMeta] : meta.chunks) {
@@ -41,11 +117,11 @@ nlohmann::ordered_json metaToJson(PlaybackMeta const& meta) {
     }
 
     return nlohmann::ordered_json{
-        {"name", meta.name},
-        {"worldName", meta.worldName},
-        {"duration", meta.duration},
-        {"totalTicks", meta.totalTicks},
-        {"chunks", std::move(chunks)}
+        {"name",       meta.name        },
+        {"worldName",  meta.worldName   },
+        {"duration",   meta.duration    },
+        {"totalTicks", meta.totalTicks  },
+        {"chunks",     std::move(chunks)}
     };
 }
 
@@ -147,7 +223,15 @@ void Recorder::stop() {
     mAsyncReplaySaver.reset();
     mState = State::Idle;
 
-    if (!ReplayExporter::exportReplay(replayPath, replayPath / "text.zip", "")) {
+    auto            replayDir = utils::PathUtils::getReplaysDir();
+    std::error_code ec;
+    std::filesystem::create_directories(replayDir, ec);
+    if (ec) {
+        getLogger().error("Error while trying to create replay folder: {}", ec.message());
+    }
+
+    auto outputPath = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
+    if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
         getLogger().error("Failed to save replay data after recording stopped");
         return;
     }

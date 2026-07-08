@@ -25,8 +25,9 @@ bool setBestSpeed(zip_t* zip, zip_int64_t index) {
     return zip_set_file_compression(zip, static_cast<zip_uint64_t>(index), ZIP_CM_DEFLATE, 1) == 0;
 }
 
-bool writeBufferEntry(zip_t* zip, std::string const& entryName, std::string_view data) {
+bool writeBufferEntry(zip_t* zip, std::string const& entryName, std::string const& data) {
     auto& logger = getLogger();
+
     auto* source = zip_source_buffer(zip, data.data(), data.size(), 0);
     if (source == nullptr) {
         logger.error("Unable to create zip source for {}: {}", entryName, zip_strerror(zip));
@@ -49,7 +50,15 @@ bool writeBufferEntry(zip_t* zip, std::string const& entryName, std::string_view
 bool writeFileEntry(zip_t* zip, std::filesystem::path const& file, std::string const& entryName) {
     auto& logger   = getLogger();
     auto  filePath = file.string();
-    auto* source   = zip_source_file(zip, filePath.c_str(), 0, 0);
+
+    std::error_code ec;
+    auto            fileSize = std::filesystem::file_size(file, ec);
+    if (ec) {
+        logger.error("Unable to stat {} for zip export: {}", file, ec.message());
+        return false;
+    }
+
+    auto* source = zip_source_file(zip, filePath.c_str(), 0, static_cast<zip_int64_t>(fileSize));
     if (source == nullptr) {
         logger.error("Unable to create zip source for {}: {}", file, zip_strerror(zip));
         return false;
@@ -125,7 +134,8 @@ bool ReplayExporter::exportReplay(
     auto closeZip = true;
 
     // Write metadata
-    if (!writeBufferEntry(zip, "metadata.json", meta->toJson())) {
+    std::string metadataJson = meta->toJson();
+    if (!writeBufferEntry(zip, "metadata.json", metadataJson)) {
         closeZip = false;
     }
 
