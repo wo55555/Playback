@@ -1,0 +1,14 @@
+playback.ui.replays=Replays
+playback.ui.search=Search replays
+playback.ui.refresh=Refresh
+playback.ui.open=Open Replay
+playback.ui.sort.created=Created date
+playback.ui.sort.name=Replay name
+playback.ui.sort.world=World name
+playback.ui.sort.duration=Duration
+playback.ui.sort.size=File size
+playback.ui.sort.descending=Descending
+playback.ui.sort.ascending=Ascending
+playback.ui.status.empty=EMPTY
+playback.ui.status.ready=READY
+playback.ui.status.issue=ISSUE

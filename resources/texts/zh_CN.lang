@@ -1,0 +1,14 @@
+playback.ui.replays=回放
+playback.ui.search=搜索回放
+playback.ui.refresh=刷新
+playback.ui.open=打开回放
+playback.ui.sort.created=创建时间
+playback.ui.sort.name=回放名称
+playback.ui.sort.world=世界名称
+playback.ui.sort.duration=时长
+playback.ui.sort.size=文件大小
+playback.ui.sort.descending=降序
+playback.ui.sort.ascending=升序
+playback.ui.status.empty=空
+playback.ui.status.ready=可用
+playback.ui.status.issue=异常

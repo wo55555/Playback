@@ -30,7 +30,7 @@ void tickPlayback() {
 
 LL_TYPE_INSTANCE_HOOK(
     PlaybackClientLevelTickHook,
-    ll::memory::HookPriority::Normal,
+    ll::memory::HookPriority::High,
     MultiPlayerLevel,
     &MultiPlayerLevel::$_subTick,
     void

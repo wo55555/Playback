@@ -7,6 +7,7 @@
 #include "playback/functions/record/Recorder.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/functions/tick/ClientTickHooks.h"
+#include "playback/ui/MainMenuHooks.h"
 #include "playback/utils/PathUtils.h"
 
 #include "ll/api/event/EventBus.h"
@@ -66,6 +67,7 @@ void Playback::registerActions() {
 void Playback::unhook() {
     functions::hookClientTick(false);
     functions::hookNetwork(false);
+    ui::hookMainMenu(false);
     getEventListeners().clear();
 }
 
@@ -117,6 +119,8 @@ bool Playback::load() {
 
     const auto& logger = getSelf().getLogger();
     logger.debug("Loading...");
+
+    ui::hookMainMenu(true);
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {

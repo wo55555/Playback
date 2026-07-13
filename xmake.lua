@@ -43,6 +43,23 @@ target("playback") -- Change this to your mod name.
     add_headerfiles("src/**.h")
     add_files("src/**.cpp")
     add_includedirs("src")
+    after_build(function(target)
+        local resource_dir = path.join(os.projectdir(), "resources")
+        if os.isdir(resource_dir) then
+            local mcpack = path.join(os.projectdir(), "bin", target:name(), target:name() .. "-ui.mcpack")
+            local packer = path.join(os.projectdir(), "scripts", "package_resource_pack.ps1")
+            os.execv("powershell", {
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                packer,
+                resource_dir,
+                mcpack
+            })
+            cprint("${bright green}[Playback]: ${reset}UI resource pack generated to " .. mcpack)
+        end
+    end)
     -- if is_config("target_type", "server") then
         -- add_includedirs("src-server")
         -- add_files("src-server/**.cpp")
