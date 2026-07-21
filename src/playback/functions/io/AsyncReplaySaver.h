@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -92,7 +93,7 @@ class ReplayReader {
 private:
     std::string    mBuffer;
     PlaybackBuffer mStream{mBuffer};
-    int32_t        mSnapshotSize   = 0;
+    uint32_t       mSnapshotSize   = 0;
     uint64_t       mSnapshotOffset = 0;
     uint64_t       mActionsOffset  = 0;
 
@@ -121,23 +122,28 @@ public:
 private:
     ReplayWriter mReplayWriter;
 
-    std::filesystem::path mRecordPath = utils::PathUtils::getSharedTempDir();
+    std::filesystem::path mRecordPath;
 
-    std::vector<WriteTask>  mQueue;
-    std::mutex              mQueueMutex;
-    std::condition_variable mCondition;
-    std::thread             mWorkerThread;
-    std::atomic<bool>       mRunning{false};
-    std::atomic<bool>       mFinished{false};
+    std::vector<WriteTask>     mQueue;
+    mutable std::mutex         mQueueMutex;
+    std::condition_variable    mCondition;
+    std::thread                mWorkerThread;
+    std::atomic<bool>          mRunning{false};
+    std::atomic<bool>          mFinished{false};
+    bool                       mCancelled = false;
+    std::optional<std::string> mError;
 
     std::unordered_map<uint64_t, std::vector<CachedChunkPacket>> mCachedChunkPackets;
     PlaybackBuffer                                               mChunkCacheOutput;
 
     int mTotalWrittenChunkPackets = 0;
     int mCurrentChunkCacheIndex   = -1;
+    int mWrittenChunkCacheFiles   = 0;
 
 private:
     void workerLoop();
+
+    void recordError(std::string error);
 
     void flushCurrentChunkCacheFile();
 
@@ -148,7 +154,7 @@ public:
     AsyncReplaySaver(AsyncReplaySaver const&)            = delete;
     AsyncReplaySaver& operator=(AsyncReplaySaver const&) = delete;
 
-    void submit(WriteTask task);
+    bool submit(WriteTask task);
 
     std::filesystem::path finish();
 
@@ -156,11 +162,15 @@ public:
 
     [[nodiscard]] bool isRunning() const { return mRunning; }
 
-    void writeGamePackets(std::vector<std::shared_ptr<Packet>> packets);
+    [[nodiscard]] bool hasError() const;
+
+    [[nodiscard]] std::optional<std::string> getError() const;
+
+    bool writeGamePackets(std::vector<std::shared_ptr<Packet>> packets);
 
     void writeChunkCacheFile(PlaybackBuffer const& chunkCacheOutput, int index);
 
-    void writeReplayChunk(std::string chunkName, std::string metadata);
+    bool writeReplayChunk(std::string chunkName, std::string metadata);
 };
 
 } // namespace playback::functions

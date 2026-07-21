@@ -67,7 +67,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_resource_pac
 
 加载回放文件并启动回放。当前回放会话会在数据目录的 `replays/` 下按世界 ID 自动检测 `<levelId>.playback` 文件。
 
-> 命令名称（`record` / `replay`）可在配置中自定义，也可单独禁用。
+### `replay play / pause`
+
+回放进入世界时默认处于暂停状态；暂停只停止时间线推进，区块仍会继续加载。等待初始区块完成后，使用 `replay play` 开始播放，使用 `replay pause` 冻结时间线。
+
+> 配置中的 `replay.enabled` 只控制 `replay start` 子命令；`play` / `pause` 控制始终可用。命令名称（`record` / `replay`）可在配置中自定义。
 
 ## 项目结构
 

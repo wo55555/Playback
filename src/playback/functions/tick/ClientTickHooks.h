@@ -2,6 +2,6 @@
 
 namespace playback::functions {
 
-void hookClientTick(bool enable);
+[[nodiscard]] bool hookClientTick(bool enable);
 
 } // namespace playback::functions

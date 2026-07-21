@@ -3,14 +3,12 @@
 #include <array>
 #include <cstdint>
 
-class LevelChunkPacket;
+class Packet;
 
 namespace playback::functions {
 
 class CachedChunkPacket {
 private:
-    int                     mX;
-    int                     mZ;
     std::array<uint8_t, 64> mBigHash;
 
 public:
@@ -18,10 +16,10 @@ public:
     uint64_t mLongHashCode;
 
 private:
-    static std::array<uint8_t, 64> computePacketBigHash(const LevelChunkPacket& packet);
+    static std::array<uint8_t, 64> computePacketBigHash(Packet const& packet);
 
 public:
-    CachedChunkPacket(const LevelChunkPacket& packet, int index);
+    CachedChunkPacket(Packet const& packet, int index);
     ~CachedChunkPacket() = default;
 
     bool operator==(const CachedChunkPacket& other) const;

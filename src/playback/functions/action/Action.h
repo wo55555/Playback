@@ -60,4 +60,15 @@ public:
     }
 };
 
+struct ActionSubChunkCached : Action {
+    ActionSubChunkCached() : Action("sub_chunk_cached") {}
+    void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionSubChunkCached& getInstance() {
+        static ActionSubChunkCached instance;
+        return instance;
+    }
+};
+
 } // namespace playback::functions

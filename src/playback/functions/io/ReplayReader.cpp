@@ -31,7 +31,10 @@ ReplayReader::ReplayReader(std::string_view data) : mBuffer(data) {
         mActionMap[i] = action;
     }
 
-    mSnapshotSize   = mStream.getVarInt().value();
+    mSnapshotSize = mStream.getUnsignedInt().value();
+    if (mSnapshotSize > mStream.getWritePointer() - mStream.mReadPointer) {
+        throw std::runtime_error("ReplayReader: snapshot extends beyond the replay chunk");
+    }
     mSnapshotOffset = mStream.mReadPointer;
     mActionsOffset  = mSnapshotOffset + static_cast<uint64>(mSnapshotSize);
 
@@ -52,21 +55,23 @@ void ReplayReader::handleSnapshot(ReplaySession& session) {
         Action* action  = it->second;
         mLastActionName = action->name;
 
-        int32_t        dataSize = mStream.getVarInt().value();
+        uint32_t dataSize = mStream.getUnsignedInt().value();
+        if (mStream.mReadPointer > mActionsOffset || dataSize > mActionsOffset - mStream.mReadPointer) {
+            throw std::runtime_error(std::format("Action {} extends beyond the replay snapshot", mLastActionName));
+        }
         std::string    buf(mStream.mView.data() + mStream.mReadPointer, dataSize);
         PlaybackBuffer stream(buf);
         action->handle(session, stream);
 
-        if (stream.mReadPointer < stream.getWritePointer()) {
-            throw std::runtime_error(
-                std::format(
-                    "Action {} failed to fully read. Had {} bytes available, only read {}",
-                    mLastActionName,
-                    mStream.getWritePointer(),
-                    mStream.mReadPointer
-                )
-            );
+        if (stream.mReadPointer != stream.getWritePointer()) {
+            throw std::runtime_error(std::format(
+                "Action {} failed to fully read. Had {} bytes available, only read {}",
+                mLastActionName,
+                stream.getWritePointer(),
+                stream.mReadPointer
+            ));
         }
+        mStream.mReadPointer += dataSize;
     }
 
     session.mIsProcessingSnapshot = false;
@@ -86,11 +91,23 @@ bool ReplayReader::handleNextAction(ReplaySession& session) {
     Action* action  = it->second;
     mLastActionName = action->name;
 
-    int32_t dataSize = mStream.getVarInt().value();
+    uint32_t dataSize = mStream.getUnsignedInt().value();
+    if (dataSize > mStream.getWritePointer() - mStream.mReadPointer) {
+        throw std::runtime_error(std::format("Action {} extends beyond the replay chunk", mLastActionName));
+    }
 
     std::string    buf(mStream.mView.data() + mStream.mReadPointer, dataSize);
     PlaybackBuffer stream(buf);
     action->handle(session, stream);
+
+    if (stream.mReadPointer != stream.getWritePointer()) {
+        throw std::runtime_error(std::format(
+            "Action {} failed to fully read. Had {} bytes available, only read {}",
+            mLastActionName,
+            stream.getWritePointer(),
+            stream.mReadPointer
+        ));
+    }
 
     mStream.mReadPointer += dataSize;
 

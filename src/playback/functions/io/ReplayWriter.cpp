@@ -40,7 +40,7 @@ void ReplayWriter::startSnapshot() {
     mState = STATE_WRITING_SNAPSHOT;
 
     mSnapshotSizePos = static_cast<int32_t>(mStream.getWritePointer());
-    mStream.writeVarInt(static_cast<int32_t>(0xDEADBEEF), nullptr, nullptr);
+    mStream.writeUnsignedInt(0, nullptr, nullptr);
 }
 
 void ReplayWriter::endSnapshot() {
@@ -53,7 +53,7 @@ void ReplayWriter::endSnapshot() {
         throw std::runtime_error(std::format("Snapshot size pos wasn't set ({})", this->mSnapshotSizePos));
     }
 
-    int32_t snapshotSize = static_cast<int32_t>(mStream.getWritePointer() - mSnapshotSizePos) - 4;
+    uint32_t snapshotSize = static_cast<uint32_t>(mStream.getWritePointer() - mSnapshotSizePos) - 4;
     mStream.writeAt(mSnapshotSizePos, snapshotSize);
 }
 
@@ -69,7 +69,7 @@ void ReplayWriter::startAndFinishAction(Action& action) {
     int32_t actionId = it->second;
 
     mStream.writeVarInt(actionId, nullptr, nullptr);
-    mStream.writeVarInt(static_cast<int32_t>(0), nullptr, nullptr);
+    mStream.writeUnsignedInt(0, nullptr, nullptr);
 
     mActionSizePos = -1;
 }
@@ -88,7 +88,7 @@ void ReplayWriter::startAction(Action& action) {
 
     mStream.writeVarInt(actionId, nullptr, nullptr);
     mActionSizePos = static_cast<int32_t>(mStream.getWritePointer());
-    mStream.writeVarInt(static_cast<int32_t>(0), nullptr, nullptr);
+    mStream.writeUnsignedInt(0, nullptr, nullptr);
 }
 
 void ReplayWriter::finishAction(Action& action) {
@@ -96,13 +96,11 @@ void ReplayWriter::finishAction(Action& action) {
         throw std::runtime_error("finishAction() called before startAction()");
     }
     if (mWritingAction != &action) {
-        throw std::runtime_error(
-            std::format(
-                "finishAction() called with wrong action, expected {} got {}",
-                mWritingAction->name,
-                action.name
-            )
-        );
+        throw std::runtime_error(std::format(
+            "finishAction() called with wrong action, expected {} got {}",
+            mWritingAction->name,
+            action.name
+        ));
     }
     mWritingAction = nullptr;
 
@@ -110,7 +108,7 @@ void ReplayWriter::finishAction(Action& action) {
         throw std::runtime_error(std::format("Action size pos wasn't set ({})", mActionSizePos));
     }
 
-    int32_t actionSize = static_cast<int32_t>(mStream.getWritePointer() - mActionSizePos) - 4;
+    uint32_t actionSize = static_cast<uint32_t>(mStream.getWritePointer() - mActionSizePos) - 4;
     mStream.writeAt(mActionSizePos, actionSize);
 
     mActionSizePos = -1;

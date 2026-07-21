@@ -31,7 +31,9 @@ public:
 
     void registerActions();
 
-    void unhook();
+    [[nodiscard]] bool hook();
+
+    [[nodiscard]] bool unhook();
 
     bool refreshMode();
 

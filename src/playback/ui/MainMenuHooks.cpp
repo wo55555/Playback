@@ -1,5 +1,6 @@
 #include "MainMenuHooks.h"
 
+#include "playback/functions/replay/ReplaySession.h"
 #include "playback/ui/ReplayBrowser.h"
 
 #include "ll/api/memory/Hook.h"
@@ -32,9 +33,9 @@ namespace {
 
 std::vector<ReplaySummary>            gAllReplayList;
 std::vector<ReplaySummary>            gCurrentReplayList;
-bool                                  gBrowserOpen    = false;
-bool                                  gOpenRequested  = false;
-bool                                  gUiDirty        = false;
+bool                                  gBrowserOpen   = false;
+bool                                  gOpenRequested = false;
+bool                                  gUiDirty       = false;
 std::optional<std::size_t>            gHighlightedIndex;
 std::optional<std::size_t>            gLastClickedIndex;
 std::chrono::steady_clock::time_point gLastClickTime;
@@ -46,14 +47,15 @@ uint                                  gSearchBoxEventId = 0;
 std::unordered_set<MinecraftScreenController*> gBindingControllers;
 std::unordered_set<MinecraftScreenController*> gEventControllers;
 
-constexpr std::string_view kReplayCollection   = "playback_replays";
-constexpr std::string_view kButtonOpenReplays  = "button.playback_open_replays";
-constexpr std::string_view kButtonOpenSelected = "button.playback_open_selected_replay";
-constexpr std::string_view kButtonCycleSort    = "button.playback_cycle_sort";
-constexpr std::string_view kButtonSortDir      = "button.playback_sort_direction";
-constexpr std::string_view kButtonRefresh      = "button.playback_refresh_replays";
-constexpr std::string_view kButtonClose        = "button.playback_close_replays";
-constexpr std::string_view kSearchBoxId        = "#playback_replay_search_box";
+constexpr std::string_view kReplayCollection       = "playback_replays";
+constexpr std::string_view kButtonOpenReplays      = "button.playback_open_replays";
+constexpr std::string_view kButtonOpenSelected     = "button.playback_open_selected_replay";
+constexpr std::string_view kButtonSelectReplay     = "button.playback_select_replay";
+constexpr std::string_view kButtonCycleSort        = "button.playback_cycle_sort";
+constexpr std::string_view kButtonSortDir          = "button.playback_sort_direction";
+constexpr std::string_view kButtonRefresh          = "button.playback_refresh_replays";
+constexpr std::string_view kButtonClose            = "button.playback_close_replays";
+constexpr std::string_view kSearchBoxId            = "#playback_replay_search_box";
 constexpr auto             kConsumeAndRefreshFocus = static_cast<::ui::ViewRequest>(
     static_cast<uint>(::ui::ViewRequest::ConsumeEvent) | static_cast<uint>(::ui::ViewRequest::DelayedFocusRefresh)
 );
@@ -284,7 +286,7 @@ bool openReplay(std::size_t index) {
 
 void openBrowser(MinecraftScreenController& ctrl) {
     refreshReplayList();
-    gBrowserOpen = true;
+    gBrowserOpen       = true;
     auto& prepareFocus = ctrl.mScreenViewCommand.get().prepareFocusForModalPopup.get();
     if (prepareFocus) prepareFocus();
     ctrl.displayJsonDefinedControlPopup(
@@ -298,6 +300,20 @@ void closeBrowser(MinecraftScreenController& ctrl) {
     auto& destroy = ctrl.mControlDestroyCallback.get();
     if (destroy) destroy("playback_replay_popup_factory", "playback_replay_browser");
     gBrowserOpen = false;
+}
+
+void selectReplay(MinecraftScreenController& ctrl, std::size_t index) {
+    if (index >= gCurrentReplayList.size()) return;
+
+    gHighlightedIndex = index;
+    auto now          = std::chrono::steady_clock::now();
+    bool doubleClick  = gLastClickedIndex.has_value() && *gLastClickedIndex == index
+                    && now - gLastClickTime < std::chrono::milliseconds(450);
+    gLastClickedIndex = index;
+    gLastClickTime    = now;
+
+    if (doubleClick && openReplay(index)) closeBrowser(ctrl);
+    else gUiDirty = true;
 }
 
 void ensureEvents(MinecraftScreenController& ctrl) {
@@ -327,29 +343,15 @@ void ensureEvents(MinecraftScreenController& ctrl) {
         if (gHighlightedIndex.has_value() && openReplay(*gHighlightedIndex)) closeBrowser(ctrl);
         return ::ui::ViewRequest::ConsumeEvent;
     });
+    ctrl.registerButtonPressedHandler(ctrl._getNameId(std::string(kButtonSelectReplay)), [&ctrl](UIPropertyBag* bag) {
+        if (bag) {
+            int index = bag->mJsonValue.get().get("#collection_index", -1).asInt(-1);
+            if (index >= 0) selectReplay(ctrl, static_cast<std::size_t>(index));
+        }
+        return ::ui::ViewRequest::ConsumeEvent;
+    });
 
     gSearchBoxEventId = ctrl._getNameId(std::string(kSearchBoxId));
-
-    ctrl.registerClippedCollectionEventHandler(
-        StringHash(kReplayCollection),
-        [&ctrl](int first, int second, UIPropertyBag&) {
-            for (int idx : {first, second}) {
-                if (idx >= 0 && static_cast<std::size_t>(idx) < gCurrentReplayList.size()) {
-                    auto sel          = static_cast<std::size_t>(idx);
-                    gHighlightedIndex = sel;
-                    auto now          = std::chrono::steady_clock::now();
-                    bool dbl          = gLastClickedIndex.has_value() && *gLastClickedIndex == sel
-                                     && now - gLastClickTime < std::chrono::milliseconds(450);
-                    gLastClickedIndex = sel;
-                    gLastClickTime    = now;
-                    if (dbl && openReplay(sel)) closeBrowser(ctrl);
-                    else gUiDirty = true;
-                    break;
-                }
-            }
-            return ::ui::ViewRequest::ConsumeEvent;
-        }
-    );
 }
 
 } // namespace
@@ -395,6 +397,7 @@ LL_TYPE_INSTANCE_HOOK(
     &StartMenuScreenController::$tick,
     ::ui::DirtyFlag
 ) {
+    functions::ReplaySession::getInstance().setMinecraftScreenModel(mMinecraftScreenModel);
     auto result = origin();
     if (gOpenRequested) {
         gOpenRequested = false;
@@ -434,9 +437,9 @@ void hookMainMenu(bool enable) {
         StartMenuEventsHook::unhook();
         StartMenuBindingsHook::unhook();
         MainMenuOpenHook::unhook();
-        gBrowserOpen     = false;
-        gOpenRequested   = false;
-        gUiDirty         = false;
+        gBrowserOpen      = false;
+        gOpenRequested    = false;
+        gUiDirty          = false;
         gSearchBoxEventId = 0;
         gAllReplayList.clear();
         gCurrentReplayList.clear();

@@ -13,4 +13,9 @@ void ActionLevelChunkCached::handle(functions::ReplaySession& session, PlaybackB
     session.handleLevelChunkCached(data.getVarInt().value());
 }
 
+// ActionSubChunkCached
+void ActionSubChunkCached::handle(functions::ReplaySession& session, PlaybackBuffer& data) {
+    session.handleSubChunkCached(data.getVarInt().value());
+}
+
 } // namespace playback::functions
