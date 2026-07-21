@@ -43,7 +43,16 @@ LL_TYPE_INSTANCE_HOOK(
     auto& replaySession = functions::ReplaySession::getInstance();
     if (replaySession.shouldIsolateChunkPackets()) {
         replaySession.captureNetworkContext(*this);
-        if (!replaySession.isInjectingPacket(packet.get())) return;
+        if (!packet) {
+            origin(source, packet);
+            return;
+        }
+        if (!replaySession.isInjectingPacket(packet.get())) {
+            auto const& pos = *packet->mPos;
+            if (replaySession.shouldSuppressNativeChunk(pos)) return;
+
+            getLogger().debug("Passing native replay-world LevelChunk for unrecorded column ({}, {})", pos.x, pos.z);
+        }
 
         origin(source, packet);
         return;
@@ -63,9 +72,37 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto& replaySession = functions::ReplaySession::getInstance();
     if (replaySession.shouldIsolateChunkPackets()) {
-        if (!replaySession.isInjectingPacket(&packet)) return;
+        if (replaySession.isInjectingPacket(&packet)) {
+            origin(source, packet);
+            return;
+        }
 
-        origin(source, packet);
+        auto        filteredPacket = packet;
+        auto const& center         = *packet.mCenterPos;
+        auto&       entries        = *filteredPacket.mSubChunkData;
+        entries.clear();
+        entries.reserve(packet.mSubChunkData->size());
+        for (auto const& entry : *packet.mSubChunkData) {
+            auto const& offset = *entry.mSubChunkPosOffset;
+            if (!replaySession.shouldSuppressNativeChunk(
+                    ChunkPos{center.x + static_cast<int>(offset.mX), center.z + static_cast<int>(offset.mZ)}
+                )) {
+                entries.emplace_back(entry);
+            }
+        }
+        if (entries.empty()) return;
+
+        auto const removed = packet.mSubChunkData->size() - entries.size();
+        if (removed != 0) {
+            getLogger().debug(
+                "Filtered {} recorded entries from a native replay-world SubChunk packet; passing {} unrecorded "
+                "entries",
+                removed,
+                entries.size()
+            );
+        }
+
+        origin(source, filteredPacket);
         return;
     }
 

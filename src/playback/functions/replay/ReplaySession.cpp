@@ -615,6 +615,9 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         mCenterChunkPositions.emplace(levelChunks.front().pos);
     }
 
+    auto& protectedChunks = mApplyingChunkSnapshot ? mApplyingSnapshotChunks : mSnapshotChunks;
+    protectedChunks.insert(levelChunkPositions.begin(), levelChunkPositions.end());
+
     std::vector<PrioritizedSubChunk> subChunks;
     subChunks.reserve(mPendingSubChunkIndices.size());
     mRemainingSubChunkPacketsByColumn.clear();
@@ -1114,6 +1117,12 @@ bool ReplaySession::shouldIsolateChunkPackets() const {
 
     auto level = ll::service::getMultiPlayerLevel();
     return level && level->getLevelId() == mReplayLevelId;
+}
+
+bool ReplaySession::shouldSuppressNativeChunk(ChunkPos const& pos) const {
+    if (!mChunkInjectionPlanPrepared && (!mWorldReady || mApplyingChunkSnapshot)) return true;
+
+    return mSnapshotChunks.contains(pos) || mApplyingSnapshotChunks.contains(pos);
 }
 
 void ReplaySession::setMinecraftScreenModel(std::shared_ptr<MinecraftScreenModel> const& screenModel) {

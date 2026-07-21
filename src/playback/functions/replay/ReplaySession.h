@@ -155,6 +155,8 @@ public:
 
     [[nodiscard]] bool shouldIsolateChunkPackets() const;
 
+    [[nodiscard]] bool shouldSuppressNativeChunk(ChunkPos const& pos) const;
+
     [[nodiscard]] bool isReplayWorldCleanupPending() const { return mCleanupState != CleanupState::None; }
 
     [[nodiscard]] static bool isReplayLevel(Level const& level);
