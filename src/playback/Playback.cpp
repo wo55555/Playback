@@ -3,12 +3,13 @@
 #include "playback/Config.h"
 #include "playback/Playback.h"
 #include "playback/command/Command.h"
+#include "playback/editor/ReplayUI.h"
 #include "playback/functions/action/Action.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/functions/record/Recorder.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/functions/tick/ClientTickHooks.h"
-#include "playback/ui/MainMenuHooks.h"
+#include "playback/screen/MainMenuHooks.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -70,16 +71,16 @@ void Playback::registerActions() {
 bool Playback::hook() {
     if (impl->mRuntimeInstalled) return true;
 
-    ui::hookMainMenu(true);
+    screen::hookMainMenu(true);
     if (!functions::hookNetwork(true)) {
-        ui::hookMainMenu(false);
+        screen::hookMainMenu(false);
         return false;
     }
     if (!functions::hookClientTick(true)) {
         if (!functions::hookNetwork(false)) {
             getSelf().getLogger().error("Unable to roll back replay network hooks after client tick hook failure");
         }
-        ui::hookMainMenu(false);
+        screen::hookMainMenu(false);
         return false;
     }
 
@@ -136,8 +137,21 @@ bool Playback::unhook() {
         );
         return false;
     }
+    if (!editor::hookReplayUI(false)) {
+        bool uiRestored      = editor::hookReplayUI(true);
+        bool networkRestored = functions::hookNetwork(true);
+        bool tickRestored    = functions::hookClientTick(true);
+        getSelf().getLogger().error(
+            "Unable to remove replay UI hooks (ui restoration={}, network restoration={}, "
+            "client tick restoration={})",
+            uiRestored,
+            networkRestored,
+            tickRestored
+        );
+        return false;
+    }
 
-    ui::hookMainMenu(false);
+    screen::hookMainMenu(false);
     getEventListeners().clear();
     impl->mLevelId.clear();
     impl->mMode.store(PlaybackMode::Unknown);
@@ -190,7 +204,13 @@ bool Playback::load() {
     logger.debug("Loading...");
 
     registerActions();
+    if (!editor::hookReplayUIRendererInit(true)) {
+        logger.error("Unable to install the early D3D12 renderer hook; the replay timeline may be unavailable");
+    }
     if (!hook()) {
+        if (!editor::hookReplayUIRendererInit(false)) {
+            logger.error("Unable to roll back the early D3D12 renderer hook after runtime hook failure");
+        }
         logger.error("Playback cannot load because its required network hooks are unavailable");
         return false;
     }
@@ -204,6 +224,10 @@ bool Playback::enable() {
     if (!hook()) {
         logger.error("Playback cannot enable because its required runtime hooks are unavailable");
         return false;
+    }
+    // Creating a probe DXGI factory is invalid while load() holds the loader lock.
+    if (!editor::hookReplayUI(true)) {
+        logger.error("Replay UI hooks are unavailable; replay support will continue without them");
     }
     return true;
 }

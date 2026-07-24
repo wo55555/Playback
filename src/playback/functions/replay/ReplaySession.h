@@ -69,6 +69,12 @@ private:
     bool                          mChunkInjectionPlanPrepared = false;
     bool                          mCenterChunksReady          = false;
 
+    std::atomic<bool> mStopRequested{false};
+    std::atomic<int>  mRequestedSeekTick{-1};
+    int               mSeekTargetTick{-1};
+    float             mPlaybackSpeed{1.0f};
+    float             mPlaybackTickAccumulator{};
+
     std::chrono::steady_clock::time_point mChunkInjectionStartedAt{};
     std::vector<double>                   mChunkInjectionDurationsMs;
     double                                mChunkPlanPreparationMs{};
@@ -109,7 +115,7 @@ private:
 
     void applyInitialSnapshot();
 
-    void applySnapshot(ReplayReader& reader);
+    void applySnapshot(ReplayReader& reader, bool positionPlayer);
 
     [[nodiscard]] bool prepareChunkInjectionPlan(PlaybackView const& view);
 
@@ -135,15 +141,33 @@ private:
 
     void finishWorldCleanup();
 
+    void beginSeek(int targetTick);
+
+    [[nodiscard]] bool advanceReplayTick(bool stopAtEnd);
+
 public:
     bool start(std::filesystem::path filePath);
     void stop();
+
+    void requestStop() { mStopRequested.store(true, std::memory_order_release); }
+
+    void requestSeek(int tick) { mRequestedSeekTick.store(tick < 0 ? 0 : tick, std::memory_order_release); }
 
     void tick();
 
     [[nodiscard]] bool isActive() const { return mActive; }
 
     [[nodiscard]] bool isPaused() const { return mIsPaused; }
+
+    [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
+
+    [[nodiscard]] int getCurrentTick() const { return mSeekTargetTick >= 0 ? mSeekTargetTick : mCurrentTick; }
+
+    [[nodiscard]] int getTotalTicks() const;
+
+    [[nodiscard]] float getPlaybackSpeed() const { return mPlaybackSpeed; }
+
+    void adjustPlaybackSpeed(int direction);
 
     [[nodiscard]] bool setPaused(bool paused);
 

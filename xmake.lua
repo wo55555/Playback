@@ -19,6 +19,7 @@ add_requires("stduuid")
 add_requires("xxhash")
 add_requires("openssl")
 add_requires("libzip")
+add_requires("imgui v1.92.7", {configs = {dx12 = true}})
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -34,6 +35,8 @@ target("playback") -- Change this to your mod name.
     add_packages("xxhash")
     add_packages("openssl")
     add_packages("libzip")
+    add_packages("imgui")
+    add_syslinks("d3d12", "dxgi", "d3dcompiler")
     set_exceptions("none") -- To avoid conflicts with /EHa.
     set_kind("shared")
     set_languages("c++20")
@@ -44,6 +47,11 @@ target("playback") -- Change this to your mod name.
     add_files("src/**.cpp")
     add_includedirs("src")
     after_build(function(target)
+        local license_source = path.join(os.projectdir(), "licenses", "DearImGui-LICENSE.txt")
+        local license_dir = path.join(os.projectdir(), "bin", target:name(), "licenses")
+        os.mkdir(license_dir)
+        os.cp(license_source, path.join(license_dir, "DearImGui-LICENSE.txt"))
+
         local resource_dir = path.join(os.projectdir(), "resources")
         if os.isdir(resource_dir) then
             local mcpack = path.join(os.projectdir(), "bin", target:name(), target:name() .. "-ui.mcpack")

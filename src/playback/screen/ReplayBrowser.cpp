@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-namespace playback::ui {
+namespace playback::screen {
 
 namespace {
 
@@ -105,8 +105,8 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
 
     try {
         auto meta             = playback::functions::PlaybackMeta::fromJson(*metadata);
-        summary.replayName   = meta.name.empty() ? summary.replayId : std::move(meta.name);
-        summary.worldName    = std::move(meta.worldName);
+        summary.replayName    = meta.name.empty() ? summary.replayId : std::move(meta.name);
+        summary.worldName     = std::move(meta.worldName);
         summary.durationTicks = meta.duration;
         summary.totalTicks    = meta.totalTicks;
         summary.canOpen       = true;
@@ -307,4 +307,4 @@ bool ReplayBrowser::openReplay(std::filesystem::path const& replayPath) {
     return true;
 }
 
-} // namespace playback::ui
+} // namespace playback::screen

@@ -10,7 +10,6 @@
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
 #include "mc/client/player/LocalPlayer.h"
-#include "mc/deps/core/threading/TaskGroup.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
@@ -29,6 +28,7 @@
 #include "zip.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -51,6 +51,8 @@ auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 constexpr std::string_view ReplayLevelIdPrefix        = "__playback_replay_world__";
 constexpr auto             CenterChunkInjectionBudget = std::chrono::milliseconds(8);
 constexpr auto             OuterChunkInjectionBudget  = std::chrono::milliseconds(4);
+constexpr int              SeekTicksPerClientTick     = 400;
+constexpr std::array       PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f};
 
 std::string createReplayLevelId() {
     static std::random_device randomDevice;
@@ -171,6 +173,8 @@ bool ReplaySession::start(std::filesystem::path filePath) {
 }
 
 void ReplaySession::clearReplayData() {
+    mStopRequested.store(false, std::memory_order_release);
+    mRequestedSeekTick.store(-1, std::memory_order_release);
     mActive       = false;
     mIsPaused     = false;
     mWorldReady   = false;
@@ -183,6 +187,9 @@ void ReplaySession::clearReplayData() {
     mIsProcessingSnapshot    = false;
     mCurrentTick             = 0;
     mReaderIndex             = 0;
+    mSeekTargetTick          = -1;
+    mPlaybackSpeed           = 1.0f;
+    mPlaybackTickAccumulator = 0.0f;
     mChunkInjectionTicks     = 0;
     mChunkInjectionIdleTicks = 0;
     mPendingLevelChunkCursor = 0;
@@ -264,8 +271,76 @@ bool ReplaySession::setPaused(bool paused) {
     return true;
 }
 
+int ReplaySession::getTotalTicks() const {
+    return std::max(0, mMeta.totalTicks > 0 ? mMeta.totalTicks : mMeta.duration);
+}
+
+void ReplaySession::adjustPlaybackSpeed(int direction) {
+    if (!mActive || direction == 0) return;
+
+    size_t currentIndex = 0;
+    for (size_t index = 1; index < PlaybackSpeeds.size(); ++index) {
+        if (std::abs(PlaybackSpeeds[index] - mPlaybackSpeed)
+            < std::abs(PlaybackSpeeds[currentIndex] - mPlaybackSpeed)) {
+            currentIndex = index;
+        }
+    }
+
+    auto const nextIndex     = static_cast<size_t>(std::clamp(
+        static_cast<int>(currentIndex) + (direction < 0 ? -1 : 1),
+        0,
+        static_cast<int>(PlaybackSpeeds.size() - 1)
+    ));
+    mPlaybackSpeed           = PlaybackSpeeds[nextIndex];
+    mPlaybackTickAccumulator = 0.0f;
+    getLogger().info("Replay speed set to {:.2f}x", mPlaybackSpeed);
+}
+
+void ReplaySession::beginSeek(int targetTick) {
+    targetTick = std::clamp(targetTick, 0, getTotalTicks());
+    if (mReaders.empty()) return;
+
+    size_t selectedReader = mReaders.size() - 1;
+    int    selectedStart  = 0;
+    int    chunkStart     = 0;
+    size_t chunkIndex     = 0;
+    for (auto const& [_, chunkMeta] : mMeta.chunks) {
+        int const chunkDuration = std::max(0, chunkMeta.duration);
+        int const chunkEnd      = chunkStart + chunkDuration;
+        if (targetTick < chunkEnd || chunkIndex + 1 == mReaders.size()) {
+            selectedReader = chunkIndex;
+            selectedStart  = chunkStart;
+            break;
+        }
+        chunkStart = chunkEnd;
+        ++chunkIndex;
+    }
+
+    mIsPaused                = true;
+    mPlaybackTickAccumulator = 0.0f;
+    mSeekTargetTick          = targetTick;
+    if (targetTick >= mCurrentTick) {
+        getLogger().info(
+            "Fast-forwarding replay from tick {} to tick {} without reloading snapshots",
+            mCurrentTick,
+            targetTick
+        );
+        return;
+    }
+
+    mReaderIndex = selectedReader;
+    mCurrentTick = selectedStart;
+    applySnapshot(*mReaders[mReaderIndex], false);
+    getLogger()
+        .info("Seeking replay to tick {} from snapshot {} at tick {}", targetTick, selectedReader, selectedStart);
+}
+
 void ReplaySession::tick() {
     if (!mActive) return;
+    if (mStopRequested.exchange(false, std::memory_order_acq_rel)) {
+        stop();
+        return;
+    }
 
     try {
         if (!mReplayWorldJoined || !mReplayPlayer || !mNetworkHandler) return;
@@ -281,7 +356,36 @@ void ReplaySession::tick() {
             }
             if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
         }
-        sendRecordedTickPacket();
+
+        int const requestedSeek = mRequestedSeekTick.exchange(-1, std::memory_order_acq_rel);
+        if (requestedSeek >= 0) beginSeek(requestedSeek);
+        if (mChunkInjectionPending) return;
+
+        if (mSeekTargetTick >= 0) {
+            int advancedTicks = 0;
+            while (mCurrentTick < mSeekTargetTick && !mChunkInjectionPending && advancedTicks < SeekTicksPerClientTick
+            ) {
+                if (!advanceReplayTick(false)) {
+                    getLogger().warn("Replay ended at tick {} while seeking to tick {}", mCurrentTick, mSeekTargetTick);
+                    mSeekTargetTick = -1;
+                    return;
+                }
+                ++advancedTicks;
+            }
+            if (mCurrentTick >= mSeekTargetTick) {
+                getLogger().info("Replay seek completed at tick {}", mCurrentTick);
+                mSeekTargetTick = -1;
+            }
+            return;
+        }
+
+        if (mIsPaused) return;
+        mPlaybackTickAccumulator += mPlaybackSpeed;
+        int const ticksToAdvance  = static_cast<int>(mPlaybackTickAccumulator);
+        mPlaybackTickAccumulator -= static_cast<float>(ticksToAdvance);
+        for (int tick = 0; tick < ticksToAdvance && !mChunkInjectionPending; ++tick) {
+            if (!advanceReplayTick(true)) break;
+        }
     } catch (std::exception const& e) {
         getLogger().error("Replay session failed: {}", e.what());
         stop();
@@ -350,13 +454,18 @@ bool ReplaySession::init(std::filesystem::path filePath) {
         }
     }
 
-    mReplayFilePath    = std::move(filePath);
-    mCurrentTick       = 0;
-    mReaderIndex       = 0;
+    mReplayFilePath          = std::move(filePath);
+    mCurrentTick             = 0;
+    mReaderIndex             = 0;
+    mSeekTargetTick          = -1;
+    mPlaybackSpeed           = 1.0f;
+    mPlaybackTickAccumulator = 0.0f;
+    mRequestedSeekTick.store(-1, std::memory_order_relaxed);
     mReplayWorldJoined = false;
     mWorldReady        = false;
     mReplayFailed      = false;
     mIsPaused          = true;
+    mStopRequested.store(false, std::memory_order_relaxed);
     mInjectingPacket.store(nullptr, std::memory_order_release);
     mChunkCompletionObserved.store(false, std::memory_order_release);
     mReplayDimension.store(nullptr, std::memory_order_release);
@@ -410,10 +519,10 @@ void ReplaySession::onWorldReady() {
 void ReplaySession::applyInitialSnapshot() {
     if (mReaders.empty()) throw std::runtime_error("Replay contains no chunks");
 
-    applySnapshot(*mReaders.front());
+    applySnapshot(*mReaders.front(), true);
 }
 
-void ReplaySession::applySnapshot(ReplayReader& reader) {
+void ReplaySession::applySnapshot(ReplayReader& reader, bool positionPlayer) {
     if (mChunkInjectionPending) throw std::runtime_error("Previous replay snapshot is still being applied");
 
     auto resolveReplayPlayer = [this]() -> Player* {
@@ -423,55 +532,7 @@ void ReplaySession::applySnapshot(ReplayReader& reader) {
             throw std::runtime_error("Replay player changed while applying snapshot");
         return player;
     };
-    auto* replayPlayer          = resolveReplayPlayer();
-    auto  drainReplayChunkTasks = [&](std::string_view phase) {
-        replayPlayer    = resolveReplayPlayer();
-        auto* dimension = &replayPlayer->getDimension();
-        auto* taskGroup = dimension->mTaskGroup.get();
-        if (!taskGroup) throw std::runtime_error("Replay dimension has no chunk task group");
-
-        auto started     = std::chrono::steady_clock::now();
-        auto beforeState = static_cast<int>(taskGroup->getState());
-        auto beforeCount = taskGroup->count();
-        taskGroup->sync_DEPRECATED_ASK_TOMMO([] {});
-
-        replayPlayer           = resolveReplayPlayer();
-        auto* currentDimension = &replayPlayer->getDimension();
-        auto* currentTaskGroup = currentDimension->mTaskGroup.get();
-        if (currentDimension != dimension || currentTaskGroup != taskGroup) {
-            throw std::runtime_error("Replay dimension chunk task group changed while draining");
-        }
-
-        auto afterState = static_cast<int>(currentTaskGroup->getState());
-        auto afterCount = currentTaskGroup->count();
-        if (!currentTaskGroup->isEmpty()) {
-            throw std::runtime_error("Replay dimension chunk task group did not drain");
-        }
-
-        auto elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-        getLogger().debug(
-            "Drained replay chunk tasks {} in {:.3f} ms (state {} -> {}, count {} -> {})",
-            phase,
-            elapsedMs,
-            beforeState,
-            afterState,
-            beforeCount,
-            afterCount
-        );
-    };
-
-    if (!mSnapshotChunks.empty()) {
-        drainReplayChunkTasks("before snapshot clear");
-
-        {
-            auto chunkSource = replayPlayer->mChunkSource;
-            if (!chunkSource) throw std::runtime_error("Replay player has no chunk view");
-            for (auto const& pos : mSnapshotChunks) chunkSource->clearEntryAtChunkPos(pos);
-        }
-        mSnapshotChunks.clear();
-
-        drainReplayChunkTasks("after snapshot clear");
-    }
+    auto* replayPlayer = resolveReplayPlayer();
 
     {
         std::scoped_lock lock(mPendingLevelChunksMutex);
@@ -506,13 +567,20 @@ void ReplaySession::applySnapshot(ReplayReader& reader) {
         return;
     }
 
-    if (mReaderIndex >= mSnapshotViews.size()) throw std::runtime_error("Replay snapshot view index is out of range");
-    auto snapshotView = mSnapshotViews[mReaderIndex];
-    if (!snapshotView) snapshotView = deriveLegacySnapshotView();
-    if (!snapshotView) throw std::runtime_error("Unable to determine replay snapshot view");
-
-    auto const& view = *snapshotView;
-    replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
+    PlaybackView view;
+    if (positionPlayer) {
+        if (mReaderIndex >= mSnapshotViews.size())
+            throw std::runtime_error("Replay snapshot view index is out of range");
+        auto snapshotView = mSnapshotViews[mReaderIndex];
+        if (!snapshotView) snapshotView = deriveLegacySnapshotView();
+        if (!snapshotView) throw std::runtime_error("Unable to determine replay snapshot view");
+        view = *snapshotView;
+        replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
+    } else {
+        auto const& position = replayPlayer->getPosition();
+        auto const& rotation = replayPlayer->getRotation();
+        view                 = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
+    }
     mChunkInjectionStartedAt = std::chrono::steady_clock::now();
     if (!prepareChunkInjectionPlan(view)) {
         mReplayFailed          = true;
@@ -522,11 +590,12 @@ void ReplaySession::applySnapshot(ReplayReader& reader) {
     mChunkPlanPreparationMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt).count();
     getLogger().debug(
-        "Positioned replay snapshot {} at ({:.3f}, {:.3f}, {:.3f}) before chunk injection",
+        "Prepared replay snapshot {} around ({:.3f}, {:.3f}, {:.3f}) before chunk injection (position player={})",
         mReaderIndex,
         view.x,
         view.y,
-        view.z
+        view.z,
+        positionPlayer
     );
 
     mChunkInjectionPending = true;
@@ -1010,11 +1079,19 @@ void ReplaySession::handleNextTick() {
 bool ReplaySession::sendRecordedTickPacket() {
     if (!mActive || !mWorldReady || mIsPaused) return false;
 
+    return advanceReplayTick(true);
+}
+
+bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
+    if (!mActive || !mWorldReady) return false;
+
     int const startingTick = mCurrentTick;
     while (mActive && mCurrentTick == startingTick) {
         if (mReaderIndex >= mReaders.size()) {
-            getLogger().info("Replay finished at tick {}", mCurrentTick);
-            stop();
+            if (stopAtEnd) {
+                getLogger().info("Replay finished at tick {}", mCurrentTick);
+                stop();
+            }
             return false;
         }
 
@@ -1022,12 +1099,18 @@ bool ReplaySession::sendRecordedTickPacket() {
         if (!reader->handleNextAction(*this)) {
             ++mReaderIndex;
             if (mReaderIndex >= mReaders.size()) {
-                getLogger().info("Replay finished at tick {}", mCurrentTick);
-                stop();
+                if (stopAtEnd) {
+                    getLogger().info("Replay finished at tick {}", mCurrentTick);
+                    stop();
+                }
                 return false;
             }
 
-            applySnapshot(*mReaders[mReaderIndex]);
+            if (stopAtEnd) {
+                applySnapshot(*mReaders[mReaderIndex], false);
+            } else {
+                mReaders[mReaderIndex]->resetToStart();
+            }
             if (mReplayFailed) throw std::runtime_error("Unable to apply a replay action");
             return true;
         }

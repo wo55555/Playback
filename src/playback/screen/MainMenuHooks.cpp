@@ -1,7 +1,7 @@
 #include "MainMenuHooks.h"
 
 #include "playback/functions/replay/ReplaySession.h"
-#include "playback/ui/ReplayBrowser.h"
+#include "playback/screen/ReplayBrowser.h"
 
 #include "ll/api/memory/Hook.h"
 
@@ -27,7 +27,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace playback::ui {
+namespace playback::screen {
 
 namespace {
 
@@ -308,7 +308,7 @@ void selectReplay(MinecraftScreenController& ctrl, std::size_t index) {
     gHighlightedIndex = index;
     auto now          = std::chrono::steady_clock::now();
     bool doubleClick  = gLastClickedIndex.has_value() && *gLastClickedIndex == index
-                    && now - gLastClickTime < std::chrono::milliseconds(450);
+                     && now - gLastClickTime < std::chrono::milliseconds(450);
     gLastClickedIndex = index;
     gLastClickTime    = now;
 
@@ -449,4 +449,4 @@ void hookMainMenu(bool enable) {
     hooked = enable;
 }
 
-} // namespace playback::ui
+} // namespace playback::screen

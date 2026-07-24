@@ -1,6 +1,7 @@
 #include "ClientTickHooks.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/ReplayUI.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/functions/record/Recorder.h"
 #include "playback/functions/replay/ReplaySession.h"
@@ -8,6 +9,7 @@
 #include "ll/api/memory/Hook.h"
 
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/gui/SceneType.h"
 #include "mc/client/multiplayer/MultiPlayerLevel.h"
 
 namespace playback::functions {
@@ -38,8 +40,17 @@ LL_TYPE_INSTANCE_HOOK(
     bool,
     bool isInitFinished
 ) {
-    auto result = origin(isInitFinished);
-    ReplaySession::getInstance().tryFinalizeWorldCleanup();
+    auto  result     = origin(isInitFinished);
+    auto& replay     = ReplaySession::getInstance();
+    bool  hudVisible = false;
+    if (isInitFinished && replay.isActive()) {
+        auto const topScene = static_cast<unsigned int>(getTopSceneType());
+        auto const hudScene = static_cast<unsigned int>(ui::SceneType::HudScene);
+        hudVisible = (topScene & hudScene) != 0 && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
+                  && !isShowingProgressScreen();
+    }
+    editor::tickReplayUI(hudVisible);
+    replay.tryFinalizeWorldCleanup();
     return result;
 }
 
