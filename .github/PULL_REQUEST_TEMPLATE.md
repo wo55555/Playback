@@ -1,18 +1,23 @@
-## What does this PR do?
+## Summary
 
+Describe the problem and the focused change that resolves it.
 
+## Validation
 
-## Which issues does this PR resolve?
+- [ ] `xmake -r -y`
+- [ ] `git diff --check`
+- [ ] Tested in Minecraft when the change affects recording, replay, or UI behavior
 
+Describe any additional validation and list the Minecraft, LeviLamina, and Playback versions used.
 
+## Compatibility and Replay Impact
 
-## Checklist before merging
+Describe changes to compatibility, replay files, recorded data, or runtime behavior. Write `None` when not applicable.
 
-Thank you for your contribution to the repository. 
-Before submitting this PR, please make sure:
+## Checklist
 
-- [ ] Your code builds clean without any errors or warnings
-- [ ] Your code follows [LeviLamina C++ Style Guide](https://github.com/LiteLDev/LeviLamina/wiki/CPP-Style-Guide)
-- [ ] You have tested all functions
-- [ ] You have not used code without license
-- [ ] You have added statement for third-party code
+- [ ] The change is focused and contains no unrelated refactoring.
+- [ ] Changed C++ files have been formatted with the repository configuration.
+- [ ] Translation keys remain aligned across supported languages where applicable.
+- [ ] New third-party code or assets include the required license notice.
+- [ ] Logs, replays, screenshots, and test data contain no private server or player information.

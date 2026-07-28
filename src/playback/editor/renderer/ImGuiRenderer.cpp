@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -285,6 +286,28 @@ struct ImGuiRenderer::Impl {
         io.IniFilename         = nullptr;
         io.LogFilename         = nullptr;
         io.BackendPlatformName = "playback_d3d12_overlay";
+        std::array<wchar_t, MAX_PATH> windowsDirectory{};
+        auto const                    windowsDirectoryLength =
+            GetWindowsDirectoryW(windowsDirectory.data(), static_cast<UINT>(windowsDirectory.size()));
+        std::filesystem::path fontPath;
+        if (windowsDirectoryLength > 0 && windowsDirectoryLength < static_cast<UINT>(windowsDirectory.size())) {
+            fontPath = std::filesystem::path(windowsDirectory.data()) / "Fonts" / "msyh.ttc";
+        }
+        auto const fontPathString = fontPath.string();
+        ImFont*    font           = nullptr;
+        if (!fontPathString.empty()) {
+            font = io.Fonts->AddFontFromFileTTF(
+                fontPathString.c_str(),
+                13.0f,
+                nullptr,
+                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+            );
+        }
+        if (font) {
+            io.FontDefault = font;
+        } else {
+            io.Fonts->AddFontDefault();
+        }
         ImGui::StyleColorsDark();
         auto& style            = ImGui::GetStyle();
         style.AntiAliasedLines = true;
@@ -325,7 +348,7 @@ struct ImGuiRenderer::Impl {
         initialized   = true;
         initFailed    = false;
         missingQueue  = false;
-        getLogger().info(
+        getLogger().debug(
             "Replay ImGui timeline initialized ({}x{}, {} buffers)",
             bufDesc.Width,
             bufDesc.Height,

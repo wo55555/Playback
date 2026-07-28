@@ -1,0 +1,46 @@
+{
+    "playback": {
+        "command": {
+            "playback": {
+                "description": "Playback 模组命令",
+                "versionUnavailable": "无法获取 Playback 版本"
+            },
+            "record": {
+                "description": "控制回放录制",
+                "started": "已开始录制",
+                "paused": "已暂停录制",
+                "stopped": "已结束录制"
+            }
+        },
+        "editor": {
+            "menu": {
+                "file": "文件",
+                "exportVideo": "导出视频",
+                "exportScreenshot": "导出截图",
+                "openReplay": "打开回放",
+                "openRecent": "最近打开",
+                "exitReplay": "退出回放",
+                "preferences": "偏好设置",
+                "playerList": "玩家列表",
+                "movement": "移动",
+                "renderFilter": "渲染过滤",
+                "keybinds": "按键绑定",
+                "hideReplayUi": "隐藏回放界面"
+            },
+            "status": {
+                "paused": "已暂停",
+                "playing": "播放中"
+            },
+            "timeline": {
+                "scrub": "{} / {} 游戏刻",
+                "jumpToStart": "跳至开头",
+                "slowDown": "减速（{:g}x）",
+                "play": "播放",
+                "pause": "暂停",
+                "speedUp": "加速（{:g}x）",
+                "jumpToEnd": "跳至结尾",
+                "ticks": "{} / {} 游戏刻"
+            }
+        }
+    }
+}

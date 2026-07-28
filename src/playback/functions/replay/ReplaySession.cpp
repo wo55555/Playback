@@ -11,15 +11,42 @@
 #include "mc/client/network/LegacyClientNetworkHandler.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
+#include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
+#include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
+#include "mc/entity/components/ActorHeadRotationComponent.h"
+#include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/NetworkIdentifier.h"
+#include "mc/network/packet/AddActorPacket.h"
+#include "mc/network/packet/AddItemActorPacket.h"
+#include "mc/network/packet/AddPaintingPacket.h"
+#include "mc/network/packet/AddPlayerPacket.h"
+#include "mc/network/packet/BlockActorDataPacket.h"
+#include "mc/network/packet/BlockEventPacket.h"
+#include "mc/network/packet/ChangeDimensionPacket.h"
+#include "mc/network/packet/DimensionDataPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
+#include "mc/network/packet/MoveActorAbsolutePacket.h"
+#include "mc/network/packet/MovePlayerPacket.h"
+#include "mc/network/packet/PlayerListPacket.h"
+#include "mc/network/packet/RemoveActorPacket.h"
+#include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
+#include "mc/network/packet/UpdateBlockPacket.h"
+#include "mc/network/packet/UpdateBlockSyncedPacket.h"
+#include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/util/VarIntDataInput.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/player/PlayerListEntry.h"
+#include "mc/world/actor/player/SerializedSkinImpl.h"
+#include "mc/world/level/ActorRuntimeIDManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
+#include "mc/world/level/chunk/ChunkSource.h"
 #include "mc/world/level/chunk/ChunkViewSource.h"
+#include "mc/world/level/chunk/LevelChunk.h"
+#include "mc/world/level/chunk/SubChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 
@@ -51,8 +78,22 @@ auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 constexpr std::string_view ReplayLevelIdPrefix        = "__playback_replay_world__";
 constexpr auto             CenterChunkInjectionBudget = std::chrono::milliseconds(8);
 constexpr auto             OuterChunkInjectionBudget  = std::chrono::milliseconds(4);
+constexpr auto             SnapshotGamePacketBudget   = std::chrono::milliseconds(2);
 constexpr int              SeekTicksPerClientTick     = 400;
 constexpr std::array       PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f};
+
+bool shouldIgnoreReplayPacket(MinecraftPacketIds packetId) {
+    switch (packetId) {
+    case MinecraftPacketIds::ContainerOpen:
+    case MinecraftPacketIds::ContainerClose:
+    case MinecraftPacketIds::ClientboundCloseScreen:
+    case MinecraftPacketIds::NetworkChunkPublisherUpdate:
+    case MinecraftPacketIds::ChunkRadiusUpdated:
+        return true;
+    default:
+        return false;
+    }
+}
 
 std::string createReplayLevelId() {
     static std::random_device randomDevice;
@@ -184,12 +225,14 @@ void ReplaySession::clearReplayData() {
     mReplayDimension.store(nullptr, std::memory_order_release);
     mInitialSnapshotApplied  = false;
     mChunkInjectionPending   = false;
+    mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mIsProcessingSnapshot    = false;
     mCurrentTick             = 0;
     mReaderIndex             = 0;
     mSeekTargetTick          = -1;
     mPlaybackSpeed           = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
+    mReplayTime.reset();
     mChunkInjectionTicks     = 0;
     mChunkInjectionIdleTicks = 0;
     mPendingLevelChunkCursor = 0;
@@ -197,6 +240,10 @@ void ReplaySession::clearReplayData() {
     mInjectedLevelChunks     = 0;
     mInjectedSubChunkPackets = 0;
     mInjectedSubChunkEntries = 0;
+    mReusedSnapshotColumns   = 0;
+    mDirectLevelChunks       = 0;
+    mDirectSubChunkPackets   = 0;
+    mDirectSubChunkEntries   = 0;
     mReplayPlayer            = nullptr;
     mNetworkHandler          = nullptr;
     mReplayFilePath.clear();
@@ -208,12 +255,21 @@ void ReplaySession::clearReplayData() {
         std::scoped_lock lock(mPendingLevelChunksMutex);
         mPendingLevelChunks.clear();
         mCompletedLevelChunkPositions.clear();
+        mRetainedReplayChunks.clear();
     }
     mPendingLevelChunkIndices.clear();
     mSnapshotChunks.clear();
     mApplyingSnapshotChunks.clear();
+    mAppliedSnapshotColumns.clear();
+    mPendingSnapshotColumns.clear();
+    mDirtySnapshotColumns.clear();
+    mReusableSnapshotColumns.clear();
+    mDirectSnapshotColumns.clear();
+    mDirectLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
     mPendingSubChunkPackets.clear();
+    mPendingSnapshotGamePackets.clear();
+    mRecordedEntityIds.clear();
     mCenterChunkPositions.clear();
     mRemainingSubChunkPacketsByColumn.clear();
     mApplyingChunkSnapshot      = false;
@@ -230,6 +286,7 @@ void ReplaySession::finishWorldCleanup() {
     mCleanupState      = CleanupState::None;
     mCleanupWaitTicks  = 0;
     mReplayLevelId.clear();
+    mOrphanReplayWorldsScanned = false;
 }
 
 void ReplaySession::stop() {
@@ -267,7 +324,7 @@ bool ReplaySession::setPaused(bool paused) {
     if (mIsPaused == paused) return true;
 
     mIsPaused = paused;
-    getLogger().info("Replay {} at tick {}", paused ? "paused" : "playing", mCurrentTick);
+    getLogger().debug("Replay {} at tick {}", paused ? "paused" : "playing", mCurrentTick);
     return true;
 }
 
@@ -293,7 +350,7 @@ void ReplaySession::adjustPlaybackSpeed(int direction) {
     ));
     mPlaybackSpeed           = PlaybackSpeeds[nextIndex];
     mPlaybackTickAccumulator = 0.0f;
-    getLogger().info("Replay speed set to {:.2f}x", mPlaybackSpeed);
+    getLogger().debug("Replay speed set to {:.2f}x", mPlaybackSpeed);
 }
 
 void ReplaySession::beginSeek(int targetTick) {
@@ -320,7 +377,7 @@ void ReplaySession::beginSeek(int targetTick) {
     mPlaybackTickAccumulator = 0.0f;
     mSeekTargetTick          = targetTick;
     if (targetTick >= mCurrentTick) {
-        getLogger().info(
+        getLogger().debug(
             "Fast-forwarding replay from tick {} to tick {} without reloading snapshots",
             mCurrentTick,
             targetTick
@@ -332,11 +389,12 @@ void ReplaySession::beginSeek(int targetTick) {
     mCurrentTick = selectedStart;
     applySnapshot(*mReaders[mReaderIndex], false);
     getLogger()
-        .info("Seeking replay to tick {} from snapshot {} at tick {}", targetTick, selectedReader, selectedStart);
+        .debug("Seeking replay to tick {} from snapshot {} at tick {}", targetTick, selectedReader, selectedStart);
 }
 
 void ReplaySession::tick() {
     if (!mActive) return;
+    if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
     if (mStopRequested.exchange(false, std::memory_order_acq_rel)) {
         stop();
         return;
@@ -373,7 +431,7 @@ void ReplaySession::tick() {
                 ++advancedTicks;
             }
             if (mCurrentTick >= mSeekTargetTick) {
-                getLogger().info("Replay seek completed at tick {}", mCurrentTick);
+                getLogger().debug("Replay seek completed at tick {}", mCurrentTick);
                 mSeekTargetTick = -1;
             }
             return;
@@ -460,6 +518,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mSeekTargetTick          = -1;
     mPlaybackSpeed           = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
+    mReplayTime.reset();
     mRequestedSeekTick.store(-1, std::memory_order_relaxed);
     mReplayWorldJoined = false;
     mWorldReady        = false;
@@ -471,6 +530,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mReplayDimension.store(nullptr, std::memory_order_release);
     mInitialSnapshotApplied  = false;
     mChunkInjectionPending   = false;
+    mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mChunkInjectionTicks     = 0;
     mChunkInjectionIdleTicks = 0;
     mPendingLevelChunkCursor = 0;
@@ -480,12 +540,21 @@ bool ReplaySession::init(std::filesystem::path filePath) {
         std::scoped_lock lock(mPendingLevelChunksMutex);
         mPendingLevelChunks.clear();
         mCompletedLevelChunkPositions.clear();
+        mRetainedReplayChunks.clear();
     }
     mSnapshotChunks.clear();
     mApplyingSnapshotChunks.clear();
+    mAppliedSnapshotColumns.clear();
+    mPendingSnapshotColumns.clear();
+    mDirtySnapshotColumns.clear();
+    mReusableSnapshotColumns.clear();
+    mDirectSnapshotColumns.clear();
+    mDirectLevelChunkIndices.clear();
     mPendingLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
     mPendingSubChunkPackets.clear();
+    mPendingSnapshotGamePackets.clear();
+    mRecordedEntityIds.clear();
     mCenterChunkPositions.clear();
     mRemainingSubChunkPacketsByColumn.clear();
     mApplyingChunkSnapshot      = false;
@@ -534,6 +603,12 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool positionPlayer) {
     };
     auto* replayPlayer = resolveReplayPlayer();
 
+    mPendingSnapshotGamePackets.clear();
+    if (!clearRecordedEntities()) {
+        mReplayFailed = true;
+        return;
+    }
+
     {
         std::scoped_lock lock(mPendingLevelChunksMutex);
         mPendingLevelChunks.clear();
@@ -550,15 +625,24 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool positionPlayer) {
     mPendingSubChunkCursor   = 0;
     mChunkInjectionPending   = false;
     mApplyingChunkSnapshot   = true;
+    mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mChunkCompletionObserved.store(false, std::memory_order_release);
     mChunkInjectionPlanPrepared = false;
     mCenterChunksReady          = false;
     mChunkInjectionDurationsMs.clear();
     mChunkPlanPreparationMs = 0.0;
     mApplyingSnapshotChunks.clear();
+    mPendingSnapshotColumns.clear();
+    mReusableSnapshotColumns.clear();
+    mDirectSnapshotColumns.clear();
+    mDirectLevelChunkIndices.clear();
     mInjectedLevelChunks     = 0;
     mInjectedSubChunkPackets = 0;
     mInjectedSubChunkEntries = 0;
+    mReusedSnapshotColumns   = 0;
+    mDirectLevelChunks       = 0;
+    mDirectSubChunkPackets   = 0;
+    mDirectSubChunkEntries   = 0;
 
     reader.handleSnapshot(*this);
     reader.resetToStart();
@@ -599,7 +683,7 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool positionPlayer) {
     );
 
     mChunkInjectionPending = true;
-    getLogger().info(
+    getLogger().debug(
         "Starting distance-prioritized replay chunk streaming with {} columns, {} SubChunk packets, and at most {} "
         "LevelChunks in flight (plan {:.3f} ms)",
         mPendingLevelChunkIndices.size(),
@@ -628,9 +712,12 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         return dx * dx + dz * dz;
     };
 
-    std::vector<PrioritizedLevelChunk> levelChunks;
-    std::unordered_set<ChunkPos>       levelChunkPositions;
-    std::unordered_set<ChunkPos>       requestModeLevelChunks;
+    std::vector<PrioritizedLevelChunk>                    levelChunks;
+    std::unordered_set<ChunkPos>                          levelChunkPositions;
+    std::unordered_set<ChunkPos>                          requestModeLevelChunks;
+    std::unordered_map<ChunkPos, SnapshotColumnIdentity>  targetColumns;
+    std::unordered_map<ChunkPos, std::unordered_set<int>> subChunkIndicesByColumn;
+    size_t                                                skippedBlobCachePackets = 0;
     levelChunks.reserve(mPendingLevelChunkIndices.size());
     levelChunkPositions.reserve(mPendingLevelChunkIndices.size());
     requestModeLevelChunks.reserve(mPendingLevelChunkIndices.size());
@@ -650,8 +737,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 
         auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
         if (static_cast<bool>(levelChunk.mCacheEnabled)) {
-            getLogger().error("Replay LevelChunk packet {} unexpectedly uses the blob cache", index);
-            return false;
+            ++skippedBlobCachePackets;
+            continue;
         }
 
         ChunkPos const pos = *levelChunk.mPos;
@@ -662,6 +749,7 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         if (static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)) {
             requestModeLevelChunks.emplace(pos);
         }
+        targetColumns[pos].levelChunkIndex = index;
         levelChunks.push_back(PrioritizedLevelChunk{pos, distanceSquared(pos), index});
     }
 
@@ -671,11 +759,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         return left.pos.z < right.pos.z;
     });
 
-    mPendingLevelChunkIndices.clear();
-    mPendingLevelChunkIndices.reserve(levelChunks.size());
     mCenterChunkPositions.clear();
     for (auto const& levelChunk : levelChunks) {
-        mPendingLevelChunkIndices.emplace_back(levelChunk.index);
         if (std::abs(levelChunk.pos.x - centerX) <= 2 && std::abs(levelChunk.pos.z - centerZ) <= 2) {
             mCenterChunkPositions.emplace(levelChunk.pos);
         }
@@ -705,8 +790,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 
         auto const& subChunk = static_cast<SubChunkPacket const&>(*packet);
         if (static_cast<bool>(subChunk.mCacheEnabled)) {
-            getLogger().error("Replay SubChunk packet {} unexpectedly uses the blob cache", index);
-            return false;
+            ++skippedBlobCachePackets;
+            continue;
         }
 
         auto const& entries = *subChunk.mSubChunkData;
@@ -714,19 +799,18 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             getLogger().error("Replay SubChunk packet {} contains no successful entries", index);
             return false;
         }
-        if (entries.size() > SUB_CHUNK_ENTRIES_PER_TICK) {
+        if (entries.size() > MAX_SUB_CHUNK_ENTRIES_PER_PACKET) {
             getLogger().error(
-                "Replay SubChunk packet {} has {} entries, exceeding the per-tick limit {}",
+                "Replay SubChunk packet {} has {} entries, exceeding the per-packet limit {}",
                 index,
                 entries.size(),
-                SUB_CHUNK_ENTRIES_PER_TICK
+                MAX_SUB_CHUNK_ENTRIES_PER_PACKET
             );
             return false;
         }
 
         PendingSubChunkPacket pending;
         pending.index      = index;
-        pending.entryCount = entries.size();
         auto const& center = *subChunk.mCenterPos;
         for (auto const& entry : entries) {
             auto const result = static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult);
@@ -741,14 +825,14 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             }
             auto const&    offset = *entry.mSubChunkPosOffset;
             ChunkPos const target{center.x + static_cast<int>(offset.mX), center.z + static_cast<int>(offset.mZ)};
+            subChunkIndicesByColumn[target].emplace(center.y + static_cast<int>(offset.mY));
             if (std::find(pending.targets.begin(), pending.targets.end(), target) == pending.targets.end()) {
                 pending.targets.emplace_back(target);
             }
         }
         int64_t priority = std::numeric_limits<int64_t>::max();
         for (auto const& target : pending.targets) {
-            bool const currentLevelChunk = levelChunkPositions.contains(target);
-            if (!currentLevelChunk && !mSnapshotChunks.contains(target)) {
+            if (!levelChunkPositions.contains(target) && !mSnapshotChunks.contains(target)) {
                 getLogger().error(
                     "Replay SubChunk packet {} targets column ({}, {}) without a LevelChunk",
                     index,
@@ -757,22 +841,96 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
                 );
                 return false;
             }
-            if (currentLevelChunk) pending.dependencies.emplace_back(target);
-            ++mRemainingSubChunkPacketsByColumn[target];
+            targetColumns[target].subChunkIndices.emplace_back(index);
             priority = std::min(priority, distanceSquared(target));
         }
         subChunks.push_back(PrioritizedSubChunk{std::move(pending), priority});
     }
 
-    for (auto const& pos : requestModeLevelChunks) {
-        if (!mRemainingSubChunkPacketsByColumn.contains(pos)) {
-            getLogger().error(
-                "Replay request-mode LevelChunk column ({}, {}) has no successful SubChunk packet",
-                pos.x,
-                pos.z
-            );
-            return false;
+    if (mApplyingChunkSnapshot) {
+        for (auto const& pos : requestModeLevelChunks) {
+            auto target = targetColumns.find(pos);
+            if (target == targetColumns.end() || target->second.subChunkIndices.empty()) {
+                getLogger().error(
+                    "Replay request-mode LevelChunk column ({}, {}) has no successful SubChunk packet",
+                    pos.x,
+                    pos.z
+                );
+                return false;
+            }
         }
+    }
+
+    for (auto& [_, identity] : targetColumns) {
+        std::sort(identity.subChunkIndices.begin(), identity.subChunkIndices.end());
+        identity.subChunkIndices.erase(
+            std::unique(identity.subChunkIndices.begin(), identity.subChunkIndices.end()),
+            identity.subChunkIndices.end()
+        );
+    }
+
+    mReusableSnapshotColumns.clear();
+    for (auto const& [pos, identity] : targetColumns) {
+        auto applied = mAppliedSnapshotColumns.find(pos);
+        if (identity.levelChunkIndex >= 0 && applied != mAppliedSnapshotColumns.end() && applied->second == identity
+            && !mDirtySnapshotColumns.contains(pos)) {
+            mReusableSnapshotColumns.emplace(pos);
+        }
+    }
+    mReusedSnapshotColumns = mReusableSnapshotColumns.size();
+
+    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+    if (!replayDimension) {
+        getLogger().error("Replay dimension disappeared while preparing direct chunk updates");
+        return false;
+    }
+    int const    minimumSubChunk = static_cast<int>(replayDimension->mHeightRange->mMin) / 16;
+    size_t const subChunkCount   = static_cast<size_t>(replayDimension->getHeightInSubchunks());
+    if (subChunkCount == 0) {
+        getLogger().error("Replay dimension has no subchunk slots");
+        return false;
+    }
+
+    mDirectSnapshotColumns.clear();
+    mDirectLevelChunkIndices.clear();
+    auto& chunkSource = replayDimension->getChunkSource();
+    for (auto const& [pos, identity] : targetColumns) {
+        if (mReusableSnapshotColumns.contains(pos) || identity.levelChunkIndex < 0
+            || !requestModeLevelChunks.contains(pos)) {
+            continue;
+        }
+
+        auto covered = subChunkIndicesByColumn.find(pos);
+        if (covered == subChunkIndicesByColumn.end() || covered->second.size() != subChunkCount) continue;
+        bool const coversCompleteHeight =
+            std::all_of(covered->second.begin(), covered->second.end(), [minimumSubChunk, subChunkCount](int index) {
+                return index >= minimumSubChunk && static_cast<size_t>(index - minimumSubChunk) < subChunkCount;
+            });
+        if (!coversCompleteHeight) continue;
+
+        auto chunk = chunkSource.getExistingChunk(pos);
+        if (!chunk || chunk->mIsEmptyClientChunk
+            || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded
+            || chunk->mSubChunks->size() != subChunkCount) {
+            continue;
+        }
+
+        mDirectSnapshotColumns.emplace(pos);
+        mDirectLevelChunkIndices.emplace(identity.levelChunkIndex);
+    }
+
+    std::unordered_set<ChunkPos> queuedLevelChunkPositions;
+    mPendingLevelChunkIndices.clear();
+    mPendingLevelChunkIndices.reserve(levelChunks.size() - mReusedSnapshotColumns);
+    for (auto const& levelChunk : levelChunks) {
+        if (mReusableSnapshotColumns.contains(levelChunk.pos)) continue;
+        mPendingLevelChunkIndices.emplace_back(levelChunk.index);
+        queuedLevelChunkPositions.emplace(levelChunk.pos);
+    }
+
+    {
+        std::scoped_lock lock(mPendingLevelChunksMutex);
+        mCompletedLevelChunkPositions.insert(mReusableSnapshotColumns.begin(), mReusableSnapshotColumns.end());
     }
 
     std::stable_sort(subChunks.begin(), subChunks.end(), [](auto const& left, auto const& right) {
@@ -780,12 +938,43 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     });
     mPendingSubChunkPackets.clear();
     mPendingSubChunkPackets.reserve(subChunks.size());
-    for (auto& subChunk : subChunks) mPendingSubChunkPackets.emplace_back(std::move(subChunk.packet));
+    for (auto& subChunk : subChunks) {
+        bool const reusable =
+            std::all_of(subChunk.packet.targets.begin(), subChunk.packet.targets.end(), [this](ChunkPos const& pos) {
+                return mReusableSnapshotColumns.contains(pos);
+            });
+        if (reusable) continue;
+
+        for (auto const& target : subChunk.packet.targets) {
+            if (queuedLevelChunkPositions.contains(target)) subChunk.packet.dependencies.emplace_back(target);
+            ++mRemainingSubChunkPacketsByColumn[target];
+        }
+        mPendingSubChunkPackets.emplace_back(std::move(subChunk.packet));
+    }
     mPendingSubChunkIndices.clear();
 
-    if (mPendingLevelChunkIndices.empty() && mPendingSubChunkPackets.empty()) {
+    if (skippedBlobCachePackets != 0) {
+        getLogger().warn(
+            "Skipped {} replay chunk packets that depend on unavailable server blob-cache data",
+            skippedBlobCachePackets
+        );
+    }
+
+    if (targetColumns.empty() && mApplyingChunkSnapshot) {
         getLogger().error("Replay snapshot contains no chunk packets");
         return false;
+    }
+
+    mPendingSnapshotColumns = std::move(targetColumns);
+    if (mApplyingChunkSnapshot || !levelChunks.empty()) {
+        getLogger().debug(
+            "Prepared replay {} chunk batch with {} target columns: {} reused, {} direct, {} native",
+            mApplyingChunkSnapshot ? "snapshot" : "timeline",
+            mPendingSnapshotColumns.size(),
+            mReusedSnapshotColumns,
+            mDirectSnapshotColumns.size(),
+            levelChunks.size() - mReusedSnapshotColumns - mDirectSnapshotColumns.size()
+        );
     }
 
     mPendingLevelChunkCursor    = 0;
@@ -796,6 +985,26 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 
 bool ReplaySession::tryFinishChunkInjection() {
     if (!mChunkInjectionPending) return true;
+    if (mSnapshotGamePacketPhase == SnapshotGamePacketPhase::WaitingAfterPlayerList) {
+        auto const deadline = std::chrono::steady_clock::now() + SnapshotGamePacketBudget;
+        if (!flushPendingSnapshotGamePackets(false, SNAPSHOT_GAME_PACKETS_PER_TICK, deadline)) {
+            mReplayFailed = true;
+            return false;
+        }
+        if (!mPendingSnapshotGamePackets.empty()) return false;
+        mSnapshotGamePacketPhase = SnapshotGamePacketPhase::WaitingAfterEntities;
+        return false;
+    }
+    if (mSnapshotGamePacketPhase == SnapshotGamePacketPhase::WaitingAfterEntities) {
+        mAppliedSnapshotColumns = std::move(mPendingSnapshotColumns);
+        mDirtySnapshotColumns.clear();
+        mReusableSnapshotColumns.clear();
+        mDirectSnapshotColumns.clear();
+        mDirectLevelChunkIndices.clear();
+        mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+        mChunkInjectionPending   = false;
+        return true;
+    }
     if (!mChunkInjectionPlanPrepared) {
         auto* player = mReplayPlayer;
         if (!player) {
@@ -824,10 +1033,8 @@ bool ReplaySession::tryFinishChunkInjection() {
     auto const deadline =
         injectionStarted + (mCenterChunksReady ? OuterChunkInjectionBudget : CenterChunkInjectionBudget);
     size_t injectedSubChunkPackets = 0;
-    size_t injectedSubChunkEntries = 0;
-    if (!injectReadySubChunkPackets(injectedSubChunkPackets, injectedSubChunkEntries, deadline)
-        || !injectPendingLevelChunks(deadline)
-        || !injectReadySubChunkPackets(injectedSubChunkPackets, injectedSubChunkEntries, deadline)) {
+    if (!injectReadySubChunkPackets(injectedSubChunkPackets, deadline) || !injectPendingLevelChunks(deadline)
+        || !injectReadySubChunkPackets(injectedSubChunkPackets, deadline)) {
         return false;
     }
     updateCenterChunkReadiness();
@@ -877,18 +1084,33 @@ bool ReplaySession::tryFinishChunkInjection() {
 }
 
 bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_point deadline) {
-    size_t injected = 0;
-    while (mPendingLevelChunkCursor < mPendingLevelChunkIndices.size() && injected < LEVEL_CHUNK_PACKETS_PER_TICK) {
-        if (injected != 0 && std::chrono::steady_clock::now() >= deadline) break;
-        {
+    size_t processed = 0;
+    while (mPendingLevelChunkCursor < mPendingLevelChunkIndices.size()) {
+        if (processed != 0 && std::chrono::steady_clock::now() >= deadline) break;
+
+        int const  index  = mPendingLevelChunkIndices[mPendingLevelChunkCursor];
+        bool const direct = mDirectLevelChunkIndices.contains(index);
+        if (!direct) {
             std::scoped_lock lock(mPendingLevelChunksMutex);
             if (mPendingLevelChunks.size() >= MAX_LEVEL_CHUNKS_IN_FLIGHT) break;
         }
 
-        int const index = mPendingLevelChunkIndices[mPendingLevelChunkCursor];
-        if (!injectChunkPacket(mChunkPackets[static_cast<size_t>(index)], MinecraftPacketIds::FullChunkData)) {
+        bool applied = false;
+        if (direct) {
+            applied = applyLevelChunkDirect(mChunkPackets[static_cast<size_t>(index)]);
+            if (!applied) {
+                getLogger().warn("Direct replay LevelChunk update became unavailable; falling back to native loading");
+                mDirectLevelChunkIndices.clear();
+                mDirectSnapshotColumns.clear();
+                continue;
+            }
+        } else {
+            applied = injectChunkPacket(mChunkPackets[static_cast<size_t>(index)], MinecraftPacketIds::FullChunkData);
+        }
+        if (!applied) {
             getLogger().error(
-                "Unable to inject replay LevelChunk packet {} of {}",
+                "Unable to {} replay LevelChunk packet {} of {}",
+                direct ? "apply directly" : "inject",
                 mPendingLevelChunkCursor,
                 mPendingLevelChunkIndices.size()
             );
@@ -896,14 +1118,13 @@ bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_poi
             return false;
         }
         ++mPendingLevelChunkCursor;
-        ++injected;
+        ++processed;
     }
     return true;
 }
 
 bool ReplaySession::injectReadySubChunkPackets(
     size_t&                               injectedPackets,
-    size_t&                               injectedEntries,
     std::chrono::steady_clock::time_point deadline
 ) {
     std::unordered_set<ChunkPos> completed;
@@ -914,17 +1135,31 @@ bool ReplaySession::injectReadySubChunkPackets(
 
     for (auto& pending : mPendingSubChunkPackets) {
         if (pending.injected) continue;
-        if (injectedPackets >= SUB_CHUNK_PACKETS_PER_TICK) break;
         if (std::chrono::steady_clock::now() >= deadline) break;
         if (!std::all_of(pending.dependencies.begin(), pending.dependencies.end(), [&completed](ChunkPos const& pos) {
                 return completed.contains(pos);
             })) {
             continue;
         }
-        if (injectedPackets != 0 && injectedEntries + pending.entryCount > SUB_CHUNK_ENTRIES_PER_TICK) continue;
-
-        if (!injectChunkPacket(mChunkPackets[static_cast<size_t>(pending.index)], MinecraftPacketIds::SubChunkPacket)) {
-            getLogger().error("Unable to inject replay SubChunk packet {}", pending.index);
+        bool const direct  = std::all_of(pending.targets.begin(), pending.targets.end(), [this](ChunkPos const& pos) {
+            return mDirectSnapshotColumns.contains(pos) || mReusableSnapshotColumns.contains(pos);
+        });
+        bool       applied = direct ? applySubChunkDirect(mChunkPackets[static_cast<size_t>(pending.index)])
+                                    : injectChunkPacket(
+                                    mChunkPackets[static_cast<size_t>(pending.index)],
+                                    MinecraftPacketIds::SubChunkPacket
+                                );
+        if (direct && !applied) {
+            getLogger().warn("Direct replay SubChunk update became unavailable; falling back to native loading");
+            for (auto const& target : pending.targets) mDirectSnapshotColumns.erase(target);
+            applied = injectChunkPacket(
+                mChunkPackets[static_cast<size_t>(pending.index)],
+                MinecraftPacketIds::SubChunkPacket
+            );
+        }
+        if (!applied) {
+            getLogger()
+                .error("Unable to {} replay SubChunk packet {}", direct ? "apply directly" : "inject", pending.index);
             mReplayFailed = true;
             return false;
         }
@@ -932,7 +1167,6 @@ bool ReplaySession::injectReadySubChunkPackets(
         pending.injected = true;
         ++mPendingSubChunkCursor;
         ++injectedPackets;
-        injectedEntries += pending.entryCount;
         for (auto const& target : pending.targets) {
             auto remaining = mRemainingSubChunkPacketsByColumn.find(target);
             if (remaining != mRemainingSubChunkPacketsByColumn.end() && remaining->second != 0) {
@@ -960,12 +1194,18 @@ void ReplaySession::updateCenterChunkReadiness() {
     mCenterChunksReady = true;
     auto const elapsed =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt);
-    getLogger().info(
+    size_t const queuedCenterColumns = static_cast<size_t>(std::count_if(
+        mCenterChunkPositions.begin(),
+        mCenterChunkPositions.end(),
+        [this](ChunkPos const& pos) { return !mReusableSnapshotColumns.contains(pos); }
+    ));
+    size_t const queuedOuterColumns  = mPendingLevelChunkIndices.size() - queuedCenterColumns;
+    getLogger().debug(
         "Replay center ready with {} columns in {:.3f} ms after {} ticks; streaming {} outer columns",
         mCenterChunkPositions.size(),
         elapsed.count(),
         mChunkInjectionTicks,
-        mPendingLevelChunkIndices.size() - mCenterChunkPositions.size()
+        queuedOuterColumns
     );
 }
 
@@ -1009,11 +1249,14 @@ std::optional<PlaybackView> ReplaySession::deriveLegacySnapshotView() const {
 
 bool ReplaySession::finishChunkInjection() {
     updateCenterChunkReadiness();
+    bool const applyingSnapshot = mApplyingChunkSnapshot;
 
     size_t completedLevelChunks;
+    size_t retainedReplayChunks;
     {
         std::scoped_lock lock(mPendingLevelChunksMutex);
         completedLevelChunks = mCompletedLevelChunkPositions.size();
+        retainedReplayChunks = mRetainedReplayChunks.size();
     }
     auto const elapsed =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt);
@@ -1027,24 +1270,60 @@ bool ReplaySession::finishChunkInjection() {
         injectionMaxMs        = sortedDurations.back();
     }
 
-    if (mApplyingChunkSnapshot) {
+    if (applyingSnapshot) {
         mSnapshotChunks        = std::move(mApplyingSnapshotChunks);
         mApplyingChunkSnapshot = false;
     }
 
-    getLogger().info(
-        "Applied replay snapshot in {:.3f} ms after {} ticks with {} LevelChunk packets ({} completed) and {} "
-        "SubChunk packets ({} entries); plan {:.3f} ms, injection tick p95 {:.3f} ms, max {:.3f} ms",
-        elapsed.count(),
-        mChunkInjectionTicks,
-        mInjectedLevelChunks,
-        completedLevelChunks,
-        mInjectedSubChunkPackets,
-        mInjectedSubChunkEntries,
-        mChunkPlanPreparationMs,
-        injectionP95Ms,
-        injectionMaxMs
-    );
+    if (applyingSnapshot
+        && !flushPendingSnapshotGamePackets(
+            true,
+            std::numeric_limits<size_t>::max(),
+            std::chrono::steady_clock::time_point::max()
+        )) {
+        mReplayFailed = true;
+        return false;
+    }
+
+    if (applyingSnapshot) {
+        getLogger().debug(
+            "Applied replay snapshot in {:.3f} ms after {} ticks with {} reused columns, {} direct and {} native "
+            "LevelChunks ({} completed), and {} direct SubChunk packets ({} entries) plus {} native packets ({} "
+            "entries); plan {:.3f} ms, injection tick p95 {:.3f} ms, max {:.3f} ms",
+            elapsed.count(),
+            mChunkInjectionTicks,
+            mReusedSnapshotColumns,
+            mDirectLevelChunks,
+            mInjectedLevelChunks,
+            completedLevelChunks,
+            mDirectSubChunkPackets,
+            mDirectSubChunkEntries,
+            mInjectedSubChunkPackets,
+            mInjectedSubChunkEntries,
+            mChunkPlanPreparationMs,
+            injectionP95Ms,
+            injectionMaxMs
+        );
+    } else if (mInjectedLevelChunks != 0 || mDirectLevelChunks != 0) {
+        getLogger().debug(
+            "Applied replay timeline chunks in {:.3f} ms after {} ticks with {} LevelChunks and {} SubChunk "
+            "packets ({} entries); {} replay columns retained",
+            elapsed.count(),
+            mChunkInjectionTicks,
+            mInjectedLevelChunks,
+            mInjectedSubChunkPackets,
+            mInjectedSubChunkEntries,
+            retainedReplayChunks
+        );
+    } else {
+        getLogger().debug(
+            "Applied replay timeline SubChunks in {:.3f} ms after {} ticks with {} packets ({} entries)",
+            elapsed.count(),
+            mChunkInjectionTicks,
+            mInjectedSubChunkPackets,
+            mInjectedSubChunkEntries
+        );
+    }
 
     mPendingLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
@@ -1060,11 +1339,30 @@ bool ReplaySession::finishChunkInjection() {
     mPendingSubChunkCursor      = 0;
     mChunkInjectionTicks        = 0;
     mChunkInjectionIdleTicks    = 0;
-    mChunkInjectionPending      = false;
     mChunkInjectionPlanPrepared = false;
+    mSnapshotGamePacketPhase =
+        applyingSnapshot ? SnapshotGamePacketPhase::WaitingAfterPlayerList : SnapshotGamePacketPhase::StreamingChunks;
     mChunkInjectionDurationsMs.clear();
     mChunkPlanPreparationMs = 0.0;
-    return true;
+
+    if (!applyingSnapshot) {
+        for (auto const& [pos, _] : mPendingSnapshotColumns) mDirtySnapshotColumns.emplace(pos);
+        mPendingSnapshotColumns.clear();
+        mReusableSnapshotColumns.clear();
+        mDirectSnapshotColumns.clear();
+        mDirectLevelChunkIndices.clear();
+        mInjectedLevelChunks     = 0;
+        mInjectedSubChunkPackets = 0;
+        mInjectedSubChunkEntries = 0;
+        mReusedSnapshotColumns   = 0;
+        mDirectLevelChunks       = 0;
+        mDirectSubChunkPackets   = 0;
+        mDirectSubChunkEntries   = 0;
+        mChunkInjectionPending   = false;
+        return true;
+    }
+
+    return false;
 }
 
 void ReplaySession::handleNextTick() {
@@ -1074,6 +1372,10 @@ void ReplaySession::handleNextTick() {
     // TODO: Flash pending entities
 
     mCurrentTick += 1;
+    if (mReplayTime) {
+        ++*mReplayTime;
+        if (mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
+    }
 }
 
 bool ReplaySession::sendRecordedTickPacket() {
@@ -1089,8 +1391,9 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
     while (mActive && mCurrentTick == startingTick) {
         if (mReaderIndex >= mReaders.size()) {
             if (stopAtEnd) {
-                getLogger().info("Replay finished at tick {}", mCurrentTick);
-                stop();
+                mIsPaused                = true;
+                mPlaybackTickAccumulator = 0.0f;
+                getLogger().info("Replay finished and paused at tick {}", mCurrentTick);
             }
             return false;
         }
@@ -1100,8 +1403,9 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
             ++mReaderIndex;
             if (mReaderIndex >= mReaders.size()) {
                 if (stopAtEnd) {
-                    getLogger().info("Replay finished at tick {}", mCurrentTick);
-                    stop();
+                    mIsPaused                = true;
+                    mPlaybackTickAccumulator = 0.0f;
+                    getLogger().info("Replay finished and paused at tick {}", mCurrentTick);
                 }
                 return false;
             }
@@ -1125,6 +1429,12 @@ void ReplaySession::handleLevelChunkCached(int index) {
         mReplayFailed = true;
         return;
     }
+    if (!mChunkInjectionPending) {
+        mChunkInjectionTicks     = 0;
+        mChunkInjectionIdleTicks = 0;
+        mCenterChunksReady       = false;
+        mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    }
     mPendingLevelChunkIndices.emplace_back(index);
     mChunkInjectionPending      = true;
     mChunkInjectionPlanPrepared = false;
@@ -1135,9 +1445,528 @@ void ReplaySession::handleSubChunkCached(int index) {
         mReplayFailed = true;
         return;
     }
+    if (!mChunkInjectionPending) {
+        mChunkInjectionTicks     = 0;
+        mChunkInjectionIdleTicks = 0;
+        mCenterChunksReady       = false;
+        mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    }
     mPendingSubChunkIndices.emplace_back(index);
     mChunkInjectionPending      = true;
     mChunkInjectionPlanPrepared = false;
+}
+
+void ReplaySession::handleGamePacket(PlaybackBuffer& data) {
+    auto        packetId  = static_cast<MinecraftPacketIds>(data.getVarInt().value());
+    auto const  remaining = data.getWritePointer() - data.mReadPointer;
+    std::string payload(data.mView.data() + data.mReadPointer, remaining);
+    data.mReadPointer += remaining;
+
+    if (mIsProcessingSnapshot) {
+        if (packetId == MinecraftPacketIds::DimensionDataPacket || packetId == MinecraftPacketIds::SetTime) {
+            if (!applyGamePacket(packetId, payload)) mReplayFailed = true;
+            return;
+        }
+        mPendingSnapshotGamePackets.emplace_back(packetId, std::move(payload));
+        return;
+    }
+    if (!applyGamePacket(packetId, payload)) mReplayFailed = true;
+}
+
+void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
+    auto dispatchMovementPacket = [this](std::shared_ptr<Packet>& packet) {
+        if (!packet || !mNetworkHandler || !packet->mHandler) {
+            mReplayFailed = true;
+            return false;
+        }
+        mInjectingPacket.store(packet.get(), std::memory_order_release);
+        InjectionReset reset{mInjectingPacket};
+        packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+        return true;
+    };
+
+    auto const markerOrCount = data.getVarInt().value();
+    if (markerOrCount == 0) {
+        auto const version = data.getVarInt().value();
+        if (version != 1) throw std::runtime_error("Unsupported precise entity movement version");
+
+        auto const count = data.getVarInt().value();
+        if (count < 0) throw std::runtime_error("Entity movement count cannot be negative");
+
+        bool const snapMovement = mSeekTargetTick >= 0;
+        for (int index = 0; index < count; ++index) {
+            ActorUniqueID const id{data.getVarInt64().value()};
+            Vec3 const          position{data.getFloat().value(), data.getFloat().value(), data.getFloat().value()};
+            Vec2 const          rotation{data.getFloat().value(), data.getFloat().value()};
+            float const         headYaw  = data.getFloat().value();
+            float const         bodyYaw  = data.getFloat().value();
+            bool const          onGround = data.getBool().value();
+
+            if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
+            auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+            if (!actor) continue;
+
+            auto const previousRotation = actor->getRotation();
+            auto&      entityContext    = actor->getEntityContext();
+
+            if (actor->isRiding()) {
+                float previousHeadYaw = previousRotation.y;
+                if (auto headRotation = entityContext.tryGetComponent<ActorHeadRotationComponent>()) {
+                    previousHeadYaw = headRotation->mYHeadRot;
+                }
+
+                float previousBodyYaw = previousRotation.y;
+                if (auto bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
+                    previousBodyYaw = bodyRotation->mYBodyRot;
+                }
+
+                actor->mBuiltInComponents->mActorRotationComponent->mRot = rotation;
+                actor->mBuiltInComponents->mActorRotationComponent->mRotPrev =
+                    snapMovement ? rotation : previousRotation;
+                actor->setYHeadRotations(headYaw, snapMovement ? headYaw : previousHeadYaw);
+                if (auto bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
+                    bodyRotation->mYBodyRot  = bodyYaw;
+                    bodyRotation->mYBodyRotO = snapMovement ? bodyYaw : previousBodyYaw;
+                }
+
+                if (onGround) {
+                    if (!entityContext.hasComponent<OnGroundFlagComponent>()) {
+                        entityContext.getRegistry().emplace<OnGroundFlagComponent>(entityContext.mEntity);
+                    }
+                } else {
+                    entityContext.removeComponent<OnGroundFlagComponent>();
+                }
+                continue;
+            }
+
+            std::shared_ptr<Packet> packet;
+            if (actor->isPlayer()) {
+                packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
+                if (packet) {
+                    auto& move          = static_cast<MovePlayerPacket&>(*packet);
+                    move.mPlayerID      = actor->getRuntimeID();
+                    move.mPos           = position;
+                    move.mRot           = rotation;
+                    move.mYHeadRot      = headYaw;
+                    move.mResetPosition = snapMovement ? PlayerPositionModeComponent::PositionMode::Teleport
+                                                       : PlayerPositionModeComponent::PositionMode::Normal;
+                    move.mOnGround      = onGround;
+                }
+            } else {
+                auto quantizeRotation = [](float degrees) {
+                    return static_cast<schar>(std::floor(degrees * 256.0f / 360.0f));
+                };
+
+                packet = MinecraftPackets::createPacket(MinecraftPacketIds::MoveAbsoluteActor);
+                if (packet) {
+                    auto& move         = *static_cast<MoveActorAbsolutePacket&>(*packet).mMoveData;
+                    move.mRuntimeId    = actor->getRuntimeID();
+                    move.mHeader->mRaw = static_cast<uchar>((onGround ? 1 : 0) | (snapMovement ? 2 : 0));
+                    move.mPos          = position;
+                    move.mRotX         = quantizeRotation(rotation.x);
+                    move.mRotY         = quantizeRotation(rotation.y);
+                    move.mRotYHead     = quantizeRotation(headYaw);
+                    move.mRotYBody     = quantizeRotation(bodyYaw);
+                }
+            }
+
+            if (!dispatchMovementPacket(packet)) return;
+
+            // MovePlayerPacket has no body-yaw field, so retain the recorded value after native movement handling.
+            if (actor->isPlayer()) {
+                if (auto bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
+                    bodyRotation->mYBodyRot = bodyYaw;
+                    if (snapMovement) bodyRotation->mYBodyRotO = bodyYaw;
+                }
+            }
+        }
+        return;
+    }
+
+    auto const count = markerOrCount;
+    if (count < 0) throw std::runtime_error("Entity movement count cannot be negative");
+
+    for (int index = 0; index < count; ++index) {
+        ActorUniqueID const id{data.getVarInt64().value()};
+        bool const          isPlayer = data.getBool().value();
+        auto const          x        = data.getFloat().value();
+        auto const          y        = data.getFloat().value();
+        auto const          z        = data.getFloat().value();
+
+        std::shared_ptr<Packet> packet;
+        if (isPlayer) {
+            auto const pitch    = data.getFloat().value();
+            auto const yaw      = data.getFloat().value();
+            auto const headYaw  = data.getFloat().value();
+            auto const onGround = data.getBool().value();
+
+            if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
+            auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+            if (!actor || !actor->isPlayer()) continue;
+
+            packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
+            if (!packet) {
+                mReplayFailed = true;
+                return;
+            }
+            auto& move          = static_cast<MovePlayerPacket&>(*packet);
+            move.mPlayerID      = actor->getRuntimeID();
+            move.mPos           = Vec3{x, y, z};
+            move.mRot           = Vec2{pitch, yaw};
+            move.mYHeadRot      = headYaw;
+            move.mResetPosition = PlayerPositionModeComponent::PositionMode::Normal;
+            move.mOnGround      = onGround;
+        } else {
+            auto const header   = data.getByte().value();
+            auto const rotX     = data.getByte().value();
+            auto const rotY     = data.getByte().value();
+            auto const headRotY = data.getByte().value();
+            auto const bodyRotY = data.getByte().value();
+
+            if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
+            auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+            if (!actor || actor->isPlayer()) continue;
+
+            packet = MinecraftPackets::createPacket(MinecraftPacketIds::MoveAbsoluteActor);
+            if (!packet) {
+                mReplayFailed = true;
+                return;
+            }
+            auto& move         = *static_cast<MoveActorAbsolutePacket&>(*packet).mMoveData;
+            move.mRuntimeId    = actor->getRuntimeID();
+            move.mHeader->mRaw = header;
+            move.mPos          = Vec3{x, y, z};
+            move.mRotX         = static_cast<schar>(rotX);
+            move.mRotY         = static_cast<schar>(rotY);
+            move.mRotYHead     = static_cast<schar>(headRotY);
+            move.mRotYBody     = static_cast<schar>(bodyRotY);
+        }
+
+        if (!dispatchMovementPacket(packet)) return;
+    }
+}
+
+bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload) {
+    // Keep UI packets for a future first-person handler and let the replay world own client chunk publishing.
+    if (shouldIgnoreReplayPacket(packetId)) return true;
+
+    auto packet = MinecraftPackets::createPacket(packetId);
+    if (!packet || !mNetworkHandler || !packet->mHandler) return false;
+
+    ReadOnlyBinaryStream stream(payload, false);
+    if (!packet->read(stream) || !stream.ensureReadCompleted()) return false;
+
+    if (packetId == MinecraftPacketIds::SetTime) {
+        mReplayTime = static_cast<SetTimePacket const&>(*packet).mTime;
+    }
+
+    if (packetId == MinecraftPacketIds::PlayerList) {
+        auto& playerList = static_cast<PlayerListPacket&>(*packet);
+        for (auto& entry : *playerList.mEntries) {
+            auto& skinOwner = entry.mSkin->mSkinImpl;
+            if (!skinOwner) return false;
+            skinOwner->mObject.mIsPrimaryUser = false;
+        }
+    }
+
+    DimensionType changedDimension{};
+    if (packetId == MinecraftPacketIds::ChangeDimension) {
+        if (!mReplayPlayer) return false;
+        changedDimension = *static_cast<ChangeDimensionPacket const&>(*packet).mDimensionId;
+        auto dimension   = mReplayPlayer->getLevel().getOrCreateDimension(changedDimension).lock();
+        if (!dimension) return false;
+    }
+
+    ActorUniqueID  entityId{};
+    ActorRuntimeID runtimeId{};
+    bool           addsEntity = true;
+    switch (packetId) {
+    case MinecraftPacketIds::AddActor: {
+        auto const& addActor = static_cast<AddActorPacket const&>(*packet);
+        entityId             = *addActor.mEntityId;
+        runtimeId            = *addActor.mRuntimeId;
+        break;
+    }
+    case MinecraftPacketIds::AddItemActor: {
+        auto const& addItem = static_cast<AddItemActorPacket const&>(*packet);
+        entityId            = *addItem.mId;
+        runtimeId           = *addItem.mRuntimeId;
+        break;
+    }
+    case MinecraftPacketIds::AddPainting: {
+        auto const& addPainting = static_cast<AddPaintingPacket const&>(*packet);
+        entityId                = *addPainting.mEntityId;
+        runtimeId               = *addPainting.mRuntimeId;
+        break;
+    }
+    case MinecraftPacketIds::AddPlayer: {
+        auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
+        if (addPlayer.mPlayerGameType == GameType::Default || addPlayer.mPlayerGameType == GameType::Undefined) {
+            auto const& abilities = *addPlayer.mAbilities;
+            if (abilities.getBool(AbilitiesIndex::NoClip)) {
+                addPlayer.mPlayerGameType = GameType::Spectator;
+            } else if (abilities.getBool(AbilitiesIndex::Instabuild)) {
+                addPlayer.mPlayerGameType = GameType::Creative;
+            } else if (abilities.getBool(AbilitiesIndex::Build) || abilities.getBool(AbilitiesIndex::Mine)) {
+                addPlayer.mPlayerGameType = GameType::Survival;
+            } else {
+                addPlayer.mPlayerGameType = GameType::Adventure;
+            }
+        }
+        entityId  = *addPlayer.mEntityId;
+        runtimeId = *addPlayer.mRuntimeId;
+        break;
+    }
+    default:
+        addsEntity = false;
+        break;
+    }
+
+    if (addsEntity && mReplayPlayer) {
+        auto& level            = mReplayPlayer->getLevel();
+        auto* uniqueCollision  = level.fetchEntity(entityId, false);
+        auto* runtimeCollision = level.getRuntimeEntity(runtimeId, false);
+        if (uniqueCollision || runtimeCollision) {
+            getLogger().warn(
+                "Skipping conflicting replay entity packet {} (unique={}, runtime={})",
+                packet->getName(),
+                entityId.rawID,
+                runtimeId.rawID
+            );
+            return true;
+        }
+
+        auto runtimeIdManager = level.getActorRuntimeIDManager();
+        if (runtimeIdManager->mLastRuntimeID->rawID < runtimeId.rawID) {
+            runtimeIdManager->mLastRuntimeID = runtimeId;
+        }
+    }
+
+    if (!mIsProcessingSnapshot && !mChunkInjectionPending) invalidateSnapshotColumns(*packet);
+
+    mInjectingPacket.store(packet.get(), std::memory_order_release);
+    InjectionReset reset{mInjectingPacket};
+    packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+
+    switch (packetId) {
+    case MinecraftPacketIds::AddActor:
+        mRecordedEntityIds.emplace(*static_cast<AddActorPacket const&>(*packet).mEntityId);
+        break;
+    case MinecraftPacketIds::AddItemActor:
+        mRecordedEntityIds.emplace(*static_cast<AddItemActorPacket const&>(*packet).mId);
+        break;
+    case MinecraftPacketIds::AddPainting:
+        mRecordedEntityIds.emplace(*static_cast<AddPaintingPacket const&>(*packet).mEntityId);
+        break;
+    case MinecraftPacketIds::AddPlayer:
+        mRecordedEntityIds.emplace(*static_cast<AddPlayerPacket const&>(*packet).mEntityId);
+        break;
+    case MinecraftPacketIds::RemoveActor:
+        mRecordedEntityIds.erase(*static_cast<RemoveActorPacket const&>(*packet).mEntityId);
+        break;
+    case MinecraftPacketIds::ChangeDimension: {
+        auto dimension = mReplayPlayer->getLevel().getOrCreateDimension(changedDimension).lock();
+        if (!dimension) return false;
+
+        mReplayDimension.store(dimension.get(), std::memory_order_release);
+        mChunkInjectionPending      = false;
+        mChunkInjectionPlanPrepared = false;
+        mApplyingChunkSnapshot      = false;
+        mCenterChunksReady          = false;
+        mSnapshotGamePacketPhase    = SnapshotGamePacketPhase::StreamingChunks;
+        mPendingLevelChunkIndices.clear();
+        mPendingSubChunkIndices.clear();
+        mPendingSubChunkPackets.clear();
+        mRemainingSubChunkPacketsByColumn.clear();
+        mSnapshotChunks.clear();
+        mApplyingSnapshotChunks.clear();
+        mAppliedSnapshotColumns.clear();
+        mPendingSnapshotColumns.clear();
+        mDirtySnapshotColumns.clear();
+        mReusableSnapshotColumns.clear();
+        mDirectSnapshotColumns.clear();
+        mDirectLevelChunkIndices.clear();
+        mCenterChunkPositions.clear();
+        {
+            std::scoped_lock lock(mPendingLevelChunksMutex);
+            mPendingLevelChunks.clear();
+            mCompletedLevelChunkPositions.clear();
+            mRetainedReplayChunks.clear();
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    return true;
+}
+
+void ReplaySession::invalidateSnapshotColumns(Packet const& packet) {
+    auto invalidate = [this](BlockPos const& pos) { mDirtySnapshotColumns.emplace(ChunkPos{pos}); };
+
+    switch (packet.getId()) {
+    case MinecraftPacketIds::UpdateBlock:
+        invalidate(*static_cast<UpdateBlockPacket const&>(packet).mPos);
+        break;
+    case MinecraftPacketIds::UpdateBlockSynced:
+        invalidate(*static_cast<UpdateBlockSyncedPacket const&>(packet).mPos);
+        break;
+    case MinecraftPacketIds::UpdateSubChunkBlocks:
+        invalidate(*static_cast<UpdateSubChunkBlocksPacket const&>(packet).mSubChunkBlockPosition);
+        break;
+    case MinecraftPacketIds::BlockActorData:
+        invalidate(*static_cast<BlockActorDataPacket const&>(packet).mPos);
+        break;
+    case MinecraftPacketIds::TileEvent: {
+        auto const& pos    = *static_cast<BlockEventPacket const&>(packet).mPos;
+        auto const  column = ChunkPos{pos};
+        mDirtySnapshotColumns.emplace(column);
+        mDirtySnapshotColumns.emplace(column.x - 1, column.z);
+        mDirtySnapshotColumns.emplace(column.x + 1, column.z);
+        mDirtySnapshotColumns.emplace(column.x, column.z - 1);
+        mDirtySnapshotColumns.emplace(column.x, column.z + 1);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+bool ReplaySession::flushPendingSnapshotGamePackets(
+    bool                                         playerListOnly,
+    size_t                                       maxPackets,
+    std::chrono::steady_clock::time_point const& deadline
+) {
+    auto pending = std::move(mPendingSnapshotGamePackets);
+    mPendingSnapshotGamePackets.clear();
+
+    size_t applied = 0;
+    for (auto& [packetId, payload] : pending) {
+        if (playerListOnly != (packetId == MinecraftPacketIds::PlayerList)) {
+            mPendingSnapshotGamePackets.emplace_back(packetId, std::move(payload));
+            continue;
+        }
+        if (applied >= maxPackets || (applied != 0 && std::chrono::steady_clock::now() >= deadline)) {
+            mPendingSnapshotGamePackets.emplace_back(packetId, std::move(payload));
+            continue;
+        }
+
+        if (!applyGamePacket(packetId, payload)) return false;
+        ++applied;
+    }
+    if (applied != 0) {
+        getLogger().debug(
+            "Applied {} replay snapshot game packets in {} phase",
+            applied,
+            playerListOnly ? "player-list" : "entity"
+        );
+    }
+    return true;
+}
+
+bool ReplaySession::clearRecordedEntities() {
+    if (mRecordedEntityIds.empty()) return true;
+    if (!mNetworkHandler) return false;
+
+    auto ids = std::move(mRecordedEntityIds);
+    mRecordedEntityIds.clear();
+    for (auto const& id : ids) {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::RemoveActor);
+        if (!packet || !packet->mHandler) return false;
+        static_cast<RemoveActorPacket&>(*packet).mEntityId = id;
+
+        mInjectingPacket.store(packet.get(), std::memory_order_release);
+        InjectionReset reset{mInjectingPacket};
+        packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+    }
+    getLogger().debug("Cleared {} recorded entities before applying a replay snapshot", ids.size());
+    return true;
+}
+
+bool ReplaySession::applyLevelChunkDirect(std::string_view payload) {
+    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+    if (!replayDimension) return false;
+
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
+    if (!packet) return false;
+
+    ReadOnlyBinaryStream packetStream(payload, false);
+    if (!packet->read(packetStream) || !packetStream.ensureReadCompleted()) return false;
+
+    auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
+    if (static_cast<bool>(levelChunk.mCacheEnabled) || !static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)
+        || static_cast<DimensionType const&>(levelChunk.mDimensionId) != replayDimension->getDimensionId()) {
+        return false;
+    }
+
+    auto const& pos   = *levelChunk.mPos;
+    auto        chunk = replayDimension->getChunkSource().getExistingChunk(pos);
+    if (!chunk || chunk->mIsEmptyClientChunk
+        || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+        return false;
+    }
+
+    try {
+        ReadOnlyBinaryStream levelStream(*levelChunk.mSerializedChunk, false);
+        VarIntDataInput      levelInput(levelStream);
+        chunk->deserializeBiomes(levelInput, true);
+        chunk->deserializeBorderBlocks(levelInput);
+        if (!levelStream.ensureReadCompleted()) return false;
+    } catch (std::exception const& exception) {
+        getLogger()
+            .error("Unable to apply replay LevelChunk data directly at ({}, {}): {}", pos.x, pos.z, exception.what());
+        return false;
+    } catch (...) {
+        getLogger().error("Unable to apply replay LevelChunk data directly at ({}, {})", pos.x, pos.z);
+        return false;
+    }
+
+    {
+        std::scoped_lock lock(mPendingLevelChunksMutex);
+        mCompletedLevelChunkPositions.emplace(pos);
+    }
+    mChunkCompletionObserved.store(true, std::memory_order_release);
+    ++mDirectLevelChunks;
+    return true;
+}
+
+bool ReplaySession::applySubChunkDirect(std::string_view payload) {
+    if (!mNetworkHandler) return false;
+    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+    if (!replayDimension) return false;
+
+    auto  client      = ll::service::getClientInstance();
+    auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
+    if (!localPlayer || localPlayer != mReplayPlayer) return false;
+
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
+    if (!packet) return false;
+
+    ReadOnlyBinaryStream stream(payload, false);
+    if (!packet->read(stream) || !stream.ensureReadCompleted()) return false;
+
+    auto const& subChunk = static_cast<SubChunkPacket const&>(*packet);
+    if (static_cast<bool>(subChunk.mCacheEnabled)
+        || static_cast<DimensionType const&>(subChunk.mDimensionType) != replayDimension->getDimensionId()) {
+        return false;
+    }
+
+    try {
+        for (auto const& entry : *subChunk.mSubChunkData) {
+            mNetworkHandler
+                ->_handleSubChunkData(mNetworkHandler->mServerGuid.get(), subChunk, entry, localPlayer, true);
+        }
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to apply replay SubChunk data directly: {}", exception.what());
+        return false;
+    } catch (...) {
+        getLogger().error("Unable to apply replay SubChunk data directly");
+        return false;
+    }
+
+    ++mDirectSubChunkPackets;
+    mDirectSubChunkEntries += subChunk.mSubChunkData->size();
+    return true;
 }
 
 bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketIds packetId) {
@@ -1159,11 +1988,23 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
             return false;
         }
 
-        if (mApplyingChunkSnapshot) mApplyingSnapshotChunks.emplace(*levelChunk.mPos);
-        else mSnapshotChunks.emplace(*levelChunk.mPos);
+        auto const& pos = *levelChunk.mPos;
+        if (mApplyingChunkSnapshot) mApplyingSnapshotChunks.emplace(pos);
+        else mSnapshotChunks.emplace(pos);
+        auto& chunkSource = replayDimension->getChunkSource();
+        auto  replayChunk = chunkSource.getExistingChunk(pos);
+        if (!replayChunk) {
+            replayChunk = chunkSource.getOrLoadChunk(pos, ChunkSource::LoadMode::None, false);
+        }
+        if (!replayChunk) {
+            getLogger()
+                .error("Unable to create replay-world LevelChunk at tick {} for ({}, {})", mCurrentTick, pos.x, pos.z);
+            return false;
+        }
         {
             std::scoped_lock lock(mPendingLevelChunksMutex);
-            mPendingLevelChunks.emplace(*levelChunk.mPos);
+            mRetainedReplayChunks.insert_or_assign(pos, replayChunk);
+            mPendingLevelChunks.emplace(pos);
         }
         mChunkInjectionPending = true;
     } else if (packetId == MinecraftPacketIds::SubChunkPacket) {
@@ -1266,13 +2107,53 @@ void ReplaySession::onLevelJoinCancelled() {
 }
 
 void ReplaySession::tryFinalizeWorldCleanup() {
-    if (mCleanupState == CleanupState::None) return;
-
     auto client = ll::service::getClientInstance();
     if (!client || !client->isLeaveGameDone() || client->hasLevel() || client->isWorldActive()) return;
 
     auto& game = client->getMinecraftGame_DEPRECATED();
     if (game.isInServer() || game.getServerInstance()) return;
+
+    auto& cache          = game.getLevelListCache();
+    auto  basePathBuffer = cache.getBasePath();
+    auto  worldsPath     = std::filesystem::path(basePathBuffer.get());
+
+    if (mCleanupState == CleanupState::None) {
+        if (mActive || !mReplayLevelId.empty() || mOrphanReplayWorldsScanned) return;
+
+        std::error_code ec;
+        auto            entries = std::filesystem::directory_iterator(worldsPath, ec);
+        if (ec) {
+            if (mCleanupWaitTicks++ == 0) {
+                getLogger().error("Unable to scan for orphaned replay worlds: {}", ec.message());
+            }
+            return;
+        }
+
+        for (auto const& entry : entries) {
+            if (!entry.is_directory(ec)) {
+                if (ec) break;
+                continue;
+            }
+
+            auto levelId = entry.path().filename().string();
+            if (!isValidReplayLevelId(levelId)) continue;
+
+            getLogger().debug("Found orphaned replay world {}; scheduling removal", levelId);
+            mReplayLevelId    = std::move(levelId);
+            mCleanupState     = CleanupState::ReadyToDelete;
+            mCleanupWaitTicks = 0;
+            break;
+        }
+        if (ec) {
+            getLogger().error("Unable to finish scanning for orphaned replay worlds: {}", ec.message());
+            return;
+        }
+        if (mCleanupState == CleanupState::None) {
+            mOrphanReplayWorldsScanned = true;
+            mCleanupWaitTicks          = 0;
+            return;
+        }
+    }
 
     if (mCleanupState == CleanupState::WaitingForExit) {
         mCleanupState      = CleanupState::ReadyToDelete;
@@ -1287,9 +2168,7 @@ void ReplaySession::tryFinalizeWorldCleanup() {
         return;
     }
 
-    auto& cache          = game.getLevelListCache();
-    auto  basePathBuffer = cache.getBasePath();
-    auto  worldPath      = std::filesystem::path(basePathBuffer.get()) / mReplayLevelId;
+    auto worldPath = worldsPath / mReplayLevelId;
 
     std::error_code ec;
     bool            worldFilesExist = std::filesystem::exists(worldPath, ec);
@@ -1302,7 +2181,7 @@ void ReplaySession::tryFinalizeWorldCleanup() {
 
     bool levelIsCached = cache.hasLevelWithId(mReplayLevelId);
     if (!levelIsCached && !worldFilesExist) {
-        getLogger().info("Removed replay world {}", mReplayLevelId);
+        getLogger().debug("Removed replay world {}", mReplayLevelId);
         finishWorldCleanup();
         return;
     }
@@ -1338,12 +2217,31 @@ void ReplaySession::clearNetworkContext() { mNetworkHandler = nullptr; }
 void ReplaySession::onLevelChunkHandled(ChunkPos const& pos, Dimension const& dimension) {
     if (mReplayDimension.load(std::memory_order_acquire) != &dimension) return;
 
-    std::scoped_lock lock(mPendingLevelChunksMutex);
-    auto             it = mPendingLevelChunks.find(pos);
-    if (it != mPendingLevelChunks.end()) {
+    auto       chunk      = dimension.getChunkSource().getExistingChunk(pos);
+    auto const loadState  = chunk ? chunk->mLoadState->load(std::memory_order_acquire) : ChunkState::Unloaded;
+    bool const retainable = chunk && !chunk->mIsEmptyClientChunk && loadState == ChunkState::Loaded;
+    {
+        std::scoped_lock lock(mPendingLevelChunksMutex);
+        auto             it = mPendingLevelChunks.find(pos);
+        if (it == mPendingLevelChunks.end()) return;
+
         mPendingLevelChunks.erase(it);
         mCompletedLevelChunkPositions.emplace(pos);
+        if (retainable) mRetainedReplayChunks.insert_or_assign(pos, chunk);
+        else mRetainedReplayChunks.erase(pos);
         mChunkCompletionObserved.store(true, std::memory_order_release);
+    }
+
+    if (!retainable) {
+        getLogger().warn(
+            "Replay LevelChunk completion for ({}, {}) did not leave a loaded chunk in the replay ChunkSource "
+            "(existing={}, empty={}, load_state={})",
+            pos.x,
+            pos.z,
+            static_cast<bool>(chunk),
+            chunk ? static_cast<bool>(chunk->mIsEmptyClientChunk) : false,
+            chunk ? static_cast<int>(loadState) : -1
+        );
     }
 }
 

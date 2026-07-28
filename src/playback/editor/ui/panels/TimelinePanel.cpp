@@ -4,10 +4,10 @@
 #include "playback/editor/ui/ReplayUILayout.h"
 
 #include "imgui.h"
+#include "ll/api/i18n/I18n.h"
 
 #include <algorithm>
 #include <cmath>
-#include <format>
 #include <string>
 #include <utility>
 
@@ -98,6 +98,8 @@ void drawCenteredFittedText(
 }
 
 void drawTimelinePanel(EditorState const& state, ReplayUILayout const& layout, std::vector<EditorAction>& actions) {
+    using ll::i18n_literals::operator""_tr;
+
     ImGuiIO& io = ImGui::GetIO();
     if (io.DisplaySize.x < 320.0f || io.DisplaySize.y < 180.0f) return;
 
@@ -155,9 +157,10 @@ void drawTimelinePanel(EditorState const& state, ReplayUILayout const& layout, s
         bool const scrubActive  = ImGui::IsItemActive();
         bool const scrubHovered = ImGui::IsItemHovered();
         if (scrubActive) {
-            float const ratio = std::clamp((io.MousePos.x - timelineLeft) / timelineWidth, 0.0f, 1.0f);
-            scrubTick         = std::clamp(static_cast<int>(std::lround(ratio * totalTicks)), 0, state.totalTicks);
-            ImGui::SetTooltip("%s / %d ticks", utils::formatTimestamp(scrubTick).c_str(), scrubTick);
+            float const ratio  = std::clamp((io.MousePos.x - timelineLeft) / timelineWidth, 0.0f, 1.0f);
+            scrubTick          = std::clamp(static_cast<int>(std::lround(ratio * totalTicks)), 0, state.totalTicks);
+            auto const tooltip = "playback.editor.timeline.scrub"_tr(utils::formatTimestamp(scrubTick), scrubTick);
+            ImGui::SetTooltip("%s", tooltip.c_str());
         }
         if (committedTick >= 0 && state.currentTick == committedTick) committedTick = -1;
         if (scrubbing && !scrubActive) {
@@ -187,18 +190,27 @@ void drawTimelinePanel(EditorState const& state, ReplayUILayout const& layout, s
             ImVec2 const      slowerCenter(origin.x + leftWidth * 2.0f / 6.0f, controlCenter.y);
             ImVec2 const      fasterCenter(origin.x + leftWidth * 4.0f / 6.0f, controlCenter.y);
             ImVec2 const      skipForwardCenter(origin.x + leftWidth * 5.0f / 6.0f, controlCenter.y);
-            std::string const slowerTooltip = std::format("Slow down ({:g}x)", state.playbackSpeed);
-            std::string const fasterTooltip = std::format("Speed up ({:g}x)", state.playbackSpeed);
-            auto const [skipBackClicked, skipBackHovered] =
-                controlButton("##PlaybackSkipBack", skipBackCenter, "Jump to start");
+            std::string const slowerTooltip               = "playback.editor.timeline.slowDown"_tr(state.playbackSpeed);
+            std::string const fasterTooltip               = "playback.editor.timeline.speedUp"_tr(state.playbackSpeed);
+            auto const [skipBackClicked, skipBackHovered] = controlButton(
+                "##PlaybackSkipBack",
+                skipBackCenter,
+                "playback.editor.timeline.jumpToStart"_tr().c_str()
+            );
             auto const [slowerClicked, slowerHovered] =
                 controlButton("##PlaybackSlower", slowerCenter, slowerTooltip.c_str());
-            auto const [pauseClicked, pauseHovered] =
-                controlButton("##PlaybackPause", controlCenter, state.paused ? "Play" : "Pause");
+            auto const [pauseClicked, pauseHovered] = controlButton(
+                "##PlaybackPause",
+                controlCenter,
+                (state.paused ? "playback.editor.timeline.play"_tr() : "playback.editor.timeline.pause"_tr()).c_str()
+            );
             auto const [fasterClicked, fasterHovered] =
                 controlButton("##PlaybackFaster", fasterCenter, fasterTooltip.c_str());
-            auto const [skipForwardClicked, skipForwardHovered] =
-                controlButton("##PlaybackSkipForward", skipForwardCenter, "Jump to end");
+            auto const [skipForwardClicked, skipForwardHovered] = controlButton(
+                "##PlaybackSkipForward",
+                skipForwardCenter,
+                "playback.editor.timeline.jumpToEnd"_tr().c_str()
+            );
 
             if (skipBackClicked) actions.push_back({EditorActionType::SkipToStart});
             if (slowerClicked) actions.push_back({EditorActionType::DecreaseSpeed});
@@ -244,8 +256,11 @@ void drawTimelinePanel(EditorState const& state, ReplayUILayout const& layout, s
                 skipForwardHovered ? IM_COL32(255, 255, 255, 255) : textColor
             );
         } else {
-            auto const [pauseClicked, pauseHovered] =
-                controlButton("##PlaybackPause", controlCenter, state.paused ? "Play" : "Pause");
+            auto const [pauseClicked, pauseHovered] = controlButton(
+                "##PlaybackPause",
+                controlCenter,
+                (state.paused ? "playback.editor.timeline.play"_tr() : "playback.editor.timeline.pause"_tr()).c_str()
+            );
             if (pauseClicked) actions.push_back({EditorActionType::TogglePause});
             drawPlaybackAction(
                 drawList,
@@ -259,7 +274,7 @@ void drawTimelinePanel(EditorState const& state, ReplayUILayout const& layout, s
         std::string const timeText =
             utils::formatTimestamp(shownTick) + " / " + utils::formatTimestamp(state.totalTicks);
         std::string const tickText =
-            std::to_string(std::max(0, shownTick)) + " / " + std::to_string(std::max(0, state.totalTicks)) + " ticks";
+            "playback.editor.timeline.ticks"_tr(std::max(0, shownTick), std::max(0, state.totalTicks));
         drawCenteredFittedText(
             drawList,
             origin.x + 8.0f * scale,

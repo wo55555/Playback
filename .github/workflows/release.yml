@@ -2,23 +2,21 @@ on:
   release:
     types:
       - published
-  
+
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        target_type:
-          - server
-          - client
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: xmake-io/github-action-setup-xmake@v1
         # with:
         #   xmake-version: branch@master
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/AppData/Local/.xmake
@@ -30,14 +28,14 @@ jobs:
           xmake repo -u
 
       - run: |
-          xmake f -a x64 -m release -p windows --target_type=${{ matrix.target_type }} -y
+          xmake f -a x64 -m release -p windows --target_type=client -y
 
       - run: |
           xmake -w -y
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ github.event.repository.name }}-${{ github.sha }}-${{ matrix.target_type }}-windows-x64
+          name: ${{ github.event.repository.name }}-${{ github.sha }}-client-windows-x64
           path: |
             bin/
 
@@ -46,12 +44,12 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - id: extract-release-notes
         uses: ffurrer2/extract-release-notes@v3
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           body: |
             ${{ steps.extract-release-notes.outputs.release_notes }}
@@ -62,28 +60,27 @@ jobs:
       - update-release-notes
     permissions:
       contents: write
-    strategy:
-      matrix:
-        target_type:
-          - server
-          - client
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8
         with:
-          name: ${{ github.event.repository.name }}-${{ github.sha }}-${{ matrix.target_type }}-windows-x64
+          name: ${{ github.event.repository.name }}-${{ github.sha }}-client-windows-x64
           path: artifact
 
       - run: |
-          cp CHANGELOG.md LICENSE README.md artifact/
+          mv artifact/playback/playback-ui.mcpack playback-ui.mcpack
+          rm -f artifact/playback/*.pdb artifact/playback/playback-ui.zip
+          rm -rf artifact/playback/data
+          cp CHANGELOG.md LICENSE README.md README_ZH.md artifact/
 
       - run: |
-          zip -r ../${{ github.event.repository.name }}-${{ matrix.target_type }}-windows-x64.zip *
+          zip -r ../${{ github.event.repository.name }}-client-windows-x64.zip *
         working-directory: artifact
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
-            ${{ github.event.repository.name }}-${{ matrix.target_type }}-windows-x64.zip
+            ${{ github.event.repository.name }}-client-windows-x64.zip
+            playback-ui.mcpack

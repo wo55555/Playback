@@ -17,6 +17,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 class Packet;
@@ -29,6 +30,11 @@ static constexpr int32_t CHUNK_CACHE_SIZE = 10000;
 class Action;
 class ReplaySession;
 class CachedChunkPacket;
+
+struct PlaybackSerializedGamePacket {
+    int32_t     mPacketId;
+    std::string mPayload;
+};
 
 class PlaybackBuffer : public BinaryStream {
 public:
@@ -117,7 +123,8 @@ public:
 
 class AsyncReplaySaver {
 public:
-    using WriteTask = std::function<void(ReplayWriter&)>;
+    using WriteTask  = std::function<void(ReplayWriter&)>;
+    using GamePacket = std::variant<std::shared_ptr<Packet>, PlaybackSerializedGamePacket>;
 
 private:
     ReplayWriter mReplayWriter;
@@ -166,7 +173,7 @@ public:
 
     [[nodiscard]] std::optional<std::string> getError() const;
 
-    bool writeGamePackets(std::vector<std::shared_ptr<Packet>> packets);
+    bool writeGamePackets(std::vector<GamePacket> packets);
 
     void writeChunkCacheFile(PlaybackBuffer const& chunkCacheOutput, int index);
 

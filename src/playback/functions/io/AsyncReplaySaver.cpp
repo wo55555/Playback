@@ -4,8 +4,7 @@
 #include "playback/functions/io/cache/CachedChunkPacket.h"
 
 #include "mc/network/MinecraftPacketIds.h"
-#include "mc/network/packet/LevelChunkPacket.h"
-#include "mc/network/packet/SubChunkPacket.h"
+#include "mc/network/Packet.h"
 
 #include "snappy.h"
 #include <uuid.h>
@@ -200,12 +199,12 @@ std::optional<std::string> AsyncReplaySaver::getError() const {
     return mError;
 }
 
-bool AsyncReplaySaver::writeGamePackets(std::vector<std::shared_ptr<Packet>> packets) {
+bool AsyncReplaySaver::writeGamePackets(std::vector<GamePacket> packets) {
     try {
-        auto sharedPackets = std::make_shared<std::vector<std::shared_ptr<Packet>>>(std::move(packets));
+        auto sharedPackets = std::make_shared<std::vector<GamePacket>>(std::move(packets));
 
         return submit([packets = std::move(sharedPackets), this](ReplayWriter& writer) {
-            auto writePacketToCache = [this](Packet const& packet) {
+            auto writePacketToCache = [this](std::string_view payload) {
                 int index = mTotalWrittenChunkPackets;
                 ++mTotalWrittenChunkPackets;
 
@@ -218,7 +217,7 @@ bool AsyncReplaySaver::writeGamePackets(std::vector<std::shared_ptr<Packet>> pac
                 uint64_t startWriterIndex = mChunkCacheOutput.getWritePointer();
                 mChunkCacheOutput.writeUnsignedInt(0, nullptr, nullptr);
 
-                packet.write(mChunkCacheOutput);
+                mChunkCacheOutput.write(payload.data(), payload.size());
                 uint64_t endWriterIndex = mChunkCacheOutput.getWritePointer();
 
                 uint32_t size = static_cast<uint32_t>(endWriterIndex - startWriterIndex) - 4;
@@ -226,19 +225,40 @@ bool AsyncReplaySaver::writeGamePackets(std::vector<std::shared_ptr<Packet>> pac
                 return index;
             };
 
-            for (auto& packet : *packets) {
-                if (!packet) continue;
+            for (auto const& packet : *packets) {
+                PlaybackBuffer   serialized;
+                int32_t          packetId;
+                std::string_view payload;
 
-                Action* action = nullptr;
-                if (packet->getId() == MinecraftPacketIds::FullChunkData) {
+                if (auto const* ownedPacket = std::get_if<std::shared_ptr<Packet>>(&packet)) {
+                    if (!*ownedPacket) continue;
+                    packetId = static_cast<int32_t>((*ownedPacket)->getId());
+                    (*ownedPacket)->write(serialized);
+                    payload = serialized.mBuffer;
+                } else {
+                    auto const& serializedPacket = std::get<PlaybackSerializedGamePacket>(packet);
+                    packetId                     = serializedPacket.mPacketId;
+                    payload                      = serializedPacket.mPayload;
+                }
+
+                Action*    action            = nullptr;
+                auto const minecraftPacketId = static_cast<MinecraftPacketIds>(packetId);
+                if (minecraftPacketId == MinecraftPacketIds::FullChunkData) {
                     action = &ActionLevelChunkCached::getInstance();
-                } else if (packet->getId() == MinecraftPacketIds::SubChunkPacket) {
+                } else if (minecraftPacketId == MinecraftPacketIds::SubChunkPacket) {
                     action = &ActionSubChunkCached::getInstance();
                 }
-                if (!action) continue;
+                if (!action) {
+                    auto& gamePacketAction = ActionGamePacket::getInstance();
+                    writer.startAction(gamePacketAction);
+                    writer.mStream.writeVarInt(packetId, nullptr, nullptr);
+                    writer.mStream.write(payload.data(), payload.size());
+                    writer.finishAction(gamePacketAction);
+                    continue;
+                }
 
                 int  index             = -1;
-                auto cachedChunkPacket = CachedChunkPacket(*packet, -1);
+                auto cachedChunkPacket = CachedChunkPacket(packetId, payload, -1);
                 bool add               = true;
 
                 std::vector<CachedChunkPacket>& cached = mCachedChunkPackets[cachedChunkPacket.mLongHashCode];
@@ -251,7 +271,7 @@ bool AsyncReplaySaver::writeGamePackets(std::vector<std::shared_ptr<Packet>> pac
                 }
 
                 if (add) {
-                    index = writePacketToCache(*packet);
+                    index = writePacketToCache(payload);
 
                     cachedChunkPacket.mIndex = index;
                     cached.push_back(cachedChunkPacket);

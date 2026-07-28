@@ -4,19 +4,26 @@
 #include "playback/utils/container/LinkedHashMap.h"
 
 #include "mc/deps/core/utility/AutomaticID.h"
+#include "mc/legacy/ActorRuntimeID.h"
+#include "mc/legacy/ActorUniqueID.h"
+#include "mc/platform/UUID.h"
 #include "mc/world/level/ChunkPos.h"
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 class LevelChunkPacket;
 class SubChunkPacket;
+class Packet;
 
 namespace playback::functions {
 
@@ -49,6 +56,20 @@ private:
 
     std::vector<std::shared_ptr<LevelChunkPacket>> mSnapshotLevelChunks;
     std::vector<std::shared_ptr<SubChunkPacket>>   mSnapshotSubChunks;
+    std::vector<PlaybackSerializedGamePacket>      mSnapshotEntityPackets;
+    std::vector<PlaybackSerializedGamePacket>      mPendingGamePackets;
+    std::string                                    mDimensionDataPayload;
+    std::string                                    mSnapshotDimensionDataPayload;
+    mutable std::mutex                             mPendingGamePacketsMutex;
+    std::unordered_map<int32_t, uint64_t>          mRecordedGamePacketCounts;
+    std::unordered_map<ActorUniqueID, std::string> mLastEntityMovements;
+    std::optional<ActorUniqueID>                   mRecordedLocalPlayerId;
+    std::optional<ActorRuntimeID>                  mRecordedLocalPlayerRuntimeId;
+    std::optional<mce::UUID>                       mRecordedLocalPlayerUuid;
+    std::optional<std::string>                     mLastLocalPlayerDataPacket;
+    std::optional<std::string>                     mLastLocalPlayerEquipmentPacket;
+    std::optional<std::string>                     mLastLocalPlayerArmorPacket;
+    std::optional<int>                             mLastLocalPlayerSwingTime;
     std::optional<PlaybackView>                    mSnapshotView;
     std::optional<PlaybackView>                    mOpenChunkView;
 
@@ -84,6 +105,12 @@ private:
 
     [[nodiscard]] bool writeTickBoundary();
 
+    [[nodiscard]] bool flushGamePackets();
+
+    [[nodiscard]] bool writeEntityMovements();
+
+    [[nodiscard]] bool writeLocalPlayerState();
+
     [[nodiscard]] bool finishCurrentChunk(bool close);
 
     void failRecording(std::string_view reason);
@@ -92,6 +119,8 @@ private:
 
     void saveRecording();
 
+    void logRecordedGamePacketSummary() const;
+
     void resetStateForNewRecording();
 
     void resetChunkSnapshot();
@@ -99,11 +128,20 @@ private:
 public:
     Recorder();
 
+    [[nodiscard]] bool isActive() const {
+        auto const state = mState.load();
+        return state == State::Recording || state == State::Paused;
+    }
+
     [[nodiscard]] bool isPaused() const { return mState.load() == State::Paused; }
 
     void start();
     void pause();
     void stop();
+
+    void recordSpawnedActor(ActorRuntimeID runtimeId);
+
+    void recordGamePacket(Packet const& packet);
 
     void endTick(bool close);
 

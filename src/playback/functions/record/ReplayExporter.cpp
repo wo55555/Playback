@@ -196,7 +196,7 @@ bool ReplayExporter::exportReplay(
 }
 
 std::optional<PlaybackMeta> ReplayExporter::tryReadMeta(std::filesystem::path const& file) {
-    getLogger().info("Trying to read metadata json {}", file);
+    getLogger().debug("Trying to read metadata json {}", file);
 
     std::ifstream metadata(file, std::ios::binary);
     if (!metadata.is_open()) {

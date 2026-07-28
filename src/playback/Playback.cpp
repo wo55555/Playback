@@ -18,6 +18,7 @@
 #include "ll/api/event/client/ClientJoinLevelEvent.h"
 #include "ll/api/event/client/ClientStartJoinLevelEvent.h"
 #include "ll/api/event/command/ClientCommandRegisterEvent.h"
+#include "ll/api/i18n/I18n.h"
 #include "ll/api/io/LogLevel.h"
 #include "ll/api/io/Logger.h"
 #include "ll/api/mod/RegisterHelper.h"
@@ -57,7 +58,6 @@ void Playback::setupCommands() {
 
     command::registerPlaybackCommand();
     command::registerRecordCommand(commandConfig.record);
-    command::registerReplayCommand(commandConfig.replay);
 }
 
 void Playback::registerActions() {
@@ -66,6 +66,8 @@ void Playback::registerActions() {
     registry.registerAction(std::make_unique<functions::ActionNextTick>());
     registry.registerAction(std::make_unique<functions::ActionLevelChunkCached>());
     registry.registerAction(std::make_unique<functions::ActionSubChunkCached>());
+    registry.registerAction(std::make_unique<functions::ActionGamePacket>());
+    registry.registerAction(std::make_unique<functions::ActionMoveEntities>());
 }
 
 bool Playback::hook() {
@@ -102,21 +104,19 @@ bool Playback::hook() {
             functions::ReplaySession::getInstance().onLevelJoinCancelled();
         })
     );
-    getEventListeners().emplace(
-        ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
-            [this](ll::event::ClientJoinLevelEvent& event) {
-                functions::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asMultiPlayerLevel());
-                functions::ReplaySession::getInstance().onLevelJoined(event.player());
-                refreshMode(event.player().getLevel());
-            }
-        )
-    );
+    getEventListeners().emplace(ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
+        [this](ll::event::ClientJoinLevelEvent& event) {
+            functions::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asMultiPlayerLevel());
+            functions::ReplaySession::getInstance().onLevelJoined(event.player());
+            refreshMode(event.player().getLevel());
+        }
+    ));
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientExitLevelEvent>([this](auto&&) {
             auto& replaySession = functions::ReplaySession::getInstance();
             replaySession.onLevelExit();
             auto& recorder = functions::Recorder::getInstance();
-            recorder.stop();
+            if (recorder.isActive()) recorder.stop();
             functions::ChunkMutationBarrier::setActiveLevel(nullptr);
             impl->mLevelId.clear();
             impl->mMode.store(PlaybackMode::Unknown);
@@ -202,6 +202,12 @@ bool Playback::load() {
 
     const auto& logger = getSelf().getLogger();
     logger.debug("Loading...");
+
+    logger.debug("Loading I18n");
+    if (auto result = ll::i18n::getInstance().load(getSelf().getLangDir()); !result) {
+        logger.error("Failed to load I18n");
+        result.error().log(getSelf().getLogger());
+    }
 
     registerActions();
     if (!editor::hookReplayUIRendererInit(true)) {

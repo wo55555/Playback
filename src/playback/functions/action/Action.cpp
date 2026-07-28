@@ -18,4 +18,14 @@ void ActionSubChunkCached::handle(functions::ReplaySession& session, PlaybackBuf
     session.handleSubChunkCached(data.getVarInt().value());
 }
 
+// ActionGamePacket
+void ActionGamePacket::handle(functions::ReplaySession& session, PlaybackBuffer& data) {
+    session.handleGamePacket(data);
+}
+
+// ActionMoveEntities
+void ActionMoveEntities::handle(functions::ReplaySession& session, PlaybackBuffer& data) {
+    session.handleMoveEntities(data);
+}
+
 } // namespace playback::functions

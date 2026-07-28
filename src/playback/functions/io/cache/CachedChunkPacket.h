@@ -2,8 +2,7 @@
 
 #include <array>
 #include <cstdint>
-
-class Packet;
+#include <string_view>
 
 namespace playback::functions {
 
@@ -16,10 +15,10 @@ public:
     uint64_t mLongHashCode;
 
 private:
-    static std::array<uint8_t, 64> computePacketBigHash(Packet const& packet);
+    static std::array<uint8_t, 64> computePacketBigHash(int32_t packetId, std::string_view payload);
 
 public:
-    CachedChunkPacket(Packet const& packet, int index);
+    CachedChunkPacket(int32_t packetId, std::string_view payload, int index);
     ~CachedChunkPacket() = default;
 
     bool operator==(const CachedChunkPacket& other) const;

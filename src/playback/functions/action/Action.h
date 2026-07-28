@@ -71,4 +71,26 @@ public:
     }
 };
 
+struct ActionGamePacket : Action {
+    ActionGamePacket() : Action("game_packet") {}
+    void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionGamePacket& getInstance() {
+        static ActionGamePacket instance;
+        return instance;
+    }
+};
+
+struct ActionMoveEntities : Action {
+    ActionMoveEntities() : Action("move_entities") {}
+    void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionMoveEntities& getInstance() {
+        static ActionMoveEntities instance;
+        return instance;
+    }
+};
+
 } // namespace playback::functions

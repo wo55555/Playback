@@ -11,10 +11,42 @@
 
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/player/LocalPlayer.h"
+#include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
+#include "mc/entity/components/ActorHeadRotationComponent.h"
+#include "mc/entity/components/MobBodyRotationComponent.h"
+#include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/network/MinecraftPacketIds.h"
 #include "mc/network/MinecraftPackets.h"
+#include "mc/network/Packet.h"
+#include "mc/network/packet/ActorEventPacket.h"
+#include "mc/network/packet/AddActorPacket.h"
+#include "mc/network/packet/AddItemActorPacket.h"
+#include "mc/network/packet/AddPlayerPacket.h"
+#include "mc/network/packet/AnimatePacket.h"
+#include "mc/network/packet/DimensionDataPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
+#include "mc/network/packet/LevelSoundEventPacket.h"
+#include "mc/network/packet/MobArmorEquipmentPacket.h"
+#include "mc/network/packet/MobEffectPacket.h"
+#include "mc/network/packet/MobEquipmentPacket.h"
+#include "mc/network/packet/PlayerActionPacket.h"
+#include "mc/network/packet/PlayerListPacket.h"
+#include "mc/network/packet/PlayerListPacketType.h"
+#include "mc/network/packet/RemoveActorPacket.h"
+#include "mc/network/packet/SetActorDataPacket.h"
+#include "mc/network/packet/SetActorLinkPacket.h"
+#include "mc/network/packet/SetActorMotionPacket.h"
+#include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
+#include "mc/network/packet/TakeItemActorPacket.h"
+#include "mc/network/packet/UpdateAttributesPacket.h"
+#include "mc/network/packet/UpdatePlayerGameTypePacket.h"
 #include "mc/util/VarIntDataOutput.h"
+#include "mc/world/ContainerID.h"
+#include "mc/world/actor/Actor.h"
+#include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/player/PlayerListEntry.h"
+#include "mc/world/actor/state/PropertyComponent.h"
 #include "mc/world/item/SaveContextFactory.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/block/BedrockBlockNames.h"
@@ -23,7 +55,6 @@
 #include "mc/world/level/chunk/LevelChunk.h"
 #include "mc/world/level/chunk/SubChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
-#include "mc/world/level/dimension/VanillaDimensions.h"
 #include "mc/world/level/storage/LevelData.h"
 
 #include "nlohmann/json.hpp"
@@ -53,7 +84,138 @@ namespace playback::functions {
 
 namespace {
 
+constexpr ActorUniqueID  RecordedPlayerUniqueId{std::numeric_limits<int64_t>::max() - 1024};
+constexpr ActorRuntimeID RecordedPlayerRuntimeId{uint64_t{1} << 62};
+
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
+
+bool remapRuntimeId(ActorRuntimeID& id, ActorRuntimeID source, ActorRuntimeID target) {
+    if (id.rawID != source.rawID) return false;
+    id = target;
+    return true;
+}
+
+bool remapUniqueId(ActorUniqueID& id, ActorUniqueID source, ActorUniqueID target) {
+    if (id.rawID != source.rawID) return false;
+    id = target;
+    return true;
+}
+
+bool packetMayReferenceRecordedPlayer(MinecraftPacketIds packetId) {
+    switch (packetId) {
+    case MinecraftPacketIds::AddPlayer:
+    case MinecraftPacketIds::PlayerList:
+    case MinecraftPacketIds::RemoveActor:
+    case MinecraftPacketIds::TakeItemActor:
+    case MinecraftPacketIds::ActorEvent:
+    case MinecraftPacketIds::MobEffect:
+    case MinecraftPacketIds::UpdateAttributes:
+    case MinecraftPacketIds::PlayerEquipment:
+    case MinecraftPacketIds::MobArmorEquipment:
+    case MinecraftPacketIds::SetActorData:
+    case MinecraftPacketIds::SetActorMotion:
+    case MinecraftPacketIds::SetActorLink:
+    case MinecraftPacketIds::Animate:
+    case MinecraftPacketIds::PlayerAction:
+    case MinecraftPacketIds::LevelSoundEvent:
+    case MinecraftPacketIds::UpdatePlayerGameType:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool remapRecordedPlayerReferences(
+    Packet&          packet,
+    ActorUniqueID    sourceUniqueId,
+    ActorRuntimeID   sourceRuntimeId,
+    mce::UUID const& sourceUuid,
+    ActorUniqueID    targetUniqueId,
+    ActorRuntimeID   targetRuntimeId,
+    mce::UUID const& targetUuid
+) {
+    switch (packet.getId()) {
+    case MinecraftPacketIds::AddPlayer: {
+        auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
+        bool  changed   = addPlayer.mEntityId->rawID == sourceUniqueId.rawID
+                    || addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
+        for (auto& link : *addPlayer.mLinks) {
+            changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
+            changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
+        }
+        if (!changed) return false;
+        addPlayer.mUuid      = targetUuid;
+        addPlayer.mEntityId  = targetUniqueId;
+        addPlayer.mRuntimeId = targetRuntimeId;
+        addPlayer.mPlatformOnlineId->clear();
+        addPlayer.mDeviceId->clear();
+        return true;
+    }
+    case MinecraftPacketIds::PlayerList: {
+        bool  changed    = false;
+        auto& playerList = static_cast<PlayerListPacket&>(packet);
+        for (auto& entry : *playerList.mEntries) {
+            if (entry.mId->rawID != sourceUniqueId.rawID && *entry.mUUID != sourceUuid) continue;
+            entry.mId   = targetUniqueId;
+            entry.mUUID = targetUuid;
+            entry.mXUID->clear();
+            entry.mPlatformOnlineId->clear();
+            changed = true;
+        }
+        return changed;
+    }
+    case MinecraftPacketIds::RemoveActor:
+        return remapUniqueId(static_cast<RemoveActorPacket&>(packet).mEntityId, sourceUniqueId, targetUniqueId);
+    case MinecraftPacketIds::TakeItemActor: {
+        auto& takeItem  = static_cast<TakeItemActorPacket&>(packet);
+        bool  changed   = remapRuntimeId(takeItem.mItemId, sourceRuntimeId, targetRuntimeId);
+        changed        |= remapRuntimeId(takeItem.mActorId, sourceRuntimeId, targetRuntimeId);
+        return changed;
+    }
+    case MinecraftPacketIds::ActorEvent:
+        return remapRuntimeId(static_cast<ActorEventPacket&>(packet).mRuntimeId, sourceRuntimeId, targetRuntimeId);
+    case MinecraftPacketIds::MobEffect:
+        return remapRuntimeId(static_cast<MobEffectPacket&>(packet).mRuntimeId, sourceRuntimeId, targetRuntimeId);
+    case MinecraftPacketIds::UpdateAttributes:
+        return remapRuntimeId(
+            static_cast<UpdateAttributesPacket&>(packet).mRuntimeId,
+            sourceRuntimeId,
+            targetRuntimeId
+        );
+    case MinecraftPacketIds::PlayerEquipment:
+        return remapRuntimeId(static_cast<MobEquipmentPacket&>(packet).mRuntimeId, sourceRuntimeId, targetRuntimeId);
+    case MinecraftPacketIds::MobArmorEquipment:
+        return remapRuntimeId(
+            static_cast<MobArmorEquipmentPacket&>(packet).mRuntimeId,
+            sourceRuntimeId,
+            targetRuntimeId
+        );
+    case MinecraftPacketIds::SetActorData:
+        return remapRuntimeId(static_cast<SetActorDataPacket&>(packet).mId, sourceRuntimeId, targetRuntimeId);
+    case MinecraftPacketIds::SetActorMotion:
+        return remapRuntimeId(static_cast<SetActorMotionPacket&>(packet).mRuntimeId, sourceRuntimeId, targetRuntimeId);
+    case MinecraftPacketIds::SetActorLink: {
+        auto& link     = *static_cast<SetActorLinkPacket&>(packet).mLink;
+        bool  changed  = remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
+        changed       |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
+        return changed;
+    }
+    case MinecraftPacketIds::Animate:
+        return remapRuntimeId(static_cast<AnimatePacket&>(packet).mRuntimeId, sourceRuntimeId, targetRuntimeId);
+    case MinecraftPacketIds::PlayerAction:
+        return remapRuntimeId(static_cast<PlayerActionPacket&>(packet).mRuntimeId, sourceRuntimeId, targetRuntimeId);
+    case MinecraftPacketIds::LevelSoundEvent:
+        return remapUniqueId(static_cast<LevelSoundEventPacket&>(packet).mActor, sourceUniqueId, targetUniqueId);
+    case MinecraftPacketIds::UpdatePlayerGameType:
+        return remapUniqueId(
+            static_cast<UpdatePlayerGameTypePacket&>(packet).mTargetPlayer,
+            sourceUniqueId,
+            targetUniqueId
+        );
+    default:
+        return false;
+    }
+}
 
 std::string sanitizeFileName(std::string name) {
     for (auto& ch : name) {
@@ -213,8 +375,8 @@ Recorder::Recorder() : mSnapshotLevelChunks{}, mSnapshotSubChunks{} {
 void Recorder::start() {
     auto  clientInstance = ll::service::getClientInstance();
     auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
-    if (!localPlayer || localPlayer->getDimensionId() != VanillaDimensions::Overworld()) {
-        getLogger().error("Recording is only supported in the Overworld");
+    if (!localPlayer) {
+        getLogger().error("Recording requires a local player");
         return;
     }
 
@@ -237,6 +399,9 @@ void Recorder::start() {
     }
 
     resetStateForNewRecording();
+    mRecordedLocalPlayerId        = RecordedPlayerUniqueId;
+    mRecordedLocalPlayerRuntimeId = RecordedPlayerRuntimeId;
+    mRecordedLocalPlayerUuid      = mce::UUID::random();
     if (auto error = mAsyncReplaySaver->getError()) {
         cancelRecording(*error);
         return;
@@ -270,6 +435,7 @@ void Recorder::stop() {
 
     endTick(true);
     if (mState.load() != State::Closing) return;
+    logRecordedGamePacketSummary();
     saveRecording();
 }
 
@@ -308,6 +474,31 @@ void Recorder::saveRecording() {
     }
 }
 
+void Recorder::logRecordedGamePacketSummary() const {
+    std::scoped_lock lock(mPendingGamePacketsMutex);
+    auto             count = [this](MinecraftPacketIds packetId) {
+        auto const it = mRecordedGamePacketCounts.find(static_cast<int32_t>(packetId));
+        return it == mRecordedGamePacketCounts.end() ? uint64_t{} : it->second;
+    };
+    getLogger().debug(
+        "Recorded timeline packet summary: AddActor={}, AddItemActor={}, RemoveActor={}, TakeItemActor={}, "
+        "ActorEvent={}, LevelEvent={}, MobEquipment={}, MobArmorEquipment={}, SetActorData={}, UpdateBlock={}, "
+        "UpdateBlockSynced={}, UpdateSubChunkBlocks={}",
+        count(MinecraftPacketIds::AddActor),
+        count(MinecraftPacketIds::AddItemActor),
+        count(MinecraftPacketIds::RemoveActor),
+        count(MinecraftPacketIds::TakeItemActor),
+        count(MinecraftPacketIds::ActorEvent),
+        count(MinecraftPacketIds::LevelEvent),
+        count(MinecraftPacketIds::PlayerEquipment),
+        count(MinecraftPacketIds::MobArmorEquipment),
+        count(MinecraftPacketIds::SetActorData),
+        count(MinecraftPacketIds::UpdateBlock),
+        count(MinecraftPacketIds::UpdateBlockSynced),
+        count(MinecraftPacketIds::UpdateSubChunkBlocks)
+    );
+}
+
 void Recorder::resetStateForNewRecording() {
     mAsyncReplaySaver = std::make_unique<AsyncReplaySaver>();
 
@@ -326,6 +517,19 @@ void Recorder::resetStateForNewRecording() {
     mHasOpenChunk         = false;
     mOpenChunkHasData     = false;
     mNeedsInitialSnapshot = true;
+    mLastEntityMovements.clear();
+    mRecordedLocalPlayerId.reset();
+    mRecordedLocalPlayerRuntimeId.reset();
+    mRecordedLocalPlayerUuid.reset();
+    mLastLocalPlayerDataPacket.reset();
+    mLastLocalPlayerEquipmentPacket.reset();
+    mLastLocalPlayerArmorPacket.reset();
+    mLastLocalPlayerSwingTime.reset();
+    {
+        std::scoped_lock lock(mPendingGamePacketsMutex);
+        mPendingGamePackets.clear();
+        mRecordedGamePacketCounts.clear();
+    }
 }
 
 void Recorder::endTick(bool close) {
@@ -339,13 +543,24 @@ void Recorder::endTick(bool close) {
         }
     }
 
+    bool dimensionChanged = false;
     if (mRecordingDimension) {
         auto  clientInstance = ll::service::getClientInstance();
         auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
-        if (!localPlayer || localPlayer->getDimensionId() != *mRecordingDimension) {
-            failRecording("Changing dimensions while recording is not supported");
+        if (!localPlayer) {
+            if (close && mHasOpenChunk) {
+                if (!flushGamePackets() || !writeTickBoundary() || !finishCurrentChunk(true)) return;
+                return;
+            }
+            failRecording("The local player is unavailable while recording");
             return;
         }
+        dimensionChanged = localPlayer->getDimensionId() != *mRecordingDimension;
+    }
+
+    if (dimensionChanged) {
+        if (!flushGamePackets() || !writeTickBoundary() || !finishCurrentChunk(close)) return;
+        return;
     }
 
     bool const rotateChunk =
@@ -367,20 +582,24 @@ void Recorder::endTick(bool close) {
             return;
         }
 
-        if (!writeTickBoundary() || !finishCurrentChunk(false) || !writeSnapshot()
-            || !commitChunkSnapshot(elapsed, barrierWait)) {
+        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeTickBoundary()
+            || !finishCurrentChunk(false) || !writeSnapshot() || !commitChunkSnapshot(elapsed, barrierWait)) {
             return;
         }
         return;
     }
 
-    if (!writeInitialSnapshotIfNeeded() || !writeTickBoundary()) return;
+    if (!writeInitialSnapshotIfNeeded() || !writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements()
+        || !writeTickBoundary()) {
+        return;
+    }
     if (close && !finishCurrentChunk(true)) return;
 }
 
 void Recorder::resetChunkSnapshot() {
     mSnapshotLevelChunks.clear();
     mSnapshotSubChunks.clear();
+    mSnapshotEntityPackets.clear();
     mSnapshotView.reset();
     mSnapshotFailure.clear();
 }
@@ -394,14 +613,6 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
     }
 
     auto const dimension = localPlayer->getDimensionId();
-    if (dimension != VanillaDimensions::Overworld()) {
-        mSnapshotFailure = "Recording is only supported in the Overworld";
-        return false;
-    }
-    if (mRecordingDimension && *mRecordingDimension != dimension) {
-        mSnapshotFailure = "Changing dimensions while recording is not supported";
-        return false;
-    }
 
     auto mutationGuard = ChunkMutationBarrier::capture();
     barrierWait        = mutationGuard.waited();
@@ -476,7 +687,7 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
         return false;
     }
 
-    // --- Parallel column serialization ---
+    // Parallel column serialization
     size_t const       numColumns = columns.size();
     unsigned int const numThreads = std::max(1u, std::thread::hardware_concurrency());
     size_t const       batchSize  = std::max(size_t{1}, (numColumns + numThreads - 1) / numThreads);
@@ -671,9 +882,124 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
         return false;
     }
 
-    mSnapshotLevelChunks = std::move(levelChunks);
-    mSnapshotSubChunks   = std::move(subChunkPackets);
-    mSnapshotView        = view;
+    std::vector<PlaybackSerializedGamePacket> entityPackets;
+    auto                                      appendEntityPacket = [&entityPackets](Packet const& packet) {
+        PlaybackBuffer stream;
+        packet.write(stream);
+        entityPackets.push_back({static_cast<int32_t>(packet.getId()), std::move(stream.mBuffer)});
+    };
+
+    try {
+        auto& level = finalPlayer->getLevel();
+        if (!mRecordedLocalPlayerId) {
+            mRecordedLocalPlayerId        = RecordedPlayerUniqueId;
+            mRecordedLocalPlayerRuntimeId = RecordedPlayerRuntimeId;
+            mRecordedLocalPlayerUuid      = mce::UUID::random();
+        }
+
+        auto timePacket = MinecraftPackets::createPacket(MinecraftPacketIds::SetTime);
+        if (!timePacket) {
+            mSnapshotFailure = "Unable to create the snapshot time packet";
+            return false;
+        }
+        static_cast<SetTimePacket&>(*timePacket).mTime = level.getTime();
+        appendEntityPacket(*timePacket);
+
+        auto                 actors = level.getRuntimeActorList();
+        std::vector<Player*> snapshotPlayers;
+        snapshotPlayers.reserve(actors.size());
+
+        for (auto* actor : actors) {
+            if (!actor || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
+            if (actor->isPlayer()) snapshotPlayers.emplace_back(static_cast<Player*>(actor));
+        }
+
+        if (!snapshotPlayers.empty()) {
+            auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::PlayerList);
+            if (!packet) {
+                mSnapshotFailure = "Unable to create the entity snapshot player list packet";
+                return false;
+            }
+
+            auto&       playerListPacket = static_cast<PlayerListPacket&>(*packet);
+            auto const& playerList       = level.getPlayerList();
+            playerListPacket.mAction     = PlayerListPacketType::Add;
+            playerListPacket.mEntries->reserve(snapshotPlayers.size());
+            for (auto const* player : snapshotPlayers) {
+                auto            entry = playerList.find(player->getUuid());
+                PlayerListEntry snapshotEntry =
+                    entry != playerList.end() ? PlayerListEntry(entry->second) : PlayerListEntry(*player);
+                if (player == finalPlayer) {
+                    snapshotEntry.mId   = *mRecordedLocalPlayerId;
+                    snapshotEntry.mUUID = *mRecordedLocalPlayerUuid;
+                    snapshotEntry.mXUID->clear();
+                    snapshotEntry.mPlatformOnlineId->clear();
+                }
+                playerListPacket.mEntries->emplace_back(std::move(snapshotEntry));
+            }
+            appendEntityPacket(playerListPacket);
+        }
+
+        for (auto* actor : actors) {
+            if (!actor || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
+
+            std::shared_ptr<Packet> packet;
+            if (actor == finalPlayer) packet = std::make_shared<AddPlayerPacket>(*finalPlayer);
+            else packet = actor->tryCreateAddActorPacket();
+            if (!packet) {
+                getLogger().debug("Skipping unsupported replay snapshot actor {}", actor->getOrCreateUniqueID().rawID);
+                continue;
+            }
+            if (actor == finalPlayer) {
+                auto& addPlayer           = static_cast<AddPlayerPacket&>(*packet);
+                addPlayer.mUuid           = *mRecordedLocalPlayerUuid;
+                addPlayer.mEntityId       = *mRecordedLocalPlayerId;
+                addPlayer.mRuntimeId      = *mRecordedLocalPlayerRuntimeId;
+                addPlayer.mPlayerGameType = finalPlayer->getPlayerGameType();
+                addPlayer.mPlatformOnlineId->clear();
+                addPlayer.mDeviceId->clear();
+            }
+            appendEntityPacket(*packet);
+
+            auto const runtimeId = actor == finalPlayer ? *mRecordedLocalPlayerRuntimeId : actor->getRuntimeID();
+            if (actor->isPlayer()) {
+                auto const*        player = static_cast<Player const*>(actor);
+                MobEquipmentPacket equipment(
+                    runtimeId,
+                    player->getSelectedItem(),
+                    player->getSelectedItemSlot(),
+                    player->getSelectedItemSlot(),
+                    ContainerID::Inventory
+                );
+                appendEntityPacket(equipment);
+
+                MobArmorEquipmentPacket armor(*player);
+                if (actor == finalPlayer) armor.mRuntimeId = *mRecordedLocalPlayerRuntimeId;
+                appendEntityPacket(armor);
+            } else if (actor->hasCategory(ActorCategory::Mob)) {
+                MobEquipmentPacket equipment(runtimeId, actor->getCarriedItem(), 0, 0, ContainerID::Inventory);
+                appendEntityPacket(equipment);
+
+                MobArmorEquipmentPacket armor(*actor);
+                appendEntityPacket(armor);
+            }
+        }
+    } catch (std::exception const& exception) {
+        mSnapshotFailure = "Unable to serialize the entity snapshot: " + std::string(exception.what());
+        return false;
+    } catch (...) {
+        mSnapshotFailure = "Unable to serialize the entity snapshot";
+        return false;
+    }
+
+    mSnapshotLevelChunks   = std::move(levelChunks);
+    mSnapshotSubChunks     = std::move(subChunkPackets);
+    mSnapshotEntityPackets = std::move(entityPackets);
+    {
+        std::scoped_lock lock(mPendingGamePacketsMutex);
+        mSnapshotDimensionDataPayload = mDimensionDataPayload;
+    }
+    mSnapshotView = view;
     if (!mMetadata.initialView) {
         mMetadata.initialView = view;
     }
@@ -681,8 +1007,12 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
 
     size_t subChunkCount = 0;
     for (auto const& packet : mSnapshotSubChunks) subChunkCount += packet->mSubChunkData->size();
-    getLogger()
-        .debug("Prepared replay snapshot with {} columns and {} subchunks", mSnapshotLevelChunks.size(), subChunkCount);
+    getLogger().debug(
+        "Prepared replay snapshot with {} columns, {} subchunks, and {} entity packets",
+        mSnapshotLevelChunks.size(),
+        subChunkCount,
+        mSnapshotEntityPackets.size()
+    );
     return true;
 }
 
@@ -700,7 +1030,7 @@ bool Recorder::commitChunkSnapshot(
     auto elapsedMs = std::chrono::duration<double, std::milli>(captureElapsed).count();
     auto longestMs = std::chrono::duration<double, std::milli>(mLongestSnapshotStall).count();
     auto waitMs    = std::chrono::duration<double, std::milli>(barrierWait).count();
-    getLogger().info(
+    getLogger().debug(
         "Captured replay snapshot with {} columns in {:.3f} ms (longest stall {:.3f} ms, barrier wait {:.3f} ms)",
         mSnapshotLevelChunks.size(),
         elapsedMs,
@@ -746,14 +1076,22 @@ bool Recorder::writeSnapshot() {
         return false;
     }
 
-    std::vector<std::shared_ptr<Packet>> gamePackets;
-    gamePackets.reserve(mSnapshotLevelChunks.size() + mSnapshotSubChunks.size());
-    for (auto const& packet : mSnapshotLevelChunks) {
-        gamePackets.emplace_back(packet);
+    std::vector<AsyncReplaySaver::GamePacket> gamePackets;
+    gamePackets.reserve(
+        (mSnapshotDimensionDataPayload.empty() ? 0 : 1) + mSnapshotLevelChunks.size() + mSnapshotSubChunks.size()
+        + mSnapshotEntityPackets.size()
+    );
+
+    if (!mSnapshotDimensionDataPayload.empty()) {
+        gamePackets.emplace_back(PlaybackSerializedGamePacket{
+            static_cast<int32_t>(MinecraftPacketIds::DimensionDataPacket),
+            mSnapshotDimensionDataPayload
+        });
     }
-    for (auto const& packet : mSnapshotSubChunks) {
-        gamePackets.emplace_back(packet);
-    }
+
+    for (auto const& packet : mSnapshotLevelChunks) gamePackets.emplace_back(packet);
+    for (auto const& packet : mSnapshotSubChunks) gamePackets.emplace_back(packet);
+    for (auto const& packet : mSnapshotEntityPackets) gamePackets.emplace_back(packet);
 
     if (!mAsyncReplaySaver->writeGamePackets(std::move(gamePackets))) {
         auto error = mAsyncReplaySaver->getError();
@@ -787,6 +1125,286 @@ bool Recorder::writeTickBoundary() {
     ++mTicksInCurrentChunk;
     ++mWrittenTicks;
     return true;
+}
+
+bool Recorder::flushGamePackets() {
+    if (!mAsyncReplaySaver) {
+        failRecording("Replay saver is not initialized while writing game packets");
+        return false;
+    }
+
+    std::vector<PlaybackSerializedGamePacket> pending;
+    {
+        std::scoped_lock lock(mPendingGamePacketsMutex);
+        pending.swap(mPendingGamePackets);
+    }
+
+    if (pending.empty()) return true;
+    std::vector<AsyncReplaySaver::GamePacket> gamePackets;
+    gamePackets.reserve(pending.size());
+    for (auto& packet : pending) gamePackets.emplace_back(std::move(packet));
+    if (mAsyncReplaySaver->writeGamePackets(std::move(gamePackets))) return true;
+
+    auto error = mAsyncReplaySaver->getError();
+    failRecording(error.value_or("Unable to queue game packets"));
+    return false;
+}
+
+bool Recorder::writeEntityMovements() {
+    if (!mAsyncReplaySaver) {
+        failRecording("Replay saver is not initialized while writing entity movements");
+        return false;
+    }
+
+    auto  clientInstance = ll::service::getClientInstance();
+    auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+    if (!localPlayer) {
+        failRecording("The local player is not ready while writing entity movements");
+        return false;
+    }
+
+    struct MovementRecord {
+        ActorUniqueID id;
+        std::string   state;
+    };
+
+    std::vector<MovementRecord>                    changed;
+    std::unordered_map<ActorUniqueID, std::string> current;
+    auto                                           actors = localPlayer->getLevel().getRuntimeActorList();
+    changed.reserve(actors.size());
+    current.reserve(actors.size());
+
+    for (auto const* actor : actors) {
+        if (!actor || !actor->isAlive() || actor->getDimensionId() != localPlayer->getDimensionId()) {
+            continue;
+        }
+
+        auto position = actor->getPosition();
+        auto rotation = actor->getRotation();
+
+        auto const& entityContext = actor->getEntityContext();
+        auto const  interpolator  = entityContext.tryGetComponent<MovementInterpolatorComponent>();
+        if (interpolator) {
+            if (interpolator->mPositionSteps > 0) position = *interpolator->mPos;
+            if (interpolator->mRotationSteps > 0) rotation = *interpolator->mRot;
+        }
+
+        float headYaw = rotation.y;
+        if (auto const headRotation = entityContext.tryGetComponent<ActorHeadRotationComponent>()) {
+            headYaw = headRotation->mYHeadRot;
+        }
+        if (interpolator && interpolator->mHeadYawSteps > 0) headYaw = interpolator->mHeadYaw;
+
+        float bodyYaw = rotation.y;
+        if (auto const bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
+            bodyYaw = bodyRotation->mYBodyRot;
+        }
+
+        PlaybackBuffer state;
+        state.writeFloat(position.x, nullptr, nullptr);
+        state.writeFloat(position.y, nullptr, nullptr);
+        state.writeFloat(position.z, nullptr, nullptr);
+        state.writeFloat(rotation.x, nullptr, nullptr);
+        state.writeFloat(rotation.y, nullptr, nullptr);
+        state.writeFloat(headYaw, nullptr, nullptr);
+        state.writeFloat(bodyYaw, nullptr, nullptr);
+        state.writeBool(actor->isOnGround(), nullptr, nullptr);
+
+        if (actor == localPlayer && !mRecordedLocalPlayerId) {
+            failRecording("The recorded local player identity is unavailable while writing entity movements");
+            return false;
+        }
+        auto const id       = actor == localPlayer ? *mRecordedLocalPlayerId : actor->getOrCreateUniqueID();
+        auto       it       = current.emplace(id, std::move(state.mBuffer)).first;
+        auto       previous = mLastEntityMovements.find(id);
+        if (previous == mLastEntityMovements.end() || previous->second != it->second) {
+            changed.emplace_back(id, it->second);
+        }
+    }
+    mLastEntityMovements = std::move(current);
+
+    if (changed.empty()) return true;
+    if (!mAsyncReplaySaver->submit([changed = std::move(changed)](ReplayWriter& writer) {
+            auto& action = ActionMoveEntities::getInstance();
+            writer.startAction(action);
+            writer.mStream.writeVarInt(0, nullptr, nullptr);
+            writer.mStream.writeVarInt(1, nullptr, nullptr);
+            writer.mStream.writeVarInt(static_cast<int>(changed.size()), nullptr, nullptr);
+            for (auto const& movement : changed) {
+                writer.mStream.writeVarInt64(movement.id.rawID, nullptr, nullptr);
+                writer.mStream.write(movement.state.data(), movement.state.size());
+            }
+            writer.finishAction(action);
+        })) {
+        auto error = mAsyncReplaySaver->getError();
+        failRecording(error.value_or("Unable to queue entity movements"));
+        return false;
+    }
+    return true;
+}
+
+bool Recorder::writeLocalPlayerState() {
+    auto  clientInstance = ll::service::getClientInstance();
+    auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+    if (!localPlayer || !mRecordedLocalPlayerRuntimeId) {
+        failRecording("The local player is not ready while writing replayable player state");
+        return false;
+    }
+
+    auto recordChanged = [this](Packet const& packet, std::optional<std::string>& previous) {
+        PlaybackBuffer serialized;
+        packet.write(serialized);
+        if (previous && *previous == serialized.mBuffer) return;
+        previous = serialized.mBuffer;
+        recordGamePacket(packet);
+    };
+
+    auto&              entityContext = localPlayer->getEntityContext();
+    auto*              properties    = entityContext.tryGetComponent<PropertyComponent>().as_ptr();
+    SetActorDataPacket actorData(localPlayer->getRuntimeID(), *localPlayer->mEntityData, properties, 0, true);
+    recordChanged(actorData, mLastLocalPlayerDataPacket);
+
+    MobEquipmentPacket equipment(
+        localPlayer->getRuntimeID(),
+        localPlayer->getSelectedItem(),
+        localPlayer->getSelectedItemSlot(),
+        localPlayer->getSelectedItemSlot(),
+        ContainerID::Inventory
+    );
+    recordChanged(equipment, mLastLocalPlayerEquipmentPacket);
+
+    MobArmorEquipmentPacket armor(*localPlayer);
+    recordChanged(armor, mLastLocalPlayerArmorPacket);
+
+    bool const swinging  = localPlayer->mSwinging;
+    int const  swingTime = localPlayer->mSwingTime;
+    if (!swinging) {
+        mLastLocalPlayerSwingTime.reset();
+    } else {
+        if (!mLastLocalPlayerSwingTime || swingTime < *mLastLocalPlayerSwingTime) {
+            auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::Animate);
+            if (!packet) {
+                failRecording("Unable to create the local-player swing packet");
+                return false;
+            }
+            auto& animate        = static_cast<AnimatePacket&>(*packet);
+            animate.mRuntimeId   = localPlayer->getRuntimeID();
+            animate.mAction      = AnimatePacketPayload::Action::Swing;
+            animate.mData        = 0.0f;
+            animate.mSwingSource = ActorSwingSource::None;
+            recordGamePacket(animate);
+        }
+        mLastLocalPlayerSwingTime = swingTime;
+    }
+    return true;
+}
+
+void Recorder::recordSpawnedActor(ActorRuntimeID runtimeId) {
+    if (!isActive()) return;
+
+    auto  client      = ll::service::getClientInstance();
+    auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
+    auto* actor       = localPlayer ? localPlayer->getLevel().getRuntimeEntity(runtimeId, false) : nullptr;
+    if (!actor) {
+        getLogger().warn("Unable to find spawned actor {} for timeline recording", runtimeId.rawID);
+        return;
+    }
+
+    auto spawnPacket = actor->tryCreateAddActorPacket();
+    if (!spawnPacket) {
+        getLogger().warn("Unable to create a replayable spawn packet for actor {}", runtimeId.rawID);
+        return;
+    }
+    recordGamePacket(*spawnPacket);
+
+    if (!actor->hasCategory(ActorCategory::Mob)) return;
+
+    MobEquipmentPacket equipment(runtimeId, actor->getCarriedItem(), 0, 0, ContainerID::Inventory);
+    recordGamePacket(equipment);
+
+    MobArmorEquipmentPacket armor(*actor);
+    recordGamePacket(armor);
+}
+
+void Recorder::recordGamePacket(Packet const& packet) {
+    auto const packetId          = packet.getId();
+    auto const state             = mState.load(std::memory_order_acquire);
+    auto const recordingTimeline = state == State::Recording || state == State::Closing;
+    if (!recordingTimeline && packetId != MinecraftPacketIds::DimensionDataPacket) return;
+
+    try {
+        if (packetId == MinecraftPacketIds::AddActor
+            && static_cast<AddActorPacket const&>(packet).mEntityData == nullptr) {
+            return;
+        }
+        if (packetId == MinecraftPacketIds::AddItemActor
+            && static_cast<AddItemActorPacket const&>(packet).mEntityData == nullptr) {
+            return;
+        }
+        if (packetId == MinecraftPacketIds::FullChunkData
+            && static_cast<bool>(static_cast<LevelChunkPacket const&>(packet).mCacheEnabled)) {
+            return;
+        }
+        if (packetId == MinecraftPacketIds::SubChunkPacket
+            && static_cast<bool>(static_cast<SubChunkPacket const&>(packet).mCacheEnabled)) {
+            return;
+        }
+
+        PlaybackBuffer stream;
+        packet.write(stream);
+
+        {
+            std::scoped_lock lock(mPendingGamePacketsMutex);
+            if (packetId == MinecraftPacketIds::DimensionDataPacket) mDimensionDataPayload = stream.mBuffer;
+        }
+
+        if (!recordingTimeline) return;
+
+        if (packetId == MinecraftPacketIds::MoveAbsoluteActor || packetId == MinecraftPacketIds::MovePlayer
+            || packetId == MinecraftPacketIds::NetworkChunkPublisherUpdate
+            || packetId == MinecraftPacketIds::ChunkRadiusUpdated) {
+            return;
+        }
+
+        auto  clientInstance = ll::service::getClientInstance();
+        auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+        if (localPlayer && mRecordedLocalPlayerId && mRecordedLocalPlayerRuntimeId && mRecordedLocalPlayerUuid
+            && packetMayReferenceRecordedPlayer(packetId)) {
+            auto                 remappedPacket = MinecraftPackets::createPacket(packetId);
+            ReadOnlyBinaryStream input(stream.mBuffer, false);
+            if (!remappedPacket || !remappedPacket->read(input) || !input.ensureReadCompleted()) {
+                getLogger().warn("Unable to decode {} for recorded-player ID remapping", packet.getName());
+            } else {
+                if (remapRecordedPlayerReferences(
+                        *remappedPacket,
+                        localPlayer->getOrCreateUniqueID(),
+                        localPlayer->getRuntimeID(),
+                        localPlayer->getUuid(),
+                        *mRecordedLocalPlayerId,
+                        *mRecordedLocalPlayerRuntimeId,
+                        *mRecordedLocalPlayerUuid
+                    )) {
+                    PlaybackBuffer remappedStream;
+                    remappedPacket->write(remappedStream);
+                    stream.mBuffer = std::move(remappedStream.mBuffer);
+                }
+            }
+        }
+
+        std::scoped_lock lock(mPendingGamePacketsMutex);
+        for (auto const& [pendingId, pendingPayload] : mPendingGamePackets) {
+            if (pendingId == static_cast<int32_t>(packetId) && pendingPayload == stream.mBuffer) return;
+        }
+        mPendingGamePackets.push_back({static_cast<int32_t>(packetId), std::move(stream.mBuffer)});
+        auto& recordedCount = mRecordedGamePacketCounts[static_cast<int32_t>(packetId)];
+        if (recordedCount++ == 0) {
+            getLogger().debug("Recording timeline packet {} ({})", packet.getName(), static_cast<int32_t>(packetId));
+        }
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to serialize incoming game packet {}: {}", packet.getName(), exception.what());
+    } catch (...) {
+        getLogger().error("Unable to serialize incoming game packet {}", packet.getName());
+    }
 }
 
 bool Recorder::finishCurrentChunk(bool close) {
@@ -841,6 +1459,18 @@ void Recorder::cancelRecording(std::string_view reason) {
     mState                = State::Idle;
     mNeedsInitialSnapshot = true;
     resetChunkSnapshot();
+    mLastEntityMovements.clear();
+    mRecordedLocalPlayerId.reset();
+    mRecordedLocalPlayerRuntimeId.reset();
+    mRecordedLocalPlayerUuid.reset();
+    mLastLocalPlayerDataPacket.reset();
+    mLastLocalPlayerEquipmentPacket.reset();
+    mLastLocalPlayerArmorPacket.reset();
+    mLastLocalPlayerSwingTime.reset();
+    {
+        std::scoped_lock lock(mPendingGamePacketsMutex);
+        mPendingGamePackets.clear();
+    }
 }
 
 } // namespace playback::functions

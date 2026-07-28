@@ -1,11 +1,14 @@
 #include "ReplayMouseHook.h"
 #include "playback/editor/ui/ReplayUILayout.h"
+#include "playback/functions/replay/ReplaySession.h"
 
 #include "ll/api/event/EventBus.h"
+#include "ll/api/event/input/KeyInputEvent.h"
 #include "ll/api/event/input/MouseInputEvent.h"
 #include "ll/api/memory/Hook.h"
 
 #include "mc/client/game/ClientInstance.h"
+#include "mc/deps/input/Keyboard.h"
 #include "mc/deps/input/MouseAction.h"
 
 #include "imgui.h"
@@ -61,6 +64,7 @@ std::atomic<bool> gRestoreCursorValid{false};
 std::mutex                    gQueuedEventsMutex;
 std::vector<QueuedMouseEvent> gQueuedEvents;
 ll::event::ListenerPtr        gMouseInputListener;
+ll::event::ListenerPtr        gKeyInputListener;
 thread_local bool             gApplyingMouseTransition{};
 thread_local uint32_t         gMouseCallbackDepth{};
 
@@ -201,6 +205,19 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
     }
 }
 
+void handleKeyInput(ll::event::KeyInputEvent& event) {
+    ActiveMouseCallback activeCallback;
+    if (!gMouseHookActive.load(std::memory_order_acquire) || !functions::ReplaySession::getInstance().isActive()
+        || event.keyCode() != Keyboard::Escape) {
+        return;
+    }
+
+    if (event.isDown() && gMouseOwner.load(std::memory_order_acquire) == MouseOwner::GameCaptured) {
+        gReleaseRequested.store(true, std::memory_order_release);
+    }
+    event.cancel();
+}
+
 void applyMouseTransition(ClientInstance& client) {
     std::scoped_lock transitionLock(gMouseTransitionMutex);
 
@@ -333,9 +350,15 @@ bool removeHooks(MouseHookState& state) {
 }
 
 void removeInputListener() {
-    if (!gMouseInputListener) return;
-    ll::event::EventBus::getInstance().removeListener(gMouseInputListener);
-    gMouseInputListener.reset();
+    auto& eventBus = ll::event::EventBus::getInstance();
+    if (gMouseInputListener) {
+        eventBus.removeListener(gMouseInputListener);
+        gMouseInputListener.reset();
+    }
+    if (gKeyInputListener) {
+        eventBus.removeListener(gKeyInputListener);
+        gKeyInputListener.reset();
+    }
 }
 
 bool waitForActiveMouseCallbacks() {
@@ -357,7 +380,7 @@ bool hookReplayMouse(bool enable) {
     auto& state = hookState();
 
     if (enable) {
-        if (state.update && state.grab && state.release && gMouseInputListener) {
+        if (state.update && state.grab && state.release && gMouseInputListener && gKeyInputListener) {
             gMouseHookActive.store(true, std::memory_order_release);
             gMouseHookStopping.store(false, std::memory_order_release);
             return true;
@@ -372,10 +395,11 @@ bool hookReplayMouse(bool enable) {
         if (state.update) state.grab = ReplayMouseGrabGuardHook::hook() == 0;
         if (state.grab) state.release = ReplayMouseReleaseGuardHook::hook() == 0;
         if (state.release) {
-            gMouseInputListener =
-                ll::event::EventBus::getInstance().emplaceListener<ll::event::MouseInputEvent>(&handleMouseInput);
+            auto& eventBus      = ll::event::EventBus::getInstance();
+            gMouseInputListener = eventBus.emplaceListener<ll::event::MouseInputEvent>(&handleMouseInput);
+            gKeyInputListener   = eventBus.emplaceListener<ll::event::KeyInputEvent>(&handleKeyInput);
         }
-        if (state.update && state.grab && state.release && gMouseInputListener) {
+        if (state.update && state.grab && state.release && gMouseInputListener && gKeyInputListener) {
             gMouseHookActive.store(true, std::memory_order_release);
             gMouseHookStopping.store(false, std::memory_order_release);
             return true;

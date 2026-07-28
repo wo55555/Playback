@@ -4,6 +4,7 @@
 #include "playback/editor/ui/ReplayUILayout.h"
 
 #include "imgui.h"
+#include "ll/api/i18n/I18n.h"
 
 #include <algorithm>
 #include <string>
@@ -21,6 +22,8 @@ constexpr auto MenuSelectedColor = IM_COL32(82, 82, 94, 255);
 } // namespace
 
 void drawMenuBarPanel(EditorState const& state, ReplayUILayout const& layout, std::vector<EditorAction>& actions) {
+    using ll::i18n_literals::operator""_tr;
+
     ImGuiIO& io = ImGui::GetIO();
     if (io.DisplaySize.x < 320.0f || io.DisplaySize.y < 200.0f) return;
 
@@ -49,30 +52,33 @@ void drawMenuBarPanel(EditorState const& state, ReplayUILayout const& layout, st
 
     if (ImGui::Begin("##PlaybackReplayMenuBar", nullptr, flags)) {
         if (ImGui::BeginMenuBar()) {
-            if (ImGui::BeginMenu("File")) {
-                ImGui::MenuItem("Export Video", nullptr, false, false);
-                ImGui::MenuItem("Export Screenshot", nullptr, false, false);
+            if (ImGui::BeginMenu("playback.editor.menu.file"_tr().c_str())) {
+                ImGui::MenuItem("playback.editor.menu.exportVideo"_tr().c_str(), nullptr, false, false);
+                ImGui::MenuItem("playback.editor.menu.exportScreenshot"_tr().c_str(), nullptr, false, false);
                 ImGui::Separator();
-                ImGui::MenuItem("Open Replay", nullptr, false, false);
-                ImGui::MenuItem("Open Recent", nullptr, false, false);
+                ImGui::MenuItem("playback.editor.menu.openReplay"_tr().c_str(), nullptr, false, false);
+                ImGui::MenuItem("playback.editor.menu.openRecent"_tr().c_str(), nullptr, false, false);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Exit Replay")) actions.push_back({EditorActionType::StopReplay});
+                if (ImGui::MenuItem("playback.editor.menu.exitReplay"_tr().c_str()))
+                    actions.push_back({EditorActionType::StopReplay});
                 ImGui::EndMenu();
             }
 
-            ImGui::MenuItem("Preferences", nullptr, false, false);
+            ImGui::MenuItem("playback.editor.menu.preferences"_tr().c_str(), nullptr, false, false);
             ImGui::Separator();
 
-            ImGui::MenuItem("Player List", nullptr, false, false);
-            ImGui::MenuItem("Movement", nullptr, false, false);
-            ImGui::MenuItem("Render Filter", nullptr, false, false);
-            ImGui::MenuItem("Keybinds", nullptr, false, false);
+            ImGui::MenuItem("playback.editor.menu.playerList"_tr().c_str(), nullptr, false, false);
+            ImGui::MenuItem("playback.editor.menu.movement"_tr().c_str(), nullptr, false, false);
+            ImGui::MenuItem("playback.editor.menu.renderFilter"_tr().c_str(), nullptr, false, false);
+            ImGui::MenuItem("playback.editor.menu.keybinds"_tr().c_str(), nullptr, false, false);
             ImGui::Separator();
-            ImGui::MenuItem("Hide Replay UI", nullptr, false, false);
+            ImGui::MenuItem("playback.editor.menu.hideReplayUi"_tr().c_str(), nullptr, false, false);
 
-            std::string const status = std::string("Playback  |  ") + (state.paused ? "Paused" : "Playing") + "  |  "
-                                     + utils::formatTimestamp(state.currentTick) + " / "
-                                     + utils::formatTimestamp(state.totalTicks);
+            std::string const status =
+                std::string("Playback  |  ")
+                + (state.paused ? "playback.editor.status.paused"_tr() : "playback.editor.status.playing"_tr())
+                + "  |  " + utils::formatTimestamp(state.currentTick) + " / "
+                + utils::formatTimestamp(state.totalTicks);
             float const statusWidth = ImGui::CalcTextSize(status.c_str()).x;
             float const statusX     = ImGui::GetWindowWidth() - statusWidth - 10.0f * layout.scale;
             if (statusX > ImGui::GetCursorPosX() + 12.0f * layout.scale) {

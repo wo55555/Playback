@@ -1,0 +1,46 @@
+{
+    "playback": {
+        "command": {
+            "playback": {
+                "description": "Playback Mod commands",
+                "versionUnavailable": "Playback version is unavailable"
+            },
+            "record": {
+                "description": "Control replay recording",
+                "started": "Recording started",
+                "paused": "Recording paused",
+                "stopped": "Recording stopped"
+            }
+        },
+        "editor": {
+            "menu": {
+                "file": "File",
+                "exportVideo": "Export Video",
+                "exportScreenshot": "Export Screenshot",
+                "openReplay": "Open Replay",
+                "openRecent": "Open Recent",
+                "exitReplay": "Exit Replay",
+                "preferences": "Preferences",
+                "playerList": "Player List",
+                "movement": "Movement",
+                "renderFilter": "Render Filter",
+                "keybinds": "Keybinds",
+                "hideReplayUi": "Hide Replay UI"
+            },
+            "status": {
+                "paused": "Paused",
+                "playing": "Playing"
+            },
+            "timeline": {
+                "scrub": "{} / {} ticks",
+                "jumpToStart": "Jump to start",
+                "slowDown": "Slow down ({:g}x)",
+                "play": "Play",
+                "pause": "Pause",
+                "speedUp": "Speed up ({:g}x)",
+                "jumpToEnd": "Jump to end",
+                "ticks": "{} / {} ticks"
+            }
+        }
+    }
+}

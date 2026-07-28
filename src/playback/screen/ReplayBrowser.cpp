@@ -303,7 +303,6 @@ bool ReplayBrowser::openReplay(std::filesystem::path const& replayPath) {
         return false;
     }
 
-    getLogger().info("Started replay session from {}", replayPath);
     return true;
 }
 

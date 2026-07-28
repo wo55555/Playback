@@ -6,6 +6,7 @@
 
 #include "ll/api/command/CommandHandle.h"
 #include "ll/api/command/CommandRegistrar.h"
+#include "ll/api/i18n/I18n.h"
 
 #include "mc/server/commands/CommandOrigin.h"
 #include "mc/server/commands/CommandOutput.h"
@@ -19,6 +20,8 @@ auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger
 } // namespace
 
 void registerRecordCommand(config::CommandConfigStruct& config) {
+    using ll::i18n_literals::operator""_tr;
+
     if (!config.enabled) {
         return;
     }
@@ -26,8 +29,10 @@ void registerRecordCommand(config::CommandConfigStruct& config) {
     auto& logger = getLogger();
     logger.debug("Start to register Record commands");
 
-    auto& recordCommand =
-        ll::command::CommandRegistrar::getClientInstance().getOrCreateCommand(config.command, "录制状态控制");
+    auto& recordCommand = ll::command::CommandRegistrar::getClientInstance().getOrCreateCommand(
+        config.command,
+        "playback.command.record.description"_tr()
+    );
 
     recordCommand.overload().text("start").execute([](CommandOrigin const&, CommandOutput& output) {
         auto& recorder = functions::Recorder::getInstance();
@@ -36,21 +41,21 @@ void registerRecordCommand(config::CommandConfigStruct& config) {
         auto& logger = getLogger();
         logger.debug("name={}", Playback::getInstance().getSelf().getName());
 
-        output.success("开始录制");
+        output.success("playback.command.record.started"_tr());
     });
 
     recordCommand.overload().text("pause").execute([](CommandOrigin const&, CommandOutput& output) {
         auto& recorder = functions::Recorder::getInstance();
         recorder.pause();
 
-        output.success("暂停录制");
+        output.success("playback.command.record.paused"_tr());
     });
 
     recordCommand.overload().text("stop").execute([](CommandOrigin const&, CommandOutput& output) {
         auto& recorder = functions::Recorder::getInstance();
         recorder.stop();
 
-        output.success("结束录制");
+        output.success("playback.command.record.stopped"_tr());
     });
 }
 

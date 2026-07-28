@@ -1,8 +1,5 @@
 #include "CachedChunkPacket.h"
 
-#include "mc/deps/core/utility/BinaryStream.h"
-#include "mc/network/Packet.h"
-
 #include "openssl/evp.h"
 #include "xxhash.h"
 
@@ -10,16 +7,17 @@
 #include <array>
 #include <cstdint>
 #include <stdexcept>
+#include <string_view>
 
 namespace playback::functions {
 
-CachedChunkPacket::CachedChunkPacket(Packet const& packet, int index)
-: mBigHash(computePacketBigHash(packet)),
+CachedChunkPacket::CachedChunkPacket(int32_t packetId, std::string_view payload, int index)
+: mBigHash(computePacketBigHash(packetId, payload)),
   mIndex(index) {
     mLongHashCode = XXH3_64bits(mBigHash.data(), mBigHash.size());
 }
 
-std::array<uint8_t, 64> CachedChunkPacket::computePacketBigHash(Packet const& packet) {
+std::array<uint8_t, 64> CachedChunkPacket::computePacketBigHash(int32_t packetId, std::string_view payload) {
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
     if (!ctx) {
         throw std::runtime_error("Failed to create EVP_MD_CTX");
@@ -29,12 +27,8 @@ std::array<uint8_t, 64> CachedChunkPacket::computePacketBigHash(Packet const& pa
 
     EVP_DigestInit_ex(ctx, md, nullptr);
 
-    auto packetId = packet.getId();
     EVP_DigestUpdate(ctx, &packetId, sizeof(packetId));
-
-    BinaryStream stream;
-    packet.write(stream);
-    EVP_DigestUpdate(ctx, stream.mBuffer.data(), stream.mBuffer.size());
+    EVP_DigestUpdate(ctx, payload.data(), payload.size());
 
     unsigned char hashBuf[EVP_MAX_MD_SIZE];
     unsigned int  hashLen = 0;

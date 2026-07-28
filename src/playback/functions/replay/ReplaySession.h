@@ -2,6 +2,7 @@
 
 #include "playback/functions/record/Recorder.h"
 
+#include "mc/legacy/ActorUniqueID.h"
 #include "mc/world/level/ChunkPos.h"
 
 #include <atomic>
@@ -19,6 +20,7 @@
 
 class Level;
 class Dimension;
+class LevelChunk;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
 class Player;
@@ -28,21 +30,27 @@ namespace playback::functions {
 
 class ReplaySession {
 private:
-    static constexpr size_t LEVEL_CHUNK_PACKETS_PER_TICK        = 16;
-    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT          = 32;
-    static constexpr size_t SUB_CHUNK_PACKETS_PER_TICK          = 16;
-    static constexpr size_t SUB_CHUNK_ENTRIES_PER_TICK          = 384;
+    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT          = 64;
+    static constexpr size_t MAX_SUB_CHUNK_ENTRIES_PER_PACKET    = 1536;
+    static constexpr size_t SNAPSHOT_GAME_PACKETS_PER_TICK      = 16;
     static constexpr int    CHUNK_INJECTION_STALL_TIMEOUT_TICKS = 20 * 30;
     static constexpr int    REPLAY_WORLD_DELETE_TIMEOUT_TICKS   = 20 * 30;
 
     enum class CleanupState { None, WaitingForExit, ReadyToDelete, DeleteIssued };
+    enum class SnapshotGamePacketPhase { StreamingChunks, WaitingAfterPlayerList, WaitingAfterEntities };
 
     struct PendingSubChunkPacket {
         int                   index = -1;
-        size_t                entryCount{};
         std::vector<ChunkPos> targets;
         std::vector<ChunkPos> dependencies;
         bool                  injected{};
+    };
+
+    struct SnapshotColumnIdentity {
+        int              levelChunkIndex = -1;
+        std::vector<int> subChunkIndices;
+
+        bool operator==(SnapshotColumnIdentity const&) const = default;
     };
 
     int    mCurrentTick             = 0;
@@ -54,6 +62,10 @@ private:
     size_t mInjectedLevelChunks     = 0;
     size_t mInjectedSubChunkPackets = 0;
     size_t mInjectedSubChunkEntries = 0;
+    size_t mReusedSnapshotColumns   = 0;
+    size_t mDirectLevelChunks       = 0;
+    size_t mDirectSubChunkPackets   = 0;
+    size_t mDirectSubChunkEntries   = 0;
 
     bool                          mActive            = false;
     bool                          mIsPaused          = false;
@@ -68,38 +80,51 @@ private:
     bool                          mApplyingChunkSnapshot      = false;
     bool                          mChunkInjectionPlanPrepared = false;
     bool                          mCenterChunksReady          = false;
+    SnapshotGamePacketPhase       mSnapshotGamePacketPhase    = SnapshotGamePacketPhase::StreamingChunks;
 
-    std::atomic<bool> mStopRequested{false};
-    std::atomic<int>  mRequestedSeekTick{-1};
-    int               mSeekTargetTick{-1};
-    float             mPlaybackSpeed{1.0f};
-    float             mPlaybackTickAccumulator{};
+    std::atomic<bool>  mStopRequested{false};
+    std::atomic<int>   mRequestedSeekTick{-1};
+    int                mSeekTargetTick{-1};
+    float              mPlaybackSpeed{1.0f};
+    float              mPlaybackTickAccumulator{};
+    std::optional<int> mReplayTime;
 
     std::chrono::steady_clock::time_point mChunkInjectionStartedAt{};
     std::vector<double>                   mChunkInjectionDurationsMs;
     double                                mChunkPlanPreparationMs{};
 
-    CleanupState mCleanupState     = CleanupState::None;
-    int          mCleanupWaitTicks = 0;
+    CleanupState mCleanupState              = CleanupState::None;
+    int          mCleanupWaitTicks          = 0;
+    bool         mOrphanReplayWorldsScanned = false;
 
     std::filesystem::path mReplayFilePath;
     std::string           mReplayLevelId;
 
     PlaybackMeta mMeta;
 
-    std::vector<std::unique_ptr<ReplayReader>> mReaders;
-    std::vector<std::optional<PlaybackView>>   mSnapshotViews;
-    std::vector<std::string>                   mChunkPackets;
-    std::mutex                                 mPendingLevelChunksMutex;
-    std::unordered_multiset<ChunkPos>          mPendingLevelChunks;
-    std::unordered_set<ChunkPos>               mCompletedLevelChunkPositions;
-    std::vector<int>                           mPendingLevelChunkIndices;
-    std::unordered_set<ChunkPos>               mSnapshotChunks;
-    std::unordered_set<ChunkPos>               mApplyingSnapshotChunks;
-    std::vector<int>                           mPendingSubChunkIndices;
-    std::vector<PendingSubChunkPacket>         mPendingSubChunkPackets;
-    std::unordered_set<ChunkPos>               mCenterChunkPositions;
-    std::unordered_map<ChunkPos, size_t>       mRemainingSubChunkPacketsByColumn;
+    std::vector<std::unique_ptr<ReplayReader>>              mReaders;
+    std::vector<std::optional<PlaybackView>>                mSnapshotViews;
+    std::vector<std::string>                                mChunkPackets;
+    std::mutex                                              mPendingLevelChunksMutex;
+    std::unordered_multiset<ChunkPos>                       mPendingLevelChunks;
+    std::unordered_set<ChunkPos>                            mCompletedLevelChunkPositions;
+    std::vector<int>                                        mPendingLevelChunkIndices;
+    std::unordered_set<ChunkPos>                            mSnapshotChunks;
+    std::unordered_set<ChunkPos>                            mApplyingSnapshotChunks;
+    std::unordered_map<ChunkPos, SnapshotColumnIdentity>    mAppliedSnapshotColumns;
+    std::unordered_map<ChunkPos, SnapshotColumnIdentity>    mPendingSnapshotColumns;
+    std::unordered_set<ChunkPos>                            mDirtySnapshotColumns;
+    std::unordered_set<ChunkPos>                            mReusableSnapshotColumns;
+    std::unordered_set<ChunkPos>                            mDirectSnapshotColumns;
+    std::unordered_set<int>                                 mDirectLevelChunkIndices;
+    std::vector<int>                                        mPendingSubChunkIndices;
+    std::vector<PendingSubChunkPacket>                      mPendingSubChunkPackets;
+    std::vector<std::pair<MinecraftPacketIds, std::string>> mPendingSnapshotGamePackets;
+    std::unordered_set<ActorUniqueID>                       mRecordedEntityIds;
+    std::unordered_set<ChunkPos>                            mCenterChunkPositions;
+    std::unordered_map<ChunkPos, size_t>                    mRemainingSubChunkPacketsByColumn;
+
+    std::unordered_map<ChunkPos, std::shared_ptr<LevelChunk>> mRetainedReplayChunks;
 
     std::weak_ptr<MinecraftScreenModel> mScreenModel;
     Player*                             mReplayPlayer   = nullptr;
@@ -125,17 +150,30 @@ private:
 
     [[nodiscard]] bool injectPendingLevelChunks(std::chrono::steady_clock::time_point deadline);
 
-    [[nodiscard]] bool injectReadySubChunkPackets(
-        size_t&                               injectedPackets,
-        size_t&                               injectedEntries,
-        std::chrono::steady_clock::time_point deadline
-    );
+    [[nodiscard]] bool
+    injectReadySubChunkPackets(size_t& injectedPackets, std::chrono::steady_clock::time_point deadline);
 
     void updateCenterChunkReadiness();
 
     [[nodiscard]] std::optional<PlaybackView> deriveLegacySnapshotView() const;
 
     [[nodiscard]] bool injectChunkPacket(std::string_view payload, MinecraftPacketIds packetId);
+
+    [[nodiscard]] bool applyLevelChunkDirect(std::string_view payload);
+
+    [[nodiscard]] bool applySubChunkDirect(std::string_view payload);
+
+    [[nodiscard]] bool applyGamePacket(MinecraftPacketIds packetId, std::string_view payload);
+
+    void invalidateSnapshotColumns(Packet const& packet);
+
+    [[nodiscard]] bool flushPendingSnapshotGamePackets(
+        bool                                         playerListOnly,
+        size_t                                       maxPackets,
+        std::chrono::steady_clock::time_point const& deadline
+    );
+
+    [[nodiscard]] bool clearRecordedEntities();
 
     void clearReplayData();
 
@@ -210,6 +248,10 @@ public:
     void handleLevelChunkCached(int index);
 
     void handleSubChunkCached(int index);
+
+    void handleGamePacket(PlaybackBuffer& data);
+
+    void handleMoveEntities(PlaybackBuffer& data);
 
 private:
     ReplaySession() = default;

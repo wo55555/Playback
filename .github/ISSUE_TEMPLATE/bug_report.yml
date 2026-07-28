@@ -1,5 +1,5 @@
 name: Bug Report
-description: Create a report to help us improve
+description: Report a reproducible Playback problem
 title: "[Bug] "
 type: bug
 body:
@@ -27,27 +27,32 @@ body:
   - type: textarea
     attributes:
       label: Screenshots
-      description: If applicable, add screenshots to help explain your problem.
-    
-  - type: input
+      description: If applicable, add sanitized screenshots or videos that help explain the problem.
+
+  - type: textarea
     attributes:
-      label: Platform
-      description: The platform you are using. (e.g. Windows 10)
+      label: Logs and replay file
+      description: Attach sanitized logs and a minimal replay when relevant. Remove server addresses, access tokens, and player information.
 
   - type: input
     attributes:
-      label: BDS Version
-      description: The version of BDS you are using. (e.g. 1.20.32.1)
+      label: Platform
+      description: The Windows version you are using. (e.g. Windows 11 24H2)
+
+  - type: input
+    attributes:
+      label: Minecraft Bedrock Version
+      description: The Minecraft Bedrock client version you are using.
 
   - type: input
     attributes:
       label: LeviLamina Version
-      description: The version of LeviLamina you are using. (e.g. 1.0.0)
+      description: The LeviLamina client version you are using. (e.g. 26.10.14)
 
   - type: input
     attributes:
-      label: Version
-      description: The version of the mod you are using. (e.g. 1.0.0)
+      label: Playback Version
+      description: The Playback version you are using. (e.g. 0.1.0-alpha.1)
 
   - type: textarea
     attributes:
