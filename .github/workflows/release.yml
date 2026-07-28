@@ -16,22 +16,45 @@ jobs:
         # with:
         #   xmake-version: branch@master
 
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/AppData/Local/.xmake
-          key: xmake-${{ hashFiles('xmake.lua') }}
-          restore-keys: |
-            xmake-
+      - run: |
+          xmake global --policies=package.precompiled:n
 
       - run: |
           xmake repo -u
+        env:
+          XMAKE_PKG_CACHEDIR: ${{ runner.temp }}/xmake-package-cache-${{ github.run_id }}
+
+      - id: package-repositories
+        shell: pwsh
+        run: |
+          $revisions = Get-ChildItem "$env:LOCALAPPDATA/.xmake/repositories" -Directory |
+            Sort-Object Name |
+            ForEach-Object {
+              $revision = git -C $_.FullName rev-parse HEAD
+              if ($LASTEXITCODE -ne 0) {
+                throw "Unable to resolve $($_.Name) repository revision"
+              }
+              "$($_.Name)-$revision"
+            }
+          if (-not $revisions) {
+            throw "No xmake package repositories were found"
+          }
+          "revisions=$($revisions -join '-')" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/AppData/Local/.xmake/packages
+          key: xmake-packages-source-${{ runner.os }}-${{ steps.package-repositories.outputs.revisions }}-${{ hashFiles('xmake.lua') }}
 
       - run: |
           xmake f -a x64 -m release -p windows --target_type=client -y
+        env:
+          XMAKE_PKG_CACHEDIR: ${{ runner.temp }}/xmake-package-cache-${{ github.run_id }}
 
       - run: |
           xmake -w -y
+        env:
+          XMAKE_PKG_CACHEDIR: ${{ runner.temp }}/xmake-package-cache-${{ github.run_id }}
 
       - uses: actions/upload-artifact@v7
         with:

@@ -116,7 +116,9 @@ Please report reproducible problems with logs, versions, and a minimal replay wh
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the build, formatting, and pull request workflow. Security issues should follow [SECURITY.md](SECURITY.md) rather than a public issue.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the build, formatting, and pull request workflow.
+
+Report security issues privately by following [SECURITY.md](SECURITY.md). Do not open a public issue for a security vulnerability.
 
 ## Acknowledgements
 
@@ -124,4 +126,6 @@ Special thanks to the [LeviLamina](https://github.com/LiteLDev/LeviLamina) maint
 
 ## License
 
-Playback is released under [CC0-1.0](LICENSE). Third-party components retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the `licenses/` directory.
+Copyright (C) 2026 [wo555](https://github.com/wo55555)
+
+Playback is released under the [GNU Affero General Public License v3.0](LICENSE). Distributed modifications must remain under AGPL-3.0 and provide their corresponding source code. Third-party components retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the `licenses/` directory.

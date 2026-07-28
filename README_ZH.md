@@ -116,7 +116,9 @@ Playback 目前提供英文（`en_US`）和简体中文（`zh_CN`）翻译。命
 
 ## 参与贡献
 
-构建、格式化和 Pull Request 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题请按照 [SECURITY.md](SECURITY.md) 私下报告，不要创建公开 Issue。
+构建、格式化和 Pull Request 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+安全问题请按照 [SECURITY.md](SECURITY.md) 私下报告，不要为安全漏洞创建公开 Issue。
 
 ## 致谢
 
@@ -124,4 +126,6 @@ Playback 目前提供英文（`en_US`）和简体中文（`zh_CN`）翻译。命
 
 ## 许可证
 
-Playback 采用 [CC0-1.0](LICENSE) 发布。第三方组件保留各自许可证，详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `licenses/` 目录。
+Copyright (C) 2026 [wo555](https://github.com/wo55555)
+
+Playback 采用 [GNU Affero 通用公共许可证 v3.0](LICENSE) 发布。分发修改版本时必须继续使用 AGPL-3.0，并提供对应源代码。第三方组件保留各自许可证，详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `licenses/` 目录。

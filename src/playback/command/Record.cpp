@@ -41,21 +41,21 @@ void registerRecordCommand(config::CommandConfigStruct& config) {
         auto& logger = getLogger();
         logger.debug("name={}", Playback::getInstance().getSelf().getName());
 
-        output.success("playback.command.record.started"_tr());
+        output.success(ll::i18n::getInstance().get("playback.command.record.started", {}));
     });
 
     recordCommand.overload().text("pause").execute([](CommandOrigin const&, CommandOutput& output) {
         auto& recorder = functions::Recorder::getInstance();
         recorder.pause();
 
-        output.success("playback.command.record.paused"_tr());
+        output.success(ll::i18n::getInstance().get("playback.command.record.paused", {}));
     });
 
     recordCommand.overload().text("stop").execute([](CommandOrigin const&, CommandOutput& output) {
         auto& recorder = functions::Recorder::getInstance();
         recorder.stop();
 
-        output.success("playback.command.record.stopped"_tr());
+        output.success(ll::i18n::getInstance().get("playback.command.record.stopped", {}));
     });
 }
 

@@ -21,7 +21,7 @@ void registerPlaybackCommand() {
     command.overload().text("version").execute([](CommandOrigin const&, CommandOutput& output) {
         auto const& version = Playback::getInstance().getSelf().getManifest().version;
         if (!version.has_value()) {
-            output.error("playback.command.playback.versionUnavailable"_tr());
+            output.error(ll::i18n::getInstance().get("playback.command.playback.versionUnavailable", {}));
             return;
         }
         output.success("v{}", version->to_string());
