@@ -1,0 +1,114 @@
+#include "MenuBar.h"
+
+#include "Editor.h"
+#include "ModeManager.h"
+#include "KeyMap.h"
+#include "iconfont.h"
+
+#include "imgui.h"
+
+namespace playback::refactor::editor {
+
+void MenuBar::draw() {
+    if (ImGui::BeginMenuBar()) {
+        // File
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Open Replay", "Ctrl+O")) {}
+            if (ImGui::MenuItem("Save Project", "Ctrl+S")) {}
+            if (ImGui::BeginMenu("Recent")) {
+                for (int i = 0; i < 10; ++i) {
+                    ImGui::MenuItem("(empty)", nullptr, false, false);
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Exit Editor", "Esc (hold)")) {
+                Editor::getInstance().toggle();
+            }
+            ImGui::EndMenu();
+        }
+
+        // Edit
+        if (ImGui::BeginMenu("Edit")) {
+            bool canUndo = Editor::getInstance().commandStack().canUndo();
+            bool canRedo = Editor::getInstance().commandStack().canRedo();
+            if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndo)) {
+                Editor::getInstance().commandStack().undo();
+            }
+            if (ImGui::MenuItem("Redo", "Ctrl+Y", false, canRedo)) {
+                Editor::getInstance().commandStack().redo();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete", "Del", false, Editor::getInstance().selection().hasSelection())) {
+                // Placeholder: delete selected
+            }
+            if (ImGui::MenuItem("Select All", "Ctrl+A")) {}
+            ImGui::EndMenu();
+        }
+
+        // Camera
+        if (ImGui::BeginMenu("Camera")) {
+            if (ImGui::MenuItem("Add Keyframe at Playhead", "K")) {}
+            if (ImGui::MenuItem("Add Camera Track", "Ctrl+Shift+N")) {}
+            if (ImGui::BeginMenu("Camera Preset")) {
+                ImGui::MenuItem("First Person");
+                ImGui::MenuItem("Third Person");
+                ImGui::MenuItem("Free");
+                ImGui::MenuItem("Follow Entity");
+                ImGui::MenuItem("Orbit");
+                ImGui::MenuItem("Telephoto");
+                ImGui::MenuItem("Drone");
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Set Active Camera 1", "1")) {}
+            if (ImGui::MenuItem("Set Active Camera 2", "2")) {}
+            if (ImGui::MenuItem("Set Active Camera 3", "3")) {}
+            ImGui::EndMenu();
+        }
+
+        // Markers
+        if (ImGui::BeginMenu("Markers")) {
+            if (ImGui::MenuItem("Insert Marker", "M")) {}
+            if (ImGui::MenuItem("Jump to Next Marker", "]")) {}
+            if (ImGui::MenuItem("Jump to Previous Marker", "[")) {}
+            ImGui::EndMenu();
+        }
+
+        // Window
+        if (ImGui::BeginMenu("Window")) {
+            if (ImGui::MenuItem("Toggle Hint Bar", "F1")) {
+                // HintBar toggle handled via Editor
+            }
+            ImGui::EndMenu();
+        }
+
+        // Export
+        if (ImGui::BeginMenu("Export")) {
+            if (ImGui::MenuItem("Export...", "Ctrl+E")) {
+                ModeManager::getInstance().switchTo(EditorMode::Render);
+            }
+            ImGui::EndMenu();
+        }
+
+        // Help
+        if (ImGui::BeginMenu("Help")) {
+            if (ImGui::MenuItem("Documentation")) {
+                // Open documentation link
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("About")) {
+                // Show about dialog
+            }
+            ImGui::EndMenu();
+        }
+
+        ImGui::EndMenuBar();
+    }
+}
+
+bool MenuBar::isAnyMenuOpen() const {
+    return ImGui::IsAnyItemHovered();
+}
+
+} // namespace playback::refactor::editor
