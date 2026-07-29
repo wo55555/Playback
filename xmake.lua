@@ -8,7 +8,7 @@ option("target_type")
     set_values("client")
 option_end()
 
-add_requires("levilamina 26.10.*", {configs = {target_type = get_config("target_type")}})
+add_requires("levilamina 26.20.*", {configs = {target_type = get_config("target_type")}})
 
 add_requires("levibuildscript")
 
@@ -25,8 +25,25 @@ end
 target("playback")
     add_rules("@levibuildscript/linkrule")
     add_rules("@levibuildscript/modpacker", {modVersion = "0.1.0-alpha.2"})
-    add_cxflags( "/EHa", "/utf-8", "/W4", "/w44265", "/w44289", "/w44296", "/w45263", "/w44738", "/w45204")
-    add_defines("NOMINMAX", "UNICODE")
+    if is_plat("windows") then
+        add_defines("NOMINMAX", "UNICODE")
+        set_exceptions("none") -- To avoid conflicts with /EHa.
+        add_cxflags( "/EHa", "/utf-8", "/W4", "/w44265", "/w44289", "/w44296", "/w45263", "/w44738", "/w45204")
+        add_cxflags(
+            "/EHs",
+            "-Wno-microsoft-cast",
+            "-Wno-invalid-offsetof",
+            "-Wno-c++2b-extensions",
+            "-Wno-microsoft-include",
+            "-Wno-overloaded-virtual",
+            "-Wno-ignored-qualifiers",
+            "-Wno-missing-field-initializers",
+            "-Wno-potentially-evaluated-expression",
+            "-Wno-pragma-system-header-outside-header",
+            {tools = {"clang_cl"}}
+        )
+        set_toolchains("clang-cl")
+    end
     add_packages("levilamina")
     add_packages("stduuid")
     add_packages("xxhash")
@@ -34,7 +51,6 @@ target("playback")
     add_packages("libzip")
     add_packages("imgui")
     add_syslinks("d3d12", "dxgi", "d3dcompiler")
-    set_exceptions("none") -- To avoid conflicts with /EHa.
     set_kind("shared")
     set_languages("c++20")
     if is_mode("debug") then

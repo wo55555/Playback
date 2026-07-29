@@ -3,11 +3,10 @@
 #include "playback/functions/io/AsyncReplaySaver.h"
 #include "playback/utils/container/LinkedHashMap.h"
 
-#include "mc/deps/core/utility/AutomaticID.h"
 #include "mc/legacy/ActorRuntimeID.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/platform/UUID.h"
-#include "mc/world/level/ChunkPos.h"
+#include "mc/world/level/dimension/DimensionType.h"
 
 #include <atomic>
 #include <chrono>
