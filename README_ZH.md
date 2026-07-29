@@ -24,6 +24,8 @@
   <p>
     <a href="#功能">功能</a>
     ·
+    <a href="#运行展示">运行展示</a>
+    ·
     <a href="#快速开始">快速开始</a>
     ·
     <a href="#从源码构建">构建</a>
@@ -38,6 +40,23 @@ Playback 基于 [LeviLamina](https://github.com/LiteLDev/LeviLamina) 构建。�
 
 > [!WARNING]
 > Playback 目前仍处于早期开发阶段，现有公开版本均为测试版本。请备份重要世界和录制文件；在 Minecraft、LeviLamina 或 Playback 版本发生变化后，不保证旧回放仍然兼容。
+
+## 运行展示
+
+<p align="center">
+  <strong>主菜单入口</strong><br>
+  <img src="docs/images/showcase/zh-cn/main-menu.webp" alt="Minecraft 主菜单中的 Playback 入口" width="900">
+</p>
+
+<p align="center">
+  <strong>原生回放浏览器</strong><br>
+  <img src="docs/images/showcase/zh-cn/replay-browser.webp" alt="Playback 回放浏览器" width="900">
+</p>
+
+<p align="center">
+  <strong>游戏内时间线编辑器</strong><br>
+  <img src="docs/images/showcase/zh-cn/timeline-editor.webp" alt="Playback 游戏内时间线编辑器" width="900">
+</p>
 
 ## 功能
 
@@ -95,7 +114,7 @@ Playback 针对不同 Minecraft 与 LeviLamina 版本并行维护发布。以下
   <img src="docs/images/quick-start/zh-cn/04-search-playback.png" alt="在 lip 中搜索 Playback" width="900">
 </p>
 
-5. 在软件包页面确认 **LL 依赖**和**游戏版本**与当前实例一致，然后选择**安装**。安装完成后启动或重启游戏。
+5. 在软件包页面手动选择 **LL 依赖**和**游戏版本**与当前实例一致的版本，然后点击该版本所在行的**安装**。Lip 不会根据已安装的 LeviLamina 版本自动选择对应的 Playback 版本。安装完成后启动或重启游戏。
 
 <p align="center">
   <img src="docs/images/quick-start/zh-cn/05-install-playback.png" alt="通过 lip 安装兼容的 Playback 版本" width="900">
@@ -105,13 +124,18 @@ Playback 针对不同 Minecraft 与 LeviLamina 版本并行维护发布。以下
 
 ### 使用 Lip 命令行安装
 
-在目标 LeviLamina 实例的根目录中执行：
+在目标 LeviLamina 实例的根目录中，根据其 Minecraft 和 LeviLamina 版本执行对应命令：
 
 ```powershell
-lip install github.com/wo55555/Playback
+# Minecraft / LeviLamina 26.10
+lip install github.com/wo55555/Playback@0.1.1-mc26.10#client
+
+# Minecraft / LeviLamina 26.20
+lip install github.com/wo55555/Playback@0.1.1-mc26.20#client
 ```
 
-Lip 会根据实例中已经安装的依赖解析软件包。启动游戏前，请确认最终选择的 Playback 版本与当前实例的 Minecraft 和 LeviLamina 版本匹配。
+> [!NOTE]
+> 安装客户端变体时必须保留末尾的 `#client`。如果省略 `@版本号`，Lip 会安装当前最新的 Playback 版本，并不会根据已安装的 LeviLamina 版本自动选择兼容版本。启动游戏前，请始终明确指定并核对匹配的版本。
 
 ### 手动安装
 
