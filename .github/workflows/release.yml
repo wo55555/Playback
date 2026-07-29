@@ -93,7 +93,7 @@ jobs:
           path: artifact
 
       - run: |
-          mv artifact/playback/playback-ui.mcpack playback-ui.mcpack
+          mv artifact/playback-ui.mcpack playback-ui.mcpack
           rm -f artifact/playback/*.pdb artifact/playback/playback-ui.zip
           rm -rf artifact/playback/data
           cp CHANGELOG.md LICENSE README.md README_ZH.md artifact/

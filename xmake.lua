@@ -66,9 +66,13 @@ target("playback")
 
         local resource_dir = path.join(os.projectdir(), "resources")
         if os.isdir(resource_dir) then
-            local mcpack = path.join(os.projectdir(), "bin", target:name(), target:name() .. "-ui.mcpack")
+            local installed_pack = path.join(output_dir, "resource_packs", target:name() .. "-ui")
+            local mcpack = path.join(os.projectdir(), "bin", target:name() .. "-ui.mcpack")
             local mcpack_zip = mcpack .. ".zip"
             assert(os.isfile(path.join(resource_dir, "manifest.json")), "resource pack manifest.json was not found")
+            os.tryrm(installed_pack)
+            os.cp(resource_dir, installed_pack)
+            os.tryrm(path.join(output_dir, target:name() .. "-ui.mcpack"))
             os.tryrm(mcpack)
             os.tryrm(mcpack_zip)
             archive.archive(mcpack_zip, "*", {
@@ -77,6 +81,7 @@ target("playback")
             })
             os.mv(mcpack_zip, mcpack)
             os.tryrm(mcpack_zip)
-            cprint("${bright green}[Playback]: ${reset}UI resource pack generated to " .. mcpack)
+            cprint("${bright green}[Playback]: ${reset}UI resource pack installed to " .. installed_pack)
+            cprint("${bright green}[Playback]: ${reset}Standalone UI resource pack generated to " .. mcpack)
         end
     end)
