@@ -36,8 +36,9 @@
 - **可发现性**：每个按钮 hover 0.3s 弹 tooltip（图标 + 文字 + 快捷键）
 - **可维护性**：每个 Panel 单一职责，可独立替换
 - **可演进**：面板注册制（`EditorPanel::register(...)`），未来加新面板不改主循环
-- **零 emoji**：所有图标位用 icon font 字符（详见 §2.10）
-- **零外部样式**：所有 ImGui 样式由 `EditorTheme` 集中管理
+- **零 emoji**：所有图标位用 icon font 字符（Lucide，详见 §2.10）
+- **零外部样式**：所有 ImGui 样式由 `EditorTheme` 集中管理（单一深色主题）
+- **零输出日志**：常驻 Output Log 不提供；失败用 `ErrorDialog` 模态弹窗（见 §2.15）
 
 ### 1.3 与现有约束对齐
 
@@ -114,12 +115,12 @@ refactor/editor/
 |            |                                               |
 |            |         Timeline (40% of left area)           |
 |            |  +----------------------------------------+   |
-|            |  |[icon:play] 00:01:23.456 [icon:key]... |   |
+|            |  |[icon:play] 00:01:23.456 [icon:add-keyframe]... |   |
 |            |  +----------------------------------------+   |
 |            |  |V0|  [   Clip A  ]  [   Clip B  ]  [T] 0:03 ||
-|            |  |C0|  ====o=====o======o====   [icon:key] ||
-|            |  |C1|       ====o======o====     [icon:key]||
-|            |  |M |              [icon:mrk]   [icon:mrk] ||
+|            |  |C0|  ====o=====o======o====   [icon:keyframe] ||
+|            |  |C1|       ====o======o====     [icon:keyframe]||
+|            |  |M |              [icon:marker]   [icon:marker] ||
 |            |  +----------------------------------------+   |
 |            |  hint: [space]=play  M=marker  Ctrl+K=split  |
 +------------+-----------------------------------------------+
@@ -345,7 +346,6 @@ sequenceDiagram
 | | Jump to Next Marker | ] |
 | | Jump to Previous Marker | [ |
 | **Window** | Toggle Hint Bar | F1 |
-| | Toggle Output Log | F12 |
 | **Export** | Export... | Ctrl+E |
 | **Help** | Documentation | (链接) |
 | | About | (弹窗) |
@@ -368,7 +368,7 @@ public:
 ### 2.7 `HintBar`（Timeline 底部 · 1 行 · 14px）
 
 ```
-[icon:play]=play   [icon:mrk]=marker   [icon:cut]=split   [icon:undo]=undo   [icon:exp]=export   [icon:help]=help
+[icon:play]=play   [icon:marker]=marker   [icon:split]=split   [icon:undo]=undo   [icon:export]=export   [icon:help]=help
 ```
 
 **6 个最常用**（按使用频率排）：Play / Add Marker / Split / Undo / Export / Help。
@@ -471,7 +471,7 @@ private:
 
 ```
 +-- Viewport -------------------------------------------+
-| [icon:play] [icon:add-key] [icon:add-marker] [...]  | <- 32px 浮层工具条
+| [icon:play] [icon:add-keyframe] [icon:add-marker] [...]  | <- 32px 浮层工具条
 |                                                      |
 |   3D scene                                            |
 |   - selected keyframe gizmo                          |
@@ -530,8 +530,8 @@ private:
 | Tracks                       [icon:add]    |  标题
 | ----------------------------------------   |
 |  [icon:track-active]  Main       (active)  |  摄影机轨 1
-|  [icon:track-inactive]  Cinematic (inactive)| 摄影机轨 2
-|  [icon:track-inactive]  Drone     (inactive)| 摄影机轨 3
+|  [icon:track-off]     Cinematic (inactive)| 摄影机轨 2
+|  [icon:track-off]     Drone     (inactive)| 摄影机轨 3
 | ----------------------------------------   |
 | Keyframe @ 00:01:23                        |  当前选中
 | ----------------------------------------   |
@@ -546,9 +546,9 @@ private:
 | Easing                                     |
 |   (o) Linear  ( ) Ease                     |
 |   ( ) Cubic  ( ) Custom                    |
-|   [icon:edit-curve]  Edit Curve...         |
+|   [icon:reset]  Edit Curve...         |
 | ----------------------------------------   |
-| [icon:insert-before]  [icon:insert-after]  |  操作
+| [icon:add-keyframe] Insert Before  [icon:add-keyframe] Insert After  |  操作
 | [icon:delete] Delete Keyframe              |
 +--------------------------------------------+
 ```
@@ -566,10 +566,10 @@ private:
 |               |
 +-- Tips -------+
 | [icon:play] Play/pause     Space          |
-| [icon:mrk]  Add marker     M              |
-| [icon:cut]  Split clip     Ctrl+K         |
+| [icon:marker] Add marker   M              |
+| [icon:split] Split clip    Ctrl+K         |
 | [icon:undo] Undo           Ctrl+Z         |
-| [icon:exp]  Export         Ctrl+E         |
+| [icon:export] Export       Ctrl+E         |
 | [icon:help] Help           F1             |
 +---------------+
 ```
@@ -678,7 +678,12 @@ private:
 - Render：蓝 `3a8cf0`
 - （**录制不在编辑器**，所以无红色态）
 
-### 2.10 `IconSystem`（22 个图标）
+### 2.10 `IconSystem`（28 个图标 · Lucide 字体）
+
+**字体文件**：[resources/fonts/lucide.ttf](file:///d:/raplay/Playback/resources/fonts/lucide.ttf)（828 KB，TrueType，Lucide v1.17+）
+**字族名**：`lucide`
+**许可**：ISC（[https://lucide.dev/](https://lucide.dev/)）
+**codepoint 来源**：[resources/fonts/lucide.css](file:///d:/raplay/Playback/resources/fonts/lucide.css) → 自动生成 → [iconfont.h](file:///d:/raplay/Playback/src/playback/refactor/editor/iconfont.h)
 
 ```cpp
 class IconSystem {
@@ -693,49 +698,83 @@ public:
     // glyph range
     const ImWchar* getGlyphRange();
 };
-
-// 字符宏（定义在 iconfont.h，由 [iconfont.h generator](https://github.com/juliettef/IconFontCppHeaders) 生成）
-#define ICON_PLAY          "\uE001"
-#define ICON_PAUSE         "\uE002"
-// ... 共 22 个 ...
 ```
 
-**22 个图标清单**（与 §1 决定方案配套）：
+**加载实现**：
 
-| 宏 | 含义 | Lucide 名 |
-|---|---|---|
-| ICON_PLAY | 播放 | play |
-| ICON_PAUSE | 暂停 | pause |
-| ICON_STOP | 停止 | square |
-| ICON_ADD_KEYFRAME | 加关键帧 | diamond-plus |
-| ICON_KEYFRAME | 关键帧 | diamond |
-| ICON_ADD_MARKER | 加标记 | map-pin-plus |
-| ICON_MARKER | 标记 | map-pin |
-| ICON_SPLIT | 切 | scissors |
-| ICON_UNDO | 撤销 | undo-2 |
-| ICON_REDO | 重做 | redo-2 |
-| ICON_OPEN | 打开 | folder-open |
-| ICON_SAVE | 保存 | save |
-| ICON_EXPORT | 导出 | upload |
-| ICON_ADD | 加 | plus |
-| ICON_DELETE | 删 | trash-2 |
-| ICON_LOCK | 锁 | lock |
-| ICON_MUTE | 静音 | volume-x |
-| ICON_HIDE | 隐藏 | eye-off |
-| ICON_DRAG | 拖拽手柄 | grip-vertical |
-| ICON_CHEVRON | 下拉 | chevron-down |
-| ICON_CHECK | 勾 | check |
-| ICON_SEARCH | 搜索 | search |
-| ICON_CAMERA | 相机 | video |
-| ICON_TRACK_ACTIVE | active 轨 | circle-dot |
-| ICON_TRACK_INACTIVE | inactive 轨 | circle |
-| ICON_TRANSITION | 转场 | arrow-right-left |
-| ICON_RESET | 重置 | rotate-ccw |
-| ICON_HELP | 帮助 | help-circle |
+```cpp
+void IconSystem::loadFonts() {
+    ImGuiIO& io = ImGui::GetIO();
 
-> **icon 加载**：用 `ImGui::GetIO().Fonts->AddFontFromFileTTF("lucide.ttf", 16.0f)`，然后 merge 图标字体的 glyph range：`AddFontFromFileTTF` 第二次 + `MergeMode=true` + `GlyphRanges = IconSystem::getGlyphRange()`。
+    // 1) 主字体（先加载，保证 base 字体）
+    io.Fonts->AddFontFromFileTTF("resources/fonts/Inter-Regular.ttf", 16.0f);
 
-**fallback**（字体未加载时）：显示 `?` 占位 + console warning。
+    // 2) 图标字体（merge，PUA 范围）
+    ImFontConfig cfg;
+    cfg.MergeMode = true;
+    cfg.PixelSnapH = true;
+    cfg.GlyphOffset.y = 1.0f;  // 视觉对齐
+    io.Fonts->AddFontFromFileTTF(Icons::kFontPath, 16.0f, &cfg, getGlyphRange());
+
+    // 3) build
+    io.Fonts->Build();
+}
+
+const ImWchar* IconSystem::getGlyphRange() {
+    static const ImWchar range[] = {
+        0xe000,  // Lucide font 起点
+        0xe6ff,  // Lucide font 终点（实际到 0xe6fd）
+        0        // 终止
+    };
+    return range;
+}
+```
+
+**28 个图标清单**（已生成到 [iconfont.h](file:///d:/raplay/Playback/src/playback/refactor/editor/iconfont.h)）：
+
+| 宏 | 含义 | Lucide 名 | Codepoint |
+|---|---|---|---|
+| `ICON_PLAY` | 播放 | play | `0xe13c` |
+| `ICON_PAUSE` | 暂停 | pause | `0xe12e` |
+| `ICON_ADD_KEYFRAME` | 加关键帧 | diamond-plus | `0xe5e2` |
+| `ICON_KEYFRAME` | 关键帧 | diamond | `0xe2d2` |
+| `ICON_ADD_MARKER` | 加标记 | map-pin-plus | `0xe613` |
+| `ICON_MARKER` | 标记 | map-pin | `0xe111` |
+| `ICON_SPLIT` | 切 | scissors | `0xe14e` |
+| `ICON_UNDO` | 撤销 | undo-2 | `0xe2a1` |
+| `ICON_REDO` | 重做 | redo-2 | `0xe2a0` |
+| `ICON_OPEN` | 打开 | folder-open | `0xe247` |
+| `ICON_SAVE` | 保存 | save | `0xe14d` |
+| `ICON_EXPORT` | 导出 | upload | `0xe19e` |
+| `ICON_ADD` | 加 | plus | `0xe13d` |
+| `ICON_DELETE` | 删 | trash-2 | `0xe18e` |
+| `ICON_LOCK` | 锁 | lock | `0xe10b` |
+| `ICON_MUTE` | 静音 | volume-x | `0xe1ac` |
+| `ICON_HIDE` | 隐藏 | eye-off | `0xe0bb` |
+| `ICON_DRAG` | 拖拽手柄 | grip-vertical | `0xe0eb` |
+| `ICON_CHEVRON_DOWN` | 下拉 | chevron-down | `0xe06d` |
+| `ICON_CHECK` | 勾 | check | `0xe06c` |
+| `ICON_SEARCH` | 搜索 | search | `0xe151` |
+| `ICON_CAMERA` | 相机 | video | `0xe1a5` |
+| `ICON_TRACK_ACTIVE` | active 轨 | circle-dot | `0xe345` |
+| `ICON_TRACK_OFF` | inactive 轨 | circle | `0xe076` |
+| `ICON_TRANSITION` | 转场 | arrow-right-left | `0xe417` |
+| `ICON_RENDER` | 渲染中 | loader-circle | `0xe10a` |
+| `ICON_RESET` | 重置 | rotate-ccw | `0xe148` |
+| `ICON_HELP` | 帮助 | help-circle | `0xe082` |
+| `ICON_CLOSE` | 关闭 | x | `0xe1b2` |
+
+**使用示例**：
+
+```cpp
+IconSystem::pushIconFont();
+ImGui::Text("%s Play", ICON_PLAY);
+ImGui::SameLine();
+ImGui::Text("%s Add Keyframe", ICON_ADD_KEYFRAME);
+IconSystem::popIconFont();
+```
+
+**fallback**（字体未加载时）：ImGui 自动显示方块占位 + console warning（不阻塞 UI）。
 
 ### 2.11 `EditorTheme`（样式集中）
 
@@ -786,15 +825,14 @@ struct EditorTheme {
   Esc        Cancel selection / close modal
 
 播放
-  Space      Play / pause
-  K          Stop
+  Space      Play / pause (核心：单一控制播放与暂停)
   Home       Jump to start
   End        Jump to end
   Left/Right Step 1 frame
   Shift+L/R  Step 1 second
 
 相机
-  K          Add keyframe at playhead  (与 Stop 共用：长按判别)
+  K          Add keyframe at playhead  (K 唯一含义：加关键帧)
   Ctrl+Shift+N  Add camera track
   1 / 2 / 3  Switch active camera track
 
@@ -813,13 +851,17 @@ struct EditorTheme {
   -          Zoom out timeline
   0          Reset zoom
   F1         Toggle hint bar
-  F12        Toggle output log
 ```
 
 **冲突解决**：
-- `K` 同时是 Stop 和 Add Keyframe：在 playhead 处有 Clip 选中时 = 切 Clip；无 Clip 选中时 = 加关键帧；正在播放时 = Stop。
-- `K` 短按 = Stop（任何时刻）；`K` 长按 = 加关键帧（无 Clip 选中时）。
-- `Space` 与文本输入框冲突：在 InputFloat/InputText 内时 = 输入空格；否则 = 播放切换。
+- `K` = 关键帧（无歧义）。`K` 不再表示 Stop；停止用 Space 切换（播放→暂停→播放本身已经覆盖了"回到起点"语义；如需回到 playhead 起点，用 `Home`）。
+- `Space` 与文本输入框冲突：在 InputFloat/InputText 内时 = 输入空格；否则 = 播放/暂停切换。
+- `Esc` 优先级：模态打开时关模态 > 取消选中 > 关闭导出对话框（导出中）。
+
+**无 F12 / 无 Output Log**：
+- 编辑器**不提供**常驻输出日志面板
+- 失败信息通过 `ErrorDialog` 模态弹窗显示（详见 §2.15 Render 页面失败处理）
+- 日常编辑不需要日志
 
 ### 2.13 `CommandStack`（撤销/重做）
 
@@ -986,9 +1028,41 @@ Hide / Show
 
 **退出触发**：
 - 渲染完成 -> 弹 toast `[OK] Export complete` + `[Open Folder] [Close]`
-- 渲染失败 -> 弹模态 `[X] Export failed at frame 1847`
+- 渲染失败 -> 弹 `ErrorDialog` 模态（**唯一**日志入口）
+  ```
+  +-- Export Failed -------------------+
+  |                                    |
+  |  Export failed at frame 1,847      |
+  |  reason: ffmpeg pipe broken        |
+  |  tmp: D:\exports\replay.tmp        |
+  |                                    |
+  |  (no log view; details in console) |
+  |                                    |
+  |            [ OK ]                  |
+  +------------------------------------+
+  ```
 - 用户按 `Cancel Render` -> 软取消 -> 回 Edit
 - 用户按 `Esc` -> 弹确认"未完成 .tmp 将被删除"
+
+**`ErrorDialog`（失败弹窗）**：
+
+```cpp
+class ErrorDialog {
+public:
+    // 单例弹窗（同时只能一个）
+    void show(std::string_view title, std::string_view msg);
+    void draw();  // 必须在 EditMode / RenderMode draw 中调
+
+private:
+    bool mOpen{false};
+    std::string mTitle;
+    std::string mMsg;
+};
+```
+
+- 触发：`RenderOrchestrator` 失败回调 / FFmpeg exit != 0 / 写盘失败 / 输入校验失败
+- 模态阻塞当前页（必须点 OK）
+- 自动 dump 详细错误到 `data/logs/export-error-<timestamp>.log`（**不显示在 UI**，仅排查用）
 
 **整页特性**：
 - Timeline / Details / Viewport **完全隐藏**（不可编辑）
@@ -1250,7 +1324,7 @@ void TimelinePanel::handleKeyframeDrag(Keyframe& k, Rect rowArea) {
 | 风险 | 缓解 |
 |---|---|
 | MCBE WndProc 钩子失败 -> 玩家还能动 | 启动时单元测试 `InputHook::shouldMCBEConsumeMouse() == false` |
-| icon font 加载失败 -> 显示 [icon:xxx] | fallback 文字占位 + console warning |
+| icon font 加载失败 -> ImGui 显示方块占位 | console warning（不阻塞 UI） |
 | 摄影机 gizmo 拖动与摄影机 orbit 冲突 | 选中时 gizmo 抢，空白处 orbit |
 | Splitter 拖出 0~100% | clamp 到 20~70% |
 | CommandStack 内存膨胀 | maxSteps 100 截断 |
@@ -1304,13 +1378,14 @@ void TimelinePanel::handleKeyframeDrag(Keyframe& k, Rect rowArea) {
 
 ## 六、待定项
 
-| 项 | 当前状态 | 等你定 |
-|---|---|---|
-| Icon 字体 | 占位 `[icon:xxx]` | Lucide / Tabler / Material / 自定义 |
-| 快捷键 K 复用 | 长按=Add Key / 短按=Stop | OK? |
-| 默认 Theme | 单一深色 | 多主题? |
-| Timeline 缩放范围 | 0.02~2.0 px/tick | 范围合适? |
-| Splitter 持久化 | preferences.timelineSplitRatio | OK? |
-| Keyframe snap grid | Ctrl=10t(0.5s) / Alt=20t(1s) | 步长合适? |
-| Output Log (F12) | 模态弹 200x400 | 位置/尺寸? |
-| Hint bar 默认可见 | true | 隐藏? |
+| 项 | 当前状态 |
+|---|---|
+| Icon 字体 | **已决定**：Lucide v1.17+，文件 [resources/fonts/lucide.ttf](file:///d:/raplay/Playback/resources/fonts/lucide.ttf)，codepoint 见 [iconfont.h](file:///d:/raplay/Playback/src/playback/refactor/editor/iconfont.h) |
+| 快捷键 K | **已决定**：K = 关键帧（无歧义，无 Stop） |
+| Space | **已决定**：Space = 播放/暂停（单一控制） |
+| 默认 Theme | **已决定**：单一深色（EditorTheme 内嵌常量） |
+| Timeline 缩放范围 | 0.02~2.0 px/tick（占位待 UI 验证） |
+| Splitter 持久化 | preferences.timelineSplitRatio（已定） |
+| Keyframe snap grid | Ctrl=10t(0.5s) / Alt=20t(1s)（占位待 UI 验证） |
+| Output Log (F12) | **已决定**：删除。失败用 ErrorDialog 模态弹窗 |
+| Hint bar 默认可见 | true（已定） |

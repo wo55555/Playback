@@ -74,6 +74,10 @@ constexpr const char* kFontPath = "resources/fonts/lucide.ttf";
 // Transitions
 #define ICON_TRANSITION    "\ue417"  // arrow-right-left
 
+// Render / loading state
+#define ICON_RENDER        "\ue10a"  // loader-circle (rotating)
+#define ICON_LOADER        "\ue109"  // loader
+
 // Menu layout
 #define ICON_PANEL_LEFT    "\ue12a"  // panel-left
 
