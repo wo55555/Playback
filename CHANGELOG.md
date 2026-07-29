@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-alpha.2] - 2026-07-29
+
+### Changed
+
+- Bundled the Playback UI resource pack with the mod so LeviLauncher and Lip installations load it automatically through LeviLamina.
+- Kept `playback-ui.mcpack` available as a standalone release asset for manual import.
+
+### Notes
+
+- This release changes installation packaging only. The replay format and replay runtime behavior are unchanged from `0.1.0-alpha.1`.
+
 ## [0.1.0-alpha.1] - 2026-07-27
 
 ### Added
@@ -20,4 +31,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - This is the first public test release. Replay files and behavior may change before `1.0.0`.
 - Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.
 
+[0.1.0-alpha.2]: https://github.com/wo55555/Playback/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/wo55555/Playback/releases/tag/v0.1.0-alpha.1

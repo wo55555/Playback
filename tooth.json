@@ -2,7 +2,7 @@
   "format_version": 3,
   "format_uuid": "289f771f-2c9a-4d73-9f3f-8492495a924d",
   "tooth": "github.com/wo55555/Playback",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "info": {
     "name": "Playback",
     "description": "Record, export, and replay Minecraft Bedrock client sessions.",

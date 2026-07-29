@@ -9,7 +9,7 @@
 Playback is a native [LeviLamina](https://github.com/LiteLDev/LeviLamina) client mod for recording, exporting, and replaying Minecraft Bedrock sessions. Its replay architecture is inspired by the Java Edition [Flashback](https://github.com/Moulberry/Flashback) mod and adapted to the Bedrock client lifecycle.
 
 > [!WARNING]
-> `0.1.0-alpha.1` is the first public test release. Keep backups of important worlds and recordings. Replay compatibility is not guaranteed across Minecraft, LeviLamina, or Playback version changes.
+> `0.1.0-alpha.2` is a public Alpha release. Keep backups of important worlds and recordings. Replay compatibility is not guaranteed across Minecraft, LeviLamina, or Playback version changes.
 
 ## Features
 
