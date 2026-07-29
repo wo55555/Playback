@@ -108,9 +108,50 @@ void DetailsPanel::drawKeyframe() {
 }
 
 void DetailsPanel::drawClip() {
+    auto* sel = Editor::getInstance().selection().getAs<SelectedClip>();
+    if (!sel) return;
+
     ImGui::Text("Clip Properties");
     ImGui::Separator();
-    ImGui::Text("Clip editing not yet implemented");
+
+    auto& state = Editor::getInstance().state();
+    for (auto& vt : state.videoTracks) {
+        for (auto& clip : vt.clips) {
+            if (clip.id != sel->clipId) continue;
+
+            char buf[256];
+            strncpy_s(buf, clip.name.c_str(), sizeof(buf) - 1);
+            if (ImGui::InputText("Name", buf, sizeof(buf))) {
+                clip.name = buf;
+            }
+
+            ImGui::Text("Source: %s", clip.replayFile.c_str());
+            ImGui::Text("Track: %s @ tick %d", vt.name.c_str(), clip.trackTick);
+
+            ImGui::Separator();
+            ImGui::InputInt("In Tick", &clip.inTick, 1, 10);
+            ImGui::InputInt("Out Tick", &clip.outTick, 1, 10);
+
+            ImGui::Separator();
+            drawNumberField("Speed", clip.speed, 0.1f);
+
+            ImGui::Separator();
+            ImGui::Checkbox("Muted", &clip.muted);
+            ImGui::Checkbox("Locked", &clip.locked);
+
+            ImGui::Separator();
+            ImGui::Text("Camera Track: %d", clip.activeCameraTrackIdx);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("+##camera")) {
+                clip.activeCameraTrackIdx++;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("-##camera")) {
+                clip.activeCameraTrackIdx = std::max(0, clip.activeCameraTrackIdx - 1);
+            }
+            return;
+        }
+    }
 }
 
 void DetailsPanel::drawMarker() {

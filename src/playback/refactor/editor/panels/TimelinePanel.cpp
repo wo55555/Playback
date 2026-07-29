@@ -115,12 +115,14 @@ void TimelinePanel::drawBody() {
     float bodyWidth  = ImGui::GetContentRegionAvail().x;
     float bodyHeight = ImGui::GetContentRegionAvail().y;
 
-    // Video track (V0) - 48px
-    float trackStartY = ImGui::GetCursorScreenPos().y;
-    {
+    // Video tracks (multi-track)
+    for (const auto& vt : state.videoTracks) {
+        if (!vt.visible) continue;
+
+        int trackHeight = vt.height;
         Rect rowArea;
         rowArea.min = ImGui::GetCursorScreenPos();
-        rowArea.max = ImVec2(rowArea.min.x + bodyWidth, rowArea.min.y + 48.0f);
+        rowArea.max = ImVec2(rowArea.min.x + bodyWidth, rowArea.min.y + static_cast<float>(trackHeight));
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->AddRectFilled(rowArea.min, rowArea.max, IM_COL32(0x1e, 0x1e, 0x1e, 0xff));
@@ -128,10 +130,16 @@ void TimelinePanel::drawBody() {
 
         // Track label
         ImGui::SetCursorScreenPos(rowArea.min);
-        ImGui::Text("V0");
+        ImGui::Text("%s", vt.name.c_str());
 
-        // Draw clips
-        for (auto& clip : state.videoClips) {
+        // Track visibility toggle
+        if (vt.locked) {
+            ImGui::SameLine();
+            ImGui::TextDisabled(ICON_LOCK);
+        }
+
+        // Draw clips on this track
+        for (auto& clip : vt.clips) {
             drawVideoClip(clip, rowArea);
         }
 
@@ -207,8 +215,9 @@ void TimelinePanel::drawTrack(const TrackDescriptor& track, Rect rowArea) {
 void TimelinePanel::drawVideoClip(const Clip& c, Rect rowArea) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    float x1 = rowArea.min.x + 60.0f + static_cast<float>(c.startTick) * mPixelsPerTick;
-    float x2 = rowArea.min.x + 60.0f + static_cast<float>(c.endTick) * mPixelsPerTick;
+    int clipEndTick = c.trackTick + (c.outTick - c.inTick);
+    float x1 = rowArea.min.x + 60.0f + static_cast<float>(c.trackTick) * mPixelsPerTick;
+    float x2 = rowArea.min.x + 60.0f + static_cast<float>(clipEndTick) * mPixelsPerTick;
 
     ImRect clipRect(ImVec2(x1, rowArea.min.y + 2), ImVec2(x2, rowArea.max.y - 2));
     dl->AddRectFilled(clipRect.Min, clipRect.Max, IM_COL32(0x2a, 0x5a, 0x8a, 0xcc), 4.0f);
@@ -251,15 +260,21 @@ void TimelinePanel::drawMarker(const Marker& m, Rect rowArea) {
 void TimelinePanel::drawTransition(const Transition& t, Rect area) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    float x = area.min.x + 60.0f + static_cast<float>(t.startTick) * mPixelsPerTick;
+    // Transition is placed between two clips; position is derived from fromClipId / toClipId
+    // For now, draw a placeholder at the start of the area
+    float x = area.min.x + 60.0f;
     float w = static_cast<float>(t.durationTicks) * mPixelsPerTick;
 
     ImRect transRect(ImVec2(x, area.min.y + 4), ImVec2(x + w, area.max.y - 4));
     dl->AddRectFilled(transRect.Min, transRect.Max, IM_COL32(0x3a, 0x8c, 0xf0, 0x66), 4.0f);
     dl->AddRect(transRect.Min, transRect.Max, IM_COL32(0x3a, 0x8c, 0xf0, 0xaa), 4.0f);
 
+    const char* kindNames[] = {"Cut", "Fade", "CrossDissolve"};
+    int idx = static_cast<int>(t.kind);
+    const char* kindName = (idx >= 0 && idx < 3) ? kindNames[idx] : "?";
+
     ImGui::SetCursorScreenPos(ImVec2(x + 4, area.min.y + 4));
-    ImGui::Text("%s %s", ICON_TRANSITION, t.type.c_str());
+    ImGui::Text("%s %s", ICON_TRANSITION, kindName);
 }
 
 void TimelinePanel::handleScrubDrag(Rect headerArea) {
@@ -282,9 +297,8 @@ void TimelinePanel::handleClipDrag(Clip& c, Rect rowArea) {
 
     float mouseX = ImGui::GetMousePos().x - rowArea.min.x - 60.0f;
     int newTick = static_cast<int>(mouseX / mPixelsPerTick);
-    int duration = c.endTick - c.startTick;
-    c.startTick = std::clamp(newTick, 0, Editor::getInstance().state().totalTicks - duration);
-    c.endTick = c.startTick + duration;
+    int duration = c.outTick - c.inTick;
+    c.trackTick = std::clamp(newTick, 0, Editor::getInstance().state().totalTicks - duration);
 }
 
 void TimelinePanel::handleKeyframeDrag(CameraKeyframe& k, Rect rowArea) {
