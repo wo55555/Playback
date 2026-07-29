@@ -8,11 +8,13 @@
 
 namespace playback::refactor::editor {
 
+struct EditorStateExt;
+
 class CommandStack {
 public:
-    void push(std::unique_ptr<IEditCommand> cmd);
-    bool undo();
-    bool redo();
+    void push(std::unique_ptr<IEditCommand> cmd, EditorStateExt& state);
+    bool undo(EditorStateExt& state);
+    bool redo(EditorStateExt& state);
     void clear();
 
     [[nodiscard]] std::vector<std::string> undoLabels() const;

@@ -4,9 +4,9 @@
 
 namespace playback::refactor::editor {
 
-void CommandStack::push(std::unique_ptr<IEditCommand> cmd) {
+void CommandStack::push(std::unique_ptr<IEditCommand> cmd, EditorStateExt& state) {
     // Execute the command first
-    cmd->execute(mState); // Note: this assumes mState is accessible
+    cmd->execute(state);
     mUndo.push_back(std::move(cmd));
     mRedo.clear();
 
@@ -16,20 +16,20 @@ void CommandStack::push(std::unique_ptr<IEditCommand> cmd) {
     }
 }
 
-bool CommandStack::undo() {
+bool CommandStack::undo(EditorStateExt& state) {
     if (mUndo.empty()) return false;
     auto cmd = std::move(mUndo.back());
     mUndo.pop_back();
-    cmd->undo(mState); // Note: this assumes mState is accessible
+    cmd->undo(state);
     mRedo.push_back(std::move(cmd));
     return true;
 }
 
-bool CommandStack::redo() {
+bool CommandStack::redo(EditorStateExt& state) {
     if (mRedo.empty()) return false;
     auto cmd = std::move(mRedo.back());
     mRedo.pop_back();
-    cmd->execute(mState); // Note: this assumes mState is accessible
+    cmd->execute(state);
     mUndo.push_back(std::move(cmd));
     return true;
 }

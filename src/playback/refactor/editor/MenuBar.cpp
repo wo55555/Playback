@@ -1,6 +1,7 @@
 #include "MenuBar.h"
 
 #include "Editor.h"
+#include "EditorBridge.h"
 #include "ModeManager.h"
 #include "KeyMap.h"
 #include "iconfont.h"
@@ -30,13 +31,14 @@ void MenuBar::draw() {
 
         // Edit
         if (ImGui::BeginMenu("Edit")) {
-            bool canUndo = Editor::getInstance().commandStack().canUndo();
-            bool canRedo = Editor::getInstance().commandStack().canRedo();
+            auto& bridge = EditorBridge::getInstance();
+            bool canUndo = bridge.canUndo();
+            bool canRedo = bridge.canRedo();
             if (ImGui::MenuItem("Undo", "Ctrl+Z", false, canUndo)) {
-                Editor::getInstance().commandStack().undo();
+                bridge.undo(Editor::getInstance().state());
             }
             if (ImGui::MenuItem("Redo", "Ctrl+Y", false, canRedo)) {
-                Editor::getInstance().commandStack().redo();
+                bridge.redo(Editor::getInstance().state());
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Delete", "Del", false, Editor::getInstance().selection().hasSelection())) {
@@ -79,6 +81,11 @@ void MenuBar::draw() {
         if (ImGui::BeginMenu("Window")) {
             if (ImGui::MenuItem("Toggle Hint Bar", "F1")) {
                 // HintBar toggle handled via Editor
+            }
+            ImGui::Separator();
+            bool curveOpen = Editor::getInstance().curveEditorPanel().isOpen();
+            if (ImGui::MenuItem("Curve Editor", nullptr, &curveOpen)) {
+                Editor::getInstance().curveEditorPanel().setOpen(curveOpen);
             }
             ImGui::EndMenu();
         }

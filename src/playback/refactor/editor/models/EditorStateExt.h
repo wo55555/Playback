@@ -14,6 +14,9 @@ struct CameraTrackExt {
     std::string              id;
     std::string              name;
     bool                     active{};
+    bool                     locked{};
+    bool                     muted{};
+    bool                     visible{true};
     std::vector<CameraKeyframe> keyframes;
 };
 

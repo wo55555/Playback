@@ -8,6 +8,9 @@
 #include "playback/editor/context/EditorContext.h"
 #include "playback/editor/ui/ReplayUILayout.h"
 #include "playback/editor/ui/ReplayView.h"
+#include "playback/refactor/editor/Editor.h"
+#include "playback/refactor/editor/EditorBridge.h"
+#include "playback/refactor/editor/InputHook.h"
 
 
 #include "imgui.h"
@@ -308,6 +311,18 @@ struct ImGuiRenderer::Impl {
         } else {
             io.Fonts->AddFontDefault();
         }
+
+        // Merge icon font for the refactored editor (Lucide icons in PUA range)
+        {
+            ImFontConfig cfg;
+            cfg.MergeMode  = true;
+            cfg.PixelSnapH = true;
+            cfg.GlyphOffset.y = 1.0f;
+            static const ImWchar iconRange[] = { 0xe000, 0xe6ff, 0 };
+            io.Fonts->AddFontFromFileTTF("resources/fonts/lucide.ttf", 13.0f, &cfg, iconRange);
+            io.Fonts->Build();
+        }
+
         ImGui::StyleColorsDark();
         auto& style            = ImGui::GetStyle();
         style.AntiAliasedLines = true;
@@ -484,6 +499,8 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     p.lastFrameTime = fn;
 
     ImGui_ImplDX12_NewFrame();
+    // Forward MCBE key events to ImGui keyboard state
+    playback::refactor::editor::InputHook::syncFrame();
     beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
     ImGui::NewFrame();
     ImGui::GetBackgroundDrawList()->AddImage(
@@ -491,10 +508,17 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
         ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
     );
-    std::vector<EditorAction> actions;
-    ui::drawReplayView(state, layout, actions);
+    // Draw the refactored editor UI (replaces legacy drawReplayView)
+    auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
+    if (refactorEditor.isOpen()) {
+        refactorEditor.draw();
+    } else {
+        // Fallback: legacy timeline UI when refactored editor is closed
+        std::vector<EditorAction> actions;
+        ui::drawReplayView(state, layout, actions);
+        for (auto const action : actions) p.editorContext->submit(action);
+    }
     endReplayMouseFrame();
-    for (auto const action : actions) p.editorContext->submit(action);
     ImGui::Render();
 
     if (FAILED(f.commandAllocator->Reset())) return false;

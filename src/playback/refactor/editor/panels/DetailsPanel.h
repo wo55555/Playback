@@ -21,6 +21,9 @@ private:
     void drawMarker();
     void drawTransition();
 
+    // Transition editing
+    void drawTransitionEditor();
+
     // Field editors
     void drawNumberField(std::string_view label, float& v, float step = 0.1f);
     void drawVec3Field(std::string_view label, Vec3& v);
@@ -28,6 +31,11 @@ private:
     void drawColorField(Color4& c);
     void drawDropdown(std::string_view label, std::string_view current, const std::vector<std::string>& options, int& idx);
     void drawButton(std::string_view label, std::string_view icon, std::function<void()> onClick);
+
+    // Transition editing state
+    int mTransitionKindIdx{};
+    float mTransitionDuration{20.0f};
+    int mTransitionEasingIdx{};
 };
 
 } // namespace playback::refactor::editor

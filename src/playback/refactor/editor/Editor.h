@@ -2,14 +2,16 @@
 
 #include "models/EditorStateExt.h"
 #include "models/SelectionModel.h"
-#include "CommandStack.h"
+#include "EditorBridge.h"
 #include "EditorTheme.h"
+#include "EventBus.h"
 #include "HintBar.h"
 #include "IconSystem.h"
 #include "KeyMap.h"
 #include "MenuBar.h"
 #include "ModeManager.h"
 #include "Splitter.h"
+#include "panels/CurveEditorPanel.h"
 #include "panels/DetailsPanel.h"
 #include "panels/StatusPanel.h"
 #include "panels/TimelinePanel.h"
@@ -32,11 +34,14 @@ public:
     // Main draw entry (called from ImGui render loop)
     void draw();
 
+    // Keyboard shortcut processing
+    void handleKeyboardShortcuts();
+
     // Accessors
     EditorStateExt&       state() { return mState; }
     const EditorStateExt& state() const { return mState; }
     SelectionModel&       selection() { return mSelection; }
-    CommandStack&         commandStack() { return mCommandStack; }
+    CurveEditorPanel&     curveEditorPanel() { return mCurveEditorPanel; }
 
 private:
     Editor() = default;
@@ -56,6 +61,7 @@ private:
     DetailsPanel    mDetailsPanel;
     TimelinePanel   mTimelinePanel;
     StatusPanel     mStatusPanel;
+    CurveEditorPanel mCurveEditorPanel;
 
     // Modes
     EditMode        mEditMode;
@@ -64,10 +70,12 @@ private:
     // Data
     EditorStateExt  mState;
     SelectionModel  mSelection;
-    CommandStack    mCommandStack;
 
     // Layout
     float mTimelineRatio{0.40f}; // 20% ~ 70%
+
+    // Allow EditMode to access Editor members
+    friend class EditMode;
 };
 
 } // namespace playback::refactor::editor

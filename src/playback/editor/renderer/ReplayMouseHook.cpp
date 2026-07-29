@@ -1,6 +1,7 @@
 #include "ReplayMouseHook.h"
 #include "playback/editor/ui/ReplayUILayout.h"
 #include "playback/functions/replay/ReplaySession.h"
+#include "playback/refactor/editor/InputHook.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/input/KeyInputEvent.h"
@@ -207,15 +208,21 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
 
 void handleKeyInput(ll::event::KeyInputEvent& event) {
     ActiveMouseCallback activeCallback;
-    if (!gMouseHookActive.load(std::memory_order_acquire) || !functions::ReplaySession::getInstance().isActive()
-        || event.keyCode() != Keyboard::Escape) {
+    if (!gMouseHookActive.load(std::memory_order_acquire) || !functions::ReplaySession::getInstance().isActive()) {
         return;
     }
 
-    if (event.isDown() && gMouseOwner.load(std::memory_order_acquire) == MouseOwner::GameCaptured) {
-        gReleaseRequested.store(true, std::memory_order_release);
+    // ── Forward key event to the refactored editor's InputHook ──
+    // This populates the ImGui keyboard state during the next frame
+    playback::refactor::editor::InputHook::onKeyEvent(event.keyCode(), event.isDown());
+
+    // ── Escape key → release mouse capture ──
+    if (event.keyCode() == Keyboard::Escape) {
+        if (event.isDown() && gMouseOwner.load(std::memory_order_acquire) == MouseOwner::GameCaptured) {
+            gReleaseRequested.store(true, std::memory_order_release);
+        }
+        event.cancel();
     }
-    event.cancel();
 }
 
 void applyMouseTransition(ClientInstance& client) {

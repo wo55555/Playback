@@ -7,6 +7,8 @@
 #include "playback/Playback.h"
 #include "playback/editor/context/EditorContext.h"
 #include "playback/editor/controller/EditorController.h"
+#include "playback/refactor/editor/Editor.h"
+#include "playback/refactor/editor/EditorBridge.h"
 
 namespace playback::editor {
 
@@ -22,6 +24,11 @@ bool hookReplayUI(bool enable) {
         gContext.reset();
         renderer::gImGuiRenderer.setContext(&gContext);
         renderer::setReplayUIActive(true);
+
+        // ── Initialize the refactored editor bridge ──
+        // Connects the new modular UI to the legacy business logic (EditorContext → EditorController → ReplaySession)
+        playback::refactor::editor::EditorBridge::getInstance().initialize(&gContext);
+        playback::refactor::editor::Editor::getInstance().initialize();
 
         if (!hookReplayUIRendererInit(true)) {
             renderer::setReplayUIActive(false);
@@ -45,6 +52,10 @@ bool hookReplayUI(bool enable) {
     }
 
     renderer::setReplayUIActive(false);
+
+    // ── Shutdown the refactored editor ──
+    playback::refactor::editor::Editor::getInstance().shutdown();
+    playback::refactor::editor::EditorBridge::getInstance().shutdown();
 
     bool ok = true;
     if (!hookReplayUIRendererInit(false)) {

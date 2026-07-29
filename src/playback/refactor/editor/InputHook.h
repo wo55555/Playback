@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include <cstdint>
 
 namespace playback::refactor::editor {
 
@@ -12,6 +13,10 @@ bool onWindowsMessage(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // Called every frame before ImGui::NewFrame
 void syncFrame();
+
+// Called from MCBE key event handler (thread-safe, no ImGui context needed)
+// Stores key state for later forwarding to ImGui during syncFrame()
+void onKeyEvent(uint32_t keyCode, bool down);
 
 // Query: should MCBE consume keyboard?
 bool shouldMCBEConsumeKeyboard();

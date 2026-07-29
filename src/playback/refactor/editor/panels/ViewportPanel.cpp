@@ -1,6 +1,8 @@
 #include "ViewportPanel.h"
 
 #include "playback/refactor/editor/Editor.h"
+#include "playback/refactor/editor/EditorBridge.h"
+#include "playback/refactor/editor/ModeManager.h"
 #include "playback/refactor/editor/iconfont.h"
 #include "playback/refactor/editor/models/SelectionModel.h"
 
@@ -19,16 +21,23 @@ void ViewportPanel::draw() {
         ImGui::BeginChild("##viewportToolbar", ImVec2(viewportSize.x, 32.0f), false,
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-        if (ImGui::Button(ICON_PLAY " Play")) {
-            Editor::getInstance().state().playing = !Editor::getInstance().state().playing;
+        if (ImGui::Button(Editor::getInstance().state().playing ? ICON_PAUSE " Pause" : ICON_PLAY " Play")) {
+            EditorBridge::getInstance().playPause();
         }
         ImGui::SameLine();
         if (ImGui::Button(ICON_ADD_KEYFRAME " Add Keyframe")) {
-            // Placeholder: add keyframe at playhead
+            auto& state = Editor::getInstance().state();
+            for (auto& track : state.cameraTracks) {
+                if (track.active) {
+                    EditorBridge::getInstance().addKeyframe(state, track.id, state.currentTick);
+                    break;
+                }
+            }
         }
         ImGui::SameLine();
         if (ImGui::Button(ICON_ADD_MARKER " Add Marker")) {
-            // Placeholder: add marker
+            auto& state = Editor::getInstance().state();
+            EditorBridge::getInstance().addMarker(state, "Marker", state.currentTick);
         }
         ImGui::SameLine();
         if (ImGui::Button(ICON_EXPORT " Export")) {
