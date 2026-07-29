@@ -24,7 +24,7 @@ end
 
 target("playback")
     add_rules("@levibuildscript/linkrule")
-    add_rules("@levibuildscript/modpacker", {modVersion = "0.1.0-alpha.1"})
+    add_rules("@levibuildscript/modpacker", {modVersion = "0.1.0-alpha.2"})
     add_cxflags( "/EHa", "/utf-8", "/W4", "/w44265", "/w44289", "/w44296", "/w45263", "/w44738", "/w45204")
     add_defines("NOMINMAX", "UNICODE")
     add_packages("levilamina")

@@ -9,7 +9,7 @@
 Playback 是一个基于 [LeviLamina](https://github.com/LiteLDev/LeviLamina) 的 Minecraft 基岩版客户端原生模组，用于录制、导出和回放游戏过程。回放架构参考了 Java 版 [Flashback](https://github.com/Moulberry/Flashback) 模组，并针对基岩版客户端生命周期进行了适配。
 
 > [!WARNING]
-> `0.1.0-alpha.1` 是第一个公开测试版本。请备份重要世界和录制文件；在 Minecraft、LeviLamina 或 Playback 版本发生变化后，不保证旧回放仍然兼容。
+> `0.1.0-alpha.2` 是公开 Alpha 测试版本。请备份重要世界和录制文件；在 Minecraft、LeviLamina 或 Playback 版本发生变化后，不保证旧回放仍然兼容。
 
 ## 功能
 

@@ -107,3 +107,57 @@ jobs:
           files: |
             ${{ github.event.repository.name }}-client-windows-x64.zip
             playback-ui.mcpack
+
+  notify-discord:
+    needs:
+      - build
+      - update-release-notes
+      - upload-to-release
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Discord
+        continue-on-error: true
+        shell: pwsh
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          NOTES_RESULT: ${{ needs.update-release-notes.result }}
+          UPLOAD_RESULT: ${{ needs.upload-to-release.result }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) {
+            Write-Warning "DISCORD_WEBHOOK_URL is not configured; skipping Discord notification."
+            exit 0
+          }
+
+          $results = @($env:BUILD_RESULT, $env:NOTES_RESULT, $env:UPLOAD_RESULT)
+          $succeeded = ($results | Where-Object { $_ -ne "success" }).Count -eq 0
+          $payload = @{
+            username = "Playback GitHub"
+            allowed_mentions = @{ parse = @() }
+            embeds = @(
+              @{
+                title = if ($succeeded) { "Release $($env:RELEASE_TAG) published" } else { "Release $($env:RELEASE_TAG) workflow failed" }
+                url = if ($succeeded) { $env:RELEASE_URL } else { $env:RUN_URL }
+                color = if ($succeeded) { 5763719 } else { 15548997 }
+                fields = @(
+                  @{ name = "Repository"; value = $env:REPOSITORY; inline = $true }
+                  @{ name = "Tag"; value = $env:RELEASE_TAG; inline = $true }
+                  @{ name = "Triggered by"; value = $env:ACTOR; inline = $true }
+                )
+                timestamp = (Get-Date).ToUniversalTime().ToString("o")
+              }
+            )
+          } | ConvertTo-Json -Depth 6
+
+          Invoke-RestMethod `
+            -Uri $env:DISCORD_WEBHOOK_URL `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body $payload

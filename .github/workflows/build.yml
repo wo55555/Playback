@@ -65,3 +65,53 @@ jobs:
           name: ${{ github.event.repository.name }}-${{ github.sha }}-client-windows-x64
           path: |
             bin/
+
+  notify-discord:
+    needs:
+      - build
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Discord
+        continue-on-error: true
+        shell: pwsh
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) {
+            Write-Warning "DISCORD_WEBHOOK_URL is not configured; skipping Discord notification."
+            exit 0
+          }
+
+          $succeeded = $env:BUILD_RESULT -eq "success"
+          $payload = @{
+            username = "Playback GitHub"
+            allowed_mentions = @{ parse = @() }
+            embeds = @(
+              @{
+                title = if ($succeeded) { "Main build succeeded" } else { "Main build $($env:BUILD_RESULT)" }
+                url = $env:RUN_URL
+                color = if ($succeeded) { 5763719 } else { 15548997 }
+                fields = @(
+                  @{ name = "Repository"; value = $env:REPOSITORY; inline = $true }
+                  @{ name = "Branch"; value = $env:REF_NAME; inline = $true }
+                  @{ name = "Commit"; value = $env:COMMIT_SHA.Substring(0, 7); inline = $true }
+                  @{ name = "Triggered by"; value = $env:ACTOR; inline = $true }
+                )
+                timestamp = (Get-Date).ToUniversalTime().ToString("o")
+              }
+            )
+          } | ConvertTo-Json -Depth 6
+
+          Invoke-RestMethod `
+            -Uri $env:DISCORD_WEBHOOK_URL `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body $payload
