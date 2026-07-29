@@ -1,44 +1,123 @@
-# Playback
+<div align="center">
+  <img src="resources/pack_icon.png" alt="Playback icon" width="160">
+  <h1>Playback</h1>
+  <p><strong>Record, revisit, and replay Minecraft Bedrock.</strong></p>
+  <p>A native LeviLamina client mod for recording, exporting, and replaying your sessions.</p>
 
-[![Discord](https://img.shields.io/badge/Discord-Playback-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/mUhRUD8AM)
-[![QQ](https://img.shields.io/badge/QQ-Playback-EB1923?style=for-the-badge&logo=qq&logoColor=white)](https://qm.qq.com/q/ufJatMDcha)
+  <p>
+    <a href="https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.10"><img src="https://img.shields.io/static/v1?label=Minecraft%2026.10&amp;message=v0.1.1&amp;color=00A6B2&amp;style=flat-square" alt="Playback v0.1.1 for Minecraft 26.10"></a>
+    <a href="https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20"><img src="https://img.shields.io/static/v1?label=Minecraft%2026.20&amp;message=v0.1.1&amp;color=00A6B2&amp;style=flat-square" alt="Playback v0.1.1 for Minecraft 26.20"></a>
+  </p>
 
-![English](https://img.shields.io/badge/English-inactive?style=for-the-badge)
-[![简体中文](https://img.shields.io/badge/简体中文-informational?style=for-the-badge)](README_ZH.md)
+  <p>
+    <a href="https://github.com/wo55555/Playback/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/wo55555/Playback/build.yml?branch=main&amp;style=flat-square&amp;label=build" alt="Build status"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/wo55555/Playback?style=flat-square" alt="License"></a>
+    <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&amp;logo=windows" alt="Windows x64">
+  </p>
 
-Playback is a native [LeviLamina](https://github.com/LiteLDev/LeviLamina) client mod for recording, exporting, and replaying Minecraft Bedrock sessions. Its replay architecture is inspired by the Java Edition [Flashback](https://github.com/Moulberry/Flashback) mod and adapted to the Bedrock client lifecycle.
+  <p>
+    <a href="README.md"><strong>English</strong></a>
+    ·
+    <a href="README_ZH.md">简体中文</a>
+  </p>
+
+  <p>
+    <a href="#features">Features</a>
+    ·
+    <a href="#quick-start">Quick Start</a>
+    ·
+    <a href="#build-from-source">Build</a>
+    ·
+    <a href="#development-status-and-roadmap">Roadmap</a>
+    ·
+    <a href="#contributing">Contributing</a>
+  </p>
+</div>
+
+Playback is built on [LeviLamina](https://github.com/LiteLDev/LeviLamina). Its replay architecture is inspired by the Java Edition [Flashback](https://github.com/Moulberry/Flashback) mod and adapted to the Bedrock client lifecycle.
 
 > [!WARNING]
-> `0.1.0-alpha.2` is a public Alpha release. Keep backups of important worlds and recordings. Replay compatibility is not guaranteed across Minecraft, LeviLamina, or Playback version changes.
+> Playback is still in an early stage of development. All currently published releases are test builds. Keep backups of important worlds and recordings; replay compatibility is not guaranteed across Minecraft, LeviLamina, or Playback version changes.
 
 ## Features
 
-- Captures loaded chunks, block actors, entity movement, player state, time, and selected client-safe game packets.
-- Writes replay snapshots and timeline data asynchronously to reduce recording stalls.
-- Exports recordings as portable replay archives.
-- Opens replays from a native main-menu browser in an isolated local replay world.
-- Provides an in-game timeline for play/pause, seeking, speed control, and exiting the replay.
-- Localizes commands, the replay editor, and the resource-pack UI in English and Simplified Chinese.
+- **Session capture** — Records loaded chunks, block actors, entity movement, player state, time, and selected client-safe game packets.
+- **Low-impact recording** — Writes replay snapshots and timeline data asynchronously to reduce recording stalls.
+- **Portable archives** — Exports recordings as replay files that are easy to store and share.
+- **Isolated playback** — Opens recordings from a native main-menu browser in a dedicated local replay world.
+- **Timeline controls** — Supports play, pause, seek, speed control, and quick navigation during replay.
+- **Bilingual UI** — Localizes commands, the replay editor, and the resource-pack UI in English and Simplified Chinese.
 
 ## Compatibility
 
-- Minecraft Bedrock for Windows
-- LeviLamina client `26.10.*`
+Playback maintains parallel release lines for different Minecraft and LeviLamina versions. These releases contain the same Playback feature version; neither supersedes the other.
+
+| Minecraft / LeviLamina | Playback release | Status |
+| --- | --- | --- |
+| `26.10.*` | [`v0.1.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.10) | Maintained |
+| `26.20.*` | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) | Maintained |
+
+Both release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
 
 > [!TIP]
 > Playback is a client-only mod that can record sessions in both local worlds and multiplayer servers.
 
 ## Quick Start
 
-### Install a release
+### Install with LeviLauncher and Lip (recommended)
 
-1. Download `Playback-client-windows-x64.zip` from the GitHub release.
-2. Extract the included `playback` directory into the LeviLamina instance's `mods` directory.
-3. Restart the client. LeviLamina loads the bundled Playback UI resource pack automatically.
+The screenshots below use a `26.10` instance. For `26.20`, follow the same steps with the matching Minecraft and LeviLamina version. Labels and available test releases may change over time.
 
-The release also provides `playback-ui.mcpack` as a standalone asset for manual import. It is not required when installing the complete mod ZIP.
+1. Select **Download** in the left sidebar, find the Minecraft version you want, and use its install menu to create an instance with the **LeviLamina** loader.
 
-The Playback button should now appear on the main menu.
+<p align="center">
+  <img src="docs/images/quick-start/en/01-install-instance.png" alt="Open Download and install a Minecraft instance with LeviLamina" width="900">
+</p>
+
+2. Select **Instances** in the left sidebar, open the new instance's settings, and confirm under **Loader** that the matching LeviLamina version is installed.
+
+<p align="center">
+  <img src="docs/images/quick-start/en/02-verify-levilamina.png" alt="Open Instances and verify the installed LeviLamina loader" width="900">
+</p>
+
+3. Select **Launch** in the left sidebar to return to the main page. Choose the target instance, then select **lip** under **Content Download**.
+
+<p align="center">
+  <img src="docs/images/quick-start/en/03-open-lip.png" alt="Open the Launch page and select lip under Content Download" width="900">
+</p>
+
+4. Search for **Playback**, then open the Playback package published by `wo55555`.
+
+<p align="center">
+  <img src="docs/images/quick-start/en/04-search-playback.png" alt="Search for Playback in lip" width="900">
+</p>
+
+5. On the package page, confirm that **LL Requirement** and **Game Versions** match your instance, then select **Install**. Launch or restart the game after installation.
+
+<p align="center">
+  <img src="docs/images/quick-start/en/05-install-playback.png" alt="Install a compatible Playback version with lip" width="900">
+</p>
+
+The **Playback** button should now appear on the Minecraft main menu. The UI resource pack is bundled with the mod and loads automatically.
+
+### Install with the Lip CLI
+
+From the root directory of the target LeviLamina instance, run:
+
+```powershell
+lip install github.com/wo55555/Playback
+```
+
+Lip resolves the package against the instance's installed dependencies. Confirm that the selected Playback release matches the instance's Minecraft and LeviLamina version before launching the game.
+
+### Manual installation
+
+If you cannot use Lip, download `Playback-client-windows-x64.zip` from the matching release:
+
+- [`v0.1.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.10) for `26.10.*`
+- [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) for `26.20.*`
+
+Extract the archive's `playback` directory into the LeviLamina instance's `mods` directory, then restart the client. Each release also provides `playback-ui.mcpack` for standalone manual import; it is not required when installing the complete mod ZIP.
 
 ### Record
 
@@ -112,9 +191,13 @@ Playback currently includes English (`en_US`) and Simplified Chinese (`zh_CN`) t
 
 Please report reproducible problems with logs, versions, and a minimal replay where possible.
 
+See the [changelog](CHANGELOG.md) for release history, or [open an issue](https://github.com/wo55555/Playback/issues) to report a reproducible problem.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the build, formatting, and pull request workflow.
+
+For questions and project discussion, join the [Discord server](https://discord.gg/mUhRUD8AM) or the [QQ group](https://qm.qq.com/q/ufJatMDcha).
 
 Report security issues privately by following [SECURITY.md](SECURITY.md). Do not open a public issue for a security vulnerability.
 
