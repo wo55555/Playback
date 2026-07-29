@@ -44,6 +44,14 @@ flowchart LR
     subgraph Browser["主菜单"]
         BROWSER["ReplayBrowser"] -->|openReplay| RS
     end
+    subgraph Render["视频导出路径"]
+        EP["ExportPanel<br/>(editor)"] -->|submitJob| RJ["RenderJob"]
+        RJ -->|tick/seek/setRenderMode| RS
+        RJ -->|captureToStaging| FS["FrameSource"]
+        RJ -->|writeVideoFrame| FE["FrameEncoder"]
+        RJ -->|writeAudioChunk| AT["AudioTrack"]
+        FE -->|Win32 Pipe| FF["ffmpeg.exe"]
+    end
 ```
 
 ## 关键设计
@@ -60,3 +68,9 @@ flowchart LR
 - 想看录制：[record.md](record.md) → [io.md](io.md)
 - 想看回放：[replay.md](replay.md) → [action.md](action.md) → [io.md](io.md)（reader 部分）
 - 想看 tick 调度：[tick.md](tick.md)
+- 想看视频导出（新增）：
+  - [render/render-job.md](render/render-job.md)（中心）
+  - [render/frame-source.md](render/frame-source.md)（帧源）
+  - [render/frame-encoder.md](render/frame-encoder.md)（编码）
+  - [render/audio-track.md](render/audio-track.md)（音频）
+  - [render/export-presets.md](render/export-presets.md)（预设 / FFmpeg）

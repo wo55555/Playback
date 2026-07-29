@@ -21,6 +21,25 @@ Playback 是 Minecraft Bedrock Edition 的客户端回放 mod，构建在 [LeviL
 
 > 一个核心心智模型：**Recorder 和 ReplaySession 共享同一套 Action 协议**。录制把游戏事件写成 Action 二进制流；回放从同一份 Action 二进制流重建游戏事件。chunk 走单独的压缩缓存以避免重复写盘。
 
+## 视频编辑与导出
+
+回放导出到视频的完整链路（新模块）：
+
+| 能力 | 入口 | 关键实现 |
+| --- | --- | --- |
+| 摄影机轨道编辑 | `editor/camera-track.md` | 关键帧 + 5 种 easing + ImGui 面板 |
+| 导出配置（分辨率/比例/FPS/格式） | `editor/export-config.md` | `ExportConfig` 数据模型 + 校验 |
+| 导出 ImGui 面板 | `editor/export-panel.md` | 表单 + 进度 + 取消 |
+| 平台预设与 FFmpeg 命令翻译 | `functions/render/export-presets.md` | 6 个内置预设 + 编码器协商 |
+| 渲染任务调度 | `functions/render/render-job.md` | 状态机 + 队列 + 原子提交 + 失败 dump |
+| DX12 离屏帧源 | `functions/render/frame-source.md` | RTV + Staging + 帧完成信号 |
+| FFmpeg 子进程编码 | `functions/render/frame-encoder.md` | 命名管道 + PNG 序列 |
+| 音频轨道 | `functions/render/audio-track.md` | PCM 重采样 + 静音生成 |
+| `playback export` 命令 | `command/export.md` | 命令行入口（无 ImGui 也能跑） |
+| 端到端时序 | `overview/export-flow.md` | 1 张总图 + 3 张时序图 |
+
+> 核心心智模型：**ExportConfig + CameraTrack** 是数据基底，**RenderJob** 是唯一执行者，UI 与命令行都是 `submitJob` 的调用方。
+
 ## 文档地图
 
 ```
@@ -31,7 +50,8 @@ docs/
 │   ├── architecture.md             分层 + 模块依赖图
 │   ├── record-flow.md              录制时序图
 │   ├── replay-flow.md              回放时序图
-│   └── editor-flow.md              编辑器时序图
+│   ├── editor-flow.md              编辑器时序图
+│   └── export-flow.md              导出时序图（端到端）
 ├── playback/                       模组入口
 │   ├── index.md                    Playback 单例 + 生命周期
 │   ├── config.md                   Config 与 CommandConfigStruct
@@ -44,13 +64,22 @@ docs/
 │   ├── record.md                   Recorder / ReplayExporter / 录制主流程
 │   ├── io.md                       AsyncReplaySaver / ReplayWriter / ReplayReader / 缓存
 │   ├── replay.md                   ReplaySession 状态机 + 区块流式注入
-│   └── tick.md                     ClientTickHooks
-├── editor/                         回放编辑器
+│   ├── tick.md                     ClientTickHooks
+│   └── render/                     视频编辑与导出（新增）
+│       ├── render-job.md           RenderJob 状态机 + 队列 + 原子提交
+│       ├── frame-source.md         DX12 离屏 RT 帧源
+│       ├── frame-encoder.md        FFmpeg 子进程编码器
+│       ├── audio-track.md          音频轨道（重采样 + 静音生成）
+│       └── export-presets.md       平台预设 + FFmpeg 命令翻译
+├── editor/                         回放编辑器 + 视频编辑
 │   ├── index.md                    编辑器子模块关系图
 │   ├── context.md                  EditorContext 状态机
 │   ├── controller.md               EditorController
 │   ├── renderer.md                 D3D12 钩子 + ImGui 渲染
-│   └── ui.md                       ReplayView / MenuBar / Timeline
+│   ├── ui.md                       ReplayView / MenuBar / Timeline
+│   ├── camera-track.md             摄影机轨道（关键帧 + 插值 + 编辑）
+│   ├── export-config.md            导出配置（数据模型 + 校验）
+│   └── export-panel.md             导出 ImGui 面板（主入口）
 ├── screen/                         主菜单
 │   ├── index.md                    主菜单钩子总览
 │   ├── main-menu-hooks.md          MainMenuHooks（按钮 + 弹窗绑定）
@@ -71,6 +100,7 @@ docs/
 - **想理解录制**：[overview/record-flow.md](overview/record-flow.md) + [functions/record.md](functions/record.md) + [functions/action.md](functions/action.md) + [functions/io.md](functions/io.md)
 - **想理解回放**：[overview/replay-flow.md](overview/replay-flow.md) + [functions/replay.md](functions/replay.md) + [functions/action.md](functions/action.md)
 - **想理解 UI**：[overview/editor-flow.md](overview/editor-flow.md) + [editor/index.md](editor/index.md) → 各子模块
+- **想理解视频导出（新增）**：[overview/export-flow.md](overview/export-flow.md) + [editor/camera-track.md](editor/camera-track.md) + [editor/export-config.md](editor/export-config.md) + [functions/render/render-job.md](functions/render/render-job.md)
 - **想理解主菜单入口**：[screen/index.md](screen/index.md) → [screen/replay-browser.md](screen/replay-browser.md)
 
 ## 与仓库其它部分的关系

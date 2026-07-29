@@ -4,20 +4,22 @@
 
 注册到 LeviLamina 客户端命令注册器的命令族。命令注册发生在 `ClientCommandRegisterEvent` 事件里，由 `Playback::setupCommands()` 触发。
 
-当前只注册两个族：
+注册的命令族：
 
 - `playback` — 展示 mod 版本
 - `record` — 录制生命周期（`start` / `pause` / `stop`）
+- `export` — 视频导出（`start` / `cancel` / `status` / `list-queue` / `set` / `preset`）
 
-`record` 命令族可以被禁用 / 重命名（见 [playback/config.md](../playback/config.md)）。
+`record` 和 `export` 命令族都可以被禁用 / 重命名（见 [playback/config.md](../playback/config.md)）。
 
 ## 文件
 
 | 文件 | 说明 |
 | --- | --- |
-| `src/playback/command/Command.h` | 两个 `registerXxxCommand` 声明 |
+| `src/playback/command/Command.h` | 三个 `registerXxxCommand` 声明 |
 | `src/playback/command/Command.cpp` | `registerPlaybackCommand` |
 | `src/playback/command/Record.cpp` | `registerRecordCommand` |
+| `src/playback/command/Export.cpp` | `registerExportCommand`（新增） |
 
 ## 命令一览
 
@@ -58,6 +60,15 @@ record start
 
 成功时输出翻译键 `playback.command.record.stopped`。
 
+### `export start` / `cancel` / `status` / `set` / `preset` ...
+
+详见 [export.md](export.md)。命令最终调用 `RenderJob::getInstance().submitJob / cancelCurrent / snapshot`：
+
+- 不依赖 ImGui，可在主菜单或调试时单独跑。
+- `playback export start <replay-file> --preset <name> --fps <n> ...` 提交一个导出 job。
+- `playback export status` 输出 `45% (1350/3000) state=Encoding`。
+- `playback export cancel` 软取消当前 job。
+
 ## 注册流程
 
 ```mermaid
@@ -67,6 +78,7 @@ sequenceDiagram
     participant PB as Playback
     participant CR as CommandRegistrar<br/>(ClientInstance)
     participant Reg as Recorder
+    participant RJ as RenderJob
 
     FW-->>Bus: ClientCommandRegisterEvent
     Bus-->>PB: lambda (在 hook() 中订阅)
@@ -77,6 +89,10 @@ sequenceDiagram
     PB->>CR: text("start") overload -> Recorder::start
     PB->>CR: text("pause") overload -> Recorder::pause
     PB->>CR: text("stop") overload -> Recorder::stop
+    PB->>CR: getOrCreateCommand("export", description)
+    PB->>CR: text("start") overload -> RenderJob::submitJob
+    PB->>CR: text("cancel") overload -> RenderJob::cancelCurrent
+    PB->>CR: text("status") overload -> RenderJob::snapshot
 ```
 
 ## 翻译键
@@ -85,22 +101,24 @@ i18n 键通过 `using ll::i18n_literals::operator""_tr;` 在编译期查表，�
 
 - `playback.command.playback.description` / `playback.command.playback.versionUnavailable`
 - `playback.command.record.description` / `playback.command.record.started` / `playback.command.record.paused` / `playback.command.record.stopped`
+- `playback.command.export.*`（详见 [export.md](export.md)）
 
 ## 模块关系
 
 ### 被谁调用
 
-- `Playback::setupCommands()` 调用 `registerPlaybackCommand` + `registerRecordCommand`。
-- 用户在聊天框输入命令时由 LeviLamina 框架把 overload 调起，最终调 `Recorder` 的方法。
+- `Playback::setupCommands()` 调用 `registerPlaybackCommand` + `registerRecordCommand` + `registerExportCommand`。
+- 用户在聊天框输入命令时由 LeviLamina 框架把 overload 调起，最终调 `Recorder` 或 `RenderJob` 的方法。
 
 ### 调用谁
 
 - `Recorder::getInstance().start/pause/stop`。
+- `RenderJob::getInstance().submitJob/cancelCurrent/snapshot`。
 - `Playback::getInstance().getSelf().getManifest()` / `getLogger()`。
 
 ### 共享数据
 
-- 通过 `Playback::getConfig().command.record` 读 `enabled` 和命令名（仅 `Record` 族）。
+- 通过 `Playback::getConfig().command` 读 `enabled` 和命令名（`Record` / `Export` 族）。
 
 ### 事件
 
@@ -108,6 +126,6 @@ i18n 键通过 `using ll::i18n_literals::operator""_tr;` 在编译期查表，�
 
 ## 扩展点
 
-- 新增 overload：在 `registerRecordCommand` 里继续 `recordCommand.overload().text("...")`。
+- 新增 overload：在对应 `registerXxxCommand` 里继续 `xxxCommand.overload().text("...")`。
 - 新增命令族：写一个 `registerXxxCommand(...)`（参数按需），在 `Playback::setupCommands()` 调用。
 - 改命令名 / 禁用：编辑 `src/playback/Config.h` 的 `CommandConfigStruct` 默认值。

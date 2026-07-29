@@ -3,6 +3,28 @@
 > 入口：[`d:\raplay\Playback\src\playback\editor\`](file:///d:/raplay/Playback/src/playback/editor/)
 > 角色：在游戏中渲染一个 ImGui 时间轴 UI（菜单栏 + 时间轴 + 控制按钮），让玩家在回放世界内暂停/seek/变速。**只读** `ReplaySession` 状态，**只发** `EditorAction`。
 
+## 视频编辑扩展（新增）
+
+`editor/` 在回放时间轴基础上扩展视频编辑能力，新增 3 个子模块：
+
+| 子模块 | 文档 | 角色 |
+| --- | --- | --- |
+| `editor/camera-track/` | [camera-track.md](camera-track.md) | 摄影机轨道数据模型 + 关键帧插值 + ImGui 编辑 |
+| `editor/export/` | [export-config.md](export-config.md) | 导出配置（分辨率/比例/FPS/格式/码率/路径）数据模型 + 校验 |
+| `editor/ui/panels/ExportPanel` | [export-panel.md](export-panel.md) | 导出 ImGui 面板（主入口 + 进度 + 取消） |
+
+数据关系：
+
+```mermaid
+flowchart LR
+    CT["CameraTrack<br/>(camera-track.md)"] --> EC1["EditorContextCameraExt"]
+    EC["ExportConfig<br/>(export-config.md)"] --> EC0["EditorContextExportExt"]
+    EC0 --> EP["ExportPanel<br/>(export-panel.md)"]
+    EP --> RJ["RenderJob<br/>(functions/render)"]
+    RJ --> CS["CameraSampler::sampleAt"]
+    CS --> CT
+```
+
 ## 内部结构
 
 ```
@@ -11,7 +33,17 @@ editor/
 ├── context/
 │   ├── EditorContext.h / .cpp      ← 线程安全的状态/动作队列（state + actions）
 │   ├── EditorState.h               ← UI 状态结构（replayVisible/paused/...）
-│   └── EditorAction.h              ← UI → 控制器的指令枚举
+│   ├── EditorAction.h              ← UI → 控制器的指令枚举
+│   ├── EditorContextCameraExt.*    ← 摄影机轨道扩展（新增）
+│   └── EditorContextExportExt.*    ← 导出配置扩展（新增）
+├── camera-track/                   ← 新增
+│   ├── CameraTrack.h / .cpp        ← 关键帧 + easing 数据模型
+│   └── CameraSampler.h / .cpp      ← 确定性 tick 采样
+├── export/                         ← 新增
+│   ├── ExportConfig.h / .cpp       ← 导出配置 + 校验
+│   ├── Resolution.h                ← 分辨率/比例互转
+│   ├── ExportFormat.h              ← 格式/编码器枚举
+│   └── ExportPresets.h             ← 用户预设
 ├── controller/
 │   └── EditorController.h / .cpp   ← 每 tick 把 action 转成 ReplaySession 调用
 ├── renderer/
@@ -25,7 +57,9 @@ editor/
     ├── FormatUtils.h               ← tick ↔ 时分秒格式
     └── panels/
         ├── MenuBarPanel.h / .cpp   ← 顶栏（标题 + 速度/退出按钮）
-        └── TimelinePanel.h / .cpp  ← 时间轴 + seek 滑块 + 播放/暂停/跳进退
+        ├── TimelinePanel.h / .cpp  ← 时间轴 + seek 滑块 + 播放/暂停/跳进退
+        ├── CameraTrackPanel.*      ← 摄影机轨道编辑（新增）
+        └── ExportPanel.*           ← 导出面板（新增）
 ```
 
 ## 子模块关系图
@@ -136,6 +170,9 @@ sequenceDiagram
 | controller | [editor/controller/EditorController.h](file:///d:/raplay/Playback/src/playback/editor/controller/EditorController.h) | 把 UI action 翻译成 `ReplaySession` 调用，并把 session 状态打包成 UI state。 |
 | renderer | [editor/renderer/D3D12Hooks.h](file:///d:/raplay/Playback/src/playback/editor/renderer/D3D12Hooks.h) | 钩 D3D12 + 跑 ImGui。详见 [renderer.md](renderer.md)。 |
 | ui | [editor/ui/ReplayView.h](file:///d:/raplay/Playback/src/playback/editor/ui/ReplayView.h) | 纯绘制：菜单栏 + 背景图 + 时间轴。详见 [ui.md](ui.md)。 |
+| **camera-track**（新）| [editor/camera-track/CameraTrack.h](file:///d:/raplay/Playback/src/playback/editor/camera-track/CameraTrack.h) | 摄影机轨道（关键帧 + easing + 持久化）。详见 [camera-track.md](camera-track.md)。 |
+| **export**（新）| [editor/export/ExportConfig.h](file:///d:/raplay/Playback/src/playback/editor/export/ExportConfig.h) | 导出配置（分辨率/比例/FPS/格式/校验）。详见 [export-config.md](export-config.md)。 |
+| **ExportPanel**（新）| [editor/ui/panels/ExportPanel.h](file:///d:/raplay/Playback/src/playback/editor/ui/panels/ExportPanel.h) | 导出 ImGui 面板（主入口 + 进度 + 取消）。详见 [export-panel.md](export-panel.md)。 |
 
 ## 关键设计
 
