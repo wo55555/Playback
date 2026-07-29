@@ -24,6 +24,8 @@
   <p>
     <a href="#features">Features</a>
     ·
+    <a href="#showcase">Showcase</a>
+    ·
     <a href="#quick-start">Quick Start</a>
     ·
     <a href="#build-from-source">Build</a>
@@ -38,6 +40,23 @@ Playback is built on [LeviLamina](https://github.com/LiteLDev/LeviLamina). Its r
 
 > [!WARNING]
 > Playback is still in an early stage of development. All currently published releases are test builds. Keep backups of important worlds and recordings; replay compatibility is not guaranteed across Minecraft, LeviLamina, or Playback version changes.
+
+## Showcase
+
+<p align="center">
+  <strong>Main menu integration</strong><br>
+  <img src="docs/images/showcase/en/main-menu.webp" alt="Playback entry on the Minecraft main menu" width="900">
+</p>
+
+<p align="center">
+  <strong>Native replay browser</strong><br>
+  <img src="docs/images/showcase/en/replay-browser.webp" alt="Playback replay browser" width="900">
+</p>
+
+<p align="center">
+  <strong>In-game timeline editor</strong><br>
+  <img src="docs/images/showcase/en/timeline-editor.webp" alt="Playback in-game timeline editor" width="900">
+</p>
 
 ## Features
 
@@ -95,7 +114,7 @@ The screenshots below use a `26.10` instance. For `26.20`, follow the same steps
   <img src="docs/images/quick-start/en/04-search-playback.png" alt="Search for Playback in lip" width="900">
 </p>
 
-5. On the package page, confirm that **LL Requirement** and **Game Versions** match your instance, then select **Install**. Launch or restart the game after installation.
+5. On the package page, manually choose the release whose **LL Requirement** and **Game Versions** match your instance, then use **Install** in that version's row. Lip does not select a Playback version based on the installed LeviLamina version. Launch or restart the game after installation.
 
 <p align="center">
   <img src="docs/images/quick-start/en/05-install-playback.png" alt="Install a compatible Playback version with lip" width="900">
@@ -105,13 +124,18 @@ The **Playback** button should now appear on the Minecraft main menu. The UI res
 
 ### Install with the Lip CLI
 
-From the root directory of the target LeviLamina instance, run:
+From the root directory of the target LeviLamina instance, install the release that matches its Minecraft and LeviLamina version:
 
 ```powershell
-lip install github.com/wo55555/Playback
+# Minecraft / LeviLamina 26.10
+lip install github.com/wo55555/Playback@0.1.1-mc26.10#client
+
+# Minecraft / LeviLamina 26.20
+lip install github.com/wo55555/Playback@0.1.1-mc26.20#client
 ```
 
-Lip resolves the package against the instance's installed dependencies. Confirm that the selected Playback release matches the instance's Minecraft and LeviLamina version before launching the game.
+> [!NOTE]
+> The `#client` variant is required. If `@version` is omitted, Lip installs the latest available Playback release; it does not automatically choose a version based on the installed LeviLamina version. Always specify and verify the matching release before launching the game.
 
 ### Manual installation
 
