@@ -44,20 +44,15 @@ target("playback")
     add_files("src/**.cpp")
     add_includedirs("src")
     after_build(function(target)
-        import("utils.archive")
-
         local output_dir = path.join(os.projectdir(), "bin", target:name())
         os.mkdir(output_dir)
-        os.cp(path.join(os.projectdir(), "LICENSE"), path.join(output_dir, "LICENSE"))
-        os.cp(
-            path.join(os.projectdir(), "THIRD_PARTY_NOTICES.md"),
-            path.join(output_dir, "THIRD_PARTY_NOTICES.md")
-        )
+        os.cp(path.join(os.projectdir(), "LICENSE"), output_dir)
+        os.cp(path.join(os.projectdir(), "THIRD_PARTY_NOTICES.md"), output_dir)
 
-        local license_source = path.join(os.projectdir(), "licenses", "DearImGui-LICENSE.txt")
+        local license_source = path.join(os.projectdir(), "licenses")
         local license_dir = path.join(output_dir, "licenses")
-        os.mkdir(license_dir)
-        os.cp(license_source, path.join(license_dir, "DearImGui-LICENSE.txt"))
+        os.tryrm(license_dir)
+        os.cp(license_source, license_dir)
 
         local lang_source = path.join(os.projectdir(), "src", "lang")
         local lang_dir = path.join(output_dir, "lang")
@@ -66,17 +61,11 @@ target("playback")
 
         local resource_dir = path.join(os.projectdir(), "resources")
         if os.isdir(resource_dir) then
-            local mcpack = path.join(os.projectdir(), "bin", target:name(), target:name() .. "-ui.mcpack")
-            local mcpack_zip = mcpack .. ".zip"
+            local output_resource_dir = path.join(output_dir, "resource_packs")
+            os.mkdir(output_resource_dir)
             assert(os.isfile(path.join(resource_dir, "manifest.json")), "resource pack manifest.json was not found")
-            os.tryrm(mcpack)
-            os.tryrm(mcpack_zip)
-            archive.archive(mcpack_zip, "*", {
-                curdir = resource_dir,
-                recurse = true
-            })
-            os.mv(mcpack_zip, mcpack)
-            os.tryrm(mcpack_zip)
-            cprint("${bright green}[Playback]: ${reset}UI resource pack generated to " .. mcpack)
+            os.cp(resource_dir, output_resource_dir)
+            os.mv(path.join(output_resource_dir, "resources"), path.join(output_resource_dir, target:name() .. "-ui"))
+            cprint("${bright green}[Playback]: ${reset}UI resource pack generated to " .. output_resource_dir)
         end
     end)
