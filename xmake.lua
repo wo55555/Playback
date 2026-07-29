@@ -22,9 +22,21 @@ if not has_config("vs_runtime") then
     set_runtimes("MD")
 end
 
+local get_version = function(os)
+    local tag = os.iorun("git describe --tags --abbrev=0 --always")
+    local major, minor, patch, suffix = tag:match("v(%d+)%.(%d+)%.(%d+)(.*)")
+    if not major then
+        print("Failed to parse version tag, using 0.0.0")
+        major, minor, patch = 0, 0, 0
+    end
+    if suffix and suffix ~= "" then
+        return major .. "." .. minor .. "." .. patch .. string.gsub(suffix, "%s+$", "")
+    end
+    return major .. "." .. minor .. "." .. patch
+end
+
 target("playback")
     add_rules("@levibuildscript/linkrule")
-    add_rules("@levibuildscript/modpacker", {modVersion = "0.1.0-alpha.2"})
     add_cxflags( "/EHa", "/utf-8", "/W4", "/w44265", "/w44289", "/w44296", "/w45263", "/w44738", "/w45204")
     add_defines("NOMINMAX", "UNICODE")
     add_packages("levilamina")
@@ -44,7 +56,12 @@ target("playback")
     add_files("src/**.cpp")
     add_includedirs("src")
     set_symbols("debug")
-    after_build(function(target)
+    on_load(function (target)
+        target:add("rules", "@levibuildscript/modpacker", {
+            modVersion = get_version(os),
+        })
+    end)
+    after_build(function (target)
         import("utils.archive")
 
         local output_dir = path.join(os.projectdir(), "bin", target:name())
