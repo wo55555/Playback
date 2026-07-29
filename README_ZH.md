@@ -1,44 +1,123 @@
-# Playback
+<div align="center">
+  <img src="resources/pack_icon.png" alt="Playback 图标" width="160">
+  <h1>Playback</h1>
+  <p><strong>录下此刻，再现世界。</strong></p>
+  <p>用于录制、导出和回放 Minecraft 基岩版游戏过程的 LeviLamina 客户端原生模组。</p>
 
-[![Discord](https://img.shields.io/badge/Discord-Playback-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/mUhRUD8AM)
-[![QQ](https://img.shields.io/badge/QQ-Playback-EB1923?style=for-the-badge&logo=qq&logoColor=white)](https://qm.qq.com/q/ufJatMDcha)
+  <p>
+    <a href="https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.10"><img src="https://img.shields.io/static/v1?label=Minecraft%2026.10&amp;message=v0.1.1&amp;color=00A6B2&amp;style=flat-square" alt="适用于 Minecraft 26.10 的 Playback v0.1.1"></a>
+    <a href="https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20"><img src="https://img.shields.io/static/v1?label=Minecraft%2026.20&amp;message=v0.1.1&amp;color=00A6B2&amp;style=flat-square" alt="适用于 Minecraft 26.20 的 Playback v0.1.1"></a>
+  </p>
 
-[![English](https://img.shields.io/badge/English-informational?style=for-the-badge)](README.md)
-![简体中文](https://img.shields.io/badge/简体中文-inactive?style=for-the-badge)
+  <p>
+    <a href="https://github.com/wo55555/Playback/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/wo55555/Playback/build.yml?branch=main&amp;style=flat-square&amp;label=build" alt="构建状态"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/wo55555/Playback?style=flat-square" alt="许可证"></a>
+    <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&amp;logo=windows" alt="Windows x64">
+  </p>
 
-Playback 是一个基于 [LeviLamina](https://github.com/LiteLDev/LeviLamina) 的 Minecraft 基岩版客户端原生模组，用于录制、导出和回放游戏过程。回放架构参考了 Java 版 [Flashback](https://github.com/Moulberry/Flashback) 模组，并针对基岩版客户端生命周期进行了适配。
+  <p>
+    <a href="README.md">English</a>
+    ·
+    <a href="README_ZH.md"><strong>简体中文</strong></a>
+  </p>
+
+  <p>
+    <a href="#功能">功能</a>
+    ·
+    <a href="#快速开始">快速开始</a>
+    ·
+    <a href="#从源码构建">构建</a>
+    ·
+    <a href="#开发状态与计划">开发计划</a>
+    ·
+    <a href="#参与贡献">参与贡献</a>
+  </p>
+</div>
+
+Playback 基于 [LeviLamina](https://github.com/LiteLDev/LeviLamina) 构建。回放架构参考了 Java 版 [Flashback](https://github.com/Moulberry/Flashback) 模组，并针对基岩版客户端生命周期进行了适配。
 
 > [!WARNING]
-> `0.1.0-alpha.2` 是公开 Alpha 测试版本。请备份重要世界和录制文件；在 Minecraft、LeviLamina 或 Playback 版本发生变化后，不保证旧回放仍然兼容。
+> Playback 目前仍处于早期开发阶段，现有公开版本均为测试版本。请备份重要世界和录制文件；在 Minecraft、LeviLamina 或 Playback 版本发生变化后，不保证旧回放仍然兼容。
 
 ## 功能
 
-- 捕获已加载区块、方块实体、实体移动、玩家状态、时间和经过筛选的客户端安全数据包。
-- 异步写入回放快照和时间线数据，减少录制过程中的卡顿。
-- 将录制结果导出为便于转移的回放压缩包。
-- 通过原生主菜单回放浏览器，在隔离的本地回放世界中打开回放。
-- 提供游戏内时间线，支持播放、暂停、跳转、倍速调整和退出回放。
-- 为命令、回放编辑器和资源包 UI 提供英文及简体中文本地化。
+- **游戏录制** — 捕获已加载区块、方块实体、实体移动、玩家状态、时间和经过筛选的客户端安全数据包。
+- **低开销写入** — 异步写入回放快照和时间线数据，减少录制过程中的卡顿。
+- **便携归档** — 将录制结果导出为便于保存和分享的回放文件。
+- **隔离回放** — 通过原生主菜单回放浏览器，在独立的本地回放世界中打开录制内容。
+- **时间线控制** — 支持播放、暂停、跳转、倍速调整和快速定位。
+- **双语界面** — 为命令、回放编辑器和资源包 UI 提供英文及简体中文本地化。
 
 ## 兼容性
 
-- Windows 基岩版
-- LeviLamina 客户端 `26.10.*`
+Playback 针对不同 Minecraft 与 LeviLamina 版本并行维护发布。以下版本具有相同的 Playback 功能版本，仅适配的游戏版本不同，两者不存在新旧替代关系。
+
+| Minecraft / LeviLamina | Playback 版本 | 状态 |
+| --- | --- | --- |
+| `26.10.*` | [`v0.1.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.10) | 维护中 |
+| `26.20.*` | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) | 维护中 |
+
+两个版本均面向 Windows x64 平台的 Minecraft 基岩版，并以纯客户端模组形式发布。
 
 > [!TIP]
 > Playback 为纯客户端模组，支持客户端与服务端录制。
 
 ## 快速开始
 
-### 安装发布版本
+### 使用 LeviLauncher 和 Lip 安装（推荐）
 
-1. 从 GitHub Release 下载 `Playback-client-windows-x64.zip`。
-2. 将压缩包内的 `playback` 目录解压到 LeviLamina 实例的 `mods` 目录。
-3. 重启客户端，LeviLamina 会自动加载模组内置的 Playback UI 资源包。
+以下截图以 `26.10` 实例为例。使用 `26.20` 时，请按照相同步骤选择与其匹配的 Minecraft 和 LeviLamina 版本。界面文字及可用测试版本可能随更新而变化。
 
-Release 仍会提供独立的 `playback-ui.mcpack`，用于手动导入；安装完整模组 ZIP 时无需另行导入。
+1. 在左侧边栏选择 **Download（下载）**，找到需要的 Minecraft 版本，通过该版本的安装菜单创建使用 **LeviLamina** 加载器的实例。
 
-完成后，主菜单中应显示 Playback 按钮。
+<p align="center">
+  <img src="docs/images/quick-start/zh-cn/01-install-instance.png" alt="打开 Download 页面并安装使用 LeviLamina 的 Minecraft 实例" width="900">
+</p>
+
+2. 在左侧边栏选择 **Instances（实例）**，打开新实例的设置，在**加载器**页面确认对应版本的 LeviLamina 已经安装。
+
+<p align="center">
+  <img src="docs/images/quick-start/zh-cn/02-verify-levilamina.png" alt="打开 Instances 页面并确认实例已经安装 LeviLamina 加载器" width="900">
+</p>
+
+3. 在左侧边栏选择 **Launch（启动）**返回主页面，选中目标实例，然后在**内容下载**区域选择 **lip**。
+
+<p align="center">
+  <img src="docs/images/quick-start/zh-cn/03-open-lip.png" alt="打开 Launch 主页面并在内容下载中选择 lip" width="900">
+</p>
+
+4. 搜索 **Playback**，然后打开由 `wo55555` 发布的 Playback 软件包。
+
+<p align="center">
+  <img src="docs/images/quick-start/zh-cn/04-search-playback.png" alt="在 lip 中搜索 Playback" width="900">
+</p>
+
+5. 在软件包页面确认 **LL 依赖**和**游戏版本**与当前实例一致，然后选择**安装**。安装完成后启动或重启游戏。
+
+<p align="center">
+  <img src="docs/images/quick-start/zh-cn/05-install-playback.png" alt="通过 lip 安装兼容的 Playback 版本" width="900">
+</p>
+
+完成后，Minecraft 主菜单中应显示 **Playback** 按钮。模组已经内置 UI 资源包，无需另行导入。
+
+### 使用 Lip 命令行安装
+
+在目标 LeviLamina 实例的根目录中执行：
+
+```powershell
+lip install github.com/wo55555/Playback
+```
+
+Lip 会根据实例中已经安装的依赖解析软件包。启动游戏前，请确认最终选择的 Playback 版本与当前实例的 Minecraft 和 LeviLamina 版本匹配。
+
+### 手动安装
+
+如果无法使用 Lip，请从对应的 Release 下载 `Playback-client-windows-x64.zip`：
+
+- `26.10.*` 使用 [`v0.1.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.10)
+- `26.20.*` 使用 [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20)
+
+将压缩包内的 `playback` 目录解压到 LeviLamina 实例的 `mods` 目录，然后重启客户端。各 Release 仍提供独立的 `playback-ui.mcpack` 供手动导入；安装完整模组 ZIP 时无需另行导入。
 
 ### 录制
 
@@ -112,9 +191,13 @@ Playback 目前提供英文（`en_US`）和简体中文（`zh_CN`）翻译。命
 
 报告可复现问题时，请尽量附带日志、相关版本和最小回放文件。
 
+版本历史见[更新日志](CHANGELOG.md)；如需报告可复现问题，请[创建 Issue](https://github.com/wo55555/Playback/issues)。
+
 ## 参与贡献
 
 构建、格式化和 Pull Request 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+如需交流或讨论项目，可加入 [Discord 服务器](https://discord.gg/mUhRUD8AM)或 [QQ 群](https://qm.qq.com/q/ufJatMDcha)。
 
 安全问题请按照 [SECURITY.md](SECURITY.md) 私下报告，不要为安全漏洞创建公开 Issue。
 
