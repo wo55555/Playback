@@ -43,21 +43,19 @@ target("playback")
     add_headerfiles("src/**.h")
     add_files("src/**.cpp")
     add_includedirs("src")
+    set_symbols("debug")
     after_build(function(target)
         import("utils.archive")
 
         local output_dir = path.join(os.projectdir(), "bin", target:name())
         os.mkdir(output_dir)
-        os.cp(path.join(os.projectdir(), "LICENSE"), path.join(output_dir, "LICENSE"))
-        os.cp(
-            path.join(os.projectdir(), "THIRD_PARTY_NOTICES.md"),
-            path.join(output_dir, "THIRD_PARTY_NOTICES.md")
-        )
+        os.cp(path.join(os.projectdir(), "LICENSE"), output_dir)
+        os.cp(path.join(os.projectdir(), "THIRD_PARTY_NOTICES.md"), output_dir)
 
-        local license_source = path.join(os.projectdir(), "licenses", "DearImGui-LICENSE.txt")
+        local license_source = path.join(os.projectdir(), "licenses")
         local license_dir = path.join(output_dir, "licenses")
-        os.mkdir(license_dir)
-        os.cp(license_source, path.join(license_dir, "DearImGui-LICENSE.txt"))
+        os.tryrm(license_dir)
+        os.cp(license_source, license_dir)
 
         local lang_source = path.join(os.projectdir(), "src", "lang")
         local lang_dir = path.join(output_dir, "lang")
@@ -72,7 +70,6 @@ target("playback")
             assert(os.isfile(path.join(resource_dir, "manifest.json")), "resource pack manifest.json was not found")
             os.tryrm(installed_pack)
             os.cp(resource_dir, installed_pack)
-            os.tryrm(path.join(output_dir, target:name() .. "-ui.mcpack"))
             os.tryrm(mcpack)
             os.tryrm(mcpack_zip)
             archive.archive(mcpack_zip, "*", {
@@ -80,7 +77,6 @@ target("playback")
                 recurse = true
             })
             os.mv(mcpack_zip, mcpack)
-            os.tryrm(mcpack_zip)
             cprint("${bright green}[Playback]: ${reset}UI resource pack installed to " .. installed_pack)
             cprint("${bright green}[Playback]: ${reset}Standalone UI resource pack generated to " .. mcpack)
         end
