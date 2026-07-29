@@ -32,13 +32,11 @@ Playback 是一个基于 [LeviLamina](https://github.com/LiteLDev/LeviLamina) �
 
 ### 安装发布版本
 
-1. 从 GitHub Release 下载 `Playback-client-windows-x64.zip` 和 `playback-ui.mcpack`。
+1. 从 GitHub Release 下载 `Playback-client-windows-x64.zip`。
 2. 将压缩包内的 `playback` 目录解压到 LeviLamina 实例的 `mods` 目录。
-3. 打开单独下载的 `playback-ui.mcpack`，将 UI 资源包导入 Minecraft。
-4. 在 Minecraft 中进入 **设置 > 全局资源 > 我的资源包**，激活 **Playback UI**，然后重启客户端。
+3. 重启客户端，LeviLamina 会自动加载模组内置的 Playback UI 资源包。
 
-> [!IMPORTANT]
-> 必须安装并激活 `playback-ui.mcpack` 资源包，否则主菜单不会显示 Playback 回放按钮。
+Release 仍会提供独立的 `playback-ui.mcpack`，用于手动导入；安装完整模组 ZIP 时无需另行导入。
 
 完成后，主菜单中应显示 Playback 按钮。
 
@@ -76,7 +74,7 @@ xmake f -y -p windows -a x64 -m release --target_type=client
 xmake -r -y
 ```
 
-打包后的模组位于 `bin/playback/`，命令和回放编辑器的翻译文件位于 `bin/playback/lang/`。构建过程还会从 `resources/` 生成 `bin/playback/playback-ui.mcpack`，其中包含主菜单和回放浏览器 UI 的本地化资源。
+打包后的模组位于 `bin/playback/`，翻译文件位于 `bin/playback/lang/`，自动加载的 UI 资源包位于 `bin/playback/resource_packs/playback-ui/`。构建过程还会生成 `bin/playback-ui.mcpack`，作为独立资源包资产发布。
 
 如果 prelink 报告无法找到 `bedrock_runtime_data`，请刷新包配置并重新构建：
 

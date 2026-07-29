@@ -93,7 +93,8 @@ jobs:
           path: artifact
 
       - run: |
-          rm -f artifact/playback/*.pdb
+          mv artifact/playback-ui.mcpack playback-ui.mcpack
+          rm -f artifact/playback/*.pdb artifact/playback/playback-ui.zip
           rm -rf artifact/playback/data
           cp CHANGELOG.md LICENSE README.md README_ZH.md artifact/
 
@@ -105,3 +106,4 @@ jobs:
         with:
           files: |
             ${{ github.event.repository.name }}-client-windows-x64.zip
+            playback-ui.mcpack

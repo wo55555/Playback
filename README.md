@@ -32,13 +32,11 @@ Playback is a native [LeviLamina](https://github.com/LiteLDev/LeviLamina) client
 
 ### Install a release
 
-1. Download `Playback-client-windows-x64.zip` and `playback-ui.mcpack` from the GitHub release.
+1. Download `Playback-client-windows-x64.zip` from the GitHub release.
 2. Extract the included `playback` directory into the LeviLamina instance's `mods` directory.
-3. Open the separately downloaded `playback-ui.mcpack` to import the UI resource pack into Minecraft.
-4. In Minecraft, open **Settings > Global Resources > My Packs**, activate **Playback UI**, and restart the client.
+3. Restart the client. LeviLamina loads the bundled Playback UI resource pack automatically.
 
-> [!IMPORTANT]
-> You must install and activate the `playback-ui.mcpack` resource pack, or the Playback replay button will not appear on the main menu.
+The release also provides `playback-ui.mcpack` as a standalone asset for manual import. It is not required when installing the complete mod ZIP.
 
 The Playback button should now appear on the main menu.
 
@@ -76,7 +74,7 @@ xmake f -y -p windows -a x64 -m release --target_type=client
 xmake -r -y
 ```
 
-The packaged mod is written to `bin/playback/`, including the command and replay-editor translations under `bin/playback/lang/`. The build also generates `bin/playback/playback-ui.mcpack` from `resources/`, including the localized main-menu and replay-browser UI.
+The packaged mod is written to `bin/playback/`, including translations under `bin/playback/lang/` and the automatically loaded UI pack under `bin/playback/resource_packs/playback-ui/`. The build also generates `bin/playback-ui.mcpack` as a standalone resource-pack asset.
 
 If prelink reports that `bedrock_runtime_data` cannot be found, refresh the package configuration and rebuild:
 
