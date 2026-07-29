@@ -157,9 +157,15 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
     ActiveMouseCallback activeCallback;
     if (!replayUiOwnsMouse()) return;
 
-    char const  action = event.actionButtonId();
-    float const x      = static_cast<float>(event.x()) * gInputScaleX.load(std::memory_order_relaxed);
-    float const y      = static_cast<float>(event.y()) * gInputScaleY.load(std::memory_order_relaxed);
+    char const action = event.actionButtonId();
+    // The X and Y coordinates in the event are broken in 26.20.4, so we need to get the cursor position by WINAPI.
+    POINT cursor{};
+    HWND  window = GetActiveWindow();
+    if (!GetCursorPos(&cursor) || !ScreenToClient(window, &cursor)) {
+        return;
+    }
+    float const x      = static_cast<float>(cursor.x) * gInputScaleX.load(std::memory_order_relaxed);
+    float const y      = static_cast<float>(cursor.y) * gInputScaleY.load(std::memory_order_relaxed);
     bool const  inGame = isGameViewportPoint(x, y);
     bool const  popup  = gPopupOpen.load(std::memory_order_acquire);
     auto const  owner  = gMouseOwner.load(std::memory_order_acquire);
