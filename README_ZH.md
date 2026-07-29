@@ -64,6 +64,9 @@ Playback 针对不同 Minecraft 与 LeviLamina 版本并行维护发布。以下
 
 ## 快速开始
 
+> [!IMPORTANT]
+> 首次安装或测试 Playback 时，建议尽量使用未安装其他第三方模组的独立 LeviLamina 实例，以避免潜在的模组冲突。目前暂不保证与其他模组兼容；后续开发将逐步测试并改善相关兼容性。
+
 ### 使用 LeviLauncher 和 Lip 安装（推荐）
 
 以下截图以 `26.10` 实例为例。使用 `26.20` 时，请按照相同步骤选择与其匹配的 Minecraft 和 LeviLamina 版本。界面文字及可用测试版本可能随更新而变化。

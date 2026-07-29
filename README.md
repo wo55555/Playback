@@ -64,6 +64,9 @@ Both release lines target Minecraft Bedrock for Windows x64 and are distributed 
 
 ## Quick Start
 
+> [!IMPORTANT]
+> When installing or testing Playback for the first time, use a clean LeviLamina instance without other third-party mods whenever possible. Other mods may conflict with Playback, and broad mod compatibility is not currently guaranteed. Compatibility with other mods will be tested and improved as development continues.
+
 ### Install with LeviLauncher and Lip (recommended)
 
 The screenshots below use a `26.10` instance. For `26.20`, follow the same steps with the matching Minecraft and LeviLamina version. Labels and available test releases may change over time.
