@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -33,15 +34,18 @@ using CreateSwapChainForCoreWindowFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
 using CreateSwapChainForCompositionFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
+using CreateCommandQueueFn =
+    HRESULT(STDMETHODCALLTYPE*)(ID3D12Device*, D3D12_COMMAND_QUEUE_DESC const*, REFIID, void**);
 
 constexpr size_t SwapChainPresentIndex                     = 8;
 constexpr size_t SwapChainPresent1Index                    = 22;
 constexpr size_t SwapChainResizeBuffersIndex               = 13;
 constexpr size_t SwapChainResizeBuffers1Index              = 39;
 constexpr size_t FactoryCreateSwapChainIndex               = 10;
-constexpr size_t FactoryCreateSwapChainForHwndIndex        = 13;
-constexpr size_t FactoryCreateSwapChainForCoreWindowIndex  = 14;
-constexpr size_t FactoryCreateSwapChainForCompositionIndex = 22;
+constexpr size_t FactoryCreateSwapChainForHwndIndex        = 15;
+constexpr size_t FactoryCreateSwapChainForCoreWindowIndex  = 16;
+constexpr size_t FactoryCreateSwapChainForCompositionIndex = 24;
+constexpr size_t DeviceCreateCommandQueueIndex             = 8;
 constexpr DWORD  DetourWaitTimeoutMsLocal                  = 2000;
 
 ll::memory::FuncPtr gOriginalPresent{};
@@ -52,6 +56,16 @@ ll::memory::FuncPtr gOriginalCreateSwapChain{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForHwnd{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForCoreWindow{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForComposition{};
+ll::memory::FuncPtr gOriginalCreateCommandQueue{};
+
+// Global device→queue map (fallback when CreateSwapChain detour doesn't fire)
+std::mutex                                         gDeviceQueueMapMutex;
+std::unordered_map<ID3D12Device*, IUnknown*> gDeviceQueueMap;
+
+// Captured D3D12 device (from D3D12CreateDevice hook)
+ID3D12Device* gCapturedD3D12Device{};
+std::once_flag sD3D12Created;
+
 std::atomic<bool>   gTimelineHooksStopping{true};
 std::atomic<bool>   gRendererInitHookStopping{true};
 
@@ -100,6 +114,7 @@ struct HookTargets {
     void* createSwapChainForHwnd{};
     void* createSwapChainForCoreWindow{};
     void* createSwapChainForComposition{};
+    void* createCommandQueue{};
 };
 
 struct HookState {
@@ -112,6 +127,7 @@ struct HookState {
     bool        createSwapChainForHwnd{};
     bool        createSwapChainForCoreWindow{};
     bool        createSwapChainForComposition{};
+    bool        createCommandQueue{};
 };
 
 HookState& hookState() {
@@ -121,12 +137,14 @@ HookState& hookState() {
 
 bool allInstalled(HookState const& state) {
     return state.present && state.present1 && state.resizeBuffers && state.resizeBuffers1 && state.createSwapChain
-        && state.createSwapChainForHwnd && state.createSwapChainForCoreWindow && state.createSwapChainForComposition;
+        && state.createSwapChainForHwnd && state.createSwapChainForCoreWindow && state.createSwapChainForComposition
+        && state.createCommandQueue;
 }
 
 bool noneInstalled(HookState const& state) {
     return !state.present && !state.present1 && !state.resizeBuffers && !state.resizeBuffers1 && !state.createSwapChain
-        && !state.createSwapChainForHwnd && !state.createSwapChainForCoreWindow && !state.createSwapChainForComposition;
+        && !state.createSwapChainForHwnd && !state.createSwapChainForCoreWindow && !state.createSwapChainForComposition
+        && !state.createCommandQueue;
 }
 
 #define DECLARE_DETOUR_FN(NAME, RET, ...)                                                                              \
@@ -134,6 +152,27 @@ bool noneInstalled(HookState const& state) {
     RET WINAPI NAME##Detour(__VA_ARGS__)
 
 DECLARE_DETOUR_FN(present, HRESULT, IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
+    // Log every unique swap chain we see (throttled)
+    {
+        static std::unordered_map<IDXGISwapChain*, bool> sSeen;
+        static std::once_flag sPresentLog;
+        bool first = false;
+        {
+            static std::mutex sMtx;
+            std::scoped_lock lk(sMtx);
+            auto it = sSeen.find(swapChain);
+            if (it == sSeen.end()) {
+                sSeen[swapChain] = true;
+                first = true;
+            }
+        }
+        if (first) {
+            ComPtr<ID3D12Device> testDev;
+            HRESULT hr = swapChain->GetDevice(IID_PPV_ARGS(&testDev));
+            FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a");
+            if(f){fprintf(f,"[Present] new swapChain=%p GetDevice(D3D12)=0x%08X\n",(void*)swapChain,(unsigned int)hr);fclose(f);}
+        }
+    }
     ActiveDetour activeDetour;
     if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
         (void)gImGuiRenderer.render(swapChain);
@@ -237,10 +276,20 @@ DECLARE_DETOUR_FN(
     DXGI_SWAP_CHAIN_DESC* description,
     IDXGISwapChain**      swapChain
 ) {
+    static std::once_flag sLog;
+    std::call_once(sLog, [] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] createSwapChain detour HIT\n");fclose(f);} });
     ActiveDetour  activeDetour;
+    if (swapChain && *swapChain) {
+        static std::once_flag sCsLog;
+        std::call_once(sCsLog, [=] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] call orig CreateSwapChain\n");fclose(f);} });
+    }
     HRESULT const result =
         reinterpret_cast<CreateSwapChainFn>(gOriginalCreateSwapChain)(factory, device, description, swapChain);
-    if (SUCCEEDED(result) && swapChain && *swapChain) bindSwapChainQueue(*swapChain, device);
+    if (SUCCEEDED(result) && swapChain && *swapChain) {
+        static std::once_flag sCsOk;
+        std::call_once(sCsOk, [=] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] CreateSwapChain SUCCEEDED, calling bindSwapChainQueue\n");fclose(f);} });
+        bindSwapChainQueue(*swapChain, device);
+    }
     return result;
 }
 
@@ -255,6 +304,8 @@ DECLARE_DETOUR_FN(
     IDXGIOutput*                           restrictToOutput,
     IDXGISwapChain1**                      swapChain
 ) {
+    static std::once_flag sLog;
+    std::call_once(sLog, [] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] createSwapChainForHwnd detour HIT\n");fclose(f);} });
     ActiveDetour  activeDetour;
     HRESULT const result = reinterpret_cast<CreateSwapChainForHwndFn>(gOriginalCreateSwapChainForHwnd)(
         factory,
@@ -265,7 +316,11 @@ DECLARE_DETOUR_FN(
         restrictToOutput,
         swapChain
     );
-    if (SUCCEEDED(result) && swapChain && *swapChain) bindSwapChainQueue(*swapChain, device);
+    if (SUCCEEDED(result) && swapChain && *swapChain) {
+        static std::once_flag sOk;
+        std::call_once(sOk, [=] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] CreateSwapChainForHwnd SUCCEEDED, binding queue\n");fclose(f);} });
+        bindSwapChainQueue(*swapChain, device);
+    }
     return result;
 }
 
@@ -279,6 +334,8 @@ DECLARE_DETOUR_FN(
     IDXGIOutput*                 restrictToOutput,
     IDXGISwapChain1**            swapChain
 ) {
+    static std::once_flag sLog;
+    std::call_once(sLog, [] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] createSwapChainForCoreWindow detour HIT\n");fclose(f);} });
     ActiveDetour  activeDetour;
     HRESULT const result = reinterpret_cast<CreateSwapChainForCoreWindowFn>(gOriginalCreateSwapChainForCoreWindow)(
         factory,
@@ -288,7 +345,11 @@ DECLARE_DETOUR_FN(
         restrictToOutput,
         swapChain
     );
-    if (SUCCEEDED(result) && swapChain && *swapChain) bindSwapChainQueue(*swapChain, device);
+    if (SUCCEEDED(result) && swapChain && *swapChain) {
+        static std::once_flag sOk;
+        std::call_once(sOk, [=] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] CreateSwapChainForCoreWindow SUCCEEDED\n");fclose(f);} });
+        bindSwapChainQueue(*swapChain, device);
+    }
     return result;
 }
 
@@ -301,6 +362,8 @@ DECLARE_DETOUR_FN(
     IDXGIOutput*                 restrictToOutput,
     IDXGISwapChain1**            swapChain
 ) {
+    static std::once_flag sLog;
+    std::call_once(sLog, [] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] createSwapChainForComposition detour HIT\n");fclose(f);} });
     ActiveDetour  activeDetour;
     HRESULT const result = reinterpret_cast<CreateSwapChainForCompositionFn>(gOriginalCreateSwapChainForComposition)(
         factory,
@@ -309,7 +372,63 @@ DECLARE_DETOUR_FN(
         restrictToOutput,
         swapChain
     );
-    if (SUCCEEDED(result) && swapChain && *swapChain) bindSwapChainQueue(*swapChain, device);
+    if (SUCCEEDED(result) && swapChain && *swapChain) {
+        static std::once_flag sOk;
+        std::call_once(sOk, [=] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] CreateSwapChainForComposition SUCCEEDED\n");fclose(f);} });
+        bindSwapChainQueue(*swapChain, device);
+    }
+    return result;
+}
+
+DECLARE_DETOUR_FN(
+    createCommandQueue,
+    HRESULT,
+    ID3D12Device*                   device,
+    D3D12_COMMAND_QUEUE_DESC const* desc,
+    REFIID                          riid,
+    void**                          ppCommandQueue
+) {
+    static std::once_flag sLog;
+    std::call_once(sLog, [] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] createCommandQueue detour HIT\n");fclose(f);} });
+    HRESULT const result = reinterpret_cast<CreateCommandQueueFn>(gOriginalCreateCommandQueue)(device, desc, riid, ppCommandQueue);
+    if (SUCCEEDED(result) && ppCommandQueue && *ppCommandQueue) {
+        static std::once_flag sOk;
+        std::call_once(sOk, [=] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] createCommandQueue SUCCEEDED\n");fclose(f);} });
+        // Store in device→queue global map
+        ComPtr<ID3D12CommandQueue> queue;
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppCommandQueue)->QueryInterface(IID_PPV_ARGS(&queue)))) {
+            std::scoped_lock lk(gDeviceQueueMapMutex);
+            // Release any previous mapping
+            auto it = gDeviceQueueMap.find(device);
+            if (it != gDeviceQueueMap.end() && it->second) it->second->Release();
+            gDeviceQueueMap[device] = queue.Detach();
+        }
+    }
+    return result;
+}
+
+// ── D3D12CreateDevice hook (captures the D3D12 device used by the game) ──
+using D3D12CreateDeviceFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+D3D12CreateDeviceFn gOriginalD3D12CreateDevice{};
+
+HRESULT WINAPI d3d12CreateDeviceDetour(
+    IUnknown*         pAdapter,
+    D3D_FEATURE_LEVEL MinimumFeatureLevel,
+    REFIID            riid,
+    void**            ppDevice
+) {
+    std::call_once(sD3D12Created, [] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] D3D12CreateDevice detour HIT\n");fclose(f);} });
+    HRESULT const result = gOriginalD3D12CreateDevice(pAdapter, MinimumFeatureLevel, riid, ppDevice);
+    if (SUCCEEDED(result) && ppDevice && *ppDevice) {
+        ComPtr<ID3D12Device> dev;
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppDevice)->QueryInterface(IID_PPV_ARGS(&dev)))) {
+            // If first time or swap chain lookup has already failed, store the device
+            if (!gCapturedD3D12Device) {
+                gCapturedD3D12Device = dev.Detach(); // steal ref
+                FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] D3D12CreateDevice: captured device=%p\n", (void*)gCapturedD3D12Device);fclose(f);}
+            }
+        }
+    }
     return result;
 }
 
@@ -427,14 +546,32 @@ bool installCreateSwapChainForCompositionHook(HookState& state) {
     return true;
 }
 
+bool installCreateCommandQueueHook(HookState& state) {
+    if (state.createCommandQueue) return true;
+    if (ll::memory::hook(
+            state.targets.createCommandQueue,
+            ll::memory::toFuncPtr(&createCommandQueueDetour),
+            &gOriginalCreateCommandQueue,
+            ll::memory::HookPriority::Normal
+        )
+        != 0)
+        return false;
+    state.createCommandQueue = true;
+    return true;
+}
+
 bool installAll(HookState& state) {
     return installCreateSwapChainHook(state) && installCreateSwapChainForHwndHook(state)
         && installCreateSwapChainForCoreWindowHook(state) && installCreateSwapChainForCompositionHook(state)
+        && installCreateCommandQueueHook(state)
         && installResizeBuffersHook(state) && installResizeBuffers1Hook(state) && installPresentHook(state)
         && installPresent1Hook(state);
 }
 
 bool removeAll(HookState& state) {
+    if (state.createCommandQueue
+        && ll::memory::unhook(state.targets.createCommandQueue, ll::memory::toFuncPtr(&createCommandQueueDetour)))
+        state.createCommandQueue = false;
     if (state.present1 && ll::memory::unhook(state.targets.present1, ll::memory::toFuncPtr(&present1Detour)))
         state.present1 = false;
     if (state.present && ll::memory::unhook(state.targets.present, ll::memory::toFuncPtr(&presentDetour)))
@@ -478,6 +615,9 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::Init const& init
 ) {
     ActiveRendererInitDetour activeDetour;
+    {
+        FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] RendererInitHook FIRED\n");fclose(f);}
+    }
     if (!gRendererInitHookStopping.load(std::memory_order_acquire) && !hookD3D12(true)) {
         Playback::getInstance().getSelf().getLogger().error(
             "Unable to install replay ImGui timeline hooks before D3D12 renderer initialization"
@@ -524,8 +664,14 @@ void bindSwapChainQueue(IDXGISwapChain* swapChain, IUnknown* queueObject) {
         // Also store in fallback map
         std::scoped_lock lk(gSwapChainQueueFallbackMutex);
         gSwapChainQueueFallback[swapChain] = queue.Detach(); // takes ownership, +1 ref
+        {
+            FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] bindSwapChainQueue SUCCESS for swapChain=%p\n", (void*)swapChain);fclose(f);}
+        }
     } else {
         swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
+        {
+            FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] bindSwapChainQueue FAILED: getDirectCommandQueue returned false\n");fclose(f);}
+        }
     }
 }
 
@@ -538,7 +684,11 @@ ComPtr<ID3D12CommandQueue> getSwapChainQueue(IDXGISwapChain* swapChain) {
         && dataSize == sizeof(IUnknown*))
     {
         ComPtr<ID3D12CommandQueue> queue;
-        if (getDirectCommandQueue(queueObject.Get(), queue)) return queue;
+        if (getDirectCommandQueue(queueObject.Get(), queue)) {
+            static std::once_flag sOk;
+            std::call_once(sOk, [] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] getSwapChainQueue: found via private data\n");fclose(f);} });
+            return queue;
+        }
     }
     // Fallback: global map (survives IFramebuffer recreation etc.)
     {
@@ -546,10 +696,33 @@ ComPtr<ID3D12CommandQueue> getSwapChainQueue(IDXGISwapChain* swapChain) {
         auto it = gSwapChainQueueFallback.find(swapChain);
         if (it != gSwapChainQueueFallback.end() && it->second) {
             ComPtr<ID3D12CommandQueue> queue;
-            if (SUCCEEDED(it->second->QueryInterface(IID_PPV_ARGS(&queue))) && queue) return queue;
+            if (SUCCEEDED(it->second->QueryInterface(IID_PPV_ARGS(&queue))) && queue) {
+                static std::once_flag sFallback;
+                std::call_once(sFallback, [] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] getSwapChainQueue: found via fallback map\n");fclose(f);} });
+                return queue;
+            }
         }
     }
+    {
+        static std::once_flag sNull;
+        std::call_once(sNull, [] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] getSwapChainQueue: returning NULL\n");fclose(f);} });
+    }
     return nullptr;
+}
+
+ComPtr<ID3D12CommandQueue> getDeviceQueue(ID3D12Device* device) {
+    if (!device) return nullptr;
+    std::scoped_lock lk(gDeviceQueueMapMutex);
+    auto it = gDeviceQueueMap.find(device);
+    if (it != gDeviceQueueMap.end() && it->second) {
+        ComPtr<ID3D12CommandQueue> queue;
+        if (SUCCEEDED(it->second->QueryInterface(IID_PPV_ARGS(&queue))) && queue) return queue;
+    }
+    return nullptr;
+}
+
+ID3D12Device* getCapturedD3D12Device() {
+    return gCapturedD3D12Device;
 }
 
 void unbindSwapChainQueue(IDXGISwapChain* swapChain) {
@@ -591,7 +764,8 @@ bool resolveHookTargets(
     void*& outCreateSwapChain,
     void*& outCreateSwapChainForHwnd,
     void*& outCreateSwapChainForCoreWindow,
-    void*& outCreateSwapChainForComposition
+    void*& outCreateSwapChainForComposition,
+    void*& outCreateCommandQueue
 ) {
     ComPtr<IDXGIFactory4> factory;
     HRESULT               result = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
@@ -681,10 +855,14 @@ bool resolveHookTargets(
     outCreateSwapChainForHwnd        = getVtableEntry(factory.Get(), FactoryCreateSwapChainForHwndIndex);
     outCreateSwapChainForCoreWindow  = getVtableEntry(factory.Get(), FactoryCreateSwapChainForCoreWindowIndex);
     outCreateSwapChainForComposition = getVtableEntry(factory.Get(), FactoryCreateSwapChainForCompositionIndex);
+    outCreateCommandQueue            = getVtableEntry(device.Get(), DeviceCreateCommandQueueIndex);
     bool const resolved = outPresent && outPresent1 && outResizeBuffers && outResizeBuffers1 && outCreateSwapChain
                        && outCreateSwapChainForHwnd && outCreateSwapChainForCoreWindow
-                       && outCreateSwapChainForComposition;
+                       && outCreateSwapChainForComposition && outCreateCommandQueue;
     if (!resolved) getLogger().error("One or more replay timeline DXGI vtable targets resolved to null");
+    else {
+        FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] resolveHookTargets SUCCESS (create=%p, hwnd=%p, core=%p, comp=%p)\n", outCreateSwapChain, outCreateSwapChainForHwnd, outCreateSwapChainForCoreWindow, outCreateSwapChainForComposition);fclose(f);}
+    }
     return resolved;
 }
 
@@ -746,13 +924,27 @@ bool hookD3D12(bool enable) {
                 state.targets.createSwapChain,
                 state.targets.createSwapChainForHwnd,
                 state.targets.createSwapChainForCoreWindow,
-                state.targets.createSwapChainForComposition
+                state.targets.createSwapChainForComposition,
+                state.targets.createCommandQueue
             )) {
             getLogger().error("Unable to resolve D3D12 hook targets for the replay ImGui timeline");
             return false;
         }
         if (installAll(state)) {
             gTimelineHooksStopping.store(false, std::memory_order_release);
+            {
+                FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] hookD3D12(true) SUCCESS - all 9 hooks installed\n");fclose(f);}
+            }
+            // Also hook D3D12CreateDevice export (captured once to provide a fallback device)
+            if (!gOriginalD3D12CreateDevice) {
+                HMODULE d3d12 = GetModuleHandleW(L"d3d12.dll");
+                if (d3d12) {
+                    auto addr = GetProcAddress(d3d12, "D3D12CreateDevice");
+                    if (addr && ll::memory::hook(addr, &d3d12CreateDeviceDetour, (void**)&gOriginalD3D12CreateDevice, ll::memory::HookPriority::Normal) == 0) {
+                        FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Hook] D3D12CreateDevice hook installed\n");fclose(f);}
+                    }
+                }
+            }
             return true;
         }
 

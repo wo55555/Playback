@@ -142,6 +142,8 @@ struct ImGuiRenderer::Impl {
     bool                                  renderingDisabled{};
     bool                                  initFailed{};
     bool                                  missingQueue{};
+    bool                                  missingQueueLogged{};
+    ComPtr<ID3D12CommandQueue>            fallbackQueue;
     std::chrono::steady_clock::time_point lastInitAttempt{};
     std::chrono::steady_clock::time_point lastFrameTime{};
     std::chrono::steady_clock::time_point lastPresent{};
@@ -469,6 +471,11 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     }
 
     ComPtr<ID3D12CommandQueue> q;
+    // debug: log swapchain ptr
+    {
+        static std::once_flag sScPtr;
+        std::call_once(sScPtr, [swapChain] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Render] render() swapChain=%p\n",(void*)swapChain);fclose(f);} });
+    }
     if (p.initialized && swapChain != p.swapChain) {
         q         = getSwapChainQueue(swapChain);
         auto area = getSwapChainArea(swapChain);
@@ -480,6 +487,32 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     MouseInputAttempt ia;
     if (!p.initialized) {
         if (!q) q = getSwapChainQueue(swapChain);
+        // Fallback 1: get queue from CreateCommandQueue hook (device→queue map)
+        if (!q) {
+            ComPtr<ID3D12Device> fbDev;
+            if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&fbDev)))) {
+                q = getDeviceQueue(fbDev.Get());
+            }
+        }
+        // Fallback 2: try to create a new command queue from the swap chain's device
+        if (!q) {
+            if (!p.fallbackQueue) {
+                ComPtr<ID3D12Device> fbDev;
+                HRESULT hrDev = swapChain->GetDevice(IID_PPV_ARGS(&fbDev));
+                if (SUCCEEDED(hrDev)) {
+                    D3D12_COMMAND_QUEUE_DESC fbDesc{};
+                    fbDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+                    fbDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+                    HRESULT hrQueue = fbDev->CreateCommandQueue(&fbDesc, IID_PPV_ARGS(&p.fallbackQueue));
+                    if (SUCCEEDED(hrQueue)) {
+                        q = p.fallbackQueue.Get();
+                        { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Render] created fallback command queue\n");fclose(f);} }
+                    } else { { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Render] fallback CreateCommandQueue FAILED hr=0x%08X\n", (unsigned int)hrQueue);fclose(f);} } }
+                }
+            } else {
+                q = p.fallbackQueue.Get();
+            }
+        }
         if (!q) {
             std::call_once(sLogSwapChain, [] {
                 FILE* f = nullptr;
@@ -487,7 +520,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
                 if (f) { fprintf(f, "[RenderOnce] no swap chain queue\n"); fclose(f); }
             });
             if (!p.missingQueue) {
-                getLogger().warn("Replay ImGui timeline cannot render: swap chain not captured at creation");
+                getLogger().warn("Replay ImGui timeline cannot render: no command queue available");
                 p.missingQueue = true;
             }
             return false;

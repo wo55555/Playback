@@ -42,6 +42,10 @@ void unbindSwapChainQueue(IDXGISwapChain* swapChain);
 
 ComPtr<ID3D12CommandQueue> getResizePresentQueue(UINT bufferCount, IUnknown* const* presentQueues);
 
+ComPtr<ID3D12CommandQueue> getDeviceQueue(ID3D12Device* device);
+
+ID3D12Device* getCapturedD3D12Device();
+
 [[nodiscard]] bool resolveHookTargets(
     void*& outPresent,
     void*& outPresent1,
@@ -50,7 +54,8 @@ ComPtr<ID3D12CommandQueue> getResizePresentQueue(UINT bufferCount, IUnknown* con
     void*& outCreateSwapChain,
     void*& outCreateSwapChainForHwnd,
     void*& outCreateSwapChainForCoreWindow,
-    void*& outCreateSwapChainForComposition
+    void*& outCreateSwapChainForComposition,
+    void*& outCreateCommandQueue
 );
 
 } // namespace playback::editor::renderer
