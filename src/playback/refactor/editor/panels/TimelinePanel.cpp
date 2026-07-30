@@ -19,7 +19,7 @@ constexpr float kTransportHeight = 34.0f;
 constexpr float kSplitterThickness = 4.0f;
 constexpr float kRowGap = 2.0f;
 constexpr float kTextSize = 14.0f;
-constexpr float kBasePixelsPerTick = 0.025f;
+constexpr float kBasePixelsPerTick = 0.25f;
 constexpr float kMinPixelsPerTick = kBasePixelsPerTick * 0.2f;
 constexpr float kMaxPixelsPerTick = kBasePixelsPerTick * 20.0f;
 
@@ -29,6 +29,21 @@ bool containsInsensitive(const std::string& value, const std::string& search) {
         return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
     });
     return it != value.end();
+}
+
+int selectMajorTickStep(float pixelsPerTick) {
+    constexpr int steps[] = {20, 40, 100, 200, 400, 600, 1200, 2400, 6000, 12000, 24000, 60000, 120000};
+    for (int step : steps) if (step * pixelsPerTick >= 60.0f) return step;
+    return steps[std::size(steps) - 1];
+}
+
+void formatTimelineTick(char* buffer, size_t size, int tick) {
+    int totalSeconds = std::max(0, tick) / 20;
+    int hours = totalSeconds / 3600;
+    int minutes = (totalSeconds / 60) % 60;
+    int seconds = totalSeconds % 60;
+    if (hours > 0) std::snprintf(buffer, size, "%02d:%02d:%02d", hours, minutes, seconds);
+    else std::snprintf(buffer, size, "%02d:%02d", minutes, seconds);
 }
 }
 
@@ -110,23 +125,14 @@ void TimelinePanel::drawHeader() {
     ImGui::TextUnformatted("Time Scale"); ImGui::SameLine();
     if (ImGui::Button("-", {28, 28})) adjustTimeScale(0.9f);
     ImGui::SameLine();
-    char scaleLabel[16];
-    std::snprintf(scaleLabel, sizeof(scaleLabel), "%.0f%%", mPixelsPerTick / kBasePixelsPerTick * 100.0f);
-    ImGui::Button(scaleLabel, {64, 28});
-    if (ImGui::IsItemActivated()) {
-        mScaleDragStartPixelsPerTick = mPixelsPerTick;
-        mScaleDragStartMouseX = ImGui::GetMousePos().x;
-    }
-    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        float distance = std::abs(ImGui::GetMousePos().x - mScaleDragStartMouseX);
-        float percentStep = std::clamp(10.0f + distance * 0.25f, 10.0f, 50.0f);
-        float direction = ImGui::GetMousePos().x >= mScaleDragStartMouseX ? 1.0f : -1.0f;
-        float target = mScaleDragStartPixelsPerTick * (1.0f + direction * percentStep / 100.0f);
+    ImGui::SetNextItemWidth(76.0f);
+    float scalePercent = mPixelsPerTick / kBasePixelsPerTick * 100.0f;
+    if (ImGui::DragFloat("##time-scale", &scalePercent, 1.0f, 20.0f, 2000.0f, "%.0f%%")) {
         float oldPixelsPerTick = mPixelsPerTick;
-        mPixelsPerTick = std::clamp(target, kMinPixelsPerTick, kMaxPixelsPerTick);
+        mPixelsPerTick = std::clamp(scalePercent / 100.0f * kBasePixelsPerTick, kMinPixelsPerTick, kMaxPixelsPerTick);
         mScrollX = std::max(0.0f, mScrollX + mPlayheadTick * (mPixelsPerTick - oldPixelsPerTick));
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("向右拖动放大，向左拖动缩小；每次变化 10%% 至 50%%");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("拖动调整比例，或双击后直接输入百分比");
     ImGui::SameLine();
     if (ImGui::Button("+", {28, 28})) adjustTimeScale(1.1f);
     ImGui::PopStyleVar();
@@ -152,13 +158,23 @@ void TimelinePanel::drawRuler() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     Rect area{{ImGui::GetCursorScreenPos()}, {ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x, ImGui::GetCursorScreenPos().y + kRulerHeight}};
     dl->AddRectFilled(area.min, area.max, IM_COL32(24, 25, 30, 255));
-    int step = mPixelsPerTick >= 0.5f ? 20 : mPixelsPerTick >= 0.1f ? 100 : 200;
-    for (int tick = 0; tick <= Editor::getInstance().state().totalTicks; tick += step) {
+    int majorStep = selectMajorTickStep(mPixelsPerTick);
+    int minorStep = std::max(1, majorStep / 5);
+    int firstTick = std::max(0, static_cast<int>(std::floor(mScrollX / mPixelsPerTick / minorStep)) * minorStep);
+    float lastLabelRight = area.min.x - 60.0f;
+    for (int tick = firstTick; tick <= Editor::getInstance().state().totalTicks; tick += minorStep) {
         float x = area.min.x + tick * mPixelsPerTick - mScrollX;
         if (x < area.min.x || x > area.max.x) continue;
-        dl->AddLine({x, area.max.y - 9}, {x, area.max.y}, IM_COL32(100, 103, 112, 255));
-        char label[16]; std::snprintf(label, sizeof(label), "%d:%02d", tick / 1200, (tick / 20) % 60);
-        dl->AddText(ImGui::GetFont(), kTextSize, {x + 3, area.min.y + 3}, IM_COL32(180, 182, 190, 255), label);
+        bool major = tick % majorStep == 0;
+        dl->AddLine({x, area.max.y - (major ? 12.0f : 6.0f)}, {x, area.max.y}, major ? IM_COL32(150, 153, 162, 255) : IM_COL32(74, 77, 86, 255));
+        if (!major) continue;
+        char label[16];
+        formatTimelineTick(label, sizeof(label), tick);
+        float labelWidth = ImGui::CalcTextSize(label).x;
+        if (x >= lastLabelRight + 60.0f && x + labelWidth <= area.max.x) {
+            dl->AddText(ImGui::GetFont(), kTextSize, {x + 3, area.min.y + 3}, IM_COL32(180, 182, 190, 255), label);
+            lastLabelRight = x + labelWidth;
+        }
     }
     handleRulerClick(area);
     ImGui::SetCursorScreenPos({area.min.x, area.max.y});

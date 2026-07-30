@@ -43,7 +43,7 @@ private:
     void onWheel(float deltaY);
     void adjustTimeScale(float multiplier);
 
-    float mPixelsPerTick{0.025f};
+    float mPixelsPerTick{0.25f};
     float mScrollX{0.0f};
     float mTrackListWidthRatio{0.30f};
     int   mPlayheadTick{};
@@ -52,8 +52,6 @@ private:
     bool mVideoGroupOpen{true};
     bool mCameraGroupOpen{true};
     bool mMarkerGroupOpen{true};
-    float mScaleDragStartPixelsPerTick{};
-    float mScaleDragStartMouseX{};
 
     // Drag state
     DragType mDragType{DragType::None};
