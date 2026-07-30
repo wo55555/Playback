@@ -2,10 +2,12 @@
 
 #include "Editor.h"
 #include "EditorBridge.h"
-#include "ModeManager.h"
 #include "iconfont.h"
 
 #include "imgui.h"
+
+#include <algorithm>
+#include <cstdio>
 
 namespace playback::refactor::editor {
 
@@ -102,23 +104,82 @@ void MenuBar::draw() {
         ImGui::EndMenuBar();
     }
 
-    if (mExportDialogOpen) ImGui::OpenPopup("Export");
-    if (ImGui::BeginPopupModal("Export", &mExportDialogOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Export configuration");
-        ImGui::Separator();
-        ImGui::TextUnformatted("Format: MP4 (H.264)");
-        ImGui::TextUnformatted("Resolution: 1920 x 1080");
-        ImGui::TextUnformatted("FPS: 60");
-        ImGui::Spacing();
-        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-            mExportDialogOpen = false;
-            ImGui::CloseCurrentPopup();
-        }
+    if (mExportDialogOpen) ImGui::OpenPopup("Export Video");
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(660.0f, 0.0f), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Export Video", &mExportDialogOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize)) {
+        constexpr const char* aspectOptions[] = {"16:9  Widescreen", "9:16  Vertical", "1:1  Square", "Custom"};
+        constexpr const char* resolutionOptions[] = {"1920 x 1080  Full HD", "1280 x 720  HD", "2560 x 1440  QHD", "3840 x 2160  4K", "Custom"};
+        constexpr const char* fpsOptions[] = {"30 FPS", "60 FPS", "120 FPS", "Custom"};
+        constexpr const char* bitrateOptions[] = {"10 Mbps  Compact", "20 Mbps  Balanced", "40 Mbps  High quality", "Custom"};
+        constexpr const char* formatOptions[] = {"MP4  H.264", "WebM  VP9", "MOV  ProRes"};
+        constexpr int widths[] = {1920, 1280, 2560, 3840};
+        constexpr int heights[] = {1080, 720, 1440, 2160};
+        constexpr int fpsValues[] = {30, 60, 120};
+        constexpr int bitrateValues[] = {10, 20, 40};
+
+        ImGui::TextUnformatted("Export Video");
         ImGui::SameLine();
-        if (ImGui::Button("Start", ImVec2(120.0f, 0.0f))) {
+        ImGui::TextDisabled("Configure output settings");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::TextUnformatted("OUTPUT");
+        ImGui::Separator();
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Name"); ImGui::SameLine(150.0f);
+        ImGui::SetNextItemWidth(-1.0f); ImGui::InputText("##export-name", mExportName.data(), mExportName.size());
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Location"); ImGui::SameLine(150.0f);
+        ImGui::SetNextItemWidth(-1.0f); ImGui::InputText("##export-directory", mExportDirectory.data(), mExportDirectory.size());
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Format"); ImGui::SameLine(150.0f);
+        ImGui::SetNextItemWidth(220.0f); ImGui::Combo("##export-format", &mFormatPreset, formatOptions, IM_ARRAYSIZE(formatOptions));
+
+        ImGui::Spacing();
+        ImGui::TextUnformatted("VIDEO");
+        ImGui::Separator();
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Aspect ratio"); ImGui::SameLine(150.0f);
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::Combo("##export-aspect", &mAspectPreset, aspectOptions, IM_ARRAYSIZE(aspectOptions)) && mAspectPreset != 3) {
+            float aspect = mAspectPreset == 0 ? 16.0f / 9.0f : mAspectPreset == 1 ? 9.0f / 16.0f : 1.0f;
+            mHeight = std::max(1, static_cast<int>(mWidth / aspect + 0.5f));
+        }
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Resolution"); ImGui::SameLine(150.0f);
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::Combo("##export-resolution", &mResolutionPreset, resolutionOptions, IM_ARRAYSIZE(resolutionOptions)) && mResolutionPreset < 4) {
+            mWidth = widths[mResolutionPreset];
+            mHeight = heights[mResolutionPreset];
+            if (mAspectPreset == 1) std::swap(mWidth, mHeight);
+            if (mAspectPreset == 2) mHeight = mWidth;
+        }
+        if (mResolutionPreset == 4) {
+            ImGui::SameLine(); ImGui::SetNextItemWidth(92.0f); ImGui::InputInt("##export-width", &mWidth);
+            ImGui::SameLine(); ImGui::TextUnformatted("x"); ImGui::SameLine(); ImGui::SetNextItemWidth(92.0f); ImGui::InputInt("##export-height", &mHeight);
+            mWidth = std::clamp(mWidth, 16, 7680); mHeight = std::clamp(mHeight, 16, 4320);
+        }
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Frame rate"); ImGui::SameLine(150.0f);
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::Combo("##export-fps", &mFpsPreset, fpsOptions, IM_ARRAYSIZE(fpsOptions)) && mFpsPreset < 3) mFps = fpsValues[mFpsPreset];
+        if (mFpsPreset == 3) { ImGui::SameLine(); ImGui::SetNextItemWidth(92.0f); ImGui::InputInt("##export-custom-fps", &mFps); mFps = std::clamp(mFps, 1, 240); }
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Bitrate"); ImGui::SameLine(150.0f);
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::Combo("##export-bitrate", &mBitratePreset, bitrateOptions, IM_ARRAYSIZE(bitrateOptions)) && mBitratePreset < 3) mBitrateMbps = bitrateValues[mBitratePreset];
+        if (mBitratePreset == 3) { ImGui::SameLine(); ImGui::SetNextItemWidth(92.0f); ImGui::InputInt("##export-custom-bitrate", &mBitrateMbps); ImGui::SameLine(); ImGui::TextUnformatted("Mbps"); mBitrateMbps = std::clamp(mBitrateMbps, 1, 200); }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        char summary[192];
+        const char* extensions[] = {"mp4", "webm", "mov"};
+        std::snprintf(summary, sizeof(summary), "%dx%d  |  %d FPS  |  %d Mbps  |  %s", mWidth, mHeight, mFps, mBitrateMbps, formatOptions[mFormatPreset]);
+        ImGui::TextDisabled("OUTPUT SUMMARY"); ImGui::SameLine(); ImGui::TextUnformatted(summary);
+        ImGui::TextDisabled("File: %s/%s.%s", mExportDirectory.data(), mExportName.data(), extensions[mFormatPreset]);
+        ImGui::Spacing();
+        ImGui::BeginDisabled();
+        ImGui::Button("Export Video", ImVec2(140.0f, 32.0f));
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Export backend is not available yet");
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(110.0f, 32.0f))) {
             mExportDialogOpen = false;
             ImGui::CloseCurrentPopup();
-            ModeManager::getInstance().switchTo(EditorMode::Render);
         }
         ImGui::EndPopup();
     }
