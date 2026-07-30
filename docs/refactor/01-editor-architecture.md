@@ -1,7 +1,7 @@
 # 01 · 编辑器核心
 
 > 入口：`src/playback/refactor/editor/`
-> 角色：UE5 风格编辑器的 UI 骨架。**4 面板 + 2 页面 + 1 可拖拽分隔条**，鼠标优先，键盘加速。**0 录制 UI**。
+> 角色：游戏窗口内的编辑器 UI 骨架。**Viewport / Details / Timeline / Status + 菜单栏 + 2 页面 + 2 个显式分隔条**，鼠标优先，键盘加速。**0 录制 UI**。
 > 与旧文档：复用旧 [editor/context.md](../editor/context.md)（EditorContext / 状态机）+ 旧 [editor/controller.md](../editor/controller.md)（Controller）+ 旧 [editor/renderer.md](../editor/renderer.md)（D3D12 hook）+ 旧 [editor/ui.md](../editor/ui.md)（ReplayView）作为底层基础设施。
 > 消费 [02](02-camera-motion.md) / [03](03-advanced-recording.md) / [04](04-video-editing.md) / [05](05-render-pipeline.md) / [06](06-data-persistence.md) 的数据。
 
@@ -11,18 +11,18 @@
 
 | ID | 需求 | 优先级 |
 |---|---|---|
-| EA-1 | 4 面板固定布局：Menu(顶) / Viewport(左上) / Details(右全高) / Timeline(左下) / Status(底) | P0 |
-| EA-2 | 1 个可拖拽分隔条在 Viewport 与 Timeline 之间，比例 20%~70%，默认 40% Timeline | P0 |
+| EA-1 | 固定骨架布局：Menu(顶) / Viewport(上方主区域) / Details(右侧) / Timeline(下方) / Status(底)；所有面板只在游戏窗口内渲染 | P0 |
+| EA-2 | 2 个显式可拖拽分隔条：右侧 Details 宽度与下方 Timeline 高度可独立大范围调节；不引入可停靠、浮动或多窗口布局 | P0 |
 | EA-3 | 2 个页面：Edit（默认）/ Render（导出中），通过 ModeManager 切换 | P0 |
 | EA-4 | 0 toolbar，0 dock system，0 多窗口 | P0 |
-| EA-5 | Menu 7 项：File / Edit / Camera / Markers / Window / Export / Help | P0 |
+| EA-5 | Menu 6 项：File / Edit / Camera / Markers / Window / Help；导出仅作为 `File > Export...` 子项 | P0 |
 | EA-6 | Timeline header 4 按钮：Play、Add Keyframe、Add Marker、Split | P0 |
 | EA-7 | Timeline body 5 轨：1 视频轨 V0 + N 摄影机轨 Cn + 1 标记轨 M | P0 |
 | EA-8 | Details 上下文敏感：无选 / 摄影机轨 / 关键帧 / Clip / Marker / Transition | P0 |
 | EA-9 | Status bar 1 行：模式 / 项目 / FPS / 内存 | P0 |
-| EA-10 | Hint bar 1 行：6 个最常用快捷键，可开关 | P0 |
+| EA-10 | Hint bar 1 行：5 个最常用快捷键，可开关 | P0 |
 | EA-11 | Hint bar 默认显示，按 `F1` 切换 | P1 |
-| EA-12 | 全部动作可鼠标完成 + 全部动作有快捷键 | P0 |
+| EA-12 | 全部动作可鼠标完成；除导出配置外，全部常用编辑动作提供快捷键 | P0 |
 | EA-13 | 右键菜单覆盖 4 个上下文：Viewport / Clip / Keyframe / Track Header | P0 |
 | EA-14 | ImGui 与 MCBE 输入正确分流（详见 §2.4） | P0 |
 | EA-15 | 录制 UI（REC、HUD、profile）**不进入编辑器**；编辑器只读 `.playback` 并编辑 | P0 |
@@ -30,10 +30,12 @@
 
 ### 1.2 非功能性需求
 
-- **面板布局确定性**：相同窗口尺寸下，比例完全一致（不抖动）
+- **面板布局确定性**：相同窗口尺寸和布局偏好下，面板矩形完全一致（不抖动）
+- **固定视频比例**：Viewport 内的游戏画面严格使用用户设置的视频宽高比；空间变化时等比缩放并留黑边，绝不拉伸、裁剪或被 UI 遮挡
 - **Input 延迟**：键盘/鼠标 → 响应 < 16ms（60 FPS）
 - **渲染开销**：Editor UI < 0.5ms / frame
 - **可发现性**：每个按钮 hover 0.3s 弹 tooltip（图标 + 文字 + 快捷键）
+- **最小字体**：编辑器中所有用户可见文本（含菜单、属性、时间轴、状态、提示和模态）字号不得小于 14px
 - **可维护性**：每个 Panel 单一职责，可独立替换
 - **可演进**：面板注册制（`EditorPanel::register(...)`），未来加新面板不改主循环
 - **零 emoji**：所有图标位用 icon font 字符（Lucide，详见 §2.10）
@@ -56,11 +58,12 @@
 |---|---|---|
 | 面板数 | 8 | **4**（+ Menu + Status） |
 | 工具栏 | 12 按钮 | **0** |
-| Dock 系统 | ImGui DockBuilder | **0**（固定布局） |
+| Dock 系统 | ImGui DockBuilder | **0**（游戏窗口内固定骨架） |
 | 多 OS 窗口 | imgui Viewport | **0** |
 | 工作区切换 | 命名工作区 | **0**（仅 2 个固定页面） |
-| 可拖拽 | 全 dock | **1** 个分隔条 |
-| Timeline 比例 | 30% | **40%**（20~70% 拖） |
+| 可拖拽 | 全 dock | **2** 个显式分隔条 |
+| Details 宽度 | 固定 | **220px ~ 工作区宽度的 50%**（默认 28%） |
+| Timeline 高度 | 30% | **18% ~ 65%**（默认 35%） |
 | 鼠标 | 辅助 | **优先**（快捷键加速） |
 | 录制 UI | 有 | **0** |
 
@@ -71,14 +74,14 @@ refactor/editor/
 ├── Editor.{h,cpp}                ← 顶层（ImGui 主循环入口）
 ├── EditorContext.{h,cpp}         ← 扩展旧 [EditorContext](../editor/context.md)
 ├── ModeManager.{h,cpp}           ← Edit / Render 模式
-├── MenuBar.{h,cpp}               ← 7 项菜单
+├── MenuBar.{h,cpp}               ← 6 项菜单，File 内含 Export
 ├── KeyMap.{h,cpp}                ← 包装旧 [KeyMap](06-data-persistence.md)
 ├── CommandStack.{h,cpp}          ← 撤销/重做
 ├── HintBar.{h,cpp}               ← 底部快捷键提示
 ├── EditorTheme.{h,cpp}           ← 样式集中管理
 ├── IconSystem.{h,cpp}            ← icon font 加载 + 字符映射
 ├── InputHook.{h,cpp}             ← ImGui vs MCBE 输入分流（关键）
-├── Splitter.{h,cpp}              ← 可拖拽分隔条
+├── Splitter.{h,cpp}              ← Details 宽度 / Timeline 高度分隔条
 ├── panels/
 │   ├── ViewportPanel.{h,cpp}     ← 3D 预览 + gizmo
 │   ├── DetailsPanel.{h,cpp}      ← 上下文敏感属性
@@ -97,49 +100,44 @@ refactor/editor/
 ### 2.3 整体布局（Edit 页面 · 1920x1080 参考）
 
 ```
-+-------------------- Menu (24px) ----------------------------+
-| File  Edit  Camera  Markers  Window  Export  Help         |
-+------------+-----------------------------------------------+
-|            |                                               |
-|            |                                               |
-|  Details   |           Viewport                            |
-|  (right)   |           (60% of left area)                  |
-|  (full     |                                               |
-|   height)  |           [icon:play] [icon:keyframe] ...     |
-|            |                                               |
-|  - Tracks  |           3D scene with gizmo                 |
-|  - +       |                                               |
-|  - keyf... |                                               |
-|            |                                               |
-|            +---- splitter (draggable) --------------------+
-|            |                                               |
-|            |         Timeline (40% of left area)           |
-|            |  +----------------------------------------+   |
-|            |  |[icon:play] 00:01:23.456 [icon:add-keyframe]... |   |
-|            |  +----------------------------------------+   |
-|            |  |V0|  [   Clip A  ]  [   Clip B  ]  [T] 0:03 ||
-|            |  |C0|  ====o=====o======o====   [icon:keyframe] ||
-|            |  |C1|       ====o======o====     [icon:keyframe]||
-|            |  |M |              [icon:marker]   [icon:marker] ||
-|            |  +----------------------------------------+   |
-|            |  hint: [space]=play  M=marker  Ctrl+K=split  |
-+------------+-----------------------------------------------+
-+-------------------- Status (22px) -------------------------+
-| [Edit]   replay-001.playback   60 FPS   256 MB            |
-+------------------------------------------------------------+
++---------------------------- Menu (24px) ----------------------------+
+| File  Edit  Camera  Markers  Window  Help                            |
++--------------------------------------------+-------------------------+
+|                                            | Details                 |
+|              Viewport                      |                         |
+|  +--------------------------------------+  | 搜索 / 当前选中属性     |
+|  |      游戏画面：用户视频比例           |  | Position / Rotation     |
+|  |      等比完整显示，余区留黑边         |  | FOV / Easing            |
+|  +--------------------------------------+  |                         |
+|                                            |                         |
++------------------- 高度分隔条 -------------+                         |
+| Timeline：播放 / 时间码 / V0 / Cn / M / Hint|                         |
+|                                            | <-> 宽度分隔条          |
++--------------------------------------------+-------------------------+
++--------------------------- Status (22px) ----------------------------+
+| [Edit]   replay-001.playback   60 FPS   256 MB                       |
++------------------------------------------------------------------------+
 ```
 
-**布局常量**（非可配）：
+**布局计算与边界**：
 
 ```cpp
 constexpr float kMenuHeight        = 24.0f;
 constexpr float kStatusHeight      = 22.0f;
-constexpr float kDetailsWidth      = 320.0f;  // 右侧固定宽
-constexpr float kTimelineMinRatio  = 0.20f;
-constexpr float kTimelineMaxRatio  = 0.70f;
-constexpr float kTimelineDefRatio  = 0.40f;   // 默认 40%
-constexpr float kSplitterHeight    = 4.0f;    // 拖拽手柄高
+constexpr float kDetailsMinWidth   = 220.0f;
+constexpr float kDetailsMaxRatio   = 0.50f;
+constexpr float kDetailsDefRatio   = 0.28f;
+constexpr float kTimelineMinRatio  = 0.18f;
+constexpr float kTimelineMaxRatio  = 0.65f;
+constexpr float kTimelineDefRatio  = 0.35f;
+constexpr float kSplitterThickness = 4.0f;
+constexpr float kViewportMinWidth  = 320.0f;
+constexpr float kViewportMinHeight = 180.0f;
 ```
+
+- 先从游戏窗口客户区扣除 Menu 与 Status，再按 `detailsWidth` 切出全高右栏；在左侧工作区按 `timelineHeight` 切出下方时间轴，剩余矩形是 Viewport 容器。
+- `videoAspectRatio` 来自用户当前视频设置；在 Viewport 容器内计算最大等比画面矩形，水平或垂直余区显示黑边。
+- 两个分隔条的终点同时受各自比例边界和 Viewport 最小宽高约束；拖到边界后保持钳制，不改变视频比例。
 
 ### 2.4 `InputHook`（关键 · ImGui vs MCBE 分流）
 
@@ -172,7 +170,7 @@ bool shouldMCBEConsumeMouse();
 ```
 [Editor 关闭]
     |
-    | 打开编辑器 (Ctrl+E 或命令)
+    | 打开编辑器（编辑器切换快捷键或命令）
     v
 [Edit 模式]
     |  ImGui 捕获鼠标 = io.WantCaptureMouse
@@ -315,7 +313,7 @@ sequenceDiagram
     participant EP as EditMode
     participant RP as RenderMode
 
-    U->>E: File > Export > Start
+    U->>E: File > Export... > Start
     E->>MM: switchTo(Render)
     MM->>EP: fadeOut(200ms)
     MM->>RP: fadeIn(200ms)
@@ -326,13 +324,14 @@ sequenceDiagram
     MM->>EP: fadeIn
 ```
 
-### 2.6 `MenuBar`（7 项）
+### 2.6 `MenuBar`（6 项）
 
 | 菜单 | 内容 | 快捷键 |
 |---|---|---|
 | **File** | Open Replay | Ctrl+O |
 | | Save Project | Ctrl+S |
 | | Recent | (子菜单，10 条) |
+| | Export... | 鼠标点击 |
 | | Exit Editor | Esc (hold) |
 | **Edit** | Undo | Ctrl+Z |
 | | Redo | Ctrl+Y |
@@ -346,7 +345,6 @@ sequenceDiagram
 | | Jump to Next Marker | ] |
 | | Jump to Previous Marker | [ |
 | **Window** | Toggle Hint Bar | F1 |
-| **Export** | Export... | Ctrl+E |
 | **Help** | Documentation | (链接) |
 | | About | (弹窗) |
 
@@ -368,10 +366,10 @@ public:
 ### 2.7 `HintBar`（Timeline 底部 · 1 行 · 14px）
 
 ```
-[icon:play]=play   [icon:marker]=marker   [icon:split]=split   [icon:undo]=undo   [icon:export]=export   [icon:help]=help
+[icon:play]=play   [icon:marker]=marker   [icon:split]=split   [icon:undo]=undo   [icon:help]=help
 ```
 
-**6 个最常用**（按使用频率排）：Play / Add Marker / Split / Undo / Export / Help。
+**5 个最常用**（按使用频率排）：Play / Add Marker / Split / Undo / Help。
 
 ```cpp
 class HintBar {
@@ -384,23 +382,29 @@ private:
 };
 ```
 
-### 2.8 `Splitter`（可拖拽分隔条 · 1 个）
+### 2.8 `Splitter`（显式可拖拽分隔条 · 2 个）
 
 ```cpp
 class Splitter {
 public:
-    // 在两个面板之间画分隔条；返回新比例
     float drawVerticalSplit(float currentRatio, Rect area, float minRatio, float maxRatio);
+    float drawHorizontalSplit(float currentRatio, Rect area, float minRatio, float maxRatio);
 };
 ```
 
-**实现**：
+**职责**：
+
+- `drawVerticalSplit` 位于全高左侧工作区与全高 Details 之间，左右拖动后返回 Details 宽度比例。
+- `drawHorizontalSplit` 位于 Viewport 与 Timeline 之间，上下拖动后返回 Timeline 高度比例。
+- 两者都不是 Dock 系统，不支持面板停靠、交换、浮动或脱离游戏窗口。
+
+**实现示意**：
 
 ```cpp
-float Splitter::drawVerticalSplit(float ratio, Rect area, float minR, float maxR) {
+float Splitter::drawHorizontalSplit(float ratio, Rect area, float minR, float maxR) {
     float splitY = area.min.y + area.GetHeight() * ratio;
-    ImGui::SetCursorScreenPos({area.min.x, splitY - kSplitterHeight/2});
-    ImGui::InvisibleButton("##splitter", {area.GetWidth(), kSplitterHeight});
+    ImGui::SetCursorScreenPos({area.min.x, splitY - kSplitterThickness / 2});
+    ImGui::InvisibleButton("##timeline-splitter", {area.GetWidth(), kSplitterThickness});
     bool hovered = ImGui::IsItemHovered();
     bool active = ImGui::IsItemActive();
 
@@ -412,7 +416,6 @@ float Splitter::drawVerticalSplit(float ratio, Rect area, float minR, float maxR
         ratio = std::clamp(newRatio, minR, maxR);
     }
 
-    // 绘制分隔条
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     ImU32 color = active ? IM_COL32(240,192,32,255) : (hovered ? IM_COL32(120,120,120,255) : IM_COL32(60,60,60,255));
     dl->AddRectFilled({area.min.x, splitY - 1}, {area.max.x, splitY + 1}, color);
@@ -421,14 +424,15 @@ float Splitter::drawVerticalSplit(float ratio, Rect area, float minR, float maxR
 }
 ```
 
-**持久化**：`preferences.timelineSplitRatio`（已在 [06](06-data-persistence.md)）。
+**持久化**：`preferences.detailsWidthRatio` 与 `preferences.timelineHeightRatio`（由 [06](06-data-persistence.md) 提供）。
 
 ### 2.9 4 个面板（核心）
 
-#### 2.9.1 `ViewportPanel`（3D 预览 · 左上）
+#### 2.9.1 `ViewportPanel`（固定视频比例预览 · 上方主区域）
 
 **职责**：
 - 渲染 [CameraSystem::sampleAt](02-camera-motion.md) 的当前帧
+- 读取用户的视频比例设置，以该固定比例计算游戏画面矩形；容器尺寸变化仅改变等比缩放和黑边面积
 - 显示 active 摄影机的 gizmo（位置/旋转/FOV）
 - 接收鼠标：orbit / pan / dolly（无选中时）/ 拖 gizmo（选中时）
 - 接收右键：弹 `ViewportMenu`
@@ -444,6 +448,7 @@ private:
     void handleCameraControl();  // 鼠标 -> 摄影机参数（仅无选中时）
     void handleGizmoDrag();      // 拖 gizmo -> 改 keyframe
     void drawGizmo();            // ImGuizmo 渲染
+    Rect calculateVideoRect(Rect container, float videoAspectRatio) const;
 
     float mFov{90.0f};
     Vec2  mViewportRotation{0, 0};
@@ -466,6 +471,8 @@ private:
 **绘制**：
 - 用 ImGuizmo（[仓库](https://github.com/CedricGuillemet/ImGuizmo)）画 3 轴箭头 + 3 旋转环
 - 选中 Keyframe 时显示；否则隐藏
+- 先绘制 Viewport 背景黑边，再将 MCBE 游戏画面和 gizmo 限制在 `calculateVideoRect(...)` 返回的等比矩形内
+- 画面矩形始终完整可见：容器较宽时左右留黑，容器较高时上下留黑；不得按容器比例拉伸或裁剪
 
 **Viewport 内部子布局**：
 
@@ -569,7 +576,6 @@ private:
 | [icon:marker] Add marker   M              |
 | [icon:split] Split clip    Ctrl+K         |
 | [icon:undo] Undo           Ctrl+Z         |
-| [icon:export] Export       Ctrl+E         |
 | [icon:help] Help           F1             |
 +---------------+
 ```
@@ -802,7 +808,7 @@ struct EditorTheme {
     // 字号
     float fontDefault  = 14.0f;
     float fontTitle    = 16.0f;
-    float fontSmall    = 12.0f;
+    float fontSmall    = 14.0f;
 
     // 应用（在 ImGui::NewFrame 前调）
     void apply() const;
@@ -815,7 +821,7 @@ struct EditorTheme {
 文件
   Ctrl+O     Open Replay
   Ctrl+S     Save Project
-  Ctrl+E     Export...
+  File > Export...  Open export configuration
 
 编辑
   Ctrl+Z     Undo
@@ -994,7 +1000,7 @@ Hide / Show
 
 ```
 +-------------------- Menu (24px) --------------------+
-| File  Edit  Window  Help                           |
+| File  Edit  Camera  Markers  Window  Help           |
 +----------------------------------------------------+
 |                                                    |
 |                                                    |
@@ -1022,7 +1028,8 @@ Hide / Show
 ```
 
 **进入触发**：
-- `File > Export...` (Ctrl+E) -> 模态配置 -> Start -> `ModeManager.switchTo(Render)`
+- 仅鼠标点击 `File > Export...` 打开导出配置模态；编辑页面不常驻显示导出面板、导出按钮或 Export 顶级菜单
+- 用户在模态内点击 Start 后才执行 `ModeManager.switchTo(Render)`
 - 模态配置字段：Format / Resolution / FPS / Output Path
 - 字段定义见 [05-render-pipeline.md](05-render-pipeline.md)
 
@@ -1173,14 +1180,14 @@ flowchart TB
 | 3 | `EditorContext` 扩展 | 编译 |
 | 4 | `InputHook.onWindowsMessage / syncFrame` | 单测：MCBE 输入抑制 |
 | 5 | MCBE WndProc 包装 | 手动：编辑器开关 输入正常 |
-| 6 | `Splitter` 拖拽 + 持久化 | 单测：拖到 40% 持久化 |
+| 6 | `Splitter` 双分隔条拖拽 + 持久化 | 单测：Details 宽度与 Timeline 高度分别持久化，并保持 Viewport 最小尺寸 |
 | 7 | `ModeManager` 2 模式切换 | 单测：Edit > Render |
-| 8 | `MenuBar` 7 项 | 手动：菜单显示 |
+| 8 | `MenuBar` 6 项与 File 导出子项 | 手动：仅 File > Export... 打开导出模态 |
 | 9 | `KeyMap` 全部快捷键 | 单测：每个键触发对应 action |
 | 10 | `CommandStack` push/undo/redo | 单测：100 步栈 |
-| 11 | `HintBar` 6 快捷键 | 手动：F1 切换 |
+| 11 | `HintBar` 5 快捷键 | 手动：F1 切换 |
 | 12 | `StatusPanel` 4 字段 | 手动：模式 / 项目 / FPS / 内存 |
-| 13 | `ViewportPanel` 鼠标 + gizmo | 手动：orbit / drag gizmo |
+| 13 | `ViewportPanel` 固定视频比例 + 鼠标 + gizmo | 手动：改变两个面板尺寸后画面等比完整显示，orbit / drag gizmo 正常 |
 | 14 | `DetailsPanel` 5 上下文 | 手动：每个上下文正确 |
 | 15 | `TimelinePanel` header + 5 轨 + 拖拽 | 手动：拖 playhead / clip / keyframe |
 | 16 | 4 个 Context Menus | 手动：右键弹菜单 |
@@ -1278,21 +1285,22 @@ void TimelinePanel::handleKeyframeDrag(Keyframe& k, Rect rowArea) {
 }
 ```
 
-**Splitter 拖动**（已在 §2.8）。
+**Splitter 拖动与固定视频比例**（已在 §2.3、§2.8）。
 
 ### 3.3 关键不变量
 
 1. **Editor 开 = MCBE 输入全抑制**（玩家不能动）
 2. **Editor 开 = MCBE 渲染照常**（D3D12 不受影响）
-3. **1 个可拖拽分隔条 = 1 个 mTimelineRatio**（不引入 dock 概念）
-4. **面板布局确定性**：相同窗口尺寸下，比例一致
-5. **0 emoji**：代码中 `grep -rE '[\x{1F300}-\x{1FAFF}]|[\x{25A0}-\x{25FF}]|[\x{25C6}-\x{25CF}]|[\x{2600}-\x{26FF}]' src/refactor/editor/` = 0
-6. **录制 UI 绝不在编辑器**：菜单/快捷键/Hint 都不含 REC 相关项
-7. **所有按钮 hover 0.3s 弹 tooltip**（含快捷键）
-8. **InputHook 是 WndProc 入口第一道**（ImGui 优先于 MCBE）
-9. **CommandStack <= 100 步**（与 preferences.maxUndoSteps 同步）
-10. **快捷键 K 复用** 通过 长按 vs 短按 判别（详见 §2.12）
-11. **所有数字字段支持拖动改值**（不依赖键盘）
+3. **2 个显式分隔条 = `mDetailsWidthRatio` + `mTimelineHeightRatio`**（不引入 dock 概念）
+4. **面板布局确定性**：相同窗口尺寸和布局偏好下，矩形一致
+5. **Viewport 画面比例固定为用户视频比例**：只能等比缩放与留黑边，绝不拉伸、裁剪或遮挡
+6. **导出入口唯一**：仅鼠标点击 `File > Export...` 打开配置模态；Start 前不进入 Render 页面
+7. **0 emoji**：代码中 `grep -rE '[\x{1F300}-\x{1FAFF}]|[\x{25A0}-\x{25FF}]|[\x{25C6}-\x{25CF}]|[\x{2600}-\x{26FF}]' src/refactor/editor/` = 0
+8. **录制 UI 绝不在编辑器**：菜单/快捷键/Hint 都不含 REC 相关项
+9. **所有按钮 hover 0.3s 弹 tooltip**（含快捷键）
+10. **InputHook 是 WndProc 入口第一道**（ImGui 优先于 MCBE）
+11. **CommandStack <= 100 步**（与 preferences.maxUndoSteps 同步）
+12. **所有数字字段支持拖动改值**（不依赖键盘）
 
 ### 3.4 测试用例
 
@@ -1300,24 +1308,26 @@ void TimelinePanel::handleKeyframeDrag(Keyframe& k, Rect rowArea) {
 |---|---|---|
 | EA-T1 | Open Editor -> WndProc(MOUSEMOVE) | MCBE 不收（log 验证） |
 | EA-T2 | Close Editor -> WndProc(MOUSEMOVE) | MCBE 收 |
-| EA-T3 | 拖 Splitter 30% -> 50% | 比例持久化 |
-| EA-T4 | 重启 Editor | Splitter 比例恢复 |
-| EA-T5 | Ctrl+E -> Start -> 切 Render | ModeManager.current() = Render |
-| EA-T6 | 渲染完成 -> 弹 toast | Toast 显示 + Open Folder 可点 |
-| EA-T7 | 拖 Keyframe 从 tick 100 -> 200 | UI 立即更新 + CommandStack push |
-| EA-T8 | Ctrl+Z | 关键帧回 100 + 状态栏 "Undo: Move Keyframe" |
-| EA-T9 | 双击 Clip -> Details 切到 Clip 上下文 | Details 显示 in/out |
-| EA-T10 | 右键 Clip | ClipMenu 弹 |
-| EA-T11 | 拖 Timeline zoom 滑块 | 像素/tick 改 |
-| EA-T12 | F1 切 HintBar | 显/隐 |
-| EA-T13 | `grep` emoji | 0 命中 |
-| EA-T14 | 22 个图标全显示 | 字形占位可见 |
-| EA-T15 | Editor 关闭后 MCBE 玩家可移动 | W/A/S/D 生效 |
-| EA-T16 | 拖 Details 数字字段 0.1 步进 | 字段值更新 + Ctrl+Z 撤销 |
-| EA-T17 | 拖 Viewport 空白 = orbit | 摄影机视角变 |
-| EA-T18 | 拖选中 Keyframe gizmo | 关键帧 position 更新 |
-| EA-T19 | Timeline Play 按钮 + Space 键 | playhead 移动 |
-| EA-T20 | Timeline Add Marker + M 键 | marker 出现 |
+| EA-T3 | 左右拖 Details 分隔条 | Details 宽度在边界内变化，Viewport 不低于最小宽度 |
+| EA-T4 | 上下拖 Timeline 分隔条并重启 Editor | Timeline 高度恢复，Details 宽度同时恢复 |
+| EA-T5 | 调整两个分隔条或游戏窗口尺寸 | 游戏画面保持用户视频比例、完整显示；剩余区域为黑边 |
+| EA-T6 | `File > Export...` | 仅此时出现导出配置模态 |
+| EA-T7 | 导出模态 Start -> 切 Render | ModeManager.current() = Render |
+| EA-T8 | 渲染完成 -> 弹 toast | Toast 显示 + Open Folder 可点 |
+| EA-T9 | 拖 Keyframe 从 tick 100 -> 200 | UI 立即更新 + CommandStack push |
+| EA-T10 | Ctrl+Z | 关键帧回 100 + 状态栏 "Undo: Move Keyframe" |
+| EA-T11 | 双击 Clip -> Details 切到 Clip 上下文 | Details 显示 in/out |
+| EA-T12 | 右键 Clip | ClipMenu 弹 |
+| EA-T13 | 拖 Timeline zoom 滑块 | 像素/tick 改 |
+| EA-T14 | F1 切 HintBar | 显/隐 |
+| EA-T15 | `grep` emoji | 0 命中 |
+| EA-T16 | 22 个图标全显示 | 字形占位可见 |
+| EA-T17 | Editor 关闭后 MCBE 玩家可移动 | W/A/S/D 生效 |
+| EA-T18 | 拖 Details 数字字段 0.1 步进 | 字段值更新 + Ctrl+Z 撤销 |
+| EA-T19 | 拖 Viewport 空白 = orbit | 摄影机视角变 |
+| EA-T20 | 拖选中 Keyframe gizmo | 关键帧 position 更新 |
+| EA-T21 | Timeline Play 按钮 + Space 键 | playhead 移动 |
+| EA-T22 | Timeline Add Marker + M 键 | marker 出现 |
 
 ### 3.5 风险与回退
 
@@ -1326,10 +1336,10 @@ void TimelinePanel::handleKeyframeDrag(Keyframe& k, Rect rowArea) {
 | MCBE WndProc 钩子失败 -> 玩家还能动 | 启动时单元测试 `InputHook::shouldMCBEConsumeMouse() == false` |
 | icon font 加载失败 -> ImGui 显示方块占位 | console warning（不阻塞 UI） |
 | 摄影机 gizmo 拖动与摄影机 orbit 冲突 | 选中时 gizmo 抢，空白处 orbit |
-| Splitter 拖出 0~100% | clamp 到 20~70% |
+| Details 或 Timeline 分隔条拖出允许范围 | 按比例边界与 Viewport 最小尺寸钳制 |
+| 面板变化导致视频比例不匹配 | 按用户视频比例计算等比画面矩形，余区绘制黑边 |
 | CommandStack 内存膨胀 | maxSteps 100 截断 |
 | ImGui WantCaptureMouse 误判 | InputHook 不依赖 WantCapture，独立判断 |
-| K 键长按/短按判别不准 | 用 500ms 阈值 + ui 反馈（按键时状态栏 "Recording K hold"） |
 | Esc 退出模态 与 取消选中 冲突 | 模态打开时 Esc 优先关模态；否则取消选中 |
 | 输出 Log (F12) 抢占 viewport 空间 | 模态弹出 200x400 不影响布局 |
 | Editor 关时 input hook 残留 | shutdown 时清空回调列表 |
@@ -1385,7 +1395,7 @@ void TimelinePanel::handleKeyframeDrag(Keyframe& k, Rect rowArea) {
 | Space | **已决定**：Space = 播放/暂停（单一控制） |
 | 默认 Theme | **已决定**：单一深色（EditorTheme 内嵌常量） |
 | Timeline 缩放范围 | 0.02~2.0 px/tick（占位待 UI 验证） |
-| Splitter 持久化 | preferences.timelineSplitRatio（已定） |
+| Details / Timeline 尺寸持久化 | preferences.detailsWidthRatio / preferences.timelineHeightRatio（已定） |
 | Keyframe snap grid | Ctrl=10t(0.5s) / Alt=20t(1s)（占位待 UI 验证） |
 | Output Log (F12) | **已决定**：删除。失败用 ErrorDialog 模态弹窗 |
 | Hint bar 默认可见 | true（已定） |
