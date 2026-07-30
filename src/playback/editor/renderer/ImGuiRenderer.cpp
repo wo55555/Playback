@@ -203,7 +203,7 @@ struct ImGuiRenderer::Impl {
         }
         auto const fontPathString = fontPath.string();
         ImFont* font = fontPathString.empty() ? nullptr : io.Fonts->AddFontFromFileTTF(
-            fontPathString.c_str(), 13.0f, nullptr, io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+            fontPathString.c_str(), 14.0f, nullptr, io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
         );
         if (font) io.FontDefault = font;
         else io.Fonts->AddFontDefault();
@@ -214,7 +214,7 @@ struct ImGuiRenderer::Impl {
         static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
         auto const iconPath = Playback::getInstance().getSelf().getModDir() / "resource_packs" / "playback-ui"
                             / "fonts" / "lucide.ttf";
-        if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 13.0f, &cfg, iconRange)) {
+        if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 14.0f, &cfg, iconRange)) {
             getLogger().warn("Unable to load replay icon font from {}", iconPath);
         }
         ImGui::StyleColorsDark();
@@ -283,7 +283,7 @@ struct ImGuiRenderer::Impl {
         io.DisplaySize             = ImVec2(static_cast<float>(desc.Width), static_cast<float>(desc.Height));
         io.DisplayFramebufferScale = ImVec2(1, 1);
         auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
-        io.FontGlobalScale         = std::max(0.85f, layout.scale);
+        io.FontGlobalScale         = std::max(1.0f, layout.scale);
         auto frameNow              = std::chrono::steady_clock::now();
         io.DeltaTime = std::clamp(std::chrono::duration<float>(frameNow - lastFrameTime).count(), 1.f / 240.f, 0.25f);
         lastFrameTime = frameNow;
@@ -292,14 +292,18 @@ struct ImGuiRenderer::Impl {
         playback::refactor::editor::InputHook::syncFrame();
         beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
         ImGui::NewFrame();
-        ImGui::GetBackgroundDrawList()->AddImage(
-            ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get()))),
-            ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
-            ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
-        );
         auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
-        if (refactorEditor.isOpen()) refactorEditor.draw();
-        else {
+        if (refactorEditor.isOpen()) {
+            refactorEditor.setGameTexture(
+                static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())),
+                static_cast<float>(desc.Width) / std::max(1.0f, static_cast<float>(desc.Height)));
+            refactorEditor.draw();
+        } else {
+            ImGui::GetBackgroundDrawList()->AddImage(
+                ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get()))),
+                ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
+                ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
+            );
             std::vector<EditorAction> actions;
             ui::drawReplayView(state, layout, actions);
             for (auto const action : actions) editorContext->submit(action);
@@ -479,7 +483,7 @@ struct ImGuiRenderer::Impl {
         if (!fontPathString.empty()) {
             font = io.Fonts->AddFontFromFileTTF(
                 fontPathString.c_str(),
-                13.0f,
+                14.0f,
                 nullptr,
                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
             );
@@ -499,7 +503,7 @@ struct ImGuiRenderer::Impl {
             static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
             auto const iconPath = Playback::getInstance().getSelf().getModDir() / "resource_packs" / "playback-ui"
                                 / "fonts" / "lucide.ttf";
-            if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 13.0f, &cfg, iconRange)) {
+            if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 14.0f, &cfg, iconRange)) {
                 getLogger().warn("Unable to load replay icon font from {}", iconPath);
             }
         }
@@ -787,7 +791,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     io.DisplaySize             = ImVec2(static_cast<float>(bd.Width), static_cast<float>(bd.Height));
     io.DisplayFramebufferScale = ImVec2(1, 1);
     auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
-    io.FontGlobalScale         = std::max(0.85f, layout.scale);
+    io.FontGlobalScale         = std::max(1.0f, layout.scale);
     auto fn                    = std::chrono::steady_clock::now();
     io.DeltaTime    = std::clamp(std::chrono::duration<float>(fn - p.lastFrameTime).count(), 1.f / 240.f, 0.25f);
     p.lastFrameTime = fn;
@@ -797,16 +801,18 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     playback::refactor::editor::InputHook::syncFrame();
     beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
     ImGui::NewFrame();
-    ImGui::GetBackgroundDrawList()->AddImage(
-        ImTextureRef(static_cast<ImTextureID>(f.gameSrvGpu.ptr)),
-        ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
-        ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
-    );
-    // Draw the refactored editor UI (replaces legacy drawReplayView)
     auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
     if (refactorEditor.isOpen()) {
+        refactorEditor.setGameTexture(
+            static_cast<ImTextureID>(f.gameSrvGpu.ptr),
+            static_cast<float>(bd.Width) / std::max(1.0f, static_cast<float>(bd.Height)));
         refactorEditor.draw();
     } else {
+        ImGui::GetBackgroundDrawList()->AddImage(
+            ImTextureRef(static_cast<ImTextureID>(f.gameSrvGpu.ptr)),
+            ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
+            ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
+        );
         // Fallback: legacy timeline UI when refactored editor is closed
         std::vector<EditorAction> actions;
         ui::drawReplayView(state, layout, actions);

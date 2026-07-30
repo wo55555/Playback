@@ -2,11 +2,12 @@
 
 #include "playback/refactor/editor/Editor.h"
 #include "playback/refactor/editor/EditorBridge.h"
-#include "playback/refactor/editor/ModeManager.h"
 #include "playback/refactor/editor/iconfont.h"
 #include "playback/refactor/editor/models/SelectionModel.h"
 
 #include "imgui.h"
+
+#include <algorithm>
 
 namespace playback::refactor::editor {
 
@@ -15,7 +16,6 @@ void ViewportPanel::draw() {
 
     ImVec2 viewportSize = ImGui::GetContentRegionAvail();
 
-    // Floating toolbar overlay (32px height at top of viewport)
     {
         ImGui::SetCursorScreenPos(ImGui::GetCursorScreenPos());
         ImGui::BeginChild("##viewportToolbar", ImVec2(viewportSize.x, 32.0f), false,
@@ -40,29 +40,29 @@ void ViewportPanel::draw() {
             EditorBridge::getInstance().addMarker(state, "Marker", state.currentTick);
         }
         ImGui::SameLine();
-        if (ImGui::Button(ICON_EXPORT " Export")) {
-            ModeManager::getInstance().switchTo(EditorMode::Render);
-        }
-
-        // Tooltips on hover
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Export (Ctrl+E)");
-        }
-
         ImGui::EndChild();
     }
 
-    // 3D scene area (placeholder: gradient background)
     ImVec2 sceneSize = ImVec2(viewportSize.x, ImGui::GetContentRegionAvail().y);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 sceneMin = ImGui::GetCursorScreenPos();
     ImVec2 sceneMax = ImVec2(sceneMin.x + sceneSize.x, sceneMin.y + sceneSize.y);
     dl->AddRectFilled(sceneMin, sceneMax, IM_COL32(0x0d, 0x0d, 0x0d, 0xff));
+    float sceneAspectRatio = sceneSize.x / std::max(1.0f, sceneSize.y);
+    ImVec2 videoSize = sceneAspectRatio > mVideoAspectRatio
+        ? ImVec2(sceneSize.y * mVideoAspectRatio, sceneSize.y)
+        : ImVec2(sceneSize.x, sceneSize.x / mVideoAspectRatio);
+    ImVec2 videoMin(
+        sceneMin.x + (sceneSize.x - videoSize.x) * 0.5f,
+        sceneMin.y + (sceneSize.y - videoSize.y) * 0.5f);
+    ImVec2 videoMax(videoMin.x + videoSize.x, videoMin.y + videoSize.y);
+    if (mGameTexture) {
+        dl->AddImage(ImTextureRef(mGameTexture), videoMin, videoMax);
+    }
+    dl->AddRect(videoMin, videoMax, IM_COL32(0x3a, 0x8c, 0xf0, 0xff));
 
-    // Handle camera controls (orbit/pan/dolly) in empty area
     handleCameraControl();
 
-    // Draw gizmo if a keyframe is selected
     auto* sel = Editor::getInstance().selection().getSelection();
     if (sel) {
         if (auto* kfSel = std::get_if<SelectedKeyframe>(sel)) {
@@ -72,6 +72,11 @@ void ViewportPanel::draw() {
 
     ImGui::Dummy(sceneSize);
     ImGui::End();
+}
+
+void ViewportPanel::setGameTexture(ImTextureID texture, float aspectRatio) {
+    mGameTexture = texture;
+    mVideoAspectRatio = std::max(0.1f, aspectRatio);
 }
 
 void ViewportPanel::handleCameraControl() {

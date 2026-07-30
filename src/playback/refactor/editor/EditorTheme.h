@@ -28,7 +28,7 @@ struct EditorTheme {
     // Font sizes
     float fontDefault     = 14.0f;
     float fontTitle       = 16.0f;
-    float fontSmall       = 12.0f;
+    float fontSmall       = 14.0f;
 
     void apply() const;
 };

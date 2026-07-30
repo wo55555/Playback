@@ -17,8 +17,8 @@ struct Rect {
 
 class Splitter {
 public:
-    // Draw a vertical splitter between two areas; returns the new ratio
     float drawVerticalSplit(float currentRatio, Rect area, float minRatio, float maxRatio);
+    float drawHorizontalSplit(float currentRatio, Rect area, float minRatio, float maxRatio);
 };
 
 } // namespace playback::refactor::editor

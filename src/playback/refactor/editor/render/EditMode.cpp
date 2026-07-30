@@ -4,22 +4,34 @@
 
 #include "imgui.h"
 
+#include <algorithm>
+
 namespace playback::refactor::editor {
 
 void EditMode::draw() {
     auto& editor = Editor::getInstance();
 
-    // Layout constants
     constexpr float kMenuHeight   = 24.0f;
     constexpr float kStatusHeight = 22.0f;
-    constexpr float kDetailsWidth = 320.0f;
     constexpr float kCurveWidth   = 280.0f;
-    constexpr float kSplitterH    = 4.0f;
+    constexpr float kSplitterThickness = 4.0f;
+    constexpr float kDetailsMinWidth = 220.0f;
+    constexpr float kViewportMinWidth = 320.0f;
+    constexpr float kViewportMinHeight = 180.0f;
 
-    // Get display size
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    float contentHeight = std::max(1.0f, displaySize.y - kMenuHeight - kStatusHeight);
+    float maxDetailsRatio = std::min(0.50f, 1.0f - kViewportMinWidth / std::max(1.0f, displaySize.x));
+    float minDetailsRatio = std::min(kDetailsMinWidth / std::max(1.0f, displaySize.x), maxDetailsRatio);
+    editor.mDetailsWidthRatio = std::clamp(editor.mDetailsWidthRatio, minDetailsRatio, maxDetailsRatio);
+    float detailsWidth = displaySize.x * editor.mDetailsWidthRatio;
+    float leftWidth = displaySize.x - detailsWidth;
+    float maxTimelineRatio = std::min(0.65f, 1.0f - kViewportMinHeight / contentHeight);
+    float minTimelineRatio = std::min(0.18f, maxTimelineRatio);
+    editor.mTimelineHeightRatio = std::clamp(editor.mTimelineHeightRatio, minTimelineRatio, maxTimelineRatio);
+    float timelineHeight = contentHeight * editor.mTimelineHeightRatio;
+    float viewportHeight = contentHeight - timelineHeight - kSplitterThickness;
 
-    // === Menu ===
     {
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2(displaySize.x, kMenuHeight));
@@ -30,25 +42,18 @@ void EditMode::draw() {
         ImGui::End();
     }
 
-    // Right side width: details panel + optional curve editor
-    float rightW = kDetailsWidth;
+    float curveWidth = 0.0f;
     if (editor.mCurveEditorPanel.isOpen()) {
-        rightW += kCurveWidth + kSplitterH;
+        curveWidth = kCurveWidth + kSplitterThickness;
     }
 
-    // === Details (rightmost) ===
     {
-        float detailsX = displaySize.x - kDetailsWidth;
+        float detailsX = displaySize.x - detailsWidth;
         float detailsY = kMenuHeight;
-        float detailsH = displaySize.y - kMenuHeight - kStatusHeight;
-
-        // Shift details left if curve editor is open
-        if (editor.mCurveEditorPanel.isOpen()) {
-            detailsX -= kCurveWidth + kSplitterH;
-        }
+        float detailsH = contentHeight;
 
         ImGui::SetNextWindowPos(ImVec2(detailsX, detailsY));
-        ImGui::SetNextWindowSize(ImVec2(kDetailsWidth, detailsH));
+        ImGui::SetNextWindowSize(ImVec2(detailsWidth, detailsH));
         ImGui::Begin("##DetailsPanel", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
             | ImGuiWindowFlags_NoScrollWithMouse);
@@ -56,14 +61,12 @@ void EditMode::draw() {
         ImGui::End();
     }
 
-    // === Curve Editor (between viewport and details) ===
     if (editor.mCurveEditorPanel.isOpen()) {
-        float curveX = displaySize.x - kDetailsWidth - kSplitterH - kCurveWidth;
+        float curveX = leftWidth - curveWidth;
         float curveY = kMenuHeight;
-        float curveH = displaySize.y - kMenuHeight - kStatusHeight;
+        float curveH = contentHeight;
         ImGui::SetNextWindowPos(ImVec2(curveX, curveY));
         ImGui::SetNextWindowSize(ImVec2(kCurveWidth, curveH));
-        // Use a separator border
         ImGui::GetForegroundDrawList()->AddLine(
             ImVec2(curveX - 1, curveY), ImVec2(curveX - 1, curveY + curveH),
             IM_COL32(0x5a, 0x5a, 0x5a, 0xff));
@@ -74,14 +77,11 @@ void EditMode::draw() {
         ImGui::End();
     }
 
-    // === Left area (Viewport + Timeline) ===
-    float leftW = displaySize.x - rightW;
+    float workspaceWidth = leftWidth - curveWidth;
 
-    // Viewport (top portion of left area)
     {
-        float viewportH = (displaySize.y - kMenuHeight - kStatusHeight) * (1.0f - editor.mTimelineRatio) - kSplitterH;
         ImGui::SetNextWindowPos(ImVec2(0, kMenuHeight));
-        ImGui::SetNextWindowSize(ImVec2(leftW, viewportH));
+        ImGui::SetNextWindowSize(ImVec2(workspaceWidth, viewportHeight));
         ImGui::Begin("##ViewportPanel", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
             | ImGuiWindowFlags_NoScrollWithMouse);
@@ -89,20 +89,10 @@ void EditMode::draw() {
         ImGui::End();
     }
 
-    // Splitter
     {
-        float splitterY = kMenuHeight + (displaySize.y - kMenuHeight - kStatusHeight) * (1.0f - editor.mTimelineRatio);
-        ImGui::GetForegroundDrawList()->AddLine(
-            ImVec2(0, splitterY), ImVec2(leftW, splitterY),
-            IM_COL32(0x5a, 0x5a, 0x5a, 0xff));
-    }
-
-    // Timeline (bottom portion of left area)
-    {
-        float timelineY = kMenuHeight + (displaySize.y - kMenuHeight - kStatusHeight) * (1.0f - editor.mTimelineRatio);
-        float timelineH = (displaySize.y - kMenuHeight - kStatusHeight) * editor.mTimelineRatio;
+        float timelineY = kMenuHeight + viewportHeight + kSplitterThickness;
         ImGui::SetNextWindowPos(ImVec2(0, timelineY));
-        ImGui::SetNextWindowSize(ImVec2(leftW, timelineH));
+        ImGui::SetNextWindowSize(ImVec2(workspaceWidth, timelineHeight));
         ImGui::Begin("##TimelinePanel", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
             | ImGuiWindowFlags_NoScrollWithMouse);
@@ -110,7 +100,22 @@ void EditMode::draw() {
         ImGui::End();
     }
 
-    // === Status ===
+    {
+        ImGui::SetNextWindowPos(ImVec2(0, kMenuHeight));
+        ImGui::SetNextWindowSize(ImVec2(displaySize.x, contentHeight));
+        ImGui::Begin("##LayoutSplitters", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+            | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
+        Rect fullArea{{0.0f, kMenuHeight}, {displaySize.x, displaySize.y - kStatusHeight}};
+        Rect leftArea{{0.0f, kMenuHeight}, {leftWidth, displaySize.y - kStatusHeight}};
+        editor.mDetailsWidthRatio = editor.mSplitter.drawVerticalSplit(
+            editor.mDetailsWidthRatio, fullArea, minDetailsRatio, maxDetailsRatio);
+        editor.mTimelineHeightRatio = editor.mSplitter.drawHorizontalSplit(
+            1.0f - editor.mTimelineHeightRatio, leftArea, 1.0f - maxTimelineRatio, 1.0f - minTimelineRatio);
+        editor.mTimelineHeightRatio = 1.0f - editor.mTimelineHeightRatio;
+        ImGui::End();
+    }
+
     {
         ImGui::SetNextWindowPos(ImVec2(0, displaySize.y - kStatusHeight));
         ImGui::SetNextWindowSize(ImVec2(displaySize.x, kStatusHeight));

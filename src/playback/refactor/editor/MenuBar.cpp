@@ -3,7 +3,6 @@
 #include "Editor.h"
 #include "EditorBridge.h"
 #include "ModeManager.h"
-#include "KeyMap.h"
 #include "iconfont.h"
 
 #include "imgui.h"
@@ -12,7 +11,6 @@ namespace playback::refactor::editor {
 
 void MenuBar::draw() {
     if (ImGui::BeginMenuBar()) {
-        // File
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Open Replay", "Ctrl+O")) {}
             if (ImGui::MenuItem("Save Project", "Ctrl+S")) {}
@@ -23,13 +21,16 @@ void MenuBar::draw() {
                 ImGui::EndMenu();
             }
             ImGui::Separator();
+            if (ImGui::MenuItem("Export...")) {
+                mExportDialogOpen = true;
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Exit Editor", "Esc (hold)")) {
                 Editor::getInstance().toggle();
             }
             ImGui::EndMenu();
         }
 
-        // Edit
         if (ImGui::BeginMenu("Edit")) {
             auto& bridge = EditorBridge::getInstance();
             bool canUndo = bridge.canUndo();
@@ -48,7 +49,6 @@ void MenuBar::draw() {
             ImGui::EndMenu();
         }
 
-        // Camera
         if (ImGui::BeginMenu("Camera")) {
             if (ImGui::MenuItem("Add Keyframe at Playhead", "K")) {}
             if (ImGui::MenuItem("Add Camera Track", "Ctrl+Shift+N")) {}
@@ -69,7 +69,6 @@ void MenuBar::draw() {
             ImGui::EndMenu();
         }
 
-        // Markers
         if (ImGui::BeginMenu("Markers")) {
             if (ImGui::MenuItem("Insert Marker", "M")) {}
             if (ImGui::MenuItem("Jump to Next Marker", "]")) {}
@@ -77,7 +76,6 @@ void MenuBar::draw() {
             ImGui::EndMenu();
         }
 
-        // Window
         if (ImGui::BeginMenu("Window")) {
             if (ImGui::MenuItem("Toggle Hint Bar", "F1")) {
                 // HintBar toggle handled via Editor
@@ -90,15 +88,6 @@ void MenuBar::draw() {
             ImGui::EndMenu();
         }
 
-        // Export
-        if (ImGui::BeginMenu("Export")) {
-            if (ImGui::MenuItem("Export...", "Ctrl+E")) {
-                ModeManager::getInstance().switchTo(EditorMode::Render);
-            }
-            ImGui::EndMenu();
-        }
-
-        // Help
         if (ImGui::BeginMenu("Help")) {
             if (ImGui::MenuItem("Documentation")) {
                 // Open documentation link
@@ -111,6 +100,27 @@ void MenuBar::draw() {
         }
 
         ImGui::EndMenuBar();
+    }
+
+    if (mExportDialogOpen) ImGui::OpenPopup("Export");
+    if (ImGui::BeginPopupModal("Export", &mExportDialogOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Export configuration");
+        ImGui::Separator();
+        ImGui::TextUnformatted("Format: MP4 (H.264)");
+        ImGui::TextUnformatted("Resolution: 1920 x 1080");
+        ImGui::TextUnformatted("FPS: 60");
+        ImGui::Spacing();
+        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+            mExportDialogOpen = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Start", ImVec2(120.0f, 0.0f))) {
+            mExportDialogOpen = false;
+            ImGui::CloseCurrentPopup();
+            ModeManager::getInstance().switchTo(EditorMode::Render);
+        }
+        ImGui::EndPopup();
     }
 }
 

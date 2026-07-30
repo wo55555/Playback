@@ -43,6 +43,9 @@ public:
     const EditorStateExt& state() const { return mState; }
     SelectionModel&       selection() { return mSelection; }
     CurveEditorPanel&     curveEditorPanel() { return mCurveEditorPanel; }
+    void setGameTexture(ImTextureID texture, float aspectRatio) {
+        mViewportPanel.setGameTexture(texture, aspectRatio);
+    }
 
 private:
     Editor() = default;
@@ -73,7 +76,8 @@ private:
     SelectionModel  mSelection;
 
     // Layout
-    float mTimelineRatio{0.40f}; // 20% ~ 70%
+    float mDetailsWidthRatio{0.28f};
+    float mTimelineHeightRatio{0.35f};
 
     // Allow EditMode to access Editor members
     friend class EditMode;
