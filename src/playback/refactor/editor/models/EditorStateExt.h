@@ -29,6 +29,7 @@ struct EditorStateExt {
     int currentTick{};
     int totalTicks{};
     bool playing{};
+    float playbackSpeed{1.0f};
 
     // Camera tracks
     std::vector<CameraTrackExt> cameraTracks;

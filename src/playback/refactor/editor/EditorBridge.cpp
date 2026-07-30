@@ -44,6 +44,7 @@ void EditorBridge::syncState(EditorStateExt& outState) {
     outState.currentTick = oldState.currentTick;
     outState.totalTicks  = oldState.totalTicks;
     outState.playing     = !oldState.paused;
+    outState.playbackSpeed = oldState.playbackSpeed;
     outState.fps         = 20.0f; // Minecraft ticks per second
 }
 

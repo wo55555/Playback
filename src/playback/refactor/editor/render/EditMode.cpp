@@ -104,15 +104,26 @@ void EditMode::draw() {
     }
 
     {
-        ImGui::SetNextWindowPos(ImVec2(0, kMenuHeight));
-        ImGui::SetNextWindowSize(ImVec2(displaySize.x, contentHeight));
-        ImGui::Begin("##LayoutSplitters", nullptr,
+        Rect fullArea{{0.0f, kMenuHeight}, {displaySize.x, displaySize.y - kStatusHeight}};
+        float splitterX = displaySize.x - detailsWidth - kSplitterThickness * 0.5f;
+        ImGui::SetNextWindowPos(ImVec2(splitterX, kMenuHeight));
+        ImGui::SetNextWindowSize(ImVec2(kSplitterThickness, contentHeight));
+        ImGui::Begin("##DetailsSplitter", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
             | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
-        Rect fullArea{{0.0f, kMenuHeight}, {displaySize.x, displaySize.y - kStatusHeight}};
-        Rect leftArea{{0.0f, kMenuHeight}, {leftWidth, displaySize.y - kStatusHeight}};
         editor.mDetailsWidthRatio = editor.mSplitter.drawVerticalSplit(
             editor.mDetailsWidthRatio, fullArea, minDetailsRatio, maxDetailsRatio);
+        ImGui::End();
+    }
+
+    {
+        Rect leftArea{{0.0f, kMenuHeight}, {leftWidth, displaySize.y - kStatusHeight}};
+        float splitterY = kMenuHeight + viewportHeight - kSplitterThickness * 0.5f;
+        ImGui::SetNextWindowPos(ImVec2(0, splitterY));
+        ImGui::SetNextWindowSize(ImVec2(leftWidth, kSplitterThickness));
+        ImGui::Begin("##TimelineSplitter", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+            | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
         editor.mTimelineHeightRatio = editor.mSplitter.drawHorizontalSplit(
             1.0f - editor.mTimelineHeightRatio, leftArea, 1.0f - maxTimelineRatio, 1.0f - minTimelineRatio);
         editor.mTimelineHeightRatio = 1.0f - editor.mTimelineHeightRatio;

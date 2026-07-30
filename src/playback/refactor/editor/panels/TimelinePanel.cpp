@@ -19,6 +19,9 @@ constexpr float kTransportHeight = 34.0f;
 constexpr float kSplitterThickness = 4.0f;
 constexpr float kRowGap = 2.0f;
 constexpr float kTextSize = 14.0f;
+constexpr float kBasePixelsPerTick = 0.025f;
+constexpr float kMinPixelsPerTick = kBasePixelsPerTick * 0.2f;
+constexpr float kMaxPixelsPerTick = kBasePixelsPerTick * 20.0f;
 
 bool containsInsensitive(const std::string& value, const std::string& search) {
     if (search.empty()) return true;
@@ -31,7 +34,7 @@ bool containsInsensitive(const std::string& value, const std::string& search) {
 
 void TimelinePanel::setViewPreferences(float trackListWidthRatio, float pixelsPerTick, float horizontalScroll) {
     mTrackListWidthRatio = std::clamp(trackListWidthRatio, 0.18f, 0.55f);
-    mPixelsPerTick = std::clamp(pixelsPerTick, 0.02f, 2.0f);
+    mPixelsPerTick = std::clamp(pixelsPerTick, kMinPixelsPerTick, kMaxPixelsPerTick);
     mScrollX = std::max(0.0f, horizontalScroll);
 }
 
@@ -88,8 +91,6 @@ void TimelinePanel::draw() {
 void TimelinePanel::drawHeader() {
     auto& state = Editor::getInstance().state();
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {7, 7});
-    if (ImGui::Button(state.playing ? ICON_PAUSE : ICON_PLAY, {28, 28})) EditorBridge::getInstance().playPause();
-    ImGui::SameLine();
     int seconds = state.currentTick / 20;
     char timecode[48];
     std::snprintf(timecode, sizeof(timecode), "%02d:%02d:%02d.%03d / %02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60, (state.currentTick % 20) * 50, state.totalTicks / 1200, (state.totalTicks / 20) % 60);
@@ -106,18 +107,28 @@ void TimelinePanel::drawHeader() {
     if (ImGui::Button(ICON_ADD_MARKER, {28, 28})) EditorBridge::getInstance().addMarker(state, "Marker", state.currentTick);
     ImGui::SameLine();
     ImGui::TextUnformatted("Snap"); ImGui::SameLine(); ImGui::Checkbox("##snap", &mSnapEnabled); ImGui::SameLine();
-    ImGui::Text("Time Scale"); ImGui::SameLine();
-    if (ImGui::Button("-", {28, 28})) adjustTimeScale(1.0f / 1.25f);
+    ImGui::TextUnformatted("Time Scale"); ImGui::SameLine();
+    if (ImGui::Button("-", {28, 28})) adjustTimeScale(0.9f);
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(72.0f);
-    float scalePercent = mPixelsPerTick / 0.1f * 100.0f;
-    if (ImGui::DragFloat("##time-scale", &scalePercent, 1.0f, 20.0f, 2000.0f, "%.0f%%")) {
+    char scaleLabel[16];
+    std::snprintf(scaleLabel, sizeof(scaleLabel), "%.0f%%", mPixelsPerTick / kBasePixelsPerTick * 100.0f);
+    ImGui::Button(scaleLabel, {64, 28});
+    if (ImGui::IsItemActivated()) {
+        mScaleDragStartPixelsPerTick = mPixelsPerTick;
+        mScaleDragStartMouseX = ImGui::GetMousePos().x;
+    }
+    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        float distance = std::abs(ImGui::GetMousePos().x - mScaleDragStartMouseX);
+        float percentStep = std::clamp(10.0f + distance * 0.25f, 10.0f, 50.0f);
+        float direction = ImGui::GetMousePos().x >= mScaleDragStartMouseX ? 1.0f : -1.0f;
+        float target = mScaleDragStartPixelsPerTick * (1.0f + direction * percentStep / 100.0f);
         float oldPixelsPerTick = mPixelsPerTick;
-        mPixelsPerTick = std::clamp(scalePercent * 0.001f, 0.02f, 2.0f);
+        mPixelsPerTick = std::clamp(target, kMinPixelsPerTick, kMaxPixelsPerTick);
         mScrollX = std::max(0.0f, mScrollX + mPlayheadTick * (mPixelsPerTick - oldPixelsPerTick));
     }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("向右拖动放大，向左拖动缩小；每次变化 10%% 至 50%%");
     ImGui::SameLine();
-    if (ImGui::Button("+", {28, 28})) adjustTimeScale(1.25f);
+    if (ImGui::Button("+", {28, 28})) adjustTimeScale(1.1f);
     ImGui::PopStyleVar();
 }
 
@@ -186,7 +197,28 @@ void TimelinePanel::drawBody() {
 
 void TimelinePanel::drawPlayhead(Rect area) { float x = area.min.x + mPlayheadTick * mPixelsPerTick - mScrollX; if (x >= area.min.x && x <= area.max.x) ImGui::GetWindowDrawList()->AddLine({x, area.min.y}, {x, area.max.y}, IM_COL32(240, 192, 32, 255), 2); }
 void TimelinePanel::handleRulerClick(Rect area) { if (area.contains(ImGui::GetMousePos()) && ImGui::IsMouseDown(ImGuiMouseButton_Left)) { int tick = std::clamp(static_cast<int>((ImGui::GetMousePos().x - area.min.x + mScrollX) / mPixelsPerTick), 0, Editor::getInstance().state().totalTicks); if (tick != mPlayheadTick) { mPlayheadTick = tick; EditorBridge::getInstance().seek(tick); } } }
-void TimelinePanel::drawTransportControls() { auto& bridge = EditorBridge::getInstance(); auto& state = Editor::getInstance().state(); if (ImGui::Button("|<", {28, 28})) bridge.skipToStart(); ImGui::SameLine(); if (ImGui::Button("<", {28, 28})) bridge.seek(std::max(0, state.currentTick - 1)); ImGui::SameLine(); if (ImGui::Button(state.playing ? ICON_PAUSE : ICON_PLAY, {28, 28})) bridge.playPause(); ImGui::SameLine(); if (ImGui::Button(">", {28, 28})) bridge.seek(std::min(state.totalTicks, state.currentTick + 1)); ImGui::SameLine(); if (ImGui::Button(">|", {28, 28})) bridge.skipToEnd(); ImGui::SameLine(); if (ImGui::Button("Speed -", {62, 28})) bridge.decreaseSpeed(); ImGui::SameLine(); if (ImGui::Button("Speed +", {62, 28})) bridge.increaseSpeed(); ImGui::SameLine(); ImGui::BeginDisabled(); ImGui::Button("Loop", {52, 28}); ImGui::EndDisabled(); if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("等待后端接口"); }
+void TimelinePanel::drawTransportControls() {
+    auto& bridge = EditorBridge::getInstance();
+    auto& state = Editor::getInstance().state();
+    if (ImGui::Button("|<", {28, 28})) { state.currentTick = 0; bridge.skipToStart(); }
+    ImGui::SameLine();
+    if (ImGui::Button("<", {28, 28})) { state.currentTick = std::max(0, state.currentTick - 1); bridge.seek(state.currentTick); }
+    ImGui::SameLine();
+    if (ImGui::Button(state.playing ? ICON_PAUSE : ICON_PLAY, {28, 28})) { state.playing = !state.playing; bridge.playPause(); }
+    ImGui::SameLine();
+    if (ImGui::Button(">", {28, 28})) { state.currentTick = std::min(state.totalTicks, state.currentTick + 1); bridge.seek(state.currentTick); }
+    ImGui::SameLine();
+    if (ImGui::Button(">|", {28, 28})) { state.currentTick = state.totalTicks; bridge.skipToEnd(); }
+    ImGui::SameLine();
+    ImGui::Text("Speed %.2fx", state.playbackSpeed);
+    ImGui::SameLine();
+    if (ImGui::Button("Speed -", {62, 28})) bridge.decreaseSpeed();
+    ImGui::SameLine();
+    if (ImGui::Button("Speed +", {62, 28})) bridge.increaseSpeed();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(); ImGui::Button("Loop", {52, 28}); ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("等待后端接口");
+}
 void TimelinePanel::handleSplitAtPlayhead() { if (mSelectedTrackIndex >= 0 && !mSelectedClipId.empty()) { auto& state = Editor::getInstance().state(); if (mSelectedTrackIndex < static_cast<int>(state.videoTracks.size())) EditorBridge::getInstance().splitClip(state, state.videoTracks[mSelectedTrackIndex].id, mSelectedClipId, mPlayheadTick); } }
 void TimelinePanel::handleRippleDelete() { if (mSelectedTrackIndex >= 0 && !mSelectedClipId.empty()) { auto& state = Editor::getInstance().state(); if (mSelectedTrackIndex < static_cast<int>(state.videoTracks.size())) EditorBridge::getInstance().deleteClip(state, state.videoTracks[mSelectedTrackIndex].id, mSelectedClipId); mSelectedClipId.clear(); } }
 void TimelinePanel::handleTrimLeftToPlayhead() {}
@@ -196,7 +228,7 @@ void TimelinePanel::onWheel(float deltaY) { if (ImGui::GetIO().KeyShift) adjustT
 
 void TimelinePanel::adjustTimeScale(float multiplier) {
     float oldPixelsPerTick = mPixelsPerTick;
-    mPixelsPerTick = std::clamp(oldPixelsPerTick * multiplier, 0.02f, 2.0f);
+    mPixelsPerTick = std::clamp(oldPixelsPerTick * multiplier, kMinPixelsPerTick, kMaxPixelsPerTick);
     mScrollX = std::max(0.0f, mScrollX + mPlayheadTick * (mPixelsPerTick - oldPixelsPerTick));
 }
 

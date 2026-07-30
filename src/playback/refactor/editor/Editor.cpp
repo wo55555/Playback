@@ -50,7 +50,7 @@ void Editor::loadLayoutPreferences() {
     float horizontalScroll{};
     std::string version;
     if (input >> version >> detailsRatio >> timelineRatio >> aspectRatio >> trackListRatio >> pixelsPerTick >> horizontalScroll
-        && version == "v2"
+        && version == "v3"
         && std::isfinite(detailsRatio) && std::isfinite(timelineRatio) && std::isfinite(aspectRatio)
         && std::isfinite(trackListRatio) && std::isfinite(pixelsPerTick) && std::isfinite(horizontalScroll)) {
         mDetailsWidthRatio = std::clamp(detailsRatio, 0.15f, 0.50f);
@@ -73,7 +73,7 @@ void Editor::loadLayoutPreferences() {
 void Editor::saveLayoutPreferences() const {
     std::ofstream output("mods/playback/editor-layout.ini", std::ios::trunc);
     if (output) {
-        output << "v2 " << mDetailsWidthRatio << ' ' << mTimelineHeightRatio << ' ' << mVideoAspectRatio << ' '
+        output << "v3 " << mDetailsWidthRatio << ' ' << mTimelineHeightRatio << ' ' << mVideoAspectRatio << ' '
                << mTimelinePanel.trackListWidthRatio() << ' ' << mTimelinePanel.pixelsPerTick() << ' '
                << mTimelinePanel.horizontalScroll();
     }
