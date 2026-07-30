@@ -3,6 +3,35 @@
 > 入口：[`d:\raplay\Playback\src\playback\editor\renderer\`](file:///d:/raplay/Playback/src/playback/editor/renderer/)
 > 角色：钩 IDXGISwapChain 的 Present / ResizeBuffers / CreateSwapChain 虚函数，注入 ImGui 渲染管线，让 ImGui 画到游戏帧上面。同时拦鼠标事件，让 ImGui 能收到点击。
 
+## 需求
+
+1. ImGui 必须根据目标 SwapChain 的 Device 类型选择原生 D3D11 或 D3D12 后端。
+2. D3D12 命令必须提交到创建目标 SwapChain 的真实 Direct Queue，禁止临时新建 Queue 绘制 back buffer。
+3. Present / Resize 核心 Hook 可独立工作；D3D12 Queue / CreateSwapChain 捕获 Hook 失败时记录降级状态，不回滚核心 Hook。
+4. 已存在的 D3D12 SwapChain 只允许使用“该 Device 唯一捕获的 Direct Queue”回退；捕获到多个 Direct Queue 时必须拒绝推断。
+5. 回放世界已进入或编辑器已打开时，不应仅因 `HudScene` 位缺失而阻断 UI；加载和进度界面仍须阻断。
+6. 运行日志必须能区分 Hook 安装、后端选择、Queue 捕获、可见性门控、初始化、首帧提交六个阶段。
+7. 字体图集必须在对应 ImGui 图形后端创建字体纹理前一次性完成，运行帧内不得再次修改图集。
+
+## 架构
+
+- **核心 Hook**：`Present`、`Present1`、`ResizeBuffers`、`ResizeBuffers1`，为两种图形 API 提供统一渲染入口。
+- **后端分派**：Present 时分别探测 `ID3D11Device` 和 `ID3D12Device`，选择对应的独立 ImGui context 与后端资源。
+- **D3D11 后端**：使用 Immediate Context、back buffer RTV 和游戏帧副本 SRV，通过 `imgui_impl_dx11` 提交。
+- **D3D12 捕获 Hook**：四个 `CreateSwapChain*` 和 `CreateCommandQueue`，负责建立精确的 `SwapChain → Direct Queue` 绑定。
+- **D3D12 安全回退**：按 Device 记录第一个 Direct Queue；若出现第二个不同 Direct Queue，将该 Device 标记为 ambiguous，不再用于推断。
+- **字体生命周期**：每个后端初始化时加载系统文本字体和模组 Lucide 字体，再创建对应后端的字体纹理。
+
+## 执行
+
+1. 在 bgfx renderer init 前安装 Present / Resize 及 D3D12 Queue / SwapChain 捕获 Hook。
+2. Present 命中后先识别 SwapChain Device 类型；D3D11 直接初始化 Immediate Context，D3D12 进入 Queue 解析流程。
+3. D3D12 Queue Hook 仅接受 `D3D12_COMMAND_LIST_TYPE_DIRECT`，并检测同 Device 多 Queue 歧义。
+4. D3D12 SwapChain 创建成功后，将传入的真实 Queue 写入 DXGI private data 和保留映射。
+5. 回放活跃时综合世界进入状态、编辑器打开状态和加载界面状态计算 HUD 可见性。
+6. Resize、设备移除和模组卸载时销毁当前后端资源；另一后端资源保持独立。
+7. 首次经过各阶段时写入 `mods/playback/debug_log.txt`，用于比较修复前后的运行路径。
+
 ## 内部结构
 
 ```

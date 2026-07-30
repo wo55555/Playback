@@ -14,7 +14,10 @@
 
 
 #include "imgui.h"
+#include "imgui_impl_dx11.h"
 #include "imgui_impl_dx12.h"
+
+#include <d3d11.h>
 
 #include <algorithm>
 #include <array>
@@ -142,11 +145,184 @@ struct ImGuiRenderer::Impl {
     bool                                  renderingDisabled{};
     bool                                  initFailed{};
     bool                                  missingQueue{};
-    bool                                  missingQueueLogged{};
-    ComPtr<ID3D12CommandQueue>            fallbackQueue;
     std::chrono::steady_clock::time_point lastInitAttempt{};
     std::chrono::steady_clock::time_point lastFrameTime{};
     std::chrono::steady_clock::time_point lastPresent{};
+
+    ComPtr<ID3D11Device>           d3d11Device;
+    ComPtr<ID3D11DeviceContext>    d3d11Context;
+    ComPtr<ID3D11Texture2D>        d3d11BackBuffer;
+    ComPtr<ID3D11RenderTargetView> d3d11Rtv;
+    ComPtr<ID3D11Texture2D>        d3d11GameTexture;
+    ComPtr<ID3D11ShaderResourceView> d3d11GameSrv;
+    IDXGISwapChain*                d3d11SwapChain{};
+    ImGuiContext*                  d3d11ImguiCtx{};
+    bool                           d3d11BackendInit{};
+    bool                           d3d11Initialized{};
+    bool                           d3d11FirstFrameLogged{};
+
+    bool initD3D11(IDXGISwapChain* sc) {
+        ComPtr<ID3D11Device> dev;
+        if (FAILED(sc->GetDevice(IID_PPV_ARGS(&dev)))) return false;
+        ComPtr<ID3D11Texture2D> backBuffer;
+        if (FAILED(sc->GetBuffer(0, IID_PPV_ARGS(&backBuffer)))) return false;
+        D3D11_TEXTURE2D_DESC desc{};
+        backBuffer->GetDesc(&desc);
+        if (desc.Width < 320 || desc.Height < 180 || desc.SampleDesc.Count != 1) return false;
+
+        ComPtr<ID3D11DeviceContext> context;
+        dev->GetImmediateContext(&context);
+        if (!context || FAILED(dev->CreateRenderTargetView(backBuffer.Get(), nullptr, &d3d11Rtv))) return false;
+
+        auto gameDesc          = desc;
+        gameDesc.BindFlags     = D3D11_BIND_SHADER_RESOURCE;
+        gameDesc.CPUAccessFlags = 0;
+        gameDesc.MiscFlags      = 0;
+        gameDesc.Usage          = D3D11_USAGE_DEFAULT;
+        if (FAILED(dev->CreateTexture2D(&gameDesc, nullptr, &d3d11GameTexture))
+            || FAILED(dev->CreateShaderResourceView(d3d11GameTexture.Get(), nullptr, &d3d11GameSrv))) {
+            d3d11Rtv.Reset();
+            d3d11GameTexture.Reset();
+            return false;
+        }
+
+        IMGUI_CHECKVERSION();
+        d3d11ImguiCtx = ImGui::CreateContext();
+        if (!d3d11ImguiCtx) return false;
+        ImGui::SetCurrentContext(d3d11ImguiCtx);
+        auto& io               = ImGui::GetIO();
+        io.IniFilename         = nullptr;
+        io.LogFilename         = nullptr;
+        io.BackendPlatformName = "playback_d3d11_overlay";
+        std::array<wchar_t, MAX_PATH> windowsDirectory{};
+        auto const windowsDirectoryLength =
+            GetWindowsDirectoryW(windowsDirectory.data(), static_cast<UINT>(windowsDirectory.size()));
+        std::filesystem::path fontPath;
+        if (windowsDirectoryLength > 0 && windowsDirectoryLength < static_cast<UINT>(windowsDirectory.size())) {
+            fontPath = std::filesystem::path(windowsDirectory.data()) / "Fonts" / "msyh.ttc";
+        }
+        auto const fontPathString = fontPath.string();
+        ImFont* font = fontPathString.empty() ? nullptr : io.Fonts->AddFontFromFileTTF(
+            fontPathString.c_str(), 13.0f, nullptr, io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+        );
+        if (font) io.FontDefault = font;
+        else io.Fonts->AddFontDefault();
+        ImFontConfig cfg;
+        cfg.MergeMode     = true;
+        cfg.PixelSnapH    = true;
+        cfg.GlyphOffset.y = 1.0f;
+        static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
+        auto const iconPath = Playback::getInstance().getSelf().getModDir() / "resource_packs" / "playback-ui"
+                            / "fonts" / "lucide.ttf";
+        if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 13.0f, &cfg, iconRange)) {
+            getLogger().warn("Unable to load replay icon font from {}", iconPath);
+        }
+        ImGui::StyleColorsDark();
+        auto& style            = ImGui::GetStyle();
+        style.AntiAliasedLines = true;
+        style.AntiAliasedFill  = true;
+        if (!ImGui_ImplDX11_Init(dev.Get(), context.Get())) {
+            ImGui::DestroyContext(d3d11ImguiCtx);
+            d3d11ImguiCtx = nullptr;
+            return false;
+        }
+
+        d3d11Device        = std::move(dev);
+        d3d11Context       = std::move(context);
+        d3d11BackBuffer    = std::move(backBuffer);
+        d3d11SwapChain     = sc;
+        d3d11BackendInit   = true;
+        d3d11Initialized   = true;
+        d3d11FirstFrameLogged = false;
+        lastFrameTime      = std::chrono::steady_clock::now();
+        lastPresent        = lastFrameTime;
+        initFailed         = false;
+        FILE* file = nullptr;
+        fopen_s(&file, "mods/playback/debug_log.txt", "a");
+        if (file) {
+            fprintf(file, "[Backend] D3D11 initialized swapChain=%p device=%p size=%ux%u\n",
+                static_cast<void*>(sc), static_cast<void*>(d3d11Device.Get()), desc.Width, desc.Height);
+            fclose(file);
+        }
+        return true;
+    }
+
+    void shutdownD3D11() {
+        if (d3d11Context) d3d11Context->ClearState();
+        if (d3d11ImguiCtx) {
+            auto* previous = ImGui::GetCurrentContext();
+            ImGui::SetCurrentContext(d3d11ImguiCtx);
+            if (d3d11BackendInit) ImGui_ImplDX11_Shutdown();
+            ImGui::DestroyContext(d3d11ImguiCtx);
+            ImGui::SetCurrentContext(previous == d3d11ImguiCtx ? nullptr : previous);
+        }
+        d3d11BackendInit = false;
+        d3d11ImguiCtx = nullptr;
+        d3d11GameSrv.Reset();
+        d3d11GameTexture.Reset();
+        d3d11Rtv.Reset();
+        d3d11BackBuffer.Reset();
+        d3d11Context.Reset();
+        d3d11Device.Reset();
+        d3d11SwapChain = nullptr;
+        d3d11Initialized = false;
+        d3d11FirstFrameLogged = false;
+    }
+
+    bool renderD3D11(IDXGISwapChain* sc, EditorState const& state) {
+        if (d3d11Initialized && sc != d3d11SwapChain) shutdownD3D11();
+        if (!d3d11Initialized && !initD3D11(sc)) return false;
+
+        D3D11_TEXTURE2D_DESC desc{};
+        d3d11BackBuffer->GetDesc(&desc);
+        d3d11Context->CopyResource(d3d11GameTexture.Get(), d3d11BackBuffer.Get());
+
+        ImGuiContextRestore restore;
+        ImGui::SetCurrentContext(d3d11ImguiCtx);
+        auto& io                   = ImGui::GetIO();
+        io.DisplaySize             = ImVec2(static_cast<float>(desc.Width), static_cast<float>(desc.Height));
+        io.DisplayFramebufferScale = ImVec2(1, 1);
+        auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
+        io.FontGlobalScale         = std::max(0.85f, layout.scale);
+        auto frameNow              = std::chrono::steady_clock::now();
+        io.DeltaTime = std::clamp(std::chrono::duration<float>(frameNow - lastFrameTime).count(), 1.f / 240.f, 0.25f);
+        lastFrameTime = frameNow;
+
+        ImGui_ImplDX11_NewFrame();
+        playback::refactor::editor::InputHook::syncFrame();
+        beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
+        ImGui::NewFrame();
+        ImGui::GetBackgroundDrawList()->AddImage(
+            ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get()))),
+            ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
+            ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
+        );
+        auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
+        if (refactorEditor.isOpen()) refactorEditor.draw();
+        else {
+            std::vector<EditorAction> actions;
+            ui::drawReplayView(state, layout, actions);
+            for (auto const action : actions) editorContext->submit(action);
+        }
+        endReplayMouseFrame();
+        ImGui::Render();
+
+        ID3D11RenderTargetView* rtv = d3d11Rtv.Get();
+        d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
+        float clearColor[]{0.055f, 0.055f, 0.065f, 1};
+        d3d11Context->ClearRenderTargetView(rtv, clearColor);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        if (!d3d11FirstFrameLogged) {
+            FILE* file = nullptr;
+            fopen_s(&file, "mods/playback/debug_log.txt", "a");
+            if (file) {
+                fprintf(file, "[Frame] first D3D11 ImGui frame submitted size=%ux%u\n", desc.Width, desc.Height);
+                fclose(file);
+            }
+            d3d11FirstFrameLogged = true;
+        }
+        return true;
+    }
 
     bool init(IDXGISwapChain* sc, ID3D12CommandQueue* cq) {
         ComPtr<IDXGISwapChain3> sc3;
@@ -314,15 +490,18 @@ struct ImGuiRenderer::Impl {
             io.Fonts->AddFontDefault();
         }
 
-        // Merge icon font for the refactored editor (Lucide icons in PUA range)
+        // Merge the packaged Lucide font before the DX12 backend creates its font texture.
         {
             ImFontConfig cfg;
-            cfg.MergeMode  = true;
-            cfg.PixelSnapH = true;
+            cfg.MergeMode     = true;
+            cfg.PixelSnapH    = true;
             cfg.GlyphOffset.y = 1.0f;
-            static const ImWchar iconRange[] = { 0xe000, 0xe6ff, 0 };
-            io.Fonts->AddFontFromFileTTF("resources/fonts/lucide.ttf", 13.0f, &cfg, iconRange);
-            io.Fonts->Build();
+            static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
+            auto const iconPath = Playback::getInstance().getSelf().getModDir() / "resource_packs" / "playback-ui"
+                                / "fonts" / "lucide.ttf";
+            if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 13.0f, &cfg, iconRange)) {
+                getLogger().warn("Unable to load replay icon font from {}", iconPath);
+            }
         }
 
         ImGui::StyleColorsDark();
@@ -376,6 +555,7 @@ struct ImGuiRenderer::Impl {
 
     void shutdown() {
         setReplayMouseInputActive(false);
+        shutdownD3D11();
         if (fence && commandQueue && unfenced) {
             UINT64 fv = lastFenceValue + 1;
             if (SUCCEEDED(commandQueue->Signal(fence.Get(), fv))) {
@@ -455,27 +635,54 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
             if (f) { fprintf(f, "[RenderOnce] replayVisible=false\n"); fclose(f); }
         });
         setReplayMouseInputActive(false);
-        if (p.initialized) p.shutdown();
+        if (p.initialized || p.d3d11Initialized) p.shutdown();
         return false;
     }
     auto now = std::chrono::steady_clock::now();
     if (p.initialized && swapChain == p.swapChain) p.lastPresent = now;
     if (!state.hudVisible) {
-        std::call_once(sLogHudVisible, [] {
-            FILE* f = nullptr;
-            fopen_s(&f, "mods/playback/debug_log.txt", "a");
-            if (f) { fprintf(f, "[RenderOnce] hudVisible=false\n"); fclose(f); }
+        std::call_once(sLogHudVisible, [state] {
+            FILE* file = nullptr;
+            fopen_s(&file, "mods/playback/debug_log.txt", "a");
+            if (file) {
+                fprintf(
+                    file,
+                    "[Visibility] blocked replayVisible=%d hudVisible=%d currentTick=%d totalTicks=%d\n",
+                    state.replayVisible,
+                    state.hudVisible,
+                    state.currentTick,
+                    state.totalTicks
+                );
+                fclose(file);
+            }
         });
         setReplayMouseInputActive(false);
         return false;
     }
 
-    ComPtr<ID3D12CommandQueue> q;
-    // debug: log swapchain ptr
-    {
-        static std::once_flag sScPtr;
-        std::call_once(sScPtr, [swapChain] { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Render] render() swapChain=%p\n",(void*)swapChain);fclose(f);} });
+    ComPtr<ID3D11Device> d3d11Device;
+    if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d11Device)))) {
+        if (p.initialized) p.shutdown();
+        MouseInputAttempt inputAttempt;
+        if (!p.renderD3D11(swapChain, state)) return false;
+        inputAttempt.commit();
+        return true;
     }
+
+    ComPtr<ID3D12Device> d3d12Device;
+    if (FAILED(swapChain->GetDevice(IID_PPV_ARGS(&d3d12Device)))) return false;
+    if (p.d3d11Initialized) p.shutdownD3D11();
+
+    ComPtr<ID3D12CommandQueue> q;
+    static std::once_flag     sSwapChainSeen;
+    std::call_once(sSwapChainSeen, [swapChain] {
+        FILE* file = nullptr;
+        fopen_s(&file, "mods/playback/debug_log.txt", "a");
+        if (file) {
+            fprintf(file, "[Render] Present reached swapChain=%p\n", static_cast<void*>(swapChain));
+            fclose(file);
+        }
+    });
     if (p.initialized && swapChain != p.swapChain) {
         q         = getSwapChainQueue(swapChain);
         auto area = getSwapChainArea(swapChain);
@@ -487,37 +694,42 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     MouseInputAttempt ia;
     if (!p.initialized) {
         if (!q) q = getSwapChainQueue(swapChain);
-        // Fallback 1: get queue from CreateCommandQueue hook (device→queue map)
+        // Safe fallback for an already-created swap chain: use the queue only if the
+        // capture hook observed exactly one Direct queue for this device.
         if (!q) {
-            ComPtr<ID3D12Device> fbDev;
-            if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&fbDev)))) {
-                q = getDeviceQueue(fbDev.Get());
-            }
-        }
-        // Fallback 2: try to create a new command queue from the swap chain's device
-        if (!q) {
-            if (!p.fallbackQueue) {
-                ComPtr<ID3D12Device> fbDev;
-                HRESULT hrDev = swapChain->GetDevice(IID_PPV_ARGS(&fbDev));
-                if (SUCCEEDED(hrDev)) {
-                    D3D12_COMMAND_QUEUE_DESC fbDesc{};
-                    fbDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-                    fbDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-                    HRESULT hrQueue = fbDev->CreateCommandQueue(&fbDesc, IID_PPV_ARGS(&p.fallbackQueue));
-                    if (SUCCEEDED(hrQueue)) {
-                        q = p.fallbackQueue.Get();
-                        { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Render] created fallback command queue\n");fclose(f);} }
-                    } else { { FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a"); if(f){fprintf(f,"[Render] fallback CreateCommandQueue FAILED hr=0x%08X\n", (unsigned int)hrQueue);fclose(f);} } }
+            ComPtr<ID3D12Device> device;
+            if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&device)))) q = getDeviceQueue(device.Get());
+            if (q) {
+                bindSwapChainQueue(swapChain, q.Get());
+                FILE* file = nullptr;
+                fopen_s(&file, "mods/playback/debug_log.txt", "a");
+                if (file) {
+                    fprintf(
+                        file,
+                        "[Queue] bound unique Direct queue swapChain=%p queue=%p\n",
+                        static_cast<void*>(swapChain),
+                        static_cast<void*>(q.Get())
+                    );
+                    fclose(file);
                 }
-            } else {
-                q = p.fallbackQueue.Get();
             }
         }
         if (!q) {
-            std::call_once(sLogSwapChain, [] {
-                FILE* f = nullptr;
-                fopen_s(&f, "mods/playback/debug_log.txt", "a");
-                if (f) { fprintf(f, "[RenderOnce] no swap chain queue\n"); fclose(f); }
+            std::call_once(sLogSwapChain, [swapChain] {
+                ComPtr<ID3D12Device> device;
+                HRESULT const        result = swapChain->GetDevice(IID_PPV_ARGS(&device));
+                FILE*                file   = nullptr;
+                fopen_s(&file, "mods/playback/debug_log.txt", "a");
+                if (file) {
+                    fprintf(
+                        file,
+                        "[Queue] unavailable swapChain=%p device=%p getDevice=0x%08X; rendering skipped\n",
+                        static_cast<void*>(swapChain),
+                        static_cast<void*>(device.Get()),
+                        static_cast<unsigned int>(result)
+                    );
+                    fclose(file);
+                }
             });
             if (!p.missingQueue) {
                 getLogger().warn("Replay ImGui timeline cannot render: no command queue available");
@@ -553,10 +765,20 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     auto bd = f.backBuffer->GetDesc();
     if (bd.Width == 0 || bd.Height == 0) return false;
 
-    std::call_once(sLogReached, [] {
-        FILE* f = nullptr;
-        fopen_s(&f, "mods/playback/debug_log.txt", "a");
-        if (f) { fprintf(f, "[RenderOnce] reached render begin\n"); fclose(f); }
+    std::call_once(sLogReached, [&p, fi, bd] {
+        FILE* file = nullptr;
+        fopen_s(&file, "mods/playback/debug_log.txt", "a");
+        if (file) {
+            fprintf(
+                file,
+                "[Frame] begin queue=%p buffer=%u size=%llux%u\n",
+                static_cast<void*>(p.commandQueue.Get()),
+                fi,
+                static_cast<unsigned long long>(bd.Width),
+                bd.Height
+            );
+            fclose(file);
+        }
     });
 
     ImGuiContextRestore cr;
@@ -651,13 +873,22 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     p.unfenced          = false;
     f.fenceValue        = fv;
     p.frameFences[slot] = fv;
+    static std::once_flag sFrameSubmitted;
+    std::call_once(sFrameSubmitted, [fv] {
+        FILE* file = nullptr;
+        fopen_s(&file, "mods/playback/debug_log.txt", "a");
+        if (file) {
+            fprintf(file, "[Frame] first ImGui command list submitted fence=%llu\n", static_cast<unsigned long long>(fv));
+            fclose(file);
+        }
+    });
     ia.commit();
     return true;
 }
 
 bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
     std::scoped_lock lk(mImpl->mutex);
-    if (sc == mImpl->swapChain) {
+    if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
         mImpl->shutdown();
         mImpl->initFailed      = false;
         mImpl->lastInitAttempt = {};
@@ -668,7 +899,7 @@ bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
 void ImGuiRenderer::afterPresent(IDXGISwapChain* sc, long result) {
     if (result != DXGI_ERROR_DEVICE_REMOVED && result != DXGI_ERROR_DEVICE_RESET) return;
     std::scoped_lock lk(mImpl->mutex);
-    if (sc == mImpl->swapChain) mImpl->shutdown();
+    if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) mImpl->shutdown();
     unbindSwapChainQueue(sc);
 }
 

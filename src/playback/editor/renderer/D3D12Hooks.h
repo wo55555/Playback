@@ -44,8 +44,6 @@ ComPtr<ID3D12CommandQueue> getResizePresentQueue(UINT bufferCount, IUnknown* con
 
 ComPtr<ID3D12CommandQueue> getDeviceQueue(ID3D12Device* device);
 
-ID3D12Device* getCapturedD3D12Device();
-
 [[nodiscard]] bool resolveHookTargets(
     void*& outPresent,
     void*& outPresent1,

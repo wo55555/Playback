@@ -65,12 +65,7 @@ void Editor::open() {
 void Editor::draw() {
     if (!mOpen) return;
 
-    // Lazy font loading (ImGui context must be available)
-    static bool sFontsLoaded = false;
-    if (!sFontsLoaded) {
-        mIconSystem.loadFonts();
-        sFontsLoaded = true;
-    }
+    // Fonts are assembled by ImGuiRenderer before the DX12 backend creates its font texture.
 
     // Apply theme each frame
     mTheme.apply();
