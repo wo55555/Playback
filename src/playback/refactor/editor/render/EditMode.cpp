@@ -21,7 +21,10 @@ void EditMode::draw() {
 
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
     float contentHeight = std::max(1.0f, displaySize.y - kMenuHeight - kStatusHeight);
-    float maxDetailsRatio = std::min(0.50f, 1.0f - kViewportMinWidth / std::max(1.0f, displaySize.x));
+    float curveReservedWidth = editor.mCurveEditorPanel.isOpen() ? kCurveWidth + kSplitterThickness : 0.0f;
+    float maxDetailsRatio = std::min(
+        0.50f,
+        1.0f - (kViewportMinWidth + curveReservedWidth) / std::max(1.0f, displaySize.x));
     float minDetailsRatio = std::min(kDetailsMinWidth / std::max(1.0f, displaySize.x), maxDetailsRatio);
     editor.mDetailsWidthRatio = std::clamp(editor.mDetailsWidthRatio, minDetailsRatio, maxDetailsRatio);
     float detailsWidth = displaySize.x * editor.mDetailsWidthRatio;
@@ -113,6 +116,14 @@ void EditMode::draw() {
         editor.mTimelineHeightRatio = editor.mSplitter.drawHorizontalSplit(
             1.0f - editor.mTimelineHeightRatio, leftArea, 1.0f - maxTimelineRatio, 1.0f - minTimelineRatio);
         editor.mTimelineHeightRatio = 1.0f - editor.mTimelineHeightRatio;
+        static float savedDetailsRatio = editor.mDetailsWidthRatio;
+        static float savedTimelineRatio = editor.mTimelineHeightRatio;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)
+            && (savedDetailsRatio != editor.mDetailsWidthRatio || savedTimelineRatio != editor.mTimelineHeightRatio)) {
+            editor.saveLayoutPreferences();
+            savedDetailsRatio = editor.mDetailsWidthRatio;
+            savedTimelineRatio = editor.mTimelineHeightRatio;
+        }
         ImGui::End();
     }
 

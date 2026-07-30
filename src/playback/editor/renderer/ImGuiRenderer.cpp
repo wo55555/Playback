@@ -295,9 +295,10 @@ struct ImGuiRenderer::Impl {
         auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
         if (refactorEditor.isOpen()) {
             refactorEditor.setGameTexture(
-                static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())),
-                static_cast<float>(desc.Width) / std::max(1.0f, static_cast<float>(desc.Height)));
+                static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
             refactorEditor.draw();
+            auto viewport = refactorEditor.viewportVideoRect();
+            setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
         } else {
             ImGui::GetBackgroundDrawList()->AddImage(
                 ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get()))),
@@ -804,9 +805,10 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
     if (refactorEditor.isOpen()) {
         refactorEditor.setGameTexture(
-            static_cast<ImTextureID>(f.gameSrvGpu.ptr),
-            static_cast<float>(bd.Width) / std::max(1.0f, static_cast<float>(bd.Height)));
+            static_cast<ImTextureID>(f.gameSrvGpu.ptr));
         refactorEditor.draw();
+        auto viewport = refactorEditor.viewportVideoRect();
+        setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
     } else {
         ImGui::GetBackgroundDrawList()->AddImage(
             ImTextureRef(static_cast<ImTextureID>(f.gameSrvGpu.ptr)),

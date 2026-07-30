@@ -7,6 +7,9 @@
 
 #include "imgui.h"
 
+#include <algorithm>
+#include <fstream>
+
 namespace playback::refactor::editor {
 
 Editor& Editor::getInstance() {
@@ -19,13 +22,39 @@ void Editor::initialize() {
     // DO NOT call mTheme.apply() here — ImGui context is not yet created
     // during enable(). Theme is applied in draw() each frame.
     mOpen = false;
+    loadLayoutPreferences();
 }
 
 void Editor::shutdown() {
+    saveLayoutPreferences();
     mOpen = false;
     mSelection.clear();
     mState = {};
     EditorBridge::getInstance().shutdown();
+}
+
+void Editor::setVideoAspectRatio(float aspectRatio) {
+    mVideoAspectRatio = std::clamp(aspectRatio, 0.25f, 4.0f);
+    mViewportPanel.setVideoAspectRatio(mVideoAspectRatio);
+    saveLayoutPreferences();
+}
+
+void Editor::loadLayoutPreferences() {
+    std::ifstream input("mods/playback/editor-layout.ini");
+    float detailsRatio{};
+    float timelineRatio{};
+    float aspectRatio{};
+    if (input >> detailsRatio >> timelineRatio >> aspectRatio) {
+        mDetailsWidthRatio = std::clamp(detailsRatio, 0.15f, 0.50f);
+        mTimelineHeightRatio = std::clamp(timelineRatio, 0.18f, 0.65f);
+        mVideoAspectRatio = std::clamp(aspectRatio, 0.25f, 4.0f);
+    }
+    mViewportPanel.setVideoAspectRatio(mVideoAspectRatio);
+}
+
+void Editor::saveLayoutPreferences() const {
+    std::ofstream output("mods/playback/editor-layout.ini", std::ios::trunc);
+    if (output) output << mDetailsWidthRatio << ' ' << mTimelineHeightRatio << ' ' << mVideoAspectRatio;
 }
 
 void Editor::toggle() {

@@ -17,9 +17,6 @@ CurveEditorPanel::CurveEditorPanel() {
 void CurveEditorPanel::draw() {
     if (!mOpen) return;
 
-    ImGui::Begin("Curve Editor", &mOpen,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
     // Preset dropdown
     if (ImGui::BeginCombo("Preset", "Custom")) {
         if (ImGui::Selectable("Linear")) {
@@ -84,7 +81,6 @@ void CurveEditorPanel::draw() {
     ImGui::Text("Sample at 0.25: %.3f", mEditor.sampleAt(0.25f));
     ImGui::Text("Sample at 0.75: %.3f", mEditor.sampleAt(0.75f));
 
-    ImGui::End();
 }
 
 } // namespace playback::refactor::editor

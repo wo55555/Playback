@@ -19,6 +19,8 @@
 #include "render/EditMode.h"
 #include "render/RenderMode.h"
 
+#include <string>
+
 namespace playback::refactor::editor {
 
 class Editor {
@@ -43,9 +45,12 @@ public:
     const EditorStateExt& state() const { return mState; }
     SelectionModel&       selection() { return mSelection; }
     CurveEditorPanel&     curveEditorPanel() { return mCurveEditorPanel; }
-    void setGameTexture(ImTextureID texture, float aspectRatio) {
-        mViewportPanel.setGameTexture(texture, aspectRatio);
+    void setGameTexture(ImTextureID texture) {
+        mViewportPanel.setGameTexture(texture);
     }
+    void setVideoAspectRatio(float aspectRatio);
+    [[nodiscard]] float videoAspectRatio() const { return mVideoAspectRatio; }
+    [[nodiscard]] Rect viewportVideoRect() const { return mViewportPanel.videoRect(); }
 
 private:
     Editor() = default;
@@ -78,6 +83,10 @@ private:
     // Layout
     float mDetailsWidthRatio{0.28f};
     float mTimelineHeightRatio{0.35f};
+    float mVideoAspectRatio{16.0f / 9.0f};
+
+    void loadLayoutPreferences();
+    void saveLayoutPreferences() const;
 
     // Allow EditMode to access Editor members
     friend class EditMode;

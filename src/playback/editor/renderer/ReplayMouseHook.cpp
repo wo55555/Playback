@@ -466,10 +466,11 @@ void setReplayMouseInputActive(bool active) {
 void setReplayUIActive(bool active) { gReplayUIActive.store(active, std::memory_order_release); }
 
 void beginReplayMouseFrame(ui::ReplayUILayout const& layout, float displayWidth, float displayHeight) {
-    gGameViewportLeft.store(layout.gameViewportLeft, std::memory_order_relaxed);
-    gGameViewportTop.store(layout.gameViewportTop, std::memory_order_relaxed);
-    gGameViewportRight.store(layout.gameViewportRight, std::memory_order_relaxed);
-    gGameViewportBottom.store(layout.gameViewportBottom, std::memory_order_relaxed);
+    setReplayGameViewport(
+        layout.gameViewportLeft,
+        layout.gameViewportTop,
+        layout.gameViewportRight,
+        layout.gameViewportBottom);
     setReplayMouseInputActive(true);
     if (!gReplayUiInputActive.load(std::memory_order_acquire)) return;
 
@@ -529,6 +530,13 @@ void beginReplayMouseFrame(ui::ReplayUILayout const& layout, float displayWidth,
     if (gMouseOwner.load(std::memory_order_acquire) == MouseOwner::GameCaptured || !focused) {
         for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) io.AddMouseButtonEvent(button, false);
     }
+}
+
+void setReplayGameViewport(float left, float top, float right, float bottom) {
+    gGameViewportLeft.store(left, std::memory_order_relaxed);
+    gGameViewportTop.store(top, std::memory_order_relaxed);
+    gGameViewportRight.store(right, std::memory_order_relaxed);
+    gGameViewportBottom.store(bottom, std::memory_order_relaxed);
 }
 
 void endReplayMouseFrame() {

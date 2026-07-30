@@ -25,9 +25,6 @@ void TimelinePanel::draw() {
     // ── Sync playhead position from bridge state every frame ──
     mPlayheadTick = state.currentTick;
 
-    ImGui::Begin("Timeline", nullptr,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
     drawHeader();
     ImGui::Separator();
     drawRuler();
@@ -45,8 +42,6 @@ void TimelinePanel::draw() {
             onWheel(io.MouseWheel);
         }
     }
-
-    ImGui::End();
 
     // ── End-of-frame: commit drag operation through bridge ──
     if (mDragType != DragType::None && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -209,7 +204,7 @@ void TimelinePanel::drawRuler() {
                 int s = sec % 60;
                 char label[16];
                 std::snprintf(label, sizeof(label), "%d:%02d", m, s);
-                dl->AddText(ImVec2(x + 2, rulerArea.max.y - 22),
+                dl->AddText(ImGui::GetFont(), 14.0f, ImVec2(x + 2, rulerArea.max.y - 22),
                     IM_COL32(0x8a, 0x8a, 0x8a, 0xff), label);
             }
         }
@@ -387,7 +382,7 @@ void TimelinePanel::drawVideoClipOnTrack(const Clip& c, Rect rowArea, int trackI
     char durLabel[32];
     std::snprintf(durLabel, sizeof(durLabel), "+%d", c.outTick - c.inTick);
     ImVec2 durSize = ImGui::CalcTextSize(durLabel);
-    dl->AddText(ImVec2(x2 - durSize.x - 4, rowArea.min.y + 3),
+    dl->AddText(ImGui::GetFont(), 14.0f, ImVec2(x2 - durSize.x - 4, rowArea.min.y + 3),
         IM_COL32(0xaa, 0xaa, 0xaa, 0xaa), durLabel);
 
     // ── Hit test & interaction ──

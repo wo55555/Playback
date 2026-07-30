@@ -7,7 +7,7 @@
 namespace playback::refactor::editor {
 
 void ViewportMenu::draw() {
-    if (ImGui::BeginPopupContextWindow("ViewportContextMenu", ImGuiPopupFlags_MouseButtonRight)) {
+    if (ImGui::BeginPopupContextItem("ViewportContextMenu", ImGuiPopupFlags_MouseButtonRight)) {
         if (ImGui::MenuItem("Add Keyframe Here", "K")) {}
         if (ImGui::MenuItem("Add Marker Here", "M")) {}
         if (ImGui::MenuItem("Set as Play Start")) {}
