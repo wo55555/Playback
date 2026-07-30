@@ -34,7 +34,9 @@
           ]
         }
       ],
-      "preserve_files": [],
+      "preserve_files": [
+        "mods/playback/data/"
+      ],
       "remove_files": [],
       "scripts": {
         "pre_install": [],
