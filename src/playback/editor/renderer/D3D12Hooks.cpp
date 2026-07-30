@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 
 namespace playback::editor::renderer {
 
@@ -38,9 +39,9 @@ constexpr size_t SwapChainPresent1Index                    = 22;
 constexpr size_t SwapChainResizeBuffersIndex               = 13;
 constexpr size_t SwapChainResizeBuffers1Index              = 39;
 constexpr size_t FactoryCreateSwapChainIndex               = 10;
-constexpr size_t FactoryCreateSwapChainForHwndIndex        = 15;
-constexpr size_t FactoryCreateSwapChainForCoreWindowIndex  = 16;
-constexpr size_t FactoryCreateSwapChainForCompositionIndex = 24;
+constexpr size_t FactoryCreateSwapChainForHwndIndex        = 13;
+constexpr size_t FactoryCreateSwapChainForCoreWindowIndex  = 14;
+constexpr size_t FactoryCreateSwapChainForCompositionIndex = 22;
 constexpr DWORD  DetourWaitTimeoutMsLocal                  = 2000;
 
 ll::memory::FuncPtr gOriginalPresent{};
@@ -511,11 +512,18 @@ bool getDirectCommandQueue(IUnknown* object, ComPtr<ID3D12CommandQueue>& queue) 
     return false;
 }
 
+// ── Swap chain queue fallback map (used when private data is lost) ──
+std::mutex                         gSwapChainQueueFallbackMutex;
+std::unordered_map<void*, IUnknown*> gSwapChainQueueFallback;
+
 void bindSwapChainQueue(IDXGISwapChain* swapChain, IUnknown* queueObject) {
     if (!swapChain) return;
     ComPtr<ID3D12CommandQueue> queue;
     if (getDirectCommandQueue(queueObject, queue)) {
         swapChain->SetPrivateDataInterface(SwapChainQueueGuid, queue.Get());
+        // Also store in fallback map
+        std::scoped_lock lk(gSwapChainQueueFallbackMutex);
+        gSwapChainQueueFallback[swapChain] = queue.Detach(); // takes ownership, +1 ref
     } else {
         swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
     }
@@ -523,17 +531,37 @@ void bindSwapChainQueue(IDXGISwapChain* swapChain, IUnknown* queueObject) {
 
 ComPtr<ID3D12CommandQueue> getSwapChainQueue(IDXGISwapChain* swapChain) {
     if (!swapChain) return nullptr;
+    // Primary path: private data set by the detour
     ComPtr<IUnknown> queueObject;
     UINT             dataSize = sizeof(IUnknown*);
-    if (FAILED(swapChain->GetPrivateData(SwapChainQueueGuid, &dataSize, queueObject.GetAddressOf()))
-        || dataSize != sizeof(IUnknown*))
-        return nullptr;
-    ComPtr<ID3D12CommandQueue> queue;
-    return getDirectCommandQueue(queueObject.Get(), queue) ? queue : nullptr;
+    if (SUCCEEDED(swapChain->GetPrivateData(SwapChainQueueGuid, &dataSize, queueObject.GetAddressOf()))
+        && dataSize == sizeof(IUnknown*))
+    {
+        ComPtr<ID3D12CommandQueue> queue;
+        if (getDirectCommandQueue(queueObject.Get(), queue)) return queue;
+    }
+    // Fallback: global map (survives IFramebuffer recreation etc.)
+    {
+        std::scoped_lock lk(gSwapChainQueueFallbackMutex);
+        auto it = gSwapChainQueueFallback.find(swapChain);
+        if (it != gSwapChainQueueFallback.end() && it->second) {
+            ComPtr<ID3D12CommandQueue> queue;
+            if (SUCCEEDED(it->second->QueryInterface(IID_PPV_ARGS(&queue))) && queue) return queue;
+        }
+    }
+    return nullptr;
 }
 
 void unbindSwapChainQueue(IDXGISwapChain* swapChain) {
-    if (swapChain) swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
+    if (swapChain) {
+        swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
+        std::scoped_lock lk(gSwapChainQueueFallbackMutex);
+        auto it = gSwapChainQueueFallback.find(swapChain);
+        if (it != gSwapChainQueueFallback.end()) {
+            if (it->second) it->second->Release();
+            gSwapChainQueueFallback.erase(it);
+        }
+    }
 }
 
 ComPtr<ID3D12CommandQueue> getResizePresentQueue(UINT bufferCount, IUnknown* const* presentQueues) {

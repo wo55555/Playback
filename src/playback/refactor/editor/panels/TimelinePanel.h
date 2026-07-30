@@ -4,6 +4,7 @@
 #include "playback/refactor/editor/models/Track.h"
 #include "playback/refactor/editor/Splitter.h"
 
+#include <optional>
 #include <string>
 
 namespace playback::refactor::editor {

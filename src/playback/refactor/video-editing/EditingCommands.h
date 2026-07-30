@@ -1,6 +1,7 @@
 #pragma once
 
 #include "playback/refactor/editor/models/EditorStateExt.h"
+#include "playback/refactor/editor/models/IEditCommand.h"
 #include "playback/refactor/editor/models/Track.h"
 
 #include <memory>
@@ -13,12 +14,12 @@ using namespace playback::refactor::editor;
 
 // ===== IEditCommand (video-editing version) =====
 
-class IEditCommand {
+class IEditCommand : public playback::refactor::editor::IEditCommand {
 public:
     virtual ~IEditCommand() = default;
-    virtual void execute(EditorStateExt& s) = 0;
-    virtual void undo(EditorStateExt& s) = 0;
-    [[nodiscard]] virtual std::string label() const = 0;
+    void execute(EditorStateExt& s) override = 0;
+    void undo(EditorStateExt& s) override = 0;
+    [[nodiscard]] std::string label() const override = 0;
 };
 
 // ===== AddClipCommand =====

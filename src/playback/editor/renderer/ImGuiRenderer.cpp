@@ -427,13 +427,31 @@ void ImGuiRenderer::setContext(EditorContext* context) {
 }
 
 bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
+    // One-shot diagnostic flags (write to debug_log.txt once per session)
+    static std::once_flag sLogEditorContext, sLogReplayVisible, sLogHudVisible, sLogSwapChain, sLogInitThrottle,
+        sLogInitFailed, sLogReached;
+
     auto&            p = *mImpl;
     std::scoped_lock lk(p.mutex);
+
     if (!isTimelineRenderingEnabled()) return false;
     if (!swapChain) return false;
-    if (!p.editorContext) return false;
+    if (!p.editorContext) {
+        std::call_once(sLogEditorContext, [] {
+            FILE* f = nullptr;
+            fopen_s(&f, "mods/playback/debug_log.txt", "a");
+            if (f) { fprintf(f, "[RenderOnce] editorContext=null\n"); fclose(f); }
+        });
+        return false;
+    }
+
     auto const state = p.editorContext->snapshot();
     if (!state.replayVisible) {
+        std::call_once(sLogReplayVisible, [] {
+            FILE* f = nullptr;
+            fopen_s(&f, "mods/playback/debug_log.txt", "a");
+            if (f) { fprintf(f, "[RenderOnce] replayVisible=false\n"); fclose(f); }
+        });
         setReplayMouseInputActive(false);
         if (p.initialized) p.shutdown();
         return false;
@@ -441,6 +459,11 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     auto now = std::chrono::steady_clock::now();
     if (p.initialized && swapChain == p.swapChain) p.lastPresent = now;
     if (!state.hudVisible) {
+        std::call_once(sLogHudVisible, [] {
+            FILE* f = nullptr;
+            fopen_s(&f, "mods/playback/debug_log.txt", "a");
+            if (f) { fprintf(f, "[RenderOnce] hudVisible=false\n"); fclose(f); }
+        });
         setReplayMouseInputActive(false);
         return false;
     }
@@ -458,6 +481,11 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     if (!p.initialized) {
         if (!q) q = getSwapChainQueue(swapChain);
         if (!q) {
+            std::call_once(sLogSwapChain, [] {
+                FILE* f = nullptr;
+                fopen_s(&f, "mods/playback/debug_log.txt", "a");
+                if (f) { fprintf(f, "[RenderOnce] no swap chain queue\n"); fclose(f); }
+            });
             if (!p.missingQueue) {
                 getLogger().warn("Replay ImGui timeline cannot render: swap chain not captured at creation");
                 p.missingQueue = true;
@@ -467,6 +495,11 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         if (now - p.lastInitAttempt < std::chrono::milliseconds(500)) return false;
         p.lastInitAttempt = now;
         if (!p.init(swapChain, q.Get())) {
+            std::call_once(sLogInitFailed, [] {
+                FILE* f = nullptr;
+                fopen_s(&f, "mods/playback/debug_log.txt", "a");
+                if (f) { fprintf(f, "[RenderOnce] init() failed\n"); fclose(f); }
+            });
             if (!p.initFailed) {
                 getLogger().warn("Unable to initialize replay ImGui timeline");
                 p.initFailed = true;
@@ -486,6 +519,12 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
 
     auto bd = f.backBuffer->GetDesc();
     if (bd.Width == 0 || bd.Height == 0) return false;
+
+    std::call_once(sLogReached, [] {
+        FILE* f = nullptr;
+        fopen_s(&f, "mods/playback/debug_log.txt", "a");
+        if (f) { fprintf(f, "[RenderOnce] reached render begin\n"); fclose(f); }
+    });
 
     ImGuiContextRestore cr;
     ImGui::SetCurrentContext(p.imguiCtx);

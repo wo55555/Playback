@@ -5,6 +5,7 @@
 
 #include "imgui.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 

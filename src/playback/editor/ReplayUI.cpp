@@ -30,6 +30,9 @@ bool hookReplayUI(bool enable) {
         playback::refactor::editor::EditorBridge::getInstance().initialize(&gContext);
         playback::refactor::editor::Editor::getInstance().initialize();
 
+        // ── Install the D3D12 swap chain hooks ──
+        // Must be done here (not deferred to RendererInitHook) because the RendererInitHook
+        // may not fire reliably during enable(). The hook probes DXGI to resolve vtable entries.
         if (!hookReplayUIRendererInit(true)) {
             renderer::setReplayUIActive(false);
             renderer::gImGuiRenderer.setContext(nullptr);

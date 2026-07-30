@@ -2,6 +2,8 @@
 
 #include "imgui.h"
 
+#include <algorithm>
+
 namespace playback::refactor::editor {
 
 namespace {

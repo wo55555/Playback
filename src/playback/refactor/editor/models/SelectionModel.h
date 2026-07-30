@@ -55,7 +55,8 @@ public:
 
     template<typename T>
     [[nodiscard]] const T* getAs() const {
-        return std::get_if<T>(&mSelection);
+        if (!mSelection) return nullptr;
+        return std::get_if<T>(&(*mSelection));
     }
 
 private:

@@ -359,13 +359,13 @@ void TimelinePanel::drawVideoClipOnTrack(const Clip& c, Rect rowArea, int trackI
     if (x2 < contentStartX || x1 > rowArea.max.x) return;
 
     bool isSelected = (c.id == mSelectedClipId);
-    ImRect clipRect(ImVec2(x1, rowArea.min.y + 2), ImVec2(x2, rowArea.max.y - 2));
+    Rect clipRect{ImVec2(x1, rowArea.min.y + 2), ImVec2(x2, rowArea.max.y - 2)};
 
     // Clip body
     ImU32 fillColor = IM_COL32(0x2a, 0x5a, 0x8a, 0xcc);
     ImU32 borderColor = isSelected ? IM_COL32(0xf0, 0xc0, 0x20, 0xff) : IM_COL32(0x4a, 0x8a, 0xba, 0xff);
-    dl->AddRectFilled(clipRect.Min, clipRect.Max, fillColor, 4.0f);
-    dl->AddRect(clipRect.Min, clipRect.Max, borderColor, 4.0f);
+    dl->AddRectFilled(clipRect.min, clipRect.max, fillColor, 4.0f);
+    dl->AddRect(clipRect.min, clipRect.max, borderColor, 4.0f);
 
     // Clip name
     ImGui::SetCursorScreenPos(ImVec2(x1 + 4, rowArea.min.y + 3));
@@ -392,11 +392,11 @@ void TimelinePanel::drawVideoClipOnTrack(const Clip& c, Rect rowArea, int trackI
 
     // ── Hit test & interaction ──
     ImVec2 mouse = ImGui::GetMousePos();
-    bool hovered = clipRect.Contains(mouse);
+    bool hovered = clipRect.contains(mouse);
 
     // Edge hit: left/right 6px
-    bool onLeftEdge  = (std::abs(mouse.x - x1) < 6.0f) && (mouse.y >= clipRect.Min.y && mouse.y <= clipRect.Max.y);
-    bool onRightEdge = (std::abs(mouse.x - x2) < 6.0f) && (mouse.y >= clipRect.Min.y && mouse.y <= clipRect.Max.y);
+    bool onLeftEdge  = (std::abs(mouse.x - x1) < 6.0f) && (mouse.y >= clipRect.min.y && mouse.y <= clipRect.max.y);
+    bool onRightEdge = (std::abs(mouse.x - x2) < 6.0f) && (mouse.y >= clipRect.min.y && mouse.y <= clipRect.max.y);
 
     // Cursor change
     if (onLeftEdge || onRightEdge) {
@@ -508,9 +508,9 @@ void TimelinePanel::drawTransitionBetween(int trackIndex, const Transition& t, R
     if (x2 < contentStartX || x1 > rowArea.max.x) return;
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImRect transRect(ImVec2(x1, rowArea.min.y + 2), ImVec2(x2, rowArea.max.y - 2));
-    dl->AddRectFilled(transRect.Min, transRect.Max, IM_COL32(0x3a, 0x8c, 0xf0, 0x55), 4.0f);
-    dl->AddRect(transRect.Min, transRect.Max, IM_COL32(0x3a, 0x8c, 0xf0, 0x88), 4.0f);
+    Rect transRect{ImVec2(x1, rowArea.min.y + 2), ImVec2(x2, rowArea.max.y - 2)};
+    dl->AddRectFilled(transRect.min, transRect.max, IM_COL32(0x3a, 0x8c, 0xf0, 0x55), 4.0f);
+    dl->AddRect(transRect.min, transRect.max, IM_COL32(0x3a, 0x8c, 0xf0, 0x88), 4.0f);
 
     const char* kindNames[] = {"Cut", "Fade", "CrossDissolve"};
     int idx = static_cast<int>(t.kind);

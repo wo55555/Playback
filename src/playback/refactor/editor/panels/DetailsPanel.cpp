@@ -22,14 +22,14 @@ void DetailsPanel::draw() {
     auto& editor = Editor::getInstance();
     auto& sel = editor.selection();
 
-    if (sel.isEmpty()) {
+    if (!sel.hasSelection()) {
         drawEmpty();
         return;
     }
 
-    if (sel.has<SelectedKeyframe>()) {
+    if (sel.getAs<SelectedKeyframe>()) {
         drawKeyframe();
-    } else if (sel.has<SelectedClip>()) {
+    } else if (sel.getAs<SelectedClip>()) {
         drawClip();
     } else {
         drawEmpty();
@@ -105,7 +105,7 @@ void DetailsPanel::drawKeyframe() {
             drawVec3Field("Position", kf.position);
             drawAngleField("Yaw", kf.yaw);
             drawAngleField("Pitch", kf.pitch);
-            drawColorField("Tint", kf.tint);
+            drawColorField(kf.tint);
 
             // Easing dropdown
             ImGui::Separator();

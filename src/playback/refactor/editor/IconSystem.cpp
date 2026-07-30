@@ -22,7 +22,7 @@ void IconSystem::loadFonts() {
     cfg.MergeMode  = true;
     cfg.PixelSnapH = true;
     cfg.GlyphOffset.y = 1.0f;
-    io.Fonts->AddFontFromFileTTF(Icons::kFontPath, 16.0f, &cfg, getGlyphRange());
+    io.Fonts->AddFontFromFileTTF(Playback::Editor::Icons::kFontPath, 16.0f, &cfg, getGlyphRange());
 
     // 3) Build
     io.Fonts->Build();

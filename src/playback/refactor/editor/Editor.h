@@ -29,6 +29,7 @@ public:
     void initialize();
     void shutdown();
     void toggle();
+    void open();         // Ensure editor is open (no-op if already open)
     [[nodiscard]] bool isOpen() const { return mOpen; }
 
     // Main draw entry (called from ImGui render loop)
@@ -76,6 +77,7 @@ private:
 
     // Allow EditMode to access Editor members
     friend class EditMode;
+    friend class RenderMode;
 };
 
 } // namespace playback::refactor::editor

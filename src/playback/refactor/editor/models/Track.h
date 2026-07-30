@@ -24,7 +24,7 @@ struct Clip {
     int         activeCameraTrackIdx{0};
     float       speed{1.0f};      // 局部变速
     std::string name;
-    Color4      color{Color4::Blue};
+    Color4      color{0,0,1,1};
     bool        muted{false};
     bool        locked{false};
 };
@@ -43,7 +43,7 @@ struct Transition {
     int            easing{0};           // EasingType index
     std::string    fromClipId;
     std::string    toClipId;
-    Color4         fadeColor{Color4::Black};  // Fade 用
+    Color4         fadeColor{0,0,0,1};  // Fade 用
 
     [[nodiscard]] float blendAlpha(int tickInTransition) const;
 };
