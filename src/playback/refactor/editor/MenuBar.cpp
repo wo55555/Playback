@@ -91,6 +91,7 @@ void MenuBar::draw() {
         }
 
         if (ImGui::BeginMenu("Help")) {
+            if (ImGui::MenuItem("Keyboard Shortcuts")) mShortcutDialogOpen = true;
             if (ImGui::MenuItem("Documentation")) {
                 // Open documentation link
             }
@@ -104,15 +105,39 @@ void MenuBar::draw() {
         ImGui::EndMenuBar();
     }
 
+    if (mShortcutDialogOpen) ImGui::OpenPopup("Keyboard Shortcuts");
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(500.0f, 0.0f), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Keyboard Shortcuts", &mShortcutDialogOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize)) {
+        ImGui::TextUnformatted("Playback"); ImGui::Separator();
+        ImGui::BulletText("Space: Play / Pause");
+        ImGui::BulletText("Home / End: Jump to start / end");
+        ImGui::BulletText("Left / Right: Seek one frame");
+        ImGui::BulletText("Shift + Mouse Wheel: Zoom timeline");
+        ImGui::Spacing(); ImGui::TextUnformatted("Editing"); ImGui::Separator();
+        ImGui::BulletText("Ctrl + Z / Ctrl + Y: Undo / Redo");
+        ImGui::BulletText("K: Add camera keyframe");
+        ImGui::BulletText("M: Insert marker");
+        ImGui::BulletText("Delete: Delete selected item");
+        ImGui::Spacing(); ImGui::TextUnformatted("Application"); ImGui::Separator();
+        ImGui::BulletText("Ctrl + S: Save project");
+        ImGui::BulletText("Esc (hold): Exit editor");
+        ImGui::Spacing();
+        if (ImGui::Button("Close", {110.0f, 32.0f})) { mShortcutDialogOpen = false; ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+
     if (mExportDialogOpen) ImGui::OpenPopup("Export Video");
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(660.0f, 0.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Export Video", &mExportDialogOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize)) {
+    ImGui::SetNextWindowSize(ImVec2(660.0f, 650.0f), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Export Video", &mExportDialogOpen, ImGuiWindowFlags_NoResize)) {
         constexpr const char* aspectOptions[] = {"16:9  Widescreen", "9:16  Vertical", "1:1  Square", "Custom"};
         constexpr const char* resolutionOptions[] = {"1920 x 1080  Full HD", "1280 x 720  HD", "2560 x 1440  QHD", "3840 x 2160  4K", "Custom"};
         constexpr const char* fpsOptions[] = {"30 FPS", "60 FPS", "120 FPS", "Custom"};
         constexpr const char* bitrateOptions[] = {"10 Mbps  Compact", "20 Mbps  Balanced", "40 Mbps  High quality", "Custom"};
-        constexpr const char* formatOptions[] = {"MP4  H.264", "WebM  VP9", "MOV  ProRes"};
+        constexpr const char* formatOptions[] = {"MP4", "MKV", "WebM", "MOV", "AVI"};
+        constexpr const char* codecOptions[][5] = {{"H.264", "H.265 / HEVC", nullptr}, {"H.264", "H.265 / HEVC", "VP9", "AV1", nullptr}, {"VP9", "AV1", nullptr}, {"H.264", "H.265 / HEVC", "ProRes", nullptr}, {"H.264", "MJPEG", nullptr}};
+        constexpr int codecCounts[] = {2, 4, 2, 3, 2};
         constexpr int widths[] = {1920, 1280, 2560, 3840};
         constexpr int heights[] = {1080, 720, 1440, 2160};
         constexpr int fpsValues[] = {30, 60, 120};
@@ -131,7 +156,10 @@ void MenuBar::draw() {
         ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Location"); ImGui::SameLine(150.0f);
         ImGui::SetNextItemWidth(-1.0f); ImGui::InputText("##export-directory", mExportDirectory.data(), mExportDirectory.size());
         ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Format"); ImGui::SameLine(150.0f);
-        ImGui::SetNextItemWidth(220.0f); ImGui::Combo("##export-format", &mFormatPreset, formatOptions, IM_ARRAYSIZE(formatOptions));
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::Combo("##export-format", &mFormatPreset, formatOptions, IM_ARRAYSIZE(formatOptions))) mCodecPreset = 0;
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Video codec"); ImGui::SameLine(150.0f);
+        ImGui::SetNextItemWidth(220.0f); ImGui::Combo("##export-codec", &mCodecPreset, codecOptions[mFormatPreset], codecCounts[mFormatPreset]);
 
         ImGui::Spacing();
         ImGui::TextUnformatted("VIDEO");
@@ -167,8 +195,8 @@ void MenuBar::draw() {
         ImGui::Spacing();
         ImGui::Separator();
         char summary[192];
-        const char* extensions[] = {"mp4", "webm", "mov"};
-        std::snprintf(summary, sizeof(summary), "%dx%d  |  %d FPS  |  %d Mbps  |  %s", mWidth, mHeight, mFps, mBitrateMbps, formatOptions[mFormatPreset]);
+        const char* extensions[] = {"mp4", "mkv", "webm", "mov", "avi"};
+        std::snprintf(summary, sizeof(summary), "%dx%d  |  %d FPS  |  %d Mbps  |  %s / %s", mWidth, mHeight, mFps, mBitrateMbps, formatOptions[mFormatPreset], codecOptions[mFormatPreset][mCodecPreset]);
         ImGui::TextDisabled("OUTPUT SUMMARY"); ImGui::SameLine(); ImGui::TextUnformatted(summary);
         ImGui::TextDisabled("File: %s/%s.%s", mExportDirectory.data(), mExportName.data(), extensions[mFormatPreset]);
         ImGui::Spacing();

@@ -212,19 +212,38 @@ void TimelinePanel::drawBody() {
 }
 
 void TimelinePanel::drawPlayhead(Rect area) { float x = area.min.x + mPlayheadTick * mPixelsPerTick - mScrollX; if (x >= area.min.x && x <= area.max.x) ImGui::GetWindowDrawList()->AddLine({x, area.min.y}, {x, area.max.y}, IM_COL32(240, 192, 32, 255), 2); }
-void TimelinePanel::handleRulerClick(Rect area) { if (area.contains(ImGui::GetMousePos()) && ImGui::IsMouseDown(ImGuiMouseButton_Left)) { int tick = std::clamp(static_cast<int>((ImGui::GetMousePos().x - area.min.x + mScrollX) / mPixelsPerTick), 0, Editor::getInstance().state().totalTicks); if (tick != mPlayheadTick) { mPlayheadTick = tick; EditorBridge::getInstance().seek(tick); } } }
+void TimelinePanel::handleRulerClick(Rect area) {
+    bool hovered = area.contains(ImGui::GetMousePos());
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) mRulerScrubbing = true;
+    if (!mRulerScrubbing) return;
+    int tick = std::clamp(static_cast<int>((ImGui::GetMousePos().x - area.min.x + mScrollX) / mPixelsPerTick), 0, Editor::getInstance().state().totalTicks);
+    mPlayheadTick = tick;
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        EditorBridge::getInstance().seek(tick);
+        mRulerScrubbing = false;
+    }
+}
 void TimelinePanel::drawTransportControls() {
     auto& bridge = EditorBridge::getInstance();
     auto& state = Editor::getInstance().state();
-    if (ImGui::Button("|<", {28, 28})) { state.currentTick = 0; bridge.skipToStart(); }
+    auto transportButton = [](const char* id, auto drawIcon) {
+        constexpr float buttonSize = 32.0f;
+        ImGui::InvisibleButton(id, {buttonSize, buttonSize});
+        ImVec2 min = ImGui::GetItemRectMin();
+        ImVec2 max = ImGui::GetItemRectMax();
+        ImU32 color = ImGui::IsItemHovered() ? IM_COL32(240, 192, 32, 255) : IM_COL32(220, 222, 230, 255);
+        drawIcon(ImGui::GetWindowDrawList(), {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f}, color);
+        return ImGui::IsItemClicked();
+    };
+    if (transportButton("##skip-start", [](ImDrawList* dl, ImVec2 c, ImU32 color) { dl->AddLine({c.x - 9, c.y - 8}, {c.x - 9, c.y + 8}, color, 2); dl->AddTriangleFilled({c.x - 7, c.y}, {c.x + 7, c.y - 8}, {c.x + 7, c.y + 8}, color); })) { bridge.skipToStart(); }
     ImGui::SameLine();
-    if (ImGui::Button("<", {28, 28})) { state.currentTick = std::max(0, state.currentTick - 1); bridge.seek(state.currentTick); }
+    if (transportButton("##seek-back", [](ImDrawList* dl, ImVec2 c, ImU32 color) { dl->AddTriangleFilled({c.x - 9, c.y}, {c.x + 5, c.y - 8}, {c.x + 5, c.y + 8}, color); dl->AddTriangleFilled({c.x - 2, c.y}, {c.x + 10, c.y - 8}, {c.x + 10, c.y + 8}, color); })) { bridge.seek(std::max(0, state.currentTick - 200)); }
     ImGui::SameLine();
-    if (ImGui::Button(state.playing ? ICON_PAUSE : ICON_PLAY, {28, 28})) { state.playing = !state.playing; bridge.playPause(); }
+    if (transportButton("##play-pause", [&state](ImDrawList* dl, ImVec2 c, ImU32 color) { if (state.playing) { dl->AddRectFilled({c.x - 7, c.y - 8}, {c.x - 2, c.y + 8}, color); dl->AddRectFilled({c.x + 2, c.y - 8}, {c.x + 7, c.y + 8}, color); } else dl->AddTriangleFilled({c.x - 6, c.y - 9}, {c.x - 6, c.y + 9}, {c.x + 9, c.y}, color); })) bridge.playPause();
     ImGui::SameLine();
-    if (ImGui::Button(">", {28, 28})) { state.currentTick = std::min(state.totalTicks, state.currentTick + 1); bridge.seek(state.currentTick); }
+    if (transportButton("##seek-forward", [](ImDrawList* dl, ImVec2 c, ImU32 color) { dl->AddTriangleFilled({c.x - 10, c.y - 8}, {c.x - 10, c.y + 8}, {c.x + 2, c.y}, color); dl->AddTriangleFilled({c.x - 3, c.y - 8}, {c.x - 3, c.y + 8}, {c.x + 9, c.y}, color); })) { bridge.seek(std::min(state.totalTicks, state.currentTick + 200)); }
     ImGui::SameLine();
-    if (ImGui::Button(">|", {28, 28})) { state.currentTick = state.totalTicks; bridge.skipToEnd(); }
+    if (transportButton("##skip-end", [](ImDrawList* dl, ImVec2 c, ImU32 color) { dl->AddTriangleFilled({c.x - 7, c.y - 8}, {c.x - 7, c.y + 8}, {c.x + 7, c.y}, color); dl->AddLine({c.x + 9, c.y - 8}, {c.x + 9, c.y + 8}, color, 2); })) bridge.skipToEnd();
     ImGui::SameLine();
     ImGui::Text("Speed %.2fx", state.playbackSpeed);
     ImGui::SameLine();

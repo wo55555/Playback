@@ -85,6 +85,7 @@ private:
     std::atomic<bool>  mStopRequested{false};
     std::atomic<int>   mRequestedSeekTick{-1};
     int                mSeekTargetTick{-1};
+    bool               mResumeAfterSeek{};
     float              mPlaybackSpeed{1.0f};
     float              mPlaybackTickAccumulator{};
     std::optional<int> mReplayTime;
@@ -199,7 +200,7 @@ public:
 
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
 
-    [[nodiscard]] int getCurrentTick() const { return mSeekTargetTick >= 0 ? mSeekTargetTick : mCurrentTick; }
+    [[nodiscard]] int getCurrentTick() const { return mCurrentTick; }
 
     [[nodiscard]] int getTotalTicks() const;
 

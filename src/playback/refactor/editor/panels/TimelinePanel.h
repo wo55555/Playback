@@ -52,6 +52,7 @@ private:
     bool mVideoGroupOpen{true};
     bool mCameraGroupOpen{true};
     bool mMarkerGroupOpen{true};
+    bool mRulerScrubbing{};
 
     // Drag state
     DragType mDragType{DragType::None};
