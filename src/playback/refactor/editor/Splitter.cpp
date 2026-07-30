@@ -23,9 +23,10 @@ float Splitter::drawVerticalSplit(float ratio, Rect area, float minR, float maxR
 
     if (hovered || active) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
 
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         float newRatio = (area.max.x - ImGui::GetMousePos().x) / area.GetWidth();
         ratio          = std::clamp(newRatio, minR, maxR);
+        splitX         = area.max.x - area.GetWidth() * ratio;
     }
 
     ImDrawList* dl    = ImGui::GetForegroundDrawList();
@@ -48,10 +49,11 @@ float Splitter::drawHorizontalSplit(float ratio, Rect area, float minR, float ma
 
     if (hovered || active) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
 
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         float mouseY    = ImGui::GetMousePos().y;
         float newRatio  = (mouseY - area.min.y) / area.GetHeight();
         ratio           = std::clamp(newRatio, minR, maxR);
+        splitY          = area.min.y + area.GetHeight() * ratio;
     }
 
     ImDrawList* dl   = ImGui::GetForegroundDrawList();

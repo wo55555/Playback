@@ -41,6 +41,7 @@ private:
     void handleTrimRightToPlayhead();
     void commitDragOperation();
     void onWheel(float deltaY);
+    void adjustTimeScale(float multiplier);
 
     float mPixelsPerTick{0.1f};
     float mScrollX{0.0f};

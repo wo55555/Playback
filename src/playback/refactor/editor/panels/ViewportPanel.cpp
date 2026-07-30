@@ -1,8 +1,6 @@
 #include "ViewportPanel.h"
 
 #include "playback/refactor/editor/Editor.h"
-#include "playback/refactor/editor/EditorBridge.h"
-#include "playback/refactor/editor/iconfont.h"
 #include "playback/refactor/editor/models/SelectionModel.h"
 
 #include "imgui.h"
@@ -37,29 +35,6 @@ void ViewportPanel::draw() {
     bool videoHovered = ImGui::IsItemHovered();
     bool videoActive = ImGui::IsItemActive();
     mContextMenu.draw();
-
-    ImGui::SetCursorScreenPos(videoMin);
-    ImGui::BeginChild("##viewportToolbar", ImVec2(videoSize.x, 32.0f), false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground);
-    if (ImGui::Button(Editor::getInstance().state().playing ? ICON_PAUSE " Pause" : ICON_PLAY " Play")) {
-        EditorBridge::getInstance().playPause();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(ICON_ADD_KEYFRAME " Add Keyframe")) {
-        auto& state = Editor::getInstance().state();
-        for (auto& track : state.cameraTracks) {
-            if (track.active) {
-                EditorBridge::getInstance().addKeyframe(state, track.id, state.currentTick);
-                break;
-            }
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(ICON_ADD_MARKER " Add Marker")) {
-        auto& state = Editor::getInstance().state();
-        EditorBridge::getInstance().addMarker(state, "Marker", state.currentTick);
-    }
-    ImGui::EndChild();
 
     handleCameraControl(videoHovered, videoActive);
 

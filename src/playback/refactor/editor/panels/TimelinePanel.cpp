@@ -106,10 +106,18 @@ void TimelinePanel::drawHeader() {
     if (ImGui::Button(ICON_ADD_MARKER, {28, 28})) EditorBridge::getInstance().addMarker(state, "Marker", state.currentTick);
     ImGui::SameLine();
     ImGui::TextUnformatted("Snap"); ImGui::SameLine(); ImGui::Checkbox("##snap", &mSnapEnabled); ImGui::SameLine();
-    ImGui::Text("Zoom %.1fx", mPixelsPerTick / 0.1f); ImGui::SameLine();
-    if (ImGui::Button("-", {28, 28})) mPixelsPerTick = std::max(0.02f, mPixelsPerTick / 1.15f);
+    ImGui::Text("Time Scale"); ImGui::SameLine();
+    if (ImGui::Button("-", {28, 28})) adjustTimeScale(1.0f / 1.25f);
     ImGui::SameLine();
-    if (ImGui::Button("+", {28, 28})) mPixelsPerTick = std::min(2.0f, mPixelsPerTick * 1.15f);
+    ImGui::SetNextItemWidth(72.0f);
+    float scalePercent = mPixelsPerTick / 0.1f * 100.0f;
+    if (ImGui::DragFloat("##time-scale", &scalePercent, 1.0f, 20.0f, 2000.0f, "%.0f%%")) {
+        float oldPixelsPerTick = mPixelsPerTick;
+        mPixelsPerTick = std::clamp(scalePercent * 0.001f, 0.02f, 2.0f);
+        mScrollX = std::max(0.0f, mScrollX + mPlayheadTick * (mPixelsPerTick - oldPixelsPerTick));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("+", {28, 28})) adjustTimeScale(1.25f);
     ImGui::PopStyleVar();
 }
 
@@ -184,6 +192,12 @@ void TimelinePanel::handleRippleDelete() { if (mSelectedTrackIndex >= 0 && !mSel
 void TimelinePanel::handleTrimLeftToPlayhead() {}
 void TimelinePanel::handleTrimRightToPlayhead() {}
 void TimelinePanel::commitDragOperation() { auto& state = Editor::getInstance().state(); if (mDragTargetId.empty()) return; if (mDragType == DragType::MoveKeyframe) return; if (mDragTrackIndex < 0 || mDragTrackIndex >= static_cast<int>(state.videoTracks.size())) return; auto& track = state.videoTracks[mDragTrackIndex]; for (auto& clip : track.clips) if (clip.id == mDragTargetId) { if (mDragType == DragType::MoveClip) { int updated = clip.trackTick; clip.trackTick = mDragStartTick; EditorBridge::getInstance().moveClip(state, track.id, clip.id, updated); } else if (mDragType == DragType::TrimClipIn || mDragType == DragType::TrimClipOut) { int in = clip.inTick, out = clip.outTick; if (mDragType == DragType::TrimClipIn) { clip.inTick = mDragOrigTick; clip.trackTick = mDragStartTick; } else clip.outTick = mDragOrigTick; EditorBridge::getInstance().trimClip(state, track.id, clip.id, in, out); } break; } }
-void TimelinePanel::onWheel(float deltaY) { if (ImGui::GetIO().KeyShift) mPixelsPerTick = std::clamp(mPixelsPerTick * (deltaY > 0 ? 1.1f : 1.0f / 1.1f), 0.02f, 2.0f); else mScrollX = std::max(0.0f, mScrollX - deltaY * 40.0f); }
+void TimelinePanel::onWheel(float deltaY) { if (ImGui::GetIO().KeyShift) adjustTimeScale(deltaY > 0 ? 1.1f : 1.0f / 1.1f); else mScrollX = std::max(0.0f, mScrollX - deltaY * 40.0f); }
+
+void TimelinePanel::adjustTimeScale(float multiplier) {
+    float oldPixelsPerTick = mPixelsPerTick;
+    mPixelsPerTick = std::clamp(oldPixelsPerTick * multiplier, 0.02f, 2.0f);
+    mScrollX = std::max(0.0f, mScrollX + mPlayheadTick * (mPixelsPerTick - oldPixelsPerTick));
+}
 
 } // namespace playback::refactor::editor
