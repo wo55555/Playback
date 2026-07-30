@@ -8,6 +8,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 
 namespace playback::refactor::editor {
@@ -44,17 +45,38 @@ void Editor::loadLayoutPreferences() {
     float detailsRatio{};
     float timelineRatio{};
     float aspectRatio{};
-    if (input >> detailsRatio >> timelineRatio >> aspectRatio) {
+    float trackListRatio{};
+    float pixelsPerTick{};
+    float horizontalScroll{};
+    std::string version;
+    if (input >> version >> detailsRatio >> timelineRatio >> aspectRatio >> trackListRatio >> pixelsPerTick >> horizontalScroll
+        && version == "v2"
+        && std::isfinite(detailsRatio) && std::isfinite(timelineRatio) && std::isfinite(aspectRatio)
+        && std::isfinite(trackListRatio) && std::isfinite(pixelsPerTick) && std::isfinite(horizontalScroll)) {
         mDetailsWidthRatio = std::clamp(detailsRatio, 0.15f, 0.50f);
         mTimelineHeightRatio = std::clamp(timelineRatio, 0.18f, 0.65f);
         mVideoAspectRatio = std::clamp(aspectRatio, 0.25f, 4.0f);
+        mTimelinePanel.setViewPreferences(trackListRatio, pixelsPerTick, horizontalScroll);
+    } else {
+        input.clear();
+        input.seekg(0);
+        if (input >> detailsRatio >> timelineRatio >> aspectRatio
+            && std::isfinite(detailsRatio) && std::isfinite(timelineRatio) && std::isfinite(aspectRatio)) {
+            mDetailsWidthRatio = std::clamp(detailsRatio, 0.15f, 0.50f);
+            mTimelineHeightRatio = std::clamp(timelineRatio, 0.18f, 0.65f);
+            mVideoAspectRatio = std::clamp(aspectRatio, 0.25f, 4.0f);
+        }
     }
     mViewportPanel.setVideoAspectRatio(mVideoAspectRatio);
 }
 
 void Editor::saveLayoutPreferences() const {
     std::ofstream output("mods/playback/editor-layout.ini", std::ios::trunc);
-    if (output) output << mDetailsWidthRatio << ' ' << mTimelineHeightRatio << ' ' << mVideoAspectRatio;
+    if (output) {
+        output << "v2 " << mDetailsWidthRatio << ' ' << mTimelineHeightRatio << ' ' << mVideoAspectRatio << ' '
+               << mTimelinePanel.trackListWidthRatio() << ' ' << mTimelinePanel.pixelsPerTick() << ' '
+               << mTimelinePanel.horizontalScroll();
+    }
 }
 
 void Editor::toggle() {
