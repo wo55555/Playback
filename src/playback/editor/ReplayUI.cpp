@@ -7,6 +7,8 @@
 #include "playback/Playback.h"
 #include "playback/editor/context/EditorContext.h"
 #include "playback/editor/controller/EditorController.h"
+#include "playback/refactor/editor/Editor.h"
+#include "playback/refactor/editor/EditorBridge.h"
 
 namespace playback::editor {
 
@@ -23,6 +25,14 @@ bool hookReplayUI(bool enable) {
         renderer::gImGuiRenderer.setContext(&gContext);
         renderer::setReplayUIActive(true);
 
+        // ── Initialize the refactored editor bridge ──
+        // Connects the new modular UI to the legacy business logic (EditorContext → EditorController → ReplaySession)
+        playback::refactor::editor::EditorBridge::getInstance().initialize(&gContext);
+        playback::refactor::editor::Editor::getInstance().initialize();
+
+        // ── Install the D3D12 swap chain hooks ──
+        // Must be done here (not deferred to RendererInitHook) because the RendererInitHook
+        // may not fire reliably during enable(). The hook probes DXGI to resolve vtable entries.
         if (!hookReplayUIRendererInit(true)) {
             renderer::setReplayUIActive(false);
             renderer::gImGuiRenderer.setContext(nullptr);
@@ -45,6 +55,10 @@ bool hookReplayUI(bool enable) {
     }
 
     renderer::setReplayUIActive(false);
+
+    // ── Shutdown the refactored editor ──
+    playback::refactor::editor::Editor::getInstance().shutdown();
+    playback::refactor::editor::EditorBridge::getInstance().shutdown();
 
     bool ok = true;
     if (!hookReplayUIRendererInit(false)) {

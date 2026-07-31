@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/functions/record/Recorder.h"
 #include "playback/functions/replay/ReplaySession.h"
+#include "playback/refactor/editor/Editor.h"
 #include "playback/utils/PathUtils.h"
 
 #include "zip.h"
@@ -287,6 +288,8 @@ bool ReplayBrowser::openReplay(ReplaySummary const& replay) {
 }
 
 bool ReplayBrowser::openReplay(std::filesystem::path const& replayPath) {
+    getLogger().info("ReplayBrowser::openReplay: opening {}", replayPath.string());
+
     std::error_code ec;
     if (!std::filesystem::exists(replayPath, ec) || !std::filesystem::is_regular_file(replayPath, ec)) {
         getLogger().error("Replay file does not exist: {}", replayPath);
@@ -302,6 +305,9 @@ bool ReplayBrowser::openReplay(std::filesystem::path const& replayPath) {
         getLogger().error("Failed to start replay session from {}", replayPath);
         return false;
     }
+
+    // Open the refactored editor when entering replay mode via the menu
+    playback::refactor::editor::Editor::getInstance().open();
 
     return true;
 }

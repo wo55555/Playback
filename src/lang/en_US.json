@@ -12,6 +12,13 @@
                 "stopped": "Recording stopped"
             }
         },
+        "refactorEditor": {
+            "menu": {"file":"File","edit":"Edit","camera":"Camera","markers":"Markers","window":"Window","help":"Help","openReplay":"Open Replay","saveProject":"Save Project","recent":"Recent","empty":"(empty)","export":"Export...","exit":"Exit Editor","undo":"Undo","redo":"Redo","delete":"Delete","selectAll":"Select All","addKeyframe":"Add Keyframe at Playhead","addCameraTrack":"Add Camera Track","cameraPreset":"Camera Preset","insertMarker":"Insert Marker","nextMarker":"Jump to Next Marker","previousMarker":"Jump to Previous Marker","hintBar":"Toggle Hint Bar","curveEditor":"Curve Editor","shortcuts":"Keyboard Shortcuts","documentation":"Documentation","about":"About"},
+            "export": {"title":"Export Video","subtitle":"Configure output settings","output":"OUTPUT","video":"VIDEO","name":"Name","location":"Location","format":"Format","codec":"Video codec","aspect":"Aspect ratio","resolution":"Resolution","frameRate":"Frame rate","bitrate":"Bitrate","summary":"OUTPUT SUMMARY","file":"File: {}","export":"Export Video","cancel":"Cancel","backendUnavailable":"Export backend is not available yet","custom":"Custom","widescreen":"Widescreen","vertical":"Vertical","square":"Square","balanced":"Balanced","compact":"Compact","highQuality":"High quality"},
+            "shortcuts": {"title":"Keyboard Shortcuts","playback":"Playback","editing":"Editing","application":"Application","space":"Space: Play / Pause","homeEnd":"Home / End: Jump to start / end","arrows":"Left / Right: Seek one frame","zoom":"Shift + Mouse Wheel: Zoom timeline","undoRedo":"Ctrl + Z / Ctrl + Y: Undo / Redo","keyframe":"K: Add camera keyframe","marker":"M: Insert marker","delete":"Delete: Delete selected item","save":"Ctrl + S: Save project","exit":"Esc (hold): Exit editor","close":"Close"},
+            "timeline": {"search":"Search tracks...","tracks":"Tracks","snap":"Snap","scale":"Time Scale","loop":"Loop","backendUnavailable":"Waiting for backend interface","scaleHint":"Drag to adjust, or double-click to enter a percentage","addTrack":"+ Track","video":"Video","camera":"Camera","markers":"Markers","lock":"LOCK","mute":"MUTE","speed":"Speed {:.2f}x","speedDown":"Speed -","speedUp":"Speed +","maximize":"Maximize viewport (Ctrl+Shift+F)","restore":"Restore viewport (Esc)"},
+            "defaults": {"marker":"Marker","videoTrack":"Video Track {}","camera":"Camera {}"}
+        },
         "editor": {
             "menu": {
                 "file": "File",

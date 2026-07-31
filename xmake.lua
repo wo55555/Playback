@@ -16,7 +16,7 @@ add_requires("stduuid")
 add_requires("xxhash")
 add_requires("openssl")
 add_requires("libzip")
-add_requires("imgui v1.92.7", {configs = {dx12 = true}})
+add_requires("imgui v1.92.7", {configs = {dx11 = true, dx12 = true}})
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -45,7 +45,7 @@ target("playback")
     add_packages("openssl")
     add_packages("libzip")
     add_packages("imgui")
-    add_syslinks("d3d12", "dxgi", "d3dcompiler")
+    add_syslinks("d3d11", "d3d12", "dxgi", "d3dcompiler")
     set_exceptions("none") -- To avoid conflicts with /EHa.
     set_kind("shared")
     set_languages("c++20")

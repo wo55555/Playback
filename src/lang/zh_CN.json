@@ -12,6 +12,13 @@
                 "stopped": "已结束录制"
             }
         },
+        "refactorEditor": {
+            "menu": {"file":"文件","edit":"编辑","camera":"相机","markers":"标记","window":"窗口","help":"帮助","openReplay":"打开回放","saveProject":"保存项目","recent":"最近打开","empty":"（空）","export":"导出…","exit":"退出编辑器","undo":"撤销","redo":"重做","delete":"删除","selectAll":"全选","addKeyframe":"在播放头添加关键帧","addCameraTrack":"添加相机轨道","cameraPreset":"相机预设","insertMarker":"插入标记","nextMarker":"跳至下一个标记","previousMarker":"跳至上一个标记","hintBar":"切换提示栏","curveEditor":"曲线编辑器","shortcuts":"快捷键","documentation":"文档","about":"关于"},
+            "export": {"title":"导出视频","subtitle":"配置输出参数","output":"输出","video":"视频","name":"名称","location":"导出位置","format":"格式","codec":"视频编码","aspect":"画面比例","resolution":"分辨率","frameRate":"帧率","bitrate":"码率","summary":"输出摘要","file":"文件：{}","export":"导出视频","cancel":"取消","backendUnavailable":"导出后端暂不可用","custom":"自定义","widescreen":"宽屏","vertical":"竖屏","square":"方形","balanced":"均衡","compact":"紧凑","highQuality":"高质量"},
+            "shortcuts": {"title":"快捷键","playback":"播放","editing":"编辑","application":"应用","space":"空格：播放 / 暂停","homeEnd":"Home / End：跳至开头 / 结尾","arrows":"左 / 右方向键：逐帧定位","zoom":"Shift + 鼠标滚轮：缩放时间轴","undoRedo":"Ctrl + Z / Ctrl + Y：撤销 / 重做","keyframe":"K：添加相机关键帧","marker":"M：插入标记","delete":"Delete：删除选中项","save":"Ctrl + S：保存项目","exit":"长按 Esc：退出编辑器","close":"关闭"},
+            "timeline": {"search":"搜索轨道…","tracks":"轨道","snap":"吸附","scale":"时间缩放","loop":"循环","backendUnavailable":"等待后端接口","scaleHint":"拖动调整比例，或双击后直接输入百分比","addTrack":"+ 轨道","video":"视频","camera":"相机","markers":"标记","lock":"锁定","mute":"静音","speed":"速度 {:.2f}x","speedDown":"减速","speedUp":"加速","maximize":"最大化视口（Ctrl+Shift+F）","restore":"还原视口（Esc）"},
+            "defaults": {"marker":"标记","videoTrack":"视频轨道 {}","camera":"相机 {}"}
+        },
         "editor": {
             "menu": {
                 "file": "文件",

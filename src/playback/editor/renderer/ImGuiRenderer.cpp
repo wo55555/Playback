@@ -8,10 +8,16 @@
 #include "playback/editor/context/EditorContext.h"
 #include "playback/editor/ui/ReplayUILayout.h"
 #include "playback/editor/ui/ReplayView.h"
+#include "playback/refactor/editor/Editor.h"
+#include "playback/refactor/editor/EditorBridge.h"
+#include "playback/refactor/editor/InputHook.h"
 
 
 #include "imgui.h"
+#include "imgui_impl_dx11.h"
 #include "imgui_impl_dx12.h"
+
+#include <d3d11.h>
 
 #include <algorithm>
 #include <array>
@@ -142,6 +148,171 @@ struct ImGuiRenderer::Impl {
     std::chrono::steady_clock::time_point lastInitAttempt{};
     std::chrono::steady_clock::time_point lastFrameTime{};
     std::chrono::steady_clock::time_point lastPresent{};
+
+    ComPtr<ID3D11Device>           d3d11Device;
+    ComPtr<ID3D11DeviceContext>    d3d11Context;
+    ComPtr<ID3D11Texture2D>        d3d11BackBuffer;
+    ComPtr<ID3D11RenderTargetView> d3d11Rtv;
+    ComPtr<ID3D11Texture2D>        d3d11GameTexture;
+    ComPtr<ID3D11ShaderResourceView> d3d11GameSrv;
+    IDXGISwapChain*                d3d11SwapChain{};
+    ImGuiContext*                  d3d11ImguiCtx{};
+    bool                           d3d11BackendInit{};
+    bool                           d3d11Initialized{};
+    bool                           d3d11FirstFrameLogged{};
+
+    bool initD3D11(IDXGISwapChain* sc) {
+        ComPtr<ID3D11Device> dev;
+        if (FAILED(sc->GetDevice(IID_PPV_ARGS(&dev)))) return false;
+        ComPtr<ID3D11Texture2D> backBuffer;
+        if (FAILED(sc->GetBuffer(0, IID_PPV_ARGS(&backBuffer)))) return false;
+        D3D11_TEXTURE2D_DESC desc{};
+        backBuffer->GetDesc(&desc);
+        if (desc.Width < 320 || desc.Height < 180 || desc.SampleDesc.Count != 1) return false;
+
+        ComPtr<ID3D11DeviceContext> context;
+        dev->GetImmediateContext(&context);
+        if (!context || FAILED(dev->CreateRenderTargetView(backBuffer.Get(), nullptr, &d3d11Rtv))) return false;
+
+        auto gameDesc          = desc;
+        gameDesc.BindFlags     = D3D11_BIND_SHADER_RESOURCE;
+        gameDesc.CPUAccessFlags = 0;
+        gameDesc.MiscFlags      = 0;
+        gameDesc.Usage          = D3D11_USAGE_DEFAULT;
+        if (FAILED(dev->CreateTexture2D(&gameDesc, nullptr, &d3d11GameTexture))
+            || FAILED(dev->CreateShaderResourceView(d3d11GameTexture.Get(), nullptr, &d3d11GameSrv))) {
+            d3d11Rtv.Reset();
+            d3d11GameTexture.Reset();
+            return false;
+        }
+
+        IMGUI_CHECKVERSION();
+        d3d11ImguiCtx = ImGui::CreateContext();
+        if (!d3d11ImguiCtx) return false;
+        ImGui::SetCurrentContext(d3d11ImguiCtx);
+        auto& io               = ImGui::GetIO();
+        io.IniFilename         = nullptr;
+        io.LogFilename         = nullptr;
+        io.BackendPlatformName = "playback_d3d11_overlay";
+        std::array<wchar_t, MAX_PATH> windowsDirectory{};
+        auto const windowsDirectoryLength =
+            GetWindowsDirectoryW(windowsDirectory.data(), static_cast<UINT>(windowsDirectory.size()));
+        std::filesystem::path fontPath;
+        if (windowsDirectoryLength > 0 && windowsDirectoryLength < static_cast<UINT>(windowsDirectory.size())) {
+            fontPath = std::filesystem::path(windowsDirectory.data()) / "Fonts" / "msyh.ttc";
+        }
+        auto const fontPathString = fontPath.string();
+        ImFont* font = fontPathString.empty() ? nullptr : io.Fonts->AddFontFromFileTTF(
+            fontPathString.c_str(), 14.0f, nullptr, io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+        );
+        if (font) io.FontDefault = font;
+        else io.Fonts->AddFontDefault();
+        ImFontConfig cfg;
+        cfg.MergeMode     = true;
+        cfg.PixelSnapH    = true;
+        cfg.GlyphOffset.y = 1.0f;
+        static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
+        auto const iconPath = Playback::getInstance().getSelf().getModDir() / "resource_packs" / "playback-ui"
+                            / "fonts" / "lucide.ttf";
+        if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 14.0f, &cfg, iconRange)) {
+            getLogger().warn("Unable to load replay icon font from {}", iconPath);
+        }
+        ImGui::StyleColorsDark();
+        auto& style            = ImGui::GetStyle();
+        style.AntiAliasedLines = true;
+        style.AntiAliasedFill  = true;
+        if (!ImGui_ImplDX11_Init(dev.Get(), context.Get())) {
+            ImGui::DestroyContext(d3d11ImguiCtx);
+            d3d11ImguiCtx = nullptr;
+            return false;
+        }
+
+        d3d11Device        = std::move(dev);
+        d3d11Context       = std::move(context);
+        d3d11BackBuffer    = std::move(backBuffer);
+        d3d11SwapChain     = sc;
+        d3d11BackendInit   = true;
+        d3d11Initialized   = true;
+        d3d11FirstFrameLogged = false;
+        lastFrameTime      = std::chrono::steady_clock::now();
+        lastPresent        = lastFrameTime;
+        initFailed         = false;
+        return true;
+    }
+
+    void shutdownD3D11() {
+        if (d3d11Context) d3d11Context->ClearState();
+        if (d3d11ImguiCtx) {
+            auto* previous = ImGui::GetCurrentContext();
+            ImGui::SetCurrentContext(d3d11ImguiCtx);
+            if (d3d11BackendInit) ImGui_ImplDX11_Shutdown();
+            ImGui::DestroyContext(d3d11ImguiCtx);
+            ImGui::SetCurrentContext(previous == d3d11ImguiCtx ? nullptr : previous);
+        }
+        d3d11BackendInit = false;
+        d3d11ImguiCtx = nullptr;
+        d3d11GameSrv.Reset();
+        d3d11GameTexture.Reset();
+        d3d11Rtv.Reset();
+        d3d11BackBuffer.Reset();
+        d3d11Context.Reset();
+        d3d11Device.Reset();
+        d3d11SwapChain = nullptr;
+        d3d11Initialized = false;
+        d3d11FirstFrameLogged = false;
+    }
+
+    bool renderD3D11(IDXGISwapChain* sc, EditorState const& state) {
+        if (d3d11Initialized && sc != d3d11SwapChain) shutdownD3D11();
+        if (!d3d11Initialized && !initD3D11(sc)) return false;
+
+        D3D11_TEXTURE2D_DESC desc{};
+        d3d11BackBuffer->GetDesc(&desc);
+        d3d11Context->CopyResource(d3d11GameTexture.Get(), d3d11BackBuffer.Get());
+
+        ImGuiContextRestore restore;
+        ImGui::SetCurrentContext(d3d11ImguiCtx);
+        auto& io                   = ImGui::GetIO();
+        io.DisplaySize             = ImVec2(static_cast<float>(desc.Width), static_cast<float>(desc.Height));
+        io.DisplayFramebufferScale = ImVec2(1, 1);
+        auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
+        io.FontGlobalScale         = std::max(1.0f, layout.scale);
+        auto frameNow              = std::chrono::steady_clock::now();
+        io.DeltaTime = std::clamp(std::chrono::duration<float>(frameNow - lastFrameTime).count(), 1.f / 240.f, 0.25f);
+        lastFrameTime = frameNow;
+
+        ImGui_ImplDX11_NewFrame();
+        playback::refactor::editor::InputHook::syncFrame();
+        beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
+        ImGui::NewFrame();
+        auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
+        if (refactorEditor.isOpen()) {
+            refactorEditor.setGameTexture(
+                static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
+            refactorEditor.draw();
+            auto viewport = refactorEditor.viewportVideoRect();
+            setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+        } else {
+            ImGui::GetBackgroundDrawList()->AddImage(
+                ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get()))),
+                ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
+                ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
+            );
+            std::vector<EditorAction> actions;
+            ui::drawReplayView(state, layout, actions);
+            for (auto const action : actions) editorContext->submit(action);
+        }
+        endReplayMouseFrame();
+        ImGui::Render();
+
+        ID3D11RenderTargetView* rtv = d3d11Rtv.Get();
+        d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
+        float clearColor[]{0.055f, 0.055f, 0.065f, 1};
+        d3d11Context->ClearRenderTargetView(rtv, clearColor);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        d3d11FirstFrameLogged = true;
+        return true;
+    }
 
     bool init(IDXGISwapChain* sc, ID3D12CommandQueue* cq) {
         ComPtr<IDXGISwapChain3> sc3;
@@ -298,7 +469,7 @@ struct ImGuiRenderer::Impl {
         if (!fontPathString.empty()) {
             font = io.Fonts->AddFontFromFileTTF(
                 fontPathString.c_str(),
-                13.0f,
+                14.0f,
                 nullptr,
                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
             );
@@ -308,6 +479,21 @@ struct ImGuiRenderer::Impl {
         } else {
             io.Fonts->AddFontDefault();
         }
+
+        // Merge the packaged Lucide font before the DX12 backend creates its font texture.
+        {
+            ImFontConfig cfg;
+            cfg.MergeMode     = true;
+            cfg.PixelSnapH    = true;
+            cfg.GlyphOffset.y = 1.0f;
+            static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
+            auto const iconPath = Playback::getInstance().getSelf().getModDir() / "resource_packs" / "playback-ui"
+                                / "fonts" / "lucide.ttf";
+            if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 14.0f, &cfg, iconRange)) {
+                getLogger().warn("Unable to load replay icon font from {}", iconPath);
+            }
+        }
+
         ImGui::StyleColorsDark();
         auto& style            = ImGui::GetStyle();
         style.AntiAliasedLines = true;
@@ -359,6 +545,7 @@ struct ImGuiRenderer::Impl {
 
     void shutdown() {
         setReplayMouseInputActive(false);
+        shutdownD3D11();
         if (fence && commandQueue && unfenced) {
             UINT64 fv = lastFenceValue + 1;
             if (SUCCEEDED(commandQueue->Signal(fence.Get(), fv))) {
@@ -414,13 +601,15 @@ void ImGuiRenderer::setContext(EditorContext* context) {
 bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     auto&            p = *mImpl;
     std::scoped_lock lk(p.mutex);
+
     if (!isTimelineRenderingEnabled()) return false;
     if (!swapChain) return false;
     if (!p.editorContext) return false;
+
     auto const state = p.editorContext->snapshot();
     if (!state.replayVisible) {
         setReplayMouseInputActive(false);
-        if (p.initialized) p.shutdown();
+        if (p.initialized || p.d3d11Initialized) p.shutdown();
         return false;
     }
     auto now = std::chrono::steady_clock::now();
@@ -429,6 +618,19 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         setReplayMouseInputActive(false);
         return false;
     }
+
+    ComPtr<ID3D11Device> d3d11Device;
+    if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d11Device)))) {
+        if (p.initialized) p.shutdown();
+        MouseInputAttempt inputAttempt;
+        if (!p.renderD3D11(swapChain, state)) return false;
+        inputAttempt.commit();
+        return true;
+    }
+
+    ComPtr<ID3D12Device> d3d12Device;
+    if (FAILED(swapChain->GetDevice(IID_PPV_ARGS(&d3d12Device)))) return false;
+    if (p.d3d11Initialized) p.shutdownD3D11();
 
     ComPtr<ID3D12CommandQueue> q;
     if (p.initialized && swapChain != p.swapChain) {
@@ -442,9 +644,18 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     MouseInputAttempt ia;
     if (!p.initialized) {
         if (!q) q = getSwapChainQueue(swapChain);
+        // Safe fallback for an already-created swap chain: use the queue only if the
+        // capture hook observed exactly one Direct queue for this device.
+        if (!q) {
+            ComPtr<ID3D12Device> device;
+            if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&device)))) q = getDeviceQueue(device.Get());
+            if (q) {
+                bindSwapChainQueue(swapChain, q.Get());
+            }
+        }
         if (!q) {
             if (!p.missingQueue) {
-                getLogger().warn("Replay ImGui timeline cannot render: swap chain not captured at creation");
+                getLogger().warn("Replay ImGui timeline cannot render: no command queue available");
                 p.missingQueue = true;
             }
             return false;
@@ -478,23 +689,35 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     io.DisplaySize             = ImVec2(static_cast<float>(bd.Width), static_cast<float>(bd.Height));
     io.DisplayFramebufferScale = ImVec2(1, 1);
     auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
-    io.FontGlobalScale         = std::max(0.85f, layout.scale);
+    io.FontGlobalScale         = std::max(1.0f, layout.scale);
     auto fn                    = std::chrono::steady_clock::now();
     io.DeltaTime    = std::clamp(std::chrono::duration<float>(fn - p.lastFrameTime).count(), 1.f / 240.f, 0.25f);
     p.lastFrameTime = fn;
 
     ImGui_ImplDX12_NewFrame();
+    // Forward MCBE key events to ImGui keyboard state
+    playback::refactor::editor::InputHook::syncFrame();
     beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
     ImGui::NewFrame();
-    ImGui::GetBackgroundDrawList()->AddImage(
-        ImTextureRef(static_cast<ImTextureID>(f.gameSrvGpu.ptr)),
-        ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
-        ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
-    );
-    std::vector<EditorAction> actions;
-    ui::drawReplayView(state, layout, actions);
+    auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
+    if (refactorEditor.isOpen()) {
+        refactorEditor.setGameTexture(
+            static_cast<ImTextureID>(f.gameSrvGpu.ptr));
+        refactorEditor.draw();
+        auto viewport = refactorEditor.viewportVideoRect();
+        setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+    } else {
+        ImGui::GetBackgroundDrawList()->AddImage(
+            ImTextureRef(static_cast<ImTextureID>(f.gameSrvGpu.ptr)),
+            ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
+            ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
+        );
+        // Fallback: legacy timeline UI when refactored editor is closed
+        std::vector<EditorAction> actions;
+        ui::drawReplayView(state, layout, actions);
+        for (auto const action : actions) p.editorContext->submit(action);
+    }
     endReplayMouseFrame();
-    for (auto const action : actions) p.editorContext->submit(action);
     ImGui::Render();
 
     if (FAILED(f.commandAllocator->Reset())) return false;
@@ -561,7 +784,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
 
 bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
     std::scoped_lock lk(mImpl->mutex);
-    if (sc == mImpl->swapChain) {
+    if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
         mImpl->shutdown();
         mImpl->initFailed      = false;
         mImpl->lastInitAttempt = {};
@@ -572,7 +795,7 @@ bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
 void ImGuiRenderer::afterPresent(IDXGISwapChain* sc, long result) {
     if (result != DXGI_ERROR_DEVICE_REMOVED && result != DXGI_ERROR_DEVICE_RESET) return;
     std::scoped_lock lk(mImpl->mutex);
-    if (sc == mImpl->swapChain) mImpl->shutdown();
+    if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) mImpl->shutdown();
     unbindSwapChainQueue(sc);
 }
 

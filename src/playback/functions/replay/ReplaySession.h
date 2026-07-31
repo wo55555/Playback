@@ -199,7 +199,7 @@ public:
 
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
 
-    [[nodiscard]] int getCurrentTick() const { return mSeekTargetTick >= 0 ? mSeekTargetTick : mCurrentTick; }
+    [[nodiscard]] int getCurrentTick() const { return mCurrentTick; }
 
     [[nodiscard]] int getTotalTicks() const;
 
