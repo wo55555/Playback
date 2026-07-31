@@ -45,6 +45,25 @@ void EditMode::draw() {
         ImGui::End();
     }
 
+    if (editor.isViewportMaximized()) {
+        ImGui::SetNextWindowPos(ImVec2(0, kMenuHeight));
+        ImGui::SetNextWindowSize(ImVec2(displaySize.x, contentHeight));
+        ImGui::Begin("##MaximizedViewport", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
+            | ImGuiWindowFlags_NoScrollWithMouse);
+        editor.mViewportPanel.draw(true);
+        ImGui::End();
+
+        ImGui::SetNextWindowPos(ImVec2(0, displaySize.y - kStatusHeight));
+        ImGui::SetNextWindowSize(ImVec2(displaySize.x, kStatusHeight));
+        ImGui::Begin("##StatusPanel", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
+            | ImGuiWindowFlags_NoScrollWithMouse);
+        editor.mStatusPanel.draw();
+        ImGui::End();
+        return;
+    }
+
     float curveWidth = 0.0f;
     if (editor.mCurveEditorPanel.isOpen()) {
         curveWidth = kCurveWidth + kSplitterThickness;
@@ -88,7 +107,7 @@ void EditMode::draw() {
         ImGui::Begin("##ViewportPanel", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
             | ImGuiWindowFlags_NoScrollWithMouse);
-        editor.mViewportPanel.draw();
+        editor.mViewportPanel.draw(false);
         ImGui::End();
     }
 

@@ -51,11 +51,14 @@ public:
     void setVideoAspectRatio(float aspectRatio);
     [[nodiscard]] float videoAspectRatio() const { return mVideoAspectRatio; }
     [[nodiscard]] Rect viewportVideoRect() const { return mViewportPanel.videoRect(); }
+    void toggleViewportMaximized() { mViewportMaximized = !mViewportMaximized; }
+    [[nodiscard]] bool isViewportMaximized() const { return mViewportMaximized; }
 
 private:
     Editor() = default;
 
     bool mOpen{false};
+    bool mViewportMaximized{false};
 
     // Core components
     EditorTheme     mTheme;

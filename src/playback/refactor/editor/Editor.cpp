@@ -148,6 +148,16 @@ void Editor::handleKeyboardShortcuts() {
     auto& bridge = EditorBridge::getInstance();
     ImGuiIO& io = ImGui::GetIO();
 
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) && mViewportMaximized) {
+        mViewportMaximized = false;
+        return;
+    }
+    if (io.WantTextInput) return;
+    if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_F)) {
+        toggleViewportMaximized();
+        return;
+    }
+
     // ── Playback control ──
     if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
         bridge.playPause();

@@ -13,7 +13,7 @@ namespace playback::refactor::editor {
 
 class ViewportPanel {
 public:
-    void draw();
+    void draw(bool maximized = false);
     void setGameTexture(ImTextureID texture);
     void setVideoAspectRatio(float aspectRatio);
     [[nodiscard]] Rect videoRect() const { return mVideoRect; }
@@ -22,6 +22,7 @@ private:
     void handleCameraControl(bool hovered, bool active);
     void handleGizmoDrag();
     void drawGizmo();
+    void drawTransportControls();
 
     float mFov{90.0f};
     ImTextureID mGameTexture{};
