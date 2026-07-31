@@ -85,7 +85,6 @@ private:
     std::atomic<bool>  mStopRequested{false};
     std::atomic<int>   mRequestedSeekTick{-1};
     int                mSeekTargetTick{-1};
-    bool               mResumeAfterSeek{};
     float              mPlaybackSpeed{1.0f};
     float              mPlaybackTickAccumulator{};
     std::optional<int> mReplayTime;

@@ -373,7 +373,6 @@ void ReplaySession::beginSeek(int targetTick) {
         ++chunkIndex;
     }
 
-    mResumeAfterSeek         = !mIsPaused;
     mIsPaused                = true;
     mPlaybackTickAccumulator = 0.0f;
     mSeekTargetTick          = targetTick;
@@ -427,7 +426,6 @@ void ReplaySession::tick() {
                 if (!advanceReplayTick(false)) {
                     getLogger().warn("Replay ended at tick {} while seeking to tick {}", mCurrentTick, mSeekTargetTick);
                     mSeekTargetTick = -1;
-                    mResumeAfterSeek = false;
                     return;
                 }
                 ++advancedTicks;
@@ -435,8 +433,6 @@ void ReplaySession::tick() {
             if (mCurrentTick >= mSeekTargetTick) {
                 getLogger().debug("Replay seek completed at tick {}", mCurrentTick);
                 mSeekTargetTick = -1;
-                mIsPaused = !mResumeAfterSeek;
-                mResumeAfterSeek = false;
             }
             return;
         }

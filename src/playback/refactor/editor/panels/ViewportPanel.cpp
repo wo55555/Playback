@@ -41,25 +41,29 @@ void ViewportPanel::draw(bool maximized) {
     bool videoActive = ImGui::IsItemActive();
     mContextMenu.draw();
 
-    handleCameraControl(videoHovered, videoActive);
-
     constexpr float kMaximizeButtonSize = 28.0f;
-    ImVec2 maximizePos(videoMax.x - kMaximizeButtonSize - 8.0f, videoMax.y - kMaximizeButtonSize - 8.0f);
+    ImVec2 maximizePos(sceneMax.x - kMaximizeButtonSize - 8.0f, sceneMax.y - kMaximizeButtonSize - 8.0f);
     ImGui::SetCursorScreenPos(maximizePos);
     ImGui::InvisibleButton("##viewport-maximize", {kMaximizeButtonSize, kMaximizeButtonSize});
     bool maximizeHovered = ImGui::IsItemHovered();
     ImDrawList* overlay = ImGui::GetWindowDrawList();
     overlay->AddRectFilled(maximizePos, {maximizePos.x + kMaximizeButtonSize, maximizePos.y + kMaximizeButtonSize}, maximizeHovered ? IM_COL32(58, 90, 140, 235) : IM_COL32(20, 20, 24, 210), 4.0f);
     ImU32 iconColor = IM_COL32(230, 232, 238, 255);
+    float x = maximizePos.x, y = maximizePos.y;
     if (maximized) {
-        overlay->AddRect({maximizePos.x + 8, maximizePos.y + 8}, {maximizePos.x + 18, maximizePos.y + 18}, iconColor, 0.0f, 0, 1.5f);
-        overlay->AddLine({maximizePos.x + 6, maximizePos.y + 11}, {maximizePos.x + 11, maximizePos.y + 11}, iconColor, 1.5f);
-        overlay->AddLine({maximizePos.x + 11, maximizePos.y + 6}, {maximizePos.x + 11, maximizePos.y + 11}, iconColor, 1.5f);
+        overlay->AddLine({x + 8, y + 12}, {x + 8, y + 8}, iconColor, 1.8f); overlay->AddLine({x + 8, y + 8}, {x + 12, y + 8}, iconColor, 1.8f);
+        overlay->AddLine({x + 20, y + 16}, {x + 20, y + 20}, iconColor, 1.8f); overlay->AddLine({x + 20, y + 20}, {x + 16, y + 20}, iconColor, 1.8f);
+        overlay->AddLine({x + 16, y + 8}, {x + 20, y + 8}, iconColor, 1.8f); overlay->AddLine({x + 20, y + 8}, {x + 20, y + 12}, iconColor, 1.8f);
+        overlay->AddLine({x + 12, y + 20}, {x + 8, y + 20}, iconColor, 1.8f); overlay->AddLine({x + 8, y + 20}, {x + 8, y + 16}, iconColor, 1.8f);
     } else {
-        overlay->AddRect({maximizePos.x + 7, maximizePos.y + 7}, {maximizePos.x + 21, maximizePos.y + 21}, iconColor, 0.0f, 0, 1.5f);
+        overlay->AddLine({x + 7, y + 12}, {x + 7, y + 7}, iconColor, 1.8f); overlay->AddLine({x + 7, y + 7}, {x + 12, y + 7}, iconColor, 1.8f);
+        overlay->AddLine({x + 21, y + 16}, {x + 21, y + 21}, iconColor, 1.8f); overlay->AddLine({x + 21, y + 21}, {x + 16, y + 21}, iconColor, 1.8f);
+        overlay->AddLine({x + 16, y + 7}, {x + 21, y + 7}, iconColor, 1.8f); overlay->AddLine({x + 21, y + 7}, {x + 21, y + 12}, iconColor, 1.8f);
+        overlay->AddLine({x + 12, y + 21}, {x + 7, y + 21}, iconColor, 1.8f); overlay->AddLine({x + 7, y + 21}, {x + 7, y + 16}, iconColor, 1.8f);
     }
     if (ImGui::IsItemClicked()) Editor::getInstance().toggleViewportMaximized();
     if (maximizeHovered) ImGui::SetTooltip("%s", (maximized ? "playback.refactorEditor.timeline.restore"_tr() : "playback.refactorEditor.timeline.maximize"_tr()).c_str());
+    handleCameraControl(videoHovered && !maximizeHovered, videoActive && !maximizeHovered);
 
     auto* sel = Editor::getInstance().selection().getSelection();
     if (sel) {

@@ -56,7 +56,8 @@ void TimelinePanel::setViewPreferences(float trackListWidthRatio, float pixelsPe
 
 void TimelinePanel::draw() {
     auto& state = Editor::getInstance().state();
-    mPlayheadTick = state.currentTick;
+    if (mPendingSeekTick >= 0 && state.currentTick == mPendingSeekTick) mPendingSeekTick = -1;
+    if (!mRulerScrubbing && mPendingSeekTick < 0) mPlayheadTick = state.currentTick;
     Rect full{{ImGui::GetCursorScreenPos()}, {ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x,
                                                ImGui::GetCursorScreenPos().y + ImGui::GetContentRegionAvail().y}};
     if (full.GetWidth() < 80.0f || full.GetHeight() < 100.0f) return;
@@ -223,6 +224,7 @@ void TimelinePanel::handleRulerClick(Rect area) {
     mPlayheadTick = tick;
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         EditorBridge::getInstance().seek(tick);
+        mPendingSeekTick = tick;
         mRulerScrubbing = false;
     }
 }
@@ -248,13 +250,6 @@ void TimelinePanel::drawTransportControls() {
     if (transportButton("##seek-forward", [](ImDrawList* dl, ImVec2 c, ImU32 color) { dl->AddTriangleFilled({c.x - 10, c.y - 8}, {c.x - 10, c.y + 8}, {c.x + 2, c.y}, color); dl->AddTriangleFilled({c.x - 3, c.y - 8}, {c.x - 3, c.y + 8}, {c.x + 9, c.y}, color); })) { bridge.seek(std::min(state.totalTicks, state.currentTick + 200)); }
     ImGui::SameLine();
     if (transportButton("##skip-end", [](ImDrawList* dl, ImVec2 c, ImU32 color) { dl->AddTriangleFilled({c.x - 7, c.y - 8}, {c.x - 7, c.y + 8}, {c.x + 7, c.y}, color); dl->AddLine({c.x + 9, c.y - 8}, {c.x + 9, c.y + 8}, color, 2); })) bridge.skipToEnd();
-    ImGui::SameLine();
-    ImGui::Text("Speed %.2fx", state.playbackSpeed);
-    ImGui::SameLine();
-    if (ImGui::Button("Speed -", {62, 28})) bridge.decreaseSpeed();
-    ImGui::SameLine();
-    if (ImGui::Button("Speed +", {62, 28})) bridge.increaseSpeed();
-    ImGui::SameLine();
     ImGui::BeginDisabled(); ImGui::Button("playback.refactorEditor.timeline.loop"_tr().c_str(), {52, 28}); ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", "playback.refactorEditor.timeline.backendUnavailable"_tr().c_str());
 }

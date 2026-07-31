@@ -132,8 +132,8 @@ void MenuBar::draw() {
 
     if (mExportDialogOpen) ImGui::OpenPopup("##ExportVideo");
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(660.0f, 650.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("##ExportVideo", &mExportDialogOpen, ImGuiWindowFlags_NoResize)) {
+    ImGui::SetNextWindowSizeConstraints(ImVec2(660.0f, 0.0f), ImVec2(660.0f, ImGui::GetMainViewport()->WorkSize.y - 24.0f));
+    if (ImGui::BeginPopupModal("##ExportVideo", &mExportDialogOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize)) {
         constexpr const char* aspectOptions[] = {"16:9  Widescreen", "9:16  Vertical", "1:1  Square", "Custom"};
         constexpr const char* resolutionOptions[] = {"1920 x 1080  Full HD", "1280 x 720  HD", "2560 x 1440  QHD", "3840 x 2160  4K", "Custom"};
         constexpr const char* fpsOptions[] = {"30 FPS", "60 FPS", "120 FPS", "Custom"};

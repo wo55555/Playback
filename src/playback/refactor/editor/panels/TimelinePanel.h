@@ -53,6 +53,7 @@ private:
     bool mCameraGroupOpen{true};
     bool mMarkerGroupOpen{true};
     bool mRulerScrubbing{};
+    int mPendingSeekTick{-1};
 
     // Drag state
     DragType mDragType{DragType::None};
