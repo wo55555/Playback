@@ -5,6 +5,7 @@
 #include "playback/refactor/editor/iconfont.h"
 
 #include "imgui.h"
+#include "ll/api/i18n/I18n.h"
 
 #include <algorithm>
 #include <cctype>
@@ -104,6 +105,7 @@ void TimelinePanel::draw() {
 }
 
 void TimelinePanel::drawHeader() {
+    using ll::i18n_literals::operator""_tr;
     auto& state = Editor::getInstance().state();
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {7, 7});
     int seconds = state.currentTick / 20;
@@ -119,10 +121,10 @@ void TimelinePanel::drawHeader() {
         for (auto& track : state.cameraTracks) if (track.active) { EditorBridge::getInstance().addKeyframe(state, track.id, state.currentTick); break; }
     }
     ImGui::SameLine();
-    if (ImGui::Button(ICON_ADD_MARKER, {28, 28})) EditorBridge::getInstance().addMarker(state, "Marker", state.currentTick);
+    if (ImGui::Button(ICON_ADD_MARKER, {28, 28})) EditorBridge::getInstance().addMarker(state, "playback.refactorEditor.defaults.marker"_tr(), state.currentTick);
     ImGui::SameLine();
-    ImGui::TextUnformatted("Snap"); ImGui::SameLine(); ImGui::Checkbox("##snap", &mSnapEnabled); ImGui::SameLine();
-    ImGui::TextUnformatted("Time Scale"); ImGui::SameLine();
+    ImGui::TextUnformatted("playback.refactorEditor.timeline.snap"_tr().c_str()); ImGui::SameLine(); ImGui::Checkbox("##snap", &mSnapEnabled); ImGui::SameLine();
+    ImGui::TextUnformatted("playback.refactorEditor.timeline.scale"_tr().c_str()); ImGui::SameLine();
     if (ImGui::Button("-", {28, 28})) adjustTimeScale(0.9f);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(76.0f);
@@ -132,26 +134,27 @@ void TimelinePanel::drawHeader() {
         mPixelsPerTick = std::clamp(scalePercent / 100.0f * kBasePixelsPerTick, kMinPixelsPerTick, kMaxPixelsPerTick);
         mScrollX = std::max(0.0f, mScrollX + mPlayheadTick * (mPixelsPerTick - oldPixelsPerTick));
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("拖动调整比例，或双击后直接输入百分比");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", "playback.refactorEditor.timeline.scaleHint"_tr().c_str());
     ImGui::SameLine();
     if (ImGui::Button("+", {28, 28})) adjustTimeScale(1.1f);
     ImGui::PopStyleVar();
 }
 
 void TimelinePanel::drawTrackList() {
+    using ll::i18n_literals::operator""_tr;
     auto& state = Editor::getInstance().state();
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 6.0f);
     char searchBuffer[128]{};
     std::snprintf(searchBuffer, sizeof(searchBuffer), "%s", mTrackSearch.c_str());
-    if (ImGui::InputTextWithHint("##track-search", "Search tracks", searchBuffer, sizeof(searchBuffer))) {
+    if (ImGui::InputTextWithHint("##track-search", "playback.refactorEditor.timeline.search"_tr().c_str(), searchBuffer, sizeof(searchBuffer))) {
         mTrackSearch = searchBuffer;
     }
-    ImGui::BeginDisabled(); ImGui::Button("+ Track", {80, 28}); ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("等待后端接口");
+    ImGui::BeginDisabled(); ImGui::Button("playback.refactorEditor.timeline.addTrack"_tr().c_str(), {80, 28}); ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", "playback.refactorEditor.timeline.backendUnavailable"_tr().c_str());
     auto group = [](const char* label, bool& open) { ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5); return ImGui::CollapsingHeader(label, &open, ImGuiTreeNodeFlags_DefaultOpen); };
-    if (group("Video", mVideoGroupOpen)) for (const auto& track : state.videoTracks) if (track.visible && containsInsensitive(track.name, mTrackSearch)) ImGui::Text("V  %s%s", track.name.c_str(), track.locked ? "  LOCK" : "");
-    if (group("Camera", mCameraGroupOpen)) for (const auto& track : state.cameraTracks) if (track.visible && containsInsensitive(track.name, mTrackSearch)) ImGui::Text("C  %s%s", track.name.c_str(), track.muted ? "  MUTE" : "");
-    if (group("Markers", mMarkerGroupOpen) && containsInsensitive("Markers", mTrackSearch)) ImGui::TextUnformatted("M  Markers");
+    if (group("playback.refactorEditor.timeline.video"_tr().c_str(), mVideoGroupOpen)) for (const auto& track : state.videoTracks) if (track.visible && containsInsensitive(track.name, mTrackSearch)) ImGui::Text("V  %s%s", track.name.c_str(), track.locked ? "  LOCK" : "");
+    if (group("playback.refactorEditor.timeline.camera"_tr().c_str(), mCameraGroupOpen)) for (const auto& track : state.cameraTracks) if (track.visible && containsInsensitive(track.name, mTrackSearch)) ImGui::Text("C  %s%s", track.name.c_str(), track.muted ? "  MUTE" : "");
+    if (group("playback.refactorEditor.timeline.markers"_tr().c_str(), mMarkerGroupOpen) && containsInsensitive("Markers", mTrackSearch)) ImGui::Text("M  %s", "playback.refactorEditor.timeline.markers"_tr().c_str());
 }
 
 void TimelinePanel::drawRuler() {
@@ -224,6 +227,7 @@ void TimelinePanel::handleRulerClick(Rect area) {
     }
 }
 void TimelinePanel::drawTransportControls() {
+    using ll::i18n_literals::operator""_tr;
     auto& bridge = EditorBridge::getInstance();
     auto& state = Editor::getInstance().state();
     auto transportButton = [](const char* id, auto drawIcon) {
@@ -251,8 +255,8 @@ void TimelinePanel::drawTransportControls() {
     ImGui::SameLine();
     if (ImGui::Button("Speed +", {62, 28})) bridge.increaseSpeed();
     ImGui::SameLine();
-    ImGui::BeginDisabled(); ImGui::Button("Loop", {52, 28}); ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("等待后端接口");
+    ImGui::BeginDisabled(); ImGui::Button("playback.refactorEditor.timeline.loop"_tr().c_str(), {52, 28}); ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", "playback.refactorEditor.timeline.backendUnavailable"_tr().c_str());
 }
 void TimelinePanel::handleSplitAtPlayhead() { if (mSelectedTrackIndex >= 0 && !mSelectedClipId.empty()) { auto& state = Editor::getInstance().state(); if (mSelectedTrackIndex < static_cast<int>(state.videoTracks.size())) EditorBridge::getInstance().splitClip(state, state.videoTracks[mSelectedTrackIndex].id, mSelectedClipId, mPlayheadTick); } }
 void TimelinePanel::handleRippleDelete() { if (mSelectedTrackIndex >= 0 && !mSelectedClipId.empty()) { auto& state = Editor::getInstance().state(); if (mSelectedTrackIndex < static_cast<int>(state.videoTracks.size())) EditorBridge::getInstance().deleteClip(state, state.videoTracks[mSelectedTrackIndex].id, mSelectedClipId); mSelectedClipId.clear(); } }

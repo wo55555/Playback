@@ -5,12 +5,14 @@
 #include "playback/refactor/editor/models/SelectionModel.h"
 
 #include "imgui.h"
+#include "ll/api/i18n/I18n.h"
 
 #include <algorithm>
 
 namespace playback::refactor::editor {
 
 void ViewportPanel::draw(bool maximized) {
+    using ll::i18n_literals::operator""_tr;
     ImVec2 viewportSize = ImGui::GetContentRegionAvail();
 
     constexpr float kTransportHeight = 42.0f;
@@ -57,7 +59,7 @@ void ViewportPanel::draw(bool maximized) {
         overlay->AddRect({maximizePos.x + 7, maximizePos.y + 7}, {maximizePos.x + 21, maximizePos.y + 21}, iconColor, 0.0f, 0, 1.5f);
     }
     if (ImGui::IsItemClicked()) Editor::getInstance().toggleViewportMaximized();
-    if (maximizeHovered) ImGui::SetTooltip(maximized ? "Restore viewport (Esc)" : "Maximize viewport (Ctrl+Shift+F)");
+    if (maximizeHovered) ImGui::SetTooltip("%s", (maximized ? "playback.refactorEditor.timeline.restore"_tr() : "playback.refactorEditor.timeline.maximize"_tr()).c_str());
 
     auto* sel = Editor::getInstance().selection().getSelection();
     if (sel) {

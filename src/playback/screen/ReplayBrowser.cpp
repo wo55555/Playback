@@ -288,20 +288,11 @@ bool ReplayBrowser::openReplay(ReplaySummary const& replay) {
 }
 
 bool ReplayBrowser::openReplay(std::filesystem::path const& replayPath) {
-    // Write to file in case logger debug level is filtered
-    FILE* dbg = nullptr;
-    fopen_s(&dbg, "mods/playback/debug_log.txt", "a");
-    if (dbg) { fprintf(dbg, "[ReplayBrowser] openReplay: opening %s\n", replayPath.string().c_str()); fclose(dbg); }
-
     getLogger().info("ReplayBrowser::openReplay: opening {}", replayPath.string());
 
     std::error_code ec;
     if (!std::filesystem::exists(replayPath, ec) || !std::filesystem::is_regular_file(replayPath, ec)) {
         getLogger().error("Replay file does not exist: {}", replayPath);
-        if (FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a") == 0) {
-            fprintf(f, "[ReplayBrowser] ERROR: file does not exist %s\n", replayPath.string().c_str());
-            fclose(f);
-        }
         return false;
     }
 
@@ -310,37 +301,13 @@ bool ReplayBrowser::openReplay(std::filesystem::path const& replayPath) {
         return false;
     }
 
-    getLogger().info("ReplayBrowser::openReplay: calling ReplaySession::start()...");
-    if (FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a") == 0) {
-        fprintf(f, "[ReplayBrowser] calling ReplaySession::start()...\n");
-        fclose(f);
-    }
     if (!functions::ReplaySession::getInstance().start(replayPath)) {
         getLogger().error("Failed to start replay session from {}", replayPath);
-        if (FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a") == 0) {
-            fprintf(f, "[ReplayBrowser] ReplaySession::start() FAILED\n");
-            fclose(f);
-        }
         return false;
-    }
-    getLogger().info("ReplayBrowser::openReplay: ReplaySession::start() succeeded");
-    if (FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a") == 0) {
-        fprintf(f, "[ReplayBrowser] ReplaySession::start() SUCCEEDED\n");
-        fclose(f);
     }
 
     // Open the refactored editor when entering replay mode via the menu
-    getLogger().info("ReplayBrowser::openReplay: calling Editor::open()...");
-    if (FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a") == 0) {
-        fprintf(f, "[ReplayBrowser] calling Editor::open()...\n");
-        fclose(f);
-    }
     playback::refactor::editor::Editor::getInstance().open();
-    getLogger().info("ReplayBrowser::openReplay: Editor::open() succeeded");
-    if (FILE* f = nullptr; fopen_s(&f, "mods/playback/debug_log.txt", "a") == 0) {
-        fprintf(f, "[ReplayBrowser] Editor::open() SUCCEEDED\n");
-        fclose(f);
-    }
 
     return true;
 }

@@ -80,36 +80,14 @@ void Editor::saveLayoutPreferences() const {
 }
 
 void Editor::toggle() {
-    auto& logger = Playback::getInstance().getSelf().getLogger();
-    logger.info("Editor::toggle: mOpen={} -> {}", mOpen, !mOpen);
-    FILE* f = nullptr;
-    fopen_s(&f, "mods/playback/debug_log.txt", "a");
-    if (f) { fprintf(f, "[Editor] toggle: %d -> %d\n", mOpen, !mOpen); fclose(f); }
-
     mOpen = !mOpen;
     // DO NOT call mTheme.apply() here — ImGui context may not be available yet.
     // Theme is applied each frame in draw().
 }
 
 void Editor::open() {
-    auto& logger = Playback::getInstance().getSelf().getLogger();
-    logger.info("Editor::open: mOpen={}", mOpen);
-    FILE* f = nullptr;
-    fopen_s(&f, "mods/playback/debug_log.txt", "a");
-    if (f) { fprintf(f, "[Editor] open: mOpen=%d\n", mOpen); fclose(f); }
-
     if (!mOpen) {
-        logger.info("Editor::open: calling toggle()...");
-        if (FILE* f2 = nullptr; fopen_s(&f2, "mods/playback/debug_log.txt", "a") == 0) {
-            fprintf(f2, "[Editor] open: calling toggle()\n");
-            fclose(f2);
-        }
         toggle();
-        logger.info("Editor::open: toggle() done");
-        if (FILE* f2 = nullptr; fopen_s(&f2, "mods/playback/debug_log.txt", "a") == 0) {
-            fprintf(f2, "[Editor] open: toggle() done\n");
-            fclose(f2);
-        }
     }
 }
 
