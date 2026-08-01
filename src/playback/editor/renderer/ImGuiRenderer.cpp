@@ -6,8 +6,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/context/EditorContext.h"
-#include "playback/editor/ui/ReplayUILayout.h"
-#include "playback/editor/ui/ReplayView.h"
+#include "playback/editor/renderer/ReplayUILayout.h"
 #include "playback/refactor/editor/Editor.h"
 #include "playback/refactor/editor/EditorBridge.h"
 #include "playback/refactor/editor/InputHook.h"
@@ -263,7 +262,7 @@ struct ImGuiRenderer::Impl {
         d3d11FirstFrameLogged = false;
     }
 
-    bool renderD3D11(IDXGISwapChain* sc, EditorState const& state) {
+    bool renderD3D11(IDXGISwapChain* sc) {
         if (d3d11Initialized && sc != d3d11SwapChain) shutdownD3D11();
         if (!d3d11Initialized && !initD3D11(sc)) return false;
 
@@ -297,15 +296,6 @@ struct ImGuiRenderer::Impl {
             refactorEditor.draw();
             auto viewport = refactorEditor.viewportVideoRect();
             setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
-        } else {
-            ImGui::GetBackgroundDrawList()->AddImage(
-                ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get()))),
-                ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
-                ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
-            );
-            std::vector<EditorAction> actions;
-            ui::drawReplayView(state, layout, actions);
-            for (auto const action : actions) editorContext->submit(action);
         }
         endReplayMouseFrame();
         ImGui::Render();
@@ -629,7 +619,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d11Device)))) {
         if (p.initialized) p.shutdown();
         MouseInputAttempt inputAttempt;
-        if (!p.renderD3D11(swapChain, state)) return false;
+        if (!p.renderD3D11(swapChain)) return false;
         inputAttempt.commit();
         return true;
     }
@@ -716,16 +706,6 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         refactorEditor.draw();
         auto viewport = refactorEditor.viewportVideoRect();
         setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
-    } else {
-        ImGui::GetBackgroundDrawList()->AddImage(
-            ImTextureRef(static_cast<ImTextureID>(f.gameSrvGpu.ptr)),
-            ImVec2(layout.gameViewportLeft, layout.gameViewportTop),
-            ImVec2(layout.gameViewportRight, layout.gameViewportBottom)
-        );
-        // Fallback: legacy timeline UI when refactored editor is closed
-        std::vector<EditorAction> actions;
-        ui::drawReplayView(state, layout, actions);
-        for (auto const action : actions) p.editorContext->submit(action);
     }
     endReplayMouseFrame();
     ImGui::Render();

@@ -30,6 +30,7 @@ void MenuBar::draw() {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("playback.refactorEditor.menu.exit"_tr().c_str(), "Esc (hold)")) {
+                EditorBridge::getInstance().stopReplay();
                 Editor::getInstance().toggle();
             }
             ImGui::EndMenu();

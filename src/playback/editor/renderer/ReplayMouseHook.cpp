@@ -1,5 +1,5 @@
 #include "ReplayMouseHook.h"
-#include "playback/editor/ui/ReplayUILayout.h"
+#include "playback/editor/renderer/ReplayUILayout.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/refactor/editor/InputHook.h"
 #include "playback/refactor/replay-browser/ReplayBrowserWindow.h"
