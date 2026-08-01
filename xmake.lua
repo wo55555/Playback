@@ -45,7 +45,7 @@ target("playback")
     add_packages("openssl")
     add_packages("libzip")
     add_packages("imgui")
-    add_syslinks("d3d11", "d3d12", "dxgi", "d3dcompiler", "windowscodecs", "ole32")
+    add_syslinks("d3d11", "d3d12", "dxgi", "d3dcompiler", "windowscodecs", "ole32", "comdlg32", "shell32")
     set_exceptions("none") -- To avoid conflicts with /EHa.
     set_kind("shared")
     set_languages("c++20")

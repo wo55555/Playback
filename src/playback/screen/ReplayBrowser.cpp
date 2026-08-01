@@ -19,6 +19,8 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <windows.h>
+#include <shellapi.h>
 
 namespace playback::screen {
 
@@ -313,6 +315,48 @@ bool ReplayBrowser::openReplay(std::filesystem::path const& replayPath) {
     playback::refactor::editor::Editor::getInstance().open();
 
     return true;
+}
+
+bool ReplayBrowser::importReplay(std::filesystem::path const& source, std::string& error) {
+    error.clear();
+    std::error_code ec;
+    if (!hasReplayExtension(source) || !std::filesystem::is_regular_file(source, ec)) {
+        error = "请选择有效的 .playback 或 .zip 回放文件";
+        return false;
+    }
+    auto directory = utils::PathUtils::getReplaysDir();
+    std::filesystem::create_directories(directory, ec);
+    if (ec) { error = ec.message(); return false; }
+    auto destination = directory / source.filename();
+    int suffix = 1;
+    while (std::filesystem::exists(destination, ec)) {
+        destination = directory / (source.stem().string() + " (" + std::to_string(suffix++) + ")" + source.extension().string());
+    }
+    if (ec) { error = ec.message(); return false; }
+    std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, ec);
+    if (ec) { error = ec.message(); return false; }
+    auto imported = findReplay(destination.string());
+    if (!imported || !imported->canOpen) {
+        std::filesystem::remove(destination, ec);
+        error = "文件不是有效的回放归档";
+        return false;
+    }
+    return true;
+}
+
+bool ReplayBrowser::deleteReplay(ReplaySummary const& replay, std::string& error) {
+    error.clear();
+    std::error_code ec;
+    if (!std::filesystem::remove(replay.path, ec)) {
+        error = ec ? ec.message() : "回放文件不存在";
+        return false;
+    }
+    return true;
+}
+
+bool ReplayBrowser::showInFolder(ReplaySummary const& replay) {
+    auto path = replay.path.wstring();
+    return reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + path + L"\"").c_str(), nullptr, SW_SHOWNORMAL)) > 32;
 }
 
 } // namespace playback::screen

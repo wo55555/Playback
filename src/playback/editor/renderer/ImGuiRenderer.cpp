@@ -28,6 +28,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace playback::editor::renderer {
 
@@ -171,6 +172,11 @@ struct ImGuiRenderer::Impl {
     std::vector<uint8_t>           thumbnailPixels;
     uint32_t                       thumbnailWidth{};
     uint32_t                       thumbnailHeight{};
+    struct D3D11ThumbnailTexture {
+        ComPtr<ID3D11Texture2D> texture;
+        ComPtr<ID3D11ShaderResourceView> srv;
+    };
+    std::unordered_map<std::string, D3D11ThumbnailTexture> d3d11ThumbnailTextures;
 
     bool initD3D11(IDXGISwapChain* sc) {
         ComPtr<ID3D11Device> dev;
@@ -263,6 +269,7 @@ struct ImGuiRenderer::Impl {
         d3d11BackendInit = false;
         d3d11ImguiCtx = nullptr;
         d3d11GameSrv.Reset();
+        d3d11ThumbnailTextures.clear();
         d3d11GameTexture.Reset();
         d3d11Rtv.Reset();
         d3d11BackBuffer.Reset();
@@ -700,6 +707,36 @@ bool ImGuiRenderer::saveReplayThumbnail(std::filesystem::path const& output) {
     return functions::render::writeReplayThumbnailPng(
         output, mImpl->thumbnailWidth, mImpl->thumbnailHeight, mImpl->thumbnailPixels.data(), mImpl->thumbnailWidth * 4
     );
+}
+
+void* ImGuiRenderer::acquireReplayThumbnailTexture(std::string_view key, std::string_view png) {
+    auto& p = *mImpl;
+    auto found = p.d3d11ThumbnailTextures.find(std::string(key));
+    if (found != p.d3d11ThumbnailTextures.end()) return found->second.srv.Get();
+    if (!p.d3d11Device || png.empty()) return nullptr;
+    functions::render::ReplayThumbnailPixels pixels;
+    if (!functions::render::decodeReplayThumbnailPng(png, pixels) || pixels.width == 0 || pixels.height == 0) return nullptr;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = pixels.width;
+    desc.Height = pixels.height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA data{};
+    data.pSysMem = pixels.rgba.data();
+    data.SysMemPitch = pixels.width * 4;
+    Impl::D3D11ThumbnailTexture texture;
+    if (FAILED(p.d3d11Device->CreateTexture2D(&desc, &data, &texture.texture))
+        || FAILED(p.d3d11Device->CreateShaderResourceView(texture.texture.Get(), nullptr, &texture.srv))) return nullptr;
+    auto [it, inserted] = p.d3d11ThumbnailTextures.emplace(std::string(key), std::move(texture));
+    return inserted ? it->second.srv.Get() : nullptr;
+}
+
+void ImGuiRenderer::clearReplayThumbnailTextures() {
+    mImpl->d3d11ThumbnailTextures.clear();
 }
 
 bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {

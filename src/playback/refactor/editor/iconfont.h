@@ -66,6 +66,9 @@ constexpr const char* kFontPath = "resources/fonts/lucide.ttf";
 #define ICON_CLOSE         "\ue1b2"  // x
 #define ICON_MOVE          "\ue121"  // move
 #define ICON_FILE_PLUS     "\ue0c9"  // file-plus
+#define ICON_LIST          "\ue10c"  // list
+#define ICON_GRID          "\ue0f0"  // grid-2x2
+#define ICON_MORE          "\ue127"  // ellipsis-vertical
 
 // Track status
 #define ICON_TRACK_ACTIVE  "\ue345"  // circle-dot
