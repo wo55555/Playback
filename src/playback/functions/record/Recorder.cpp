@@ -4,6 +4,7 @@
 #include "playback/functions/action/Action.h"
 #include "playback/functions/io/AsyncReplaySaver.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
+#include "playback/editor/renderer/ImGuiRenderer.h"
 #include "playback/utils/PathUtils.h"
 
 #include "ll/api/service/Bedrock.h"
@@ -413,6 +414,7 @@ void Recorder::start() {
     }
 
     mState = State::Recording;
+    editor::renderer::gImGuiRenderer.requestReplayThumbnailCapture();
     getLogger().info("Recording started");
 }
 
@@ -468,6 +470,9 @@ void Recorder::saveRecording() {
     }
 
     auto outputPath = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
+    if (!editor::renderer::gImGuiRenderer.saveReplayThumbnail(replayPath / "icon.png")) {
+        getLogger().warn("Unable to save replay thumbnail for {}", replayPath);
+    }
     if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
         getLogger().error("Failed to save replay data after recording stopped");
         return;

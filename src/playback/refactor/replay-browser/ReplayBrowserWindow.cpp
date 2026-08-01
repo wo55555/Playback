@@ -1,11 +1,13 @@
 #include "ReplayBrowserWindow.h"
 
 #include "playback/refactor/editor/EditorTheme.h"
+#include "playback/functions/render/ReplayThumbnail.h"
 
 #include "imgui.h"
 
 #include <algorithm>
 #include <array>
+#include <unordered_map>
 
 namespace playback::refactor::replay_browser {
 
@@ -15,6 +17,13 @@ constexpr float kNavigationHeight = 56.0f;
 constexpr float kActionBarHeight  = 64.0f;
 constexpr float kCardMinWidth     = 240.0f;
 constexpr float kCardGap          = 16.0f;
+
+struct ThumbnailCacheEntry {
+    bool attempted{};
+    functions::render::ReplayThumbnailPixels pixels;
+};
+
+std::unordered_map<std::string, ThumbnailCacheEntry> gThumbnailCache;
 
 } // namespace
 
@@ -129,6 +138,14 @@ void ReplayBrowserWindow::drawCard(screen::ReplaySummary const& replay, std::siz
     auto const imageStart = ImGui::GetCursorScreenPos();
     auto const imageEnd = ImVec2(imageStart.x + ImGui::GetContentRegionAvail().x, imageStart.y + width * 0.75f - 12.0f);
     ImGui::GetWindowDrawList()->AddRectFilled(imageStart, imageEnd, ImColor(36, 52, 75, 255), 4.0f);
+    auto& thumbnail = gThumbnailCache[replay.replayId];
+    if (!thumbnail.attempted) {
+        thumbnail.attempted = true;
+        if (!replay.thumbnailPng.empty()) {
+            auto const decoded = functions::render::decodeReplayThumbnailPng(replay.thumbnailPng, thumbnail.pixels);
+            static_cast<void>(decoded);
+        }
+    }
     ImGui::Dummy({0.0f, width * 0.75f - 12.0f});
     if (ImGui::Selectable(replay.displayName().c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick)) {
         mSelectedIndex = index;

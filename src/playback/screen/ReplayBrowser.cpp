@@ -111,6 +111,9 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
         summary.durationTicks = meta.duration;
         summary.totalTicks    = meta.totalTicks;
         summary.canOpen       = true;
+        if (auto thumbnail = readZipEntry(summary.path, "icon.png")) {
+            summary.thumbnailPng = std::move(*thumbnail);
+        }
     } catch (std::exception const& e) {
         summary.replayName = summary.replayId;
         summary.problem    = e.what();
