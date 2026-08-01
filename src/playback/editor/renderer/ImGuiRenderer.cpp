@@ -11,6 +11,7 @@
 #include "playback/refactor/editor/Editor.h"
 #include "playback/refactor/editor/EditorBridge.h"
 #include "playback/refactor/editor/InputHook.h"
+#include "playback/refactor/replay-browser/ReplayBrowserWindow.h"
 
 
 #include "imgui.h"
@@ -285,8 +286,12 @@ struct ImGuiRenderer::Impl {
         playback::refactor::editor::InputHook::syncFrame();
         beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
         ImGui::NewFrame();
+        auto& replayBrowser = playback::refactor::replay_browser::ReplayBrowserWindow::getInstance();
         auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
-        if (refactorEditor.isOpen()) {
+        if (replayBrowser.isOpen()) {
+            setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
+            replayBrowser.draw();
+        } else if (refactorEditor.isOpen()) {
             refactorEditor.setGameTexture(
                 static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
             refactorEditor.draw();
@@ -606,15 +611,16 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     if (!swapChain) return false;
     if (!p.editorContext) return false;
 
+    bool const browserOpen = playback::refactor::replay_browser::ReplayBrowserWindow::getInstance().isOpen();
     auto const state = p.editorContext->snapshot();
-    if (!state.replayVisible) {
+    if (!browserOpen && !state.replayVisible) {
         setReplayMouseInputActive(false);
         if (p.initialized || p.d3d11Initialized) p.shutdown();
         return false;
     }
     auto now = std::chrono::steady_clock::now();
     if (p.initialized && swapChain == p.swapChain) p.lastPresent = now;
-    if (!state.hudVisible) {
+    if (!browserOpen && !state.hudVisible) {
         setReplayMouseInputActive(false);
         return false;
     }
@@ -699,8 +705,12 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     playback::refactor::editor::InputHook::syncFrame();
     beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
     ImGui::NewFrame();
+    auto& replayBrowser = playback::refactor::replay_browser::ReplayBrowserWindow::getInstance();
     auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
-    if (refactorEditor.isOpen()) {
+    if (replayBrowser.isOpen()) {
+        setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
+        replayBrowser.draw();
+    } else if (refactorEditor.isOpen()) {
         refactorEditor.setGameTexture(
             static_cast<ImTextureID>(f.gameSrvGpu.ptr));
         refactorEditor.draw();

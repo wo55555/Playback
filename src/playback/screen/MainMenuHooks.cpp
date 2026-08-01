@@ -1,6 +1,7 @@
 #include "MainMenuHooks.h"
 
 #include "playback/functions/replay/ReplaySession.h"
+#include "playback/refactor/replay-browser/ReplayBrowserWindow.h"
 #include "playback/screen/ReplayBrowser.h"
 
 #include "ll/api/memory/Hook.h"
@@ -320,7 +321,7 @@ void ensureEvents(MinecraftScreenController& ctrl) {
     if (!gEventControllers.insert(&ctrl).second) return;
 
     ctrl.registerButtonPressedHandler(ctrl._getNameId(std::string(kButtonOpenReplays)), [](UIPropertyBag*) {
-        if (!gBrowserOpen) gOpenRequested = true;
+        if (!refactor::replay_browser::ReplayBrowserWindow::getInstance().isOpen()) gOpenRequested = true;
         return kConsumeAndRefreshFocus;
     });
     ctrl.registerButtonPressedHandler(ctrl._getNameId(std::string(kButtonCycleSort)), [](UIPropertyBag*) {
@@ -401,7 +402,7 @@ LL_TYPE_INSTANCE_HOOK(
     auto result = origin();
     if (gOpenRequested) {
         gOpenRequested = false;
-        openBrowser(*this);
+        refactor::replay_browser::ReplayBrowserWindow::getInstance().open();
     }
     if (gUiDirty) {
         gUiDirty = false;

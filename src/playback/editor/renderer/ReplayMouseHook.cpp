@@ -2,6 +2,7 @@
 #include "playback/editor/ui/ReplayUILayout.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/refactor/editor/InputHook.h"
+#include "playback/refactor/replay-browser/ReplayBrowserWindow.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/input/KeyInputEvent.h"
@@ -158,6 +159,10 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
     ActiveMouseCallback activeCallback;
     if (!replayUiOwnsMouse()) return;
 
+    if (playback::refactor::replay_browser::ReplayBrowserWindow::getInstance().ownsInput()) {
+        event.cancel();
+    }
+
     char const  action = event.actionButtonId();
     float const x      = static_cast<float>(event.x()) * gInputScaleX.load(std::memory_order_relaxed);
     float const y      = static_cast<float>(event.y()) * gInputScaleY.load(std::memory_order_relaxed);
@@ -208,13 +213,20 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
 
 void handleKeyInput(ll::event::KeyInputEvent& event) {
     ActiveMouseCallback activeCallback;
-    if (!gMouseHookActive.load(std::memory_order_acquire) || !functions::ReplaySession::getInstance().isActive()) {
+    bool const browserOwnsInput = playback::refactor::replay_browser::ReplayBrowserWindow::getInstance().ownsInput();
+    if (!gMouseHookActive.load(std::memory_order_acquire)
+        || (!browserOwnsInput && !functions::ReplaySession::getInstance().isActive())) {
         return;
     }
 
     // ── Forward key event to the refactored editor's InputHook ──
     // This populates the ImGui keyboard state during the next frame
     playback::refactor::editor::InputHook::onKeyEvent(event.keyCode(), event.isDown());
+
+    if (browserOwnsInput) {
+        event.cancel();
+        return;
+    }
 
     // ── Escape key → release mouse capture ──
     if (event.keyCode() == Keyboard::Escape) {
