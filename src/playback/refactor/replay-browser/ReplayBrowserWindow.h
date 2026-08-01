@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace playback::refactor::replay_browser {
@@ -29,11 +30,11 @@ private:
     void drawNavigation();
     void drawGrid();
     void drawDetails();
-    void drawCard(screen::ReplaySummary const& replay, float width);
+    void drawCard(screen::ReplaySummary const& replay, std::size_t visibleIndex, float width);
     void drawPreview(screen::ReplaySummary const& replay, ImVec2 size);
     void drawActionBar();
     void drawDeleteDialog();
-    void select(std::string_view replayId);
+    void select(std::string_view replayId, std::size_t visibleIndex, bool toggle, bool range);
     void openSelected();
     void importReplay();
     [[nodiscard]] std::optional<screen::ReplaySummary const*> selectedReplay() const;
@@ -41,7 +42,8 @@ private:
     bool                               mOpen{};
     std::vector<screen::ReplaySummary> mReplays;
     std::vector<std::size_t>           mVisible;
-    std::string                        mSelectedId;
+    std::unordered_set<std::string>    mSelectedIds;
+    std::optional<std::size_t>         mSelectionAnchor;
     std::string                        mSearch;
     screen::ReplaySort                 mSort = screen::ReplaySort::LastModified;
     bool                               mDescending = true;

@@ -69,6 +69,11 @@ constexpr const char* kFontPath = "resources/fonts/lucide.ttf";
 #define ICON_LIST          "\ue10c"  // list
 #define ICON_GRID          "\ue0f0"  // grid-2x2
 #define ICON_MORE          "\ue127"  // ellipsis-vertical
+#define ICON_SORT          "\ue16c"  // arrow-up-down
+#define ICON_CALENDAR      "\ue04b"  // calendar
+#define ICON_CLOCK         "\ue080"  // clock-3
+#define ICON_WORLD         "\ue0fa"  // globe-2
+#define ICON_WARNING       "\ue1bd"  // triangle-alert
 
 // Track status
 #define ICON_TRACK_ACTIVE  "\ue345"  // circle-dot
@@ -83,5 +88,6 @@ constexpr const char* kFontPath = "resources/fonts/lucide.ttf";
 
 // Menu layout
 #define ICON_PANEL_LEFT    "\ue12a"  // panel-left
+#define ICON_BACK          "\ue05e"  // chevron-left (left arrow)
 
 }  // namespace Playback::Editor::Icons
