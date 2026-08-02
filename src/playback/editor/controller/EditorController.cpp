@@ -76,6 +76,9 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SplitSequence:
         mCommandStack.push(CommandFactory::createSplitSequence(action.tick), mProject);
         break;
+    case EditorActionType::TrimSequence:
+        mCommandStack.push(CommandFactory::createTrimSequence(action.id, action.tick, action.kind), mProject);
+        break;
     case EditorActionType::DeleteSequenceSegment:
         mCommandStack.push(CommandFactory::createDeleteSequenceSegment(action.id), mProject);
         break;
@@ -84,6 +87,9 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::SplitWorldActor:
         mCommandStack.push(CommandFactory::createSplitWorldActor(action.tick), mProject);
+        break;
+    case EditorActionType::TrimWorldActor:
+        mCommandStack.push(CommandFactory::createTrimWorldActor(action.id, action.tick, action.kind), mProject);
         break;
     case EditorActionType::SetWorldActorSpeed:
         mCommandStack.push(CommandFactory::createSetWorldActorSpeed(action.id, action.speed), mProject);

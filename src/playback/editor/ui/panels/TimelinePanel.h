@@ -26,6 +26,14 @@ private:
     float mTrackListWidthRatio{0.30f};
     int mPendingSeekTick{-1};
     std::string mTrackSearch;
+    bool mSnapEnabled{true};
+    bool mCamerasExpanded{true};
+    bool mMarkersExpanded{true};
+    std::string mDraggingSegmentId;
+    bool mDraggingWorldActor{};
+    bool mDraggingStart{};
+    int mDragStartTick{};
+    int mDragEndTick{};
 };
 
 } // namespace playback::editor::ui
