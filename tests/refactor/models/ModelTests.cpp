@@ -1,13 +1,17 @@
 #include "playback/refactor/editor/CommandStack.h"
+#include "playback/refactor/editor/CommandFactory.h"
 #include "playback/refactor/editor/models/EditorStateExt.h"
 #include "playback/refactor/video-editing/CameraBindingOps.h"
 #include "playback/refactor/video-editing/SequenceOps.h"
 #include "playback/refactor/video-editing/WorldActorOps.h"
 #include "playback/refactor/video-editing/commands/CameraCommands.h"
 #include "playback/refactor/video-editing/commands/SequenceCommands.h"
+#include "playback/refactor/video-editing/commands/SubActorCommands.h"
+#include "playback/refactor/video-editing/commands/WorldActorCommands.h"
 
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 
 namespace {
 using namespace playback::refactor;
@@ -63,11 +67,97 @@ void testCameraAndUndo() {
     require(stack.undo(state), "binding camera must undo");
     require(state.cameras.size() == 1 && state.worldActor.subActors.front().boundCameraIds.empty(), "binding camera undo must restore both associations");
 }
+
+void testCommandGroups() {
+    auto state = makeState();
+    editor::CommandStack stack;
+    stack.push(std::make_unique<video_editing::SplitSequenceAtPlayhead>(40), state);
+    require(state.sequence.size() == 2, "split sequence command must split");
+    require(stack.undo(state) && state.sequence.size() == 1, "split sequence undo must restore state");
+    require(stack.redo(state) && state.sequence.size() == 2, "split sequence redo must reapply state");
+    stack.push(std::make_unique<video_editing::TrimSequenceSegment>("sequence", 0, 30), state);
+    require(state.sequence.front().endTick == 30 && state.sequence.back().startTick == 30, "trim sequence must move the shared boundary");
+    stack.push(std::make_unique<video_editing::DeleteSequenceSegment>("sequence.split.40"), state);
+    require(state.sequence.size() == 1 && video_editing::SequenceOps::validateCoverage(state.sequence, 100), "delete sequence command must preserve coverage");
+
+    state = makeState();
+    stack.clear();
+    stack.push(std::make_unique<video_editing::SplitWorldActorAtPlayhead>(50), state);
+    require(state.worldActor.segments.size() == 2, "split world actor command must split");
+    auto worldRight = state.worldActor.segments.back().id;
+    stack.push(std::make_unique<video_editing::TrimWorldActorSegment>("world", 0, 40), state);
+    require(state.worldActor.segments.front().endTick == 40, "trim world actor command must move the shared boundary");
+    stack.push(std::make_unique<video_editing::SetWorldActorSegmentSpeed>(worldRight, 0.5f), state);
+    require(state.worldActor.segments.back().speed == 0.5f, "world actor speed command must set speed");
+    stack.push(std::make_unique<video_editing::RippleDeleteWorldActorSeg>(worldRight), state);
+    require(state.worldActor.segments.size() == 1 && video_editing::WorldActorOps::validateCoverage(state.worldActor, 100), "world actor ripple delete must preserve coverage");
+
+    state = makeState();
+    stack.clear();
+    stack.push(std::make_unique<video_editing::AddFreeCamera>("Main"), state);
+    auto cameraId = state.cameras.front().id;
+    stack.push(std::make_unique<video_editing::AddKeyframe>(cameraId, -1), state);
+    require(state.cameras.front().keys.size() == 1 && state.cameras.front().keys.front().tick == 0, "keyframe tick must clamp before insertion");
+    stack.push(std::make_unique<video_editing::AddKeyframe>(cameraId, 0), state);
+    require(state.cameras.front().keys.size() == 1, "normalized duplicate keyframe must be rejected");
+    stack.push(std::make_unique<video_editing::AddKeyframe>(cameraId, 50), state);
+    auto keyframeId = state.cameras.front().keys.back().id;
+    stack.push(std::make_unique<video_editing::MoveKeyframe>(cameraId, keyframeId, 0), state);
+    require(state.cameras.front().keys.back().tick == 50, "keyframe move collision must be rejected");
+    stack.push(std::make_unique<video_editing::SetKeyframeEasing>(cameraId, keyframeId, editor::EasingType::EaseIn), state);
+    require(state.cameras.front().keys.back().easingType == editor::EasingType::EaseIn, "keyframe easing command must update easing");
+    stack.push(std::make_unique<video_editing::SetCameraKind>(cameraId, editor::CameraKind::Rig), state);
+    require(state.cameras.front().kind == editor::CameraKind::Rig, "camera kind command must update kind");
+    stack.push(std::make_unique<video_editing::DeleteKeyframe>(cameraId, keyframeId), state);
+    require(state.cameras.front().keys.size() == 1, "delete keyframe command must delete");
+    stack.push(std::make_unique<video_editing::CreateBindingCamera>("actor", "Follow"), state);
+    auto bindingId = state.cameras.back().id;
+    stack.push(std::make_unique<video_editing::UnbindCamera>(bindingId), state);
+    require(state.cameras.back().bindingEntityUuid.empty() && state.worldActor.subActors.front().boundCameraIds.empty(), "unbind command must remove both associations");
+    stack.push(std::make_unique<video_editing::DeleteCamera>(cameraId), state);
+    require(state.cameras.size() == 1, "delete camera command must remove the camera");
+    editor::AgentDetails details{{"state", "active"}};
+    stack.push(std::make_unique<video_editing::SetSubActorDetails>("actor", details), state);
+    require(state.worldActor.subActors.front().agentDetails == details, "sub actor details command must update details");
+}
+
+void testFactoryAndStack() {
+    auto state = makeState();
+    std::vector<std::unique_ptr<editor::IEditCommand>> commands;
+    commands.push_back(editor::CommandFactory::createSplitSequence(50));
+    commands.push_back(editor::CommandFactory::createTrimSequence("sequence", 0, 80));
+    commands.push_back(editor::CommandFactory::createDeleteSequenceSegment("sequence"));
+    commands.push_back(editor::CommandFactory::createBindSequenceToCamera("sequence", "camera_1"));
+    commands.push_back(editor::CommandFactory::createSplitWorldActor(50));
+    commands.push_back(editor::CommandFactory::createTrimWorldActor("world", 0, 80));
+    commands.push_back(editor::CommandFactory::createSetWorldActorSpeed("world", 2.0f));
+    commands.push_back(editor::CommandFactory::createRippleDeleteWorldActorSegment("world"));
+    commands.push_back(editor::CommandFactory::createAddFreeCamera("Main"));
+    commands.push_back(editor::CommandFactory::createDeleteCamera("camera_1"));
+    commands.push_back(editor::CommandFactory::createCreateBindingCamera("actor", "Follow"));
+    commands.push_back(editor::CommandFactory::createUnbindCamera("camera_1"));
+    commands.push_back(editor::CommandFactory::createAddCameraKeyframe("camera_1", 50));
+    commands.push_back(editor::CommandFactory::createMoveCameraKeyframe("camera_1", "key", 50));
+    commands.push_back(editor::CommandFactory::createDeleteCameraKeyframe("camera_1", "key"));
+    commands.push_back(editor::CommandFactory::createSetKeyframeEasing("camera_1", "key", editor::EasingType::EaseOut));
+    commands.push_back(editor::CommandFactory::createSetCameraKind("camera_1", editor::CameraKind::Path));
+    commands.push_back(editor::CommandFactory::createSetSubActorDetails("actor", {}));
+    for (const auto& command : commands) require(command != nullptr, "every v3 factory method must return a command");
+
+    editor::CommandStack stack;
+    for (int index = 0; index < 101; ++index) stack.push(editor::CommandFactory::createAddFreeCamera("Camera"), state);
+    require(stack.undoLabels().size() == 100, "command stack must retain at most 100 steps");
+    require(stack.undo(state), "command stack must undo after reaching its limit");
+    stack.push(editor::CommandFactory::createAddFreeCamera("Fresh"), state);
+    require(!stack.canRedo(), "new command must clear redo history");
+}
 }
 
 int main() {
     testSequenceOps();
     testWorldActorOps();
     testCameraAndUndo();
+    testCommandGroups();
+    testFactoryAndStack();
     return 0;
 }

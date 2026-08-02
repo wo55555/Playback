@@ -13,6 +13,10 @@ compile_commands.json
 *.exp
 *.ilk
 
+# FFmpeg build products and sources (regenerate via scripts/build-ffmpeg/build-ffmpeg.ps1)
+third_party/ffmpeg/
+third_party/ffmpeg-src/
+
 # Shared repository automation should stay tracked
 
 # IDE and editor files
