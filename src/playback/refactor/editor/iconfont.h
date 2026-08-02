@@ -63,18 +63,19 @@ constexpr const char* kFontPath = "resources/fonts/lucide.ttf";
 #define ICON_SETTINGS      "\ue30b"  // cog
 #define ICON_REFRESH       "\ue145"  // refresh-cw
 #define ICON_HELP          "\ue082"  // help-circle
+#define ICON_INFO          "\ue0f9"  // info
 #define ICON_CLOSE         "\ue1b2"  // x
 #define ICON_MOVE          "\ue121"  // move
 #define ICON_FILE_PLUS     "\ue0c9"  // file-plus
-#define ICON_LIST          "\ue10c"  // list
-#define ICON_GRID          "\ue0f0"  // grid-2x2
-#define ICON_MORE          "\ue127"  // ellipsis-vertical
-#define ICON_SORT          "\ue16c"  // arrow-up-down
+#define ICON_LIST          "\ue106"  // list
+#define ICON_GRID          "\ue0ff"  // layout-grid
+#define ICON_MORE          "\ue0b7"  // ellipsis-vertical
+#define ICON_SORT          "\ue37d"  // arrow-up-down
 #define ICON_FILTER        "\ue0dc"  // filter
-#define ICON_CALENDAR      "\ue04b"  // calendar
-#define ICON_CLOCK         "\ue080"  // clock-3
-#define ICON_WORLD         "\ue0fa"  // globe-2
-#define ICON_WARNING       "\ue1bd"  // triangle-alert
+#define ICON_CALENDAR      "\ue063"  // calendar
+#define ICON_CLOCK         "\ue250"  // clock-3
+#define ICON_WORLD         "\ue0e8"  // globe
+#define ICON_WARNING       "\ue193"  // triangle-alert
 
 // Track status
 #define ICON_TRACK_ACTIVE  "\ue345"  // circle-dot

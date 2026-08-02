@@ -59,6 +59,22 @@ std::string formatDuration(screen::ReplaySummary const& replay) {
     return std::to_string(seconds / 60) + " 分 " + std::to_string(seconds % 60) + " 秒";
 }
 
+std::string formatModifiedTime(std::filesystem::file_time_type const& time) {
+    if (time == std::filesystem::file_time_type{}) return "未知";
+    auto const sysTime =
+        std::chrono::time_point_cast<std::chrono::system_clock::duration>(time - std::filesystem::file_time_type::clock::now()
+                                                                          + std::chrono::system_clock::now());
+    std::time_t const t = std::chrono::system_clock::to_time_t(sysTime);
+    std::tm tm{};
+    localtime_s(&tm, &t);
+    std::array<char, 64> buf{};
+    std::strftime(buf.data(), buf.size(), "%Y-%m-%d %H:%M", &tm);
+    return buf.data();
+}
+
+// 按钮自适应宽度：文字（含图标）+ 左右留白。
+float autoWidth(std::string const& text) { return ImGui::CalcTextSize(text.c_str()).x + 34.0f; }
+
 char const* sortLabel(screen::ReplaySort sort) {
     switch (sort) {
     case screen::ReplaySort::ReplayName: return "名称";
@@ -226,6 +242,7 @@ void ReplayBrowserWindow::draw() {
     if (mViewMode == ViewMode::Grid && !mSelectedIds.empty()) drawActionBar();
 
     drawDeleteDialog();
+    drawRenameDialog();
 
     ImGui::SetWindowFontScale(kFontScaleBody);
     ImGui::End();
@@ -240,12 +257,18 @@ void ReplayBrowserWindow::drawNavigation() {
     float const margin = 24.0f;
     float const gap    = 12.0f;
     float const iconW  = kControlHeight;
-    float const textW  = 100.0f;
-    float const filterW = 130.0f;
-    float const sortW   = 130.0f;
-    float const importW = 110.0f;
     float const searchW = 300.0f;
-    float const ctrlW   = searchW + importW + filterW + sortW + textW * 2.0f + iconW + gap * 6.0f;
+
+    // 文字按钮宽度自适应：按当前标签（含图标）计算，避免文字被裁剪。
+    std::string const importLabelText = std::string(ICON_EXPORT) + "  导入";
+    std::string const filterLabelText = std::string(ICON_FILTER) + "  过滤  " + filterLabel(mFilter);
+    std::string const sortLabelText   = std::string(ICON_SORT) + "  排序  " + sortLabel(mSort) + (mDescending ? " ↓" : " ↑");
+    std::string const viewLabelText   = mViewMode == ViewMode::Grid ? std::string(ICON_GRID) + "  平铺" : std::string(ICON_LIST) + "  列表";
+    float const importW = autoWidth(importLabelText);
+    float const filterW = autoWidth(filterLabelText);
+    float const sortW   = autoWidth(sortLabelText);
+    float const viewW   = autoWidth(viewLabelText);
+    float const ctrlW   = searchW + importW + filterW + sortW + viewW + iconW + gap * 6.0f;
     float const startX  = std::max(margin + 200.0f, width - margin - ctrlW);
     float const y       = (kNavHeight - kControlHeight) * 0.5f;
 
@@ -286,15 +309,15 @@ void ReplayBrowserWindow::drawNavigation() {
     // 导入
     ImGui::SetCursorPos({x, y});
     styleButton();
-    if (ImGui::Button(ICON_EXPORT "  导入", {importW, kControlHeight})) importReplay();
+    if (ImGui::Button(importLabelText.c_str(), {importW, kControlHeight})) importReplay();
     popButtonStyle();
     tooltip("导入回放文件");
     x += importW + gap;
 
-    // 过滤下拉框：图标在左，无下拉箭头。
+    // 过滤下拉框：图标在左，宽度随文字自适应，无下拉箭头。
     ImGui::SetCursorPos({x, y});
     styleButton(mFilter != ReplayFilter::All);
-    if (ImGui::Button((std::string(ICON_FILTER) + "  过滤  " + filterLabel(mFilter)).c_str(), {filterW, kControlHeight})) {
+    if (ImGui::Button(filterLabelText.c_str(), {filterW, kControlHeight})) {
         ImGui::OpenPopup("##filter-menu");
     }
     popButtonStyle();
@@ -310,10 +333,10 @@ void ReplayBrowserWindow::drawNavigation() {
     }
     x += filterW + gap;
 
-    // 排序下拉框：图标在左，无下拉箭头。
+    // 排序下拉框：图标在左，宽度随文字自适应，无下拉箭头。
     ImGui::SetCursorPos({x, y});
     styleButton();
-    if (ImGui::Button((std::string(ICON_SORT) + "  排序  " + sortLabel(mSort) + (mDescending ? " ↓" : " ↑")).c_str(), {sortW, kControlHeight})) {
+    if (ImGui::Button(sortLabelText.c_str(), {sortW, kControlHeight})) {
         ImGui::OpenPopup("##sort-menu");
     }
     popButtonStyle();
@@ -342,16 +365,13 @@ void ReplayBrowserWindow::drawNavigation() {
     }
     x += sortW + gap;
 
-    // 平铺 / 列表 视图切换
+    // 视图切换：单个按钮，点击在平铺/列表之间切换。
     ImGui::SetCursorPos({x, y});
-    if (textButton(ICON_GRID "  平铺", textW, mViewMode == ViewMode::Grid)) mViewMode = ViewMode::Grid;
-    tooltip("平铺视图");
-    x += textW + gap;
-
-    ImGui::SetCursorPos({x, y});
-    if (textButton(ICON_LIST "  列表", textW, mViewMode == ViewMode::Details)) mViewMode = ViewMode::Details;
-    tooltip("列表视图");
-    x += textW + gap;
+    if (textButton(viewLabelText.c_str(), viewW, true)) {
+        mViewMode = mViewMode == ViewMode::Grid ? ViewMode::Details : ViewMode::Grid;
+    }
+    tooltip(mViewMode == ViewMode::Grid ? "切换到列表视图" : "切换到平铺视图");
+    x += viewW + gap;
 
     // 设置
     ImGui::SetCursorPos({x, y});
@@ -419,23 +439,52 @@ void ReplayBrowserWindow::drawCard(screen::ReplaySummary const& replay, std::siz
     drawPreview(replay, {previewWidth, previewHeight});
 
     // Clickable full-card overlay (after preview so it receives clicks over the whole card)
+    // 注意：InvisibleButton 默认在“释放”时返回 true，而 IsMouseDoubleClicked 只在第二次“按下”
+    // 那一帧为 true，二者不同帧，因此不能把双击判定放进按钮返回值分支里。改为在按下帧结合悬停判定。
     ImGui::SetCursorPos({0.0f, 0.0f});
-    if (ImGui::InvisibleButton("##select-card", {width, cardHeight})) {
+    ImGui::InvisibleButton("##select-card", {width, cardHeight});
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered()) {
+        select(replay.replayId, visibleIndex, false, false);
+        openSelected();
+    } else if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
         select(replay.replayId, visibleIndex, ImGui::GetIO().KeyCtrl, ImGui::GetIO().KeyShift);
-        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) openSelected();
     }
 
-    // More menu at bottom-right
-    float moreY = cardHeight - 44.0f;
-    ImGui::SetCursorPos({width - 44.0f, moreY});
-    if (ImGui::Button(ICON_MORE, {36.0f, 36.0f})) ImGui::OpenPopup("##card-actions");
-    if (ImGui::BeginPopup("##card-actions")) {
-        if (ImGui::MenuItem(ICON_OPEN "  打开", nullptr, false, replay.canOpen)) { select(replay.replayId, visibleIndex, false, false); openSelected(); }
-        if (ImGui::MenuItem(ICON_SETTINGS "  编辑", nullptr, false, replay.canOpen)) { select(replay.replayId, visibleIndex, false, false); openSelected(); }
-        if (ImGui::MenuItem(ICON_OPEN "  在文件夹中显示")) { auto const shown = screen::ReplayBrowser::showInFolder(replay); static_cast<void>(shown); }
-        ImGui::Separator();
-        if (ImGui::MenuItem(ICON_DELETE "  删除")) { select(replay.replayId, visibleIndex, false, false); mShowDeleteDialog = true; }
-        ImGui::EndPopup();
+    // 右下角详细信息图标：透明背景，悬停时图标本身变白并显示详细信息。
+    float const infoSize = 36.0f;
+    ImGui::SetCursorPos({width - 44.0f, cardHeight - 44.0f});
+    ImGui::InvisibleButton("##card-info", {infoSize, infoSize});
+    bool const infoHovered = ImGui::IsItemHovered();
+    auto const infoMin     = ImGui::GetItemRectMin();
+    auto const infoText    = ImGui::CalcTextSize(ICON_INFO);
+    ImGui::GetWindowDrawList()->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        {infoMin.x + (infoSize - infoText.x) * 0.5f, infoMin.y + (infoSize - infoText.y) * 0.5f},
+        infoHovered ? kColorText : kColorTextDim,
+        ICON_INFO
+    );
+    if (infoHovered) {
+        ImGui::BeginTooltip();
+        ImGui::SetWindowFontScale(kFontScaleSmall);
+        auto detailRow = [](char const* label, std::string const& value) {
+            ImGui::TextDisabled("%s", label);
+            ImGui::SameLine();
+            ImGui::TextUnformatted(value.c_str());
+        };
+        detailRow("名称", replay.displayName());
+        detailRow("世界", replay.worldName.empty() ? "未知" : replay.worldName);
+        detailRow("时长", formatDuration(replay));
+        detailRow("大小", formatSize(replay.fileSize));
+        detailRow("修改时间", formatModifiedTime(replay.lastModified));
+        detailRow("文件名", replay.replayId);
+        ImGui::Spacing();
+        ImGui::TextWrapped("路径: %s", replay.path.string().c_str());
+        if (!replay.canOpen) {
+            ImGui::Spacing();
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kColorDanger), "异常: %s", replay.problem.c_str());
+        }
+        ImGui::EndTooltip();
     }
 
     // Info section：标题 30px，元信息 18px
@@ -525,11 +574,14 @@ void ReplayBrowserWindow::drawDetails() {
             bool const selected = mSelectedIds.contains(replay.replayId);
             ImGui::PushID(replay.replayId.c_str());
             ImGui::PushStyleColor(ImGuiCol_Header, kColorCardSelected);
-            if (ImGui::Selectable("##detail-item", selected, ImGuiSelectableFlags_AllowDoubleClick, {0.0f, 92.0f})) {
-                select(replay.replayId, visibleIndex, false, false);
-                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) openSelected();
-            }
+            ImGui::Selectable("##detail-item", selected, ImGuiSelectableFlags_AllowDoubleClick, {0.0f, 92.0f});
             ImGui::PopStyleColor();
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered()) {
+                select(replay.replayId, visibleIndex, false, false);
+                openSelected();
+            } else if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                select(replay.replayId, visibleIndex, false, false);
+            }
             auto const min = ImGui::GetItemRectMin();
             auto const max = ImGui::GetItemRectMax();
             if (selected) ImGui::GetWindowDrawList()->AddRectFilled(min, {min.x + 4.0f, max.y}, kColorAccent);
@@ -668,7 +720,7 @@ void ReplayBrowserWindow::drawActionBar() {
     popButtonStyle();
     ImGui::SameLine();
     styleButton();
-    if (ImGui::Button("编辑", {btnW, kControlHeight})) openSelected();
+    if (ImGui::Button("编辑", {btnW, kControlHeight})) openRenameDialog();
     popButtonStyle();
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -713,6 +765,70 @@ void ReplayBrowserWindow::drawDeleteDialog() {
             ImGui::EndPopup();
         }
     }
+}
+
+void ReplayBrowserWindow::openRenameDialog() {
+    auto replay = selectedReplay();
+    if (!replay || !(*replay)->canOpen) return;
+    mRenameBuffer  = (*replay)->displayName();
+    mRenameDialogOpen = true;
+}
+
+void ReplayBrowserWindow::drawRenameDialog() {
+    auto replay = selectedReplay();
+    if (mRenameDialogOpen) {
+        ImGui::OpenPopup("编辑回放名称");
+        mRenameDialogOpen = false;
+    }
+    if (!ImGui::BeginPopupModal("编辑回放名称", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+
+    ImGui::SetWindowFontScale(kFontScaleBody);
+    ImGui::TextDisabled("修改名称会同时更新回放元数据与文件名");
+    ImGui::Spacing();
+
+    std::array<char, 256> buffer{};
+    std::copy_n(mRenameBuffer.data(), std::min(mRenameBuffer.size(), buffer.size() - 1), buffer.data());
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, kColorButton);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, kColorButtonHover);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, kColorButtonActive);
+    ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.0f, 10.0f});
+    ImGui::SetNextItemWidth(460.0f);
+    bool const submitted = ImGui::InputText(
+        "##rename-input",
+        buffer.data(),
+        buffer.size(),
+        ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_EnterReturnsTrue
+    );
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(4);
+    if (submitted) mRenameBuffer = buffer.data();
+
+    ImGui::Spacing();
+    bool const empty = mRenameBuffer.empty();
+    ImGui::BeginDisabled(empty);
+    styleButton();
+    bool const saved = ImGui::Button(ICON_CHECK "  保存", {140.0f, kControlHeight});
+    popButtonStyle();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    styleButton();
+    bool const cancelled = ImGui::Button(ICON_CLOSE "  取消", {120.0f, kControlHeight});
+    popButtonStyle();
+
+    bool const confirm = saved || (submitted && !empty);
+    if (confirm && replay) {
+        if (screen::ReplayBrowser::renameReplay(**replay, mRenameBuffer, mOperationError)) {
+            ImGui::CloseCurrentPopup();
+            refresh();
+        } else {
+            ImGui::CloseCurrentPopup();
+        }
+    } else if (cancelled) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
 }
 
 } // namespace playback::refactor::replay_browser

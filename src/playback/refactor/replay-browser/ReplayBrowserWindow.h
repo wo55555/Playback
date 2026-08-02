@@ -36,6 +36,8 @@ private:
     void drawPreview(screen::ReplaySummary const& replay, ImVec2 size);
     void drawActionBar();
     void drawDeleteDialog();
+    void drawRenameDialog();
+    void openRenameDialog();
     void select(std::string_view replayId, std::size_t visibleIndex, bool toggle, bool range);
     void openSelected();
     void importReplay();
@@ -52,6 +54,8 @@ private:
     ReplayFilter                       mFilter = ReplayFilter::All;
     ViewMode                           mViewMode = ViewMode::Grid;
     bool                               mShowDeleteDialog{};
+    bool                               mRenameDialogOpen{};
+    std::string                        mRenameBuffer;
     std::string                        mOperationError;
 };
 
