@@ -103,7 +103,7 @@ target("refactor-model-tests")
     after_build(function (target)
         import("utils.archive")
 
-        local output_dir = path.join(os.projectdir(), "bin", target:name())
+        local output_dir = path.join(os.projectdir(), "bin", "playback")
         os.mkdir(output_dir)
         os.cp(path.join(os.projectdir(), "LICENSE"), output_dir)
         os.cp(path.join(os.projectdir(), "THIRD_PARTY_NOTICES.md"), output_dir)
@@ -120,8 +120,8 @@ target("refactor-model-tests")
 
         local resource_dir = path.join(os.projectdir(), "resources")
         if os.isdir(resource_dir) then
-            local installed_pack = path.join(output_dir, "resource_packs", target:name() .. "-ui")
-            local mcpack = path.join(os.projectdir(), "bin", target:name() .. "-ui.mcpack")
+            local installed_pack = path.join(output_dir, "resource_packs", "playback-ui")
+            local mcpack = path.join(output_dir, "playback-ui.mcpack")
             local mcpack_zip = mcpack .. ".zip"
             assert(os.isfile(path.join(resource_dir, "manifest.json")), "resource pack manifest.json was not found")
             os.tryrm(installed_pack)

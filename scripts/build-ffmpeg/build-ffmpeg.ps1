@@ -1,4 +1,4 @@
-﻿# build-ffmpeg.ps1 — Playback 内置静态 FFmpeg 的一键构建入口（步骤 1 的执行脚本）。
+# build-ffmpeg.ps1 — Playback 内置静态 FFmpeg 的一键构建入口（步骤 1 的执行脚本）。
 #
 # 功能：
 #   1. 检查并定位 MSYS2 与 Visual Studio（MSVC 工具链）
@@ -262,7 +262,7 @@ $manifest = @{
         version  = $FfmpegVersion
         url      = "https://ffmpeg.org/releases/ffmpeg-$FfmpegVersion.tar.xz"
         sha256   = (Get-FileHash (Join-Path $SrcDir "ffmpeg-$FfmpegVersion.tar.xz") -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash.ToLowerInvariant()
-        configure = "./configure --prefix=$prefixMsys --target-os=win64 --arch=x86_64 --toolchain=msvc --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-avdevice --disable-postproc --disable-network --enable-gpl --enable-libx264 --enable-libx265 --enable-libvpx --enable-libopus --enable-zlib --enable-swscale --enable-swresample"
+        configure = "./configure --prefix=$prefixMsys --target-os=win64 --arch=x86_64 --toolchain=msvc --enable-static --disable-shared --enable-pic --disable-programs --disable-doc --disable-debug --disable-avdevice --disable-network --pkg-config=pkgconf --enable-gpl --enable-libx264 --enable-libx265 --enable-libvpx --enable-libopus --enable-zlib --enable-swscale --enable-swresample --enable-avformat --enable-avcodec --enable-avutil --enable-encoder=aac,alac,apng,bmp,ffv1,ffvhuff,flac,gif,libopus,libvpx_vp8,libvpx_vp9,libx264,libx265,mjpeg,mp3,pcm_f32le,pcm_s16le,pcm_s24le,png,prores,rawvideo,tiff,vorbis,webp --enable-decoder=aac,alac,apng,bmp,flac,gif,h264,hevc,jpeg2000,mjpeg,mp3,opus,pcm_f32le,pcm_s16le,pcm_s24le,png,prores,rawvideo,vorbis,vp8,vp9,webp --enable-muxer=apng,avi,flac,gif,image2,image2pipe,matroska,mjpeg,mov,mp4,ogg,png,wav,webm,webp --enable-demuxer=apng,avi,flac,gif,image2,image2pipe,matroska,mjpeg,mov,mp3,ogg,png,wav,webm,webp --enable-protocol=file --extra-cflags=`"-I$(Join-Path $Prefix 'include') -MD`" --extra-ldflags=`"-LIBPATH:$(Join-Path $Prefix 'lib')`" --extra-libs=`"x264.lib x265.lib vpx.lib opus.lib zlib.lib ws2_32.lib bcrypt.lib secur32.lib avrt.lib user32.lib ole32.lib`""
     }
     x264      = @{ commit = $x264Commit; url = "https://code.videolan.org/videolan/x264.git"; license = "GPL-2.0-or-later" }
     x265      = @{ tag = $X265Tag; commit = $x265Commit; url = "https://github.com/videolan/x265"; license = "GPL-2.0-or-later" }

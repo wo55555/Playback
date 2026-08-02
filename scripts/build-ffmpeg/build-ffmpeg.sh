@@ -16,15 +16,26 @@ command -v nasm >/dev/null 2>&1 || { echo "[ffmpeg] ERROR: nasm not found."; exi
 
 cd "$FFSRC"
 
-# 固定、可复现、GPL 静态配置。库依赖直接链接（禁用 pkg-config），
+# MSYS 风格路径（/D/...）传给 cl/link 时无法识别，必须转成 Windows 路径（D:\...）。
+INC_WIN="$(cygpath -w "$PREFIX/include")"
+LIB_WIN="$(cygpath -w "$PREFIX/lib")"
+
+# libx264/libx265/libopus 的检测硬依赖 pkg-config（require_pkg_config，无回退），必须启用 pkgconf。
+# 注意：不能加 --msvc-syntax —— 该模式下 pkgconf 输出 /libpath: 与裸库名 *.lib，
+# 而 configure 的 test_ld 只按 '-l*|*.so' 拆分参数，两者会混入编译测试导致失败。
+# 用普通 pkgconf 输出标准的 -I/-L/-l，由 configure 自带的 msvc_common_flags 转成 /I、-libpath:、*.lib。
+command -v pkgconf >/dev/null 2>&1 || { echo "[ffmpeg] ERROR: pkgconf not found. Run: pacman -S --needed pkg-config"; exit 1; }
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+
+# 固定、可复现、GPL 静态配置。pkgconf 负责 x264/x265/libvpx/libopus 检测（输出 -I/-L/-l，FFmpeg 自行转 MSVC 形式），
 # 各静态库名已由 build-deps.sh 统一为 x264.lib / x265.lib / vpx.lib / opus.lib / zlib.lib。
 ./configure \
     --prefix="$PREFIX" \
     --target-os=win64 --arch=x86_64 --toolchain=msvc \
     --enable-static --disable-shared --enable-pic \
     --disable-programs --disable-doc --disable-debug \
-    --disable-avdevice --disable-postproc --disable-network \
-    --pkg-config=false \
+    --disable-avdevice --disable-network \
+    --pkg-config="pkgconf" \
     --enable-gpl \
     --enable-libx264 --enable-libx265 --enable-libvpx --enable-libopus --enable-zlib \
     --enable-swscale --enable-swresample \
@@ -34,8 +45,8 @@ cd "$FFSRC"
     --enable-muxer=apng,avi,flac,gif,image2,image2pipe,matroska,mjpeg,mov,mp4,ogg,png,wav,webm,webp \
     --enable-demuxer=apng,avi,flac,gif,image2,image2pipe,matroska,mjpeg,mov,mp3,ogg,png,wav,webm,webp \
     --enable-protocol=file \
-    --extra-cflags="-I$PREFIX/include" \
-    --extra-ldflags="-LIBPATH:$PREFIX/lib" \
+    --extra-cflags="-I$INC_WIN -MD" \
+    --extra-ldflags="-LIBPATH:$LIB_WIN" \
     --extra-libs="x264.lib x265.lib vpx.lib opus.lib zlib.lib ws2_32.lib bcrypt.lib secur32.lib avrt.lib user32.lib ole32.lib"
 
 make -j"$JOBS"

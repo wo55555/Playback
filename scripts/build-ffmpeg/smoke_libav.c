@@ -6,7 +6,7 @@
  *   3. 做一次真实往返：libx264 编码 -> mp4 封装 -> 解封装 -> h264 解码，证明整条导出链路可用。
  *
  * 用法：由 smoke-libav.ps1 在 VS x64 环境编译并运行；也可手动：
- *   cl /nologo /W3 /O2 /I <prefix>\include smoke_libav.c /Fe:smoke_libav.exe /link /LIBPATH:<prefix>\lib avformat.lib avcodec.lib avutil.lib swscale.lib swresample.lib x264.lib x265.lib vpx.lib opus.lib zlib.lib ws2_32.lib bcrypt.lib secur32.lib avrt.lib user32.lib ole32.lib
+ *   cl /nologo /W3 /O2 /I <prefix>\include smoke_libav.c /Fe:smoke_libav.exe /link /LIBPATH:<prefix>\lib avformat.lib avcodec.lib avutil.lib swscale.lib swresample.lib x264.lib x265.lib vpx.lib opus.lib zlib.lib ws2_32.lib bcrypt.lib secur32.lib avrt.lib user32.lib ole32.lib ucrt.lib vcruntime.lib
  */
 #include <stdio.h>
 #include <string.h>
@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
     const char *muxs[] = {"mp4", "mov", "matroska", "webm", "wav", "gif", NULL};
     for (int i = 0; muxs[i]; i++) ok &= check_format(muxs[i], "mux");
     printf("demuxers:\n");
-    const char *demuxs[] = {"mov,mp4,m4a,3gp,3g2,mj2", "matroska,webm", "wav", "image2", NULL};
+    const char *demuxs[] = {"mov", "matroska", "wav", "image2", NULL};
     for (int i = 0; demuxs[i]; i++) ok &= check_format(demuxs[i], "demux");
 
     ok &= test_swscale() == 0;

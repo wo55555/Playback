@@ -48,6 +48,14 @@ xmake f --playback_ffmpeg=y
 xmake build playback
 ```
 
+可选：运行冒烟验证（编译最小 libav 静态链接测试，覆盖编码器/解码器/封装器/解封装器注册、swscale、swresample 与一次 libx264→mp4→h264 真实往返）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-ffmpeg/smoke-libav.ps1
+```
+
+输出 `RESULT: ALL OK` 即通过。
+
 ### 常用参数
 
 | 参数 | 默认 | 说明 |
@@ -94,3 +102,10 @@ xmake build playback
 | x265 库名不符 | 检查 `$PREFIX/lib` 下实际库名，调整 `build-deps.sh` 的统一拷贝逻辑 |
 | libvpx target 报错 | 换 `-VsTarget vs16`（对应 VS2019），或升级 libvpx |
 | configure 检测不到某库 | 确认 `$PREFIX/include`、`$PREFIX/lib` 有对应头与库；库名与 `--extra-libs` 一致 |
+| 检测不到 x264/x265/libopus | pkgconf 不要加 `--msvc-syntax`：其 `/libpath:` 与裸 `.lib` 输出无法被 configure 的 `test_ld` 拆分；用普通 `pkgconf` 输出 `-I/-L/-l`，由 `msvc_common_flags` 转成 MSVC 形式 |
+| libvpx 检测失败 / `LNK1181 m.lib` | `vpx.pc` 缺失或带 `-lm`（MSVC 下被转成 `m.lib`）；`build-deps.sh` 已生成无 `-lm` 的 `vpx.pc` |
+| 链接报 `__imp_*` 未解析 / MSVCRT 与 LIBCMT 冲突 | CRT 必须全链统一 `/MD`：x264 加 `--extra-cflags=-MD`，FFmpeg `--extra-cflags` 带 `-MD` |
+| `cl: warning D9024 ... "C:/msys64/MD"` | MSYS 会把 `/MD` 当 POSIX 路径转换；必须用 `-MD`（短横线形式） |
+| zconf.h 误包含 `<unistd.h>` 编译失败 | FFmpeg `config.h` 的 `#define HAVE_UNISTD_H 0` 会误触发 `#ifdef`；改为 `#if defined(HAVE_UNISTD_H) && HAVE_UNISTD_H` |
+| 运行 smoke 报 `0xC0000135`（缺 zlib.dll） | zlib 默认生成导入库；`build-deps.sh` 用 `zlibstatic.lib` 覆盖 `zlib.lib`（`-DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON`） |
+| smoke_libav.exe 运行报缺 VC 运行库 | `/MD` 产物依赖 VCRUNTIME140/msvcp140/ucrtbase；运行前将 VS Redist 的 `x64\Microsoft.VC143.CRT` 加入 PATH（脚本已自动处理） |
