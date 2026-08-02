@@ -108,7 +108,7 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
         auto meta             = playback::functions::PlaybackMeta::fromJson(*metadata);
         summary.replayName    = meta.name.empty() ? summary.replayId : std::move(meta.name);
         summary.worldName     = std::move(meta.worldName);
-        summary.durationTicks = meta.duration;
+        summary.durationTicks = meta.totalTicks;
         summary.totalTicks    = meta.totalTicks;
         summary.canOpen       = true;
     } catch (std::exception const& e) {

@@ -43,6 +43,7 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto  result     = origin(isInitFinished);
     auto& replay     = ReplaySession::getInstance();
+    replay.updateControlPlane();
     bool  hudVisible = false;
     if (isInitFinished && replay.isActive()) {
         auto const topScene     = static_cast<unsigned int>(getTopSceneType());
