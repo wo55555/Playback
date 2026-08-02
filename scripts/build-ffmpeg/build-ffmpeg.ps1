@@ -1,4 +1,4 @@
-# build-ffmpeg.ps1 — Playback 内置静态 FFmpeg 的一键构建入口（步骤 1 的执行脚本）。
+﻿# build-ffmpeg.ps1 — Playback 内置静态 FFmpeg 的一键构建入口（步骤 1 的执行脚本）。
 #
 # 功能：
 #   1. 检查并定位 MSYS2 与 Visual Studio（MSVC 工具链）
@@ -69,6 +69,32 @@ if (-not $vsInstall) {
 $vcvars64 = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
 Require-Tool $vcvars64 "vcvars64.bat not found at $vcvars64."
 
+# Windows 原生 cmake：MSYS2 的 cmake 以 Unix 模式运行，无法正确驱动 MSVC。
+# 优先用 VS 自带的 cmake，否则回退系统 PATH 中的 cmake。
+$cmakeExe = ""
+$vsCmake = Join-Path $vsInstall "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+if (Test-Path $vsCmake) {
+    $cmakeExe = $vsCmake
+} else {
+    $sysCmake = (Get-Command cmake.exe -ErrorAction SilentlyContinue).Source
+    if ($sysCmake) { $cmakeExe = $sysCmake }
+}
+if (-not $cmakeExe) {
+    Write-Host "[ffmpeg] ERROR: no Windows-native cmake found (looked in VS and PATH)." -ForegroundColor Red
+    exit 1
+}
+Write-Host "[ffmpeg] using cmake: $cmakeExe"
+
+# Windows 原生 ninja：MSYS2 的 ninja 通过 /bin/sh 调用 cl.exe 时会把 Windows 路径的反斜杠吞掉，
+# 必须使用 VS 自带的 Windows 版 ninja。
+$ninjaExe = Join-Path $vsInstall "Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+if (Test-Path $ninjaExe) {
+    Write-Host "[ffmpeg] using ninja: $ninjaExe"
+} else {
+    $ninjaExe = ""
+    Write-Host "[ffmpeg] WARN: VS ninja not found, falling back to PATH ninja (may break MSVC builds)." -ForegroundColor Yellow
+}
+
 # ---------- 2. 源码下载 / 检出 ----------
 New-Item -ItemType Directory -Force -Path $SrcDir | Out-Null
 $work = @()
@@ -127,23 +153,25 @@ function Get-GitSource {
 }
 
 # FFmpeg（固定 release tarball，优先 GitHub 镜像；ffmpeg.org 有时连接慢）
+# 注意：Get-Source 以解压临时目录为存在性依据，故先判断最终目录 $ffmpegSrc。
 $ffmpegSrc = Join-Path $SrcDir "ffmpeg-$FfmpegVersion"
-Get-Source -Name "ffmpeg-$FfmpegVersion" `
-    -Url "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n$FfmpegVersion.tar.gz" `
-    -Dest "FFmpeg-n$FfmpegVersion" -ExpectedSha256 ""
-if (-not (Test-Path $ffmpegSrc) -and (Test-Path (Join-Path $SrcDir "FFmpeg-n$FfmpegVersion"))) {
-    Move-Item (Join-Path $SrcDir "FFmpeg-n$FfmpegVersion") $ffmpegSrc
+if (-not (Test-Path $ffmpegSrc)) {
+    Get-Source -Name "ffmpeg-$FfmpegVersion" `
+        -Url "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n$FfmpegVersion.tar.gz" `
+        -Dest "FFmpeg-n$FfmpegVersion" -ExpectedSha256 ""
+    if (Test-Path (Join-Path $SrcDir "FFmpeg-n$FfmpegVersion")) {
+        Move-Item (Join-Path $SrcDir "FFmpeg-n$FfmpegVersion") $ffmpegSrc
+    }
+} else {
+    Write-Host "[ffmpeg] source 'ffmpeg' already present at $ffmpegSrc, skipping."
 }
 
-# x264（git，固定 commit 或 HEAD；code.videolan.org 有时慢，用 GitHub 镜像）
-Get-GitSource -Name "x264" -Url "https://github.com/videolan/x264.git" `
+# x264（git，固定 commit 或 HEAD；官方源在 code.videolan.org）
+Get-GitSource -Name "x264" -Url "https://code.videolan.org/videolan/x264.git" `
     -Ref "master" -Dest "x264" -PinCommit $X264Commit
-# x265（release tarball）
-Get-Source -Name "x265" -Url "https://github.com/videolan/x265/archive/refs/tags/$X265Tag.tar.gz" `
-    -Dest "x265-$X265Tag" -ExpectedSha256 ""
-if (-not (Test-Path (Join-Path $SrcDir "x265"))) {
-    Move-Item (Join-Path $SrcDir "x265-$X265Tag") (Join-Path $SrcDir "x265")
-}
+# x265（git tag；官方源 bitbucket，GitHub mirror 只到 3.4）
+Get-GitSource -Name "x265" -Url "https://bitbucket.org/multicoreware/x265_git.git" `
+    -Ref $X265Tag -Dest "x265"
 
 # libvpx / libopus / zlib（git tag）
 Get-GitSource -Name "libvpx" -Url "https://github.com/webmproject/libvpx.git" `
@@ -157,25 +185,41 @@ Get-GitSource -Name "zlib" -Url "https://github.com/madler/zlib.git" `
 $srcMsys      = To-MsysPath $SrcDir
 $prefixMsys   = To-MsysPath $Prefix
 $ffmpegSrcMsys = To-MsysPath $ffmpegSrc
+$scriptDirMsys = To-MsysPath (Join-Path $RepoRoot "scripts\build-ffmpeg")
+$cmakeMsys    = To-MsysPath $cmakeExe
+$ninjaMsys    = if ($ninjaExe) { To-MsysPath $ninjaExe } else { "/usr/bin/ninja" }
 
 New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Prefix "include") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Prefix "lib") | Out-Null
 
-$inner = "cd '$srcMsys' && bash build-deps.sh '$prefixMsys' '$Jobs' '$VsTarget' && bash build-ffmpeg.sh '$prefixMsys' '$Jobs' '$ffmpegSrcMsys'"
-$cmdLine = "call `"$vcvars64`" >nul && set MSYS2_PATH_TYPE=inherit && `"$msysBash`" -lc `"$inner`""
+$inner = "cd '$scriptDirMsys' && bash build-deps.sh '$prefixMsys' '$Jobs' '$VsTarget' '$srcMsys' '$cmakeMsys' '$ninjaMsys' && bash build-ffmpeg.sh '$prefixMsys' '$Jobs' '$ffmpegSrcMsys'"
 Write-Host "[ffmpeg] running build inside MSYS2 (VS environment):"
-Write-Host "  $cmdLine"
+Write-Host "  $inner"
 
-Push-Location (Join-Path $RepoRoot "scripts\build-ffmpeg")
+# 通过临时 .bat 包装：cmd /c 内联调用在部分终端环境中会丢失 vcvars64 设置的环境变量，
+# 独立 bat 文件（call vcvars64 -> set MSYS2_PATH_TYPE=inherit -> bash）已验证可靠。
+$batPath = Join-Path $env:TEMP "build-ffmpeg-env.bat"
+@"
+@echo off
+call "$vcvars64" >nul 2>&1
+if errorlevel 1 goto vcvars_failed
+set MSYS2_PATH_TYPE=inherit
+"$msysBash" -lc "$inner"
+exit /b %ERRORLEVEL%
+:vcvars_failed
+echo [ffmpeg] ERROR: vcvars64.bat failed: "$vcvars64"
+exit /b 1
+"@ | Set-Content -Path $batPath -Encoding ASCII
+
 try {
-    cmd.exe /c $cmdLine
+    & $batPath
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ffmpeg] ERROR: build failed with exit code $LASTEXITCODE" -ForegroundColor Red
         exit $LASTEXITCODE
     }
 } finally {
-    Pop-Location
+    Remove-Item $batPath -Force -ErrorAction SilentlyContinue
 }
 
 # ---------- 4. 收集产物 + manifest ----------

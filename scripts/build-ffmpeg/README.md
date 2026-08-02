@@ -20,7 +20,7 @@ Playback 的导出链路以 **GPL 静态链接**方式内置 FFmpeg（libav API�
    ```bash
    pacman -Syu   # 完成后 MSYS2 会自动关闭，重新打开终端
    pacman -Su
-   pacman -S --needed git make nasm pkg-config cmake
+   pacman -S --needed git make nasm pkg-config cmake diffutils
    ```
 
 2. **Visual Studio 2022**（C++ 桌面工作负载），脚本通过 vswhere 自动定位 `vcvars64.bat`。
