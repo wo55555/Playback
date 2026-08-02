@@ -3,6 +3,8 @@
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/iconfont.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -11,6 +13,8 @@
 #include <utility>
 
 namespace playback::editor::ui {
+
+using namespace ll::i18n_literals;
 
 namespace {
 
@@ -50,23 +54,25 @@ void TimelinePanel::draw() {
     if (mPendingSeekTick >= 0 && state.currentTick == mPendingSeekTick) mPendingSeekTick = -1;
     int const displayTick = mPendingSeekTick >= 0 ? mPendingSeekTick : state.currentTick;
 
-    if (toolbarButton(ICON_RESET, "Skip to start")) {
+    if (toolbarButton(ICON_RESET, "playback.refactorEditor.timeline.skipToStart"_tr().c_str())) {
         editor.submitAction({playback::editor::EditorActionType::SkipToStart});
     }
     ImGui::SameLine();
-    if (toolbarButton(ICON_BACK, "Decrease playback speed")) {
+    if (toolbarButton(ICON_BACK, "playback.refactorEditor.timeline.decreaseSpeed"_tr().c_str())) {
         editor.submitAction({playback::editor::EditorActionType::DecreaseSpeed});
     }
     ImGui::SameLine();
-    if (toolbarButton(state.paused ? ICON_PLAY : ICON_PAUSE, state.paused ? "Play" : "Pause")) {
+    std::string const toggleTooltip = state.paused ? "playback.refactorEditor.timeline.play"_tr()
+                                                   : "playback.refactorEditor.timeline.pause"_tr();
+    if (toolbarButton(state.paused ? ICON_PLAY : ICON_PAUSE, toggleTooltip.c_str())) {
         editor.submitAction({playback::editor::EditorActionType::TogglePause});
     }
     ImGui::SameLine();
-    if (toolbarButton(">", "Increase playback speed")) {
+    if (toolbarButton(">", "playback.refactorEditor.timeline.increaseSpeed"_tr().c_str())) {
         editor.submitAction({playback::editor::EditorActionType::IncreaseSpeed});
     }
     ImGui::SameLine();
-    if (toolbarButton(">|", "Skip to end")) {
+    if (toolbarButton(">|", "playback.refactorEditor.timeline.skipToEnd"_tr().c_str())) {
         editor.submitAction({playback::editor::EditorActionType::SkipToEnd});
     }
     ImGui::SameLine();
@@ -121,15 +127,21 @@ void TimelinePanel::draw() {
         IM_COL32(240, 192, 32, 255)
     );
 
+    std::string const videoTracks = state.capabilities.videoEditing
+        ? "playback.refactorEditor.timeline.videoTracks"_tr()
+        : "playback.refactorEditor.timeline.videoTracksUnavailable"_tr();
+    std::string const cameraTracks = state.capabilities.cameraEditing
+        ? "playback.refactorEditor.timeline.cameraTracks"_tr()
+        : "playback.refactorEditor.timeline.cameraTracksUnavailable"_tr();
     drawList->AddText(
         {ImGui::GetCursorScreenPos().x + 10.0f, rulerTop + rulerHeight + 13.0f},
         IM_COL32(150, 154, 165, 255),
-        state.capabilities.videoEditing ? "Video tracks" : "Video tracks (backend unavailable)"
+        videoTracks.c_str()
     );
     drawList->AddText(
         {ImGui::GetCursorScreenPos().x + 10.0f, rulerTop + rulerHeight + 55.0f},
         IM_COL32(150, 154, 165, 255),
-        state.capabilities.cameraEditing ? "Camera tracks" : "Camera tracks (backend unavailable)"
+        cameraTracks.c_str()
     );
 
     ImGui::SetCursorScreenPos({timelineLeft, rulerTop});

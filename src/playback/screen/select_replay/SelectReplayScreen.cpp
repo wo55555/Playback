@@ -4,6 +4,9 @@
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/iconfont.h"
 
+#include "ll/api/i18n/I18n.h"
+#include "ll/api/utils/StringUtils.h"
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -14,11 +17,14 @@
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <windows.h>
 #include <commdlg.h>
 
 namespace playback::screen::select_replay {
+
+using namespace ll::i18n_literals;
 
 namespace {
 
@@ -61,11 +67,11 @@ std::string formatSize(std::uintmax_t bytes) {
 
 std::string formatDuration(playback::editor::ReplayBrowserEntry const& replay) {
     int seconds = (replay.totalTicks > 0 ? replay.totalTicks : replay.durationTicks) / 20;
-    return std::to_string(seconds / 60) + " 分 " + std::to_string(seconds % 60) + " 秒";
+    return "playback.replayBrowser.duration"_tr(seconds / 60, seconds % 60);
 }
 
 std::string formatModifiedTime(std::filesystem::file_time_type const& time) {
-    if (time == std::filesystem::file_time_type{}) return "未知";
+    if (time == std::filesystem::file_time_type{}) return "playback.replayBrowser.unknown"_tr();
     auto const sysTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
         time - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now()
     );
@@ -80,18 +86,18 @@ std::string formatModifiedTime(std::filesystem::file_time_type const& time) {
 // 按钮自适应宽度：文字（含图标）+ 左右留白。
 float autoWidth(std::string const& text) { return ImGui::CalcTextSize(text.c_str()).x + 34.0f; }
 
-char const* sortLabel(BrowserSort sort) {
+std::string sortLabel(BrowserSort sort) {
     switch (sort) {
     case BrowserSort::ReplayName:
-        return "名称";
+        return "playback.replayBrowser.sort.name"_tr();
     case BrowserSort::WorldName:
-        return "世界";
+        return "playback.replayBrowser.sort.world"_tr();
     case BrowserSort::Duration:
-        return "时长";
+        return "playback.replayBrowser.sort.duration"_tr();
     case BrowserSort::FileSize:
-        return "大小";
+        return "playback.replayBrowser.sort.size"_tr();
     default:
-        return "日期";
+        return "playback.replayBrowser.sort.date"_tr();
     }
 }
 
@@ -110,14 +116,14 @@ int compareText(std::string_view left, std::string_view right) {
     return 0;
 }
 
-char const* filterLabel(ReplayFilter filter) {
+std::string filterLabel(ReplayFilter filter) {
     switch (filter) {
     case ReplayFilter::Playable:
-        return "仅正常";
+        return "playback.replayBrowser.filter.playable"_tr();
     case ReplayFilter::Broken:
-        return "仅异常";
+        return "playback.replayBrowser.filter.broken"_tr();
     default:
-        return "全部";
+        return "playback.replayBrowser.filter.all"_tr();
     }
 }
 
@@ -268,9 +274,16 @@ void SelectReplayScreen::openSelected() {
 
 void SelectReplayScreen::importReplay() {
     std::array<wchar_t, 32768> file{};
+    std::wstring filter = ll::string_utils::str2wstr("playback.replayBrowser.openDialog.replayFiles"_tr())
+        + L" (*.playback;*.zip)";
+    filter.push_back(L'\0');
+    filter += L"*.playback;*.zip";
+    filter.push_back(L'\0');
+    filter.push_back(L'\0');
+
     OPENFILENAMEW              dialog{};
     dialog.lStructSize = sizeof(dialog);
-    dialog.lpstrFilter = L"Replay files (*.playback;*.zip)\0*.playback;*.zip\0\0";
+    dialog.lpstrFilter = filter.c_str();
     dialog.lpstrFile   = file.data();
     dialog.nMaxFile    = static_cast<DWORD>(file.size());
     dialog.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
@@ -342,12 +355,16 @@ void SelectReplayScreen::drawNavigation() {
     float const searchW = 300.0f;
 
     // 文字按钮宽度自适应：按当前标签（含图标）计算，避免文字被裁剪。
-    std::string const importLabelText = std::string(ICON_EXPORT) + "  导入";
-    std::string const filterLabelText = std::string(ICON_FILTER) + "  过滤  " + filterLabel(mFilter);
+    std::string const importLabelText =
+        std::string(ICON_EXPORT) + "  " + "playback.replayBrowser.navigation.import"_tr();
+    std::string const filterLabelText = std::string(ICON_FILTER) + "  "
+        + "playback.replayBrowser.navigation.filter"_tr() + "  " + filterLabel(mFilter);
     std::string const sortLabelText =
-        std::string(ICON_SORT) + "  排序  " + sortLabel(mSort) + (mDescending ? " ↓" : " ↑");
-    std::string const viewLabelText =
-        mViewMode == ViewMode::Grid ? std::string(ICON_GRID) + "  平铺" : std::string(ICON_LIST) + "  列表";
+        std::string(ICON_SORT) + "  " + "playback.replayBrowser.navigation.sort"_tr() + "  " + sortLabel(mSort)
+        + (mDescending ? " ↓" : " ↑");
+    std::string const viewLabelText = mViewMode == ViewMode::Grid
+        ? std::string(ICON_GRID) + "  " + "playback.replayBrowser.navigation.grid"_tr()
+        : std::string(ICON_LIST) + "  " + "playback.replayBrowser.navigation.list"_tr();
     float const importW = autoWidth(importLabelText);
     float const filterW = autoWidth(filterLabelText);
     float const sortW   = autoWidth(sortLabelText);
@@ -359,13 +376,13 @@ void SelectReplayScreen::drawNavigation() {
     // 返回按钮：← 图标，位于标题左侧，默认透明、悬停浅灰。
     ImGui::SetCursorPos({margin, y});
     if (backButton(ICON_BACK, iconW)) submit({playback::editor::EditorActionType::CloseReplayBrowser});
-    tooltip("返回主菜单");
+    tooltip("playback.replayBrowser.navigation.back"_tr().c_str());
 
     // 标题：30px
     ImGui::SetCursorPos({margin + iconW + gap, (kNavHeight - 30.0f * 1.4f) * 0.5f});
     ImGui::SetWindowFontScale(kFontScaleLarge);
     pushTextColor(kColorText);
-    ImGui::TextUnformatted("回放列表");
+    ImGui::TextUnformatted("playback.replayBrowser.title"_tr().c_str());
     ImGui::PopStyleColor();
     ImGui::SetWindowFontScale(kFontScaleBody);
 
@@ -382,7 +399,9 @@ void SelectReplayScreen::drawNavigation() {
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, kColorButtonActive);
     ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
     ImGui::PushStyleColor(ImGuiCol_TextDisabled, kColorTextDim);
-    if (ImGui::InputTextWithHint("##search", ICON_SEARCH "  搜索回放文件", search.data(), search.size())) {
+    std::string const searchHint =
+        std::string(ICON_SEARCH) + "  " + "playback.replayBrowser.navigation.search"_tr();
+    if (ImGui::InputTextWithHint("##search", searchHint.c_str(), search.data(), search.size())) {
         mSearch = search.data();
         rebuildVisible();
     }
@@ -395,7 +414,7 @@ void SelectReplayScreen::drawNavigation() {
     styleButton();
     if (ImGui::Button(importLabelText.c_str(), {importW, kControlHeight})) importReplay();
     popButtonStyle();
-    tooltip("导入回放文件");
+    tooltip("playback.replayBrowser.navigation.importTooltip"_tr().c_str());
     x += importW + gap;
 
     // 过滤下拉框：图标在左，宽度随文字自适应，无下拉箭头。
@@ -408,7 +427,7 @@ void SelectReplayScreen::drawNavigation() {
     if (ImGui::BeginPopup("##filter-menu")) {
         ImGui::SetWindowFontScale(kFontScaleBody);
         for (auto filter : {ReplayFilter::All, ReplayFilter::Playable, ReplayFilter::Broken}) {
-            if (ImGui::MenuItem(filterLabel(filter), nullptr, mFilter == filter)) {
+            if (ImGui::MenuItem(filterLabel(filter).c_str(), nullptr, mFilter == filter)) {
                 mFilter = filter;
                 rebuildVisible();
             }
@@ -432,17 +451,17 @@ void SelectReplayScreen::drawNavigation() {
               BrowserSort::WorldName,
               BrowserSort::Duration,
               BrowserSort::FileSize}) {
-            if (ImGui::MenuItem(sortLabel(sort), nullptr, mSort == sort)) {
+            if (ImGui::MenuItem(sortLabel(sort).c_str(), nullptr, mSort == sort)) {
                 mSort = sort;
                 rebuildVisible();
             }
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("升序", nullptr, !mDescending)) {
+        if (ImGui::MenuItem("playback.replayBrowser.sort.ascending"_tr().c_str(), nullptr, !mDescending)) {
             mDescending = false;
             rebuildVisible();
         }
-        if (ImGui::MenuItem("降序", nullptr, mDescending)) {
+        if (ImGui::MenuItem("playback.replayBrowser.sort.descending"_tr().c_str(), nullptr, mDescending)) {
             mDescending = true;
             rebuildVisible();
         }
@@ -455,23 +474,26 @@ void SelectReplayScreen::drawNavigation() {
     if (textButton(viewLabelText.c_str(), viewW, true)) {
         mViewMode = mViewMode == ViewMode::Grid ? ViewMode::Details : ViewMode::Grid;
     }
-    tooltip(mViewMode == ViewMode::Grid ? "切换到列表视图" : "切换到平铺视图");
+    std::string const viewTooltip = mViewMode == ViewMode::Grid
+        ? "playback.replayBrowser.navigation.switchToList"_tr()
+        : "playback.replayBrowser.navigation.switchToGrid"_tr();
+    tooltip(viewTooltip.c_str());
     x += viewW + gap;
 
     ImGui::SetCursorPos({x, y});
     if (iconButton(ICON_REFRESH, iconW)) {
         submit({playback::editor::EditorActionType::RefreshReplayBrowser});
     }
-    tooltip("刷新回放列表");
+    tooltip("playback.replayBrowser.navigation.refresh"_tr().c_str());
     x += iconW + gap;
 
     // 设置
     ImGui::SetCursorPos({x, y});
     if (iconButton(ICON_SETTINGS, iconW)) ImGui::OpenPopup("##settings");
-    tooltip("设置");
+    tooltip("playback.replayBrowser.navigation.settings"_tr().c_str());
     if (ImGui::BeginPopup("##settings")) {
         ImGui::SetWindowFontScale(kFontScaleBody);
-        ImGui::TextDisabled("回放目录设置将在后续版本提供");
+        ImGui::TextDisabled("%s", "playback.replayBrowser.navigation.settingsUnavailable"_tr().c_str());
         ImGui::EndPopup();
     }
 
@@ -504,10 +526,11 @@ void SelectReplayScreen::drawPreview(playback::editor::ReplayBrowserEntry const&
         }
         ImGui::Image(texture, size, uv0, uv1);
     } else {
-        auto        center = ImVec2(start.x + size.x * 0.5f, start.y + size.y * 0.5f);
-        auto const* msg    = "暂无缩略图";
-        auto        ts     = ImGui::CalcTextSize(msg);
-        ImGui::GetWindowDrawList()->AddText(ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f), kColorTextDim, msg);
+        auto              center = ImVec2(start.x + size.x * 0.5f, start.y + size.y * 0.5f);
+        std::string const msg    = "playback.replayBrowser.previewUnavailable"_tr();
+        auto              ts     = ImGui::CalcTextSize(msg.c_str());
+        ImGui::GetWindowDrawList()
+            ->AddText(ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f), kColorTextDim, msg.c_str());
         ImGui::Dummy(size);
     }
 }
@@ -593,17 +616,24 @@ void SelectReplayScreen::drawCard(
             ImGui::SameLine();
             ImGui::TextUnformatted(value.c_str());
         };
-        detailRow("名称", replay.displayName());
-        detailRow("世界", replay.worldName.empty() ? "未知" : replay.worldName);
-        detailRow("时长", formatDuration(replay));
-        detailRow("大小", formatSize(replay.fileSize));
-        detailRow("修改时间", formatModifiedTime(replay.lastModified));
-        detailRow("文件名", replay.replayId);
+        detailRow("playback.replayBrowser.field.name"_tr().c_str(), replay.displayName());
+        detailRow(
+            "playback.replayBrowser.field.world"_tr().c_str(),
+            replay.worldName.empty() ? "playback.replayBrowser.unknown"_tr() : replay.worldName
+        );
+        detailRow("playback.replayBrowser.field.duration"_tr().c_str(), formatDuration(replay));
+        detailRow("playback.replayBrowser.field.size"_tr().c_str(), formatSize(replay.fileSize));
+        detailRow("playback.replayBrowser.field.modified"_tr().c_str(), formatModifiedTime(replay.lastModified));
+        detailRow("playback.replayBrowser.field.fileName"_tr().c_str(), replay.replayId);
         ImGui::Spacing();
-        ImGui::TextWrapped("路径: %s", replay.path.string().c_str());
+        ImGui::TextWrapped("%s", "playback.replayBrowser.pathValue"_tr(replay.path.string()).c_str());
         if (!replay.canOpen) {
             ImGui::Spacing();
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kColorDanger), "异常: %s", replay.problem.c_str());
+            ImGui::TextColored(
+                ImGui::ColorConvertU32ToFloat4(kColorDanger),
+                "%s",
+                "playback.replayBrowser.problemValue"_tr(replay.problem).c_str()
+            );
         }
         ImGui::EndTooltip();
         ImGui::PopStyleVar();
@@ -619,7 +649,9 @@ void SelectReplayScreen::drawCard(
 
     ImGui::SetWindowFontScale(kFontScaleSmall);
     ImGui::SetCursorPos({kCardPadding, textY + 46.0f});
-    ImGui::TextDisabled("%s", replay.worldName.empty() ? "未知世界" : replay.worldName.c_str());
+    std::string const worldName =
+        replay.worldName.empty() ? "playback.replayBrowser.unknownWorld"_tr() : replay.worldName;
+    ImGui::TextDisabled("%s", worldName.c_str());
 
     ImGui::SetCursorPos({kCardPadding, textY + 76.0f});
     ImGui::TextDisabled("%s  ·  %s", formatDuration(replay).c_str(), formatSize(replay.fileSize).c_str());
@@ -641,10 +673,12 @@ void SelectReplayScreen::drawGrid() {
     if (mVisible.empty()) {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 60.0f);
         ImGui::SetWindowFontScale(kFontScaleLarge);
-        ImGui::TextDisabled("没有回放文件");
+        ImGui::TextDisabled("%s", "playback.replayBrowser.empty"_tr().c_str());
         ImGui::SetWindowFontScale(kFontScaleBody);
         styleButton();
-        if (ImGui::Button(ICON_EXPORT "  导入第一个回放", {240.0f, kControlHeight})) importReplay();
+        std::string const importFirstLabel =
+            std::string(ICON_EXPORT) + "  " + "playback.replayBrowser.importFirst"_tr();
+        if (ImGui::Button(importFirstLabel.c_str(), {240.0f, kControlHeight})) importReplay();
         popButtonStyle();
         return;
     }
@@ -659,7 +693,7 @@ void SelectReplayScreen::drawGrid() {
     // Header count
     ImGui::SetWindowFontScale(kFontScaleSmall);
     ImGui::SetCursorPosX(kScreenMargin);
-    ImGui::TextDisabled("共 %zu 个回放文件", mVisible.size());
+    ImGui::TextDisabled("%s", "playback.replayBrowser.visibleCount"_tr(mVisible.size()).c_str());
     ImGui::SetWindowFontScale(kFontScaleBody);
     ImGui::Dummy({0.0f, 16.0f});
 
@@ -684,11 +718,11 @@ void SelectReplayScreen::drawDetails() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorCardBg);
     ImGui::BeginChild("##details-list", {listWidth, listHeight}, false);
     ImGui::SetWindowFontScale(kFontScaleSmall);
-    ImGui::TextDisabled("回放文件  %zu", mVisible.size());
+    ImGui::TextDisabled("%s", "playback.replayBrowser.fileCount"_tr(mVisible.size()).c_str());
     ImGui::Separator();
 
     if (mVisible.empty()) {
-        ImGui::TextDisabled("没有回放文件");
+        ImGui::TextDisabled("%s", "playback.replayBrowser.empty"_tr().c_str());
     } else {
         auto* const font = ImGui::GetFont();
         for (std::size_t visibleIndex = 0; visibleIndex < mVisible.size(); ++visibleIndex) {
@@ -709,6 +743,8 @@ void SelectReplayScreen::drawDetails() {
             auto const max = ImGui::GetItemRectMax();
             if (selected) ImGui::GetWindowDrawList()->AddRectFilled(min, {min.x + 4.0f, max.y}, kColorAccent);
             std::string const summary = formatDuration(replay) + "  ·  " + formatSize(replay.fileSize);
+            std::string const worldName =
+                replay.worldName.empty() ? "playback.replayBrowser.unknownWorld"_tr() : replay.worldName;
             ImGui::GetWindowDrawList()
                 ->AddText(font, 24.0f, {min.x + 16.0f, min.y + 8.0f}, kColorText, replay.displayName().c_str());
             ImGui::GetWindowDrawList()->AddText(
@@ -716,7 +752,7 @@ void SelectReplayScreen::drawDetails() {
                 18.0f,
                 {min.x + 16.0f, min.y + 44.0f},
                 kColorTextDim,
-                replay.worldName.empty() ? "未知世界" : replay.worldName.c_str()
+                worldName.c_str()
             );
             ImGui::GetWindowDrawList()
                 ->AddText(font, 18.0f, {min.x + 16.0f, min.y + 68.0f}, kColorTextDim, summary.c_str());
@@ -739,9 +775,10 @@ void SelectReplayScreen::drawDetails() {
 
     auto replay = selectedReplay();
     if (!replay) {
-        ImVec2 const textSize = ImGui::CalcTextSize("选择一个回放以查看详细信息");
+        std::string const selectHint = "playback.replayBrowser.selectForDetails"_tr();
+        ImVec2 const      textSize   = ImGui::CalcTextSize(selectHint.c_str());
         ImGui::SetCursorPos({(ImGui::GetWindowWidth() - textSize.x) * 0.5f, 60.0f});
-        ImGui::TextDisabled("选择一个回放以查看详细信息");
+        ImGui::TextDisabled("%s", selectHint.c_str());
         ImGui::EndChild();
         ImGui::PopStyleColor();
         return;
@@ -788,12 +825,15 @@ void SelectReplayScreen::drawDetails() {
             ImGui::TableSetColumnIndex(1);
             ImGui::TextUnformatted(value.c_str());
         };
-        row("世界", (*replay)->worldName.empty() ? "未知" : (*replay)->worldName);
-        row("时长", formatDuration(**replay));
-        row("文件大小", formatSize((*replay)->fileSize));
-        row("文件格式", ".playback");
-        row("文件名", (*replay)->replayId);
-        row("文件路径", (*replay)->path.string());
+        row(
+            "playback.replayBrowser.field.world"_tr().c_str(),
+            (*replay)->worldName.empty() ? "playback.replayBrowser.unknown"_tr() : (*replay)->worldName
+        );
+        row("playback.replayBrowser.field.duration"_tr().c_str(), formatDuration(**replay));
+        row("playback.replayBrowser.field.fileSize"_tr().c_str(), formatSize((*replay)->fileSize));
+        row("playback.replayBrowser.field.fileFormat"_tr().c_str(), ".playback");
+        row("playback.replayBrowser.field.fileName"_tr().c_str(), (*replay)->replayId);
+        row("playback.replayBrowser.field.filePath"_tr().c_str(), (*replay)->path.string());
         ImGui::EndTable();
     }
     ImGui::PopStyleVar();
@@ -803,16 +843,20 @@ void SelectReplayScreen::drawDetails() {
     ImGui::SetCursorPos({margin, y});
     ImGui::BeginDisabled(!(*replay)->canOpen);
     styleButton();
-    if (ImGui::Button("打开回放", {150.0f, kControlHeight})) openSelected();
+    if (ImGui::Button("playback.replayBrowser.action.openReplay"_tr().c_str(), {150.0f, kControlHeight})) {
+        openSelected();
+    }
     popButtonStyle();
     ImGui::EndDisabled();
     ImGui::SameLine();
     styleButton();
-    if (ImGui::Button("复制路径", {140.0f, kControlHeight})) ImGui::SetClipboardText((*replay)->path.string().c_str());
+    if (ImGui::Button("playback.replayBrowser.action.copyPath"_tr().c_str(), {140.0f, kControlHeight})) {
+        ImGui::SetClipboardText((*replay)->path.string().c_str());
+    }
     popButtonStyle();
     ImGui::SameLine();
     styleButton();
-    if (ImGui::Button("所在文件夹", {160.0f, kControlHeight})) {
+    if (ImGui::Button("playback.replayBrowser.action.showInFolder"_tr().c_str(), {160.0f, kControlHeight})) {
         playback::editor::EditorAction action{playback::editor::EditorActionType::ShowReplayInFolder};
         action.replayId = (*replay)->replayId;
         submit(std::move(action));
@@ -820,7 +864,9 @@ void SelectReplayScreen::drawDetails() {
     popButtonStyle();
     ImGui::SameLine();
     styleButton();
-    if (ImGui::Button("删除", {110.0f, kControlHeight})) mShowDeleteDialog = true;
+    if (ImGui::Button("playback.replayBrowser.action.delete"_tr().c_str(), {110.0f, kControlHeight})) {
+        mShowDeleteDialog = true;
+    }
     popButtonStyle();
 
     ImGui::EndChild();
@@ -852,7 +898,7 @@ void SelectReplayScreen::drawActionBar() {
         ImGui::SetCursorPos({24.0f, 28.0f});
         ImGui::SetWindowFontScale(kFontScaleLarge);
         pushTextColor(kColorText);
-        ImGui::Text("已选择 %zu 个文件", mSelectedIds.size());
+        ImGui::TextUnformatted("playback.replayBrowser.selectedCount"_tr(mSelectedIds.size()).c_str());
         ImGui::PopStyleColor();
     }
     ImGui::SetWindowFontScale(kFontScaleBody);
@@ -863,18 +909,20 @@ void SelectReplayScreen::drawActionBar() {
 
     ImGui::BeginDisabled(!replay || !(*replay)->canOpen);
     styleButton();
-    if (ImGui::Button("打开", {btnW, kControlHeight})) openSelected();
+    if (ImGui::Button("playback.replayBrowser.action.open"_tr().c_str(), {btnW, kControlHeight})) openSelected();
     popButtonStyle();
     ImGui::SameLine();
     styleButton();
-    if (ImGui::Button("编辑", {btnW, kControlHeight})) openRenameDialog();
+    if (ImGui::Button("playback.replayBrowser.action.edit"_tr().c_str(), {btnW, kControlHeight})) openRenameDialog();
     popButtonStyle();
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Button, kColorDanger);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kColorDanger);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kColorDanger);
-    if (ImGui::Button("删除", {btnW, kControlHeight})) mShowDeleteDialog = true;
+    if (ImGui::Button("playback.replayBrowser.action.delete"_tr().c_str(), {btnW, kControlHeight})) {
+        mShowDeleteDialog = true;
+    }
     ImGui::PopStyleColor(3);
 
     ImGui::EndChild();
@@ -882,13 +930,16 @@ void SelectReplayScreen::drawActionBar() {
 }
 
 void SelectReplayScreen::drawDeleteDialog() {
-    if (mShowDeleteDialog) ImGui::OpenPopup("删除回放");
-    if (ImGui::BeginPopupModal("删除回放", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("确定删除选中的回放文件吗");
-        ImGui::TextDisabled("此操作无法撤销");
+    std::string const deleteTitle = "playback.replayBrowser.dialog.delete.title"_tr() + "###delete-replay";
+    if (mShowDeleteDialog) ImGui::OpenPopup(deleteTitle.c_str());
+    if (ImGui::BeginPopupModal(deleteTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("playback.replayBrowser.dialog.delete.confirm"_tr().c_str());
+        ImGui::TextDisabled("%s", "playback.replayBrowser.dialog.delete.irreversible"_tr().c_str());
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Button, kColorDanger);
-        if (ImGui::Button(ICON_DELETE "  确认删除", {156.0f, kControlHeight})) {
+        std::string const confirmDelete =
+            std::string(ICON_DELETE) + "  " + "playback.replayBrowser.dialog.delete.confirmButton"_tr();
+        if (ImGui::Button(confirmDelete.c_str(), {156.0f, kControlHeight})) {
             playback::editor::EditorAction action{playback::editor::EditorActionType::DeleteReplays};
             action.replayIds.assign(mSelectedIds.begin(), mSelectedIds.end());
             submit(std::move(action));
@@ -897,17 +948,22 @@ void SelectReplayScreen::drawDeleteDialog() {
         }
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        if (ImGui::Button(ICON_CLOSE "  取消", {120.0f, kControlHeight})) {
+        std::string const cancel =
+            std::string(ICON_CLOSE) + "  " + "playback.replayBrowser.dialog.cancel"_tr();
+        if (ImGui::Button(cancel.c_str(), {120.0f, kControlHeight})) {
             mShowDeleteDialog = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
     if (mState && !mState->error.empty()) {
-        ImGui::OpenPopup("回放操作失败");
-        if (ImGui::BeginPopupModal("回放操作失败", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        std::string const errorTitle =
+            "playback.replayBrowser.dialog.operationFailed"_tr() + "###replay-operation-failed";
+        ImGui::OpenPopup(errorTitle.c_str());
+        if (ImGui::BeginPopupModal(errorTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::TextWrapped("%s", mState->error.c_str());
-            if (ImGui::Button(ICON_CHECK "  确定", {120.0f, kControlHeight})) {
+            std::string const ok = std::string(ICON_CHECK) + "  " + "playback.replayBrowser.dialog.ok"_tr();
+            if (ImGui::Button(ok.c_str(), {120.0f, kControlHeight})) {
                 submit({playback::editor::EditorActionType::ClearReplayBrowserError});
                 ImGui::CloseCurrentPopup();
             }
@@ -925,14 +981,15 @@ void SelectReplayScreen::openRenameDialog() {
 
 void SelectReplayScreen::drawRenameDialog() {
     auto replay = selectedReplay();
+    std::string const renameTitle = "playback.replayBrowser.dialog.rename.title"_tr() + "###rename-replay";
     if (mRenameDialogOpen) {
-        ImGui::OpenPopup("编辑回放名称");
+        ImGui::OpenPopup(renameTitle.c_str());
         mRenameDialogOpen = false;
     }
-    if (!ImGui::BeginPopupModal("编辑回放名称", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    if (!ImGui::BeginPopupModal(renameTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
 
     ImGui::SetWindowFontScale(kFontScaleBody);
-    ImGui::TextDisabled("修改名称会同时更新回放元数据与文件名");
+    ImGui::TextDisabled("%s", "playback.replayBrowser.dialog.rename.description"_tr().c_str());
     ImGui::Spacing();
 
     std::array<char, 256> buffer{};
@@ -953,12 +1010,15 @@ void SelectReplayScreen::drawRenameDialog() {
     bool const empty = mRenameBuffer.empty();
     ImGui::BeginDisabled(empty);
     styleButton();
-    bool const saved = ImGui::Button(ICON_CHECK "  保存", {140.0f, kControlHeight});
+    std::string const save = std::string(ICON_CHECK) + "  " + "playback.replayBrowser.dialog.rename.save"_tr();
+    bool const        saved = ImGui::Button(save.c_str(), {140.0f, kControlHeight});
     popButtonStyle();
     ImGui::EndDisabled();
     ImGui::SameLine();
     styleButton();
-    bool const cancelled = ImGui::Button(ICON_CLOSE "  取消", {120.0f, kControlHeight});
+    std::string const cancel =
+        std::string(ICON_CLOSE) + "  " + "playback.replayBrowser.dialog.cancel"_tr();
+    bool const cancelled = ImGui::Button(cancel.c_str(), {120.0f, kControlHeight});
     popButtonStyle();
 
     bool const confirm = saved;

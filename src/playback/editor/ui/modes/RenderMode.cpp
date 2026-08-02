@@ -4,9 +4,13 @@
 #include "playback/editor/ui/iconfont.h"
 #include "playback/editor/ui/modes/ModeManager.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include "imgui.h"
 
 namespace playback::editor::ui {
+
+using namespace ll::i18n_literals;
 
 void RenderMode::draw() {
     auto& editor = ReplayEditor::getInstance();
@@ -45,8 +49,9 @@ void RenderMode::draw() {
         ImGui::Text("%s", ICON_RENDER);
 
         // Title
-        ImGui::SetCursorPosX((cardWidth - 120.0f) * 0.5f);
-        ImGui::Text("Rendering...");
+        std::string const rendering = "playback.refactorEditor.render.rendering"_tr();
+        ImGui::SetCursorPosX((cardWidth - ImGui::CalcTextSize(rendering.c_str()).x) * 0.5f);
+        ImGui::TextUnformatted(rendering.c_str());
 
         ImGui::Spacing();
         ImGui::Spacing();
@@ -60,10 +65,10 @@ void RenderMode::draw() {
         ImGui::Spacing();
 
         // Frame info
-        char frameInfo[64];
-        std::snprintf(frameInfo, sizeof(frameInfo), "Frame %d / %d", mCurrentFrame, mTotalFrames);
+        std::string const frameInfo =
+            "playback.refactorEditor.render.frame"_tr(mCurrentFrame, mTotalFrames);
         ImGui::SetCursorPosX((cardWidth - 160.0f) * 0.5f);
-        ImGui::Text("%s", frameInfo);
+        ImGui::TextUnformatted(frameInfo.c_str());
 
         // Format info
         ImGui::SetCursorPosX((cardWidth - 200.0f) * 0.5f);
@@ -71,19 +76,22 @@ void RenderMode::draw() {
 
         // ETA
         ImGui::SetCursorPosX((cardWidth - 100.0f) * 0.5f);
-        ImGui::Text("ETA %s", mEta.empty() ? "0:00:00" : mEta.c_str());
+        ImGui::TextUnformatted(
+            "playback.refactorEditor.render.eta"_tr(mEta.empty() ? "0:00:00" : mEta).c_str()
+        );
 
         // Output path
         ImGui::Spacing();
         ImGui::SetCursorPosX((cardWidth - 300.0f) * 0.5f);
-        ImGui::Text("Output: %s", mOutputPath.empty() ? "D:\\exports\\replay-001.mp4" : mOutputPath.c_str());
+        std::string const outputPath = mOutputPath.empty() ? "D:\\exports\\replay-001.mp4" : mOutputPath;
+        ImGui::TextUnformatted("playback.refactorEditor.render.output"_tr(outputPath).c_str());
 
         ImGui::Spacing();
         ImGui::Spacing();
 
         // Cancel button
         ImGui::SetCursorPosX((cardWidth - 160.0f) * 0.5f);
-        if (ImGui::Button("Cancel Render", ImVec2(160.0f, 32.0f))) {
+        if (ImGui::Button("playback.refactorEditor.render.cancel"_tr().c_str(), ImVec2(160.0f, 32.0f))) {
             ModeManager::getInstance().switchTo(EditorMode::Edit);
         }
 
