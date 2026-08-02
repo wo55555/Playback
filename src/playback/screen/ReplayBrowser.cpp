@@ -2,8 +2,6 @@
 
 #include "playback/Playback.h"
 #include "playback/functions/record/Recorder.h"
-#include "playback/functions/replay/ReplaySession.h"
-#include "playback/refactor/editor/Editor.h"
 #include "playback/utils/PathUtils.h"
 
 #include "zip.h"
@@ -28,6 +26,9 @@ namespace {
 
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
 
+constexpr zip_uint64_t MaxReplayMetadataBytes  = 1024 * 1024;
+constexpr zip_uint64_t MaxReplayThumbnailBytes = 16 * 1024 * 1024;
+
 std::string lowerCopy(std::string_view value) {
     std::string result(value);
     std::transform(result.begin(), result.end(), result.begin(), [](unsigned char ch) {
@@ -41,7 +42,9 @@ bool hasReplayExtension(std::filesystem::path const& path) {
     return extension == ".playback" || extension == ".zip";
 }
 
-std::optional<std::string> readZipEntry(std::filesystem::path const& archivePath, std::string const& entryName) {
+std::optional<std::string> readZipEntry(
+    std::filesystem::path const& archivePath, std::string const& entryName, zip_uint64_t maxBytes
+) {
     auto archivePathString = archivePath.string();
     int  zipError          = 0;
     auto archive           = zip_open(archivePathString.c_str(), ZIP_RDONLY, &zipError);
@@ -57,6 +60,11 @@ std::optional<std::string> readZipEntry(std::filesystem::path const& archivePath
     zip_stat_init(&stat);
     if (zip_stat(archive, entryName.c_str(), 0, &stat) != 0) {
         getLogger().warn("Replay archive {} does not contain {}", archivePath, entryName);
+        zip_close(archive);
+        return std::nullopt;
+    }
+    if ((stat.valid & ZIP_STAT_SIZE) == 0 || stat.size > maxBytes) {
+        getLogger().warn("Replay archive entry {} in {} exceeds the allowed size", entryName, archivePath);
         zip_close(archive);
         return std::nullopt;
     }
@@ -102,7 +110,7 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
         ec.clear();
     }
 
-    auto metadata = readZipEntry(summary.path, "metadata.json");
+    auto metadata = readZipEntry(summary.path, "metadata.json", MaxReplayMetadataBytes);
     if (!metadata.has_value()) {
         summary.replayName = fileStem;
         summary.problem    = "missing metadata.json";
@@ -116,7 +124,7 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
         summary.durationTicks = meta.totalTicks;
         summary.totalTicks    = meta.totalTicks;
         summary.canOpen       = true;
-        if (auto thumbnail = readZipEntry(summary.path, "icon.png")) {
+        if (auto thumbnail = readZipEntry(summary.path, "icon.png", MaxReplayThumbnailBytes)) {
             summary.thumbnailPng = std::move(*thumbnail);
         }
     } catch (std::exception const& e) {
@@ -367,39 +375,6 @@ std::optional<ReplaySummary> ReplayBrowser::findReplay(std::string_view replayId
     return std::nullopt;
 }
 
-bool ReplayBrowser::openReplay(ReplaySummary const& replay) {
-    if (!replay.canOpen) {
-        getLogger().error("Replay {} cannot be opened: {}", replay.path, replay.problem);
-        return false;
-    }
-    return openReplay(replay.path);
-}
-
-bool ReplayBrowser::openReplay(std::filesystem::path const& replayPath) {
-    getLogger().info("ReplayBrowser::openReplay: opening {}", replayPath.string());
-
-    std::error_code ec;
-    if (!std::filesystem::exists(replayPath, ec) || !std::filesystem::is_regular_file(replayPath, ec)) {
-        getLogger().error("Replay file does not exist: {}", replayPath);
-        return false;
-    }
-
-    if (!hasReplayExtension(replayPath)) {
-        getLogger().error("Unsupported replay file extension: {}", replayPath);
-        return false;
-    }
-
-    if (!functions::ReplaySession::getInstance().start(replayPath)) {
-        getLogger().error("Failed to start replay session from {}", replayPath);
-        return false;
-    }
-
-    // Open the refactored editor when entering replay mode via the menu
-    playback::refactor::editor::Editor::getInstance().open();
-
-    return true;
-}
-
 bool ReplayBrowser::importReplay(std::filesystem::path const& source, std::string& error) {
     error.clear();
     std::error_code ec;
@@ -473,7 +448,7 @@ bool ReplayBrowser::renameReplay(ReplaySummary const& replay, std::string_view n
     }
 
     // 1. 读取归档内元数据并更新名称字段；失败则中止。
-    auto const metadata = readZipEntry(replay.path, "metadata.json");
+    auto const metadata = readZipEntry(replay.path, "metadata.json", MaxReplayMetadataBytes);
     if (!metadata.has_value()) {
         error = "回放归档中缺少 metadata.json，无法重命名";
         return false;

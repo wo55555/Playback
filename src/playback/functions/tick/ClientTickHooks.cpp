@@ -5,7 +5,6 @@
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/functions/record/Recorder.h"
 #include "playback/functions/replay/ReplaySession.h"
-#include "playback/refactor/editor/Editor.h"
 
 #include "ll/api/memory/Hook.h"
 
@@ -48,8 +47,7 @@ LL_TYPE_INSTANCE_HOOK(
     if (isInitFinished && replay.isActive()) {
         auto const topScene     = static_cast<unsigned int>(getTopSceneType());
         auto const hudScene     = static_cast<unsigned int>(ui::SceneType::HudScene);
-        bool const replayReady  = replay.hasJoinedReplayWorld()
-                               || playback::refactor::editor::Editor::getInstance().isOpen();
+        bool const replayReady  = replay.hasJoinedReplayWorld();
         bool const sceneVisible = (topScene & hudScene) != 0 || replayReady;
         hudVisible = sceneVisible && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
                   && !isShowingProgressScreen();

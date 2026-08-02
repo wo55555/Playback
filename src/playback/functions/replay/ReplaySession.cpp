@@ -251,10 +251,10 @@ void ReplaySession::clearReplayData() {
         mDimensionTransitionRequest->status.store(DimensionTransitionStatus::Cancelled, std::memory_order_release);
         mDimensionTransitionRequest.reset();
     }
-    mChunkInjectionTicks      = 0;
-    mChunkInjectionIdleTicks  = 0;
-    mPendingLevelChunkCursor  = 0;
-    mPendingSubChunkCursor    = 0;
+    mChunkInjectionTicks     = 0;
+    mChunkInjectionIdleTicks = 0;
+    mPendingLevelChunkCursor = 0;
+    mPendingSubChunkCursor   = 0;
 
     mDimensionTransitionSettledUpdates = 0;
     mDimensionTransitionStartedAt      = {};
@@ -358,9 +358,7 @@ bool ReplaySession::setPaused(bool paused) {
     return true;
 }
 
-int ReplaySession::getTotalTicks() const {
-    return std::max(0, mMeta.totalTicks);
-}
+int ReplaySession::getTotalTicks() const { return std::max(0, mMeta.totalTicks); }
 
 void ReplaySession::adjustPlaybackSpeed(int direction) {
     if (!mActive || direction == 0) return;
@@ -833,7 +831,7 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
 }
 
 bool ReplaySession::ensureReplayDimension(
-    DimensionType      target,
+    DimensionType       target,
     PlaybackView const& view,
     bool                relocateWithinDimension
 ) {
@@ -877,10 +875,10 @@ bool ReplaySession::ensureReplayDimension(
     mChunkIsolationDimension.reset();
     mReplayDimension.store(nullptr, std::memory_order_release);
 
-    mPendingReplayDimension                 = target;
-    mDimensionTransitionRequest             = request;
-    mDimensionTransitionSettledUpdates      = 0;
-    mDimensionTransitionStartedAt           = std::chrono::steady_clock::now();
+    mPendingReplayDimension            = target;
+    mDimensionTransitionRequest        = request;
+    mDimensionTransitionSettledUpdates = 0;
+    mDimensionTransitionStartedAt      = std::chrono::steady_clock::now();
     ll::thread::ServerThreadExecutor::getDefault().execute([request,
                                                             generation,
                                                             generationCounter,
@@ -1182,8 +1180,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         }
 
         PendingSubChunkPacket pending;
-        pending.index      = index;
-        auto const& center = *subChunk.mCenterPos;
+        pending.index                                          = index;
+        auto const&                                     center = *subChunk.mCenterPos;
         std::vector<SubChunkPacket::SubChunkPacketData> playableEntries;
         playableEntries.reserve(entries.size());
         for (auto const& entry : entries) {
@@ -1212,7 +1210,7 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         }
         if (pending.targets.empty()) continue;
         if (playableEntries.size() != entries.size()) {
-            auto filteredPacket = subChunk;
+            auto filteredPacket           = subChunk;
             *filteredPacket.mSubChunkData = std::move(playableEntries);
             PlaybackBuffer filteredPayload;
             filteredPacket.write(filteredPayload);
@@ -1503,14 +1501,14 @@ bool ReplaySession::injectReadySubChunkPackets(
             })) {
             continue;
         }
-        bool const direct  = std::all_of(pending.targets.begin(), pending.targets.end(), [this](ChunkPos const& pos) {
+        bool const direct = std::all_of(pending.targets.begin(), pending.targets.end(), [this](ChunkPos const& pos) {
             return mDirectSnapshotColumns.contains(pos) || mReusableSnapshotColumns.contains(pos);
         });
         std::string_view payload = pending.payload.empty()
-            ? std::string_view{mChunkPackets[static_cast<size_t>(pending.index)]}
-            : std::string_view{pending.payload};
-        bool applied = direct ? applySubChunkDirect(payload)
-                              : injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
+                                     ? std::string_view{mChunkPackets[static_cast<size_t>(pending.index)]}
+                                     : std::string_view{pending.payload};
+        bool             applied =
+            direct ? applySubChunkDirect(payload) : injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
         if (direct && !applied) {
             getLogger().warn("Direct replay SubChunk update became unavailable; falling back to native loading");
             for (auto const& target : pending.targets) mDirectSnapshotColumns.erase(target);
@@ -1553,12 +1551,12 @@ void ReplaySession::updateCenterChunkReadiness() {
     mCenterChunksReady = true;
     auto const elapsed =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt);
-    size_t const queuedCenterColumns = static_cast<size_t>(std::count_if(
-        mCenterChunkPositions.begin(),
-        mCenterChunkPositions.end(),
-        [this](ChunkPos const& pos) { return !mReusableSnapshotColumns.contains(pos); }
-    ));
-    size_t const queuedOuterColumns  = mPendingLevelChunkIndices.size() - queuedCenterColumns;
+    size_t const queuedCenterColumns = static_cast<size_t>(
+        std::count_if(mCenterChunkPositions.begin(), mCenterChunkPositions.end(), [this](ChunkPos const& pos) {
+            return !mReusableSnapshotColumns.contains(pos);
+        })
+    );
+    size_t const queuedOuterColumns = mPendingLevelChunkIndices.size() - queuedCenterColumns;
     getLogger().debug(
         "Replay center ready with {} columns in {:.3f} ms after {} ticks; streaming {} outer columns",
         mCenterChunkPositions.size(),
@@ -1713,7 +1711,7 @@ void ReplaySession::handleSnapshotContext(PlaybackSnapshotContext const& context
 }
 
 void ReplaySession::handleCreateLocalPlayer(PlaybackBuffer& data) {
-    auto const remaining = data.getWritePointer() - data.mReadPointer;
+    auto const  remaining = data.getWritePointer() - data.mReadPointer;
     std::string payload(data.mView.data() + data.mReadPointer, remaining);
     data.mReadPointer += remaining;
 
@@ -2067,9 +2065,9 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     if (packetId == MinecraftPacketIds::ChangeDimension) {
         if (!mReplayPlayer) return false;
-        auto const& change   = static_cast<ChangeDimensionPacket const&>(*packet);
-        auto const& position = *change.mPos;
-        auto const& rotation = mReplayPlayer->getRotation();
+        auto const&        change   = static_cast<ChangeDimensionPacket const&>(*packet);
+        auto const&        position = *change.mPos;
+        auto const&        rotation = mReplayPlayer->getRotation();
         PlaybackView const view{position.x, position.y, position.z, rotation.y, rotation.x};
         (void)ensureReplayDimension(*change.mDimensionId, view);
         return !mReplayFailed;
@@ -2307,7 +2305,7 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
 bool ReplaySession::applySubChunkDirect(std::string_view payload) {
     if (!mNetworkHandler) return false;
     if (!refreshReplayPlayer()) return false;
-    auto* localPlayer = static_cast<LocalPlayer*>(mReplayPlayer);
+    auto*       localPlayer     = static_cast<LocalPlayer*>(mReplayPlayer);
     auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
     if (!replayDimension) return false;
 
@@ -2327,9 +2325,7 @@ bool ReplaySession::applySubChunkDirect(std::string_view payload) {
     try {
         localPlayer->getLevel().notifySubChunkRequestManager(subChunk);
         for (auto const& entry : *subChunk.mSubChunkData) {
-            if (!isSuccessfulSubChunkResult(
-                    static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
-                )) {
+            if (!isSuccessfulSubChunkResult(static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult))) {
                 continue;
             }
             mNetworkHandler
@@ -2396,14 +2392,12 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
         std::vector<SubChunkPacket::SubChunkPacketData> successfulEntries;
         successfulEntries.reserve(subChunk.mSubChunkData->size());
         for (auto const& entry : *subChunk.mSubChunkData) {
-            if (isSuccessfulSubChunkResult(
-                    static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
-                )) {
+            if (isSuccessfulSubChunkResult(static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult))) {
                 successfulEntries.emplace_back(entry);
             }
         }
         *subChunk.mSubChunkData = std::move(successfulEntries);
-        subChunkEntries = subChunk.mSubChunkData->size();
+        subChunkEntries         = subChunk.mSubChunkData->size();
         if (subChunkEntries == 0) return true;
     } else {
         return false;

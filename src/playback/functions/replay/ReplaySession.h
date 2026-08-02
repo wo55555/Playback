@@ -31,13 +31,13 @@ namespace playback::functions {
 
 class ReplaySession {
 private:
-    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT           = 64;
-    static constexpr size_t MAX_SUB_CHUNK_ENTRIES_PER_PACKET     = 1536;
-    static constexpr size_t SNAPSHOT_GAME_PACKETS_PER_TICK       = 16;
-    static constexpr int    CHUNK_INJECTION_STALL_TIMEOUT_TICKS  = 20 * 30;
-    static constexpr int    DIMENSION_TRANSITION_SETTLE_UPDATES  = 2;
-    static constexpr int    REPLAY_WORLD_DELETE_TIMEOUT_TICKS    = 20 * 30;
-    static constexpr auto   DIMENSION_TRANSITION_TIMEOUT         = std::chrono::seconds{30};
+    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT          = 64;
+    static constexpr size_t MAX_SUB_CHUNK_ENTRIES_PER_PACKET    = 1536;
+    static constexpr size_t SNAPSHOT_GAME_PACKETS_PER_TICK      = 16;
+    static constexpr int    CHUNK_INJECTION_STALL_TIMEOUT_TICKS = 20 * 30;
+    static constexpr int    DIMENSION_TRANSITION_SETTLE_UPDATES = 2;
+    static constexpr int    REPLAY_WORLD_DELETE_TIMEOUT_TICKS   = 20 * 30;
+    static constexpr auto   DIMENSION_TRANSITION_TIMEOUT        = std::chrono::seconds{30};
 
     enum class CleanupState { None, WaitingForExit, ReadyToDelete, DeleteIssued };
     enum class SnapshotGamePacketPhase { StreamingChunks, WaitingAfterPlayerList, WaitingAfterEntities };
@@ -99,19 +99,19 @@ private:
     bool                          mCenterChunksReady          = false;
     SnapshotGamePacketPhase       mSnapshotGamePacketPhase    = SnapshotGamePacketPhase::StreamingChunks;
 
-    std::atomic<bool>                   mStopRequested{false};
-    std::atomic<int>                    mRequestedSeekTick{-1};
-    int                                 mSeekTargetTick{-1};
-    float                               mPlaybackSpeed{1.0f};
-    float                               mPlaybackTickAccumulator{};
-    std::optional<int>                  mReplayTime;
-    std::optional<DimensionType>                  mPendingReplayDimension;
-    std::optional<PendingSnapshotApply>           mPendingSnapshotApply;
-    std::shared_ptr<DimensionTransitionRequest>   mDimensionTransitionRequest;
-    int                                           mDimensionTransitionSettledUpdates = 0;
-    std::atomic<uint64_t>                         mDimensionTransitionGeneration{0};
-    uint64_t                                      mCompletedDimensionGeneration = 0;
-    std::chrono::steady_clock::time_point         mDimensionTransitionStartedAt{};
+    std::atomic<bool>                           mStopRequested{false};
+    std::atomic<int>                            mRequestedSeekTick{-1};
+    int                                         mSeekTargetTick{-1};
+    float                                       mPlaybackSpeed{1.0f};
+    float                                       mPlaybackTickAccumulator{};
+    std::optional<int>                          mReplayTime;
+    std::optional<DimensionType>                mPendingReplayDimension;
+    std::optional<PendingSnapshotApply>         mPendingSnapshotApply;
+    std::shared_ptr<DimensionTransitionRequest> mDimensionTransitionRequest;
+    int                                         mDimensionTransitionSettledUpdates = 0;
+    std::atomic<uint64_t>                       mDimensionTransitionGeneration{0};
+    uint64_t                                    mCompletedDimensionGeneration = 0;
+    std::chrono::steady_clock::time_point       mDimensionTransitionStartedAt{};
 
     std::chrono::steady_clock::time_point mChunkInjectionStartedAt{};
     std::vector<double>                   mChunkInjectionDurationsMs;
@@ -235,7 +235,6 @@ public:
 
     void tick();
 
-    // Advances dimension transitions while the loading screen pauses the native level tick.
     void updateControlPlane();
 
     [[nodiscard]] bool isActive() const { return mActive; }
@@ -244,7 +243,11 @@ public:
 
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
 
-    [[nodiscard]] int getCurrentTick() const { return mCurrentTick; }
+    [[nodiscard]] int getCurrentTick() const {
+        int const requestedTick = mRequestedSeekTick.load(std::memory_order_acquire);
+        if (requestedTick >= 0) return requestedTick;
+        return mSeekTargetTick >= 0 ? mSeekTargetTick : mCurrentTick;
+    }
 
     [[nodiscard]] int getTotalTicks() const;
 

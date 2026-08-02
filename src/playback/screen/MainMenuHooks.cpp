@@ -1,7 +1,7 @@
 #include "MainMenuHooks.h"
 
+#include "playback/editor/ReplayUI.h"
 #include "playback/functions/replay/ReplaySession.h"
-#include "playback/refactor/replay-browser/ReplayBrowserWindow.h"
 
 #include "ll/api/memory/Hook.h"
 
@@ -19,18 +19,17 @@ namespace playback::screen {
 
 namespace {
 
-bool gOpenRequested{};
 std::unordered_set<MinecraftScreenController*> gEventControllers;
 
-constexpr std::string_view kButtonOpenReplays = "button.playback_open_replays";
-constexpr auto kConsumeAndRefreshFocus = static_cast<::ui::ViewRequest>(
+constexpr std::string_view kButtonOpenReplays      = "button.playback_open_replays";
+constexpr auto             kConsumeAndRefreshFocus = static_cast<::ui::ViewRequest>(
     static_cast<uint>(::ui::ViewRequest::ConsumeEvent) | static_cast<uint>(::ui::ViewRequest::DelayedFocusRefresh)
 );
 
 void ensureEvents(MinecraftScreenController& ctrl) {
     if (!gEventControllers.insert(&ctrl).second) return;
     ctrl.registerButtonPressedHandler(ctrl._getNameId(std::string(kButtonOpenReplays)), [](UIPropertyBag*) {
-        if (!refactor::replay_browser::ReplayBrowserWindow::getInstance().isOpen()) gOpenRequested = true;
+        editor::submitEditorAction({editor::EditorActionType::OpenReplayBrowser});
         return kConsumeAndRefreshFocus;
     });
 }
@@ -67,12 +66,7 @@ LL_TYPE_INSTANCE_HOOK(
     ::ui::DirtyFlag
 ) {
     functions::ReplaySession::getInstance().setMinecraftScreenModel(mMinecraftScreenModel);
-    auto result = origin();
-    if (gOpenRequested) {
-        gOpenRequested = false;
-        refactor::replay_browser::ReplayBrowserWindow::getInstance().open();
-    }
-    return result;
+    return origin();
 }
 
 void hookMainMenu(bool enable) {
@@ -86,7 +80,6 @@ void hookMainMenu(bool enable) {
         StartMenuTickHook::unhook();
         StartMenuEventsHook::unhook();
         MainMenuOpenHook::unhook();
-        gOpenRequested = false;
         gEventControllers.clear();
     }
     hooked = enable;

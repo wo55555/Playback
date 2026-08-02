@@ -353,6 +353,7 @@ DECLARE_DETOUR_FN(
     REFIID                          riid,
     void**                          ppCommandQueue
 ) {
+    ActiveDetour activeDetour;
     HRESULT const result = reinterpret_cast<CreateCommandQueueFn>(gOriginalCreateCommandQueue)(device, desc, riid, ppCommandQueue);
     if (FAILED(result) || !desc || desc->Type != D3D12_COMMAND_LIST_TYPE_DIRECT || !ppCommandQueue || !*ppCommandQueue) {
         return result;

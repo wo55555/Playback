@@ -7,6 +7,14 @@
 
 namespace playback::functions::render {
 
+class ReplayThumbnailCaptureProvider {
+public:
+    virtual ~ReplayThumbnailCaptureProvider() = default;
+
+    virtual void               requestReplayThumbnailCapture()                          = 0;
+    [[nodiscard]] virtual bool saveReplayThumbnail(std::filesystem::path const& output) = 0;
+};
+
 struct ReplayThumbnailPixels {
     uint32_t             width{};
     uint32_t             height{};
