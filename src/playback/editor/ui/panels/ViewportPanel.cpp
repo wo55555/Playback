@@ -10,8 +10,9 @@
 
 namespace playback::editor::ui {
 
+using namespace ll::i18n_literals;
+
 void ViewportPanel::draw(bool maximized) {
-    using ll::i18n_literals::operator""_tr;
     ImVec2 viewportSize = ImGui::GetContentRegionAvail();
 
     constexpr float kTransportHeight = 42.0f;

@@ -4,6 +4,8 @@
 #include "playback/functions/record/Recorder.h"
 #include "playback/utils/PathUtils.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include "zip.h"
 
 #include <algorithm>
@@ -21,6 +23,8 @@
 #include <shellapi.h>
 
 namespace playback::screen {
+
+using namespace ll::i18n_literals;
 
 namespace {
 
@@ -113,7 +117,7 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
     auto metadata = readZipEntry(summary.path, "metadata.json", MaxReplayMetadataBytes);
     if (!metadata.has_value()) {
         summary.replayName = fileStem;
-        summary.problem    = "missing metadata.json";
+        summary.problem    = "playback.replayBrowser.problem.missingMetadata"_tr();
         return summary;
     }
 
@@ -129,7 +133,7 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
         }
     } catch (std::exception const& e) {
         summary.replayName = fileStem;
-        summary.problem    = e.what();
+        summary.problem    = "playback.replayBrowser.problem.invalidMetadata"_tr(e.what());
     }
 
     return summary;
@@ -177,7 +181,7 @@ bool updateZipEntry(
 
     zip_int64_t index = zip_name_locate(archive, entryName.c_str(), 0);
     if (index < 0) {
-        error = "回放归档中缺少 " + entryName;
+        error = "playback.replayBrowser.error.archiveMissingEntry"_tr(entryName);
         zip_discard(archive);
         return false;
     }
@@ -379,7 +383,7 @@ bool ReplayBrowser::importReplay(std::filesystem::path const& source, std::strin
     error.clear();
     std::error_code ec;
     if (!hasReplayExtension(source) || !std::filesystem::is_regular_file(source, ec)) {
-        error = "请选择有效的 .playback 或 .zip 回放文件";
+        error = "playback.replayBrowser.error.invalidImportFile"_tr();
         return false;
     }
     auto directory = utils::PathUtils::getReplaysDir();
@@ -396,7 +400,7 @@ bool ReplayBrowser::importReplay(std::filesystem::path const& source, std::strin
     auto imported = findReplay(destination.string());
     if (!imported || !imported->canOpen) {
         std::filesystem::remove(destination, ec);
-        error = "文件不是有效的回放归档";
+        error = "playback.replayBrowser.error.invalidArchive"_tr();
         return false;
     }
     return true;
@@ -406,7 +410,7 @@ bool ReplayBrowser::deleteReplay(ReplaySummary const& replay, std::string& error
     error.clear();
     std::error_code ec;
     if (!std::filesystem::remove(replay.path, ec)) {
-        error = ec ? ec.message() : "回放文件不存在";
+        error = ec ? ec.message() : "playback.replayBrowser.error.fileNotFound"_tr();
         return false;
     }
     return true;
@@ -443,14 +447,14 @@ bool ReplayBrowser::renameReplay(ReplaySummary const& replay, std::string_view n
 
     auto const name = sanitizeReplayName(newName);
     if (name.empty()) {
-        error = "回放名称不能为空";
+        error = "playback.replayBrowser.error.emptyName"_tr();
         return false;
     }
 
     // 1. 读取归档内元数据并更新名称字段；失败则中止。
     auto const metadata = readZipEntry(replay.path, "metadata.json", MaxReplayMetadataBytes);
     if (!metadata.has_value()) {
-        error = "回放归档中缺少 metadata.json，无法重命名";
+        error = "playback.replayBrowser.error.renameMissingMetadata"_tr();
         return false;
     }
 
@@ -460,7 +464,7 @@ bool ReplayBrowser::renameReplay(ReplaySummary const& replay, std::string_view n
         meta.name = name;
         updatedJson = meta.toJson();
     } catch (std::exception const& e) {
-        error = std::string("无法解析回放元数据: ") + e.what();
+        error = "playback.replayBrowser.error.parseMetadata"_tr(e.what());
         return false;
     }
 
@@ -478,7 +482,7 @@ bool ReplayBrowser::renameReplay(ReplaySummary const& replay, std::string_view n
                 std::string rollbackError;
                 updateZipEntry(replay.path, "metadata.json", *metadata, rollbackError);
             }
-            error = "重命名文件失败: " + ec.message();
+            error = "playback.replayBrowser.error.renameFile"_tr(ec.message());
             return false;
         }
     }

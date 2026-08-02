@@ -2,6 +2,8 @@
 
 #include "playback/editor/ui/ReplayEditor.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -9,6 +11,8 @@
 #include <cstdio>
 
 namespace playback::editor::ui {
+
+using namespace ll::i18n_literals;
 
 namespace {
 
@@ -67,7 +71,7 @@ void TimelinePanel::draw() {
     auto const& state   = editor.state();
     auto const  project = state.project;
     if (!project) {
-        ImGui::TextDisabled("No replay project is active.");
+        ImGui::TextDisabled("%s", "playback.refactorEditor.common.noActiveProject"_tr().c_str());
         return;
     }
 
@@ -90,16 +94,18 @@ void TimelinePanel::draw() {
     ImGui::Text("%s / %s", formatTick(displayTick).c_str(), formatTick(state.totalTicks).c_str());
     ImGui::SameLine();
     ImGui::BeginDisabled(!state.canUndo);
-    if (ImGui::Button("Undo", {42, 28})) submitEdit({EditorActionType::UndoEditorEdit});
+    if (ImGui::Button("playback.refactorEditor.menu.undo"_tr().c_str(), {42, 28}))
+        submitEdit({EditorActionType::UndoEditorEdit});
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!state.canRedo);
-    if (ImGui::Button("Redo", {42, 28})) submitEdit({EditorActionType::RedoEditorEdit});
+    if (ImGui::Button("playback.refactorEditor.menu.redo"_tr().c_str(), {42, 28}))
+        submitEdit({EditorActionType::RedoEditorEdit});
     ImGui::EndDisabled();
     ImGui::SameLine();
     auto const* selectedCamera = editor.selection().getAs<editing::model::SelectedCamera>();
     ImGui::BeginDisabled(selectedCamera == nullptr);
-    if (ImGui::Button("+ Key", {50, 28})) {
+    if (ImGui::Button("playback.refactorEditor.timeline.addKey"_tr().c_str(), {64, 28})) {
         EditorAction action{EditorActionType::AddCameraKeyframe};
         action.id   = selectedCamera->cameraId;
         action.tick = state.currentTick;
@@ -107,13 +113,13 @@ void TimelinePanel::draw() {
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("+ Camera", {74, 28})) {
+    if (ImGui::Button("playback.refactorEditor.timeline.addCamera"_tr().c_str(), {74, 28})) {
         EditorAction action{EditorActionType::AddFreeCamera};
-        action.name = "Camera " + std::to_string(project->cameras.size() + 1);
+        action.name = "playback.refactorEditor.defaults.camera"_tr(project->cameras.size() + 1);
         submitEdit(std::move(action));
     }
     ImGui::SameLine();
-    ImGui::TextUnformatted("Snap");
+    ImGui::TextUnformatted("playback.refactorEditor.timeline.snap"_tr().c_str());
     ImGui::SameLine();
     ImGui::Checkbox("##timeline-snap", &mSnapEnabled);
     ImGui::SameLine();
@@ -156,7 +162,13 @@ void TimelinePanel::draw() {
     char search[128]{};
     std::snprintf(search, sizeof(search), "%s", mTrackSearch.c_str());
     ImGui::SetNextItemWidth(listWidth - 8.0f);
-    if (ImGui::InputTextWithHint("##timeline-search", "Search cameras", search, sizeof(search))) mTrackSearch = search;
+    if (ImGui::InputTextWithHint(
+            "##timeline-search",
+            "playback.refactorEditor.timeline.searchCameras"_tr().c_str(),
+            search,
+            sizeof(search)
+        ))
+        mTrackSearch = search;
     for (auto const& row : mTrackTree.rows()) {
         bool selected = (row.kind == editing::model::TrackRowKind::Sequence
                          && editor.selection().getAs<editing::model::SelectedSequence>())
@@ -171,17 +183,20 @@ void TimelinePanel::draw() {
                 editor.selection().select(editing::model::SelectedCamera{row.id.substr(7)});
             ImGui::PopID();
         } else if (row.kind == editing::model::TrackRowKind::Sequence) {
-            if (ImGui::Selectable("S  Camera Sequence", selected))
+            std::string const label = "S  " + "playback.refactorEditor.details.cameraSequence"_tr();
+            if (ImGui::Selectable(label.c_str(), selected))
                 editor.selection().select(editing::model::SelectedSequence{});
         } else if (row.kind == editing::model::TrackRowKind::WorldActor) {
-            if (ImGui::Selectable("W  World Actor", selected))
+            std::string const label = "W  " + "playback.refactorEditor.details.worldActor"_tr();
+            if (ImGui::Selectable(label.c_str(), selected))
                 editor.selection().select(editing::model::SelectedWorldActor{});
         } else {
-            if (ImGui::Selectable("M  Markers", false)) editor.selection().clear();
+            std::string const label = "M  " + "playback.refactorEditor.timeline.markers"_tr();
+            if (ImGui::Selectable(label.c_str(), false)) editor.selection().clear();
         }
         if (row.locked) {
             ImGui::SameLine();
-            ImGui::TextDisabled("LOCK");
+            ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.lock"_tr().c_str());
         }
     }
     ImGui::EndChild();
@@ -215,12 +230,14 @@ void TimelinePanel::draw() {
     }
     if (ImGui::IsItemDeactivated()) submitSeek(displayTick);
 
-    auto segmentLabel = [&project](editing::model::SequenceSegment const& segment) -> char const* {
-        if (segment.cameraId.empty()) return project->cameras.empty() ? "No camera" : "Auto (first camera)";
+    auto segmentLabel = [&project](editing::model::SequenceSegment const& segment) -> std::string {
+        if (segment.cameraId.empty())
+            return project->cameras.empty() ? "playback.refactorEditor.timeline.noCamera"_tr()
+                                            : "playback.refactorEditor.timeline.autoFirstCamera"_tr();
         auto it = std::find_if(project->cameras.begin(), project->cameras.end(), [&segment](auto const& camera) {
             return camera.id == segment.cameraId;
         });
-        return it == project->cameras.end() ? "Missing camera" : it->name.c_str();
+        return it == project->cameras.end() ? "playback.refactorEditor.timeline.missingCamera"_tr() : it->name;
     };
     auto tickFromMouse = [&] {
         return std::clamp(
@@ -247,10 +264,11 @@ void TimelinePanel::draw() {
                     selected ? IM_COL32(240, 192, 32, 255) : IM_COL32(100, 160, 225, 255),
                     3.0f
                 );
+                std::string const label = segmentLabel(segment);
                 drawList->AddText(
                     {minimum.x + 5.0f, minimum.y + 6.0f},
                     IM_COL32(245, 245, 247, 255),
-                    segmentLabel(segment)
+                    label.c_str()
                 );
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && contains(minimum, maximum, ImGui::GetMousePos())) {
                     editor.selection().select(editing::model::SelectedSequenceSegment{segment.id});
@@ -367,7 +385,9 @@ void TimelinePanel::draw() {
         submitEdit(std::move(action));
     }
     ImGui::SameLine();
-    if (ImGui::Button(state.paused ? "Play" : "Pause", {52, 28})) submitEdit({EditorActionType::TogglePause});
+    std::string const playPause = state.paused ? "playback.refactorEditor.timeline.play"_tr()
+                                               : "playback.refactorEditor.timeline.pause"_tr();
+    if (ImGui::Button(playPause.c_str(), {52, 28})) submitEdit({EditorActionType::TogglePause});
     ImGui::SameLine();
     if (ImGui::Button(">>", {32, 28})) {
         EditorAction action{EditorActionType::Seek};
@@ -378,7 +398,7 @@ void TimelinePanel::draw() {
     if (ImGui::Button(">|", {32, 28})) submitEdit({EditorActionType::SkipToEnd});
     ImGui::SameLine();
     ImGui::BeginDisabled();
-    ImGui::Button("Loop", {48, 28});
+    ImGui::Button("playback.refactorEditor.timeline.loop"_tr().c_str(), {48, 28});
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextDisabled("%.2fx", state.playbackSpeed);

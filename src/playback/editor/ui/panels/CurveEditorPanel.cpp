@@ -1,8 +1,12 @@
 #include "CurveEditorPanel.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include "imgui.h"
 
 namespace playback::editor::ui {
+
+using namespace ll::i18n_literals;
 
 CurveEditorPanel::CurveEditorPanel() {
     // Default linear curve
@@ -18,8 +22,9 @@ void CurveEditorPanel::draw() {
     if (!mOpen) return;
 
     // Preset dropdown
-    if (ImGui::BeginCombo("Preset", "Custom")) {
-        if (ImGui::Selectable("Linear")) {
+    std::string const presetLabel = "playback.refactorEditor.curve.preset"_tr() + "###curve-preset";
+    if (ImGui::BeginCombo(presetLabel.c_str(), "playback.refactorEditor.curve.custom"_tr().c_str())) {
+        if (ImGui::Selectable("playback.refactorEditor.curve.linear"_tr().c_str())) {
             BezierCurve linear;
             linear.name = "Linear";
             linear.points = {
@@ -28,7 +33,7 @@ void CurveEditorPanel::draw() {
             };
             mEditor.setCurve(linear);
         }
-        if (ImGui::Selectable("Ease In")) {
+        if (ImGui::Selectable("playback.refactorEditor.curve.easeIn"_tr().c_str())) {
             BezierCurve easeIn;
             easeIn.name = "Ease In";
             easeIn.points = {
@@ -38,7 +43,7 @@ void CurveEditorPanel::draw() {
             };
             mEditor.setCurve(easeIn);
         }
-        if (ImGui::Selectable("Ease Out")) {
+        if (ImGui::Selectable("playback.refactorEditor.curve.easeOut"_tr().c_str())) {
             BezierCurve easeOut;
             easeOut.name = "Ease Out";
             easeOut.points = {
@@ -48,7 +53,7 @@ void CurveEditorPanel::draw() {
             };
             mEditor.setCurve(easeOut);
         }
-        if (ImGui::Selectable("Ease InOut")) {
+        if (ImGui::Selectable("playback.refactorEditor.curve.easeInOut"_tr().c_str())) {
             BezierCurve easeInOut;
             easeInOut.name = "Ease InOut";
             easeInOut.points = {
@@ -77,9 +82,9 @@ void CurveEditorPanel::draw() {
 
     // Sample point preview
     ImGui::Separator();
-    ImGui::Text("Sample at 0.5: %.3f", mEditor.sampleAt(0.5f));
-    ImGui::Text("Sample at 0.25: %.3f", mEditor.sampleAt(0.25f));
-    ImGui::Text("Sample at 0.75: %.3f", mEditor.sampleAt(0.75f));
+    ImGui::TextUnformatted("playback.refactorEditor.curve.sample"_tr(0.5f, mEditor.sampleAt(0.5f)).c_str());
+    ImGui::TextUnformatted("playback.refactorEditor.curve.sample"_tr(0.25f, mEditor.sampleAt(0.25f)).c_str());
+    ImGui::TextUnformatted("playback.refactorEditor.curve.sample"_tr(0.75f, mEditor.sampleAt(0.75f)).c_str());
 
 }
 
