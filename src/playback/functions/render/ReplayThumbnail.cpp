@@ -12,14 +12,17 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
+constexpr uint32_t MaxThumbnailDimension = 4096;
+constexpr uint64_t MaxThumbnailBytes     = 64ull * 1024 * 1024;
+
 // 确保当前线程 COM 已初始化（WIC 依赖 COM）。游戏主线程通常已初始化；
 // 若在某辅助线程首次调用，这里完成初始化并在函数结束时清理。
 class ComInitialize {
 public:
     ComInitialize() {
         HRESULT const hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        mNeedsUninit      = (hr == S_OK);
-        // S_FALSE = 已初始化（其它模型亦可使用）；RPC_E_CHANGED_MODE = 已用其它模型初始化，仍可用。
+        mNeedsUninit      = SUCCEEDED(hr);
+        // S_OK and S_FALSE both increment the thread's COM initialization count.
     }
     ~ComInitialize() {
         if (mNeedsUninit) CoUninitialize();
@@ -106,9 +109,15 @@ bool decodeReplayThumbnailPng(std::string_view png, ReplayThumbnailPixels& outpu
         ))) {
         return false;
     }
-    if (FAILED(converter->GetSize(&output.width, &output.height)) || output.width == 0 || output.height == 0) return false;
+    if (FAILED(converter->GetSize(&output.width, &output.height)) || output.width == 0 || output.height == 0
+        || output.width > MaxThumbnailDimension || output.height > MaxThumbnailDimension) {
+        return false;
+    }
     uint64_t const byteCount = static_cast<uint64_t>(output.width) * output.height * 4;
-    if (byteCount > std::numeric_limits<size_t>::max() || byteCount > std::numeric_limits<UINT>::max()) return false;
+    if (byteCount > MaxThumbnailBytes || byteCount > std::numeric_limits<size_t>::max()
+        || byteCount > std::numeric_limits<UINT>::max()) {
+        return false;
+    }
     output.rgba.resize(static_cast<size_t>(byteCount));
     return SUCCEEDED(converter->CopyPixels(
         nullptr, output.width * 4, static_cast<UINT>(output.rgba.size()), output.rgba.data()

@@ -1,22 +1,58 @@
-#include "playback/refactor/editor/CommandStack.h"
-#include "playback/refactor/editor/CommandFactory.h"
-#include "playback/refactor/editor/EditorProjectCodec.h"
-#include "playback/refactor/editor/models/EditorStateExt.h"
-#include "playback/refactor/editor/models/TrackTreeModel.h"
-#include "playback/refactor/video-editing/CameraBindingOps.h"
-#include "playback/refactor/video-editing/SequenceOps.h"
-#include "playback/refactor/video-editing/WorldActorOps.h"
-#include "playback/refactor/video-editing/commands/CameraCommands.h"
-#include "playback/refactor/video-editing/commands/SequenceCommands.h"
-#include "playback/refactor/video-editing/commands/SubActorCommands.h"
-#include "playback/refactor/video-editing/commands/WorldActorCommands.h"
+#include "playback/editor/editing/CameraBindingOps.h"
+#include "playback/editor/editing/SequenceOps.h"
+#include "playback/editor/editing/WorldActorOps.h"
+#include "playback/editor/editing/commands/CameraCommands.h"
+#include "playback/editor/editing/commands/CommandFactory.h"
+#include "playback/editor/editing/commands/CommandStack.h"
+#include "playback/editor/editing/commands/SequenceCommands.h"
+#include "playback/editor/editing/commands/SubActorCommands.h"
+#include "playback/editor/editing/commands/WorldActorCommands.h"
+#include "playback/editor/editing/models/EditorStateExt.h"
+#include "playback/editor/editing/models/TrackTreeModel.h"
+#include "playback/editor/ui/EditorProjectCodec.h"
 
 #include <cstdlib>
 #include <iostream>
 #include <memory>
 
 namespace {
-using namespace playback::refactor;
+namespace editor {
+using playback::editor::editing::model::AgentDetails;
+using playback::editor::editing::model::CameraEntity;
+using playback::editor::editing::model::CameraKind;
+using playback::editor::editing::model::EditorStateExt;
+using playback::editor::editing::model::EasingType;
+using playback::editor::editing::model::IEditCommand;
+using playback::editor::editing::model::TrackRowKind;
+using playback::editor::editing::model::TrackTreeModel;
+using playback::editor::editing::command::CommandFactory;
+using playback::editor::editing::command::CommandStack;
+using playback::editor::ui::EditorProjectCodec;
+}
+
+namespace video_editing {
+namespace CameraBindingOps = playback::editor::editing::CameraBindingOps;
+namespace SequenceOps = playback::editor::editing::SequenceOps;
+namespace WorldActorOps = playback::editor::editing::WorldActorOps;
+using playback::editor::editing::command::AddFreeCamera;
+using playback::editor::editing::command::AddKeyframe;
+using playback::editor::editing::command::BindSequenceToCamera;
+using playback::editor::editing::command::CreateBindingCamera;
+using playback::editor::editing::command::DeleteCamera;
+using playback::editor::editing::command::DeleteKeyframe;
+using playback::editor::editing::command::DeleteSequenceSegment;
+using playback::editor::editing::command::MoveKeyframe;
+using playback::editor::editing::command::RippleDeleteWorldActorSeg;
+using playback::editor::editing::command::SetCameraKind;
+using playback::editor::editing::command::SetKeyframeEasing;
+using playback::editor::editing::command::SetSubActorDetails;
+using playback::editor::editing::command::SetWorldActorSegmentSpeed;
+using playback::editor::editing::command::SplitSequenceAtPlayhead;
+using playback::editor::editing::command::SplitWorldActorAtPlayhead;
+using playback::editor::editing::command::TrimSequenceSegment;
+using playback::editor::editing::command::TrimWorldActorSegment;
+using playback::editor::editing::command::UnbindCamera;
+}
 
 void require(bool value, const char* message) {
     if (!value) {

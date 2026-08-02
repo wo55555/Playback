@@ -50,8 +50,6 @@ public:
 
     [[nodiscard]] static std::optional<ReplaySummary> findReplay(std::string_view replayIdOrPath);
 
-    static bool openReplay(ReplaySummary const& replay);
-    static bool openReplay(std::filesystem::path const& replayPath);
     [[nodiscard]] static bool importReplay(std::filesystem::path const& source, std::string& error);
     [[nodiscard]] static bool deleteReplay(ReplaySummary const& replay, std::string& error);
     [[nodiscard]] static bool showInFolder(ReplaySummary const& replay);

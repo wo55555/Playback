@@ -1,6 +1,7 @@
 #pragma once
 
 #include "playback/functions/io/AsyncReplaySaver.h"
+#include "playback/functions/render/ReplayThumbnail.h"
 #include "playback/utils/container/LinkedHashMap.h"
 
 #include "mc/deps/core/utility/AutomaticID.h"
@@ -83,10 +84,11 @@ private:
 
     PlaybackMeta mMetadata = PlaybackMeta();
 
-    std::atomic<State> mState{State::Idle};
-    std::atomic_bool   mNeedsInitialSnapshot       = true;
-    std::atomic_bool   mDimensionTransitionPending = false;
-    std::atomic<int>   mDimensionTransitionTargetId{0};
+    std::atomic<State>                                   mState{State::Idle};
+    std::atomic<render::ReplayThumbnailCaptureProvider*> mThumbnailCaptureProvider{};
+    std::atomic_bool                                     mNeedsInitialSnapshot       = true;
+    std::atomic_bool                                     mDimensionTransitionPending = false;
+    std::atomic<int>                                     mDimensionTransitionTargetId{0};
 
     int mChunkIndex          = 0;
     int mTicksInCurrentChunk = 0;
@@ -147,6 +149,10 @@ public:
     void start();
     void pause();
     void stop();
+
+    void setThumbnailCaptureProvider(render::ReplayThumbnailCaptureProvider* provider) {
+        mThumbnailCaptureProvider.store(provider, std::memory_order_release);
+    }
 
     void recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallbackPacket);
 
