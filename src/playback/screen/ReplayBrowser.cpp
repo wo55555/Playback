@@ -2,7 +2,6 @@
 
 #include "playback/Playback.h"
 #include "playback/functions/record/Recorder.h"
-#include "playback/functions/replay/ReplaySession.h"
 #include "playback/utils/PathUtils.h"
 
 #include "zip.h"
@@ -18,12 +17,17 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <windows.h>
+#include <shellapi.h>
 
 namespace playback::screen {
 
 namespace {
 
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
+
+constexpr zip_uint64_t MaxReplayMetadataBytes  = 1024 * 1024;
+constexpr zip_uint64_t MaxReplayThumbnailBytes = 16 * 1024 * 1024;
 
 std::string lowerCopy(std::string_view value) {
     std::string result(value);
@@ -38,7 +42,9 @@ bool hasReplayExtension(std::filesystem::path const& path) {
     return extension == ".playback" || extension == ".zip";
 }
 
-std::optional<std::string> readZipEntry(std::filesystem::path const& archivePath, std::string const& entryName) {
+std::optional<std::string> readZipEntry(
+    std::filesystem::path const& archivePath, std::string const& entryName, zip_uint64_t maxBytes
+) {
     auto archivePathString = archivePath.string();
     int  zipError          = 0;
     auto archive           = zip_open(archivePathString.c_str(), ZIP_RDONLY, &zipError);
@@ -54,6 +60,11 @@ std::optional<std::string> readZipEntry(std::filesystem::path const& archivePath
     zip_stat_init(&stat);
     if (zip_stat(archive, entryName.c_str(), 0, &stat) != 0) {
         getLogger().warn("Replay archive {} does not contain {}", archivePath, entryName);
+        zip_close(archive);
+        return std::nullopt;
+    }
+    if ((stat.valid & ZIP_STAT_SIZE) == 0 || stat.size > maxBytes) {
+        getLogger().warn("Replay archive entry {} in {} exceeds the allowed size", entryName, archivePath);
         zip_close(archive);
         return std::nullopt;
     }
@@ -83,6 +94,9 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
     summary.path     = entry.path();
     summary.replayId = entry.path().filename().string();
 
+    // 名称降级策略：读取不到元数据名称（缺文件、名为空或默认占位符）时，使用文件名（不含扩展名）作为名称。
+    std::string const fileStem = entry.path().stem().string();
+
     std::error_code ec;
     summary.fileSize = entry.file_size(ec);
     if (ec) {
@@ -96,22 +110,25 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
         ec.clear();
     }
 
-    auto metadata = readZipEntry(summary.path, "metadata.json");
+    auto metadata = readZipEntry(summary.path, "metadata.json", MaxReplayMetadataBytes);
     if (!metadata.has_value()) {
-        summary.replayName = summary.replayId;
+        summary.replayName = fileStem;
         summary.problem    = "missing metadata.json";
         return summary;
     }
 
     try {
         auto meta             = playback::functions::PlaybackMeta::fromJson(*metadata);
-        summary.replayName    = meta.name.empty() ? summary.replayId : std::move(meta.name);
+        summary.replayName    = (meta.name.empty() || meta.name == "Unnamed") ? fileStem : std::move(meta.name);
         summary.worldName     = std::move(meta.worldName);
         summary.durationTicks = meta.totalTicks;
         summary.totalTicks    = meta.totalTicks;
         summary.canOpen       = true;
+        if (auto thumbnail = readZipEntry(summary.path, "icon.png", MaxReplayThumbnailBytes)) {
+            summary.thumbnailPng = std::move(*thumbnail);
+        }
     } catch (std::exception const& e) {
-        summary.replayName = summary.replayId;
+        summary.replayName = fileStem;
         summary.problem    = e.what();
     }
 
@@ -140,9 +157,89 @@ void sortWithDirection(std::vector<ReplaySummary>& replays, Compare compare, boo
     });
 }
 
+// 用新内容替换 zip 归档中的指定条目（就地修改，不影响其他条目）。
+bool updateZipEntry(
+    std::filesystem::path const& archivePath,
+    std::string const&           entryName,
+    std::string const&           content,
+    std::string&                 error
+) {
+    auto pathString = archivePath.string();
+    int  zipError   = 0;
+    auto archive    = zip_open(pathString.c_str(), ZIP_CREATE, &zipError);
+    if (archive == nullptr) {
+        zip_error_t entryError;
+        zip_error_init_with_code(&entryError, zipError);
+        error = zip_error_strerror(&entryError);
+        zip_error_fini(&entryError);
+        return false;
+    }
+
+    zip_int64_t index = zip_name_locate(archive, entryName.c_str(), 0);
+    if (index < 0) {
+        error = "回放归档中缺少 " + entryName;
+        zip_discard(archive);
+        return false;
+    }
+
+    auto* source = zip_source_buffer(archive, content.data(), content.size(), 0);
+    if (source == nullptr) {
+        error = zip_strerror(archive);
+        zip_discard(archive);
+        return false;
+    }
+
+    if (zip_file_replace(archive, index, source, 0) < 0) {
+        error = zip_strerror(archive);
+        zip_source_free(source);
+        zip_discard(archive);
+        return false;
+    }
+
+    if (zip_close(archive) < 0) {
+        error = zip_strerror(archive);
+        zip_discard(archive);
+        return false;
+    }
+    return true;
+}
+
+// 去掉开头/结尾空白，并过滤文件名非法字符。
+std::string sanitizeReplayName(std::string_view input) {
+    std::string const cleanedRaw(input);
+    auto const first = cleanedRaw.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    auto const last = cleanedRaw.find_last_not_of(" \t\r\n");
+    std::string cleaned = cleanedRaw.substr(first, last - first + 1);
+
+    std::string result;
+    result.reserve(cleaned.size());
+    for (char ch : cleaned) {
+        switch (ch) {
+        case '/':
+        case '\\':
+        case ':':
+        case '*':
+        case '?':
+        case '"':
+        case '<':
+        case '>':
+        case '|': continue;
+        default: result.push_back(ch);
+        }
+    }
+    while (!result.empty() && (result.back() == '.' || result.back() == ' ')) {
+        result.pop_back();
+    }
+    return result;
+}
+
 } // namespace
 
-std::string ReplaySummary::displayName() const { return replayName.empty() ? replayId : replayName; }
+std::string ReplaySummary::displayName() const {
+    if (!replayName.empty() && replayName != "Unnamed") return replayName;
+    return path.stem().string();
+}
 
 bool ReplaySummary::matches(std::string_view filter) const {
     auto needle = lowerCopy(filter);
@@ -278,29 +375,112 @@ std::optional<ReplaySummary> ReplayBrowser::findReplay(std::string_view replayId
     return std::nullopt;
 }
 
-bool ReplayBrowser::openReplay(ReplaySummary const& replay) {
-    if (!replay.canOpen) {
-        getLogger().error("Replay {} cannot be opened: {}", replay.path, replay.problem);
+bool ReplayBrowser::importReplay(std::filesystem::path const& source, std::string& error) {
+    error.clear();
+    std::error_code ec;
+    if (!hasReplayExtension(source) || !std::filesystem::is_regular_file(source, ec)) {
+        error = "请选择有效的 .playback 或 .zip 回放文件";
         return false;
     }
-    return openReplay(replay.path);
+    auto directory = utils::PathUtils::getReplaysDir();
+    std::filesystem::create_directories(directory, ec);
+    if (ec) { error = ec.message(); return false; }
+    auto destination = directory / source.filename();
+    int suffix = 1;
+    while (std::filesystem::exists(destination, ec)) {
+        destination = directory / (source.stem().string() + " (" + std::to_string(suffix++) + ")" + source.extension().string());
+    }
+    if (ec) { error = ec.message(); return false; }
+    std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, ec);
+    if (ec) { error = ec.message(); return false; }
+    auto imported = findReplay(destination.string());
+    if (!imported || !imported->canOpen) {
+        std::filesystem::remove(destination, ec);
+        error = "文件不是有效的回放归档";
+        return false;
+    }
+    return true;
 }
 
-bool ReplayBrowser::openReplay(std::filesystem::path const& replayPath) {
+bool ReplayBrowser::deleteReplay(ReplaySummary const& replay, std::string& error) {
+    error.clear();
     std::error_code ec;
-    if (!std::filesystem::exists(replayPath, ec) || !std::filesystem::is_regular_file(replayPath, ec)) {
-        getLogger().error("Replay file does not exist: {}", replayPath);
+    if (!std::filesystem::remove(replay.path, ec)) {
+        error = ec ? ec.message() : "回放文件不存在";
+        return false;
+    }
+    return true;
+}
+
+bool ReplayBrowser::showInFolder(ReplaySummary const& replay) {
+    // 使用绝对路径，避免相对路径下资源管理器无法定位文件。
+    std::error_code ec;
+    auto const path = std::filesystem::absolute(replay.path, ec);
+    if (ec) return false;
+
+    auto const wpath   = path.wstring();
+    auto const wparent = path.parent_path().wstring();
+
+    auto const result = reinterpret_cast<intptr_t>(ShellExecuteW(
+        nullptr,
+        L"open",
+        L"explorer.exe",
+        (L"/select,\"" + wpath + L"\"").c_str(),
+        wparent.c_str(),
+        SW_SHOWNORMAL
+    ));
+
+    // 文件定位失败时，回退为直接打开父目录。
+    if (result <= 32) {
+        return reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", wparent.c_str(), nullptr, nullptr, SW_SHOWNORMAL))
+            > 32;
+    }
+    return true;
+}
+
+bool ReplayBrowser::renameReplay(ReplaySummary const& replay, std::string_view newName, std::string& error) {
+    error.clear();
+
+    auto const name = sanitizeReplayName(newName);
+    if (name.empty()) {
+        error = "回放名称不能为空";
         return false;
     }
 
-    if (!hasReplayExtension(replayPath)) {
-        getLogger().error("Unsupported replay file extension: {}", replayPath);
+    // 1. 读取归档内元数据并更新名称字段；失败则中止。
+    auto const metadata = readZipEntry(replay.path, "metadata.json", MaxReplayMetadataBytes);
+    if (!metadata.has_value()) {
+        error = "回放归档中缺少 metadata.json，无法重命名";
         return false;
     }
 
-    if (!functions::ReplaySession::getInstance().start(replayPath)) {
-        getLogger().error("Failed to start replay session from {}", replayPath);
+    std::string updatedJson;
+    try {
+        auto meta = playback::functions::PlaybackMeta::fromJson(*metadata);
+        meta.name = name;
+        updatedJson = meta.toJson();
+    } catch (std::exception const& e) {
+        error = std::string("无法解析回放元数据: ") + e.what();
         return false;
+    }
+
+    if (updatedJson != *metadata && !updateZipEntry(replay.path, "metadata.json", updatedJson, error)) {
+        return false;
+    }
+
+    // 2. 重命名物理文件；失败时回滚元数据写入。
+    auto const newPath = replay.path.parent_path() / (name + ".playback");
+    if (newPath != replay.path) {
+        std::error_code ec;
+        std::filesystem::rename(replay.path, newPath, ec);
+        if (ec) {
+            if (updatedJson != *metadata) {
+                std::string rollbackError;
+                updateZipEntry(replay.path, "metadata.json", *metadata, rollbackError);
+            }
+            error = "重命名文件失败: " + ec.message();
+            return false;
+        }
     }
 
     return true;

@@ -427,6 +427,9 @@ void Recorder::start() {
     }
 
     mState = State::Recording;
+    if (auto* provider = mThumbnailCaptureProvider.load(std::memory_order_acquire)) {
+        provider->requestReplayThumbnailCapture();
+    }
     getLogger().info("Recording started");
 }
 
@@ -482,6 +485,10 @@ void Recorder::saveRecording() {
     }
 
     auto outputPath = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
+    auto* thumbnailProvider = mThumbnailCaptureProvider.load(std::memory_order_acquire);
+    if (!thumbnailProvider || !thumbnailProvider->saveReplayThumbnail(replayPath / "icon.png")) {
+        getLogger().warn("Unable to save replay thumbnail for {}", replayPath);
+    }
     if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
         getLogger().error("Failed to save replay data after recording stopped");
         return;

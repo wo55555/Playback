@@ -1,6 +1,6 @@
 #include "ReplayMouseHook.h"
-#include "playback/editor/ui/ReplayUILayout.h"
-#include "playback/functions/replay/ReplaySession.h"
+#include "playback/editor/renderer/ReplayUILayout.h"
+#include "playback/editor/input/EditorInput.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/input/KeyInputEvent.h"
@@ -27,7 +27,8 @@ namespace {
 enum class MouseOwner : uint8_t { Inactive, UiReleased, GameCaptured };
 enum class QueuedEventType : uint8_t { Position, Button, Wheel };
 
-constexpr auto MouseHookDrainTimeout = std::chrono::seconds(2);
+constexpr auto   MouseHookDrainTimeout = std::chrono::seconds(2);
+constexpr size_t MaxQueuedMouseEvents  = 512;
 
 struct QueuedMouseEvent {
     QueuedEventType type{};
@@ -98,6 +99,11 @@ bool replayUiOwnsMouse() {
     return gMouseHookActive.load(std::memory_order_acquire) && gReplayUiInputActive.load(std::memory_order_acquire);
 }
 
+void setMouseOwner(MouseOwner owner) {
+    input::setGameInputCaptured(owner == MouseOwner::GameCaptured);
+    gMouseOwner.store(owner, std::memory_order_release);
+}
+
 bool isCurrentProcessForeground(HWND* window = nullptr) {
     HWND const foreground = GetForegroundWindow();
     DWORD      processId{};
@@ -122,6 +128,7 @@ void queueEvent(QueuedMouseEvent event) {
         gQueuedEvents.back() = event;
         return;
     }
+    if (gQueuedEvents.size() >= MaxQueuedMouseEvents) gQueuedEvents.erase(gQueuedEvents.begin());
     gQueuedEvents.emplace_back(event);
 }
 
@@ -207,15 +214,15 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
 
 void handleKeyInput(ll::event::KeyInputEvent& event) {
     ActiveMouseCallback activeCallback;
-    if (!gMouseHookActive.load(std::memory_order_acquire) || !functions::ReplaySession::getInstance().isActive()
-        || event.keyCode() != Keyboard::Escape) {
+    if (!gMouseHookActive.load(std::memory_order_acquire)) return;
+
+    if (input::isUiVisible() && input::isGameInputCaptured() && event.keyCode() == Keyboard::Escape) {
+        if (event.isDown()) gReleaseRequested.store(true, std::memory_order_release);
+        event.cancel();
         return;
     }
 
-    if (event.isDown() && gMouseOwner.load(std::memory_order_acquire) == MouseOwner::GameCaptured) {
-        gReleaseRequested.store(true, std::memory_order_release);
-    }
-    event.cancel();
+    if (!input::routeKeyEvent(event.keyCode(), event.isDown())) event.cancel();
 }
 
 void applyMouseTransition(ClientInstance& client) {
@@ -233,7 +240,7 @@ void applyMouseTransition(ClientInstance& client) {
             if (client.getMouseGrabbed()) client.releaseMouse();
             gApplyingMouseTransition = false;
         }
-        gMouseOwner.store(MouseOwner::Inactive, std::memory_order_release);
+        setMouseOwner(MouseOwner::Inactive);
         gRestoreCursorValid.store(false, std::memory_order_release);
         gMouseTransitionChanged.notify_all();
         return;
@@ -241,7 +248,7 @@ void applyMouseTransition(ClientInstance& client) {
 
     if (owner == MouseOwner::Inactive) {
         owner = MouseOwner::UiReleased;
-        gMouseOwner.store(owner, std::memory_order_release);
+        setMouseOwner(owner);
         gReleaseRequested.store(false, std::memory_order_release);
         if (client.getMouseGrabbed()) {
             gApplyingMouseTransition = true;
@@ -265,7 +272,7 @@ void applyMouseTransition(ClientInstance& client) {
         gApplyingMouseTransition = true;
         if (!client.getMouseGrabbed()) client.grabMouse();
         gApplyingMouseTransition = false;
-        gMouseOwner.store(MouseOwner::GameCaptured, std::memory_order_release);
+        setMouseOwner(MouseOwner::GameCaptured);
         return;
     }
 
@@ -277,7 +284,7 @@ void applyMouseTransition(ClientInstance& client) {
     gApplyingMouseTransition = true;
     if (client.getMouseGrabbed()) client.releaseMouse();
     gApplyingMouseTransition = false;
-    gMouseOwner.store(MouseOwner::UiReleased, std::memory_order_release);
+    setMouseOwner(MouseOwner::UiReleased);
     gMouseTransitionChanged.notify_all();
 
     if (focused && gRestoreCursorValid.exchange(false, std::memory_order_acq_rel)) {
@@ -390,6 +397,7 @@ bool hookReplayMouse(bool enable) {
         setReplayMouseInputActive(false);
         gMouseHookActive.store(false, std::memory_order_release);
         if (gMouseCallbackDepth != 0 || !removeMouseHooksAndDrain(state)) return false;
+        input::resetInputState();
 
         state.update = ReplayMouseUpdateHook::hook() == 0;
         if (state.update) state.grab = ReplayMouseGrabGuardHook::hook() == 0;
@@ -406,6 +414,7 @@ bool hookReplayMouse(bool enable) {
         }
 
         (void)removeMouseHooksAndDrain(state);
+        input::resetInputState();
         return false;
     }
 
@@ -426,13 +435,14 @@ bool hookReplayMouse(bool enable) {
             return gMouseOwner.load(std::memory_order_acquire) != MouseOwner::GameCaptured;
         });
         if (!released) return false;
-        gMouseOwner.store(MouseOwner::Inactive, std::memory_order_release);
+        setMouseOwner(MouseOwner::Inactive);
     }
 
     gMouseHookActive.store(false, std::memory_order_release);
     if (!removeMouseHooksAndDrain(state)) return false;
     gLastMouseUpdateClient.store(nullptr, std::memory_order_release);
     gMouseUpdateThreadId.store(0, std::memory_order_release);
+    input::resetInputState();
     return true;
 }
 
@@ -456,13 +466,18 @@ void setReplayMouseInputActive(bool active) {
     gQueuedEvents.clear();
 }
 
-void setReplayUIActive(bool active) { gReplayUIActive.store(active, std::memory_order_release); }
+void setReplayUIActive(bool active) {
+    gReplayUIActive.store(active, std::memory_order_release);
+    if (!active) input::setUiVisible(false);
+}
 
 void beginReplayMouseFrame(ui::ReplayUILayout const& layout, float displayWidth, float displayHeight) {
-    gGameViewportLeft.store(layout.gameViewportLeft, std::memory_order_relaxed);
-    gGameViewportTop.store(layout.gameViewportTop, std::memory_order_relaxed);
-    gGameViewportRight.store(layout.gameViewportRight, std::memory_order_relaxed);
-    gGameViewportBottom.store(layout.gameViewportBottom, std::memory_order_relaxed);
+    setReplayGameViewport(
+        layout.gameViewportLeft,
+        layout.gameViewportTop,
+        layout.gameViewportRight,
+        layout.gameViewportBottom
+    );
     setReplayMouseInputActive(true);
     if (!gReplayUiInputActive.load(std::memory_order_acquire)) return;
 
@@ -522,6 +537,13 @@ void beginReplayMouseFrame(ui::ReplayUILayout const& layout, float displayWidth,
     if (gMouseOwner.load(std::memory_order_acquire) == MouseOwner::GameCaptured || !focused) {
         for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) io.AddMouseButtonEvent(button, false);
     }
+}
+
+void setReplayGameViewport(float left, float top, float right, float bottom) {
+    gGameViewportLeft.store(left, std::memory_order_relaxed);
+    gGameViewportTop.store(top, std::memory_order_relaxed);
+    gGameViewportRight.store(right, std::memory_order_relaxed);
+    gGameViewportBottom.store(bottom, std::memory_order_relaxed);
 }
 
 void endReplayMouseFrame() {

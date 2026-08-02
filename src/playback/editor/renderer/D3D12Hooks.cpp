@@ -9,11 +9,15 @@
 
 #include "mc/external/bgfx/RendererContextD3D12.h"
 
+#include <d3d11.h>
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 
 namespace playback::editor::renderer {
 
@@ -32,6 +36,8 @@ using CreateSwapChainForCoreWindowFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
 using CreateSwapChainForCompositionFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
+using CreateCommandQueueFn =
+    HRESULT(STDMETHODCALLTYPE*)(ID3D12Device*, D3D12_COMMAND_QUEUE_DESC const*, REFIID, void**);
 
 constexpr size_t SwapChainPresentIndex                     = 8;
 constexpr size_t SwapChainPresent1Index                    = 22;
@@ -41,6 +47,7 @@ constexpr size_t FactoryCreateSwapChainIndex               = 10;
 constexpr size_t FactoryCreateSwapChainForHwndIndex        = 15;
 constexpr size_t FactoryCreateSwapChainForCoreWindowIndex  = 16;
 constexpr size_t FactoryCreateSwapChainForCompositionIndex = 24;
+constexpr size_t DeviceCreateCommandQueueIndex             = 8;
 constexpr DWORD  DetourWaitTimeoutMsLocal                  = 2000;
 
 ll::memory::FuncPtr gOriginalPresent{};
@@ -51,6 +58,17 @@ ll::memory::FuncPtr gOriginalCreateSwapChain{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForHwnd{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForCoreWindow{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForComposition{};
+ll::memory::FuncPtr gOriginalCreateCommandQueue{};
+
+// A device fallback is safe only while exactly one Direct queue has been observed.
+struct DeviceQueueCandidate {
+    ComPtr<ID3D12CommandQueue> queue;
+    bool                       ambiguous{};
+};
+
+std::mutex                                                    gDeviceQueueMapMutex;
+std::unordered_map<ID3D12Device*, DeviceQueueCandidate>       gDeviceQueueMap;
+
 std::atomic<bool>   gTimelineHooksStopping{true};
 std::atomic<bool>   gRendererInitHookStopping{true};
 
@@ -99,6 +117,7 @@ struct HookTargets {
     void* createSwapChainForHwnd{};
     void* createSwapChainForCoreWindow{};
     void* createSwapChainForComposition{};
+    void* createCommandQueue{};
 };
 
 struct HookState {
@@ -111,6 +130,7 @@ struct HookState {
     bool        createSwapChainForHwnd{};
     bool        createSwapChainForCoreWindow{};
     bool        createSwapChainForComposition{};
+    bool        createCommandQueue{};
 };
 
 HookState& hookState() {
@@ -118,14 +138,19 @@ HookState& hookState() {
     return state;
 }
 
-bool allInstalled(HookState const& state) {
-    return state.present && state.present1 && state.resizeBuffers && state.resizeBuffers1 && state.createSwapChain
-        && state.createSwapChainForHwnd && state.createSwapChainForCoreWindow && state.createSwapChainForComposition;
+bool coreInstalled(HookState const& state) {
+    return state.present && state.present1 && state.resizeBuffers && state.resizeBuffers1;
+}
+
+bool captureInstalled(HookState const& state) {
+    return state.createSwapChain && state.createSwapChainForHwnd && state.createSwapChainForCoreWindow
+        && state.createSwapChainForComposition && state.createCommandQueue;
 }
 
 bool noneInstalled(HookState const& state) {
     return !state.present && !state.present1 && !state.resizeBuffers && !state.resizeBuffers1 && !state.createSwapChain
-        && !state.createSwapChainForHwnd && !state.createSwapChainForCoreWindow && !state.createSwapChainForComposition;
+        && !state.createSwapChainForHwnd && !state.createSwapChainForCoreWindow && !state.createSwapChainForComposition
+        && !state.createCommandQueue;
 }
 
 #define DECLARE_DETOUR_FN(NAME, RET, ...)                                                                              \
@@ -236,10 +261,12 @@ DECLARE_DETOUR_FN(
     DXGI_SWAP_CHAIN_DESC* description,
     IDXGISwapChain**      swapChain
 ) {
-    ActiveDetour  activeDetour;
+    ActiveDetour activeDetour;
     HRESULT const result =
         reinterpret_cast<CreateSwapChainFn>(gOriginalCreateSwapChain)(factory, device, description, swapChain);
-    if (SUCCEEDED(result) && swapChain && *swapChain) bindSwapChainQueue(*swapChain, device);
+    if (SUCCEEDED(result) && swapChain && *swapChain) {
+        bindSwapChainQueue(*swapChain, device);
+    }
     return result;
 }
 
@@ -254,7 +281,7 @@ DECLARE_DETOUR_FN(
     IDXGIOutput*                           restrictToOutput,
     IDXGISwapChain1**                      swapChain
 ) {
-    ActiveDetour  activeDetour;
+    ActiveDetour activeDetour;
     HRESULT const result = reinterpret_cast<CreateSwapChainForHwndFn>(gOriginalCreateSwapChainForHwnd)(
         factory,
         device,
@@ -264,7 +291,9 @@ DECLARE_DETOUR_FN(
         restrictToOutput,
         swapChain
     );
-    if (SUCCEEDED(result) && swapChain && *swapChain) bindSwapChainQueue(*swapChain, device);
+    if (SUCCEEDED(result) && swapChain && *swapChain) {
+        bindSwapChainQueue(*swapChain, device);
+    }
     return result;
 }
 
@@ -287,7 +316,9 @@ DECLARE_DETOUR_FN(
         restrictToOutput,
         swapChain
     );
-    if (SUCCEEDED(result) && swapChain && *swapChain) bindSwapChainQueue(*swapChain, device);
+    if (SUCCEEDED(result) && swapChain && *swapChain) {
+        bindSwapChainQueue(*swapChain, device);
+    }
     return result;
 }
 
@@ -308,7 +339,45 @@ DECLARE_DETOUR_FN(
         restrictToOutput,
         swapChain
     );
-    if (SUCCEEDED(result) && swapChain && *swapChain) bindSwapChainQueue(*swapChain, device);
+    if (SUCCEEDED(result) && swapChain && *swapChain) {
+        bindSwapChainQueue(*swapChain, device);
+    }
+    return result;
+}
+
+DECLARE_DETOUR_FN(
+    createCommandQueue,
+    HRESULT,
+    ID3D12Device*                   device,
+    D3D12_COMMAND_QUEUE_DESC const* desc,
+    REFIID                          riid,
+    void**                          ppCommandQueue
+) {
+    ActiveDetour activeDetour;
+    HRESULT const result = reinterpret_cast<CreateCommandQueueFn>(gOriginalCreateCommandQueue)(device, desc, riid, ppCommandQueue);
+    if (FAILED(result) || !desc || desc->Type != D3D12_COMMAND_LIST_TYPE_DIRECT || !ppCommandQueue || !*ppCommandQueue) {
+        return result;
+    }
+
+    ComPtr<ID3D12CommandQueue> queue;
+    if (FAILED(reinterpret_cast<IUnknown*>(*ppCommandQueue)->QueryInterface(IID_PPV_ARGS(&queue)))) return result;
+
+    ComPtr<IUnknown> newIdentity;
+    if (FAILED(queue.As(&newIdentity))) return result;
+
+    {
+        std::scoped_lock lock(gDeviceQueueMapMutex);
+        auto&            candidate = gDeviceQueueMap[device];
+        if (!candidate.queue) {
+            candidate.queue = queue;
+        } else {
+            ComPtr<IUnknown> currentIdentity;
+            if (FAILED(candidate.queue.As(&currentIdentity)) || currentIdentity.Get() != newIdentity.Get()) {
+                candidate.ambiguous = true;
+            }
+        }
+    }
+
     return result;
 }
 
@@ -426,14 +495,39 @@ bool installCreateSwapChainForCompositionHook(HookState& state) {
     return true;
 }
 
-bool installAll(HookState& state) {
-    return installCreateSwapChainHook(state) && installCreateSwapChainForHwndHook(state)
-        && installCreateSwapChainForCoreWindowHook(state) && installCreateSwapChainForCompositionHook(state)
-        && installResizeBuffersHook(state) && installResizeBuffers1Hook(state) && installPresentHook(state)
+bool installCreateCommandQueueHook(HookState& state) {
+    if (state.createCommandQueue) return true;
+    if (ll::memory::hook(
+            state.targets.createCommandQueue,
+            ll::memory::toFuncPtr(&createCommandQueueDetour),
+            &gOriginalCreateCommandQueue,
+            ll::memory::HookPriority::Normal
+        )
+        != 0)
+        return false;
+    state.createCommandQueue = true;
+    return true;
+}
+
+bool installCoreHooks(HookState& state) {
+    return installResizeBuffersHook(state) && installResizeBuffers1Hook(state) && installPresentHook(state)
         && installPresent1Hook(state);
 }
 
+bool installCaptureHooks(HookState& state) {
+    bool ok = true;
+    ok      = installCreateCommandQueueHook(state) && ok;
+    ok      = installCreateSwapChainHook(state) && ok;
+    ok      = installCreateSwapChainForHwndHook(state) && ok;
+    ok      = installCreateSwapChainForCoreWindowHook(state) && ok;
+    ok      = installCreateSwapChainForCompositionHook(state) && ok;
+    return ok;
+}
+
 bool removeAll(HookState& state) {
+    if (state.createCommandQueue
+        && ll::memory::unhook(state.targets.createCommandQueue, ll::memory::toFuncPtr(&createCommandQueueDetour)))
+        state.createCommandQueue = false;
     if (state.present1 && ll::memory::unhook(state.targets.present1, ll::memory::toFuncPtr(&present1Detour)))
         state.present1 = false;
     if (state.present && ll::memory::unhook(state.targets.present, ll::memory::toFuncPtr(&presentDetour)))
@@ -511,11 +605,20 @@ bool getDirectCommandQueue(IUnknown* object, ComPtr<ID3D12CommandQueue>& queue) 
     return false;
 }
 
+// ── Swap chain queue fallback map (used when private data is lost) ──
+std::mutex                         gSwapChainQueueFallbackMutex;
+std::unordered_map<void*, IUnknown*> gSwapChainQueueFallback;
+
 void bindSwapChainQueue(IDXGISwapChain* swapChain, IUnknown* queueObject) {
     if (!swapChain) return;
     ComPtr<ID3D12CommandQueue> queue;
     if (getDirectCommandQueue(queueObject, queue)) {
         swapChain->SetPrivateDataInterface(SwapChainQueueGuid, queue.Get());
+        // Also retain the exact queue for this swap chain if DXGI private data is lost.
+        std::scoped_lock lock(gSwapChainQueueFallbackMutex);
+        auto&            retained = gSwapChainQueueFallback[swapChain];
+        if (retained) retained->Release();
+        retained = queue.Detach();
     } else {
         swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
     }
@@ -523,17 +626,49 @@ void bindSwapChainQueue(IDXGISwapChain* swapChain, IUnknown* queueObject) {
 
 ComPtr<ID3D12CommandQueue> getSwapChainQueue(IDXGISwapChain* swapChain) {
     if (!swapChain) return nullptr;
+    // Primary path: private data set by the detour
     ComPtr<IUnknown> queueObject;
     UINT             dataSize = sizeof(IUnknown*);
-    if (FAILED(swapChain->GetPrivateData(SwapChainQueueGuid, &dataSize, queueObject.GetAddressOf()))
-        || dataSize != sizeof(IUnknown*))
-        return nullptr;
-    ComPtr<ID3D12CommandQueue> queue;
-    return getDirectCommandQueue(queueObject.Get(), queue) ? queue : nullptr;
+    if (SUCCEEDED(swapChain->GetPrivateData(SwapChainQueueGuid, &dataSize, queueObject.GetAddressOf()))
+        && dataSize == sizeof(IUnknown*))
+    {
+        ComPtr<ID3D12CommandQueue> queue;
+        if (getDirectCommandQueue(queueObject.Get(), queue)) {
+            return queue;
+        }
+    }
+    // Fallback: global map (survives IFramebuffer recreation etc.)
+    {
+        std::scoped_lock lk(gSwapChainQueueFallbackMutex);
+        auto it = gSwapChainQueueFallback.find(swapChain);
+        if (it != gSwapChainQueueFallback.end() && it->second) {
+            ComPtr<ID3D12CommandQueue> queue;
+            if (SUCCEEDED(it->second->QueryInterface(IID_PPV_ARGS(&queue))) && queue) {
+                return queue;
+            }
+        }
+    }
+    return nullptr;
+}
+
+ComPtr<ID3D12CommandQueue> getDeviceQueue(ID3D12Device* device) {
+    if (!device) return nullptr;
+    std::scoped_lock lock(gDeviceQueueMapMutex);
+    auto const       it = gDeviceQueueMap.find(device);
+    if (it == gDeviceQueueMap.end() || it->second.ambiguous) return nullptr;
+    return it->second.queue;
 }
 
 void unbindSwapChainQueue(IDXGISwapChain* swapChain) {
-    if (swapChain) swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
+    if (swapChain) {
+        swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
+        std::scoped_lock lk(gSwapChainQueueFallbackMutex);
+        auto it = gSwapChainQueueFallback.find(swapChain);
+        if (it != gSwapChainQueueFallback.end()) {
+            if (it->second) it->second->Release();
+            gSwapChainQueueFallback.erase(it);
+        }
+    }
 }
 
 ComPtr<ID3D12CommandQueue> getResizePresentQueue(UINT bufferCount, IUnknown* const* presentQueues) {
@@ -563,7 +698,8 @@ bool resolveHookTargets(
     void*& outCreateSwapChain,
     void*& outCreateSwapChainForHwnd,
     void*& outCreateSwapChainForCoreWindow,
-    void*& outCreateSwapChainForComposition
+    void*& outCreateSwapChainForComposition,
+    void*& outCreateCommandQueue
 ) {
     ComPtr<IDXGIFactory4> factory;
     HRESULT               result = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
@@ -653,9 +789,10 @@ bool resolveHookTargets(
     outCreateSwapChainForHwnd        = getVtableEntry(factory.Get(), FactoryCreateSwapChainForHwndIndex);
     outCreateSwapChainForCoreWindow  = getVtableEntry(factory.Get(), FactoryCreateSwapChainForCoreWindowIndex);
     outCreateSwapChainForComposition = getVtableEntry(factory.Get(), FactoryCreateSwapChainForCompositionIndex);
+    outCreateCommandQueue            = getVtableEntry(device.Get(), DeviceCreateCommandQueueIndex);
     bool const resolved = outPresent && outPresent1 && outResizeBuffers && outResizeBuffers1 && outCreateSwapChain
                        && outCreateSwapChainForHwnd && outCreateSwapChainForCoreWindow
-                       && outCreateSwapChainForComposition;
+                       && outCreateSwapChainForComposition && outCreateCommandQueue;
     if (!resolved) getLogger().error("One or more replay timeline DXGI vtable targets resolved to null");
     return resolved;
 }
@@ -690,7 +827,8 @@ bool hookD3D12(bool enable) {
     auto&            state = hookState();
 
     if (enable) {
-        if (allInstalled(state)) {
+        if (coreInstalled(state)) {
+            if (!captureInstalled(state)) (void)installCaptureHooks(state);
             gTimelineHooksStopping.store(false, std::memory_order_release);
             return true;
         }
@@ -718,12 +856,19 @@ bool hookD3D12(bool enable) {
                 state.targets.createSwapChain,
                 state.targets.createSwapChainForHwnd,
                 state.targets.createSwapChainForCoreWindow,
-                state.targets.createSwapChainForComposition
+                state.targets.createSwapChainForComposition,
+                state.targets.createCommandQueue
             )) {
             getLogger().error("Unable to resolve D3D12 hook targets for the replay ImGui timeline");
             return false;
         }
-        if (installAll(state)) {
+        bool const captureOk = installCaptureHooks(state);
+        if (!captureOk) {
+            getLogger().warn(
+                "One or more replay queue capture hooks are unavailable; existing swap chains require a unique captured Direct queue"
+            );
+        }
+        if (installCoreHooks(state)) {
             gTimelineHooksStopping.store(false, std::memory_order_release);
             return true;
         }
