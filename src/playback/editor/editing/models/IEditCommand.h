@@ -12,8 +12,9 @@ class IEditCommand {
 public:
     virtual ~IEditCommand() = default;
 
-    virtual void execute(EditorStateExt& state) = 0;
-    virtual void undo(EditorStateExt& state) = 0;
+    virtual void                      execute(EditorStateExt& state) = 0;
+    virtual void                      undo(EditorStateExt& state)    = 0;
+    [[nodiscard]] virtual bool        didChange() const { return true; }
     [[nodiscard]] virtual std::string label() const = 0;
 };
 

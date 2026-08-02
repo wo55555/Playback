@@ -1,5 +1,7 @@
 #include "EditorController.h"
 
+#include "playback/editor/editing/commands/CameraCommands.h"
+#include "playback/editor/editing/commands/CommandFactory.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/screen/ReplayBrowser.h"
 
@@ -37,23 +39,116 @@ void EditorController::reset() {
     mBrowserOperation = ReplayBrowserOperation::None;
     mBrowserError.clear();
     mBrowserSnapshot = std::make_shared<ReplayBrowserSnapshot>();
+    mProject         = {};
+    mCommandStack.clear();
+    mProjectTotalTicks = -1;
+}
+
+void EditorController::ensureProject(int totalTicks) {
+    totalTicks = std::max(0, totalTicks);
+    if (mProjectTotalTicks == totalTicks) return;
+
+    mProject            = {};
+    mProject.totalTicks = totalTicks;
+    mProject.sequence.push_back({"sequence", 0, totalTicks});
+    mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
+    mCommandStack.clear();
+    mProjectTotalTicks = totalTicks;
+}
+
+void EditorController::applyEditorAction(EditorAction const& action) {
+    using namespace editing::command;
+
+    switch (action.type) {
+    case EditorActionType::UndoEditorEdit:
+        (void)mCommandStack.undo(mProject);
+        break;
+    case EditorActionType::RedoEditorEdit:
+        (void)mCommandStack.redo(mProject);
+        break;
+    case EditorActionType::AddFreeCamera:
+        mCommandStack.push(CommandFactory::createAddFreeCamera(action.name), mProject);
+        break;
+    case EditorActionType::SplitSequence:
+        mCommandStack.push(CommandFactory::createSplitSequence(action.tick), mProject);
+        break;
+    case EditorActionType::TrimSequence:
+        mCommandStack.push(CommandFactory::createTrimSequence(action.id, action.tick, action.kind), mProject);
+        break;
+    case EditorActionType::DeleteSequenceSegment:
+        mCommandStack.push(CommandFactory::createDeleteSequenceSegment(action.id), mProject);
+        break;
+    case EditorActionType::BindSequenceCamera:
+        mCommandStack.push(CommandFactory::createBindSequenceToCamera(action.id, action.secondaryId), mProject);
+        break;
+    case EditorActionType::SplitWorldActor:
+        mCommandStack.push(CommandFactory::createSplitWorldActor(action.tick), mProject);
+        break;
+    case EditorActionType::TrimWorldActor:
+        mCommandStack.push(CommandFactory::createTrimWorldActor(action.id, action.tick, action.kind), mProject);
+        break;
+    case EditorActionType::SetWorldActorSpeed:
+        mCommandStack.push(CommandFactory::createSetWorldActorSpeed(action.id, action.speed), mProject);
+        break;
+    case EditorActionType::RippleDeleteWorldActorSegment:
+        mCommandStack.push(CommandFactory::createRippleDeleteWorldActorSegment(action.id), mProject);
+        break;
+    case EditorActionType::AddCameraKeyframe:
+        mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick), mProject);
+        break;
+    case EditorActionType::MoveCameraKeyframe:
+        mCommandStack.push(
+            CommandFactory::createMoveCameraKeyframe(action.id, action.secondaryId, action.tick),
+            mProject
+        );
+        break;
+    case EditorActionType::DeleteCameraKeyframe:
+        mCommandStack.push(CommandFactory::createDeleteCameraKeyframe(action.id, action.secondaryId), mProject);
+        break;
+    case EditorActionType::DeleteCamera:
+        mCommandStack.push(CommandFactory::createDeleteCamera(action.id), mProject);
+        break;
+    case EditorActionType::UnbindCamera:
+        mCommandStack.push(CommandFactory::createUnbindCamera(action.id), mProject);
+        break;
+    case EditorActionType::SetCameraKind:
+        mCommandStack.push(
+            CommandFactory::createSetCameraKind(action.id, static_cast<editing::model::CameraKind>(action.kind)),
+            mProject
+        );
+        break;
+    case EditorActionType::CreateBindingCamera:
+        mCommandStack.push(CommandFactory::createCreateBindingCamera(action.id, action.name), mProject);
+        break;
+    default:
+        break;
+    }
 }
 
 void EditorController::publishState(bool hudVisible) {
     auto& session = functions::ReplaySession::getInstance();
 
     EditorState state;
-    state.replayVisible     = session.isActive() && session.hasJoinedReplayWorld();
-    state.editorVisible     = session.isActive();
-    state.hudVisible        = hudVisible;
-    state.paused            = session.isPaused();
-    state.playbackSpeed     = session.getPlaybackSpeed();
-    state.currentTick       = std::max(0, session.getCurrentTick());
-    state.totalTicks        = std::max(0, session.getTotalTicks());
-    state.browser.visible   = mBrowserVisible;
-    state.browser.operation = mBrowserOperation;
-    state.browser.error     = mBrowserError;
-    state.browser.snapshot  = mBrowserSnapshot;
+    state.replayVisible = session.isActive() && session.hasJoinedReplayWorld();
+    state.editorVisible = session.isActive();
+    state.hudVisible    = hudVisible;
+    state.paused        = session.isPaused();
+    state.playbackSpeed = session.getPlaybackSpeed();
+    state.currentTick   = std::max(0, session.getCurrentTick());
+    state.totalTicks    = std::max(0, session.getTotalTicks());
+    ensureProject(state.totalTicks);
+    mProject.currentTick             = state.currentTick;
+    mProject.playing                 = !state.paused;
+    mProject.playbackSpeed           = state.playbackSpeed;
+    state.project                    = std::make_shared<editing::model::EditorStateExt>(mProject);
+    state.canUndo                    = mCommandStack.canUndo();
+    state.canRedo                    = mCommandStack.canRedo();
+    state.capabilities.cameraEditing = state.editorVisible;
+    state.capabilities.videoEditing  = state.editorVisible;
+    state.browser.visible            = mBrowserVisible;
+    state.browser.operation          = mBrowserOperation;
+    state.browser.error              = mBrowserError;
+    state.browser.snapshot           = mBrowserSnapshot;
     mContext.publish(std::move(state));
 }
 
@@ -80,6 +175,10 @@ void EditorController::tick(bool hudVisible) {
     auto& session = functions::ReplaySession::getInstance();
 
     for (auto const& action : mContext.takeActions()) {
+        if (action.type >= EditorActionType::UndoEditorEdit) {
+            applyEditorAction(action);
+            continue;
+        }
         switch (action.type) {
         case EditorActionType::TogglePause:
             (void)session.setPaused(!session.isPaused());

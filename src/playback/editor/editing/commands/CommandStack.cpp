@@ -5,8 +5,11 @@
 namespace playback::editor::editing::command {
 
 void CommandStack::push(std::unique_ptr<model::IEditCommand> cmd, model::EditorStateExt& state) {
-    // Execute the command first
+    if (!cmd) return;
+
     cmd->execute(state);
+    if (!cmd->didChange()) return;
+
     mUndo.push_back(std::move(cmd));
     mRedo.clear();
 
@@ -30,6 +33,10 @@ bool CommandStack::redo(model::EditorStateExt& state) {
     auto cmd = std::move(mRedo.back());
     mRedo.pop_back();
     cmd->execute(state);
+    if (!cmd->didChange()) {
+        mRedo.push_back(std::move(cmd));
+        return false;
+    }
     mUndo.push_back(std::move(cmd));
     return true;
 }

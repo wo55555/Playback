@@ -1,7 +1,10 @@
 #pragma once
 
+#include "CameraEntity.h"
 #include "CameraKeyframe.h"
+#include "SequenceSegment.h"
 #include "Track.h"
+#include "WorldActor.h"
 
 #include <memory>
 #include <optional>
@@ -11,12 +14,12 @@
 namespace playback::editor::editing::model {
 
 struct CameraTrackExt {
-    std::string              id;
-    std::string              name;
-    bool                     active{};
-    bool                     locked{};
-    bool                     muted{};
-    bool                     visible{true};
+    std::string                 id;
+    std::string                 name;
+    bool                        active{};
+    bool                        locked{};
+    bool                        muted{};
+    bool                        visible{true};
     std::vector<CameraKeyframe> keyframes;
 };
 
@@ -26,18 +29,21 @@ struct EditorStateExt {
     std::string projectPath;
 
     // Timeline
-    int currentTick{};
-    int totalTicks{};
-    bool playing{};
+    int   currentTick{};
+    int   totalTicks{};
+    bool  playing{};
     float playbackSpeed{1.0f};
 
-    // Camera tracks
+    std::vector<SequenceSegment> sequence;
+    WorldActor                   worldActor;
+    std::vector<CameraEntity>    cameras;
+
     std::vector<CameraTrackExt> cameraTracks;
-    int activeCameraIndex{};
+    int                         activeCameraIndex{};
 
     // Video tracks (multi-track per 04-video-editing)
     std::vector<Track> videoTracks;
-    int activeVideoTrackIdx{};
+    int                activeVideoTrackIdx{};
 
     // Transitions
     std::vector<Transition> transitions;
@@ -46,7 +52,7 @@ struct EditorStateExt {
     std::vector<Marker> markers;
 
     // Performance
-    float fps{60.0f};
+    float  fps{60.0f};
     size_t memoryUsageBytes{};
 };
 

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CameraKeyframe.h"
+#include "SequenceSegment.h"
+#include "SubActor.h"
 #include "Track.h"
 
 #include <optional>
@@ -33,27 +35,47 @@ struct SelectedTransition {
     std::string transitionId;
 };
 
+struct SelectedSequence {};
+struct SelectedSequenceSegment {
+    std::string segmentId;
+};
+struct SelectedWorldActor {};
+struct SelectedWorldActorSegment {
+    std::string segmentId;
+};
+struct SelectedSubActor {
+    std::string subActorId;
+};
+struct SelectedCamera {
+    std::string cameraId;
+};
+
 using Selection = std::variant<
     SelectedKeyframe,
     SelectedClip,
     SelectedMarker,
     SelectedTrack,
-    SelectedTransition
->;
+    SelectedTransition,
+    SelectedSequence,
+    SelectedSequenceSegment,
+    SelectedWorldActor,
+    SelectedWorldActorSegment,
+    SelectedSubActor,
+    SelectedCamera>;
 
 class SelectionModel {
 public:
-    void select(Selection sel);
-    void clear();
-    [[nodiscard]] bool hasSelection() const;
-    [[nodiscard]] const Selection* getSelection() const;
+    void                                   select(Selection sel);
+    void                                   clear();
+    [[nodiscard]] bool                     hasSelection() const;
+    [[nodiscard]] const Selection*         getSelection() const;
     [[nodiscard]] std::vector<std::string> selectedIds() const;
 
     // Event
     // using Callback = void(Selection);
     // Event<Callback> onSelectionChanged;
 
-    template<typename T>
+    template <typename T>
     [[nodiscard]] const T* getAs() const {
         if (!mSelection) return nullptr;
         return std::get_if<T>(&(*mSelection));

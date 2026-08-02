@@ -2,21 +2,22 @@
 
 #include "playback/editor/context/EditorAction.h"
 #include "playback/editor/context/EditorState.h"
+#include "playback/editor/editing/models/SelectionModel.h"
 
 #include "EditorTheme.h"
 #include "HintBar.h"
 #include "IconSystem.h"
-#include "playback/editor/input/KeyMap.h"
-#include "playback/editor/ui/menus/EditorMenuBar.h"
-#include "playback/editor/ui/modes/ModeManager.h"
-#include "playback/editor/ui/components/Splitter.h"
+#include "modes/EditMode.h"
+#include "modes/RenderMode.h"
 #include "panels/CurveEditorPanel.h"
 #include "panels/DetailsPanel.h"
 #include "panels/StatusPanel.h"
 #include "panels/TimelinePanel.h"
 #include "panels/ViewportPanel.h"
-#include "modes/EditMode.h"
-#include "modes/RenderMode.h"
+#include "playback/editor/input/KeyMap.h"
+#include "playback/editor/ui/components/Splitter.h"
+#include "playback/editor/ui/menus/EditorMenuBar.h"
+#include "playback/editor/ui/modes/ModeManager.h"
 
 #include <functional>
 #include <string>
@@ -38,9 +39,11 @@ public:
     // Keyboard shortcut processing
     void handleKeyboardShortcuts();
 
-    [[nodiscard]] playback::editor::EditorState const& state() const;
-    void                                               submitAction(playback::editor::EditorAction action) const;
-    CurveEditorPanel&                                  curveEditorPanel() { return mCurveEditorPanel; }
+    [[nodiscard]] playback::editor::EditorState const&  state() const;
+    [[nodiscard]] editing::model::SelectionModel const& selection() const { return mSelection; }
+    editing::model::SelectionModel&                     selection() { return mSelection; }
+    void                                                submitAction(playback::editor::EditorAction action) const;
+    CurveEditorPanel&                                   curveEditorPanel() { return mCurveEditorPanel; }
     void                setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     void                setVideoAspectRatio(float aspectRatio);
     [[nodiscard]] float videoAspectRatio() const { return mVideoAspectRatio; }
@@ -54,12 +57,12 @@ private:
     bool mViewportMaximized{false};
 
     // Core components
-    EditorTheme  mTheme;
-    IconSystem&  mIconSystem{IconSystem::getInstance()};
-    ModeManager& mModeManager{ModeManager::getInstance()};
-    EditorMenuBar      mMenuBar;
-    HintBar      mHintBar;
-    Splitter     mSplitter;
+    EditorTheme   mTheme;
+    IconSystem&   mIconSystem{IconSystem::getInstance()};
+    ModeManager&  mModeManager{ModeManager::getInstance()};
+    EditorMenuBar mMenuBar;
+    HintBar       mHintBar;
+    Splitter      mSplitter;
 
     // Panels
     ViewportPanel    mViewportPanel;
@@ -74,6 +77,7 @@ private:
 
     playback::editor::EditorState const* mFrameState{};
     SubmitAction const*                  mSubmit{};
+    editing::model::SelectionModel       mSelection;
 
     // Layout
     float mDetailsWidthRatio{0.28f};
