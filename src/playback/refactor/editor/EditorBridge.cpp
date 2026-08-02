@@ -257,30 +257,12 @@ void EditorBridge::deleteVideoTrack(EditorStateExt& state, const std::string& tr
 
 void EditorBridge::ensureInitialData(EditorStateExt& state) {
     if (state.sequence.empty() && state.totalTicks > 0) {
-        state.sequence.push_back({"sequence_1", 0, state.totalTicks});
+        state.sequence.push_back({"sequence", 0, state.totalTicks});
     }
     if (state.worldActor.segments.empty() && state.totalTicks > 0) {
+        if (state.worldActor.id.empty()) state.worldActor.id = "worldActor";
         state.worldActor.totalTicks = state.totalTicks;
-        state.worldActor.segments.push_back({"world_1", 0, state.totalTicks, 0});
-    }
-    // Create default video track if none exist
-    if (state.videoTracks.empty()) {
-        Track vt;
-        vt.id   = "vt_1";
-        vt.name = "Video Track 1";
-        vt.kind = TrackKind::Video;
-        vt.height = 48;
-        state.videoTracks.push_back(vt);
-    }
-
-    // Create default camera track if none exist
-    if (state.cameraTracks.empty()) {
-        CameraTrackExt ct;
-        ct.id     = "ct_1";
-        ct.name   = "Camera 1";
-        ct.active = true;
-        ct.visible = true;
-        state.cameraTracks.push_back(ct);
+        state.worldActor.segments.push_back({"worldActor", 0, state.totalTicks, 0});
     }
 }
 

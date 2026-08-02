@@ -376,7 +376,7 @@ stateDiagram-v2
 
 | 步骤 | 模块 | 内容 | 验证 |
 |---|---|---|---|
-| 1 | `FfmpegBuildInfo` 与构建脚本 | 固定 GPL 静态 FFmpeg 版本、配置、依赖和许可证随附规则 | 干净环境可重建；发行物许可证清单审计 |
+| 1 | `FfmpegBuildInfo` 与构建脚本 | 固定 GPL 静态 FFmpeg 8.1.2、配置、依赖和许可证随附规则（执行入口见 `scripts/build-ffmpeg/build-ffmpeg.ps1`，版本清单见 `scripts/build-ffmpeg/versions.txt`） | 干净环境可重建；发行物许可证清单审计 |
 | 2 | `ExportPlan` / `ExportValidator` | 从三轨不可变快照建立逐帧计划并校验 | 单测：Camera 兜底、变速 WorldActor、覆盖缺口、空 Camera |
 | 3 | `FrameQueue` | 有界 FIFO、背压、close/fail/cancel | 单测：顺序、容量、唤醒、失败传播 |
 | 4 | `RenderExecutor` | 在渲染安全点逐帧 seek、采样、抓帧 | 集成：不同序列段按顺序切镜头，source tick 正确 |

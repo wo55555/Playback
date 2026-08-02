@@ -1,6 +1,7 @@
 #include "playback/refactor/editor/CommandStack.h"
 #include "playback/refactor/editor/CommandFactory.h"
 #include "playback/refactor/editor/models/EditorStateExt.h"
+#include "playback/refactor/editor/models/TrackTreeModel.h"
 #include "playback/refactor/video-editing/CameraBindingOps.h"
 #include "playback/refactor/video-editing/SequenceOps.h"
 #include "playback/refactor/video-editing/WorldActorOps.h"
@@ -151,6 +152,49 @@ void testFactoryAndStack() {
     stack.push(editor::CommandFactory::createAddFreeCamera("Fresh"), state);
     require(!stack.canRedo(), "new command must clear redo history");
 }
+
+void testTrackTreeModel() {
+    auto state = makeState();
+    editor::CameraEntity mainCamera;
+    mainCamera.id = "camera-main";
+    mainCamera.name = "Main Camera";
+    mainCamera.active = true;
+    state.cameras.push_back(mainCamera);
+    editor::CameraEntity actorCamera;
+    actorCamera.id = "camera-actor";
+    actorCamera.name = "Follow Camera";
+    actorCamera.bindingEntityUuid = "actor";
+    actorCamera.locked = true;
+    state.cameras.push_back(actorCamera);
+
+    editor::TrackTreeModel model;
+    model.rebuild(state);
+    const auto& rows = model.rows();
+    require(rows.size() == 5, "expanded track tree must contain sequence, world actor, cameras, and marker");
+    require(rows[0].kind == editor::TrackRowKind::Sequence && rows[0].id == "sequence" && rows[0].height == editor::TrackTreeModel::kSequenceRowHeight, "sequence row must be stable");
+    require(rows[1].kind == editor::TrackRowKind::WorldActor && rows[1].id == "worldActor" && rows[1].height == editor::TrackTreeModel::kWorldActorRowHeight, "world actor row must be stable");
+    require(rows[2].id == "camera:camera-main" && rows[2].cameraIndex == 0 && rows[2].active, "first camera row must preserve state order and active status");
+    require(rows[3].id == "camera:camera-actor" && rows[3].cameraIndex == 1 && rows[3].locked, "second camera row must preserve state order and locked status");
+    require(rows[4].kind == editor::TrackRowKind::Marker && rows[4].id == "marker" && rows[4].height == editor::TrackTreeModel::kMarkerRowHeight, "marker row must use the shared marker height");
+
+    model.setSearch("ACTOR");
+    model.rebuild(state);
+    require(model.rows().size() == 4 && model.rows()[2].id == "camera:camera-actor", "search must match a bound sub actor without hiding permanent rows");
+
+    state.cameras[1].bindingEntityUuid = "deleted-actor";
+    model.setSearch("follow");
+    model.rebuild(state);
+    require(model.rows().size() == 4 && model.rows()[2].id == "camera:camera-actor", "camera name search must retain cameras with deleted bindings");
+
+    model.setCamerasExpanded(false);
+    model.setMarkerExpanded(false);
+    model.rebuild(state);
+    require(model.rows().size() == 2, "collapsed groups must not hide permanent rows");
+
+    editor::TrackTreeModel emptyModel;
+    emptyModel.rebuild(makeState());
+    require(emptyModel.rows().size() == 3 && emptyModel.rows()[2].kind == editor::TrackRowKind::Marker, "marker display setting must retain the marker row when no markers exist");
+}
 }
 
 int main() {
@@ -159,5 +203,6 @@ int main() {
     testCameraAndUndo();
     testCommandGroups();
     testFactoryAndStack();
+    testTrackTreeModel();
     return 0;
 }
