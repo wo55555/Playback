@@ -35,15 +35,17 @@ struct PlaybackView {
     float pitch = 0.0f;
 };
 
+struct PlaybackChunkMeta {
+    int  duration          = 0;
+    bool forcePlaySnapshot = false;
+};
+
 struct PlaybackMeta {
     std::string name = "Unnamed";
     std::string worldName;
-    int         duration   = 0;
     int         totalTicks = 0;
 
-    std::optional<PlaybackView> initialView;
-
-    utils::container::LinkedHashMap<std::string, PlaybackMeta> chunks;
+    utils::container::LinkedHashMap<std::string, PlaybackChunkMeta> chunks;
 
     static PlaybackMeta       fromJson(std::string_view json);
     [[nodiscard]] std::string toJson() const;
@@ -52,11 +54,13 @@ struct PlaybackMeta {
 class Recorder {
 private:
     enum class State { Idle, Recording, Paused, Closing };
+    enum class SnapshotCaptureResult { Success, NotReady, Failed };
     std::unique_ptr<AsyncReplaySaver> mAsyncReplaySaver;
 
     std::vector<std::shared_ptr<LevelChunkPacket>> mSnapshotLevelChunks;
     std::vector<std::shared_ptr<SubChunkPacket>>   mSnapshotSubChunks;
     std::vector<PlaybackSerializedGamePacket>      mSnapshotEntityPackets;
+    std::optional<std::string>                     mSnapshotLocalPlayerPayload;
     std::vector<PlaybackSerializedGamePacket>      mPendingGamePackets;
     std::string                                    mDimensionDataPayload;
     std::string                                    mSnapshotDimensionDataPayload;
@@ -71,7 +75,7 @@ private:
     std::optional<std::string>                     mLastLocalPlayerArmorPacket;
     std::optional<int>                             mLastLocalPlayerSwingTime;
     std::optional<PlaybackView>                    mSnapshotView;
-    std::optional<PlaybackView>                    mOpenChunkView;
+    std::optional<DimensionType>                   mSnapshotDimension;
 
     std::optional<DimensionType>        mRecordingDimension;
     std::string                         mSnapshotFailure;
@@ -80,19 +84,22 @@ private:
     PlaybackMeta mMetadata = PlaybackMeta();
 
     std::atomic<State> mState{State::Idle};
-    std::atomic_bool   mNeedsInitialSnapshot = true;
+    std::atomic_bool   mNeedsInitialSnapshot       = true;
+    std::atomic_bool   mDimensionTransitionPending = false;
+    std::atomic<int>   mDimensionTransitionTargetId{0};
 
     int mChunkIndex          = 0;
     int mTicksInCurrentChunk = 0;
     int mWrittenTicks        = 0;
 
-    bool mHasOpenChunk     = false;
-    bool mOpenChunkHasData = false;
+    bool mHasOpenChunk                  = false;
+    bool mOpenChunkHasData              = false;
+    bool mCurrentChunkForcePlaySnapshot = false;
 
 private:
     static constexpr int RECORD_CHUNK_TICKS = 20 * 60 * 5;
 
-    [[nodiscard]] bool captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait);
+    [[nodiscard]] SnapshotCaptureResult captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait);
 
     [[nodiscard]] bool commitChunkSnapshot(
         std::chrono::steady_clock::duration captureElapsed,
@@ -100,6 +107,8 @@ private:
     );
 
     [[nodiscard]] bool writeInitialSnapshotIfNeeded();
+
+    [[nodiscard]] bool writeCreateLocalPlayer();
 
     [[nodiscard]] bool writeSnapshot();
 
@@ -139,7 +148,9 @@ public:
     void pause();
     void stop();
 
-    void recordSpawnedActor(ActorRuntimeID runtimeId);
+    void recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallbackPacket);
+
+    void recordNetworkGamePacket(Packet const& packet);
 
     void recordGamePacket(Packet const& packet);
 

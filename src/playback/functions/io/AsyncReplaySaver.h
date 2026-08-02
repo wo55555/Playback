@@ -36,6 +36,19 @@ struct PlaybackSerializedGamePacket {
     std::string mPayload;
 };
 
+struct PlaybackSnapshotContext {
+    static constexpr int32_t FormatVersion = 1;
+
+    int32_t dimensionId{};
+    float   x{};
+    float   y{};
+    float   z{};
+    float   yaw{};
+    float   pitch{};
+
+    bool operator==(PlaybackSnapshotContext const&) const = default;
+};
+
 class PlaybackBuffer : public BinaryStream {
 public:
     using BinaryStream::BinaryStream;
@@ -59,6 +72,10 @@ public:
         mReadPointer = 0;
     }
 };
+
+void writeSnapshotContext(PlaybackBuffer& buffer, PlaybackSnapshotContext const& context);
+
+[[nodiscard]] PlaybackSnapshotContext readSnapshotContext(PlaybackBuffer& buffer);
 
 class ReplayWriter {
 private:
@@ -115,6 +132,8 @@ public:
     ReplayReader& operator=(ReplayReader const&) = delete;
 
     void resetToStart() { mStream.mReadPointer = mActionsOffset; };
+
+    [[nodiscard]] PlaybackSnapshotContext readSnapshotContext();
 
     void handleSnapshot(ReplaySession& replaySession);
 

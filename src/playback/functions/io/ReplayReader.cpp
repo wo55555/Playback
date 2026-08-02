@@ -12,11 +12,35 @@ namespace playback::functions {
 
 static constexpr uint64 MAX_STRING_LENGTH = 65536;
 
+void writeSnapshotContext(PlaybackBuffer& buffer, PlaybackSnapshotContext const& context) {
+    buffer.writeVarInt(PlaybackSnapshotContext::FormatVersion, nullptr, nullptr);
+    buffer.writeVarInt(context.dimensionId, nullptr, nullptr);
+    buffer.writeFloat(context.x, nullptr, nullptr);
+    buffer.writeFloat(context.y, nullptr, nullptr);
+    buffer.writeFloat(context.z, nullptr, nullptr);
+    buffer.writeFloat(context.yaw, nullptr, nullptr);
+    buffer.writeFloat(context.pitch, nullptr, nullptr);
+}
+
+PlaybackSnapshotContext readSnapshotContext(PlaybackBuffer& buffer) {
+    auto const version = buffer.getVarInt().value();
+    if (version != PlaybackSnapshotContext::FormatVersion) {
+        throw std::runtime_error(std::format("Unsupported replay snapshot context version: {}", version));
+    }
+    return PlaybackSnapshotContext{
+        buffer.getVarInt().value(),
+        buffer.getFloat().value(),
+        buffer.getFloat().value(),
+        buffer.getFloat().value(),
+        buffer.getFloat().value(),
+        buffer.getFloat().value()
+    };
+}
+
 ReplayReader::ReplayReader(std::string_view data) : mBuffer(data) {
     int32_t magic = mStream.getVarInt().value();
     if (magic != MAGIC_NUMBER) {
         throw std::runtime_error("ReplayReader: invalid magic number");
-        return;
     }
 
     int32_t actionCount    = mStream.getVarInt().value();
@@ -39,6 +63,39 @@ ReplayReader::ReplayReader(std::string_view data) : mBuffer(data) {
     mActionsOffset  = mSnapshotOffset + static_cast<uint64>(mSnapshotSize);
 
     mStream.mReadPointer = mActionsOffset;
+}
+
+PlaybackSnapshotContext ReplayReader::readSnapshotContext() {
+    auto const savedReadPointer = mStream.mReadPointer;
+    mStream.mReadPointer        = mSnapshotOffset;
+    try {
+        if (mStream.mReadPointer >= mActionsOffset) {
+            throw std::runtime_error("Replay snapshot does not contain a snapshot context");
+        }
+
+        auto const actionId = mStream.getVarInt().value();
+        auto const actionIt = mActionMap.find(actionId);
+        if (actionIt == mActionMap.end() || actionIt->second->name != ActionSnapshotContext::getInstance().name) {
+            throw std::runtime_error("Replay snapshot does not begin with a snapshot context");
+        }
+
+        auto const dataSize = mStream.getUnsignedInt().value();
+        if (mStream.mReadPointer > mActionsOffset || dataSize > mActionsOffset - mStream.mReadPointer) {
+            throw std::runtime_error("Replay snapshot context extends beyond the replay snapshot");
+        }
+
+        std::string    data(mStream.mView.data() + mStream.mReadPointer, dataSize);
+        PlaybackBuffer contextBuffer(data);
+        auto           context = playback::functions::readSnapshotContext(contextBuffer);
+        if (contextBuffer.mReadPointer != contextBuffer.getWritePointer()) {
+            throw std::runtime_error("Replay snapshot context was not fully read");
+        }
+        mStream.mReadPointer = savedReadPointer;
+        return context;
+    } catch (...) {
+        mStream.mReadPointer = savedReadPointer;
+        throw;
+    }
 }
 
 void ReplayReader::handleSnapshot(ReplaySession& session) {
