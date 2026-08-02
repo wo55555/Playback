@@ -90,7 +90,7 @@ function Get-Source {
     Write-Host "[ffmpeg] fetching $Name <- $Url"
     $tarball = Join-Path $SrcDir "$Name.tar.gz"
     if ($curl) {
-        & $curl -L -sS -o $tarball $Url
+        & $curl -L -sS --ssl-no-revoke --connect-timeout 30 --retry 3 --retry-delay 5 -o $tarball $Url
         if ($LASTEXITCODE -ne 0) { Write-Host "[ffmpeg] ERROR: download failed: $Url" -ForegroundColor Red; exit 1 }
     } else {
         Invoke-WebRequest -Uri $Url -OutFile $tarball
@@ -126,16 +126,18 @@ function Get-GitSource {
     if ($LASTEXITCODE -ne 0) { Write-Host "[ffmpeg] ERROR: git clone failed: $Url" -ForegroundColor Red; exit 1 }
 }
 
-# FFmpeg（固定 release tarball）
+# FFmpeg（固定 release tarball，优先 GitHub 镜像；ffmpeg.org 有时连接慢）
 $ffmpegSrc = Join-Path $SrcDir "ffmpeg-$FfmpegVersion"
 Get-Source -Name "ffmpeg-$FfmpegVersion" `
-    -Url "https://ffmpeg.org/releases/ffmpeg-$FfmpegVersion.tar.xz" `
-    -Dest "ffmpeg-$FfmpegVersion" -ExpectedSha256 ""
+    -Url "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n$FfmpegVersion.tar.gz" `
+    -Dest "FFmpeg-n$FfmpegVersion" -ExpectedSha256 ""
+if (-not (Test-Path $ffmpegSrc) -and (Test-Path (Join-Path $SrcDir "FFmpeg-n$FfmpegVersion"))) {
+    Move-Item (Join-Path $SrcDir "FFmpeg-n$FfmpegVersion") $ffmpegSrc
+}
 
-# x264（git，固定 commit 或 HEAD）
-Get-GitSource -Name "x264" -Url "https://code.videolan.org/videolan/x264.git" `
+# x264（git，固定 commit 或 HEAD；code.videolan.org 有时慢，用 GitHub 镜像）
+Get-GitSource -Name "x264" -Url "https://github.com/videolan/x264.git" `
     -Ref "master" -Dest "x264" -PinCommit $X264Commit
-
 # x265（release tarball）
 Get-Source -Name "x265" -Url "https://github.com/videolan/x265/archive/refs/tags/$X265Tag.tar.gz" `
     -Dest "x265-$X265Tag" -ExpectedSha256 ""

@@ -1,5 +1,6 @@
 #include "playback/refactor/editor/CommandStack.h"
 #include "playback/refactor/editor/CommandFactory.h"
+#include "playback/refactor/editor/EditorProjectCodec.h"
 #include "playback/refactor/editor/models/EditorStateExt.h"
 #include "playback/refactor/editor/models/TrackTreeModel.h"
 #include "playback/refactor/video-editing/CameraBindingOps.h"
@@ -195,6 +196,21 @@ void testTrackTreeModel() {
     emptyModel.rebuild(makeState());
     require(emptyModel.rows().size() == 3 && emptyModel.rows()[2].kind == editor::TrackRowKind::Marker, "marker display setting must retain the marker row when no markers exist");
 }
+
+void testEditorProjectCodec() {
+    auto state = makeState();
+    state.projectName = "Codec Test";
+    state.markers.push_back({"marker", "Cut", 40});
+    state.cameras.push_back({"camera", "Main"});
+    state.sequence.front().cameraId = "camera";
+    auto bytes = editor::EditorProjectCodec::encode(state);
+    auto decoded = editor::EditorProjectCodec::decode(bytes);
+    require(decoded.has_value(), "editor project codec must decode its own payload");
+    require(decoded->projectName == state.projectName && decoded->sequence.front().cameraId == "camera", "editor project codec must preserve v3 sequence data");
+    require(decoded->worldActor.subActors.front().id == "actor" && decoded->markers.front().label == "Cut", "editor project codec must preserve nested data");
+    bytes.back() ^= 1;
+    require(!editor::EditorProjectCodec::decode(bytes).has_value(), "editor project codec must reject corrupt payloads");
+}
 }
 
 int main() {
@@ -204,5 +220,6 @@ int main() {
     testCommandGroups();
     testFactoryAndStack();
     testTrackTreeModel();
+    testEditorProjectCodec();
     return 0;
 }

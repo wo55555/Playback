@@ -3,8 +3,8 @@
 #
 # 格式: 名称 = 版本标识 | 源码地址 | 许可证
 
-FFmpeg = 8.1.2 | https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz | GPL-2.0-or-later (启用 --enable-gpl)
-x264   = <git commit, 见构建 manifest> | https://code.videolan.org/videolan/x264.git | GPL-2.0-or-later
+FFmpeg = 8.1.2 | https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n8.1.2.tar.gz (镜像：https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz) | GPL-2.0-or-later (启用 --enable-gpl)
+x264   = <git commit, 见构建 manifest> | https://github.com/videolan/x264.git (镜像：https://code.videolan.org/videolan/x264.git) | GPL-2.0-or-later
 x265   = 3.6 | https://github.com/videolan/x265/archive/refs/tags/3.6.tar.gz | GPL-2.0-or-later
 libvpx = v1.15.0 | https://github.com/webmproject/libvpx.git (tag v1.15.0) | BSD-3-Clause
 libopus = v1.5.2 | https://github.com/xiph/opus.git (tag v1.5.2) | BSD-3-Clause
