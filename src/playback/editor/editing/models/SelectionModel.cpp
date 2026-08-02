@@ -36,6 +36,17 @@ std::vector<std::string> SelectionModel::selectedIds() const {
             return {sel.trackId};
         } else if constexpr (std::is_same_v<T, SelectedTransition>) {
             return {sel.transitionId};
+        } else if constexpr (std::is_same_v<T, SelectedSequence>) {
+            return {"sequence"};
+        } else if constexpr (std::is_same_v<T, SelectedSequenceSegment>
+                             || std::is_same_v<T, SelectedWorldActorSegment>) {
+            return {sel.segmentId};
+        } else if constexpr (std::is_same_v<T, SelectedWorldActor>) {
+            return {"worldActor"};
+        } else if constexpr (std::is_same_v<T, SelectedSubActor>) {
+            return {sel.subActorId};
+        } else if constexpr (std::is_same_v<T, SelectedCamera>) {
+            return {sel.cameraId};
         }
         return {};
     }, mSelection.value());

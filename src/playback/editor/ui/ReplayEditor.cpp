@@ -30,6 +30,7 @@ void ReplayEditor::shutdown() {
     mCurveEditorPanel.setOpen(false);
     mFrameState = nullptr;
     mSubmit     = nullptr;
+    mSelection.clear();
 }
 
 void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
@@ -114,6 +115,14 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
     if (io.WantTextInput) return;
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) {
+        submitAction({playback::editor::EditorActionType::UndoEditorEdit});
+        return;
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) {
+        submitAction({playback::editor::EditorActionType::RedoEditorEdit});
+        return;
+    }
     if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_F)) {
         toggleViewportMaximized();
         return;

@@ -4,6 +4,7 @@
 > 角色：游戏窗口内的编辑器 UI 骨架。**Viewport / Details / Timeline / Status + 菜单栏 + 2 页面 + 2 个显式分隔条**，鼠标优先，键盘加速。**0 录制 UI**。
 > 与旧文档：复用旧 [editor/context.md](../editor/context.md)（EditorContext / 状态机）+ 旧 [editor/controller.md](../editor/controller.md)（Controller）+ 旧 [editor/renderer.md](../editor/renderer.md)（D3D12 hook）+ 旧 [editor/ui.md](../editor/ui.md)（ReplayView）作为底层基础设施。
 > 消费 [02](02-camera-motion.md) / [03](03-advanced-recording.md) / [04](04-video-editing.md) / [05](05-render-pipeline.md) / [06](06-data-persistence.md) 的数据。
+> **视频编辑工作流**遵循 [09-video-editing-workflow.md](09-video-editing-workflow.md) 的 3 条一级轨道模型（摄像机序列 / 世界Actor / 摄像机）。
 
 ## 一、需求（Requirements）
 
@@ -17,8 +18,8 @@
 | EA-4 | 0 toolbar，0 dock system，0 多窗口 | P0 |
 | EA-5 | Menu 6 项：File / Edit / Camera / Markers / Window / Help；导出仅作为 `File > Export...` 子项 | P0 |
 | EA-6 | Timeline header 4 按钮：Play、Add Keyframe、Add Marker、Split | P0 |
-| EA-7 | Timeline body 5 轨：1 视频轨 V0 + N 摄影机轨 Cn + 1 标记轨 M | P0 |
-| EA-8 | Details 上下文敏感：无选 / 摄影机轨 / 关键帧 / Clip / Marker / Transition | P0 |
+| EA-7 | Timeline body **3 条一级轨道 + N 条摄像机轨**（详见 [09](09-video-editing-workflow.md) §2.1）：1 摄像机序列（顶轨，连续填满）+ 1 世界Actor（中轨，可 split/trim）+ N 摄像机轨（用户加，0..N）+ 1 标记轨（独立，与条目无关） | P0 |
+| EA-8 | Details 上下文敏感：**8 种**（详见 [09](09-video-editing-workflow.md) §2.6）——无选 / 序列 / 序列段 / 世界Actor / 世界Actor 段 / 子Actor / Camera / 关键帧 / Marker | P0 |
 | EA-9 | Status bar 1 行：模式 / 项目 / FPS / 内存 | P0 |
 | EA-10 | Hint bar 1 行：5 个最常用快捷键，可开关 | P0 |
 | EA-11 | Hint bar 默认显示，按 `F1` 切换 | P1 |
@@ -66,6 +67,7 @@
 | Timeline 高度 | 30% | **18% ~ 65%**（默认 35%） |
 | 鼠标 | 辅助 | **优先**（快捷键加速） |
 | 录制 UI | 有 | **0** |
+| **时间轴结构** | 5 轨 (V0/N Camera/M) | **3 一级轨道 + N 摄像机轨**（[09](09-video-editing-workflow.md)） |
 
 ### 2.2 内部结构
 
@@ -106,17 +108,19 @@ refactor/editor/
 |                                            | Details                 |
 |              Viewport                      |                         |
 |  +--------------------------------------+  | 搜索 / 当前选中属性     |
-|  |      游戏画面：用户视频比例           |  | Position / Rotation     |
-|  |      等比完整显示，余区留黑边         |  | FOV / Easing            |
+|  |      游戏画面：用户视频比例           |  | （8 上下文 [09]）       |
+|  |      等比完整显示，余区留黑边         |  |                         |
 |  +--------------------------------------+  |                         |
 |                                            |                         |
 +------------------- 高度分隔条 -------------+                         |
-| Timeline：播放 / 时间码 / V0 / Cn / M / Hint|                         |
-|                                            | <-> 宽度分隔条          |
+| Timeline：S / W / C0..Cn / M / Hint        |                         |
+| 顶工具栏 38px · 传输栏 34px                | <-> 宽度分隔条          |
 +--------------------------------------------+-------------------------+
 +--------------------------- Status (22px) ----------------------------+
 | [Edit]   replay-001.playback   60 FPS   256 MB                       |
 +------------------------------------------------------------------------+
+
+时间轴内 3+N 轨（S 序列 / W 世界Actor / C0..Cn 摄像机 / M 标记）— 详见 [09](09-video-editing-workflow.md) §2.1。
 ```
 
 **布局计算与边界**：
@@ -337,13 +341,16 @@ sequenceDiagram
 | | Redo | Ctrl+Y |
 | | Delete | Del |
 | | Select All | Ctrl+A |
-| **Camera** | Add Keyframe at Playhead | K |
-| | Add Camera Track | Ctrl+Shift+N |
+| **Sequence** | Split at Playhead | Ctrl+K |
+| | Trim Left to Playhead | [ |
+| | Trim Right to Playhead | ] |
+| **Camera** | Add Free Camera | Ctrl+N |
+| | Create Camera Binding (on selected subActor) | Ctrl+B |
 | | Camera Preset | (子菜单 7 个) |
 | | Set Active | 1 / 2 / 3 |
 | **Markers** | Insert Marker | M |
-| | Jump to Next Marker | ] |
-| | Jump to Previous Marker | [ |
+| | Jump to Next Marker | . |
+| | Jump to Previous Marker | , |
 | **Window** | Toggle Hint Bar | F1 |
 | **Help** | Documentation | (链接) |
 | | About | (弹窗) |
@@ -496,7 +503,7 @@ private:
 
 #### 2.9.2 `DetailsPanel`（属性 · 右侧 · 上下文敏感）
 
-**职责**：根据 `SelectionModel` 当前选中，渲染对应属性编辑 UI。
+**职责**：根据 `SelectionModel` 当前选中（[09 §2.6](09-video-editing-workflow.md)），渲染对应属性编辑 UI。
 
 **实现**：
 
@@ -506,12 +513,15 @@ public:
     void draw();
 
 private:
-    void drawEmpty();          // 无选
-    void drawCameraTrack();    // 摄影机轨
-    void drawKeyframe();       // 关键帧
-    void drawClip();           // Clip
-    void drawMarker();         // Marker
-    void drawTransition();     // Transition
+    void drawEmpty();              // 无选
+    void drawSequence();           // 摄像机序列（无段选）
+    void drawSequenceSegment();    // 序列段
+    void drawWorldActor();         // 世界Actor（无段选）
+    void drawWorldActorSegment();  // 世界Actor 段
+    void drawSubActor();           // 子Actor（含"创建摄像机绑定"按钮）
+    void drawCamera();             // 摄像机
+    void drawKeyframe();           // 关键帧
+    void drawMarker();             // Marker
 
     void drawNumberField(std::string_view label, float& v, float step = 0.1f);
     void drawVec3Field(std::string_view label, Vec3& v);
@@ -584,12 +594,16 @@ private:
 
 **职责**：
 - Timeline header：4 按钮 + 时间码 + zoom
-- Timeline body：V0 / Cn / M 5 类轨
+- Timeline body：**3 条一级轨道 + N 条摄像机轨**（详见 [09](09-video-editing-workflow.md) §2.1）
+  - S = 摄像机序列（顶轨，连续填满；段 = 选某段 tick 范围 + 绑 Camera）
+  - W = 世界Actor（中轨，可 split/trim；段 = 选某段 tick 范围 + 变速）
+  - C0..Cn = 摄像机（用户加，0..N；关键帧 + 路径 + Rig + 预设）
+  - M = 标记轨（独立）
 - Hint bar：6 个快捷键
 - 拖 playhead：scrub
-- 拖 Clip / Keyframe / Marker：移动
-- 拖 Clip 头/尾：trim
-- 双击 Clip / Keyframe：选中
+- 拖段 / 关键帧 / Marker：移动
+- 拖段头/尾：trim
+- 双击段 / 关键帧：选中
 - 右键：弹 context menu
 
 **实现**：
@@ -602,16 +616,16 @@ public:
 private:
     void drawHeader();
     void drawBody();
-    void drawTrack(Track& t, Rect rowArea);
-    void drawVideoClip(Clip& c, Rect rowArea);
-    void drawKeyframe(Keyframe& k, Rect rowArea);
+    void drawTrack(const TrackTreeModel::VisibleRow& row, Rect rowArea);
+    void drawSequenceSegment(SequenceSegment& s, Rect rowArea);
+    void drawWorldActorSegment(WorldActorSegment& s, Rect rowArea);
+    void drawCameraKeyframe(CameraEntity& c, CameraKeyframe& k, Rect rowArea);
     void drawMarker(Marker& m, Rect rowArea);
-    void drawTransition(Transition& t, Rect area);
 
     // 拖拽
     void handleScrubDrag(Rect headerArea);
-    void handleClipDrag(Clip& c, Rect rowArea);
-    void handleKeyframeDrag(Keyframe& k, Rect rowArea);
+    void handleSegmentDrag(SequenceSegment& s, Rect rowArea);  // WorldActor 同
+    void handleKeyframeDrag(CameraKeyframe& k, Rect rowArea);
 
     // Zoom
     float mPixelsPerTick{0.1f};  // 0.02 ~ 2.0
@@ -636,27 +650,33 @@ private:
 | Zoom [-] / [+] | 缩放 | 像素/tick 变 |
 | `[1x]` | 双击重置 | 立即重置 |
 
-**Timeline body 布局**：
+**Timeline body 布局**（3 一级 + N 摄像机）：
 
 ```
-| V0 |  [   Clip A   ]  [   Clip B   ]  [   Clip C   ]  [icon:transition] CrossDissolve 0:03  |
-| C0 |  ====o======o=========o=========o=======  Main  (3 keys)              |
-| C1 |       ====o=========o=========o===       Cinematic  (2 keys)          |
-| M  |                [icon:marker] Boss        [icon:marker] End              |
+| S  |  [== Seg A (Cam0) ==][= Seg B (Cam2) =][== Seg C (auto) ==]   |   <- 摄像机序列（顶轨）
+| W  |  [===== WorldActor A =====][== WorldActor B ==]               |   <- 世界Actor（中轨）
+| C0 |  ====●======●======●======●======●  Main                       |   <- 摄像机 0
+| C1 |       ====●======●======●====       Player1 (bind)             |   <- 摄像机 1（绑定）
+| M  |                [icon:marker] Boss       [icon:marker] End       |   <- 标记
 ```
 
-**视频轨**（V0，48px 高）：
-- 矩形：色块 + 名字
+**S 序列轨**（36px 高）：
+- 矩形：色块（按"绑定 Camera"着色）+ 段名
 - 头/尾 6px 拖拽区 = trim
 - 中部 = move
-- 转场 = 半透明圆环 + 文字
+- 未绑 Camera = 灰底斜线
 
-**摄影机轨**（Cn，24px 高）：
+**W 世界Actor 轨**（36px 高）：
+- 矩形：橙色 + 段名
+- 头/尾 6px 拖拽区 = trim
+- 中部 = move
+
+**C 摄像机轨**（24px 高）：
 - 细线 = 进度条样式
 - 关键帧 = 圆点（8px）
 - 圆点拖动 = 改 tick（snap 到其他圆点或 0.5s 网格）
 
-**标记轨**（M，20px 高）：
+**M 标记轨**（20px 高）：
 - 垂直细线
 - 标记 + 标签
 
@@ -666,6 +686,8 @@ private:
 - Locked：1px 红斜线 + 50% 透明
 - Muted：50% 透明 + 灰
 - 鼠标在边缘 6px：cursor 变 resize
+
+> **子Actor 不画在画布**；展开在 Details 面板的 `SubActorTree`（按 Default/Players/Creatures/Entities 折叠）。详见 [09](09-video-editing-workflow.md) §2.6。
 
 #### 2.9.4 `StatusPanel`（1 行 · 22px）
 
@@ -837,20 +859,21 @@ struct EditorTheme {
   Left/Right Step 1 frame
   Shift+L/R  Step 1 second
 
-相机
-  K          Add keyframe at playhead  (K 唯一含义：加关键帧)
-  Ctrl+Shift+N  Add camera track
-  1 / 2 / 3  Switch active camera track
+序列（摄像机序列）
+  Ctrl+K     Split at playhead
+  [          Trim left to playhead
+  ]          Trim right to playhead
 
-剪辑
-  Ctrl+K     Split clip at playhead
-  I          Set in point
-  O          Set out point
+摄像机
+  Ctrl+N     Add Free Camera
+  Ctrl+B     Create Camera Binding (on selected subActor)
+  K          Add keyframe at playhead  (K 唯一含义：加关键帧)
+  1 / 2 / 3  Switch active camera
 
 标记
   M          Insert marker
-  [          Jump to previous marker
-  ]          Jump to next marker
+  ,          Jump to previous marker
+  .          Jump to next marker
 
 视图
   +          Zoom in timeline
@@ -863,6 +886,8 @@ struct EditorTheme {
 - `K` = 关键帧（无歧义）。`K` 不再表示 Stop；停止用 Space 切换（播放→暂停→播放本身已经覆盖了"回到起点"语义；如需回到 playhead 起点，用 `Home`）。
 - `Space` 与文本输入框冲突：在 InputFloat/InputText 内时 = 输入空格；否则 = 播放/暂停切换。
 - `Esc` 优先级：模态打开时关模态 > 取消选中 > 关闭导出对话框（导出中）。
+- `Ctrl+K` = 序列 split（在 playhead 切序列段）；在旧版里是 "Split clip"，在新版里含义相同但作用于序列（[09](09-video-editing-workflow.md)）。
+- `Ctrl+B` = "Create Camera Binding"（在选中的子Actor 上创建绑定 Camera）；要求 Selection 是 SubActor 才生效。
 
 **无 F12 / 无 Output Log**：
 - 编辑器**不提供**常驻输出日志面板
@@ -892,45 +917,54 @@ private:
 - `Ctrl+Z` 按下：按钮闪一次 + 状态栏 `[Edit] Undo: Split Clip at 0:01:23`
 - 撤销栈空：菜单 Edit > Undo 灰
 
-**示例 Commands**（来自 [04-video-editing.md](04-video-editing.md)）：
+**示例 Commands**（来自 [04-video-editing.md](04-video-editing.md) / [09 §2.7](09-video-editing-workflow.md)）：
 
 ```cpp
 class AddKeyframeCommand : public IEditCommand {
-    std::string trackId;
+    std::string  cameraId;
     int          tick;
     CameraKeyframe kf;
 public:
-    void execute(EditorState& s) override;
-    void undo(EditorState& s) override;
+    void execute(EditorStateExt& s) override;
+    void undo(EditorStateExt& s) override;
     std::string label() const override { return "Add Keyframe at " + std::to_string(tick); }
 };
 
 class MoveKeyframeCommand : public IEditCommand {
-    std::string keyframeId;
+    std::string  cameraId, keyframeId;
     int oldTick, newTick;
 public:
-    void execute(EditorState& s) override;  // 新 tick
-    void undo(EditorState& s) override;     // 旧 tick
+    void execute(EditorStateExt& s) override;
+    void undo(EditorStateExt& s) override;
     std::string label() const override { return "Move Keyframe"; }
 };
 
-class SplitClipCommand : public IEditCommand {
-    std::string trackId, clipId;
+class SplitSequenceAtPlayhead : public IEditCommand {
     int atTick;
-    Clip right;
+    SequenceSegment rightSnapshot;
 public:
-    void execute(EditorState& s) override;
-    void undo(EditorState& s) override;
-    std::string label() const override { return "Split Clip at " + std::to_string(atTick); }
+    void execute(EditorStateExt& s) override;  // SequenceOps::splitAt
+    void undo(EditorStateExt& s) override;     // erase rightSnapshot
+    std::string label() const override { return "Split Sequence at " + std::to_string(atTick); }
 };
 
-class AddCameraTrackCommand : public IEditCommand {
-    CameraTrackExt track;
+class CreateBindingCamera : public IEditCommand {
+    CameraEntity cam;
+    std::string  subActorId;
+    std::string  oldBound;
+public:
+    void execute(EditorStateExt& s) override;
+    void undo(EditorStateExt& s) override;
+    std::string label() const override { return "Create Camera Binding"; }
+};
+
+class AddFreeCamera : public IEditCommand {
+    CameraEntity cam;
     int insertIdx;
 public:
-    void execute(EditorState& s) override;
-    void undo(EditorState& s) override;
-    std::string label() const override { return "Add Camera Track " + track.name; }
+    void execute(EditorStateExt& s) override;
+    void undo(EditorStateExt& s) override;
+    std::string label() const override { return "Add Free Camera " + cam.name; }
 };
 ```
 
@@ -957,19 +991,35 @@ Copy Camera State
 Paste Camera State
 ```
 
-#### ClipMenu（Clip 上右键）
+#### SequenceSegmentMenu（摄像机序列段上右键）
 
 ```
-Cut                          Ctrl+X
-Copy                         Ctrl+C
-Paste                        Ctrl+V
----
 Split at Playhead            Ctrl+K
 Trim Left to Playhead
 Trim Right to Playhead
 ---
+Bind Camera >               (子菜单，列出 cameras)
+   (●) Main
+   ( ) Player1 (bind)
+   ( ) <None> (use cameras[0])
+---
+Set Speed…                   (输入框)
+---
 Properties
 Delete                       Del
+```
+
+#### WorldActorSegmentMenu（世界Actor 段上右键）
+
+```
+Split at Playhead            Ctrl+K
+Trim Left to Playhead
+Trim Right to Playhead
+---
+Set Speed…                   (输入框)
+---
+Ripple Delete                Shift+Del
+Properties
 ```
 
 #### KeyframeMenu（关键帧点上右键）
@@ -985,15 +1035,42 @@ Paste Value
 Delete                       Del
 ```
 
-#### TrackHeaderMenu（Track 头右键）
+#### SubActorMenu（子Actor 上右键 · Details 面板内）
 
 ```
-Rename
-Delete Track
+Create Camera Binding        Ctrl+B        ← 走 CameraBindingOps::createBindingCamera
+Jump to SubActor in World
+Copy SubActor Id
 ---
-Lock / Unlock
-Mute / Unmute
-Hide / Show
+Properties
+```
+
+#### TrackHeaderMenu（3 类别 + N 摄像机的轨头）
+
+```
+Sequence:
+   Add Segment at Playhead
+   ─
+   （序列不可删；只暴露"在 playhead 切"）
+
+WorldActor:
+   Add Segment at Playhead
+   Ripple Delete Last Segment
+
+Camera:
+   Rename
+   Set Kind >
+   Unbind (only if bindingEntityUuid != "")
+   Delete Camera                ← 触发 clearReferencesInSequence / SubActor
+   ─
+   Lock / Unlock
+   Mute / Unmute
+   Hide / Show
+
+Marker:
+   Rename
+   Delete
+   Set Color
 ```
 
 ### 2.15 Render 页面（导出中）
@@ -1118,11 +1195,12 @@ flowchart TB
         CS[CommandStack]
         MM[ModeManager]
     end
-    subgraph Domain
-        CamSys[CameraSystem]
-        TrackMgr[TrackManager]
-        MarkerMgr[MarkerManager]
-        Preview[RealtimePreview]
+    subgraph Domain [3 类别 + N 摄像机]
+        Seq[SequenceOps]
+        WA[WorldActorOps]
+        Bind[CameraBindingOps]
+        Cam[CameraSystem]
+        Prev[RealtimePreview]
     end
     subgraph Engine
         Sess[ReplaySession]
@@ -1132,23 +1210,26 @@ flowchart TB
     Menu --> CS
     Menu --> Ctx
     Timeline --> Sel
-    Timeline --> TrackMgr
-    Timeline --> MarkerMgr
+    Timeline --> Seq
+    Timeline --> WA
+    Timeline --> Cam
     Timeline --> Ctx
     Viewport --> Sel
-    Viewport --> CamSys
+    Viewport --> Cam
     Viewport --> MCBE
     Details --> Sel
-    Details --> TrackMgr
-    Details --> CamSys
+    Details --> Seq
+    Details --> WA
+    Details --> Cam
     Status --> MM
 
-    Sel --> CamSys
-    Ctx --> Preview
-    TrackMgr --> CamSys
-    CamSys --> Sess
-    Preview --> Sess
-    Preview --> MCBE
+    Sel --> Cam
+    Ctx --> Prev
+    Seq --> Prev
+    WA --> Prev
+    Cam --> Sess
+    Prev --> Sess
+    Prev --> MCBE
 ```
 
 ### 2.17 与旧基础设施的对接

@@ -2,6 +2,7 @@
 
 #include "playback/editor/context/EditorAction.h"
 #include "playback/editor/context/EditorState.h"
+#include "playback/editor/editing/models/SelectionModel.h"
 
 #include "EditorTheme.h"
 #include "HintBar.h"
@@ -39,6 +40,8 @@ public:
     void handleKeyboardShortcuts();
 
     [[nodiscard]] playback::editor::EditorState const& state() const;
+    [[nodiscard]] editing::model::SelectionModel const& selection() const { return mSelection; }
+    editing::model::SelectionModel& selection() { return mSelection; }
     void                                               submitAction(playback::editor::EditorAction action) const;
     CurveEditorPanel&                                  curveEditorPanel() { return mCurveEditorPanel; }
     void                setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
@@ -74,6 +77,7 @@ private:
 
     playback::editor::EditorState const* mFrameState{};
     SubmitAction const*                  mSubmit{};
+    editing::model::SelectionModel       mSelection;
 
     // Layout
     float mDetailsWidthRatio{0.28f};

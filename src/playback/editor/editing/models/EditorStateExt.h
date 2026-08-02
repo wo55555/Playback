@@ -1,7 +1,10 @@
 #pragma once
 
 #include "CameraKeyframe.h"
+#include "CameraEntity.h"
+#include "SequenceSegment.h"
 #include "Track.h"
+#include "WorldActor.h"
 
 #include <memory>
 #include <optional>
@@ -21,6 +24,7 @@ struct CameraTrackExt {
 };
 
 struct EditorStateExt {
+    int version{3};
     // Project info
     std::string projectName;
     std::string projectPath;
@@ -31,7 +35,10 @@ struct EditorStateExt {
     bool playing{};
     float playbackSpeed{1.0f};
 
-    // Camera tracks
+    std::vector<SequenceSegment> sequence;
+    WorldActor worldActor;
+    std::vector<CameraEntity> cameras;
+
     std::vector<CameraTrackExt> cameraTracks;
     int activeCameraIndex{};
 

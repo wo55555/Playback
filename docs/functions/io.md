@@ -168,7 +168,6 @@ if (MinecraftPacketIds::FullChunkData) {
 **`handleNextAction(ReplaySession&)`** [ReplayReader.cpp:80-115](file:///d:/raplay/Playback/src/playback/functions/io/ReplayReader.cpp#L80-L115)：单步读一个 action 并分发。
 
 **严格性检查**：
-
 - 包读完后必须 `mReadPointer == mStream.getWritePointer()`，否则抛异常（防协议不一致）。
 - 包 size 不能跨过 `mActionsOffset`。
 - 未知 `actionId` 抛 `Unknow action id`（用 `mLastActionName` 增强错误信息）。
