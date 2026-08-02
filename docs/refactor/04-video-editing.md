@@ -1,39 +1,41 @@
-# 04 · 多剪辑编辑
+# 04 · 多剪辑编辑（按 09 工作流 · 操作层）
 
 > 入口：`src/playback/refactor/video-editing/`
-> 角色：在 [TimelinePanel](01-editor-architecture.md) 内提供 **多 Clip / 多 Track / 3 个基础转场 / Bezier 曲线** 的剪辑能力。**不**做内容浏览器、复杂转场、后期处理。
-> 数据模型见 [06-data-persistence.md](06-data-persistence.md)；本文件描述**算法与编辑操作**。
+> 角色：实现 [09-video-editing-workflow.md](09-video-editing-workflow.md) 所定义 **3 条一级轨道**（摄像机序列 / 世界Actor / 摄像机）下的**剪辑操作**：段 CRUD / 切 / trim / ripple / 绑定 / 关键帧 / Undo-Redo。**本文件是 09 的"操作层"**。
+> 数据模型在 [09 §2.2-2.3](09-video-editing-workflow.md) 与 [06-data-persistence.md](06-data-persistence.md) 描述；本文件**只描述**命令、操作算法与 Undo/Redo 互逆性。
+> **不**做内容浏览器、复杂转场、后期处理（与 09 一致）。
 
 ## 一、需求（Requirements）
 
-### 1.1 功能性需求
+> 工作流总需求见 [09 §1.1](09-video-editing-workflow.md)。本文件聚焦操作：
 
 | ID | 需求 | 优先级 |
 |---|---|---|
-| VE-1 | 时间轴支持**多条**视频轨（Video）+ 摄影机轨（Camera）+ 标记轨（Marker） | P0 |
-| VE-2 | 每条 Track 可放多个 Clip（同一 `.playback` 的不同区段） | P0 |
-| VE-3 | Clip 操作：Cut（剪切到剪贴板）/ Split（按 playhead 切）/ Trim In / Trim Out / Ripple Delete | P0 |
-| VE-4 | Clip 可独立设置 speed（局部变速，不改原回放） | P1 |
-| VE-5 | Clip 可独立设置 activeCameraTrackIdx（每段用不同摄影机） | P0 |
-| VE-6 | 3 个基础转场：**Cut**（duration=0）/ **Fade**（淡入淡出到指定色）/ **CrossDissolve**（交叉溶解） | P0 |
-| VE-7 | 转场放在两个相邻 Clip 之间，UI 显示为半透明矩形 | P0 |
-| VE-8 | **Bezier 曲线**：通用曲线编辑器（替代纯 easing），可被摄影机 / Rig / Transition 共用 | P0 |
-| VE-9 | 撤销 / 重做：所有 Clip / Track / Transition 操作可 Undo / Redo | P0 |
-| VE-10 | Clip / Track 可 Lock（防误编辑）和 Mute（不渲染） | P0 |
+| VE-1 | **摄像机序列**：Split / Trim / Delete / BindCamera / SetSpeed 全套；操作可 Undo/Redo | P0 |
+| VE-2 | **世界Actor**：Split / Trim / SetSpeed / RippleDelete 全套；操作可 Undo/Redo | P0 |
+| VE-3 | **摄像机**：AddFree / CreateBinding(子Actor) / Delete(同时清空引用) / SetKind / Unbind | P0 |
+| VE-4 | **关键帧**：Add / Move / Delete / SetEasing / SetValue（position/rotation/fov） | P0 |
+| VE-5 | **子Actor**：SetDetails（按 category 的 agent 字段） | P1 |
+| VE-6 | **Undo/Redo 栈**：≤ 100 步，所有命令 execute/undo 互逆 | P0 |
+| VE-7 | 序列段与 WorldActor 段**首尾相接**（split 不留空隙，ripple 不留洞） | P0 |
+| VE-8 | 删除 Camera 时，所有引用它的 sequence 段 `cameraId = ""`（导出兜底 cameras[0]） | P0 |
+| VE-9 | Clip / Track 概念**整体下线**（旧 `TrackKind::Video/Camera/Marker` 与 `Clip/Track/Transition` 由 09 新模型替代） | P0 |
 
 ### 1.2 非功能性需求
 
 - **操作响应**：单次编辑操作 < 16ms（1080p 视口无卡顿）
-- **轨道数**：单项目支持 ≤ 32 视频轨 + 16 摄影机轨 + 1 标记轨
-- **Clip 数**：单轨道 ≤ 256 个 Clip
-- **Undo 栈**：≤ 100 步（与 [EditorPreferences.maxUndoSteps](06-data-persistence.md) 一致）
-- **持久化**：所有编辑操作写入 `EditorState`，`record stop` 时落盘
+- **序列段数**：≤ 256（与 [09 §1.2](09-video-editing-workflow.md) 一致）
+- **世界Actor 段数**：≤ 32
+- **摄像机数**：≤ 16
+- **Undo 栈**：≤ 100 步
+- **持久化**：所有编辑操作写入 `EditorStateExt`，`record stop` 时落盘
 
 ### 1.3 与现有约束对齐
 
 - 复用 [EditorContext](../editor/context/EditorContext.md) 的 mutex 模式
-- 复用 [CommandStack](01-editor-architecture.md) 撤销 / 重做（待写）
+- 复用 [CommandStack](01-editor-architecture.md) 撤销 / 重做
 - 不引入新的第三方库（[BezierCurve](06-data-persistence.md) 自写）
+- 旧 `Track/Clip/Transition/TrackManager/TransitionEngine` 全部由新模型替代
 
 ## 二、架构（Architecture）
 
@@ -41,224 +43,143 @@
 
 ```
 refactor/video-editing/
-├── ClipEditor.{h,cpp}               ← Clip 增删改 + Cut/Split/Trim
-├── TrackManager.{h,cpp}             ← 多轨管理
-├── TransitionEngine.{h,cpp}         ← 转场混合
-├── BezierCurveEditor.{h,cpp}        ← 贝塞尔曲线 UI + 采样
-├── Clipboard.{h,cpp}                ← 内部剪贴板
-├── SelectionModel.{h,cpp}           ← 选中模型
-└── EditingCommands.h                ← Command 模式（Undo / Redo）
+├── SequenceSegment.{h,cpp}          ← 摄像机序列段（split/trim/bind/speed）
+├── WorldActorSegment.{h,cpp}        ← 世界Actor 段（split/trim/speed/ripple）
+├── CameraEntity.{h,cpp}             ← 摄像机（add free / create binding / keyframe）
+├── SubActor.{h,cpp}                 ← 子Actor（category + agentDetails）
+├── WorldActor.{h,cpp}               ← 容器：解析自 .playback
+├── SequenceOps.{h,cpp}              ← 序列专用：findSegmentAt / mergeAfterDelete
+├── CameraBindingOps.{h,cpp}         ← 绑定：从 SubActor 创建 Camera
+├── commands/
+│   ├── SequenceCommands.{h,cpp}     ← Split/Trim/Delete/Bind/SetSpeed
+│   ├── WorldActorCommands.{h,cpp}   ← Split/Trim/SetSpeed/RippleDelete
+│   ├── CameraCommands.{h,cpp}       ← AddFree/CreateBinding/Keyframe/SetKind/Unbind/Delete
+│   ├── SubActorCommands.{h,cpp}     ← SetDetails
+│   └── IEditCommand.h               ← Command 模式基类
+├── SelectionModel.{h,cpp}           ← 选中模型（3 类别 + 段 + 关键帧）
+├── BezierCurve.{h,cpp}              ← 通用曲线（被 Camera 关键帧 easing 共用）
+└── BezierCurveEditor.{h,cpp}        ← 贝塞尔曲线 UI（在 Details 面板弹出）
 ```
 
-### 2.2 `TrackManager`（多轨）
+### 2.2 `SequenceOps`（序列操作核心）
 
 ```cpp
-class TrackManager {
-public:
-    static TrackManager& getInstance();
+namespace SequenceOps {
 
-    void setEditorState(EditorState state);
-    EditorState snapshot() const;
+// O(log n)：找到含 tick 的段
+const SequenceSegment* findSegmentAt(const std::vector<SequenceSegment>& segs, int tick);
 
-    // 增删
-    std::string addTrack(TrackKind kind, std::string name);
-    void removeTrack(const std::string& id);
-    void reorderTrack(const std::string& id, int newIndex);
+// 校验：[0,totalTicks] 完全覆盖；段间无空隙
+bool validateCoverage(const std::vector<SequenceSegment>& segs, int totalTicks);
 
-    // Clip 操作
-    std::string addClip(const std::string& trackId, const Clip& clip);
-    void removeClip(const std::string& trackId, const std::string& clipId);
-    void moveClip(const std::string& trackId, const std::string& clipId, int newTrackTick);
-    void trimClip(const std::string& trackId, const std::string& clipId, int newInTick, int newOutTick);
-    void splitClip(const std::string& trackId, const std::string& clipId, int atTick);
-    void rippleDelete(const std::string& trackId, const std::string& clipId);
+// 在 atTick 切分含 atTick 的段；返回新段 id（若切不动 = atTick 在端点）
+std::string splitAt(std::vector<SequenceSegment>& segs, int atTick);
 
-    // 转场
-    std::string addTransition(const std::string& fromClipId, const std::string& toClipId, TransitionKind kind, int durationTicks);
-    void removeTransition(const std::string& transitionId);
+// 段 delIdx 删除后，左右两段自动合并（覆盖连续）
+void mergeAfterDelete(std::vector<SequenceSegment>& segs, size_t delIdx);
 
-    // 查询
-    std::vector<Clip*> getActiveClipsAt(int timelineTick, const TrackManager& self);
-    const Transition* findTransitionBetween(const std::string& fromClipId, const std::string& toClipId) const;
+// 段 trim 头尾
+void trimSegment(std::vector<SequenceSegment>& segs, const std::string& segId,
+                 int newStart, int newEnd);
 
-private:
-    mutable std::mutex  mMtx;
-    EditorState         mState;
-};
+// 段改 speed
+void setSegmentSpeed(SequenceSegment& seg, float speed);
+
+// 段绑 Camera（清空 = ""，由导出兜底）
+void bindCamera(SequenceSegment& seg, const std::string& cameraId);
+
+}  // namespace
 ```
 
-### 2.3 `Clip` 操作算法
-
-#### Add
+**算法**（`findSegmentAt`）：
 
 ```cpp
-std::string TrackManager::addClip(const std::string& trackId, const Clip& clip) {
-    std::scoped_lock lk(mMtx);
-    auto& track = findTrack(trackId);
-    if (track.locked) return {};
-
-    Clip c = clip;
-    c.id = genUuid();
-    c.color = pickColorFor(c.replayFile);  // 同源复用色
-    track.clips.push_back(c);
-    sortClipsByTick(track);
-    return c.id;
+const SequenceSegment* findSegmentAt(const std::vector<SequenceSegment>& segs, int tick) {
+    if (segs.empty()) return nullptr;
+    auto it = std::upper_bound(segs.begin(), segs.end(), tick,
+        [](int v, const SequenceSegment& s){ return v < s.startTick; });
+    if (it == segs.begin()) return &segs.front();
+    --it;
+    return (tick < it->endTick) ? &*it : nullptr;
 }
 ```
 
-#### Split
+**算法**（`mergeAfterDelete`）：
 
 ```cpp
-void TrackManager::splitClip(const std::string& trackId, const std::string& clipId, int atTick) {
-    std::scoped_lock lk(mMtx);
-    auto& track = findTrack(trackId);
-    auto it = findClipIter(track, clipId);
-    if (it == track.clips.end() || track.locked || it->locked) return;
-
-    int localTick = atTick - it->trackTick;  // 转回 clip 内部 tick
-    if (localTick <= 0 || localTick >= (it->outTick - it->inTick)) return;
-
-    Clip right = *it;
-    right.id = genUuid();
-    right.inTick = it->inTick + localTick;
-    right.trackTick = it->trackTick + localTick;
-
-    it->outTick = it->inTick + localTick;
-    // right.outTick 不变
-
-    track.clips.push_back(right);
-    sortClipsByTick(track);
-}
-```
-
-#### Trim In / Out
-
-```cpp
-void TrackManager::trimClip(const std::string& trackId, const std::string& clipId, int newInTick, int newOutTick) {
-    auto& clip = findClip(trackId, clipId);
-    if (clip.locked) return;
-
-    int len = newOutTick - newInTick;
-    if (len <= 0) return;
-
-    // 边界检查：不与前 / 后 Clip 重叠（除非 force=true）
-    clip.inTick = newInTick;
-    clip.outTick = newOutTick;
-    if (clip.outTick - clip.inTick <= 0) {  // rollback
-        // restore
+void mergeAfterDelete(std::vector<SequenceSegment>& segs, size_t delIdx) {
+    if (delIdx > 0 && delIdx + 1 < segs.size()) {
+        segs[delIdx - 1].endTick   = segs[delIdx + 1].endTick;
+        segs[delIdx - 1].sourceTick = segs[delIdx + 1].sourceTick;
+        segs.erase(segs.begin() + delIdx);
+        segs.erase(segs.begin() + delIdx);  // 原 delIdx+1 现为 delIdx
+    } else {
+        segs.erase(segs.begin() + delIdx);
     }
 }
 ```
 
-#### Ripple Delete
+### 2.3 `WorldActorOps`（世界Actor 操作核心）
 
 ```cpp
-void TrackManager::rippleDelete(const std::string& trackId, const std::string& clipId) {
-    auto& track = findTrack(trackId);
-    auto& clip = findClip(track, clipId);
+namespace WorldActorOps {
 
-    int removeLen = clip.outTick - clip.inTick;
-    auto it = findClipIter(track, clipId);
-    track.clips.erase(it);
+// 与 SequenceOps 类似的 split / trim / setSpeed / rippleDelete
+std::string splitAt(std::vector<WorldActorSegment>& segs, int atTick);
+void trimSegment(std::vector<WorldActorSegment>& segs, const std::string& segId,
+                 int newStart, int newEnd);
+void setSegmentSpeed(WorldActorSegment& seg, float speed);
 
-    // 后续 Clip 全部前移 removeLen
-    for (auto& c : track.clips) {
-        if (c.trackTick > clip.trackTick) {
-            c.trackTick -= removeLen;
-        }
-    }
+// Ripple Delete：删除段且后续所有段前移 totalRemoved
+void rippleDelete(std::vector<WorldActorSegment>& segs, const std::string& segId);
+
+}  // namespace
+```
+
+### 2.4 `CameraBindingOps`（绑定生成）
+
+```cpp
+namespace CameraBindingOps {
+
+// 由子Actor 一键生成一台 Camera：FollowEntity 预设 + 全跟随 + 阻尼
+CameraEntity createBindingCamera(const SubActor& actor);
+
+// 在 cameras 列表中找 id 匹配；空 = cameras[0] 兜底
+const CameraEntity* resolveCamera(const std::vector<CameraEntity>& cameras,
+                                 const std::string& cameraId);
+
+// 删除 Camera 时，sequence 中所有引用它的段 cameraId = ""
+void clearReferencesInSequence(std::vector<SequenceSegment>& segs,
+                               const std::string& cameraId);
+
+// 删除 Camera 时，subActor.boundCameraId 中所有引用它的项清空
+void clearReferencesInSubActors(std::vector<SubActor>& subActors,
+                                const std::string& cameraId);
+
+}  // namespace
+```
+
+**`createBindingCamera` 实现**：
+
+```cpp
+CameraEntity CameraBindingOps::createBindingCamera(const SubActor& actor) {
+    CameraEntity cam;
+    cam.id = genUuid();
+    cam.name = actor.name + " (bind)";
+    cam.kind = CameraKind::Preset;
+    cam.preset = CameraPreset{ /* PresetKind::FollowEntity, ... */ };
+    cam.bindingEntityUuid = actor.id;
+    cam.bindingMode = 3;  // 全跟随
+    cam.bindingDamping = 0.15f;
+    return cam;
 }
 ```
 
-### 2.4 `TransitionEngine`（转场应用）
-
-```cpp
-class TransitionEngine {
-public:
-    // 调用于 RenderJob 每帧
-    // 输入：当前 tick + 全部 clip，决定渲染哪些 + alpha
-    struct RenderPlan {
-        std::string primaryClipId;
-        std::optional<std::string> secondaryClipId;  // 转场期间
-        float blendAlpha{1.0f};  // 0=primary, 1=secondary
-        TransitionKind kind{TransitionKind::Cut};
-    };
-
-    RenderPlan planAt(int timelineTick, const EditorState& editor);
-};
-```
-
-**算法**：
-
-```cpp
-RenderPlan TransitionEngine::planAt(int timelineTick, const EditorState& editor) {
-    RenderPlan plan;
-
-    // 1) 找所有 active clips（按 timelineTick）
-    std::vector<std::pair<int, Clip*>> active;
-    for (auto& t : editor.videoTracks) {
-        if (!t.visible || t.kind != TrackKind::Video) continue;
-        for (auto& c : t.clips) {
-            if (timelineTick >= c.trackTick && timelineTick < c.trackTick + (c.outTick - c.inTick)) {
-                active.push_back({timelineTick - c.trackTick, &c});
-            }
-        }
-    }
-    if (active.empty()) return plan;
-    if (active.size() == 1) {
-        plan.primaryClipId = active[0].second->id;
-        return plan;
-    }
-
-    // 2) 找转场
-    auto& a = *active[0].second;
-    auto& b = *active[1].second;
-    auto* trans = findTransitionBetween(a.id, b.id);
-    if (!trans) {
-        plan.primaryClipId = a.id;
-        return plan;
-    }
-
-    // 3) 在转场区间内混合
-    int transStart = b.trackTick - trans->durationTicks;  // 转场从 a 末尾前开始
-    int transEnd = b.trackTick;
-    if (timelineTick < transStart || timelineTick > transEnd) {
-        plan.primaryClipId = a.id;
-        return plan;
-    }
-    int tickInTrans = timelineTick - transStart;
-    plan.primaryClipId = a.id;
-    plan.secondaryClipId = b.id;
-    plan.kind = trans->kind;
-
-    switch (trans->kind) {
-        case TransitionKind::Cut:
-            plan.blendAlpha = timelineTick < transEnd ? 0 : 1;
-            break;
-        case TransitionKind::Fade:
-            // 仅 a 淡出 / b 不淡入（可配）
-            plan.blendAlpha = easingValue(trans->easing, float(tickInTrans) / trans->durationTicks);
-            break;
-        case TransitionKind::CrossDissolve:
-            float t = float(tickInTrans) / trans->durationTicks;
-            float e = easingValue(trans->easing, t);
-            plan.blendAlpha = e;  // 0=全 a, 1=全 b
-            break;
-    }
-    return plan;
-}
-```
-
-**渲染层应用**（详见 [05-render-pipeline.md](05-render-pipeline.md)）：`plan.secondaryClipId` 存在时，RenderJob **先渲 primary** 到 RTV-A，**再渲 secondary** 到 RTV-B，按 `blendAlpha` 把 B 混合到 A，写一帧到 pipe。
-
-> **MVP 简化**：v1 一次只渲一个 Clip（取主）；转场在 04v1.1 再加。文档先写完整架构。
-
-### 2.5 `BezierCurveEditor`（曲线编辑器）
+### 2.5 `BezierCurve` 与 `BezierCurveEditor`
 
 ```cpp
 class BezierCurveEditor {
 public:
-    // 加载曲线 + 当前采样值
     void setCurve(const BezierCurve& curve);
     void setSampleRange(float tMin, float tMax);  // 默认 [0,1]
 
@@ -272,7 +193,7 @@ public:
 };
 ```
 
-**UI 草图**：
+**UI 草图**（在 Details 面板内弹出）：
 
 ```
 +------------------------------------------+
@@ -289,60 +210,34 @@ public:
 +------------------------------------------+
 ```
 
-**绘制**（De Casteljau 采样 64 段画线）：
+> 完整绘制 / 采样算法与 [02 §2.4 CubicBezier](02-camera-motion.md) 一致；本文件不重复。
+
+### 2.6 `SelectionModel`（3 类别 + 段 + 关键帧）
 
 ```cpp
-void BezierCurveEditor::draw(ImDrawList* dl, Rect area) {
-    dl->AddRect(area.min, area.max, IM_COL32(100,100,100,255));
-    std::vector<ImVec2> pts;
-    for (int i = 0; i <= 64; ++i) {
-        float t = i / 64.0f;
-        float y = sampleAt(t);
-        pts.push_back({area.min.x + area.GetWidth() * t,
-                       area.max.y - area.GetHeight() * y});
-    }
-    for (size_t i = 1; i < pts.size(); ++i)
-        dl->AddLine(pts[i-1], pts[i], IM_COL32(255,200,0,255), 2.0f);
+enum class SelectionKind {
+    None,
+    Sequence,            // 选中"序列"本身（无段选）
+    SequenceSegment,     // 选中某段
+    WorldActor,          // 选中"世界Actor"本身
+    WorldActorSegment,   // 选中某段
+    Camera,              // 选中某台 Camera
+    SubActor,            // 选中某子 Actor
+    Keyframe,            // 关键帧
+    Marker,
+};
 
-    // 控制点
-    for (auto& p : mCurve.points) {
-        ImVec2 c{area.min.x + area.GetWidth() * p.t, area.max.y - area.GetHeight() * p.v};
-        dl->AddCircleFilled(c, 5.0f, IM_COL32(255,100,0,255));
-    }
-}
-```
-
-**采样**（Newton-Raphson 反函数）：
-
-```cpp
-float BezierCurveEditor::sampleAt(float t) const {
-    if (mCurve.points.size() < 2) return t;
-    // 1) 找到包含 t 的段
-    auto seg = locateSegment(mCurve.points, t);
-    if (!seg) return t;
-    // 2) 段内局部 u
-    auto& a = mCurve.points[seg->lo];
-    auto& b = mCurve.points[seg->hi];
-    float u = (t - a.t) / (b.t - a.t);
-    // 3) Newton-Raphson 求 x(u) = u_local → v
-    return bezierYFromX(u, a, b);
-}
-```
-
-### 2.6 `SelectionModel`（选中模型）
-
-```cpp
 struct Selection {
-    std::vector<std::string> clipIds;
-    std::vector<std::string> trackIds;
-    std::vector<std::string> keyframeIds;
-    std::vector<std::string> transitionIds;
-    int anchorTick{0};
+    SelectionKind kind{SelectionKind::None};
+    std::string   id;             // 上述对象的 id
+    std::string   secondaryId;    // keyframe / marker 等附加 id
+    int           anchorTick{0};
+    int           focusTrackKind{0};  // 0=sequence 1=worldActor 2=camera
 };
 
 class SelectionModel {
 public:
-    void select(const std::string& id, bool additive = false);
+    void select(const std::string& id, SelectionKind kind, bool additive = false);
     void clear();
     bool isSelected(const std::string& id) const;
     Selection snapshot() const;
@@ -356,39 +251,113 @@ public:
 - Shift+单击：范围选
 - 框选（Marquee）：拖拽框覆盖
 
-### 2.7 `EditingCommands`（Command 模式）
+### 2.7 命令模式（Undo/Redo）
 
 ```cpp
 struct IEditCommand {
     virtual ~IEditCommand() = default;
-    virtual void execute(EditorState& s) = 0;
-    virtual void undo(EditorState& s) = 0;
-    virtual std::string label() const = 0;  // for menu
+    virtual void execute(EditorStateExt& s) = 0;
+    virtual void undo(EditorStateExt& s) = 0;
+    virtual std::string label() const = 0;
 };
 
-class AddClipCommand : public IEditCommand {
-    std::string trackId;
-    Clip clip;
-public:
-    void execute(EditorState& s) override { /* addClip */ }
-    void undo(EditorState& s) override { /* removeClip */ }
-    std::string label() const override { return "Add Clip"; }
-};
-
-class SplitClipCommand : public IEditCommand {
-    std::string trackId, clipId;
+// 摄像机序列
+class SplitSequenceAtPlayhead : public IEditCommand {
     int atTick;
-    Clip right;  // 保存 split 出的 right clip
+    SequenceSegment newSeg;   // 保存 split 出的新段
 public:
-    void execute(EditorState& s) override { /* splitClip */ }
-    void undo(EditorState& s) override { /* remove right + restore left.outTick */ }
-    std::string label() const override { return "Split Clip at " + std::to_string(atTick); }
+    void execute(EditorStateExt& s) override;  // SequenceOps::splitAt
+    void undo(EditorStateExt& s) override;     // 删 newSeg.id
+    std::string label() const override { return "Split Sequence"; }
 };
 
-// ... AddTransitionCommand, TrimClipCommand, MoveClipCommand, ...
+class TrimSequenceSegment : public IEditCommand {
+    std::string segId;
+    int oldStart, oldEnd, newStart, newEnd;
+public:
+    void execute(EditorStateExt& s) override;
+    void undo(EditorStateExt& s) override;
+    std::string label() const override;
+};
+
+class BindSequenceToCamera : public IEditCommand {
+    std::string segId, oldCam, newCam;
+public:
+    void execute(EditorStateExt& s) override;
+    void undo(EditorStateExt& s) override;
+    std::string label() const override;
+};
+
+class SetSequenceSegmentSpeed : public IEditCommand { /* 同 Trim 模式 */ };
+class DeleteSequenceSegment : public IEditCommand { /* mergeAfterDelete undo 需保存 3 段快照 */ };
+
+// 世界Actor
+class SplitWorldActorAtPlayhead : public IEditCommand { /* 同上 */ };
+class TrimWorldActorSegment : public IEditCommand { /* 同上 */ };
+class SetWorldActorSegmentSpeed : public IEditCommand { /* 同上 */ };
+class RippleDeleteWorldActorSegment : public IEditCommand {
+    std::string segId;
+    std::vector<WorldActorSegment> movedSnapshot;  // undo 还原
+public:
+    void execute(EditorStateExt& s) override;
+    void undo(EditorStateExt& s) override;
+    std::string label() const override;
+};
+
+// 摄像机
+class AddFreeCamera : public IEditCommand {
+    CameraEntity cam;
+    int insertIdx;
+public:
+    void execute(EditorStateExt& s) override;
+    void undo(EditorStateExt& s) override;
+    std::string label() const override;
+};
+
+class CreateBindingCamera : public IEditCommand {
+    CameraEntity cam;
+    std::string subActorId;  // undo 还原 boundCameraId
+    std::string oldBound;
+public:
+    void execute(EditorStateExt& s) override {
+        // 1) s.cameras.push(cam)
+        // 2) s.worldActor.subActors[id].boundCameraId = cam.id
+    }
+    void undo(EditorStateExt& s) override {
+        // 1) s.cameras remove by cam.id
+        // 2) restore oldBound
+    }
+    std::string label() const override { return "Create Camera Binding"; }
+};
+
+class DeleteCamera : public IEditCommand {
+    CameraEntity cam;
+    std::vector<std::string> clearedSegIds;        // undo 还原
+    std::map<std::string, std::string> clearedSubActor;  // 同上
+    int insertIdx;
+public:
+    void execute(EditorStateExt& s) override {
+        // 1) Snapshot
+        // 2) cameras erase
+        // 3) CameraBindingOps::clearReferencesInSequence
+        // 4) CameraBindingOps::clearReferencesInSubActors
+    }
+    void undo(EditorStateExt& s) override;
+    std::string label() const override;
+};
+
+// 关键帧
+class AddKeyframe : public IEditCommand { /* ... */ };
+class MoveKeyframe : public IEditCommand { /* ... */ };
+class DeleteKeyframe : public IEditCommand { /* ... */ };
+class SetKeyframeEasing : public IEditCommand { /* ... */ };
+class SetKeyframeValue : public IEditCommand { /* ... */ };
+
+// 子Actor
+class SetSubActorDetails : public IEditCommand { /* ... */ };
 ```
 
-**CommandStack**（在 [01-editor-architecture.md](01-editor-architecture.md) 中详述）：
+**`CommandStack`**（[01 §2.13](01-editor-architecture.md) 中详述）：
 
 ```cpp
 class CommandStack {
@@ -409,23 +378,7 @@ private:
 - `Ctrl+Z` → `CommandStack::undo()`
 - `Ctrl+Shift+Z` / `Ctrl+Y` → `CommandStack::redo()`
 
-### 2.8 内部剪贴板
-
-```cpp
-class Clipboard {
-public:
-    void put(const std::vector<Clip>& clips, const std::vector<Transition>& transitions);
-    std::vector<Clip>       getClips() const;
-    std::vector<Transition> getTransitions() const;
-private:
-    std::vector<Clip>       mClips;
-    std::vector<Transition> mTransitions;
-};
-```
-
-**操作**：`Ctrl+X`（Cut）/ `Ctrl+C`（Copy）/ `Ctrl+V`（Paste）。粘贴时 tick = `playheadTick`。
-
-### 2.9 时间轴渲染（参考，详细在 [01-editor-architecture.md](01-editor-architecture.md)）
+### 2.8 时间轴渲染（参考，详细在 [08](08-sequencer-timeline-ui.md)）
 
 ```
 +------------------------------------------------------------------+
@@ -433,164 +386,213 @@ private:
 +------------------------------------------------------------------+
 |  0:00      0:30      1:00      1:30      2:00                    |
 |  |---------|---------|---------|---------|                        |
-|  V2:    [   Clip A   ][   Clip B   ][   Clip C   ]                |
-|  V1:        [Clip D   ]                                           |
-|  C1: ═══════════●══════●═══════════●═══════ (摄影机主轨)         |
-|  C0:        ══════●═══════════════●═════════  (摄影机副轨)        |
-|  M:                  ◆ Boss        ◆ End                         |
+|  S:   [== Segment A (Cam0) ==][= Seg B (Cam2) =][== Seg C (auto) ==]
+|  W:        [== WorldActor A ==][== WorldActor B ==]               |
+|  C0:  ════●══════●══════●══════●══════●═  Main                    |
+|  C1:       ════●══════●══════●══════       Player1 (bind)         |
 +------------------------------------------------------------------+
 ```
 
 **视觉**：
-- 视频轨：横向矩形，颜色按 `.playback` 源 hash 着色
-- 摄影机轨：横向细线 + 关键帧点 ◆
-- 标记轨：◆ + 名字标签
-- 拖拽：Clip 头/尾拖 → Trim；Clip 体拖 → Move
-- 分割线：playhead 垂直黄线
+- **摄像机序列**（S）：横向矩形，按"绑定 Camera"着色；未绑定 = 灰底斜线
+- **世界Actor**（W）：横向矩形，橙色（回放原色）
+- **摄像机**（Cn）：细线 + 关键帧点 ◆
+- **拖拽**：段头/尾 → Trim；段体 → Move（**段间必须接续，不允许重叠**）
+- **分割线**：playhead 垂直黄线
+- **子Actor 不画在画布**；在 Details 面板用树展示
 
-### 2.10 与摄影机的集成
+### 2.9 与 [02](02-camera-motion.md) CameraSystem 的集成
 
-`Clip.activeCameraTrackIdx` 决定该段用哪条摄影机轨；切换到 Track 边界时，`CameraSystem` 自动切到下一 Clip 的摄影机。
+**核心变化**：`Clip.activeCameraTrackIdx` 模式**完全移除**。新模式下：
+- `CameraSystem::sampleAt(camera, tick, session)` 直接接受 `CameraEntity`（取代旧 `trackIdx`）。
+- 序列段调用 `resolveCamera(seq.cameraId, e.cameras)` 拿到 `CameraEntity*`。
+- 导出 / 预览按 [09 §2.7-2.8](09-video-editing-workflow.md) 的伪代码。
 
 ```cpp
-CameraSample CameraSystem::sampleAt(int tick, const ReplaySession& session) const {
-    // 1) 找当前 active Clip
-    auto* clip = findActiveClip(tick);
-    int trackIdx = clip ? clip->activeCameraTrackIdx : mState.activeCameraTrackIdx;
-    // 2) 用对应摄影机轨采样
-    return sampleTrack(mState.tracks[trackIdx], tick, session);
+// 新：直接传 CameraEntity
+CameraSample CameraSystem::sampleAt(const CameraEntity& cam, int tick,
+                                    const ReplaySession& session) const {
+    // 1) 基础：按 cam.kind 采样
+    CameraSample s = dispatchByKind(cam, tick, session);
+    // 2) 绑定 + 阻尼
+    if (!cam.bindingEntityUuid.empty()) s = applyBinding(s, cam, tick, session);
+    // 3) Shake / Limiter（与 02 一致）
+    return s;
 }
 ```
+
+> 旧 `CameraSystem::sampleAt(tick, session)` 仍保留为"按 `activeCameraIndex` 选一台 Camera 采样"的快捷入口，用于"无序列选中 / 单 Camera 预览"。
 
 ## 三、执行（Execution）
 
 ### 3.1 任务拆分
 
-| 步骤 | 文件 | 验证 |
-|---|---|---|
-| 1 | `SelectionModel.{h,cpp}` | 编译 |
-| 2 | `Clipboard.{h,cpp}` | 编译 |
-| 3 | `TrackManager.addClip / removeClip / moveClip` | 单测：增删改 |
-| 4 | `TrackManager.trimClip / splitClip / rippleDelete` | 单测：5 个操作 |
-| 5 | `TransitionEngine.planAt` | 单测：Cut/Fade/CrossDissolve |
-| 6 | `BezierCurve` 采样 + 序列化（已在 [06-data-persistence.md](06-data-persistence.md)） | 单测：5 个采样点 |
-| 7 | `BezierCurveEditor` UI 草图 | 手动：手画曲线 |
-| 8 | `EditingCommands`（AddClip / Split / Trim / Move / AddTransition） | 单测：execute + undo 互逆 |
-| 9 | `CommandStack` | 单测：100 步 undo 不丢 |
-| 10 | 时间轴 UI 草图 | 手动：拖 Clip / 关键帧 |
-| 11 | 与 `CameraSystem` 集成 | 手动：切换 Clip 摄影机切 |
-| 12 | 与 `RenderJob` 集成 | 手动：导出包含转场 |
+| # | 文件 | 内容 | 验证 |
+|---|---|---|---|
+| 1 | `SequenceSegment.{h,cpp}` | 序列段模型 + 序列化 | 编译 |
+| 2 | `WorldActorSegment.{h,cpp}` | 世界Actor 段模型 + 序列化 | 编译 |
+| 3 | `CameraEntity.{h,cpp}` | 摄像机实体 | 编译 |
+| 4 | `SubActor.{h,cpp}` | 子Actor + 类别枚举 | 编译 |
+| 5 | `WorldActor.{h,cpp}` | 容器：解析自 .playback | 编译 |
+| 6 | `SequenceOps.{h,cpp}` | findSegmentAt / mergeAfterDelete / splitAt | 单测：覆盖 / 拆分 / 合并 |
+| 7 | `WorldActorOps.{h,cpp}` | splitAt / trimSegment / rippleDelete | 单测：ripple 前移 |
+| 8 | `CameraBindingOps.{h,cpp}` | createBinding / resolve / clearReferences | 单测：引用清空 |
+| 9 | `commands/SequenceCommands` | Split/Trim/Delete/Bind/SetSpeed | 单测：execute/undo 互逆 |
+| 10 | `commands/WorldActorCommands` | Split/Trim/SetSpeed/RippleDelete | 单测：execute/undo 互逆 |
+| 11 | `commands/CameraCommands` | AddFree/CreateBinding/Keyframe/SetKind/Unbind/Delete | 单测：execute/undo 互逆 |
+| 12 | `commands/SubActorCommands` | SetDetails | 单测：execute/undo 互逆 |
+| 13 | `BezierCurve.{h,cpp}` + `BezierCurveEditor.{h,cpp}` | 曲线 + UI | 手动：手画曲线 |
+| 14 | `SelectionModel.{h,cpp}` | 8 种 SelectionKind | 单测：替换/加选/范围选 |
+| 15 | 集成到 `TimelinePanel` | 渲染 3 一级轨道 + 段 + 关键帧 | 手动：UI 正确 |
+| 16 | 集成到 `DetailsPanel` | 8 个上下文 | 手动：每个上下文 |
+| 17 | 集成到 `CommandStack` | push/undo/redo | 单测：100 步 |
+| 18 | 集成到 `RenderJob` / `RealtimePreview` | 沿序列导出 / 预览 | 手动：导出样片 |
+| 19 | 移除旧 `TrackManager` / `TransitionEngine` | 旧 API 下线 | 编译 |
 
 ### 3.2 关键算法
 
-**Clip 排序**（按 trackTick 升序）：
+**段 sort by tick**（insert 后必做）：
 
 ```cpp
-void sortClipsByTick(Track& track) {
-    std::sort(track.clips.begin(), track.clips.end(),
-              [](const Clip& a, const Clip& b){ return a.trackTick < b.trackTick; });
+void sortSegmentsByTick(std::vector<SequenceSegment>& segs) {
+    std::sort(segs.begin(), segs.end(),
+              [](const SequenceSegment& a, const SequenceSegment& b){
+                  return a.startTick < b.startTick;
+              });
 }
 ```
 
-**转场应用**（渲染层伪代码）：
+**段 split（不变量保持）**：
 
 ```cpp
-void RenderJob::renderFrameWithTransition(int timelineTick) {
-    auto plan = TransitionEngine::planAt(timelineTick, mEditor);
+std::string SequenceOps::splitAt(std::vector<SequenceSegment>& segs, int atTick) {
+    auto* seg = findSegmentAt(segs, atTick);
+    if (!seg) return {};
+    if (atTick <= seg->startTick || atTick >= seg->endTick) return {};
 
-    // 1) 渲 primary 到 RTV
-    mFrameSource->beginFrame();
-    mReplay->seek(plan.primaryClip().inTick + (timelineTick - plan.primaryClip().trackTick));
-    mReplay->tick();
-    CameraSystem::sampleAndApply(plan.primaryClip().activeCameraTrackIdx, ...);
-    mFrameSource->waitForFrame();
-    mFrameSource->captureToStaging(rgbA);
+    SequenceSegment right = *seg;
+    right.id = genUuid();
+    right.startTick   = atTick;
+    right.sourceTick += (atTick - seg->startTick);
 
-    if (!plan.secondaryClipId) {
-        mEncoder->writeVideoFrame(rgbA, ...);
-        return;
+    seg->endTick = atTick;
+
+    segs.push_back(right);
+    sortSegmentsByTick(segs);
+    return right.id;
+}
+```
+
+**导出伪代码**（[09 §2.7](09-video-editing-workflow.md) 详）：
+
+```cpp
+void RenderJob::runExport(EditorStateExt& e) {
+    for (int frame = 0; frame < totalFrames; ++frame) {
+        int timelineTick = frame * ticksPerFrame;
+
+        const SequenceSegment* seg = SequenceOps::findSegmentAt(e.sequence, timelineTick);
+        if (!seg) continue;
+
+        const CameraEntity* cam = CameraBindingOps::resolveCamera(e.cameras, seg->cameraId);
+        if (!cam) continue;
+
+        int localTick = timelineTick - seg->startTick;
+        int sourceTick = seg->sourceTick + (int)(localTick * seg->speed);
+
+        replaySession.requestSeek(sourceTick);
+        replaySession.tick();
+
+        CameraSample s = CameraSystem::getInstance().sampleAt(*cam, sourceTick, replaySession);
+        CameraSystem::applyToMCBE(s);
+        captureFrame();
     }
-
-    // 2) 渲 secondary 到 RTV-B
-    mFrameSourceB->beginFrame();
-    mReplay->seek(plan.secondaryClip().inTick + ...);
-    mReplay->tick();
-    CameraSystem::sampleAndApply(plan.secondaryClip().activeCameraTrackIdx, ...);
-    mFrameSourceB->waitForFrame();
-    mFrameSourceB->captureToStaging(rgbB);
-
-    // 3) alpha 混合 rgbA ← rgbB * alpha
-    blend(rgbA, rgbB, plan.blendAlpha);
-    mEncoder->writeVideoFrame(rgbA, ...);
 }
 ```
-
-> **MVP**：v1 不实现双 RTV；转场 = 抽帧混合，落到单 RTV。完整双 RTV 在 04v1.1。
 
 ### 3.3 关键不变量
 
-1. **Clip 不重叠**（除转场区）：UI 自动避免重叠，否则报 warning
-2. **Track 排序稳定**：按 index，UI 上手动 reorder
-3. **transition 必须连接两个 Clip**：`fromClipId.outTick + durationTicks == toClipId.trackTick`
-4. **Command execute / undo 互逆**：undo 状态 == 执行前状态（property test）
-5. **BezierCurve 单调 x**：x 严格升序，避免多解
-6. **Selection 唯一**：UI 上只显示一个"主选中"（其余浅色）
+1. **段首尾相接**：`validateCoverage(segs, totalTicks) == true` 永真。
+2. **段不重叠**：split 后两段共端点（`prev.endTick == next.startTick`）。
+3. **Ripple 不留洞**：被删段 + 后续段前移 = 仍覆盖 `[0, totalTicks]`。
+4. **Camera 引用一致性**：`segment.cameraId != ""` 时，cameras 中存在该 id；否则在导出兜底 `cameras[0]`。
+5. **绑定唯一**：单个 SubActor 同时最多被 1 台 Camera 绑定。
+6. **Command execute/undo 互逆**：undo 后状态 == 执行前状态（property test）。
+7. **Selection 唯一**：UI 上只显示一个"主选中"（其余浅色）。
+8. **删除 Camera 清空引用**：所有 sequence 段 + 所有 subActor 的 boundCameraId 中含该 id 的项置空（不抛错）。
 
 ### 3.4 测试用例
 
 | ID | 用例 | 期望 |
 |---|---|---|
-| VE-T1 | addClip + sortClipsByTick | tick 升序 |
-| VE-T2 | splitClip(中点) | 两个 clip，tick 接续 |
-| VE-T3 | trimClip(缩短) | inTick 增加，len 减 |
-| VE-T4 | rippleDelete | 后续 clip trackTick 前移 |
-| VE-T5 | addTransition(Cut, dur=0) | 立即切 |
-| VE-T6 | addTransition(Fade, dur=20) | 20 tick 渐变 |
-| VE-T7 | planAt 在转场中点 | blendAlpha = 0.5 |
-| VE-T8 | planAt 转场前 | primary |
-| VE-T9 | undo AddClipCommand | clip 消失 |
-| VE-T10 | 100 步 undo + redo | 栈不丢 |
-| VE-T11 | BezierCurve 端点 | sample(0)=0, sample(1)=1 |
-| VE-T12 | Clip 拖出 Track 边界 | 警告 / clamp |
+| VE-T1 | 打开 .playback → 序列默认 1 段 [0, totalTicks] | cameras 空，段未绑 |
+| VE-T2 | split sequence at tick=1000 | 变 2 段 [0,1000) + [1000,totalTicks) |
+| VE-T3 | trim worldActor 段 in +20 | startTick += 20 |
+| VE-T4 | rippleDelete worldActor 中段 | 后续段前移 = 仍覆盖 totalTicks |
+| VE-T5 | 子Actor 树展开 Players | Details 面板出现按名字排序的玩家列表 |
+| VE-T6 | 玩家右键"创建摄像机绑定" | cameras 多 1 台；subActor.boundCameraId 填 |
+| VE-T7 | 序列段绑到新建 Camera | segment.cameraId 更新；导出用该 Camera |
+| VE-T8 | 删除 Camera | cameras 少 1；引用它的段变 cameraId=""；引用它的 subActor 清空 boundCameraId |
+| VE-T9 | 关键帧 CRUD | 关键帧点增删 + UI 重绘 |
+| VE-T10 | undo CreateBindingCamera | cameras 恢复；subActor.boundCameraId 清空 |
+| VE-T11 | 导出 = 沿序列渲染 | 导出视频按时序切镜头 |
+| VE-T12 | 100 步 undo + redo | 栈不丢 |
+| VE-T13 | 旧 .playback（无 sequence/worldActor/cameras 字段）加载 | 重建：序列 1 段、世界Actor 1 段、cameras 空 |
+| VE-T14 | DeleteSequenceSegment（中段） | 左右两段合并 |
+| VE-T15 | SetKeyframeEasing | 关键帧 easing 字段更新；不破坏其他帧 |
 
 ### 3.5 风险与回退
 
 | 风险 | 缓解 |
 |---|---|
-| 双 RTV 性能 | 首期单 RTV + 抽帧 |
-| 撤销栈内存膨胀 | maxUndoSteps 截断 |
-| 转场与 Trim 冲突 | UI 提示"转场将被删除" |
-| Bezier 手画 UX 难 | 拖拽 + 关键点直接选；可改回纯 easing |
+| 子Actor 数量大（>500）树渲染卡 | 默认折叠；首次展开只渲染前 100 |
+| 绑定 Camera 解绑后旧段无 Camera | 兜底 cameras[0] + UI 警告 |
+| 旧 videoTracks 字段被移除，存档不可读 | JSON 缺字段重建；新存档不写旧字段 |
+| 关键帧绑定 Camera id 在重命名后失效 | cameraId 用 uuid，不依赖 name |
+| 沿序列导出时 WorldActor 段与序列段不对齐 | 导出前校验：每个 sequence 段必须有对应 worldActor 段覆盖其 [startTick,endTick)，否则报 ErrorDialog |
+| Ripple 后段重叠 | validateCoverage 在 execute 末尾必调；不通过则回滚 |
+| 撤销栈内存膨胀 | maxUndoSteps 100 截断 |
+| 旧 Clip.activeCameraTrackIdx 残留引用 | 编译期删除；旧文档标注 DEPRECATED |
 
 ## 四、模块关系
 
 ### 被谁调用（上游）
 
-- **`refactor/editor-architecture/Panels/TimelinePanel`**：调所有 Clip / Track / Transition 操作
-- **`refactor/editor-architecture/Panels/CurveEditorPanel`**：调 BezierCurveEditor
-- **`refactor/editor-architecture/CommandStack`**：包装所有 EditingCommands
-- **`refactor/render-pipeline/RenderJob`**：调 `TransitionEngine::planAt` 拿转场计划
+- **`refactor/editor/panels/TimelinePanel`**：渲染 3 一级轨道 + 段 + 关键帧
+- **`refactor/editor/panels/DetailsPanel`**：上下文敏感字段编辑
+- **`refactor/editor/panels/SubActorTree`**（新）：子Actor 树
+- **`refactor/editor/EditorBridge`**：同步 sequence / worldActor / cameras
+- **`refactor/render-pipeline/RealtimePreview`**：序列驱动预览
+- **`refactor/render-pipeline/RenderJob`**：沿序列导出
+- **`refactor/editor/CommandStack`**：包装所有命令
 
 ### 调用谁（下游）
 
-- **旧 [EditorContext](../editor/context/EditorContext.md)**：读写 `EditorState`
-- **[02-camera-motion.md](02-camera-motion.md)**：Clip.activeCameraTrackIdx 切摄影机
-- **[06-data-persistence.md](06-data-persistence.md)**：数据模型
-- **旧 [ReplaySession](../functions/replay.md)**：seek 到 Clip.inTick + offset
+- **[01](01-editor-architecture.md) EditorCore**：EditorStateExt / CommandStack
+- **[02](02-camera-motion.md) CameraSystem**：sampleAt + applyToMCBE（不再用 `activeCameraTrackIdx`）
+- **[05](05-render-pipeline.md) RenderJob / RealtimePreview**：读 sequence 与 worldActor
+- **[06](06-data-persistence.md) PlaybackMeta.editor**：序列化 sequence / worldActor / cameras / subActors
+- **旧 [EditorContext](../editor/context/EditorContext.md)**：通过 `EditorBridge` 通信
 
 ### 共享数据
 
-- `EditorContext::mEditorExt` —— UI ↔ 数据
-- `TrackManager::mState`（私有，写者唯一）
+- `EditorStateExt.sequence`：UI ↔ 渲染
+- `EditorStateExt.worldActor`：UI ↔ 渲染
+- `EditorStateExt.cameras`：UI ↔ 渲染
+- `EditorStateExt.activeCameraIndex`：gizmo 高亮
+- `SelectionModel`：UI 选中
 
 ### 事件订阅 / 发送
 
-- 无
+- `CommandStack.onPushed/onUndo/onRedo` → StatusPanel
+- `SequenceOps.onSegmentsChanged` → TimelinePanel
+- `CameraBindingOps.onBindingCreated` → ViewportPanel（重置 gizmo）
 
 ## 五、阅读顺序
 
-1. 本文件
-2. [06-data-persistence.md](06-data-persistence.md) —— 数据模型
-3. [02-camera-motion.md](02-camera-motion.md) —— 摄影机
-4. [05-render-pipeline.md](05-render-pipeline.md) —— 渲染消费
-5. [01-editor-architecture.md](01-editor-architecture.md) —— UI
+1. 本文件（操作层）
+2. [09](09-video-editing-workflow.md) — 工作流总览
+3. [01](01-editor-architecture.md) — 编辑器骨架
+4. [08](08-sequencer-timeline-ui.md) — Sequencer 四区 UI
+5. [02](02-camera-motion.md) — CameraSystem 算法
+6. [05](05-render-pipeline.md) — 渲染消费
+7. [06](06-data-persistence.md) — 数据模型

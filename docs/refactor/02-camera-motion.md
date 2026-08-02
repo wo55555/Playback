@@ -1,8 +1,9 @@
 # 02 · 摄像机与运动控制
 
 > 入口：`src/playback/refactor/camera-motion/`
-> 角色：在旧 [CameraTrack](../editor/camera-track.md)（关键帧 + easing）基础上，扩展为 **多轨 / 3D 样条 / 8 种运动原语 / 摄影机预设 / 绑定+阻尼 / Shake / 限位器 / 时间重映射 / 标记** 的电影级摄影机系统。
-> 数据模型见 [06-data-persistence.md](06-data-persistence.md)；本文件描述**算法与运行时行为**。
+> 角色：在旧 [CameraTrack](../editor/camera-track.md)（关键帧 + easing）基础上，扩展为 **4 种 kind / 3D 样条 / 8 种运动原语 / 摄影机预设 / 绑定+阻尼 / Shake / 限位器 / 时间重映射** 的电影级摄影机系统。
+> **视频编辑工作流**遵循 [09-video-editing-workflow.md](09-video-editing-workflow.md) 的 3 条一级轨道模型：本文只描述**一台 `CameraEntity` 在某一 tick 的采样算法**；多台 Camera 通过 `EditorStateExt.cameras` 数组承载，**与具体轨道解耦**。
+> 数据模型见 [06 §2.3 CameraEntity](06-data-persistence.md) 与 [09 §2.2](09-video-editing-workflow.md)；本文件描述**算法与运行时行为**。
 
 ## 一、需求（Requirements）
 
@@ -10,8 +11,8 @@
 
 | ID | 需求 | 优先级 |
 |---|---|---|
-| CM-1 | 多条摄影机轨道平行存在，导出 / 预览可任选其一作为主轨 | P0 |
-| CM-2 | 4 种摄影机类型：**Keyframe**（旧）、**Path**（3D 样条）、**Rig**（运动原语）、**Preset**（预设） | P0 |
+| CM-1 | 多个 `CameraEntity` 平行存在（`EditorStateExt.cameras` 数组，0..16 台），由 [09](09-video-editing-workflow.md) 摄像机序列段引用 | P0 |
+| CM-2 | 4 种摄影机类型：**Keyframe** / **Path**（3D 样条） / **Rig**（运动原语） / **Preset**（预设） | P0 |
 | CM-3 | 3D 样条路径支持 Linear / Catmull-Rom / CubicBezier，可拖拽控制点 | P0 |
 | CM-4 | 8 种运动原语：Dolly / Truck / Pedestal / Pan / Tilt / Roll / Zoom / Follow | P0 |
 | CM-5 | 7 种摄影机预设：FirstPerson / ThirdPerson / Free / FollowEntity / Orbit / Telephoto / Drone | P0 |
@@ -25,10 +26,10 @@
 
 ### 1.2 非功能性需求
 
-- **采样延迟**：单轨道 tick 采样 < 0.5ms（含 8 段 Rig + 1 个 Shake + 1 个 Limiter）
+- **采样延迟**：单台 `CameraEntity` tick 采样 < 0.5ms（含 8 段 Rig + 1 个 Shake + 1 个 Limiter）
 - **抖动开销**：Perlin 噪声调用 < 0.1ms / tick（用 5-tick 缓存）
-- **关键帧数**：单轨道支持 ≤ 1024 关键帧（locateSegment O(log n)）
-- **内存**：单 CameraTrackExt 完整字段 ≤ 8KB
+- **关键帧数**：单台 Camera 支持 ≤ 1024 关键帧（locateSegment O(log n)）
+- **内存**：单 `CameraEntity` 完整字段 ≤ 8KB
 - **线程安全**：`sampleAt()` 是 `const`，多线程只读安全
 
 ### 1.3 与现有约束对齐
@@ -44,15 +45,15 @@
 
 ```
 refactor/camera-motion/
-├── CameraSystem.h / .cpp             ← 顶层协调器
-├── CameraTrackExt.{h,cpp}            ← 多轨 + 4 种 kind 封装
+├── CameraSystem.h / .cpp             ← 顶层协调器（持有 cameras 列表快照）
+├── CameraEntity.{h,cpp}              ← 一台摄影机（取代旧 CameraTrackExt 在采样层的角色）
 ├── CameraPath.{h,cpp}                ← 3D 样条
 ├── CameraRig.{h,cpp}                 ← 运动原语
 ├── CameraPreset.{h,cpp}              ← 预设
 ├── CameraShake.{h,cpp}               ← 抖动
 ├── CameraLimiter.{h,cpp}             ← 限位
 ├── CameraBinder.{h,cpp}              ← 实体绑定 + 阻尼
-├── CameraSampler.h                   ← tick → CameraSample（聚合所有效果）
+├── CameraSampler.h                   ← CameraEntity + tick → CameraSample（聚合所有效果）
 ├── SplineMath.h / .cpp               ← 通用样条数学
 └── PerlinNoise.h / .cpp              ← Perlin/Simplex（stb_perlin 包装）
 ```
@@ -64,72 +65,67 @@ class CameraSystem {
 public:
     static CameraSystem& getInstance();
 
-    // 配置（由 EditorContext 喂入）
-    void setEditorState(const EditorState& state);
-    const EditorState& snapshot() const;
+    // 配置（由 EditorContext 喂入；cameras 数组 = EditorStateExt.cameras）
+    void setEditorState(const EditorStateExt& state);
+    const EditorStateExt& snapshot() const;
 
-    // 主入口：每 tick 调一次
-    CameraSample sampleAt(int tick, const ReplaySession& session) const;
+    // 主入口：每 tick 调一次；参数 = 序列段绑定的 CameraEntity 引用
+    CameraSample sampleAt(const CameraEntity& cam, int tick, const ReplaySession& session) const;
 
     // 摄影机注入 MCBE（每帧调一次；只对 EditorRenderMode 生效）
     void applyToMCBE(const CameraSample& s) const;
 
 private:
     mutable std::mutex    mMtx;
-    EditorState           mState;
-    mutable LRUCache<int, CameraSample> mCache{1024};  // tick → sample
+    EditorStateExt        mState;
+    mutable LRUCache<int, CameraSample> mCache{1024};  // tick → sample（按 cam.id 分桶）
 };
 ```
 
-### 2.3 `CameraSampler`（tick → CameraSample 聚合）
+### 2.3 `CameraSampler`（CameraEntity + tick → CameraSample 聚合）
 
 ```cpp
 struct CameraSample {
     Vec3       position{0, 80, 0};
     Vec2       rotation{0, 0};
     float      fov{90.0f};
-    std::string source;  // "Main/CameraRig/Dolly" 等（用于调试）
+    std::string source;  // cam.name / "CameraRig/Dolly" 等（用于调试）
     bool       valid{true};
 };
 
 CameraSample CameraSampler::sampleAt(
-    const EditorState& editor,
+    const CameraEntity& cam,
     int tick,
     const ReplaySession& session   // 拿玩家位置 / 实体位置
 ) {
-    if (editor.tracks.empty()) return {};
-
-    const auto& track = editor.tracks[editor.activeCameraTrackIdx];
-    if (!track.visible) return {};
-
-    // 1) 基础：按 kind 采样
+    // 1) 基础：按 cam.kind 采样（不再用 activeCameraTrackIdx）
     CameraSample s = {};
-    switch (track.kind) {
-        case CameraKind::Keyframe: s = sampleKeyframes(track.keys, tick); break;
-        case CameraKind::Path:     s = samplePath(*track.path, tick); break;
-        case CameraKind::Rig:      s = sampleRig(*track.rig, track.preset, tick); break;
-        case CameraKind::Preset:   s = samplePreset(*track.preset, tick, session); break;
+    switch (cam.kind) {
+        case CameraKind::Keyframe: s = sampleKeyframes(cam.keys, tick); break;
+        case CameraKind::Path:     s = samplePath(*cam.path, tick); break;
+        case CameraKind::Rig:      s = sampleRig(*cam.rig, cam.preset, tick); break;
+        case CameraKind::Preset:   s = samplePreset(*cam.preset, tick, session); break;
     }
 
     // 2) 实体绑定 + 阻尼（覆写 position / rotation）
-    if (!track.bindingEntityUuid.empty()) {
-        s = applyBinding(s, track, tick, session);
+    if (!cam.bindingEntityUuid.empty()) {
+        s = applyBinding(s, cam, tick, session);
     }
 
     // 3) Shake 叠加
-    for (const auto& sh : track.shakes) {
-        if (tick >= sh.startTick && tick <= sh.endTick) {
-            s.position += shakeOffsetAt(sh, tick, 0);
-            s.rotation += shakeRotationAt(sh, tick, 1);
+    if (cam.shake) {
+        if (tick >= cam.shake->startTick && tick <= cam.shake->endTick) {
+            s.position += shakeOffsetAt(*cam.shake, tick, 0);
+            s.rotation += shakeRotationAt(*cam.shake, tick, 1);
         }
     }
 
     // 4) Limiter clamp
-    if (track.limiter) {
-        s.position = clampByLimiter(s.position, *track.limiter, session);
+    if (cam.limiter) {
+        s.position = clampByLimiter(s.position, *cam.limiter, session);
     }
 
-    s.source = track.name;
+    s.source = cam.name;
     return s;
 }
 ```
@@ -297,7 +293,7 @@ CameraSample samplePreset(const CameraPreset& p, int tick, const ReplaySession& 
 ### 2.8 实体绑定 + 阻尼
 
 ```cpp
-CameraSample applyBinding(const CameraSample& base, const CameraTrackExt& track,
+CameraSample applyBinding(const CameraSample& base, const CameraEntity& cam,
                            int tick, const ReplaySession& session) {
     Vec3 targetPos = base.position;
     Vec2 targetRot = base.rotation;
@@ -305,13 +301,13 @@ CameraSample applyBinding(const CameraSample& base, const CameraTrackExt& track,
     // 1) 拿绑定目标位置
     Vec3 entityPos = session.getPlayerPosition();
     Vec2 entityRot = session.getPlayerRotation();
-    if (!track.bindingEntityUuid.empty()) {
-        auto* e = session.findEntityByUuid(track.bindingEntityUuid);
+    if (!cam.bindingEntityUuid.empty()) {
+        auto* e = session.findEntityByUuid(cam.bindingEntityUuid);
         if (e) { entityPos = e->getPosition(); entityRot = e->getRotation(); }
     }
 
     // 2) 按 mode 混合
-    switch (track.bindingMode) {
+    switch (cam.bindingMode) {
         case 1: targetPos = entityPos + base.position; break;  // 位置跟随
         case 2: targetRot = entityRot + base.rotation; break;  // 角度跟随
         case 3: targetPos = entityPos + base.position;
@@ -320,9 +316,9 @@ CameraSample applyBinding(const CameraSample& base, const CameraTrackExt& track,
     }
 
     // 3) 弹簧阻尼（保持上一帧 + 平滑过渡）
-    auto& prev = mPrevFrame[track.name];  // 缓存上一帧
+    auto& prev = mPrevFrame[cam.id];  // 缓存上一帧（按 cameraId 分桶）
     if (prev.valid) {
-        float k = 1.0f - std::clamp(track.bindingDamping, 0.0f, 1.0f);
+        float k = 1.0f - std::clamp(cam.bindingDamping, 0.0f, 1.0f);
         targetPos = prev.position + (targetPos - prev.position) * k;
         targetRot = lerpAngle(prev.rotation, targetRot, k);
     }
@@ -431,7 +427,8 @@ void CameraSystem::applyToMCBE(const CameraSample& s) const {
 
 gizmo 渲染用 [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) 或自写；拖拽时实时改 `CameraKeyframe` / `SplineControlPoint`。
 
-> **属于 UI 层**，详见 [01-editor-architecture.md](01-editor-architecture.md) 后续设计。
+> **属于 UI 层**，详见 [01-editor-architecture.md](01-editor-architecture.md) `ViewportPanel` 设计。
+> **激活的 Camera（`cam.active == true`）才会显示 gizmo**；多 Camera 切换通过 Details 面板或在 Timeline 选中 Camera 行后激活。
 
 ## 三、执行（Execution）
 
@@ -448,10 +445,10 @@ gizmo 渲染用 [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) 或自�
 | 7 | `CameraLimiter.{h,cpp}` + 序列化 | 单测：3 种 shape clamp |
 | 8 | `CameraBinder.{h,cpp}` 阻尼 | 单测：连续帧平滑 |
 | 9 | `CameraSampler.h` 聚合 | 单测：tick=mid 输出 |
-| 10 | `CameraTrackExt` 封装 | 编译 |
-| 11 | `CameraSystem` 单例 + 缓存 | 单测：5-tick 缓存命中 |
+| 10 | `CameraEntity` 封装（4 种 kind + 绑定 + Shake + Limiter） | 编译 |
+| 11 | `CameraSystem` 单例 + 缓存（按 cam.id 分桶） | 单测：5-tick 缓存命中 |
 | 12 | MCBE `applyToMCBE` | 手动：隔离世界内切换 |
-| 13 | 集成 `RenderJob` 采样 | 手动：导出摄影机位置正确 |
+| 13 | 集成 `RenderJob` 沿序列采样 | 手动：导出摄影机位置正确 |
 
 ### 3.2 关键算法
 
@@ -520,38 +517,41 @@ Vec2 lerpAngle(Vec2 a, Vec2 b, float t) {
 | 绑定阻尼初始帧抖动 | 第一帧 prev = invalid，target = base，无插值 |
 | MCBE 字段偏移变化 | tooth.json 锁基线 + 启动符号校验 |
 | Orbit 数学溢出 | tick wrap 每 360° 一次 |
-| 多摄影机轨导出时切换 | RenderJob 选 activeCameraTrackIdx，其它轨仍采样（不渲染） |
+| 多 Camera 沿序列导出 | RenderJob 按序列段切换 `CameraEntity`，**不再有 activeCameraTrackIdx**（见 [09 §2.7](09-video-editing-workflow.md)） |
 
 ## 四、模块关系
 
 ### 被谁调用（上游）
 
-- **`refactor/render-pipeline/RenderJob`**：每帧 `sampleAt` 拿当前摄影机
-- **`refactor/render-pipeline/RealtimePreview`**：实时预览每帧采样
-- **`refactor/editor-architecture/Panels/CameraTrackPanel`**：编辑摄影机轨道
-- **`refactor/editor-architecture/Panels/ViewportPanel`**：显示 gizmo + 拖拽编辑
+- **`refactor/render-pipeline/RenderJob`**：每帧 `sampleAt(camEntity, tick)` 拿当前摄影机
+- **`refactor/render-pipeline/RealtimePreview`**：实时预览每帧采样（按 [09 §2.8](09-video-editing-workflow.md) 序列驱动）
+- **`refactor/editor/panels/TimelinePanel`**：编辑关键帧 / 路径点 / Rig 段
+- **`refactor/editor/panels/DetailsPanel`**：编辑 CameraEntity 字段（kind / binding / 关键帧列表）
+- **`refactor/editor/panels/ViewportPanel`**：显示 gizmo + 拖拽编辑
 
 ### 调用谁（下游）
 
-- **旧 [EditorContext](../editor/context/EditorContext.md)**：读 `EditorState` 快照
+- **旧 [EditorContext](../editor/context/EditorContext.md)**：读 `EditorStateExt` 快照
 - **旧 [ReplaySession](../functions/replay.md)**：拿玩家位置 / 实体位置
 - **MCBE `CameraManager`**：注入摄影机
 - **stb_perlin.h**（新增）：噪声
-- **[06-data-persistence.md](06-data-persistence.md)**：数据模型
+- **[06-data-persistence.md](06-data-persistence.md)**：数据模型（`CameraEntity` / `CameraPath` / ...）
+- **[09-video-editing-workflow.md](09-video-editing-workflow.md)**：消费方 = 序列段绑定的 Camera
 
 ### 共享数据
 
-- `CameraSystem::mState` —— 摄影机状态
-- `EditorContext::mCameraExt` —— UI ↔ 数据
-- `mPrevFrame`（私有）—— 阻尼上一帧
+- `CameraSystem::mState.cameras` —— `EditorStateExt.cameras` 数组
+- `EditorContext::mEditorExt` —— UI ↔ 数据
+- `mPrevFrame`（私有）—— 按 `cam.id` 分桶的阻尼上一帧
 
 ### 事件订阅 / 发送
 
-- 无
+- `CameraSystem.onCamerasChanged` ← EditorBridge（cameras 增删时清缓存 + 清 `mPrevFrame`）
 
 ## 五、阅读顺序
 
 1. 本文件
-2. [06-data-persistence.md](06-data-persistence.md) —— 数据模型
-3. [05-render-pipeline.md](05-render-pipeline.md) —— 渲染消费
-4. [01-editor-architecture.md](01-editor-architecture.md) —— UI 编辑入口
+2. [09-video-editing-workflow.md](09-video-editing-workflow.md) —— 工作流总览（必读）
+3. [06-data-persistence.md](06-data-persistence.md) —— 数据模型
+4. [05-render-pipeline.md](05-render-pipeline.md) —— 渲染消费
+5. [01-editor-architecture.md](01-editor-architecture.md) —— UI 编辑入口

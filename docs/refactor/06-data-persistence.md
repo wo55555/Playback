@@ -2,6 +2,9 @@
 
 > 入口：`src/playback/refactor/data/`
 > 角色：定义**所有新增**的数据结构与持久化格式。包含 `.playback` 的 `editor` 节点、布局 / 工作区 / 快捷键 / 录制预设 / 编辑器偏好。
+> **视频编辑工作流**遵循 [09-video-editing-workflow.md](09-video-editing-workflow.md) 的 3 条一级轨道模型：
+> - **数据模型已切换为**：`SequenceSegment` + `WorldActorSegment` + `CameraEntity` + `SubActor` + `WorldActor`（取代旧 `Track / Clip / TrackKind / Transition / CameraTrackExt`）。
+> - 旧 `TrackKind::Video / Camera / Marker` 与 `Clip / Track / Transition` **整体下线**（参见 [04 §VE-9](04-video-editing.md)）。
 > 与旧文档的关系：摄影机轨道基础（关键帧 / easing）见 [editor/camera-track.md](../editor/camera-track.md)；本文件**只描述新增**。
 
 ## 一、需求（Requirements）
@@ -10,7 +13,7 @@
 
 | ID | 需求 | 优先级 |
 |---|---|---|
-| DP-1 | `.playback` ZIP 内 `metadata.json` 增 `editor` 节点（含全部编辑状态） | P0 |
+| DP-1 | `.playback` ZIP 内 `metadata.json` 增 `editor` 节点（含 `sequence` / `worldActor` / `cameras` 三大条目） | P0 |
 | DP-2 | 编辑器布局存 `data/editor/layouts/<name>.json`（用户可命名 / 导入导出） | P0 |
 | DP-3 | 工作区存 `data/editor/workspaces/<name>.json`（Edit / Export 内置 + 用户） | P0 |
 | DP-4 | 快捷键存 `data/editor/keymap.json`（可绑定 / 可序列化） | P0 |
@@ -19,6 +22,7 @@
 | DP-7 | 所有 JSON 格式带 `version` 字段；缺字段时回退默认 | P0 |
 | DP-8 | 序列化 / 反序列化**对称**：round-trip 字段值不变 | P0 |
 | DP-9 | nlohmann::json 序列化（与现有项目一致） | P0 |
+| DP-10 | 旧 `.playback`（无 `editor` 节点或使用旧 `tracks` / `videoTracks` / `cameraTracks` 字段）加载时按新模型**重建** | P0 |
 
 ### 1.2 非功能性需求
 
@@ -39,24 +43,26 @@
 
 ```
 refactor/data/
-├── CameraPath.h                ← 3D 样条路径
-├── CameraRig.h                 ← 摄影机运动原语状态
-├── CameraPreset.h              ← 摄影机预设定义
-├── CameraShake.h               ← 摄影机抖动（噪声）
-├── CameraLimiter.h             ← 限位器（AABB）
-├── TimeRemap.h                 ← 时间重映射（速度曲线）
-├── Marker.h                    ← 章节标记
-├── Clip.h                      ← 视频剪辑
-├── Track.h                     ← 时间轴轨道
-├── Transition.h                ← 3 个基础转场
-├── BezierCurve.h               ← 通用贝塞尔曲线
-├── EditorLayout.h              ← 编辑器布局
-├── EditorWorkspace.h           ← 工作区
-├── KeyBinding.h                ← 快捷键绑定
-├── RecordingProfile.h          ← 录制配置预设
-├── EditorPreferences.h         ← 编辑器偏好
-├── JsonCodec.h / .cpp          ← 通用 JSON 编 / 解码（模板特化）
-└── Migration.h / .cpp          ← 版本迁移（v1 → v2 ...）
+├── SequenceSegment.h              ← 摄像机序列段（[09 §2.2](09-video-editing-workflow.md)）
+├── WorldActorSegment.h            ← 世界Actor 段（[09 §2.2](09-video-editing-workflow.md)）
+├── CameraEntity.h                 ← 摄影机（4 种 kind；[09 §2.2](09-video-editing-workflow.md)）
+├── SubActor.h                     ← 子Actor（4 类别 + agentDetails）
+├── WorldActor.h                   ← 容器：解析自 .playback
+├── CameraPath.h                   ← 3D 样条路径
+├── CameraRig.h                    ← 摄影机运动原语状态
+├── CameraPreset.h                 ← 摄影机预设定义
+├── CameraShake.h                  ← 摄影机抖动（噪声）
+├── CameraLimiter.h                ← 限位器（AABB）
+├── TimeRemap.h                    ← 时间重映射（速度曲线，序列段内 speed 的低阶替代）
+├── Marker.h                       ← 章节标记
+├── BezierCurve.h                  ← 通用贝塞尔曲线
+├── EditorLayout.h                 ← 编辑器布局
+├── EditorWorkspace.h              ← 工作区
+├── KeyBinding.h                   ← 快捷键绑定
+├── RecordingProfile.h             ← 录制配置预设
+├── EditorPreferences.h            ← 编辑器偏好
+├── JsonCodec.h / .cpp             ← 通用 JSON 编 / 解码（模板特化）
+└── Migration.h / .cpp             ← 版本迁移（v1 → v2 → v3 ...）
 ```
 
 ### 2.2 `.playback` 扩展（PlaybackMeta 增字段）
@@ -80,43 +86,153 @@ struct PlaybackMeta {
 
 `toJson` / `fromJson` 增加 `editor` 节点；缺字段时 `editor = std::nullopt`，旧回放文件**不破坏**。
 
-### 2.3 `EditorState`（`.playback` editor 节点）
+### 2.3 `EditorStateExt`（`.playback` editor 节点 · 3 条一级轨道模型）
 
 ```cpp
-// EditorState.h
-struct EditorState {
-    int                        version{2};           // editor 节点版本
-    std::vector<CameraTrackExt> tracks;              // 多摄影机轨道
-    std::vector<Marker>         markers;             // 章节标记
-    TimeRemap                   timeRemap;           // 时间重映射
-    std::vector<Track>          videoTracks;         // 视频剪辑轨
-    std::vector<Transition>     transitions;         // 转场（连接两个 Clip）
-    std::vector<BezierCurve>    curves;              // 共享贝塞尔曲线
-    int                         activeCameraTrackIdx{0};
-    int                         activeVideoTrackIdx{0};
-    float                       playheadTick{0};     // 编辑器光标位置
+// EditorStateExt.h
+struct EditorStateExt {
+    int                       version{3};            // editor 节点版本（v3 = 3 条一级轨道）
+    int                       currentTick{};
+    int                       totalTicks{};          // = WorldActor.totalTicks
+    bool                      playing{};
+    float                     playbackSpeed{1.0f};
+
+    // ====== 摄像机序列（顶轨） ======
+    std::vector<SequenceSegment> sequence;           // 1..256 段；默认 1 段 [0, totalTicks]
+    // 注意：序列本身**不存 Camera**，仅存 `cameraId` 引用 → cameras[]
+
+    // ====== 世界Actor（中轨） ======
+    WorldActor                  worldActor;          // 1 个；内含 segments + subActors
+
+    // ====== 摄像机（底轨 0..N） ======
+    std::vector<CameraEntity>   cameras;            // 0..16 台；按用户添加顺序
+    int                         activeCameraIndex{}; // 当前激活（gizmo 高亮 / Details 上下文）
+
+    // ====== 独立轨（保留） ======
+    std::vector<Marker>         markers;            // 标记轨；与条目无关
+
+    // ====== 性能 ======
+    float                       fps{60.0f};
+    size_t                      memoryUsageBytes{};
 };
 ```
 
-**`CameraTrackExt`**：在旧 [CameraTrack](../editor/camera-track.md) 基础上扩展：
+> **删除项（与 v1/v2 不再兼容）**：
+> - `EditorState.tracks`（旧 `CameraTrackExt[]` 数组）→ 由 `cameras` 替代
+> - `EditorState.videoTracks`（旧 `Track[]` 数组）→ 由 `sequence` 替代
+> - `EditorState.transitions`（旧转场）→ **整体删除**（[04 §VE-9](04-video-editing.md)）
+> - `EditorState.timeRemap`（全局变速）→ 由 `SequenceSegment.speed` 替代；本期下线
+> - `EditorState.curves`（共享贝塞尔曲线）→ 嵌入 `CameraKeyframe.easing` / `RigSegment.easing`
+> - `EditorState.activeCameraTrackIdx` → 由 `activeCameraIndex` 替代
+> - `EditorState.activeVideoTrackIdx` → 不再需要
+> - `EditorState.playheadTick` → 由 `currentTick` 替代
+>
+> **旧字段保留（兼容层）**：v2 文件反序列化时，旧 `tracks[]` 数组的每个元素先尝试 `CameraTrackExt` → `CameraEntity` 字段映射；旧 `videoTracks[]` 与 `transitions` 字段**忽略**（不进入新模型），旧文件加载后 sequence 默认为 1 段、cameras 默认为空、WorldActor 段默认为 1 段。
+
+### 2.3.1 `SequenceSegment`（序列段）
 
 ```cpp
-struct CameraTrackExt {
-    std::string             name{"Main"};
-    bool                    visible{true};
-    CameraKind              kind{CameraKind::Keyframe};  // Keyframe / Path / Rig / Preset
-    std::vector<CameraKeyframe> keys;                    // kind=Keyframe 用
-    std::optional<CameraPath>   path;                    // kind=Path 用（3D 样条）
-    std::optional<CameraRig>    rig;                     // kind=Rig 用（运动原语）
-    std::optional<CameraPreset> preset;                  // kind=Preset 用
-    std::vector<CameraShake>    shakes;                  // 任意 kind 都可叠加
-    std::optional<CameraLimiter> limiter;                // 限位器
-    std::string                 bindingEntityUuid;       // 绑定的实体（空 = 不绑）
-    int                         bindingMode{0};          // 0=无 1=位置跟随 2=角度跟随 3=全跟随
-    float                       bindingDamping{0.1f};    // 弹簧阻尼（0..1）
-    std::optional<CameraPreset> override;                // 摄影机瞬时参数覆盖（FOV / roll / 偏移）
+struct SequenceSegment {
+    std::string id;                  // uuid
+    int         startTick{};         // 在时间轴上的起点
+    int         endTick{};           // 在时间轴上的终点
+    int         sourceTick{};        // 对应世界Actor 的源 tick（默认 = startTick）
+    std::string cameraId;            // 绑定的 Camera id；空 = 列表中第 1 台
+    float       speed{1.0f};         // 段内播放速度（影响 sourceTick 步进）
+    Color4      color{0.20f, 0.55f, 0.95f, 1.0f};  // 默认蓝
+    bool        locked{};
 };
 ```
+
+序列化（示例）：
+
+```json
+{
+  "id": "seq-uuid-001",
+  "startTick": 0,
+  "endTick": 6000,
+  "sourceTick": 0,
+  "cameraId": "cam-uuid-001",
+  "speed": 1.0,
+  "color": "#338cf0",
+  "locked": false
+}
+```
+
+### 2.3.2 `WorldActor` + `WorldActorSegment`（世界Actor 容器）
+
+```cpp
+struct WorldActor {
+    std::string                     id;              // 与 .playback 文件同 id
+    std::string                     name;            // 回放名
+    int                             totalTicks{};    // 总时长
+    std::vector<WorldActorSegment>  segments;        // 段（默认 1 段 = 整条）
+    std::vector<SubActor>           subActors;       // 解析出的子Actor（按 .playback 解析顺序）
+};
+
+struct WorldActorSegment {
+    std::string id;                  // uuid
+    int         startTick{};         // 在时间轴上的起点
+    int         endTick{};           // 在时间轴上的终点
+    int         sourceTick{};        // 对应回放源 tick
+    float       speed{1.0f};         // 段内播放速度
+    Color4      color{0.95f, 0.55f, 0.20f, 1.0f};  // 默认橙
+    bool        locked{};
+};
+```
+
+### 2.3.3 `CameraEntity`（摄影机）
+
+```cpp
+struct CameraEntity {
+    std::string id;                  // uuid
+    std::string name;                // 人类可读
+    CameraKind  kind{CameraKind::Keyframe};
+    std::vector<CameraKeyframe>  keys;             // kind=Keyframe 用
+    std::optional<CameraPath>    path;             // kind=Path 用
+    std::optional<CameraRig>     rig;              // kind=Rig 用
+    std::optional<CameraPreset>  preset;           // kind=Preset 用
+    std::optional<CameraShake>   shake;            // 任意 kind 可叠
+    std::optional<CameraLimiter> limiter;          // 限位
+    std::string  bindingEntityUuid;                 // 绑定的子Actor；空 = 自由机位
+    int          bindingMode{0};                    // 0=无 1=位置 2=角度 3=全
+    float        bindingDamping{0.1f};
+    bool         active{false};                     // 当前激活（gizmo / Details 上下文）
+    bool         locked{};
+};
+```
+
+> **取代旧 `CameraTrackExt`**：旧结构位于 `EditorState.tracks[]`；新结构位于 `EditorState.cameras[]`。
+> 字段含义完全兼容；新增 `active` / `locked` 字段（缺省 = false / false）。
+
+### 2.3.4 `SubActor`（子Actor · 解析自 .playback）
+
+```cpp
+enum class SubActorCategory : uint8_t {
+    Default = 0,
+    Players,
+    Creatures,
+    Entities
+};
+
+struct SubActor {
+    std::string       id;            // uuid（来自 .playback）
+    std::string       name;
+    SubActorCategory  category{SubActorCategory::Default};
+    Vec3              position{};
+    Vec2              rotation{};
+    nlohmann::json    agentDetails;  // 自由结构，按 category 决定 key
+    std::string       boundCameraId; // 若被一台 Camera 绑定，则非空
+};
+```
+
+> **关键不变量**：`SubActorCategory` 不可改（解析自 .playback；UI 只读 category）。
+> `agentDetails` 字段 schema 按 category 决定：
+> - **Default**：基础 (health / hunger / armor)
+> - **Players**：Default + (gamemode / dimension / inventory)
+> - **Creatures**：Default + (species / age / tameStatus)
+> - **Entities**：Default + (entityType / flags)
+> 具体 schema 由 [03-advanced-recording.md](03-advanced-recording.md) 的 packet 解析器决定。
 
 ### 2.4 `Marker`（章节标记）
 
@@ -289,7 +405,10 @@ struct CameraLimiter {
 
 **算法**：采样后 `clamp(cameraPosition, limiter)`。
 
-### 2.10 `TimeRemap`（时间重映射）
+### 2.10 `TimeRemap`（时间重映射 · **本期下线**）
+
+> **新工作流**：[09 §1.2](09-video-editing-workflow.md) 不再使用全局 TimeRemap。变速通过 `SequenceSegment.speed` / `WorldActorSegment.speed` 实现。
+> 本节保留数据结构定义，仅供未来扩展或回退使用；新 `EditorStateExt` **不**序列化 `timeRemap` 字段。
 
 ```cpp
 struct TimeRemap {
@@ -307,78 +426,23 @@ int TimeRemap::remap(int sourceTick) const {
     if (points.empty()) return sourceTick;
     if (sourceTick <= points.front().sourceTick) return points.front().targetTick;
     if (sourceTick >= points.back().sourceTick)  return points.back().targetTick;
-    // locateSegment + 插值（与 CameraTrack::locateSegment 一致）
+    // locateSegment + 插值
 }
 ```
 
-**示例**：原 100tick 播放用 50 渲染 = 慢动作 ×0.5。
+### 2.11 ~~`Clip` / `Track` / `Transition`~~（整体下线）
 
-### 2.11 `Clip` / `Track` / `Transition`
+> **新工作流 [04 §VE-9](04-video-editing.md) 已明确下线**：
+> - `Clip`（视频剪辑）→ 由 `SequenceSegment` + `WorldActorSegment` 替代
+> - `Track`（时间轴轨道 + `TrackKind`）→ 由 3 条一级轨道（sequence / worldActor / cameras）替代
+> - `Transition`（Cut / Fade / CrossDissolve）→ 由"序列段切换 Camera"实现（**无转场概念**）
+> - `TrackManager` / `TransitionEngine` 旧 API → 由 `SequenceOps` / `CameraBindingOps` 替代
+>
+> **代码层**：`src/playback/refactor/editor/models/Track.h` 后续清理时移除 `TrackKind` enum 与 `Clip / Track / Transition` 结构体；新代码不再引用。
+>
+> **JSON 层**：旧 `videoTracks` / `transitions` 字段加载时被忽略；新文件不写这些字段。
 
-```cpp
-// Clip.h
-struct Clip {
-    std::string id;             // uuid
-    std::string replayFile;     // .playback 路径
-    int         inTick{};
-    int         outTick{};
-    int         trackTick{};    // 在 track 上的起始 tick
-    int         activeCameraTrackIdx{0};
-    float       speed{1.0f};    // 局部变速
-    std::string name;
-    Color4      color{Color4::Blue};
-    bool        muted{false};
-    bool        locked{false};
-};
-
-// Track.h
-struct Track {
-    std::string        id;
-    std::string        name;
-    TrackKind          kind{TrackKind::Video};  // Video / Camera / Marker
-    std::vector<Clip>  clips;
-    bool               visible{true};
-    bool               locked{false};
-    int                height{48};              // UI 像素高度
-};
-
-enum class TrackKind : uint8_t { Video = 0, Camera, Marker };
-```
-
-**Transition**（3 个基础）：
-
-```cpp
-enum class TransitionKind : uint8_t {
-    Cut = 0,            // 硬切（duration=0）
-    Fade,               // 淡入淡出
-    CrossDissolve       // 交叉溶解
-};
-
-struct Transition {
-    std::string    id;
-    TransitionKind kind{TransitionKind::Cut};
-    int            durationTicks{20};  // 0=Cut
-    EasingType     easing{EasingType::EaseInOut};
-    std::string    fromClipId;
-    std::string    toClipId;
-    Color4         fadeColor{Color4::Black};  // Fade 用
-};
-```
-
-**应用算法**（以 CrossDissolve 为例）：
-
-```cpp
-float Transition::blendAlpha(int tickInTransition) const {
-    float t = float(tickInTransition) / durationTicks;
-    if (t <= 0) return 0;
-    if (t >= 1) return 1;
-    return easingValue(easing, t);
-}
-
-// RenderJob 应用：在 [transitionStart, transitionEnd] 区间同时渲染两个 Clip，alpha 混合
-```
-
-### 2.12 `BezierCurve`（通用曲线）
+### 2.12 `BezierCurve`（通用曲线 · 关键帧 easing 共用）
 
 ```cpp
 struct BezierPoint {
@@ -389,17 +453,21 @@ struct BezierPoint {
 };
 
 struct BezierCurve {
-    std::string            name;
+    std::string             name;
     std::vector<BezierPoint> points;
-    bool                   loop{false};
+    bool                    loop{false};
 
     // 任意 t (0..1) 采样 y
     float sample(float t) const;
-    // 同 camera-track.md 的 CubicBezier Newton-Raphson 反函数
 };
 ```
 
-**用途**：可被 `CameraKeyframe.easing`（CubicBezier）、`RigSegment.easing`、`Transition.easing` 共用。
+**用途**（新工作流）：
+- `CameraKeyframe.easing`（Keyframe 段间）
+- `RigSegment.easing`（运动原语）
+- `SequenceSegment.speed` 切换曲线（未来扩展）
+
+> 旧工作流把 `BezierCurve` 独立存储在 `EditorState.curves[]` 中；新工作流**直接嵌入** easing 字段，不再有 `curves[]` 数组。
 
 ### 2.13 `EditorLayout`（布局文件）
 
@@ -554,6 +622,24 @@ private:
 - v1 只有 `cameraTracks`（旧字段）
 - v2 把 `cameraTracks` 改名为 `editor.tracks`；原 `CameraKeyframe` 加 `positionSeed` 字段（兼容：缺则用 0）
 
+**v2 → v3（新工作流）**：
+- v2 的 `EditorState.tracks[]`（`CameraTrackExt[]`） → v3 的 `EditorState.cameras[]`（`CameraEntity[]`）
+  - 每个 `CameraTrackExt` → `CameraEntity`：字段一一映射，`override` 字段丢弃
+- v2 的 `EditorState.videoTracks[]`（`Track[]`）→ v3 的 `EditorState.sequence[]`（`SequenceSegment[]`）：
+  - 默认 1 段 `[0, totalTicks]`，`cameraId` 来自原 `clip.activeCameraTrackIdx` 指向的 track id
+  - 旧 track 中每个 `clip` 的 `speed` 字段被丢弃（由用户后续手动设置）
+- v2 的 `EditorState.transitions[]` → v3 整体删除
+- v2 的 `EditorState.timeRemap` → v3 整体删除
+- v2 的 `EditorState.curves[]` → v3 整体删除（easing 直接嵌入）
+- v2 的 `EditorState.activeCameraTrackIdx` → v3 的 `EditorState.activeCameraIndex`
+- v2 的 `EditorState.activeVideoTrackIdx` → v3 删除
+- v2 的 `EditorState.playheadTick` → v3 的 `EditorState.currentTick`
+
+**v3 的初始默认值**（v2 旧字段缺省时）：
+- `sequence` = `[ { id: genUuid, startTick: 0, endTick: totalTicks, sourceTick: 0, cameraId: "", speed: 1.0, ... } ]`（1 段，未绑）
+- `worldActor.segments` = `[ { id: genUuid, startTick: 0, endTick: totalTicks, sourceTick: 0, speed: 1.0, ... } ]`（1 段）
+- `cameras` = `[]`（空）
+
 ### 2.20 通用编 / 解码（JsonCodec）
 
 ```cpp
@@ -586,19 +672,21 @@ E enumFromJson(const nlohmann::json& j, E def) { return j.is_number_integer() ? 
 |---|---|---|
 | 1 | `JsonCodec.h` 通用模板 | 单测：每种类型 round-trip |
 | 2 | `Vec3` / `Vec2` / `Color4` / `AABB` 的 nlohmann 特化 | 编译 |
-| 3 | `CameraPath` / `CameraRig` / `CameraPreset` / `CameraShake` / `CameraLimiter` 数据 + 序列化 | 单测：locate / sampleAt |
-| 4 | `TimeRemap` / `Marker` | 单测：remap 边界 |
-| 5 | `BezierCurve` | 单测：5 个采样点 |
-| 6 | `Clip` / `Track` / `Transition` | 编译 |
-| 7 | `CameraTrackExt`（含 EditorState） | 单测：JSON round-trip |
-| 8 | `EditorLayout`（含 DockLayout 序列化） | 手动：保存 → 加载 → 布局恢复 |
-| 9 | `EditorWorkspace` | 单测：可见面板列表 |
-| 10 | `KeyBinding` / `KeyMap` | 单测：双向查找 |
-| 11 | `RecordingProfile` | 单测：JSON round-trip |
-| 12 | `EditorPreferences` | 单测：JSON round-trip |
-| 13 | `MigrationChain` | 单测：v1 → v2 |
-| 14 | `PlaybackMeta` 增 `editor` 字段 | 手动：旧 .playback 加载不报错 |
-| 15 | 首次启动拷贝内置文件 | 手动：删 data/ → 启动 → 看到 default |
+| 3 | `SequenceSegment` / `WorldActorSegment` / `WorldActor` + 序列化 | 单测：段覆盖 / split / merge |
+| 4 | `CameraEntity` + 序列化（4 种 kind + 绑定 + Shake + Limiter） | 单测：JSON round-trip |
+| 5 | `SubActor` + 4 类别枚举 + 序列化 | 单测：4 类别各 1 个 round-trip |
+| 6 | `CameraPath` / `CameraRig` / `CameraPreset` / `CameraShake` / `CameraLimiter` 数据 + 序列化 | 单测：locate / sampleAt |
+| 7 | `Marker` / `BezierCurve` | 单测：remap 边界 / 5 个采样点 |
+| 8 | `EditorStateExt` v3 重构（移除旧字段；新增 sequence / worldActor / cameras） | 编译 + 旧数据回退 |
+| 9 | `EditorLayout`（含 DockLayout 序列化） | 手动：保存 → 加载 → 布局恢复 |
+| 10 | `EditorWorkspace` | 单测：可见面板列表 |
+| 11 | `KeyBinding` / `KeyMap` | 单测：双向查找 |
+| 12 | `RecordingProfile` | 单测：JSON round-trip |
+| 13 | `EditorPreferences` | 单测：JSON round-trip |
+| 14 | `MigrationChain` v1→v2→v3 | 单测：旧文件加载正确迁移 |
+| 15 | `PlaybackMeta` 增 `editor` 字段 | 手动：旧 .playback 加载不报错 |
+| 16 | 首次启动拷贝内置文件 | 手动：删 data/ → 启动 → 看到 default |
+| 17 | 移除旧 `Track.h` 中的 `TrackKind` / `Clip` / `Track` / `Transition`（代码清理） | 编译通过 |
 
 ### 3.2 关键不变量
 
@@ -613,16 +701,20 @@ E enumFromJson(const nlohmann::json& j, E def) { return j.is_number_integer() ? 
 
 | ID | 用例 | 期望 |
 |---|---|---|
-| DP-T1 | `CameraTrackExt` round-trip | 所有字段不变 |
-| DP-T2 | 旧 `.playback`（无 editor 节点）加载 | `editor = nullopt`，不报错 |
-| DP-T3 | v1 → v2 迁移 | 字段全映射 |
+| DP-T1 | `EditorStateExt` round-trip | 所有字段不变（v3 schema） |
+| DP-T2 | 旧 `.playback`（无 editor 节点）加载 | `editor = nullopt`，加载后再写 = 1 段默认 sequence |
+| DP-T3 | v1 → v2 → v3 迁移 | 字段全映射；旧 tracks→cameras、videoTracks→sequence |
 | DP-T4 | `fromJson` 缺字段 | 缺字段用默认 |
 | DP-T5 | `BezierCurve.sample(0.5)` 线性 | y = (p0.v + p1.v) / 2 |
-| DP-T6 | `TimeRemap.remap` 边界 | 端点返回对应 targetTick |
-| DP-T7 | `validate` 命中不合法 fps | 含 E_FpsOutOfRange |
-| DP-T8 | `EditorLayout` 序列化 | ImGui DockBuilder 可还原 |
-| DP-T9 | `KeyMap` 双向查找 | ctrl+space → playback.togglePause |
-| DP-T10 | `RecordingProfile` round-trip | 字段全一致 |
+| DP-T6 | `SequenceSegment` round-trip | 字段一致 |
+| DP-T7 | `WorldActor` round-trip | segments + subActors 完整保留 |
+| DP-T8 | `SubActor` 4 类别各 1 个 round-trip | 类别 enum 保留 |
+| DP-T9 | `CameraEntity` 4 种 kind 各 1 个 round-trip | keys / path / rig / preset 不混淆 |
+| DP-T10 | `validate` 命中不合法 fps | 含 E_FpsOutOfRange |
+| DP-T11 | `EditorLayout` 序列化 | ImGui DockBuilder 可还原 |
+| DP-T12 | `KeyMap` 双向查找 | ctrl+space → playback.togglePause |
+| DP-T13 | `RecordingProfile` round-trip | 字段全一致 |
+| DP-T14 | 旧 v2 文件加载（无 cameras / sequence 字段） | 重建：1 段 sequence、1 段 worldActor、cameras 空 |
 
 ### 3.4 风险与回退
 
@@ -638,31 +730,34 @@ E enumFromJson(const nlohmann::json& j, E def) { return j.is_number_integer() ? 
 
 ### 被谁调用（上游）
 
-- **`refactor/camera-motion/*`**：用 `CameraTrackExt` / `CameraPath` / `CameraRig` / `CameraShake` / `CameraLimiter` / `CameraPreset`
-- **`refactor/video-editing/*`**：用 `Clip` / `Track` / `Transition` / `BezierCurve`
+- **`refactor/camera-motion/*`**：用 `CameraEntity` / `CameraPath` / `CameraRig` / `CameraShake` / `CameraLimiter` / `CameraPreset`
+- **`refactor/video-editing/*`**：用 `SequenceSegment` / `WorldActorSegment` / `WorldActor` / `CameraEntity` / `SubActor` + `SequenceOps` / `CameraBindingOps`（取代旧 `Clip / Track / Transition`）
 - **`refactor/advanced-recording/*`**：用 `RecordingProfile`
-- **`refactor/render-pipeline/*`**：用 `EditorState` / `TimeRemap` / `Marker` 渲染
-- **`refactor/editor-architecture/*`**：用 `EditorLayout` / `EditorWorkspace` / `KeyMap` / `EditorPreferences`
+- **`refactor/render-pipeline/*`**：用 `EditorStateExt`（sequence / worldActor / cameras）渲染
+- **`refactor/editor/*`**：用 `EditorLayout` / `EditorWorkspace` / `KeyMap` / `EditorPreferences`
 
 ### 调用谁（下游）
 
 - **nlohmann::json**：序列化
 - **stb_perlin.h**（新增）：抖动噪声
 - **ImGui `DockBuilder`**：布局序列化
+- **旧 [EditorContext](../editor/context/EditorContext.md)**：通过 [EditorBridge](01-editor-architecture.md) 读写 `EditorStateExt`
 
 ### 共享数据
 
-- 无（纯数据结构）
+- `EditorStateExt` 单例：UI / Domain / Render 共读
+- 旧 `EditorContext::mCameraExt` / `mEditorExt` / `mExportExt` 由 `EditorBridge` 同步
 
 ### 事件订阅 / 发送
 
-- 无
+- `EditorStateExt.onChanged`（任何字段变化）→ `EditorBridge.sync()` → 旧 `EditorContext`
 
 ## 五、阅读顺序
 
 1. 本文件
-2. [02-camera-motion.md](02-camera-motion.md) —— 摄影机
-3. [04-video-editing.md](04-video-editing.md) —— 剪辑
-4. [03-advanced-recording.md](03-advanced-recording.md) —— 录制
-5. [05-render-pipeline.md](05-render-pipeline.md) —— 渲染
-6. [01-editor-architecture.md](01-editor-architecture.md) —— UI
+2. [09-video-editing-workflow.md](09-video-editing-workflow.md) —— 工作流总览（必读；确定数据模型前提）
+3. [02-camera-motion.md](02-camera-motion.md) —— 摄影机算法
+4. [04-video-editing.md](04-video-editing.md) —— 剪辑操作
+5. [03-advanced-recording.md](03-advanced-recording.md) —— 录制（决定 SubActor 解析）
+6. [05-render-pipeline.md](05-render-pipeline.md) —— 渲染消费
+7. [01-editor-architecture.md](01-editor-architecture.md) —— UI
