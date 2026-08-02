@@ -16,7 +16,7 @@ compile_commands.json
 # Shared repository automation should stay tracked
 
 # IDE and editor files
-.vscode/
+.vscode/*
 !.vscode/launch.json
 !.vscode/tasks.json
 !.vscode/extensions.json
