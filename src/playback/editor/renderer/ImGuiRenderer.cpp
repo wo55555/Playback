@@ -24,6 +24,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -178,6 +179,13 @@ struct ImGuiRenderer::Impl {
     };
     std::unordered_map<std::string, D3D11ThumbnailTexture> d3d11ThumbnailTextures;
 
+    struct D3D12ThumbnailTexture {
+        ComPtr<ID3D12Resource> resource;
+        D3D12_CPU_DESCRIPTOR_HANDLE srvCpu{};
+        D3D12_GPU_DESCRIPTOR_HANDLE srvGpu{};
+    };
+    std::unordered_map<std::string, D3D12ThumbnailTexture> d3d12ThumbnailTextures;
+
     bool initD3D11(IDXGISwapChain* sc) {
         ComPtr<ID3D11Device> dev;
         if (FAILED(sc->GetDevice(IID_PPV_ARGS(&dev)))) return false;
@@ -316,7 +324,7 @@ struct ImGuiRenderer::Impl {
         thumbnailCaptureRequested = false;
     }
 
-    bool renderD3D11(IDXGISwapChain* sc) {
+    bool renderD3D11(IDXGISwapChain* sc, bool renderUi) {
         if (d3d11Initialized && sc != d3d11SwapChain) shutdownD3D11();
         if (!d3d11Initialized && !initD3D11(sc)) return false;
 
@@ -324,6 +332,10 @@ struct ImGuiRenderer::Impl {
         d3d11BackBuffer->GetDesc(&desc);
         d3d11Context->CopyResource(d3d11GameTexture.Get(), d3d11BackBuffer.Get());
         captureD3D11Thumbnail(desc);
+
+        // Capture-only pass: copy the frame and grab the thumbnail, but never render
+        // the ImGui overlay or clear the back buffer while the user is playing.
+        if (!renderUi) return true;
 
         ImGuiContextRestore restore;
         ImGui::SetCurrentContext(d3d11ImguiCtx);
@@ -634,6 +646,7 @@ struct ImGuiRenderer::Impl {
         renderingDisabled = false;
         missingQueue      = false;
         srvUsed.fill(false);
+        d3d12ThumbnailTextures.clear();
         thumbnailReadback.Reset();
         thumbnailReadbackFence = 0;
         thumbnailReadbackBytes = 0;
@@ -676,6 +689,124 @@ struct ImGuiRenderer::Impl {
         thumbnailReadbackBytes = 0;
         thumbnailCaptureRequested = false;
     }
+
+    // Uploads a decoded RGBA8 thumbnail into a D3D12 SRV on the game's command queue and waits
+    // for the upload to finish so the returned GPU descriptor is immediately usable by ImGui.
+    void* acquireD3D12ThumbnailTexture(
+        std::string const&                     key,
+        functions::render::ReplayThumbnailPixels const& pixels
+    ) {
+        if (!device || !commandQueue || !srvHeap || srvDescSize == 0 || pixels.width == 0 || pixels.height == 0) {
+            return nullptr;
+        }
+
+        D3D12_RESOURCE_DESC texDesc{};
+        texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        texDesc.Width            = pixels.width;
+        texDesc.Height           = pixels.height;
+        texDesc.DepthOrArraySize = 1;
+        texDesc.MipLevels        = 1;
+        texDesc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        texDesc.Flags            = D3D12_RESOURCE_FLAG_NONE;
+        D3D12_HEAP_PROPERTIES const defaultHeap{
+            D3D12_HEAP_TYPE_DEFAULT, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1
+        };
+        D3D12ThumbnailTexture tex;
+        if (FAILED(device->CreateCommittedResource(
+                &defaultHeap,
+                D3D12_HEAP_FLAG_NONE,
+                &texDesc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                nullptr,
+                IID_PPV_ARGS(&tex.resource)
+            ))) {
+            return nullptr;
+        }
+
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+        UINT64                             totalBytes{};
+        device->GetCopyableFootprints(&texDesc, 0, 1, 0, &footprint, nullptr, nullptr, &totalBytes);
+        D3D12_RESOURCE_DESC const uploadDesc{
+            D3D12_RESOURCE_DIMENSION_BUFFER, 0, totalBytes, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+            D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE
+        };
+        D3D12_HEAP_PROPERTIES const uploadHeap{
+            D3D12_HEAP_TYPE_UPLOAD, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1
+        };
+        ComPtr<ID3D12Resource> upload;
+        if (FAILED(device->CreateCommittedResource(
+                &uploadHeap,
+                D3D12_HEAP_FLAG_NONE,
+                &uploadDesc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                nullptr,
+                IID_PPV_ARGS(&upload)
+            ))) {
+            return nullptr;
+        }
+
+        void* mapped{};
+        if (FAILED(upload->Map(0, nullptr, &mapped))) return nullptr;
+        auto const rowPitch = footprint.Footprint.RowPitch;
+        auto*      dst      = static_cast<uint8_t*>(mapped);
+        for (uint32_t y = 0; y < pixels.height; ++y) {
+            std::memcpy(
+                dst + static_cast<size_t>(y) * rowPitch,
+                pixels.rgba.data() + static_cast<size_t>(y) * pixels.width * 4,
+                static_cast<size_t>(pixels.width) * 4
+            );
+        }
+        upload->Unmap(0, nullptr);
+
+        ComPtr<ID3D12CommandAllocator>  alloc;
+        ComPtr<ID3D12GraphicsCommandList> list;
+        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&alloc)))
+            || FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc.Get(), nullptr,
+                                                IID_PPV_ARGS(&list)))) {
+            return nullptr;
+        }
+        D3D12_TEXTURE_COPY_LOCATION src{};
+        src.pResource                = upload.Get();
+        src.Type                     = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        src.PlacedFootprint          = footprint;
+        D3D12_TEXTURE_COPY_LOCATION texDst{};
+        texDst.pResource       = tex.resource.Get();
+        texDst.Type            = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        texDst.SubresourceIndex = 0;
+        list->CopyTextureRegion(&texDst, 0, 0, 0, &src, nullptr);
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource   = tex.resource.Get();
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        list->ResourceBarrier(1, &barrier);
+        if (FAILED(list->Close())) return nullptr;
+
+        allocateSrv(srvUsed, srvHeap.Get(), srvDescSize, tex.srvCpu, tex.srvGpu);
+        if (tex.srvCpu.ptr == 0 || tex.srvGpu.ptr == 0) return nullptr;
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(0, 1, 2, 3);
+        srvDesc.Format                  = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels       = 1;
+        device->CreateShaderResourceView(tex.resource.Get(), &srvDesc, tex.srvCpu);
+
+        ID3D12CommandList* const lists[]{list.Get()};
+        commandQueue->ExecuteCommandLists(1, lists);
+        UINT64 fv = lastFenceValue + 1;
+        if (FAILED(commandQueue->Signal(fence.Get(), fv)) || !waitForFence(fv, fence, fenceEvent)) {
+            freeSrv(srvUsed, srvHeap.Get(), srvDescSize, tex.srvCpu);
+            return nullptr;
+        }
+        lastFenceValue = fv;
+
+        auto [it, inserted] = d3d12ThumbnailTextures.emplace(key, std::move(tex));
+        return inserted ? reinterpret_cast<void*>(it->second.srvGpu.ptr) : nullptr;
+    }
 };
 
 ImGuiRenderer gImGuiRenderer;
@@ -711,31 +842,42 @@ bool ImGuiRenderer::saveReplayThumbnail(std::filesystem::path const& output) {
 
 void* ImGuiRenderer::acquireReplayThumbnailTexture(std::string_view key, std::string_view png) {
     auto& p = *mImpl;
-    auto found = p.d3d11ThumbnailTextures.find(std::string(key));
+    auto keyStr = std::string(key);
+    auto found = p.d3d11ThumbnailTextures.find(keyStr);
     if (found != p.d3d11ThumbnailTextures.end()) return found->second.srv.Get();
-    if (!p.d3d11Device || png.empty()) return nullptr;
+    auto found12 = p.d3d12ThumbnailTextures.find(keyStr);
+    if (found12 != p.d3d12ThumbnailTextures.end()) return reinterpret_cast<void*>(found12->second.srvGpu.ptr);
+    if (png.empty()) return nullptr;
     functions::render::ReplayThumbnailPixels pixels;
     if (!functions::render::decodeReplayThumbnailPng(png, pixels) || pixels.width == 0 || pixels.height == 0) return nullptr;
-    D3D11_TEXTURE2D_DESC desc{};
-    desc.Width = pixels.width;
-    desc.Height = pixels.height;
-    desc.MipLevels = 1;
-    desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    D3D11_SUBRESOURCE_DATA data{};
-    data.pSysMem = pixels.rgba.data();
-    data.SysMemPitch = pixels.width * 4;
-    Impl::D3D11ThumbnailTexture texture;
-    if (FAILED(p.d3d11Device->CreateTexture2D(&desc, &data, &texture.texture))
-        || FAILED(p.d3d11Device->CreateShaderResourceView(texture.texture.Get(), nullptr, &texture.srv))) return nullptr;
-    auto [it, inserted] = p.d3d11ThumbnailTextures.emplace(std::string(key), std::move(texture));
-    return inserted ? it->second.srv.Get() : nullptr;
+    if (p.d3d11Device) {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = pixels.width;
+        desc.Height = pixels.height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA data{};
+        data.pSysMem = pixels.rgba.data();
+        data.SysMemPitch = pixels.width * 4;
+        Impl::D3D11ThumbnailTexture texture;
+        if (FAILED(p.d3d11Device->CreateTexture2D(&desc, &data, &texture.texture))
+            || FAILED(p.d3d11Device->CreateShaderResourceView(texture.texture.Get(), nullptr, &texture.srv))) return nullptr;
+        auto [it, inserted] = p.d3d11ThumbnailTextures.emplace(keyStr, std::move(texture));
+        return inserted ? it->second.srv.Get() : nullptr;
+    }
+    if (p.device && p.commandQueue) return p.acquireD3D12ThumbnailTexture(keyStr, pixels);
+    return nullptr;
 }
 
 void ImGuiRenderer::clearReplayThumbnailTextures() {
+    for (auto& [_, tex] : mImpl->d3d12ThumbnailTextures) {
+        freeSrv(mImpl->srvUsed, mImpl->srvHeap.Get(), mImpl->srvDescSize, tex.srvCpu);
+    }
+    mImpl->d3d12ThumbnailTextures.clear();
     mImpl->d3d11ThumbnailTextures.clear();
 }
 
@@ -749,7 +891,11 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
 
     bool const browserOpen = playback::refactor::replay_browser::ReplayBrowserWindow::getInstance().isOpen();
     auto const state = p.editorContext->snapshot();
-    if (!browserOpen && !state.replayVisible) {
+    // Thumbnail capture pipeline is active while a request is pending or a readback is in flight.
+    // It must bypass the UI gates below so thumbnails are captured even during recording.
+    bool const thumbnailActive = p.thumbnailCaptureRequested || p.thumbnailReadback != nullptr;
+    bool const uiActive        = browserOpen || state.replayVisible;
+    if (!uiActive && !thumbnailActive) {
         setReplayMouseInputActive(false);
         if (p.initialized || p.d3d11Initialized) p.shutdown();
         return false;
@@ -758,15 +904,21 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     if (p.initialized && swapChain == p.swapChain) p.lastPresent = now;
     if (!browserOpen && !state.hudVisible) {
         setReplayMouseInputActive(false);
-        return false;
+        if (!thumbnailActive) return false;
+    } else if (!uiActive) {
+        setReplayMouseInputActive(false);
     }
 
     ComPtr<ID3D11Device> d3d11Device;
     if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d11Device)))) {
         if (p.initialized) p.shutdown();
-        MouseInputAttempt inputAttempt;
-        if (!p.renderD3D11(swapChain)) return false;
-        inputAttempt.commit();
+        if (uiActive) {
+            MouseInputAttempt inputAttempt;
+            if (!p.renderD3D11(swapChain, true)) return false;
+            inputAttempt.commit();
+        } else if (!p.renderD3D11(swapChain, false)) {
+            return false;
+        }
         return true;
     }
 
@@ -827,35 +979,37 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     if (bd.Width == 0 || bd.Height == 0) return false;
 
     ImGuiContextRestore cr;
-    ImGui::SetCurrentContext(p.imguiCtx);
-    auto& io                   = ImGui::GetIO();
-    io.DisplaySize             = ImVec2(static_cast<float>(bd.Width), static_cast<float>(bd.Height));
-    io.DisplayFramebufferScale = ImVec2(1, 1);
-    auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
-    io.FontGlobalScale         = std::max(1.0f, layout.scale);
-    auto fn                    = std::chrono::steady_clock::now();
-    io.DeltaTime    = std::clamp(std::chrono::duration<float>(fn - p.lastFrameTime).count(), 1.f / 240.f, 0.25f);
-    p.lastFrameTime = fn;
+    if (uiActive) {
+        ImGui::SetCurrentContext(p.imguiCtx);
+        auto& io                   = ImGui::GetIO();
+        io.DisplaySize             = ImVec2(static_cast<float>(bd.Width), static_cast<float>(bd.Height));
+        io.DisplayFramebufferScale = ImVec2(1, 1);
+        auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
+        io.FontGlobalScale         = std::max(1.0f, layout.scale);
+        auto fn                    = std::chrono::steady_clock::now();
+        io.DeltaTime = std::clamp(std::chrono::duration<float>(fn - p.lastFrameTime).count(), 1.f / 240.f, 0.25f);
+        p.lastFrameTime = fn;
 
-    ImGui_ImplDX12_NewFrame();
-    // Forward MCBE key events to ImGui keyboard state
-    playback::refactor::editor::InputHook::syncFrame();
-    beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
-    ImGui::NewFrame();
-    auto& replayBrowser = playback::refactor::replay_browser::ReplayBrowserWindow::getInstance();
-    auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
-    if (replayBrowser.isOpen()) {
-        setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
-        replayBrowser.draw();
-    } else if (refactorEditor.isOpen()) {
-        refactorEditor.setGameTexture(
-            static_cast<ImTextureID>(f.gameSrvGpu.ptr));
-        refactorEditor.draw();
-        auto viewport = refactorEditor.viewportVideoRect();
-        setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+        ImGui_ImplDX12_NewFrame();
+        // Forward MCBE key events to ImGui keyboard state
+        playback::refactor::editor::InputHook::syncFrame();
+        beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
+        ImGui::NewFrame();
+        auto& replayBrowser = playback::refactor::replay_browser::ReplayBrowserWindow::getInstance();
+        auto& refactorEditor = playback::refactor::editor::Editor::getInstance();
+        if (replayBrowser.isOpen()) {
+            setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
+            replayBrowser.draw();
+        } else if (refactorEditor.isOpen()) {
+            refactorEditor.setGameTexture(
+                static_cast<ImTextureID>(f.gameSrvGpu.ptr));
+            refactorEditor.draw();
+            auto viewport = refactorEditor.viewportVideoRect();
+            setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+        }
+        endReplayMouseFrame();
+        ImGui::Render();
     }
-    endReplayMouseFrame();
-    ImGui::Render();
 
     if (FAILED(f.commandAllocator->Reset())) return false;
     if (FAILED(f.commandList->Reset(f.commandAllocator.Get(), nullptr))) return false;
@@ -911,12 +1065,14 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     toRT[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
     toRT[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
     f.commandList->ResourceBarrier(2, toRT);
-    f.commandList->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
-    float cc[]{0.055f, 0.055f, 0.065f, 1};
-    f.commandList->ClearRenderTargetView(f.rtv, cc, 0, nullptr);
-    ID3D12DescriptorHeap* dh[]{p.srvHeap.Get()};
-    f.commandList->SetDescriptorHeaps(1, dh);
-    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), f.commandList.Get());
+    if (uiActive) {
+        f.commandList->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
+        float cc[]{0.055f, 0.055f, 0.065f, 1};
+        f.commandList->ClearRenderTargetView(f.rtv, cc, 0, nullptr);
+        ID3D12DescriptorHeap* dh[]{p.srvHeap.Get()};
+        f.commandList->SetDescriptorHeaps(1, dh);
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), f.commandList.Get());
+    }
     ++p.frameCursor;
 
     D3D12_RESOURCE_BARRIER toPresent{};

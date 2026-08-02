@@ -12,6 +12,25 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
+// 确保当前线程 COM 已初始化（WIC 依赖 COM）。游戏主线程通常已初始化；
+// 若在某辅助线程首次调用，这里完成初始化并在函数结束时清理。
+class ComInitialize {
+public:
+    ComInitialize() {
+        HRESULT const hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        mNeedsUninit      = (hr == S_OK);
+        // S_FALSE = 已初始化（其它模型亦可使用）；RPC_E_CHANGED_MODE = 已用其它模型初始化，仍可用。
+    }
+    ~ComInitialize() {
+        if (mNeedsUninit) CoUninitialize();
+    }
+    ComInitialize(ComInitialize const&)            = delete;
+    ComInitialize& operator=(ComInitialize const&) = delete;
+
+private:
+    bool mNeedsUninit{};
+};
+
 [[nodiscard]] bool createFactory(ComPtr<IWICImagingFactory>& factory) {
     return SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)));
 }
@@ -26,11 +45,12 @@ bool writeReplayThumbnailPng(
     uint32_t                     rowPitch
 ) {
     if (width == 0 || height == 0 || !rgba || rowPitch < width * 4) return false;
-    ComPtr<IWICImagingFactory> factory;
-    ComPtr<IWICStream> stream;
-    ComPtr<IWICBitmapEncoder> encoder;
+    ComInitialize com;
+    ComPtr<IWICImagingFactory>   factory;
+    ComPtr<IWICStream>           stream;
+    ComPtr<IWICBitmapEncoder>    encoder;
     ComPtr<IWICBitmapFrameEncode> frame;
-    ComPtr<IPropertyBag2> properties;
+    ComPtr<IPropertyBag2>        properties;
     if (!createFactory(factory)
         || FAILED(factory->CreateStream(&stream))
         || FAILED(stream->InitializeFromFilename(output.c_str(), GENERIC_WRITE))
@@ -42,21 +62,37 @@ bool writeReplayThumbnailPng(
         return false;
     }
     WICPixelFormatGUID format = GUID_WICPixelFormat32bppRGBA;
-    if (FAILED(frame->SetPixelFormat(&format)) || format != GUID_WICPixelFormat32bppRGBA) return false;
+    if (FAILED(frame->SetPixelFormat(&format))) return false;
     uint64_t const size = static_cast<uint64_t>(rowPitch) * height;
     if (size > std::numeric_limits<UINT>::max()) return false;
-    return SUCCEEDED(frame->WritePixels(height, rowPitch, static_cast<UINT>(size), const_cast<BYTE*>(rgba)))
+    // PNG 编码器会把 SetPixelFormat 请求的格式改写为其首选格式（如 32bppBGRA），因此不能
+    // 严格校验 format 是否保持 32bppRGBA，也不能直接 WritePixels（会按改写后的格式解释数据，
+    // 造成 R/B 通道错乱）。改用 IWICBitmap 包装像素并经 WriteSource 写入，让 WIC 自动转换。
+    ComPtr<IWICBitmap> bitmap;
+    if (FAILED(factory->CreateBitmapFromMemory(
+            width,
+            height,
+            GUID_WICPixelFormat32bppRGBA,
+            rowPitch,
+            static_cast<UINT>(size),
+            const_cast<BYTE*>(rgba),
+            &bitmap
+        ))) {
+        return false;
+    }
+    return SUCCEEDED(frame->WriteSource(bitmap.Get(), nullptr))
         && SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
 }
 
 bool decodeReplayThumbnailPng(std::string_view png, ReplayThumbnailPixels& output) {
     output = {};
     if (png.empty() || png.size() > std::numeric_limits<DWORD>::max()) return false;
-    ComPtr<IWICImagingFactory> factory;
-    ComPtr<IWICStream> stream;
-    ComPtr<IWICBitmapDecoder> decoder;
+    ComInitialize com;
+    ComPtr<IWICImagingFactory>   factory;
+    ComPtr<IWICStream>           stream;
+    ComPtr<IWICBitmapDecoder>    decoder;
     ComPtr<IWICBitmapFrameDecode> frame;
-    ComPtr<IWICFormatConverter> converter;
+    ComPtr<IWICFormatConverter>  converter;
     if (!createFactory(factory)
         || FAILED(factory->CreateStream(&stream))
         || FAILED(stream->InitializeFromMemory(

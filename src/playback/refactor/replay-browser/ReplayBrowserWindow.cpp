@@ -455,6 +455,22 @@ void ReplayBrowserWindow::drawCard(screen::ReplaySummary const& replay, std::siz
     ImGui::SetCursorPos({width - 44.0f, cardHeight - 44.0f});
     ImGui::InvisibleButton("##card-info", {infoSize, infoSize});
     bool const infoHovered = ImGui::IsItemHovered();
+
+    // tooltip 淡入：悬停瞬间透明度为 0，0.5s 后开始渐显，0.8s 时恢复为 1，
+    // 规避首次悬停时 tooltip 短暂渲染异常。
+    double const now = ImGui::GetTime();
+    if (infoHovered) {
+        if (mInfoHoverStart < 0.0) mInfoHoverStart = now;
+    } else {
+        mInfoHoverStart = -1.0;
+    }
+    float tooltipAlpha = 1.0f;
+    if (infoHovered) {
+        double const elapsed = now - mInfoHoverStart;
+        tooltipAlpha = elapsed <= 0.5 ? 0.0f
+                                       : static_cast<float>(std::clamp((elapsed - 0.5) / 0.3, 0.0, 1.0));
+    }
+
     auto const infoMin     = ImGui::GetItemRectMin();
     auto const infoText    = ImGui::CalcTextSize(ICON_INFO);
     ImGui::GetWindowDrawList()->AddText(
@@ -465,6 +481,7 @@ void ReplayBrowserWindow::drawCard(screen::ReplaySummary const& replay, std::siz
         ICON_INFO
     );
     if (infoHovered) {
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, tooltipAlpha);
         ImGui::BeginTooltip();
         ImGui::SetWindowFontScale(kFontScaleSmall);
         auto detailRow = [](char const* label, std::string const& value) {
@@ -485,6 +502,7 @@ void ReplayBrowserWindow::drawCard(screen::ReplaySummary const& replay, std::siz
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kColorDanger), "异常: %s", replay.problem.c_str());
         }
         ImGui::EndTooltip();
+        ImGui::PopStyleVar();
     }
 
     // Info section：标题 30px，元信息 18px
@@ -616,27 +634,40 @@ void ReplayBrowserWindow::drawDetails() {
         return;
     }
 
-    float const margin = 24.0f;
-    float const panelWidth = ImGui::GetWindowWidth() - margin * 2.0f;
+    // 下方内容全部左对齐，距左边框 50px；元素上下间隔 2px；表格行内文字间隔 0.75px。
+    float const margin    = 50.0f;
+    float const panelW    = ImGui::GetWindowWidth();
+    float const contentW  = panelW - margin * 2.0f;
     float const maxPreviewHeight = std::max(220.0f, ImGui::GetWindowHeight() * 0.53f);
-    float previewWidth = panelWidth;
+    float previewWidth  = contentW;
     float previewHeight = previewWidth * 9.0f / 16.0f;
     if (previewHeight > maxPreviewHeight) {
         previewHeight = maxPreviewHeight;
-        previewWidth = previewHeight * 16.0f / 9.0f;
+        previewWidth  = previewHeight * 16.0f / 9.0f;
     }
-    ImGui::SetCursorPos({margin + (panelWidth - previewWidth) * 0.5f, margin});
+    ImGui::SetCursorPos({(panelW - previewWidth) * 0.5f, 24.0f});
     drawPreview(**replay, {previewWidth, previewHeight});
 
-    ImGui::SetCursorPos({margin, margin + previewHeight + 22.0f});
+    float y = 24.0f + previewHeight + 2.0f;
+
+    // 标题：最大字号 30px
+    ImGui::SetCursorPos({margin, y});
     ImGui::SetWindowFontScale(kFontScaleLarge);
     pushTextColor(kColorText);
     ImGui::TextUnformatted((*replay)->displayName().c_str());
     ImGui::PopStyleColor();
+    y += ImGui::GetItemRectSize().y + 2.0f;
+
+    ImGui::SetCursorPos({margin, y});
     ImGui::SetWindowFontScale(kFontScaleSmall);
     ImGui::Separator();
+    y += ImGui::GetItemRectSize().y + 2.0f;
 
-    if (ImGui::BeginTable("##metadata", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
+    ImGui::SetCursorPos({margin, y});
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {12.0f, 0.75f});
+    if (ImGui::BeginTable("##metadata", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("##key", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+        ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
         auto row = [](char const* label, std::string const& value) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -652,9 +683,11 @@ void ReplayBrowserWindow::drawDetails() {
         row("文件路径", (*replay)->path.string());
         ImGui::EndTable();
     }
+    ImGui::PopStyleVar();
+    y += ImGui::GetItemRectSize().y + 2.0f;
 
     ImGui::SetWindowFontScale(kFontScaleBody);
-    ImGui::Spacing();
+    ImGui::SetCursorPos({margin, y});
     ImGui::BeginDisabled(!(*replay)->canOpen);
     styleButton();
     if (ImGui::Button("打开回放", {150.0f, kControlHeight})) openSelected();

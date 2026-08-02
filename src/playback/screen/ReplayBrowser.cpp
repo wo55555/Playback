@@ -438,8 +438,29 @@ bool ReplayBrowser::deleteReplay(ReplaySummary const& replay, std::string& error
 }
 
 bool ReplayBrowser::showInFolder(ReplaySummary const& replay) {
-    auto path = replay.path.wstring();
-    return reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + path + L"\"").c_str(), nullptr, SW_SHOWNORMAL)) > 32;
+    // 使用绝对路径，避免相对路径下资源管理器无法定位文件。
+    std::error_code ec;
+    auto const path = std::filesystem::absolute(replay.path, ec);
+    if (ec) return false;
+
+    auto const wpath   = path.wstring();
+    auto const wparent = path.parent_path().wstring();
+
+    auto const result = reinterpret_cast<intptr_t>(ShellExecuteW(
+        nullptr,
+        L"open",
+        L"explorer.exe",
+        (L"/select,\"" + wpath + L"\"").c_str(),
+        wparent.c_str(),
+        SW_SHOWNORMAL
+    ));
+
+    // 文件定位失败时，回退为直接打开父目录。
+    if (result <= 32) {
+        return reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", wparent.c_str(), nullptr, nullptr, SW_SHOWNORMAL))
+            > 32;
+    }
+    return true;
 }
 
 bool ReplayBrowser::renameReplay(ReplaySummary const& replay, std::string_view newName, std::string& error) {
