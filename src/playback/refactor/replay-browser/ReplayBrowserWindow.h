@@ -57,7 +57,6 @@ private:
     bool                               mRenameDialogOpen{};
     std::string                        mRenameBuffer;
     std::string                        mOperationError;
-    double                             mInfoHoverStart = -1.0; // 卡片信息图标悬停起始时间，用于 tooltip 淡入
 };
 
 } // namespace playback::refactor::replay_browser

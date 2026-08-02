@@ -60,3 +60,5 @@
 - `decodeReplayThumbnailPng` 同步加 `ComInitialize` 兜底。
 
 验收：录制任意时长的回放后归档内含 `icon.png`（可被图片查看器打开，且可由 WIC 解码回读，颜色无通道错乱）；D3D11 与 D3D12 下卡片 / 预览均可显示缩略图；录制与播放画面不受影响；`xmake build` 通过。
+
+第三轮修复（悬停详情提示框永不出现）：`mInfoHoverStart` 是窗口类的**单个成员变量**，被所有卡片共享。悬停某卡片图标时，同一帧内**在它之后绘制的其它卡片**的 `else` 分支每帧把该成员重置为 `-1.0`，导致悬停卡片下一帧重新记录起始时间，`elapsed` 恒为 0、`tooltipAlpha` 恒为 0——图标（局部 `infoHovered` 驱动）正常变白，但 tooltip 永远透明。修复：改用 `ImGui::GetStateStorage()` + `ImGui::GetID("##info-fade")`（`PushID(replayId)` 已隔离各卡片）保存每张卡片的悬停起始时间，互不干扰；删除共享成员。验收：悬停图标 0.5s 后提示框渐显、0.8s 完全可见，多卡片并存时行为一致，`xmake build` 通过。

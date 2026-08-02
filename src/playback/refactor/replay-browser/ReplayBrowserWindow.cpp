@@ -458,15 +458,20 @@ void ReplayBrowserWindow::drawCard(screen::ReplaySummary const& replay, std::siz
 
     // tooltip 淡入：悬停瞬间透明度为 0，0.5s 后开始渐显，0.8s 时恢复为 1，
     // 规避首次悬停时 tooltip 短暂渲染异常。
+    // 注意：悬停起始时间不能用成员变量保存——多张卡片共享同一成员，悬停卡片之后
+    // 绘制的其它卡片每帧会把状态重置为 -1，导致 elapsed 恒为 0、tooltip 恒透明。
+    // 改用 ImGuiStorage 按 per-card ID（PushID 已隔离卡片）保存，互不干扰。
     double const now = ImGui::GetTime();
+    ImGuiStorage* const fadeStorage = ImGui::GetStateStorage();
+    ImGuiID const fadeKey = ImGui::GetID("##info-fade");
     if (infoHovered) {
-        if (mInfoHoverStart < 0.0) mInfoHoverStart = now;
+        if (fadeStorage->GetFloat(fadeKey, -1.0f) < 0.0f) fadeStorage->SetFloat(fadeKey, static_cast<float>(now));
     } else {
-        mInfoHoverStart = -1.0;
+        fadeStorage->SetFloat(fadeKey, -1.0f);
     }
     float tooltipAlpha = 1.0f;
     if (infoHovered) {
-        double const elapsed = now - mInfoHoverStart;
+        double const elapsed = now - fadeStorage->GetFloat(fadeKey, -1.0f);
         tooltipAlpha = elapsed <= 0.5 ? 0.0f
                                        : static_cast<float>(std::clamp((elapsed - 0.5) / 0.3, 0.0, 1.0));
     }
