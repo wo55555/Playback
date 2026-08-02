@@ -15,11 +15,11 @@
 | VW-3 | **摄像机序列** 是一条**连续、占满整个时间轴**的轨道，可被 split 为多段 | P0 |
 | VW-4 | 摄像机序列的**每一段**必须**绑定到一台摄像机**；未绑定时回退到"列表中第 1 台摄像机" | P0 |
 | VW-5 | 选中摄像机序列时，预览按**序列段顺序**播放视频：每段用所绑定摄像机的当前参数去拍世界Actor | P0 |
-| VW-6 | 导出（File > Export…）的最终视频**由摄像机序列定义**：序列决定时序与镜头切换，WorldActor 决定画面内容 | P0 |
+| VW-6 | 导出（File > Export…）的最终视频**由摄像机序列定义**：序列决定镜头与硬切边界，WorldActor 决定时间轴到回放源 tick 的映射及画面内容 | P0 |
 | VW-7 | **世界Actor** 即"回放文件本体"；默认填满整个时间轴，可被 split / trim / 变速 | P0 |
-| VW-8 | 世界Actor 自身可调整**播放速度**（speed），可整段 trim 头尾，可 split 多段 | P0 |
+| VW-8 | 世界Actor 自身可调整**播放速度**（speed），可整段 trim 头尾，可 split 多段；它是时间轴到回放源 tick 的唯一映射器 | P0 |
 | VW-9 | 世界Actor 解析出 N 个 **子Actor**，按**类别**（Default / Players / Creatures / Entities）折叠；UI 默认折叠，可在 Details 面板展开 | P0 |
-| VW-10 | 可为**玩家 / 生物**等子Actor 一键 **"创建摄像机绑定"**；绑定后生成的摄像机属于"摄像机"组的成员，**自动出现在摄像机序列的摄像机列表中** | P0 |
+| VW-10 | 可为**玩家 / 生物**等子Actor 一键 **"创建摄像机绑定"**；同一子Actor可创建多台具有不同视角参数的绑定摄像机，生成的摄像机属于"摄像机"组并自动出现在序列绑定列表中 | P0 |
 | VW-11 | **摄像机**（Cameras）= 用户手动添加或由绑定生成的 Camera 实体；每条 Camera 在时间轴上是**独立的一级轨道**（行） | P0 |
 | VW-12 | 摄像机支持 4 种 kind：**Keyframe**（关键帧）/ **Path**（3D 样条）/ **Rig**（运动原语）/ **Preset**（预设） | P0 |
 | VW-13 | 摄像机支持**关键帧**编辑：插值（position / rotation / fov）、easing、关键帧 CRUD | P0 |
@@ -86,9 +86,7 @@ struct SequenceSegment {
     std::string id;                  // uuid
     int         startTick{};         // 在时间轴上的起点
     int         endTick{};           // 在时间轴上的终点
-    int         sourceTick{};        // 对应世界Actor 的源 tick（默认 = startTick）
     std::string cameraId;            // 绑定的 Camera id；空 = 列表中第 1 台
-    float       speed{1.0f};         // 段内播放速度（影响 sourceTick 步进）
     Color4      color{0.20f, 0.55f, 0.95f, 1.0f};  // 默认蓝
     bool        locked{};
 };
@@ -145,22 +143,25 @@ struct SubActor {
     Vec2        rotation{};
     // 详情面板可改的 agent 字段（按 category 决定具体 schema）
     nlohmann::json agentDetails;     // 自由结构，按 category 决定 key
-    // 关联：若被一台 Camera 绑定，则 cameraId 非空
-    std::string  boundCameraId;
+    // 关联：同一子Actor可被多台不同视角的 Camera 绑定
+    std::vector<std::string> boundCameraIds;
 };
 ```
 
 **关键不变量**：
 
-- `WorldActor.segments` 段间**首尾相接**覆盖 `[0, WorldActor.totalTicks]`，**无空隙**；split 时把段二等分。
+- `sequence` 与 `WorldActor.segments` 均首尾相接覆盖 `[0, totalTicks]`，无空隙、无重叠；split 只拆分当前段。
+- `trim` 调整当前段与相邻段的共享边界，不能产生空隙或重叠；唯一段不可删除，删除首尾段时相邻段扩展到时间轴边界。
+- `WorldActorSegment` 是时间轴到回放源 tick 的唯一映射器：`sourceTick + floor((timelineTick - startTick) * speed)`；摄像机序列不重映射回放时间。
 - `SequenceSegment.cameraId == ""` 时回退到 `Cameras[0]`，渲染层兜底，不抛错。
-- `CameraEntity.bindingEntityUuid != ""` 时该 Camera 是"绑定子Actor 的"；UI 上显示 `[bound]` 角标。
+- `CameraEntity.bindingEntityUuid != ""` 时该 Camera 是"绑定子Actor 的"；一个子Actor可关联多台 Camera，UI 上显示 `[bound]` 角标。
 
 ### 2.3 `EditorStateExt`（扩展）
 
 ```cpp
 // models/EditorStateExt.h
 struct EditorStateExt {
+    int version{3};
     // 既有字段（保留）
     std::string projectName;
     std::string projectPath;
@@ -178,16 +179,13 @@ struct EditorStateExt {
     // 既有字段：Marker 仍可独立存在（不绑定任何条目）
     std::vector<Marker> markers;
 
-    // 既有字段：Transition 仅在 sequence 段间有效（不再用于 worldActor 段间）
-    std::vector<Transition> transitions;
-
     // 既有字段：性能
     float fps{60.0f};
     size_t memoryUsageBytes{};
 };
 ```
 
-> **删除项**：`EditorStateExt.videoTracks` 与 `EditorStateExt.cameraTracks`（旧 Track / CameraTrackExt 数组）整体下线。`Track`（TrackKind::Video / Camera / Marker）模型改由"3 条一级轨道 + 内部段"显式表达。
+> **删除项**：`EditorStateExt.videoTracks`、`cameraTracks`、`transitions` 与旧 `Track / Clip / Transition` 模型整体下线。序列段之间只支持硬切，由"3 条一级轨道 + 内部段"显式表达。
 
 ### 2.4 `TrackTreeModel`（统一轨道行）
 
@@ -219,16 +217,15 @@ public:
 | 轨道 | 操作 | 命令 | 数据变化 |
 |---|---|---|---|
 | 摄像机序列 | 在 playhead 切 | `SplitSequenceAtPlayhead` | `sequence` 插入新 `SequenceSegment` |
-| 摄像机序列 | 段 trim in/out | `TrimSequenceSegment` | 改 `startTick/endTick` |
+| 摄像机序列 | 段 trim in/out | `TrimSequenceSegment` | 调整与相邻段共享的 `startTick/endTick` 边界 |
 | 摄像机序列 | 段绑摄像机 | `BindSequenceToCamera` | 改 `segment.cameraId` |
-| 摄像机序列 | 段改 speed | `SetSequenceSegmentSpeed` | 改 `segment.speed` |
 | 摄像机序列 | 段删 | `DeleteSequenceSegment` | 段移除（左右两段合并） |
 | 世界Actor | 在 playhead 切 | `SplitWorldActorAtPlayhead` | `worldActor.segments` 插入新段 |
-| 世界Actor | 段 trim in/out | `TrimWorldActorSegment` | 改 `startTick/endTick` |
+| 世界Actor | 段 trim in/out | `TrimWorldActorSegment` | 调整与相邻段共享的 `startTick/endTick` 边界 |
 | 世界Actor | 段改 speed | `SetWorldActorSegmentSpeed` | 改 `segment.speed` |
 | 世界Actor | 段 ripple 删 | `RippleDeleteWorldActorSegment` | 段移除 + 后续段前移 |
 | 摄像机 | 新建自由机位 | `AddFreeCamera` | `cameras` push 一台 |
-| 摄像机 | 子Actor 创建绑定 | `CreateBindingCamera` | `cameras` push + `subActor.boundCameraId` 填 |
+| 摄像机 | 子Actor 创建绑定 | `CreateBindingCamera` | `cameras` push + `subActor.boundCameraIds` 追加，可重复创建不同视角 |
 | 摄像机 | 加关键帧 | `AddKeyframe` | `camera.keys` push |
 | 摄像机 | 关键帧 CRUD | `MoveKeyframe/DeleteKeyframe/SetKeyframeEasing` | 改 `keys` |
 | 摄像机 | 改 kind | `SetCameraKind` | 改 `camera.kind` / `path/rig/preset` |
@@ -244,7 +241,7 @@ public:
 |---|---|---|
 | 无 | 空状态 + 提示 | — |
 | 序列（无段选） | 序列总览 | 段数、绑定覆盖率、警告（"X 段未绑定 Camera"） |
-| 序列段 | 段属性 | startTick / endTick / sourceTick / cameraId（下拉）/ speed / locked |
+| 序列段 | 段属性 | startTick / endTick / cameraId（下拉）/ locked |
 | WorldActor（无段选） | 子Actor 树（按类别折叠） | Default / Players / Creatures / Entities |
 | WorldActor 段 | 段属性 | startTick / endTick / sourceTick / speed / locked |
 | 子Actor | 子Actor 详情 | name / category（不可改）/ position / rotation / agentDetails（按类别动态字段）/ `[创建摄像机绑定]` 按钮 |
@@ -260,7 +257,7 @@ public:
 // 伪代码
 RenderJob::runExport(EditorStateExt& e) {
     for (int frame = 0; frame < totalFrames; ++frame) {
-        int timelineTick = frame * ticksPerFrame;
+        int timelineTick = exportStartTick + (frame * ticksPerSecond) / exportFps;
 
         // 1) 找当前 active 的 SequenceSegment
         const SequenceSegment* seg = findSegmentAt(e.sequence, timelineTick);
@@ -271,9 +268,8 @@ RenderJob::runExport(EditorStateExt& e) {
         if (!cam) cam = e.cameras.empty() ? nullptr : &e.cameras[0];
         if (!cam) continue;  // 无摄像机可采
 
-        // 3) 计算 WorldActor 的源 tick
-        int localTick = timelineTick - seg->startTick;
-        int sourceTick = seg->sourceTick + (int)(localTick * seg->speed);
+        // 3) 世界Actor 是唯一时间映射器
+        int sourceTick = WorldActorOps::mapTimelineToSourceTick(e.worldActor, timelineTick);
 
         // 4) 让 WorldActor 跳到 sourceTick
         replaySession.requestSeek(sourceTick);
@@ -298,7 +294,7 @@ RenderJob::runExport(EditorStateExt& e) {
 PreviewEngine::previewSequenceTick(EditorStateExt& e, int timelineTick) {
     const SequenceSegment* seg = findSegmentAt(e.sequence, timelineTick);
     const CameraEntity*    cam = resolveCamera(e.cameras, seg->cameraId);
-    int sourceTick = seg->sourceTick + (int)((timelineTick - seg->startTick) * seg->speed);
+    int sourceTick = WorldActorOps::mapTimelineToSourceTick(e.worldActor, timelineTick);
 
     replaySession.requestSeek(sourceTick);
     replaySession.tick();
@@ -390,18 +386,16 @@ const SequenceSegment* findSegmentAt(const std::vector<SequenceSegment>& segs, i
 }
 ```
 
-**段 merge（删除段时左右合并）**：
+**删除段（保持覆盖）**：
 
 ```cpp
-void mergeAfterDelete(std::vector<SequenceSegment>& segs, size_t delIdx) {
-    if (delIdx > 0 && delIdx + 1 < segs.size()) {
-        segs[delIdx - 1].endTick = segs[delIdx + 1].endTick;
-        segs[delIdx - 1].sourceTick = segs[delIdx + 1].sourceTick;
-        segs.erase(segs.begin() + delIdx);
-        segs.erase(segs.begin() + delIdx);  // 原 delIdx+1 现为 delIdx
-    } else {
-        segs.erase(segs.begin() + delIdx);
-    }
+bool deleteSegment(std::vector<SequenceSegment>& segs, size_t index, int totalTicks) {
+    if (segs.size() <= 1 || index >= segs.size()) return false;
+    if (index == 0) segs[1].startTick = 0;
+    else if (index + 1 == segs.size()) segs[index - 1].endTick = totalTicks;
+    else segs[index - 1].endTick = segs[index + 1].startTick;
+    segs.erase(segs.begin() + index);
+    return true;
 }
 ```
 
@@ -428,8 +422,8 @@ CameraEntity createBindingCamera(const SubActor& actor, const EditorStateExt& e)
 3. **世界Actor 段同约束**：同序列。
 4. **段未绑 Camera 不报错**：导出 / 预览兜底为 `cameras[0]`。
 5. **子Actor 类别不可改**：解析自 .playback；UI 只读 category。
-6. **绑定 Camera = cameras 成员**：用户加 Camera 时若选"绑定子Actor"，必须指定一个子Actor；同理子 Actor 同一时刻最多被一台 Camera 绑定。
-7. **旧 EditorStateExt.videoTracks / cameraTracks = nullopt**：JSON 缺字段时按新模型重建。
+6. **绑定 Camera = cameras 成员**：用户加 Camera 时若选"绑定子Actor"，必须指定一个子Actor；同一子Actor可关联多台具有不同视角参数的 Camera。
+7. **迁移版本明确**：无 `editor` 节点时重建 v3 默认模型；v1/v2 经迁移后加载；v3 校验加载；未知未来版本拒绝加载并显示错误。
 8. **Command execute/undo 互逆**：undo 状态 = 执行前。
 9. **TrackTreeModel 顺序固定**：Sequence → WorldActor → Cameras（按 cameras 数组顺序）。
 
@@ -440,13 +434,13 @@ CameraEntity createBindingCamera(const SubActor& actor, const EditorStateExt& e)
 | VW-T1 | 打开 .playback → 序列默认 1 段 [0, totalTicks] | cameras 空，段未绑 |
 | VW-T2 | 段未绑 + 导出 | 兜底 cameras[0]（空则报错对话框"无摄像机"） |
 | VW-T3 | split sequence at tick=1000 | 变 2 段 [0,1000) + [1000,totalTicks) |
-| VW-T4 | trim worldActor 段 in +20 | startTick += 20 |
+| VW-T4 | trim worldActor 段边界 +20 | 相邻段共享边界同步移动，覆盖不变 |
 | VW-T5 | 子Actor 树展开 Players | Details 面板出现按名字排序的玩家列表 |
-| VW-T6 | 玩家右键"创建摄像机绑定" | cameras 多 1 台；subActor.boundCameraId 填 |
+| VW-T6 | 玩家连续两次创建不同视角绑定 | cameras 多 2 台；subActor.boundCameraIds 含两台 Camera id |
 | VW-T7 | 序列段绑到新建 Camera | segment.cameraId 更新；导出用该 Camera |
 | VW-T8 | 删除 Camera | cameras 少 1；引用它的段变 cameraId="" |
 | VW-T9 | 关键帧 CRUD | 关键帧点增删 + UI 重绘 |
-| VW-T10 | Undo CreateBindingCamera | cameras 恢复；subActor.boundCameraId 清空 |
+| VW-T10 | Undo CreateBindingCamera | cameras 恢复；只移除本次写入的 subActor.boundCameraIds 项 |
 | VW-T11 | 导出 = 沿序列渲染 | 导出视频按时序切镜头 |
 | VW-T12 | 字体下限 14px | grep 自绘 Text 不低于 14 |
 | VW-T13 | 旧 .playback（无 sequence/worldActor/cameras 字段）加载 | 重建：序列 1 段、世界Actor 1 段、cameras 空 |
@@ -457,9 +451,9 @@ CameraEntity createBindingCamera(const SubActor& actor, const EditorStateExt& e)
 |---|---|
 | 子Actor 数量大（>500）树渲染卡 | 默认折叠；首次展开只渲染前 100 |
 | 绑定 Camera 解绑后旧段无 Camera | 兜底 cameras[0] + UI 警告 |
-| 旧 videoTracks 字段被移除，存档不可读 | JSON 缺字段重建；新存档不写旧字段 |
+| 旧 videoTracks 字段被移除，存档不可读 | 无 editor 节点重建默认；v1/v2 迁移为 v3；新存档不写旧字段 |
 | 关键帧绑定 Camera id 在重命名后失效 | cameraId 用 uuid，不依赖 name |
-| 沿序列导出时 WorldActor 段与序列段不对齐 | 导出前校验：每个 sequence 段必须有对应 worldActor 段覆盖其 [startTick,endTick)，否则报 ErrorDialog |
+| 时间轴到回放源 tick 映射不一致 | 预览、导出与 SequenceSampler 仅调用 `WorldActorOps::mapTimelineToSourceTick`，并验证 WorldActor 段覆盖全时间轴 |
 
 ## 四、模块关系
 

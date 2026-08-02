@@ -5,6 +5,7 @@
 #include "playback/functions/replay/ReplaySession.h"
 
 #include "playback/refactor/video-editing/EditingCommands.h"
+#include "CommandFactory.h"
 
 #include <algorithm>
 
@@ -126,6 +127,31 @@ void EditorBridge::addTransition(EditorStateExt& state, const std::string& fromC
     EventBus::emit(CommandExecutedEvent{"Add Transition", false});
 }
 
+namespace {
+void pushCommand(CommandStack& stack, std::unique_ptr<IEditCommand> command, EditorStateExt& state) {
+    if (command) stack.push(std::move(command), state);
+}
+}
+
+void EditorBridge::splitSequence(EditorStateExt& state, int tick) { pushCommand(mCommandStack, CommandFactory::createSplitSequence(tick), state); }
+void EditorBridge::trimSequence(EditorStateExt& state, const std::string& id, int start, int end) { pushCommand(mCommandStack, CommandFactory::createTrimSequence(id, start, end), state); }
+void EditorBridge::deleteSequenceSegment(EditorStateExt& state, const std::string& id) { pushCommand(mCommandStack, CommandFactory::createDeleteSequenceSegment(id), state); }
+void EditorBridge::bindSequence(EditorStateExt& state, const std::string& id, const std::string& cameraId) { pushCommand(mCommandStack, CommandFactory::createBindSequenceToCamera(id, cameraId), state); }
+void EditorBridge::splitWorldActor(EditorStateExt& state, int tick) { pushCommand(mCommandStack, CommandFactory::createSplitWorldActor(tick), state); }
+void EditorBridge::trimWorldActor(EditorStateExt& state, const std::string& id, int start, int end) { pushCommand(mCommandStack, CommandFactory::createTrimWorldActor(id, start, end), state); }
+void EditorBridge::setWorldActorSegmentSpeed(EditorStateExt& state, const std::string& id, float speed) { pushCommand(mCommandStack, CommandFactory::createSetWorldActorSpeed(id, speed), state); }
+void EditorBridge::rippleDeleteWorldActor(EditorStateExt& state, const std::string& id) { pushCommand(mCommandStack, CommandFactory::createRippleDeleteWorldActorSegment(id), state); }
+void EditorBridge::addFreeCamera(EditorStateExt& state, const std::string& name) { pushCommand(mCommandStack, CommandFactory::createAddFreeCamera(name), state); }
+void EditorBridge::createBindingCamera(EditorStateExt& state, const std::string& id, const std::string& name) { pushCommand(mCommandStack, CommandFactory::createCreateBindingCamera(id, name), state); }
+void EditorBridge::deleteCamera(EditorStateExt& state, const std::string& id) { pushCommand(mCommandStack, CommandFactory::createDeleteCamera(id), state); }
+void EditorBridge::unbindCamera(EditorStateExt& state, const std::string& id) { pushCommand(mCommandStack, CommandFactory::createUnbindCamera(id), state); }
+void EditorBridge::addCameraKeyframe(EditorStateExt& state, const std::string& id, int tick) { pushCommand(mCommandStack, CommandFactory::createAddCameraKeyframe(id, tick), state); }
+void EditorBridge::moveCameraKeyframe(EditorStateExt& state, const std::string& id, const std::string& keyframeId, int tick) { pushCommand(mCommandStack, CommandFactory::createMoveCameraKeyframe(id, keyframeId, tick), state); }
+void EditorBridge::deleteCameraKeyframe(EditorStateExt& state, const std::string& id, const std::string& keyframeId) { pushCommand(mCommandStack, CommandFactory::createDeleteCameraKeyframe(id, keyframeId), state); }
+void EditorBridge::setKeyframeEasing(EditorStateExt& state, const std::string& id, const std::string& keyframeId, EasingType easing) { pushCommand(mCommandStack, CommandFactory::createSetKeyframeEasing(id, keyframeId, easing), state); }
+void EditorBridge::setCameraKind(EditorStateExt& state, const std::string& id, CameraKind kind) { pushCommand(mCommandStack, CommandFactory::createSetCameraKind(id, kind), state); }
+void EditorBridge::setSubActorDetails(EditorStateExt& state, const std::string& id, AgentDetails details) { pushCommand(mCommandStack, CommandFactory::createSetSubActorDetails(id, std::move(details)), state); }
+
 // ===== Keyframe operations =====
 
 void EditorBridge::addKeyframe(EditorStateExt& state, const std::string& trackId, int tick) {
@@ -230,6 +256,13 @@ void EditorBridge::deleteVideoTrack(EditorStateExt& state, const std::string& tr
 // ===== Initialization =====
 
 void EditorBridge::ensureInitialData(EditorStateExt& state) {
+    if (state.sequence.empty() && state.totalTicks > 0) {
+        state.sequence.push_back({"sequence_1", 0, state.totalTicks});
+    }
+    if (state.worldActor.segments.empty() && state.totalTicks > 0) {
+        state.worldActor.totalTicks = state.totalTicks;
+        state.worldActor.segments.push_back({"world_1", 0, state.totalTicks, 0});
+    }
     // Create default video track if none exist
     if (state.videoTracks.empty()) {
         Track vt;

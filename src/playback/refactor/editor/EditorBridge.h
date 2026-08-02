@@ -75,6 +75,25 @@ public:
     void addTransition(EditorStateExt& state, const std::string& fromClipId,
                        const std::string& toClipId, int kind, int durationTicks);
 
+    void splitSequence(EditorStateExt& state, int atTick);
+    void trimSequence(EditorStateExt& state, const std::string& segmentId, int startTick, int endTick);
+    void deleteSequenceSegment(EditorStateExt& state, const std::string& segmentId);
+    void bindSequence(EditorStateExt& state, const std::string& segmentId, const std::string& cameraId);
+    void splitWorldActor(EditorStateExt& state, int atTick);
+    void trimWorldActor(EditorStateExt& state, const std::string& segmentId, int startTick, int endTick);
+    void setWorldActorSegmentSpeed(EditorStateExt& state, const std::string& segmentId, float speed);
+    void rippleDeleteWorldActor(EditorStateExt& state, const std::string& segmentId);
+    void addFreeCamera(EditorStateExt& state, const std::string& name);
+    void createBindingCamera(EditorStateExt& state, const std::string& subActorId, const std::string& name);
+    void deleteCamera(EditorStateExt& state, const std::string& cameraId);
+    void unbindCamera(EditorStateExt& state, const std::string& cameraId);
+    void addCameraKeyframe(EditorStateExt& state, const std::string& cameraId, int tick);
+    void moveCameraKeyframe(EditorStateExt& state, const std::string& cameraId, const std::string& keyframeId, int tick);
+    void deleteCameraKeyframe(EditorStateExt& state, const std::string& cameraId, const std::string& keyframeId);
+    void setKeyframeEasing(EditorStateExt& state, const std::string& cameraId, const std::string& keyframeId, EasingType easing);
+    void setCameraKind(EditorStateExt& state, const std::string& cameraId, CameraKind kind);
+    void setSubActorDetails(EditorStateExt& state, const std::string& subActorId, AgentDetails details);
+
     // ── Keyframe operations ──
     void addKeyframe(EditorStateExt& state, const std::string& trackId, int tick);
     void moveKeyframe(EditorStateExt& state, const std::string& trackId,

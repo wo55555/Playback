@@ -15,6 +15,7 @@
 | 7 | [07-link-assembly.md](07-link-assembly.md) | ✅ 已写 | 链接装配：把 SequenceSegment / WorldActorSegment / CameraEntity 装配为可执行时间轴 |
 | 8 | [08-sequencer-timeline-ui.md](08-sequencer-timeline-ui.md) | ✅ 已写 | Sequencer 时间轴 UI：顶工具栏 / 左侧导航 / 右侧画布 / 底部传输栏（3+N 轨） |
 | 9 | [09-video-editing-workflow.md](09-video-editing-workflow.md) | ✅ 已写 | **视频编辑工作流单一权威**（3 条一级轨道：摄像机序列 / 世界Actor / 摄像机） |
+| 10 | [10-implementation-plan.md](10-implementation-plan.md) | ✅ 已写 | **可落地执行计划**：模块依赖 / 变更总表 / 21 步任务 / 11 周甘特 / 14 个回归用例 |
 
 > **09 是工作流唯一权威**：01 / 04 / 06 / 08 全部以 09 为准。
 
