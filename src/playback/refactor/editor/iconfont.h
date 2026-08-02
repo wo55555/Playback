@@ -70,6 +70,7 @@ constexpr const char* kFontPath = "resources/fonts/lucide.ttf";
 #define ICON_GRID          "\ue0f0"  // grid-2x2
 #define ICON_MORE          "\ue127"  // ellipsis-vertical
 #define ICON_SORT          "\ue16c"  // arrow-up-down
+#define ICON_FILTER        "\ue0dc"  // filter
 #define ICON_CALENDAR      "\ue04b"  // calendar
 #define ICON_CLOCK         "\ue080"  // clock-3
 #define ICON_WORLD         "\ue0fa"  // globe-2
@@ -88,6 +89,6 @@ constexpr const char* kFontPath = "resources/fonts/lucide.ttf";
 
 // Menu layout
 #define ICON_PANEL_LEFT    "\ue12a"  // panel-left
-#define ICON_BACK          "\ue05e"  // chevron-left (left arrow)
+#define ICON_BACK          "\ue048"  // arrow-left (←)
 
 }  // namespace Playback::Editor::Icons

@@ -12,6 +12,8 @@
 
 namespace playback::refactor::replay_browser {
 
+enum class ReplayFilter { All, Playable, Broken };
+
 class ReplayBrowserWindow {
 public:
     static ReplayBrowserWindow& getInstance();
@@ -47,6 +49,7 @@ private:
     std::string                        mSearch;
     screen::ReplaySort                 mSort = screen::ReplaySort::LastModified;
     bool                               mDescending = true;
+    ReplayFilter                       mFilter = ReplayFilter::All;
     ViewMode                           mViewMode = ViewMode::Grid;
     bool                               mShowDeleteDialog{};
     std::string                        mOperationError;

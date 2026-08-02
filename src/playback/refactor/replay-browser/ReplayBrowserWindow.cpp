@@ -26,13 +26,10 @@ constexpr float kScreenMargin     = 50.0f;
 constexpr float kCardGap          = 24.0f;
 constexpr float kCardPadding      = 16.0f;
 constexpr float kControlHeight    = 52.0f;
-constexpr float kFontScaleHeader  = 1.6f;
-constexpr float kFontScaleBody    = 1.0f;
-constexpr float kFontScaleSmall   = 0.9f;
-constexpr float kFontScaleCardTitle = 2.0f;
-constexpr float kFontScaleCardMeta  = 1.6f;
-constexpr float kFontScaleActionTitle = 3.0f;
-constexpr float kFontScaleActionMeta  = 2.0f;
+// 统一字号：基础字体 14px，全 UI 只允许 18 / 24 / 30 三档。
+constexpr float kFontScaleSmall = 18.0f / 14.0f; // 18px
+constexpr float kFontScaleBody  = 24.0f / 14.0f; // 24px
+constexpr float kFontScaleLarge = 30.0f / 14.0f; // 30px
 
 constexpr ImU32 kColorAccent       = IM_COL32(58,  140, 240, 255);
 constexpr ImU32 kColorAccentDim    = IM_COL32(58,  140, 240, 130);
@@ -72,6 +69,14 @@ char const* sortLabel(screen::ReplaySort sort) {
     }
 }
 
+char const* filterLabel(ReplayFilter filter) {
+    switch (filter) {
+    case ReplayFilter::Playable: return "仅正常";
+    case ReplayFilter::Broken: return "仅异常";
+    default: return "全部";
+    }
+}
+
 void tooltip(char const* text) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", text);
 }
@@ -103,6 +108,16 @@ bool iconButton(char const* icon, float width, bool active = false) {
     styleButton(active);
     bool clicked = ImGui::Button(icon, {width, kControlHeight});
     popButtonStyle();
+    return clicked;
+}
+
+// 返回按钮：默认透明，悬停才显示浅灰色。
+bool backButton(char const* icon, float size) {
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kColorButtonHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kColorButtonActive);
+    bool clicked = ImGui::Button(icon, {size, size});
+    ImGui::PopStyleColor(3);
     return clicked;
 }
 
@@ -140,7 +155,11 @@ void ReplayBrowserWindow::rebuildVisible() {
     mVisible.clear();
     mVisible.reserve(mReplays.size());
     for (std::size_t index = 0; index < mReplays.size(); ++index) {
-        if (mReplays[index].matches(mSearch)) mVisible.push_back(index);
+        auto const& replay = mReplays[index];
+        bool pass = replay.matches(mSearch);
+        if (pass && mFilter == ReplayFilter::Playable) pass = replay.canOpen;
+        if (pass && mFilter == ReplayFilter::Broken) pass = !replay.canOpen;
+        if (pass) mVisible.push_back(index);
     }
 }
 
@@ -217,66 +236,92 @@ void ReplayBrowserWindow::drawNavigation() {
     ImGui::BeginChild("##header", {0.0f, kNavHeight}, false,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-    ImGui::SetWindowFontScale(kFontScaleHeader);
+    float const width  = ImGui::GetWindowWidth();
+    float const margin = 24.0f;
+    float const gap    = 12.0f;
+    float const iconW  = kControlHeight;
+    float const textW  = 100.0f;
+    float const filterW = 130.0f;
+    float const sortW   = 130.0f;
+    float const importW = 110.0f;
+    float const searchW = 300.0f;
+    float const ctrlW   = searchW + importW + filterW + sortW + textW * 2.0f + iconW + gap * 6.0f;
+    float const startX  = std::max(margin + 200.0f, width - margin - ctrlW);
+    float const y       = (kNavHeight - kControlHeight) * 0.5f;
 
-    float const width     = ImGui::GetWindowWidth();
-    float const margin    = 24.0f;
-    float const totalGap  = 12.0f;
-    float const iconW     = kControlHeight;
-    float const textW     = 90.0f;
-    float const filterW   = 130.0f;
-    float const importW   = 110.0f;
-    float const searchW   = 300.0f;
-    float const controlsW = iconW + textW + textW + filterW + importW + searchW + totalGap * 6.0f;
-    float const startX    = std::max(margin + 180.0f, width - margin - controlsW);
-
-    // Back arrow left of title
-    ImGui::SetCursorPos({margin, (kNavHeight - kControlHeight) * 0.5f});
-    if (iconButton(ICON_BACK, iconW)) close();
+    // 返回按钮：← 图标，位于标题左侧，默认透明、悬停浅灰。
+    ImGui::SetCursorPos({margin, y});
+    if (backButton(ICON_BACK, iconW)) close();
     tooltip("返回主菜单");
 
-    ImGui::SameLine(0.0f, 12.0f);
-    ImGui::AlignTextToFramePadding();
+    // 标题：30px
+    ImGui::SetCursorPos({margin + iconW + gap, (kNavHeight - 30.0f * 1.4f) * 0.5f});
+    ImGui::SetWindowFontScale(kFontScaleLarge);
     pushTextColor(kColorText);
     ImGui::TextUnformatted("回放列表");
     ImGui::PopStyleColor();
+    ImGui::SetWindowFontScale(kFontScaleBody);
 
     float x = startX;
 
-    // Search
-    ImGui::SetCursorPos({x, (kNavHeight - kControlHeight) * 0.5f});
+    // 搜索框：修正为深灰底、白字，与按钮风格一致。
+    ImGui::SetCursorPos({x, y});
     ImGui::SetNextItemWidth(searchW);
     std::array<char, 256> search{};
     std::copy_n(mSearch.data(), std::min(mSearch.size(), search.size() - 1), search.data());
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.0f, 12.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.0f, (kControlHeight - 24.0f) * 0.5f});
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, kColorButton);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, kColorButtonHover);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, kColorButtonActive);
+    ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled, kColorTextDim);
     if (ImGui::InputTextWithHint("##search", ICON_SEARCH "  搜索回放文件", search.data(), search.size())) {
         mSearch = search.data();
         rebuildVisible();
     }
+    ImGui::PopStyleColor(5);
     ImGui::PopStyleVar();
-    x += searchW + totalGap;
+    x += searchW + gap;
 
-    // Import
-    ImGui::SetCursorPos({x, (kNavHeight - kControlHeight) * 0.5f});
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.0f, 12.0f});
+    // 导入
+    ImGui::SetCursorPos({x, y});
     styleButton();
     if (ImGui::Button(ICON_EXPORT "  导入", {importW, kControlHeight})) importReplay();
     popButtonStyle();
-    ImGui::PopStyleVar();
     tooltip("导入回放文件");
-    x += importW + totalGap;
+    x += importW + gap;
 
-    // Filter
-    ImGui::SetCursorPos({x, (kNavHeight - kControlHeight) * 0.5f});
-    ImGui::SetNextItemWidth(filterW);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.0f, 12.0f});
+    // 过滤下拉框：图标在左，无下拉箭头。
+    ImGui::SetCursorPos({x, y});
+    styleButton(mFilter != ReplayFilter::All);
+    if (ImGui::Button((std::string(ICON_FILTER) + "  过滤  " + filterLabel(mFilter)).c_str(), {filterW, kControlHeight})) {
+        ImGui::OpenPopup("##filter-menu");
+    }
+    popButtonStyle();
+    if (ImGui::BeginPopup("##filter-menu")) {
+        ImGui::SetWindowFontScale(kFontScaleBody);
+        for (auto filter : {ReplayFilter::All, ReplayFilter::Playable, ReplayFilter::Broken}) {
+            if (ImGui::MenuItem(filterLabel(filter), nullptr, mFilter == filter)) {
+                mFilter = filter;
+                rebuildVisible();
+            }
+        }
+        ImGui::EndPopup();
+    }
+    x += filterW + gap;
+
+    // 排序下拉框：图标在左，无下拉箭头。
+    ImGui::SetCursorPos({x, y});
     styleButton();
-    if (ImGui::BeginCombo("##filter", ICON_SORT "  过滤")) {
-        popButtonStyle();
+    if (ImGui::Button((std::string(ICON_SORT) + "  排序  " + sortLabel(mSort) + (mDescending ? " ↓" : " ↑")).c_str(), {sortW, kControlHeight})) {
+        ImGui::OpenPopup("##sort-menu");
+    }
+    popButtonStyle();
+    if (ImGui::BeginPopup("##sort-menu")) {
+        ImGui::SetWindowFontScale(kFontScaleBody);
         for (auto sort : {screen::ReplaySort::LastModified, screen::ReplaySort::ReplayName,
                           screen::ReplaySort::WorldName, screen::ReplaySort::Duration, screen::ReplaySort::FileSize}) {
-            bool selected = mSort == sort;
-            if (ImGui::Selectable(sortLabel(sort), selected)) {
+            if (ImGui::MenuItem(sortLabel(sort), nullptr, mSort == sort)) {
                 mSort = sort;
                 screen::ReplayBrowser::sortReplays(mReplays, mSort, mDescending);
                 rebuildVisible();
@@ -293,29 +338,27 @@ void ReplayBrowserWindow::drawNavigation() {
             screen::ReplayBrowser::sortReplays(mReplays, mSort, mDescending);
             rebuildVisible();
         }
-        ImGui::EndCombo();
-    } else {
-        popButtonStyle();
+        ImGui::EndPopup();
     }
-    ImGui::PopStyleVar();
-    x += filterW + totalGap;
+    x += sortW + gap;
 
-    // View toggles
-    ImGui::SetCursorPos({x, (kNavHeight - kControlHeight) * 0.5f});
+    // 平铺 / 列表 视图切换
+    ImGui::SetCursorPos({x, y});
     if (textButton(ICON_GRID "  平铺", textW, mViewMode == ViewMode::Grid)) mViewMode = ViewMode::Grid;
     tooltip("平铺视图");
-    x += textW + totalGap;
+    x += textW + gap;
 
-    ImGui::SetCursorPos({x, (kNavHeight - kControlHeight) * 0.5f});
+    ImGui::SetCursorPos({x, y});
     if (textButton(ICON_LIST "  列表", textW, mViewMode == ViewMode::Details)) mViewMode = ViewMode::Details;
     tooltip("列表视图");
-    x += textW + totalGap;
+    x += textW + gap;
 
-    // Settings
-    ImGui::SetCursorPos({x, (kNavHeight - kControlHeight) * 0.5f});
+    // 设置
+    ImGui::SetCursorPos({x, y});
     if (iconButton(ICON_SETTINGS, iconW)) ImGui::OpenPopup("##settings");
     tooltip("设置");
     if (ImGui::BeginPopup("##settings")) {
+        ImGui::SetWindowFontScale(kFontScaleBody);
         ImGui::TextDisabled("回放目录设置将在后续版本提供");
         ImGui::EndPopup();
     }
@@ -395,23 +438,23 @@ void ReplayBrowserWindow::drawCard(screen::ReplaySummary const& replay, std::siz
         ImGui::EndPopup();
     }
 
-    // Info section
-    float textY = kCardPadding + previewHeight + 18.0f;
+    // Info section：标题 30px，元信息 18px
+    float textY = kCardPadding + previewHeight + 16.0f;
     ImGui::SetCursorPos({kCardPadding, textY});
-    ImGui::SetWindowFontScale(kFontScaleCardTitle);
+    ImGui::SetWindowFontScale(kFontScaleLarge);
     pushTextColor(kColorText);
     ImGui::TextUnformatted(replay.displayName().c_str());
     ImGui::PopStyleColor();
 
-    ImGui::SetWindowFontScale(kFontScaleCardMeta);
-    ImGui::SetCursorPos({kCardPadding, textY + 42.0f});
+    ImGui::SetWindowFontScale(kFontScaleSmall);
+    ImGui::SetCursorPos({kCardPadding, textY + 46.0f});
     ImGui::TextDisabled("%s", replay.worldName.empty() ? "未知世界" : replay.worldName.c_str());
 
-    ImGui::SetCursorPos({kCardPadding, textY + 72.0f});
+    ImGui::SetCursorPos({kCardPadding, textY + 76.0f});
     ImGui::TextDisabled("%s  ·  %s", formatDuration(replay).c_str(), formatSize(replay.fileSize).c_str());
 
     if (!replay.canOpen) {
-        ImGui::SetCursorPos({width - 44.0f, textY + 68.0f});
+        ImGui::SetCursorPos({width - 44.0f, textY + 72.0f});
         ImGui::TextDisabled(ICON_WARNING);
         tooltip(replay.problem.c_str());
     }
@@ -426,11 +469,11 @@ void ReplayBrowserWindow::drawCard(screen::ReplaySummary const& replay, std::siz
 void ReplayBrowserWindow::drawGrid() {
     if (mVisible.empty()) {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 60.0f);
-        ImGui::SetWindowFontScale(kFontScaleHeader);
+        ImGui::SetWindowFontScale(kFontScaleLarge);
         ImGui::TextDisabled("没有回放文件");
         ImGui::SetWindowFontScale(kFontScaleBody);
         styleButton();
-        if (ImGui::Button(ICON_EXPORT "  导入第一个回放", {220.0f, kControlHeight})) importReplay();
+        if (ImGui::Button(ICON_EXPORT "  导入第一个回放", {240.0f, kControlHeight})) importReplay();
         popButtonStyle();
         return;
     }
@@ -469,13 +512,14 @@ void ReplayBrowserWindow::drawDetails() {
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorCardBg);
     ImGui::BeginChild("##details-list", {listWidth, listHeight}, false);
-    ImGui::SetWindowFontScale(1.1f);
+    ImGui::SetWindowFontScale(kFontScaleSmall);
     ImGui::TextDisabled("回放文件  %zu", mVisible.size());
     ImGui::Separator();
 
     if (mVisible.empty()) {
         ImGui::TextDisabled("没有回放文件");
     } else {
+        auto* const font = ImGui::GetFont();
         for (std::size_t visibleIndex = 0; visibleIndex < mVisible.size(); ++visibleIndex) {
             auto const& replay = mReplays[mVisible[visibleIndex]];
             bool const selected = mSelectedIds.contains(replay.replayId);
@@ -489,11 +533,11 @@ void ReplayBrowserWindow::drawDetails() {
             auto const min = ImGui::GetItemRectMin();
             auto const max = ImGui::GetItemRectMax();
             if (selected) ImGui::GetWindowDrawList()->AddRectFilled(min, {min.x + 4.0f, max.y}, kColorAccent);
-            ImGui::GetWindowDrawList()->AddText({min.x + 16.0f, min.y + 12.0f}, kColorText, replay.displayName().c_str());
-            ImGui::GetWindowDrawList()->AddText({min.x + 16.0f, min.y + 40.0f}, kColorTextDim,
-                                                replay.worldName.empty() ? "未知世界" : replay.worldName.c_str());
             std::string const summary = formatDuration(replay) + "  ·  " + formatSize(replay.fileSize);
-            ImGui::GetWindowDrawList()->AddText({min.x + 16.0f, min.y + 66.0f}, kColorTextDim, summary.c_str());
+            ImGui::GetWindowDrawList()->AddText(font, 24.0f, {min.x + 16.0f, min.y + 8.0f}, kColorText, replay.displayName().c_str());
+            ImGui::GetWindowDrawList()->AddText(font, 18.0f, {min.x + 16.0f, min.y + 44.0f}, kColorTextDim,
+                                                replay.worldName.empty() ? "未知世界" : replay.worldName.c_str());
+            ImGui::GetWindowDrawList()->AddText(font, 18.0f, {min.x + 16.0f, min.y + 68.0f}, kColorTextDim, summary.c_str());
             ImGui::PopID();
         }
     }
@@ -533,11 +577,11 @@ void ReplayBrowserWindow::drawDetails() {
     drawPreview(**replay, {previewWidth, previewHeight});
 
     ImGui::SetCursorPos({margin, margin + previewHeight + 22.0f});
-    ImGui::SetWindowFontScale(1.55f);
+    ImGui::SetWindowFontScale(kFontScaleLarge);
     pushTextColor(kColorText);
     ImGui::TextUnformatted((*replay)->displayName().c_str());
     ImGui::PopStyleColor();
-    ImGui::SetWindowFontScale(1.05f);
+    ImGui::SetWindowFontScale(kFontScaleSmall);
     ImGui::Separator();
 
     if (ImGui::BeginTable("##metadata", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg)) {
@@ -597,17 +641,17 @@ void ReplayBrowserWindow::drawActionBar() {
     float const contentW = ImGui::GetWindowWidth();
 
     if (mSelectedIds.size() == 1 && replay) {
-        ImGui::SetCursorPos({24.0f, 14.0f});
-        ImGui::SetWindowFontScale(kFontScaleActionTitle);
+        ImGui::SetCursorPos({24.0f, 10.0f});
+        ImGui::SetWindowFontScale(kFontScaleLarge);
         pushTextColor(kColorText);
         ImGui::TextUnformatted((*replay)->displayName().c_str());
         ImGui::PopStyleColor();
-        ImGui::SetWindowFontScale(kFontScaleActionMeta);
-        ImGui::SetCursorPos({24.0f, 58.0f});
+        ImGui::SetWindowFontScale(kFontScaleSmall);
+        ImGui::SetCursorPos({24.0f, 62.0f});
         ImGui::TextDisabled("%s  ·  %s", formatDuration(**replay).c_str(), formatSize((*replay)->fileSize).c_str());
     } else {
-        ImGui::SetCursorPos({24.0f, 30.0f});
-        ImGui::SetWindowFontScale(kFontScaleActionTitle);
+        ImGui::SetCursorPos({24.0f, 28.0f});
+        ImGui::SetWindowFontScale(kFontScaleLarge);
         pushTextColor(kColorText);
         ImGui::Text("已选择 %zu 个文件", mSelectedIds.size());
         ImGui::PopStyleColor();
