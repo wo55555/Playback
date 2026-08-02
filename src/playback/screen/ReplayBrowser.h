@@ -28,6 +28,7 @@ struct ReplaySummary {
     std::filesystem::file_time_type lastModified{};
     bool                            canOpen = false;
     std::string                     problem;
+    std::string                     thumbnailPng;
 
     [[nodiscard]] std::string displayName() const;
     [[nodiscard]] bool        matches(std::string_view filter) const;
@@ -51,6 +52,12 @@ public:
 
     static bool openReplay(ReplaySummary const& replay);
     static bool openReplay(std::filesystem::path const& replayPath);
+    [[nodiscard]] static bool importReplay(std::filesystem::path const& source, std::string& error);
+    [[nodiscard]] static bool deleteReplay(ReplaySummary const& replay, std::string& error);
+    [[nodiscard]] static bool showInFolder(ReplaySummary const& replay);
+
+    // 同时修改回放元数据名称与文件本身名称；新名会自动去掉非法字符并补全 .playback 扩展名。
+    [[nodiscard]] static bool renameReplay(ReplaySummary const& replay, std::string_view newName, std::string& error);
 };
 
 } // namespace playback::screen

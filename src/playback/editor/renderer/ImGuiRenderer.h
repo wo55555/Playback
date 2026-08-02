@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <filesystem>
+#include <string_view>
 
 struct IDXGISwapChain;
 
@@ -17,6 +19,10 @@ public:
     ~ImGuiRenderer();
 
     void setContext(EditorContext* context);
+    void requestReplayThumbnailCapture();
+    [[nodiscard]] bool saveReplayThumbnail(std::filesystem::path const& output);
+    [[nodiscard]] void* acquireReplayThumbnailTexture(std::string_view key, std::string_view png);
+    void clearReplayThumbnailTextures();
 
     bool render(IDXGISwapChain* swapChain);
     bool beforeResize(IDXGISwapChain* swapChain);

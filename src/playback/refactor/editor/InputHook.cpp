@@ -1,6 +1,7 @@
 #include "InputHook.h"
 
 #include "Editor.h"
+#include "playback/refactor/replay-browser/ReplayBrowserWindow.h"
 
 #include "imgui.h"
 
@@ -74,11 +75,13 @@ void onKeyEvent(uint32_t keyCode, bool down) {
 }
 
 bool shouldMCBEConsumeMouse() {
+    if (replay_browser::ReplayBrowserWindow::getInstance().ownsInput()) return false;
     if (!Editor::getInstance().isOpen()) return true;  // Editor closed: game normal
     return false;                                       // Editor open: game doesn't get mouse
 }
 
 bool shouldMCBEConsumeKeyboard() {
+    if (replay_browser::ReplayBrowserWindow::getInstance().ownsInput()) return false;
     if (!Editor::getInstance().isOpen()) return true;
     return false;
 }
