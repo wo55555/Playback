@@ -19,7 +19,7 @@ xmake f -y -p windows -a x64 -m release --target_type=client
 xmake -r -y
 ```
 
-The packaged mod is written to `bin/playback/`. Translations are copied to `bin/playback/lang/`, and the icon font is copied to `bin/playback/fonts/`. The legacy UI resource pack and standalone `.mcpack` are no longer generated.
+The packaged mod is written to `bin/playback/`. Native translations are copied to `bin/playback/lang/`, the icon font is copied to `bin/playback/fonts/`, and the lightweight main-menu button pack is installed under `bin/playback/resource_packs/playback-ui/`. The same button pack is generated as `bin/playback-ui.mcpack` for standalone manual import; it does not contain the replay browser, which is rendered natively.
 
 ## Refresh Dependencies
 

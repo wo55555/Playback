@@ -15,7 +15,7 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 > Use a clean LeviLamina instance without other third-party mods whenever possible. Broad mod compatibility is not currently guaranteed.
 
 > [!CAUTION]
-> `v0.1.2-mc26.10` changes the replay snapshot format, so replays created by `v0.1.1` or earlier must be recorded again. It also removes the previous UI resource-pack installation layout. Delete any old `playback-ui.mcpack` file and `mods/playback/resource_packs/playback-ui/` directory before installing, then perform a clean mod installation.
+> `v0.1.2-mc26.10` changes the replay snapshot format, so replays created by `v0.1.1` or earlier must be recorded again. The replay browser is now native, but its main-menu button still requires the lightweight resource pack included with the mod. If you installed an earlier `v0.1.2-mc26.10` asset without that pack, download the corrected release and reinstall it.
 
 ## Install with LeviLauncher and Lip
 
@@ -51,7 +51,7 @@ The screenshots below use a `26.10` instance. For `26.20`, follow the same steps
   <img src="images/quick-start/en/install-playback.webp" alt="Install a compatible Playback version with lip" width="900">
 </p>
 
-Launch or restart the game. The **Playback** button should appear on the Minecraft main menu.
+Launch or restart the game. The bundled button resource pack loads automatically, and the **Playback** button should appear on the Minecraft main menu. The Release also provides `playback-ui.mcpack` for standalone manual import.
 
 ## Install with the Lip CLI
 

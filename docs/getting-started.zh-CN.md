@@ -15,7 +15,7 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 > 建议尽量使用未安装其他第三方模组的独立 LeviLamina 实例。目前暂不保证与其他模组广泛兼容。
 
 > [!CAUTION]
-> `v0.1.2-mc26.10` 修改了回放快照格式，使用 `v0.1.1` 或更早版本创建的回放必须重新录制。同时，该版本移除了旧的 UI 资源包安装布局。安装前请删除旧的 `playback-ui.mcpack` 文件和 `mods/playback/resource_packs/playback-ui/` 目录，然后重新进行模组安装。
+> `v0.1.2-mc26.10` 修改了回放快照格式，使用 `v0.1.1` 或更早版本创建的回放必须重新录制。回放浏览器现已改为原生界面，但主菜单按钮仍需要模组内置的轻量资源包。如果此前安装的是缺少该资源包的早期 `v0.1.2-mc26.10` 资产，请重新下载修正版并安装。
 
 ## 使用 LeviLauncher 和 Lip 安装
 
@@ -51,7 +51,7 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
   <img src="images/quick-start/zh-cn/install-playback.webp" alt="通过 lip 安装兼容的 Playback 版本" width="900">
 </p>
 
-安装完成后启动或重启游戏，Minecraft 主菜单中应显示 **Playback** 按钮。
+安装完成后启动或重启游戏，内置按钮资源包会自动加载，Minecraft 主菜单中应显示 **Playback** 按钮。Release 同时提供 `playback-ui.mcpack` 供单独手动导入。
 
 ## 使用 Lip 命令行安装
 
