@@ -59,7 +59,6 @@ struct NavigationLayoutConfig {
 
 constexpr NavigationLayoutConfig kNavigationLayout{};
 
-// Shared spacing for the location bar and content canvas in both browser views.
 struct ContentLayoutConfig {
     float horizontalMargin    = kScreenMargin;
     float bottomMargin        = 16.0f;
@@ -69,7 +68,6 @@ struct ContentLayoutConfig {
 
 constexpr ContentLayoutConfig kContentLayout{};
 
-// Centralized layout configuration for grid cards; body height is derived from font sizes, actual gaps, and padding.
 struct CardLayoutConfig {
     static constexpr int metadataRowCount = 3;
 
@@ -94,7 +92,6 @@ struct CardLayoutConfig {
 
 constexpr CardLayoutConfig kCardLayout{};
 
-// Centralized layout configuration for the responsive master-detail view.
 struct DetailsLayoutConfig {
     static constexpr int metadataRowCount = 7;
 
@@ -243,13 +240,16 @@ float centeredIconX(char const* icon, float minimumX, float maximumX) {
     return iconDrawX(icon, visualLeft);
 }
 
-float toolbarButtonWidth(char const* icon, std::string_view text, char const* trailingIcon = nullptr) {
-    float const leadingGap    = text.empty() ? 0.0f : kNavigationLayout.iconTextGap;
-    float const trailingGap   = trailingIcon ? kNavigationLayout.iconTextGap : 0.0f;
+float iconLabelWidth(char const* icon, std::string_view text, float gap = 6.0f, char const* trailingIcon = nullptr) {
+    float const leadingGap    = text.empty() ? 0.0f : gap;
+    float const trailingGap   = trailingIcon ? gap : 0.0f;
     float const trailingWidth = trailingIcon ? iconVisualWidth(trailingIcon) : 0.0f;
+    return iconVisualWidth(icon) + leadingGap + textWidth(text) + trailingGap + trailingWidth;
+}
+
+float toolbarButtonWidth(char const* icon, std::string_view text, char const* trailingIcon = nullptr) {
     return std::ceil(
-        iconVisualWidth(icon) + leadingGap + textWidth(text) + trailingGap + trailingWidth
-        + kNavigationLayout.buttonPadding * 2.0f
+        iconLabelWidth(icon, text, kNavigationLayout.iconTextGap, trailingIcon) + kNavigationLayout.buttonPadding * 2.0f
     );
 }
 
@@ -261,10 +261,6 @@ bool beginAnchoredPopup(char const* popupId, ImVec2 buttonMinimum, ImVec2 button
     ImGui::SetNextWindowPos({buttonMinimum.x, buttonMaximum.y + popupGap}, ImGuiCond_Always);
     ImGui::SetNextWindowSizeConstraints({popupWidth, 0.0f}, {popupWidth, FLT_MAX});
     return ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoMove);
-}
-
-float iconTextWidth(char const* icon, std::string_view text, float gap = 6.0f) {
-    return iconVisualWidth(icon) + gap + textWidth(text);
 }
 
 void drawClippedText(std::string_view text, ImVec2 position, float clipRight, ImU32 color) {
@@ -351,8 +347,6 @@ void tooltip(char const* text) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", text);
 }
 
-void pushTextColor(ImU32 col) { ImGui::PushStyleColor(ImGuiCol_Text, col); }
-
 void styleButton(bool active = false) {
     if (active) {
         ImGui::PushStyleColor(ImGuiCol_Button, kColorAccent);
@@ -367,31 +361,25 @@ void styleButton(bool active = false) {
 
 void popButtonStyle() { ImGui::PopStyleColor(3); }
 
-bool toolbarButton(
-    char const*      id,
+void drawCenteredIconLabel(
+    ImVec2           minimum,
+    ImVec2           maximum,
     char const*      icon,
     std::string_view text,
-    float            width,
-    bool             active       = false,
     char const*      trailingIcon = nullptr
 ) {
-    styleButton(active);
-    bool const clicked = ImGui::Button(id, {width, kControlHeight});
-    popButtonStyle();
+    float const iconWidth   = iconVisualWidth(icon);
+    float const leadingGap  = text.empty() ? 0.0f : kNavigationLayout.iconTextGap;
+    float const labelWidth  = textWidth(text);
+    float const trailingGap = trailingIcon ? kNavigationLayout.iconTextGap : 0.0f;
+    float const groupWidth  = iconLabelWidth(icon, text, kNavigationLayout.iconTextGap, trailingIcon);
+    float const groupX      = minimum.x + (maximum.x - minimum.x - groupWidth) * 0.5f;
+    float const iconX =
+        text.empty() && !trailingIcon ? centeredIconX(icon, minimum.x, maximum.x) : iconDrawX(icon, groupX);
 
-    ImVec2 const minimum       = ImGui::GetItemRectMin();
-    ImVec2 const maximum       = ImGui::GetItemRectMax();
-    float const  iconWidth     = iconVisualWidth(icon);
-    float const  leadingGap    = text.empty() ? 0.0f : kNavigationLayout.iconTextGap;
-    float const  labelW        = textWidth(text);
-    float const  trailingGap   = trailingIcon ? kNavigationLayout.iconTextGap : 0.0f;
-    float const  trailingWidth = trailingIcon ? iconVisualWidth(trailingIcon) : 0.0f;
-    float const  groupW        = iconWidth + leadingGap + labelW + trailingGap + trailingWidth;
-    float const  groupX        = minimum.x + (maximum.x - minimum.x - groupW) * 0.5f;
-    float const  iconX         = text.empty() ? centeredIconX(icon, minimum.x, maximum.x) : iconDrawX(icon, groupX);
-    ImU32 const  color         = ImGui::GetColorU32(ImGui::ColorConvertU32ToFloat4(kColorText));
-
-    ImGui::GetWindowDrawList()->AddText(
+    ImDrawList* const draw  = ImGui::GetWindowDrawList();
+    ImU32 const       color = ImGui::GetColorU32(kColorText);
+    draw->AddText(
         ImGui::GetFont(),
         ImGui::GetFontSize(),
         {iconX, centeredIconY(icon, minimum.y, maximum.y)},
@@ -400,7 +388,7 @@ bool toolbarButton(
     );
     if (!text.empty()) {
         ImVec2 const textSize = ImGui::CalcTextSize(text.data(), text.data() + text.size());
-        ImGui::GetWindowDrawList()->AddText(
+        draw->AddText(
             ImGui::GetFont(),
             ImGui::GetFontSize(),
             {
@@ -413,8 +401,8 @@ bool toolbarButton(
         );
     }
     if (trailingIcon) {
-        float const trailingX = groupX + iconWidth + leadingGap + labelW + trailingGap;
-        ImGui::GetWindowDrawList()->AddText(
+        float const trailingX = groupX + iconWidth + leadingGap + labelWidth + trailingGap;
+        draw->AddText(
             ImGui::GetFont(),
             ImGui::GetFontSize(),
             {iconDrawX(trailingIcon, trailingX), centeredIconY(trailingIcon, minimum.y, maximum.y)},
@@ -422,6 +410,21 @@ bool toolbarButton(
             trailingIcon
         );
     }
+}
+
+bool toolbarButton(
+    char const*      id,
+    char const*      icon,
+    std::string_view text,
+    float            width,
+    bool             active       = false,
+    char const*      trailingIcon = nullptr
+) {
+    styleButton(active);
+    bool const clicked = ImGui::Button(id, {width, kControlHeight});
+    popButtonStyle();
+
+    drawCenteredIconLabel(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), icon, text, trailingIcon);
     return clicked;
 }
 
@@ -436,33 +439,7 @@ bool popupIconMenuItem(char const* id, char const* icon, std::string_view text) 
     );
     ImGui::PopStyleColor(2);
 
-    ImVec2 const minimum    = ImGui::GetItemRectMin();
-    ImVec2 const maximum    = ImGui::GetItemRectMax();
-    float const  iconWidth  = iconVisualWidth(icon);
-    ImVec2 const textSize   = ImGui::CalcTextSize(text.data(), text.data() + text.size());
-    float const  groupWidth = iconWidth + kNavigationLayout.iconTextGap + textSize.x;
-    float const  groupX     = minimum.x + (maximum.x - minimum.x - groupWidth) * 0.5f;
-
-    ImDrawList* const draw  = ImGui::GetWindowDrawList();
-    ImU32 const       color = ImGui::GetColorU32(ImGui::ColorConvertU32ToFloat4(kColorText));
-    draw->AddText(
-        ImGui::GetFont(),
-        ImGui::GetFontSize(),
-        {iconDrawX(icon, groupX), centeredIconY(icon, minimum.y, maximum.y)},
-        color,
-        icon
-    );
-    draw->AddText(
-        ImGui::GetFont(),
-        ImGui::GetFontSize(),
-        {
-            groupX + iconWidth + kNavigationLayout.iconTextGap,
-            minimum.y + (maximum.y - minimum.y - textSize.y) * 0.5f + kTextOpticalOffsetY,
-        },
-        color,
-        text.data(),
-        text.data() + text.size()
-    );
+    drawCenteredIconLabel(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), icon, text);
     return clicked;
 }
 
@@ -542,7 +519,7 @@ bool backButton(char const* id, char const* icon, float size) {
             centeredIconX(icon, minimum.x, maximum.x),
             centeredIconY(icon, minimum.y, maximum.y),
         },
-        ImGui::GetColorU32(ImGui::ColorConvertU32ToFloat4(kColorText)),
+        ImGui::GetColorU32(kColorText),
         icon
     );
     return clicked;
@@ -559,8 +536,8 @@ bool searchInput(
     ImVec2 const minimum = ImGui::GetCursorScreenPos();
     ImVec2 const maximum{minimum.x + width, minimum.y + kControlHeight};
     bool const   hovered = ImGui::IsMouseHoveringRect(minimum, maximum);
-    ImU32 const  bg   = ImGui::GetColorU32(ImGui::ColorConvertU32ToFloat4(hovered ? kColorButtonHover : kColorButton));
-    ImDrawList*  draw = ImGui::GetWindowDrawList();
+    ImU32 const  bg      = ImGui::GetColorU32(hovered ? kColorButtonHover : kColorButton);
+    ImDrawList*  draw    = ImGui::GetWindowDrawList();
     draw->AddRectFilled(minimum, maximum, bg, ImGui::GetStyle().FrameRounding);
 
     constexpr float iconAreaWidth = 44.0f;
@@ -574,7 +551,7 @@ bool searchInput(
             centeredIconX(icon, minimum.x, minimum.x + iconAreaWidth),
             centeredIconY(icon, minimum.y, maximum.y),
         },
-        ImGui::GetColorU32(ImGui::ColorConvertU32ToFloat4(kColorTextDim)),
+        ImGui::GetColorU32(kColorTextDim),
         icon
     );
 
@@ -806,7 +783,6 @@ void SelectReplayScreen::drawNavigation() {
     float const iconW   = kControlHeight;
     float const searchW = kNavigationLayout.searchWidth;
 
-    // Measure and draw icons and labels separately so every control shares the visual center of the 52 px toolbar.
     std::string const importLabelText   = "playback.replayBrowser.navigation.import"_tr();
     std::string const filterLabelText   = "playback.replayBrowser.navigation.filter"_tr();
     std::string const sortLabelText     = "playback.replayBrowser.navigation.sort"_tr();
@@ -833,24 +809,21 @@ void SelectReplayScreen::drawNavigation() {
     float const startX = std::max(titleRight + margin, width - margin - ctrlW);
     float const y      = (kNavHeight - kControlHeight) * 0.5f;
 
-    // Back button: a left arrow before the title, transparent by default with a light-gray hover state.
     ImGui::SetWindowFontScale(kFontScaleNavBackIcon);
     ImGui::SetCursorPos({margin, y});
     if (backButton("##back", ICON_BACK, iconW)) submit({playback::editor::EditorActionType::CloseReplayBrowser});
     ImGui::SetWindowFontScale(kFontScaleNavControl);
     tooltip("playback.replayBrowser.navigation.back"_tr().c_str());
 
-    // Center the title using its measured height instead of an estimated line height.
     ImGui::SetWindowFontScale(kFontScaleNavTitle);
     ImGui::SetCursorPos({titleX, (kNavHeight - titleSize.y) * 0.5f + kTextOpticalOffsetY});
-    pushTextColor(kColorText);
+    ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
     ImGui::TextUnformatted(title.c_str());
     ImGui::PopStyleColor();
     ImGui::SetWindowFontScale(kFontScaleNavControl);
 
     float x = startX;
 
-    // Center the search icon independently and align the input text to the same visual axis.
     ImGui::SetCursorPos({x, y});
     std::array<char, 256> search{};
     std::copy_n(mSearch.data(), std::min(mSearch.size(), search.size() - 1), search.data());
@@ -861,7 +834,6 @@ void SelectReplayScreen::drawNavigation() {
     }
     x += searchW + gap;
 
-    // Import.
     ImGui::SetCursorPos({x, y});
     if (toolbarButton("##import", ICON_EXPORT, importLabelText, importW)) importReplay();
     tooltip("playback.replayBrowser.navigation.importTooltip"_tr().c_str());
@@ -928,7 +900,6 @@ void SelectReplayScreen::drawNavigation() {
     }
     x += iconW + kNavigationLayout.viewGroupGap;
 
-    // Draw both states as one segmented control with a single click target.
     ImGui::SetCursorPos({x, y});
     if (viewToggleButton(
             "##view-mode",
@@ -1013,9 +984,8 @@ void SelectReplayScreen::drawCard(
     ImGui::SetCursorPos({kCardLayout.previewInset, kCardLayout.previewInset});
     drawPreview(replay, {previewWidth, previewHeight});
 
-    // Clickable full-card overlay (after preview so it receives clicks over the whole card)
-    // InvisibleButton returns true on release by default, while IsMouseDoubleClicked is true only on the second press.
-    // Since these occur in different frames, detect double-clicks on the pressed frame while the card is hovered.
+    // InvisibleButton activates on release, but ImGui reports a double-click on the second press.
+    // Detect it on that press while the card is hovered.
     ImGui::SetCursorPos({0.0f, 0.0f});
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##select-card", {width, height});
@@ -1037,11 +1007,7 @@ void SelectReplayScreen::drawCard(
     ImGui::InvisibleButton("##card-info", {infoSize, infoSize});
     bool const infoHovered = ImGui::IsItemHovered();
 
-    // Fade in the tooltip: start at zero opacity, begin fading after 0.5 s, and reach full opacity at 0.8 s.
-    // This avoids a transient rendering artifact when the tooltip first appears.
-    // Do not store the hover start time in a member: all cards would share it, and cards drawn after the hovered card
-    // would reset it to -1 every frame, keeping elapsed at zero and the tooltip fully transparent.
-    // Store it in ImGuiStorage under a per-card ID; PushID keeps cards isolated from one another.
+    // Store fade timing in per-card ImGui state; shared state would be reset by every non-hovered card.
     double const        now         = ImGui::GetTime();
     ImGuiStorage* const fadeStorage = ImGui::GetStateStorage();
     ImGuiID const       fadeKey     = ImGui::GetID("##info-fade");
@@ -1118,7 +1084,7 @@ void SelectReplayScreen::drawCard(
     drawIconTextLine(ICON_WORLD, worldName, {contentX, cardMinimum.y + worldY}, contentRight, kColorTextDim);
     drawIconTextLine(ICON_CALENDAR, modified, {contentX, cardMinimum.y + modifiedY}, contentRight, kColorTextDim);
 
-    float const sizeWidth = iconTextWidth(ICON_FILE, size);
+    float const sizeWidth = iconLabelWidth(ICON_FILE, size);
     float const sizeX     = std::max(contentX, contentRight - sizeWidth);
     drawIconTextLine(
         ICON_CLOCK,
@@ -1299,7 +1265,6 @@ void SelectReplayScreen::drawDetailsListItem(
     ImVec2 const thumbnailMaximum{thumbnailMinimum.x + thumbnailWidth, thumbnailMinimum.y + thumbnailHeight};
     ImGui::GetWindowDrawList()->AddRect(thumbnailMinimum, thumbnailMaximum, kColorCardBorder, 3.0f);
 
-    // Draw one click target over the complete row after the thumbnail.
     ImGui::SetCursorPos({0.0f, 0.0f});
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##select-details-item", {width, itemHeight});
@@ -1356,7 +1321,7 @@ void SelectReplayScreen::drawDetailsListItem(
         ((titleY + titleHeight * 0.5f) + (footerY + metadataHeight * 0.5f)) * 0.5f - metadataHeight * 0.5f;
     drawClippedText(worldName, {textX, worldY + kTextOpticalOffsetY}, textRight, kColorTextDim);
 
-    float const durationWidth = iconTextWidth(ICON_CLOCK, duration);
+    float const durationWidth = iconLabelWidth(ICON_CLOCK, duration);
     float const durationX = std::max(textX, itemMaximum.x - kDetailsLayout.listItemHorizontalPadding - durationWidth);
     drawIconTextLine(
         ICON_CALENDAR,
@@ -1409,7 +1374,6 @@ void SelectReplayScreen::drawDetails() {
     float const  contentX =
         contentOriginX + std::max(kContentLayout.horizontalMargin, (available.x - contentWidth) * 0.5f);
 
-    // Reuse the grid view's location treatment so both modes keep the same content hierarchy.
     float const locationY = contentOriginY + kContentLayout.locationVerticalGap;
     ImGui::SetCursorPos({contentX, locationY});
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorPanelBg);
@@ -1832,8 +1796,7 @@ void SelectReplayScreen::drawRenameDialog() {
     bool const        cancelled = ImGui::Button(cancel.c_str(), {120.0f, kControlHeight});
     popButtonStyle();
 
-    bool const confirm = saved;
-    if (confirm && replay) {
+    if (saved && replay) {
         playback::editor::EditorAction action{playback::editor::EditorActionType::RenameReplay};
         action.replayId = (*replay)->replayId;
         action.name     = mRenameBuffer;
