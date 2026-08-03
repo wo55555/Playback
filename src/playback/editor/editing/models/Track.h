@@ -97,7 +97,6 @@ inline float Transition::blendAlpha(int tickInTransition) const {
     float t = static_cast<float>(tickInTransition) / static_cast<float>(durationTicks);
     if (t <= 0.0f) return 0.0f;
     if (t >= 1.0f) return 1.0f;
-    // Simple linear easing for now
     return t;
 }
 

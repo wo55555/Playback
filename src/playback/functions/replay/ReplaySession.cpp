@@ -1743,8 +1743,6 @@ void ReplaySession::handleNextTick() {
     if (mIsProcessingSnapshot) {
         throw std::runtime_error("Can't go to next tick while processing snapshot");
     }
-    // TODO: Flash pending entities
-
     mCurrentTick += 1;
     if (mReplayTime) {
         ++*mReplayTime;

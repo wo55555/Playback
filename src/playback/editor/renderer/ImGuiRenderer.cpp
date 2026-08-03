@@ -252,8 +252,7 @@ struct ImGuiRenderer::Impl {
         cfg.PixelSnapH    = true;
         cfg.GlyphOffset.y = 1.0f;
         static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
-        auto const           iconPath =
-            Playback::getInstance().getSelf().getModDir() / "resource_packs" / "playback-ui" / "fonts" / "lucide.ttf";
+        auto const           iconPath = Playback::getInstance().getSelf().getModDir() / "fonts" / "lucide.ttf";
         if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 14.0f, &cfg, iconRange)) {
             getLogger().warn("Unable to load replay icon font from {}", iconPath);
         }
@@ -563,15 +562,14 @@ struct ImGuiRenderer::Impl {
             io.Fonts->AddFontDefault();
         }
 
-        // Merge the packaged Lucide font before the DX12 backend creates its font texture.
+        // Merge the bundled Lucide font before the DX12 backend creates its font texture.
         {
             ImFontConfig cfg;
             cfg.MergeMode     = true;
             cfg.PixelSnapH    = true;
             cfg.GlyphOffset.y = 1.0f;
             static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
-            auto const iconPath = Playback::getInstance().getSelf().getModDir() / "resource_packs" / "playback-ui"
-                                / "fonts" / "lucide.ttf";
+            auto const           iconPath = Playback::getInstance().getSelf().getModDir() / "fonts" / "lucide.ttf";
             if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 14.0f, &cfg, iconRange)) {
                 getLogger().warn("Unable to load replay icon font from {}", iconPath);
             }

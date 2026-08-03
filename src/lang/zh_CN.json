@@ -21,7 +21,7 @@
             "empty": "没有回放文件",
             "importFirst": "导入第一个回放",
             "visibleCount": "共 {} 个回放文件",
-            "fileCount": "回放文件  {}",
+            "fileCount": "回放文件：{}",
             "selectedCount": "已选择 {} 个文件",
             "selectForDetails": "选择一个回放以查看详细信息",
             "pathValue": "路径：{}",
@@ -34,7 +34,7 @@
                 "search": "搜索回放文件",
                 "import": "导入",
                 "importTooltip": "导入回放文件",
-                "filter": "过滤",
+                "filter": "筛选",
                 "sort": "排序",
                 "grid": "平铺",
                 "list": "列表",
@@ -46,8 +46,8 @@
             },
             "filter": {
                 "all": "全部",
-                "playable": "仅正常",
-                "broken": "仅异常"
+                "playable": "仅可播放",
+                "broken": "仅不可用"
             },
             "sort": {
                 "name": "名称",
@@ -72,7 +72,7 @@
             "action": {
                 "openReplay": "打开回放",
                 "copyPath": "复制路径",
-                "showInFolder": "所在文件夹",
+                "showInFolder": "在文件夹中显示",
                 "delete": "删除",
                 "open": "打开",
                 "edit": "编辑"
@@ -102,6 +102,8 @@
                 "invalidImportFile": "请选择有效的 .playback 或 .zip 回放文件",
                 "invalidArchive": "文件不是有效的回放归档",
                 "fileNotFound": "回放文件不存在",
+                "openFailed": "启动回放会话失败",
+                "showInFolderFailed": "无法在文件资源管理器中显示回放",
                 "emptyName": "回放名称不能为空",
                 "renameMissingMetadata": "回放归档中缺少 metadata.json，无法重命名",
                 "parseMetadata": "无法解析回放元数据：{}",
@@ -109,7 +111,7 @@
             }
         },
         "refactorEditor": {
-            "menu": {"file":"文件","edit":"编辑","camera":"相机","markers":"标记","window":"窗口","help":"帮助","openReplay":"打开回放","saveProject":"保存项目","recent":"最近打开","empty":"（空）","export":"导出…","exit":"退出编辑器","undo":"撤销","redo":"重做","delete":"删除","selectAll":"全选","addKeyframe":"在播放头添加关键帧","addCameraTrack":"添加相机轨道","cameraPreset":"相机预设","insertMarker":"插入标记","nextMarker":"跳至下一个标记","previousMarker":"跳至上一个标记","hintBar":"切换提示栏","curveEditor":"曲线编辑器","shortcuts":"快捷键","documentation":"文档","about":"关于"},
+            "menu": {"file":"文件","edit":"编辑","camera":"相机","markers":"标记","window":"窗口","help":"帮助","openReplay":"打开回放","saveProject":"保存项目","recent":"最近打开","export":"导出…","exit":"退出编辑器","undo":"撤销","redo":"重做","delete":"删除","selectAll":"全选","addKeyframe":"在播放头添加关键帧","cameraPreset":"相机预设","hintBar":"切换提示栏","curveEditor":"曲线编辑器","shortcuts":"快捷键","documentation":"文档","about":"关于"},
             "common": {
                 "ok": "确定",
                 "noActiveProject": "当前没有活动的回放项目。"
@@ -124,31 +126,25 @@
             },
             "curve": {"preset":"预设","custom":"自定义","linear":"线性","easeIn":"缓入","easeOut":"缓出","easeInOut":"缓入缓出","sample":"采样点 {:.2f}：{:.3f}"},
             "details": {
-                "inspector": "检查器",
-                "cameraEditing": "相机编辑",
-                "videoEditing": "视频编辑",
-                "videoExport": "视频导出",
-                "ready": "可用",
-                "backendUnavailable": "后端不可用",
                 "title": "详细信息",
                 "cameraSequence": "相机序列",
                 "segments": "片段数：{}",
-                "sequenceSegmentMissing": "相机序列片段已不存在。",
+                "sequenceSegmentMissing": "序列片段已不存在。",
                 "sequenceSegment": "序列片段",
                 "range": "范围：{} - {}",
                 "automaticFirstCamera": "自动：第一台相机",
                 "camera": "相机",
                 "deleteSegment": "删除片段",
-                "worldActor": "世界角色",
-                "actors": "角色",
-                "noActors": "无角色",
-                "worldActorSegmentMissing": "世界角色片段已不存在。",
-                "worldActorSegment": "世界角色片段",
+                "worldActor": "世界实体",
+                "actors": "实体",
+                "noActors": "无实体",
+                "worldActorSegmentMissing": "世界实体片段已不存在。",
+                "worldActorSegment": "世界实体片段",
                 "sourceTick": "源游戏刻：{}",
                 "speed": "速度",
                 "rippleDelete": "波纹删除",
-                "subActorMissing": "子角色已不存在。",
-                "subActor": "子角色",
+                "subActorMissing": "子实体已不存在。",
+                "subActor": "子实体",
                 "name": "名称：{}",
                 "boundCameras": "已绑定相机：{}",
                 "createBindingCamera": "创建绑定相机",
@@ -171,7 +167,7 @@
                 "tick": "游戏刻",
                 "easing": "缓动：{}",
                 "deleteKeyframe": "删除关键帧",
-                "selectionHint": "选择序列片段、世界角色、相机或关键帧。",
+                "selectionHint": "选择序列片段、世界实体、相机或关键帧。",
                 "duration": "时长：{} 游戏刻",
                 "addFreeCamera": "添加自由相机"
             },
@@ -179,38 +175,8 @@
             "status": {"replay":"[回放]","tick":"游戏刻 {} / {}","backendsUnavailable":"编辑后端不可用"},
             "export": {"title":"导出视频","subtitle":"配置输出参数","output":"输出","video":"视频","name":"名称","location":"导出位置","format":"格式","codec":"视频编码","aspect":"画面比例","resolution":"分辨率","frameRate":"帧率","bitrate":"码率","summary":"输出摘要","file":"文件：{}","export":"导出视频","cancel":"取消","backendUnavailable":"导出后端暂不可用","custom":"自定义","widescreen":"宽屏","vertical":"竖屏","square":"方形","balanced":"均衡","compact":"紧凑","highQuality":"高质量"},
             "shortcuts": {"title":"快捷键","playback":"播放","editing":"编辑","application":"应用","space":"空格：播放 / 暂停","homeEnd":"Home / End：跳至开头 / 结尾","arrows":"左 / 右方向键：逐帧定位","zoom":"Shift + 鼠标滚轮：缩放时间轴","undoRedo":"Ctrl + Z / Ctrl + Y：撤销 / 重做","keyframe":"K：添加相机关键帧","marker":"M：插入标记","delete":"Delete：删除选中项","save":"Ctrl + S：保存项目","exit":"长按 Esc：退出编辑器","close":"关闭"},
-            "timeline": {"search":"搜索轨道…","searchCameras":"搜索相机","tracks":"轨道","snap":"吸附","scale":"时间缩放","loop":"循环","backendUnavailable":"等待后端接口","scaleHint":"拖动调整比例，或双击后直接输入百分比","addTrack":"+ 轨道","addKey":"+ 关键帧","addCamera":"+ 相机","video":"视频","camera":"相机","markers":"标记","lock":"锁定","mute":"静音","speed":"速度 {:.2f}x","speedDown":"减速","speedUp":"加速","maximize":"最大化视口（Ctrl+Shift+F）","restore":"还原视口（Esc）","skipToStart":"跳至开头","decreaseSpeed":"降低播放速度","play":"播放","pause":"暂停","increaseSpeed":"提高播放速度","skipToEnd":"跳至结尾","videoTracks":"视频轨道","videoTracksUnavailable":"视频轨道（后端不可用）","cameraTracks":"相机轨道","cameraTracksUnavailable":"相机轨道（后端不可用）","noCamera":"无相机","autoFirstCamera":"自动（第一台相机）","missingCamera":"相机缺失"},
-            "defaults": {"marker":"标记","videoTrack":"视频轨道 {}","camera":"相机 {}"}
-        },
-        "editor": {
-            "menu": {
-                "file": "文件",
-                "exportVideo": "导出视频",
-                "exportScreenshot": "导出截图",
-                "openReplay": "打开回放",
-                "openRecent": "最近打开",
-                "exitReplay": "退出回放",
-                "preferences": "偏好设置",
-                "playerList": "玩家列表",
-                "movement": "移动",
-                "renderFilter": "渲染过滤",
-                "keybinds": "按键绑定",
-                "hideReplayUi": "隐藏回放界面"
-            },
-            "status": {
-                "paused": "已暂停",
-                "playing": "播放中"
-            },
-            "timeline": {
-                "scrub": "{} / {} 游戏刻",
-                "jumpToStart": "跳至开头",
-                "slowDown": "减速（{:g}x）",
-                "play": "播放",
-                "pause": "暂停",
-                "speedUp": "加速（{:g}x）",
-                "jumpToEnd": "跳至结尾",
-                "ticks": "{} / {} 游戏刻"
-            }
+            "timeline": {"searchCameras":"搜索相机","snap":"吸附","loop":"循环","addKey":"+ 关键帧","addCamera":"+ 相机","markers":"标记","lock":"锁定","maximize":"最大化视口（Ctrl+Shift+F）","restore":"还原视口（Esc）","play":"播放","pause":"暂停","noCamera":"无相机","autoFirstCamera":"自动（第一台相机）","missingCamera":"相机缺失"},
+            "defaults": {"camera":"相机 {}"}
         }
     }
 }

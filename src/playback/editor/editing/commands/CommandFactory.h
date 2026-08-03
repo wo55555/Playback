@@ -10,10 +10,6 @@
 
 namespace playback::editor::editing::command {
 
-// ===== CommandFactory =====
-// Creates IEditCommand instances for common editor operations.
-// Retained for the future editing backend.
-
 class CommandFactory {
 public:
     static std::unique_ptr<model::IEditCommand> createSplitSequence(int atTick);
@@ -37,7 +33,6 @@ public:
     createDeleteCameraKeyframe(const std::string& id, const std::string& keyframeId);
     static std::unique_ptr<model::IEditCommand> createSetCameraKind(const std::string& id, model::CameraKind kind);
 
-    // ── Clip commands ──
     static std::unique_ptr<model::IEditCommand>
     createSplitClip(const std::string& trackId, const std::string& clipId, int atTick);
 
@@ -49,7 +44,6 @@ public:
     static std::unique_ptr<model::IEditCommand>
     createMoveClip(const std::string& trackId, const std::string& clipId, int newTrackTick);
 
-    // ── Transition commands ──
     static std::unique_ptr<model::IEditCommand> createAddTransition(
         const std::string&    fromClipId,
         const std::string&    toClipId,
@@ -57,7 +51,6 @@ public:
         int                   durationTicks
     );
 
-    // ── Track commands ──
     static std::unique_ptr<model::IEditCommand> createAddTrack(model::TrackKind kind, const std::string& name);
 
     static std::unique_ptr<model::IEditCommand> createRemoveTrack(const std::string& trackId);

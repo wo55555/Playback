@@ -15,7 +15,6 @@ struct KeyBinding {
     bool        alt;
 };
 
-// Full key binding table (from §2.12)
 const KeyBinding kBindings[] = {
     // File
     {"playback.editor.openReplay",      'O',          true,  false, false},

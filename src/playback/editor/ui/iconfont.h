@@ -1,17 +1,10 @@
-// Lucide icon font codepoints
-// Source font: resources/fonts/lucide.ttf (Lucide v1.17+ from unpkg.com/lucide-static)
-// Generated from resources/fonts/lucide.css
+// Lucide icon font codepoints used by the native ImGui UI.
+// Source font: assets/fonts/lucide.ttf (Lucide v1.17+ from unpkg.com/lucide-static)
 // License: ISC (Lucide) - https://lucide.dev/
 
 #pragma once
 
 namespace Playback::ReplayEditor::Icons {
-
-// Font family name in TTF
-constexpr const char* kFontFamily = "lucide";
-
-// Font file path (relative to executable)
-constexpr const char* kFontPath = "resources/fonts/lucide.ttf";
 
 // Time icons
 #define ICON_PLAY   "\ue13c" // play

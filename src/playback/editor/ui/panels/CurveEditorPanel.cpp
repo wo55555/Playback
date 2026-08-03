@@ -76,7 +76,6 @@ void CurveEditorPanel::draw() {
 
     // Draw the curve
     mEditor.draw(ImGui::GetWindowDrawList(), curveArea);
-    mEditor.handleInput(ImGui::GetIO(), curveArea);
 
     ImGui::SetCursorScreenPos(ImVec2(curveArea.min.x, curveArea.max.y));
 

@@ -20,8 +20,8 @@
             "previewUnavailable": "No thumbnail",
             "empty": "No replay files",
             "importFirst": "Import first replay",
-            "visibleCount": "{} replay files",
-            "fileCount": "Replays  {}",
+            "visibleCount": "Replay files: {}",
+            "fileCount": "Replays: {}",
             "selectedCount": "{} files selected",
             "selectForDetails": "Select a replay to view details",
             "pathValue": "Path: {}",
@@ -102,6 +102,8 @@
                 "invalidImportFile": "Select a valid .playback or .zip replay file",
                 "invalidArchive": "The file is not a valid replay archive",
                 "fileNotFound": "Replay file does not exist",
+                "openFailed": "Failed to start replay session",
+                "showInFolderFailed": "Unable to show replay in File Explorer",
                 "emptyName": "Replay name cannot be empty",
                 "renameMissingMetadata": "Replay archive is missing metadata.json and cannot be renamed",
                 "parseMetadata": "Unable to parse replay metadata: {}",
@@ -109,7 +111,7 @@
             }
         },
         "refactorEditor": {
-            "menu": {"file":"File","edit":"Edit","camera":"Camera","markers":"Markers","window":"Window","help":"Help","openReplay":"Open Replay","saveProject":"Save Project","recent":"Recent","empty":"(empty)","export":"Export...","exit":"Exit Editor","undo":"Undo","redo":"Redo","delete":"Delete","selectAll":"Select All","addKeyframe":"Add Keyframe at Playhead","addCameraTrack":"Add Camera Track","cameraPreset":"Camera Preset","insertMarker":"Insert Marker","nextMarker":"Jump to Next Marker","previousMarker":"Jump to Previous Marker","hintBar":"Toggle Hint Bar","curveEditor":"Curve Editor","shortcuts":"Keyboard Shortcuts","documentation":"Documentation","about":"About"},
+            "menu": {"file":"File","edit":"Edit","camera":"Camera","markers":"Markers","window":"Window","help":"Help","openReplay":"Open Replay","saveProject":"Save Project","recent":"Recent","export":"Export...","exit":"Exit Editor","undo":"Undo","redo":"Redo","delete":"Delete","selectAll":"Select All","addKeyframe":"Add Keyframe at Playhead","cameraPreset":"Camera Preset","hintBar":"Toggle Hint Bar","curveEditor":"Curve Editor","shortcuts":"Keyboard Shortcuts","documentation":"Documentation","about":"About"},
             "common": {
                 "ok": "OK",
                 "noActiveProject": "No replay project is active."
@@ -124,12 +126,6 @@
             },
             "curve": {"preset":"Preset","custom":"Custom","linear":"Linear","easeIn":"Ease In","easeOut":"Ease Out","easeInOut":"Ease InOut","sample":"Sample at {:.2f}: {:.3f}"},
             "details": {
-                "inspector": "Inspector",
-                "cameraEditing": "Camera editing",
-                "videoEditing": "Video editing",
-                "videoExport": "Video export",
-                "ready": "Ready",
-                "backendUnavailable": "Backend unavailable",
                 "title": "Details",
                 "cameraSequence": "Camera Sequence",
                 "segments": "Segments: {}",
@@ -179,38 +175,8 @@
             "status": {"replay":"[Replay]","tick":"Tick {} / {}","backendsUnavailable":"Editing backends unavailable"},
             "export": {"title":"Export Video","subtitle":"Configure output settings","output":"OUTPUT","video":"VIDEO","name":"Name","location":"Location","format":"Format","codec":"Video codec","aspect":"Aspect ratio","resolution":"Resolution","frameRate":"Frame rate","bitrate":"Bitrate","summary":"OUTPUT SUMMARY","file":"File: {}","export":"Export Video","cancel":"Cancel","backendUnavailable":"Export backend is not available yet","custom":"Custom","widescreen":"Widescreen","vertical":"Vertical","square":"Square","balanced":"Balanced","compact":"Compact","highQuality":"High quality"},
             "shortcuts": {"title":"Keyboard Shortcuts","playback":"Playback","editing":"Editing","application":"Application","space":"Space: Play / Pause","homeEnd":"Home / End: Jump to start / end","arrows":"Left / Right: Seek one frame","zoom":"Shift + Mouse Wheel: Zoom timeline","undoRedo":"Ctrl + Z / Ctrl + Y: Undo / Redo","keyframe":"K: Add camera keyframe","marker":"M: Insert marker","delete":"Delete: Delete selected item","save":"Ctrl + S: Save project","exit":"Esc (hold): Exit editor","close":"Close"},
-            "timeline": {"search":"Search tracks...","searchCameras":"Search cameras","tracks":"Tracks","snap":"Snap","scale":"Time Scale","loop":"Loop","backendUnavailable":"Waiting for backend interface","scaleHint":"Drag to adjust, or double-click to enter a percentage","addTrack":"+ Track","addKey":"+ Key","addCamera":"+ Camera","video":"Video","camera":"Camera","markers":"Markers","lock":"LOCK","mute":"MUTE","speed":"Speed {:.2f}x","speedDown":"Speed -","speedUp":"Speed +","maximize":"Maximize viewport (Ctrl+Shift+F)","restore":"Restore viewport (Esc)","skipToStart":"Skip to start","decreaseSpeed":"Decrease playback speed","play":"Play","pause":"Pause","increaseSpeed":"Increase playback speed","skipToEnd":"Skip to end","videoTracks":"Video tracks","videoTracksUnavailable":"Video tracks (backend unavailable)","cameraTracks":"Camera tracks","cameraTracksUnavailable":"Camera tracks (backend unavailable)","noCamera":"No camera","autoFirstCamera":"Auto (first camera)","missingCamera":"Missing camera"},
-            "defaults": {"marker":"Marker","videoTrack":"Video Track {}","camera":"Camera {}"}
-        },
-        "editor": {
-            "menu": {
-                "file": "File",
-                "exportVideo": "Export Video",
-                "exportScreenshot": "Export Screenshot",
-                "openReplay": "Open Replay",
-                "openRecent": "Open Recent",
-                "exitReplay": "Exit Replay",
-                "preferences": "Preferences",
-                "playerList": "Player List",
-                "movement": "Movement",
-                "renderFilter": "Render Filter",
-                "keybinds": "Keybinds",
-                "hideReplayUi": "Hide Replay UI"
-            },
-            "status": {
-                "paused": "Paused",
-                "playing": "Playing"
-            },
-            "timeline": {
-                "scrub": "{} / {} ticks",
-                "jumpToStart": "Jump to start",
-                "slowDown": "Slow down ({:g}x)",
-                "play": "Play",
-                "pause": "Pause",
-                "speedUp": "Speed up ({:g}x)",
-                "jumpToEnd": "Jump to end",
-                "ticks": "{} / {} ticks"
-            }
+            "timeline": {"searchCameras":"Search cameras","snap":"Snap","loop":"Loop","addKey":"+ Key","addCamera":"+ Camera","markers":"Markers","lock":"LOCK","maximize":"Maximize viewport (Ctrl+Shift+F)","restore":"Restore viewport (Esc)","play":"Play","pause":"Pause","noCamera":"No camera","autoFirstCamera":"Auto (first camera)","missingCamera":"Missing camera"},
+            "defaults": {"camera":"Camera {}"}
         }
     }
 }

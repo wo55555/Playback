@@ -1,34 +1,24 @@
 <div align="center">
-  <img src="resources/pack_icon.png" alt="Playback 图标" width="160">
+  <img src="assets/pack_icon.png" alt="Playback 图标" width="160">
   <h1>Playback</h1>
   <p><strong>录下此刻，再现世界。</strong></p>
   <p>用于录制、导出和回放 Minecraft 基岩版游戏过程的 LeviLamina 客户端原生模组。</p>
 
   <p>
-    <a href="https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.10"><img src="https://img.shields.io/static/v1?label=Minecraft%2026.10&amp;message=v0.1.1&amp;color=00A6B2&amp;style=flat-square" alt="适用于 Minecraft 26.10 的 Playback v0.1.1"></a>
-    <a href="https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20"><img src="https://img.shields.io/static/v1?label=Minecraft%2026.20&amp;message=v0.1.1&amp;color=00A6B2&amp;style=flat-square" alt="适用于 Minecraft 26.20 的 Playback v0.1.1"></a>
+    <a href="https://discord.gg/mUhRUD8AM"><img src="https://img.shields.io/badge/Discord-%E5%8A%A0%E5%85%A5%E7%A4%BE%E5%8C%BA-5865F2?style=for-the-badge&amp;logo=discord&amp;logoColor=white" alt="加入 Playback Discord 社区"></a>
+    <a href="https://qm.qq.com/q/ufJatMDcha"><img src="https://img.shields.io/badge/QQ-%E5%8A%A0%E5%85%A5%E7%BE%A4%E8%81%8A-EA0000?style=for-the-badge&amp;logo=qq&amp;logoColor=white" alt="加入 Playback QQ 群"></a>
+    <a href="README.md"><img src="https://img.shields.io/badge/English-informational?style=for-the-badge" alt="English"></a>
+    <img src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-inactive?style=for-the-badge" alt="简体中文">
   </p>
 
   <p>
-    <a href="https://github.com/wo55555/Playback/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/wo55555/Playback/build.yml?branch=main&amp;style=flat-square&amp;label=build" alt="构建状态"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/wo55555/Playback?style=flat-square" alt="许可证"></a>
-    <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D4?style=flat-square&amp;logo=windows" alt="Windows x64">
-  </p>
-
-  <p>
-    <a href="README.md">English</a>
-    ·
-    <a href="README_ZH.md"><strong>简体中文</strong></a>
-  </p>
-
-  <p>
-    <a href="#功能">功能</a>
+    <a href="#快速开始">快速开始</a>
     ·
     <a href="#运行展示">运行展示</a>
     ·
-    <a href="#快速开始">快速开始</a>
+    <a href="#功能">功能</a>
     ·
-    <a href="#从源码构建">构建</a>
+    <a href="#本版更新">更新日志</a>
     ·
     <a href="#开发状态与计划">开发计划</a>
     ·
@@ -36,10 +26,19 @@
   </p>
 </div>
 
-Playback 基于 [LeviLamina](https://github.com/LiteLDev/LeviLamina) 构建。回放架构参考了 Java 版 [Flashback](https://github.com/Moulberry/Flashback) 模组，并针对基岩版客户端生命周期进行了适配。
-
 > [!WARNING]
 > Playback 目前仍处于早期开发阶段，现有公开版本均为测试版本。请备份重要世界和录制文件；在 Minecraft、LeviLamina 或 Playback 版本发生变化后，不保证旧回放仍然兼容。
+
+## 快速开始
+
+> [!IMPORTANT]
+> 建议尽量使用干净的 LeviLamina 客户端实例；目前不保证与其他模组广泛兼容。
+
+1. 为目标 Minecraft 版本创建或选择干净的 LeviLamina 客户端实例。
+2. 通过 LeviLauncher/Lip 或发行压缩包安装匹配的 Playback `#client` 版本。
+3. 启动游戏，使用 `record start` / `record pause` / `record stop` 录制，然后从主菜单的 **Playback** 浏览器打开导出的回放。
+
+截图、完整 Lip 命令、手动安装以及录制回放说明见[安装与使用指南](docs/getting-started.zh-CN.md)。
 
 ## 运行展示
 
@@ -58,137 +57,47 @@ Playback 基于 [LeviLamina](https://github.com/LiteLDev/LeviLamina) 构建。�
   <img src="docs/images/showcase/zh-cn/timeline-editor.webp" alt="Playback 游戏内时间线编辑器" width="900">
 </p>
 
+> [!NOTE]
+> 目前的 UI 仍在积极开发中，当前 UI 界面不代表最终效果。
+
 ## 功能
 
 - **游戏录制** — 捕获已加载区块、方块实体、实体移动、玩家状态、时间和经过筛选的客户端安全数据包。
 - **低开销写入** — 异步写入回放快照和时间线数据，减少录制过程中的卡顿。
 - **便携归档** — 将录制结果导出为便于保存和分享的回放文件。
 - **隔离回放** — 通过原生主菜单回放浏览器，在独立的本地回放世界中打开录制内容。
+- **回放浏览器** — 支持搜索、导入、筛选、排序、重命名、删除和打开回放，并提供平铺与列表视图。
+- **回放缩略图** — 在游戏未打开菜单时尝试为录制内容捕获预览图。
 - **时间线控制** — 支持播放、暂停、跳转、倍速调整和快速定位。
-- **双语界面** — 为命令、回放编辑器和资源包 UI 提供英文及简体中文本地化。
+- **时间线编辑器** — 提供可缩放轨道、可调整面板、相机/序列/实体片段编辑，以及当前内存项目的撤销与重做。
+- **双语界面** — 为命令和原生回放界面提供英文及简体中文本地化。
+
+## 本版更新
+
+`v0.1.2` 扩展了原生回放浏览器，加入回放缩略图，重构了游戏内时间线编辑器，统一了用户界面的国际化文本，并移除了旧 UI 资源包构建与打包流程。
+
+> [!CAUTION]
+> 本次更新修改了回放快照格式，使用 `v0.1.1` 或更早版本创建的回放必须重新录制。安装前请删除旧的 `playback-ui.mcpack` 文件和 `mods/playback/resource_packs/playback-ui/` 目录，然后重新进行模组安装。代码中的 `Config` 版本保持初始值（`1`），第三方依赖版本保持不变，不提供迁移逻辑。
+
+完整发行历史与详细变更见[更新日志](CHANGELOG.md)。
 
 ## 兼容性
 
-Playback 针对不同 Minecraft 与 LeviLamina 版本并行维护发布。以下版本具有相同的 Playback 功能版本，仅适配的游戏版本不同，两者不存在新旧替代关系。
+Playback 针对不同 Minecraft 与 LeviLamina 版本维护发行版本。本次发行面向 `26.10.*`；在针对 `26.20.*` 的兼容 `v0.1.2` 构建发布前，请继续使用下表列出的版本。
 
-| Minecraft / LeviLamina | Playback 版本 | 状态 |
-| --- | --- | --- |
-| `26.10.*` | [`v0.1.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.10) | 维护中 |
-| `26.20.*` | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) | 维护中 |
+| Minecraft / LeviLamina | Playback 版本                                                                       | 状态   |
+| ---------------------- | ----------------------------------------------------------------------------------- | ------ |
+| `26.10.*`              | [`v0.1.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.2-mc26.10) | 维护中 |
+| `26.20.*`              | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) | 维护中 |
 
 两个版本均面向 Windows x64 平台的 Minecraft 基岩版，并以纯客户端模组形式发布。
 
 > [!TIP]
-> Playback 为纯客户端模组，支持客户端与服务端录制。
-
-## 快速开始
-
-> [!IMPORTANT]
-> 首次安装或测试 Playback 时，建议尽量使用未安装其他第三方模组的独立 LeviLamina 实例，以避免潜在的模组冲突。目前暂不保证与其他模组兼容；后续开发将逐步测试并改善相关兼容性。
-
-### 使用 LeviLauncher 和 Lip 安装（推荐）
-
-以下截图以 `26.10` 实例为例。使用 `26.20` 时，请按照相同步骤选择与其匹配的 Minecraft 和 LeviLamina 版本。界面文字及可用测试版本可能随更新而变化。
-
-1. 在左侧边栏选择 **Download（下载）**，找到需要的 Minecraft 版本，通过该版本的安装菜单创建使用 **LeviLamina** 加载器的实例。
-
-<p align="center">
-  <img src="docs/images/quick-start/zh-cn/01-install-instance.png" alt="打开 Download 页面并安装使用 LeviLamina 的 Minecraft 实例" width="900">
-</p>
-
-2. 在左侧边栏选择 **Instances（实例）**，打开新实例的设置，在**加载器**页面确认对应版本的 LeviLamina 已经安装。
-
-<p align="center">
-  <img src="docs/images/quick-start/zh-cn/02-verify-levilamina.png" alt="打开 Instances 页面并确认实例已经安装 LeviLamina 加载器" width="900">
-</p>
-
-3. 在左侧边栏选择 **Launch（启动）**返回主页面，选中目标实例，然后在**内容下载**区域选择 **lip**。
-
-<p align="center">
-  <img src="docs/images/quick-start/zh-cn/03-open-lip.png" alt="打开 Launch 主页面并在内容下载中选择 lip" width="900">
-</p>
-
-4. 搜索 **Playback**，然后打开由 `wo55555` 发布的 Playback 软件包。
-
-<p align="center">
-  <img src="docs/images/quick-start/zh-cn/04-search-playback.png" alt="在 lip 中搜索 Playback" width="900">
-</p>
-
-5. 在软件包页面手动选择 **LL 依赖**和**游戏版本**与当前实例一致的版本，然后点击该版本所在行的**安装**。Lip 不会根据已安装的 LeviLamina 版本自动选择对应的 Playback 版本。安装完成后启动或重启游戏。
-
-<p align="center">
-  <img src="docs/images/quick-start/zh-cn/05-install-playback.png" alt="通过 lip 安装兼容的 Playback 版本" width="900">
-</p>
-
-完成后，Minecraft 主菜单中应显示 **Playback** 按钮。模组已经内置 UI 资源包，无需另行导入。
-
-### 使用 Lip 命令行安装
-
-在目标 LeviLamina 实例的根目录中，根据其 Minecraft 和 LeviLamina 版本执行对应命令：
-
-```powershell
-# Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.1.1-mc26.10#client
-
-# Minecraft / LeviLamina 26.20
-lip install github.com/wo55555/Playback@0.1.1-mc26.20#client
-```
-
-> [!NOTE]
-> 安装客户端变体时必须保留末尾的 `#client`。如果省略 `@版本号`，Lip 会安装当前最新的 Playback 版本，并不会根据已安装的 LeviLamina 版本自动选择兼容版本。启动游戏前，请始终明确指定并核对匹配的版本。
-
-### 手动安装
-
-如果无法使用 Lip，请从对应的 Release 下载 `Playback-client-windows-x64.zip`：
-
-- `26.10.*` 使用 [`v0.1.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.10)
-- `26.20.*` 使用 [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20)
-
-将压缩包内的 `playback` 目录解压到 LeviLamina 实例的 `mods` 目录，然后重启客户端。各 Release 仍提供独立的 `playback-ui.mcpack` 供手动导入；安装完整模组 ZIP 时无需另行导入。
-
-### 录制
-
-进入世界后，打开客户端命令控制台并使用：
-
-```text
-record start
-record pause
-record stop
-```
-
-`record start` 开始或继续录制，`record pause` 暂停录制，`record stop` 结束录制并导出回放。导出的 `.zip` 文件位于 Playback 的 `data/replays` 目录。
-
-### 回放
-
-1. 返回主菜单并选择 **Playback**。
-2. 在回放浏览器中选择 `.playback` 或兼容的 `.zip` 回放文件。
-3. 等待隔离回放世界和初始区块加载完成。
-4. 使用底部时间线播放、暂停、跳转、调整倍速或跳至时间线两端；使用 **File > Exit Replay** 退出回放。
+> Playback 为纯客户端模组，支持在本地世界和多人服务器中录制游戏过程。
 
 ## 从源码构建
 
-环境要求：
-
-- 带有 MSVC C++ 工具链的 Visual Studio 2022
-- [xmake](https://xmake.io/)
-- Git
-
-配置并执行干净的 Release 客户端构建：
-
-```powershell
-xmake f -y -p windows -a x64 -m release --target_type=client
-xmake -r -y
-```
-
-打包后的模组位于 `bin/playback/`，翻译文件位于 `bin/playback/lang/`，自动加载的 UI 资源包位于 `bin/playback/resource_packs/playback-ui/`。构建过程还会生成 `bin/playback-ui.mcpack`，作为独立资源包资产发布。
-
-如果 prelink 报告无法找到 `bedrock_runtime_data`，请刷新包配置并重新构建：
-
-```powershell
-xmake repo -u
-xmake f -c -y -p windows -a x64 -m release --target_type=client
-xmake -r -y
-```
+Playback 使用 Visual Studio 2022、xmake 和 Git 在 Windows x64 上构建。干净 Release 构建命令、输出结构和依赖排错见[源码构建指南](docs/building.zh-CN.md)。
 
 ## 命令
 
@@ -201,30 +110,32 @@ xmake -r -y
 
 ## 语言
 
-Playback 目前提供英文（`en_US`）和简体中文（`zh_CN`）翻译。命令与回放编辑器的翻译文件位于 `src/lang/`，资源包 UI 的翻译文件位于 `resources/texts/`。
+Playback 目前提供英文（`en_US`）和简体中文（`zh_CN`）翻译，翻译文件位于 `src/lang/`。
 
 ## 开发状态与计划
 
 - 录制、导出和回放 GUI 正在持续构建与优化中。
 - 后续将重点调试多人服务器会话的录制与回放，欢迎测试并反馈问题。
-- 计划开发摄影机运动、视频渲染与导出等功能。
+- 计划开发视频渲染与导出等功能。
+
+> [!TIP]
+> **下个版本预告：** 将继续进行 UI 界面的大更新与深度优化，并加入摄影机功能。
 
 ## 已知限制
 
 - 回放格式仍在开发中，Alpha 版本之间可能发生变化。
 - Playback 重建的是已录制的客户端可见状态，并不是原始服务器模拟过程的确定性副本。
-- 当前不会将待执行计划刻和村庄、袭击、POI 等服务端系统保存为权威模拟状态。
+- 当前不会将待处理的计划刻以及村庄、袭击、POI 等服务端系统保存为权威模拟状态。
+- 编辑器修改目前只存在于内存中，项目持久化和视频导出尚未开放。
 - Minecraft 或 LeviLamina 更新后，需要重新确认兼容性。
 
 报告可复现问题时，请尽量附带日志、相关版本和最小回放文件。
 
-版本历史见[更新日志](CHANGELOG.md)；如需报告可复现问题，请[创建 Issue](https://github.com/wo55555/Playback/issues)。
+如需报告可复现问题，请[创建 Issue](https://github.com/wo55555/Playback/issues)。
 
 ## 参与贡献
 
-构建、格式化和 Pull Request 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-如需交流或讨论项目，可加入 [Discord 服务器](https://discord.gg/mUhRUD8AM)或 [QQ 群](https://qm.qq.com/q/ufJatMDcha)。
+构建说明见[源码构建指南](docs/building.zh-CN.md)，格式化和 Pull Request 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 安全问题请按照 [SECURITY.md](SECURITY.md) 私下报告，不要为安全漏洞创建公开 Issue。
 

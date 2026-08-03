@@ -97,14 +97,12 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createAddTransition(
 // ===== Track commands =====
 
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddTrack(model::TrackKind kind, const std::string& name) {
-    // Placeholder — AddTrackCommand will be defined in future iterations
     (void)kind;
     (void)name;
     return nullptr;
 }
 
 std::unique_ptr<model::IEditCommand> CommandFactory::createRemoveTrack(const std::string& trackId) {
-    // Placeholder — RemoveTrackCommand will be defined in future iterations
     (void)trackId;
     return nullptr;
 }

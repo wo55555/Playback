@@ -71,10 +71,6 @@ public:
     [[nodiscard]] const Selection*         getSelection() const;
     [[nodiscard]] std::vector<std::string> selectedIds() const;
 
-    // Event
-    // using Callback = void(Selection);
-    // Event<Callback> onSelectionChanged;
-
     template <typename T>
     [[nodiscard]] const T* getAs() const {
         if (!mSelection) return nullptr;

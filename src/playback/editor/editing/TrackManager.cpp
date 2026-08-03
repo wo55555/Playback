@@ -290,10 +290,10 @@ void TrackManager::sortClipsByTick(Track& track) {
 
 Color4 TrackManager::pickColorFor(const std::string& replayFile) {
     // Simple hash-based color assignment
-    uint32_t h = std::hash<std::string>{}(replayFile);
-    float    r = ((h >> 0) & 0xFF) / 255.0f * 0.6f + 0.2f;
-    float    g = ((h >> 8) & 0xFF) / 255.0f * 0.6f + 0.2f;
-    float    b = ((h >> 16) & 0xFF) / 255.0f * 0.6f + 0.2f;
+    auto const h = static_cast<uint32_t>(std::hash<std::string>{}(replayFile));
+    float      r = ((h >> 0) & 0xFF) / 255.0f * 0.6f + 0.2f;
+    float      g = ((h >> 8) & 0xFF) / 255.0f * 0.6f + 0.2f;
+    float      b = ((h >> 16) & 0xFF) / 255.0f * 0.6f + 0.2f;
     return {r, g, b, 1.0f};
 }
 

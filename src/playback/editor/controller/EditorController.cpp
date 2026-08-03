@@ -5,6 +5,8 @@
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/screen/ReplayBrowser.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include <algorithm>
 #include <filesystem>
 #include <utility>
@@ -181,6 +183,8 @@ ReplayBrowserEntry const* EditorController::findBrowserEntry(std::string_view re
 }
 
 void EditorController::tick(bool hudVisible) {
+    using namespace ll::i18n_literals;
+
     auto& session = functions::ReplaySession::getInstance();
 
     for (auto const& action : mContext.takeActions()) {
@@ -232,11 +236,12 @@ void EditorController::tick(bool hudVisible) {
                 auto replay = action.path.empty() ? screen::ReplayBrowser::findReplay(action.replayId)
                                                   : screen::ReplayBrowser::findReplay(action.path.string());
                 if (!replay) {
-                    mBrowserError = "Replay file no longer exists";
+                    mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                 } else if (!replay->canOpen) {
-                    mBrowserError = replay->problem.empty() ? "Replay archive is invalid" : replay->problem;
+                    mBrowserError =
+                        replay->problem.empty() ? "playback.replayBrowser.error.invalidArchive"_tr() : replay->problem;
                 } else if (!session.start(replay->path)) {
-                    mBrowserError = "Failed to start replay session";
+                    mBrowserError = "playback.replayBrowser.error.openFailed"_tr();
                 } else {
                     mActiveReplayPath = replayPreferenceKey(replay->path);
                     mBrowserVisible   = false;
@@ -256,7 +261,7 @@ void EditorController::tick(bool hudVisible) {
                 for (auto const& replayId : action.replayIds) {
                     auto const* entry = findBrowserEntry(replayId);
                     if (!entry) {
-                        mBrowserError = "Replay file no longer exists";
+                        mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                         break;
                     }
                     auto replay = screen::ReplayBrowser::findReplay(entry->path.string());
@@ -271,7 +276,7 @@ void EditorController::tick(bool hudVisible) {
                 auto const* entry  = findBrowserEntry(action.replayId);
                 auto        replay = entry ? screen::ReplayBrowser::findReplay(entry->path.string()) : std::nullopt;
                 if (!replay) {
-                    mBrowserError = "Replay file no longer exists";
+                    mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                 } else if (screen::ReplayBrowser::renameReplay(*replay, action.name, mBrowserError)) {
                     refreshBrowser();
                 }
@@ -282,9 +287,9 @@ void EditorController::tick(bool hudVisible) {
                 auto const* entry  = findBrowserEntry(action.replayId);
                 auto        replay = entry ? screen::ReplayBrowser::findReplay(entry->path.string()) : std::nullopt;
                 if (!replay) {
-                    mBrowserError = "Replay file no longer exists";
+                    mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                 } else if (!screen::ReplayBrowser::showInFolder(*replay)) {
-                    mBrowserError = "Unable to show replay in File Explorer";
+                    mBrowserError = "playback.replayBrowser.error.showInFolderFailed"_tr();
                 } else {
                     mBrowserError.clear();
                 }

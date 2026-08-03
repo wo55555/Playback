@@ -20,8 +20,6 @@ public:
 
 private:
     void handleCameraControl(bool hovered, bool active);
-    void handleGizmoDrag();
-    void drawGizmo();
     void drawTransportControls();
 
     float                mFov{90.0f};

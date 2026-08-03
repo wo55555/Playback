@@ -31,9 +31,7 @@ bool hookReplayUI(bool enable) {
 
         ui::ReplayEditor::getInstance().initialize();
 
-        // ── Install the D3D12 swap chain hooks ──
-        // Must be done here (not deferred to RendererInitHook) because the RendererInitHook
-        // may not fire reliably during enable(). The hook probes DXGI to resolve vtable entries.
+        // Install early because the renderer-init callback is not guaranteed during enable().
         if (!hookReplayUIRendererInit(true)) {
             renderer::setReplayUIActive(false);
             functions::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);

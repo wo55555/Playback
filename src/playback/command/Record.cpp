@@ -1,7 +1,6 @@
 #include "Command.h"
 
 #include "playback/Config.h"
-#include "playback/Playback.h"
 #include "playback/functions/record/Recorder.h"
 
 #include "ll/api/command/CommandHandle.h"
@@ -13,21 +12,12 @@
 
 namespace playback::command {
 
-namespace {
-
-auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
-
-} // namespace
-
 void registerRecordCommand(config::CommandConfigStruct& config) {
     using namespace ll::i18n_literals;
 
     if (!config.enabled) {
         return;
     }
-
-    auto& logger = getLogger();
-    logger.debug("Start to register Record commands");
 
     auto& recordCommand = ll::command::CommandRegistrar::getClientInstance().getOrCreateCommand(
         config.command,
@@ -37,9 +27,6 @@ void registerRecordCommand(config::CommandConfigStruct& config) {
     recordCommand.overload().text("start").execute([](CommandOrigin const&, CommandOutput& output) {
         auto& recorder = functions::Recorder::getInstance();
         recorder.start();
-
-        auto& logger = getLogger();
-        logger.debug("name={}", Playback::getInstance().getSelf().getName());
 
         output.success("playback.command.record.started"_tr());
     });

@@ -100,11 +100,6 @@ void BezierCurveEditor::draw(ImDrawList* dl, Rect area) {
     }
 }
 
-void BezierCurveEditor::handleInput(const ImGuiIO& io, Rect area) {
-    // Placeholder: drag control points
-    // Will be implemented with per-point hit testing + drag delta
-}
-
 std::optional<BezierCurveEditor::Segment>
 BezierCurveEditor::locateSegment(const std::vector<BezierPoint>& pts, float t) const {
     if (pts.size() < 2) return std::nullopt;
@@ -122,8 +117,6 @@ BezierCurveEditor::locateSegment(const std::vector<BezierPoint>& pts, float t) c
 }
 
 float BezierCurveEditor::bezierYFromX(float u, const BezierPoint& a, const BezierPoint& b) const {
-    // Simplified: lerp between a.v and b.v
-    // Full implementation would use Newton-Raphson on the cubic Bezier
     return a.v + (b.v - a.v) * u;
 }
 

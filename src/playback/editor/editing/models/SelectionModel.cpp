@@ -2,15 +2,9 @@
 
 namespace playback::editor::editing::model {
 
-void SelectionModel::select(Selection sel) {
-    mSelection = std::move(sel);
-    // onSelectionChanged.emit(selectedIds());
-}
+void SelectionModel::select(Selection sel) { mSelection = std::move(sel); }
 
-void SelectionModel::clear() {
-    mSelection.reset();
-    // onSelectionChanged.emit({});
-}
+void SelectionModel::clear() { mSelection.reset(); }
 
 bool SelectionModel::hasSelection() const { return mSelection.has_value(); }
 

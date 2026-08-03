@@ -2,7 +2,6 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/ui/ErrorDialog.h"
-#include "playback/editor/ui/iconfont.h"
 
 #include "imgui.h"
 #include "nlohmann/json.hpp"

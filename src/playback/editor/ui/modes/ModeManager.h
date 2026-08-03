@@ -13,12 +13,8 @@ public:
     [[nodiscard]] EditorMode current() const { return mCurrent; }
     void                     switchTo(EditorMode mode);
 
-    // Transition state
     [[nodiscard]] bool  isTransitioning() const { return mTransitioning; }
     [[nodiscard]] float transitionAlpha() const { return mTransitionAlpha; }
-
-    // Event: using Callback = void(EditorMode);
-    // Event<Callback> onModeChanged;
 
 private:
     ModeManager() = default;

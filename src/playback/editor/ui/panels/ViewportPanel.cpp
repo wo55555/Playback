@@ -161,14 +161,4 @@ void ViewportPanel::handleCameraControl(bool hovered, bool active) {
     }
 }
 
-void ViewportPanel::handleGizmoDrag() {
-    // Placeholder: ImGuizmo integration
-    // ImGuizmo::Manipulate(viewMatrix, projMatrix, TRANSLATE, LOCAL, glm::value_ptr(newPos), nullptr, nullptr);
-}
-
-void ViewportPanel::drawGizmo() {
-    // Placeholder: draw ImGuizmo 3-axis arrow + rotation rings
-    // This will be implemented with ImGuizmo::Manipulate when ImGuizmo is available
-}
-
 } // namespace playback::editor::ui

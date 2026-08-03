@@ -393,19 +393,16 @@ void Recorder::start() {
 
     if (mState.load() == State::Paused) {
         mState = State::Recording;
-        getLogger().debug("Resume recording");
         return;
     }
 
     auto& playback = playback::Playback::getInstance();
     if (playback.isReplayMode()) {
         mState = State::Idle;
-        getLogger().debug("Skip recording because current save is a replay save");
         return;
     }
 
     if (mState.load() != State::Idle) {
-        getLogger().debug("Recorder is already active");
         return;
     }
 
@@ -435,12 +432,10 @@ void Recorder::pause() {
 void Recorder::stop() {
     State state = mState.exchange(State::Closing);
     if (state == State::Idle) {
-        getLogger().debug("Recorder is not active");
         mState = State::Idle;
         return;
     }
     if (state == State::Closing) {
-        getLogger().debug("Recorder is already closing");
         return;
     }
 
@@ -1098,10 +1093,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
             if (!actor || actor == finalPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
 
             auto packet = actor->tryCreateAddActorPacket();
-            if (!packet) {
-                getLogger().debug("Skipping unsupported replay snapshot actor {}", actor->getOrCreateUniqueID().rawID);
-                continue;
-            }
+            if (!packet) continue;
             appendEntityPacket(*packet);
             if (!appendActorState(*actor, actor->getRuntimeID())) return SnapshotCaptureResult::Failed;
         }
@@ -1196,14 +1188,7 @@ bool Recorder::writeInitialSnapshotIfNeeded() {
     auto                                captureResult = captureChunkSnapshot(barrierWait);
     auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
 
-    if (captureResult == SnapshotCaptureResult::NotReady) {
-        getLogger().debug(
-            "Waiting for the initial replay snapshot after {:.3f} ms: {}",
-            std::chrono::duration<double, std::milli>(elapsed).count(),
-            mSnapshotFailure
-        );
-        return false;
-    }
+    if (captureResult == SnapshotCaptureResult::NotReady) return false;
     if (captureResult == SnapshotCaptureResult::Failed) {
         getLogger().error(
             "Initial snapshot capture failed after {:.3f} ms: {}",
@@ -1636,9 +1621,7 @@ void Recorder::recordGamePacket(Packet const& packet) {
         }
         mPendingGamePackets.push_back({static_cast<int32_t>(packetId), std::move(stream.mBuffer)});
         auto& recordedCount = mRecordedGamePacketCounts[static_cast<int32_t>(packetId)];
-        if (recordedCount++ == 0) {
-            getLogger().debug("Recording timeline packet {} ({})", packet.getName(), static_cast<int32_t>(packetId));
-        }
+        ++recordedCount;
     } catch (std::exception const& exception) {
         getLogger().error("Unable to serialize incoming game packet {}: {}", packet.getName(), exception.what());
     } catch (...) {

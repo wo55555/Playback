@@ -6,7 +6,6 @@
 
 #include "EditorTheme.h"
 #include "HintBar.h"
-#include "IconSystem.h"
 #include "modes/EditMode.h"
 #include "modes/RenderMode.h"
 #include "panels/CurveEditorPanel.h"
@@ -60,7 +59,6 @@ private:
 
     // Core components
     EditorTheme   mTheme;
-    IconSystem&   mIconSystem{IconSystem::getInstance()};
     ModeManager&  mModeManager{ModeManager::getInstance()};
     EditorMenuBar mMenuBar;
     HintBar       mHintBar;

@@ -34,8 +34,6 @@ public:
 
     // UI
     void draw(ImDrawList* dl, Rect area);
-    void handleInput(const ImGuiIO& io, Rect area);
-
     // Output
     [[nodiscard]] BezierCurve curve() const;
     float                     sampleAt(float t) const;

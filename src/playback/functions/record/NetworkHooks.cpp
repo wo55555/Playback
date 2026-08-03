@@ -206,8 +206,6 @@ LL_TYPE_INSTANCE_HOOK(
             if (replaySession.shouldSuppressNativeChunk(pos, packetDimension)) {
                 return;
             }
-
-            getLogger().debug("Passing native replay-world LevelChunk for unrecorded column ({}, {})", pos.x, pos.z);
         }
 
         origin(source, packet);
@@ -259,13 +257,6 @@ LL_TYPE_INSTANCE_HOOK(
         if (!suppressedEntries.empty()) {
             auto level = ll::service::getMultiPlayerLevel();
             if (level) level->notifySubChunkRequestManager(suppressedPacket);
-
-            getLogger().debug(
-                "Filtered {} recorded entries from a native replay-world SubChunk packet; passing {} unrecorded "
-                "entries",
-                suppressedEntries.size(),
-                filteredEntries.size()
-            );
         }
         if (filteredEntries.empty()) return;
 
@@ -318,19 +309,6 @@ void removeNetworkHook(bool& installed) {
 
 bool hookNetwork(bool enable) {
     auto& state = networkHookState();
-    getLogger().debug(
-        "Network hook request (enable={}, LevelChunk={}, SubChunk={}, SetTime={}, completion={}, packetObserver={}, "
-        "packetSender={}, spawnHandlers={}, fastPathHandlers={})",
-        enable,
-        state.levelChunk,
-        state.subChunk,
-        state.setTime,
-        state.completion,
-        state.packetObserver,
-        state.packetSender,
-        state.addActor && state.addItemActor,
-        state.fastPathHandlersInstalled()
-    );
 
     auto allInstalled = [&] {
         return state.levelChunk && state.subChunk && state.setTime && state.completion && state.packetObserver
@@ -401,7 +379,6 @@ bool hookNetwork(bool enable) {
             );
             return false;
         }
-        getLogger().debug("Replay network hooks installed");
         return true;
     }
 
@@ -434,7 +411,6 @@ bool hookNetwork(bool enable) {
         );
         return false;
     }
-    getLogger().debug("Replay network hooks removed");
     return true;
 }
 
