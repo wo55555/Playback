@@ -95,6 +95,8 @@
 #include <utility>
 #include <vector>
 
+PlayerInputTick::PlayerInputTick() { mValue = 0; }
+
 namespace playback::functions {
 
 namespace {
@@ -582,7 +584,7 @@ void Recorder::endTick(bool close) {
     }
 
     if (dimensionChanged) {
-        auto const currentDimensionId = localPlayer->getDimensionId().id;
+        auto const currentDimensionId = localPlayer->getDimensionId();
 
         // Finish the client tick in the old chunk before snapshotting the state produced by that tick.
         if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeTickBoundary()
@@ -1247,7 +1249,7 @@ bool Recorder::writeSnapshot() {
     }
 
     PlaybackSnapshotContext const context{
-        mSnapshotDimension->id,
+        mSnapshotDimension->mValue,
         mSnapshotView->x,
         mSnapshotView->y,
         mSnapshotView->z,
@@ -1572,7 +1574,8 @@ void Recorder::recordGamePacket(Packet const& packet) {
             std::vector<SubChunkPacket::SubChunkPacketData> successfulEntries;
             successfulEntries.reserve(filteredPacket.mSubChunkData->size());
             for (auto const& entry : *filteredPacket.mSubChunkData) {
-                if (isSuccessfulSubChunkResult(static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
+                if (isSuccessfulSubChunkResult(
+                        static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
                     )) {
                     successfulEntries.emplace_back(entry);
                 }
@@ -1593,7 +1596,7 @@ void Recorder::recordGamePacket(Packet const& packet) {
 
         if (packetId == MinecraftPacketIds::ChangeDimension) {
             auto const& change = static_cast<ChangeDimensionPacket const&>(packet);
-            mDimensionTransitionTargetId.store(change.mDimensionId->id, std::memory_order_release);
+            mDimensionTransitionTargetId.store(change.mDimensionId->mValue, std::memory_order_release);
             mDimensionTransitionPending.store(true, std::memory_order_release);
         }
 

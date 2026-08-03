@@ -851,8 +851,8 @@ bool ReplaySession::ensureReplayDimension(
         if (*mPendingReplayDimension != target) {
             getLogger().error(
                 "Replay requested dimension {} while dimension {} is still pending",
-                target.id,
-                mPendingReplayDimension->id
+                target.mValue,
+                mPendingReplayDimension->mValue
             );
             mReplayFailed = true;
         }
@@ -870,7 +870,10 @@ bool ReplaySession::ensureReplayDimension(
     auto* generationCounter    = &mDimensionTransitionGeneration;
 
     if (!clearRecordedEntities()) {
-        getLogger().error("Unable to clear recorded entities before leaving replay dimension {}", sourceDimension.id);
+        getLogger().error(
+            "Unable to clear recorded entities before leaving replay dimension {}",
+            sourceDimension.mValue
+        );
         mReplayFailed = true;
         return false;
     }
@@ -928,7 +931,7 @@ bool ReplaySession::ensureReplayDimension(
             if (!targetDimension || !player) {
                 getLogger().error(
                     "Unable to change replay dimension to {}: target dimension or server player is unavailable",
-                    target.id
+                    target.mValue
                 );
                 fail();
                 return;
@@ -957,10 +960,10 @@ bool ReplaySession::ensureReplayDimension(
                 return;
             }
         } catch (std::exception const& e) {
-            getLogger().error("Unable to change replay dimension to {}: {}", target.id, e.what());
+            getLogger().error("Unable to change replay dimension to {}: {}", target.mValue, e.what());
             fail();
         } catch (...) {
-            getLogger().error("Unable to change replay dimension to {}", target.id);
+            getLogger().error("Unable to change replay dimension to {}", target.mValue);
             fail();
         }
     });
@@ -993,7 +996,7 @@ void ReplaySession::processPendingDimensionTransition() {
         getLogger().error(
             "Replay dimension transition generation {} to {} timed out after {} ms with request status {}",
             mDimensionTransitionRequest->generation,
-            mPendingReplayDimension->id,
+            mPendingReplayDimension->mValue,
             std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
             static_cast<int>(status)
         );
@@ -1033,7 +1036,7 @@ void ReplaySession::processPendingDimensionTransition() {
                             "Unable to send replay dimension acknowledgment fallback for generation {}: the server "
                             "player is unavailable or has not reached dimension {}",
                             generation,
-                            target.id
+                            target.mValue
                         );
                         return;
                     }
@@ -1602,12 +1605,12 @@ void ReplaySession::updateCenterChunkReadiness() {
     mCenterChunksReady = true;
     auto const elapsed =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt);
-    size_t const queuedCenterColumns = static_cast<size_t>(std::count_if(
-        mCenterChunkPositions.begin(),
-        mCenterChunkPositions.end(),
-        [this](ChunkPos const& pos) { return !mReusableSnapshotColumns.contains(pos); }
-    ));
-    size_t const queuedOuterColumns  = mPendingLevelChunkIndices.size() - queuedCenterColumns;
+    size_t const queuedCenterColumns = static_cast<size_t>(
+        std::count_if(mCenterChunkPositions.begin(), mCenterChunkPositions.end(), [this](ChunkPos const& pos) {
+            return !mReusableSnapshotColumns.contains(pos);
+        })
+    );
+    size_t const queuedOuterColumns = mPendingLevelChunkIndices.size() - queuedCenterColumns;
     getLogger().debug(
         "Replay center ready with {} columns in {:.3f} ms after {} ticks; streaming {} outer columns",
         mCenterChunkPositions.size(),
