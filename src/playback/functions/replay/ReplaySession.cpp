@@ -34,15 +34,19 @@
 #include "mc/network/packet/MovePlayerPacket.h"
 #include "mc/network/packet/PlayerActionPacket.h"
 #include "mc/network/packet/PlayerActionType.h"
+#include "mc/network/packet/PackInfoData.h"
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/RemoveObjectivePacket.h"
+#include "mc/network/packet/ResourcePacksInfoPacket.h"
+#include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/SetDisplayObjectivePacket.h"
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/resources/IResourcePackRepository.h"
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
 #include "mc/world/actor/player/Player.h"
@@ -56,6 +60,7 @@
 #include "mc/world/level/chunk/LevelChunk.h"
 #include "mc/world/level/chunk/SubChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
+#include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 
 #include "snappy.h"
@@ -68,6 +73,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -202,6 +208,9 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             return false;
         }
         if (mSnapshotContexts.empty()) throw std::runtime_error("Replay contains no snapshot contexts");
+        if (!prepareReplayResourcePacks(mReaders.front()->readConfigurationPackets())) {
+            throw std::runtime_error("Unable to prepare the recorded resource-pack configuration");
+        }
         auto const& context = mSnapshotContexts.front();
 
         LevelSettings settings;
@@ -214,9 +223,40 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         settings.mDisablePlayerInteractions = true;
         settings.mDefaultSpawn              = BlockPos(Vec3{context.x, context.y, context.z});
 
-        mReplayLevelId = createReplayLevelId();
-        mCleanupState  = CleanupState::None;
-        mActive        = true;
+        mReplayLevelId            = createReplayLevelId();
+        auto dimensionProfile     = std::make_shared<ReplayDimensionProfile>();
+        dimensionProfile->levelId = mReplayLevelId;
+        for (auto const& snapshot : mSnapshotContexts) {
+            auto const minimum = snapshot.dimensionMinHeight;
+            auto const maximum = snapshot.dimensionMaxHeight;
+            auto const height  = static_cast<int64_t>(maximum) - static_cast<int64_t>(minimum);
+            if (minimum < std::numeric_limits<short>::min() || maximum > std::numeric_limits<short>::max()
+                || minimum % 16 != 0 || maximum <= minimum || height % 16 != 0) {
+                throw std::runtime_error(std::format(
+                    "Replay dimension {} has invalid recorded height range [{}, {})",
+                    snapshot.dimensionId,
+                    minimum,
+                    maximum
+                ));
+            }
+
+            RecordedDimensionHeightRange const range{minimum, maximum};
+            auto const [it, inserted] = dimensionProfile->heightRanges.emplace(snapshot.dimensionId, range);
+            if (!inserted && it->second != range) {
+                throw std::runtime_error(std::format(
+                    "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
+                    snapshot.dimensionId,
+                    it->second.minimum,
+                    it->second.maximum,
+                    minimum,
+                    maximum
+                ));
+            }
+        }
+        mReplayDimensionProfile.store(std::move(dimensionProfile), std::memory_order_release);
+
+        mCleanupState = CleanupState::None;
+        mActive       = true;
         screenModel->startLocalServerAsync(mReplayLevelId, "Playback Replay", settings);
         getLogger().info("Starting replay from {} in {}", mReplayFilePath, mReplayLevelId);
         return true;
@@ -228,6 +268,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
 }
 
 void ReplaySession::clearReplayData() {
+    mReplayDimensionProfile.store({}, std::memory_order_release);
     mStopRequested.store(false, std::memory_order_release);
     mRequestedSeekTick.store(-1, std::memory_order_release);
     mActive       = false;
@@ -300,6 +341,7 @@ void ReplaySession::clearReplayData() {
     mPendingSubChunkPackets.clear();
     mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
+    mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
     mReplayObjectiveNames.clear();
     mCenterChunkPositions.clear();
@@ -313,6 +355,7 @@ void ReplaySession::clearReplayData() {
 }
 
 void ReplaySession::finishWorldCleanup() {
+    releaseReplayResourcePacks();
     clearReplayData();
     mReplayWorldJoined = false;
     mCleanupState      = CleanupState::None;
@@ -664,6 +707,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mPendingSubChunkPackets.clear();
     mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
+    mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
     mReplayObjectiveNames.clear();
     mCenterChunkPositions.clear();
@@ -676,6 +720,72 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mChunkPlanPreparationMs = 0.0;
     clearNetworkContext();
     return true;
+}
+
+bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets) {
+    mReplayResourcePacksInfo.store(nullptr, std::memory_order_release);
+    mReplayResourcePackStack.store(nullptr, std::memory_order_release);
+    mReplayCachedResourcePacksLoaded = false;
+
+    auto client = ll::service::getClientInstance();
+    if (!client) return false;
+
+    auto findPacket = [&packets](MinecraftPacketIds packetId) -> PlaybackSerializedGamePacket const* {
+        for (auto it = packets.rbegin(); it != packets.rend(); ++it) {
+            if (it->mPacketId == static_cast<int32_t>(packetId)) return &*it;
+        }
+        return nullptr;
+    };
+    auto decodePacket = [](PlaybackSerializedGamePacket const& serialized) {
+        auto packet = MinecraftPackets::createPacket(static_cast<MinecraftPacketIds>(serialized.mPacketId));
+        if (!packet) throw std::runtime_error("Unable to create a recorded resource-pack packet");
+
+        ReadOnlyBinaryStream stream(serialized.mPayload, false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            throw std::runtime_error(std::format(
+                "Unable to decode recorded resource-pack packet {}",
+                serialized.mPacketId
+            ));
+        }
+        return packet;
+    };
+
+    auto&       repository     = client->getResourcePackRepository();
+    auto const* serializedInfo = findPacket(MinecraftPacketIds::ResourcePacksInfo);
+    auto const* serializedStack = findPacket(MinecraftPacketIds::ResourcePackStack);
+
+    std::shared_ptr<ResourcePacksInfoPacket> info;
+    if (serializedInfo) {
+        info = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
+        auto keys = info->mData->collectKeys();
+        mReplayCachedResourcePacksLoaded = true;
+        repository.addCachedResourcePacks(&keys);
+    }
+
+    if (!serializedStack) return true;
+
+    auto stack = std::static_pointer_cast<ResourcePackStackPacket>(decodePacket(*serializedStack));
+    if (!info) return true;
+    mReplayResourcePacksInfo.store(std::move(info), std::memory_order_release);
+    mReplayResourcePackStack.store(std::move(stack), std::memory_order_release);
+    return true;
+}
+
+void ReplaySession::releaseReplayResourcePacks() {
+    mReplayResourcePacksInfo.store(nullptr, std::memory_order_release);
+    mReplayResourcePackStack.store(nullptr, std::memory_order_release);
+    if (!mReplayCachedResourcePacksLoaded) return;
+    mReplayCachedResourcePacksLoaded = false;
+
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    try {
+        client->getResourcePackRepository().removePacksLoadedFromCache();
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to release replay resource packs loaded from cache: {}", exception.what());
+    } catch (...) {
+        getLogger().error("Unable to release replay resource packs loaded from cache");
+    }
 }
 
 void ReplaySession::onWorldReady() {
@@ -1048,6 +1158,13 @@ void ReplaySession::processPendingDimensionTransition() {
     }
 
     if (status != DimensionTransitionStatus::Succeeded || !dimensionMatches || waitingForAcknowledgment) {
+        mDimensionTransitionSettledUpdates = 0;
+        return;
+    }
+
+    auto client = ll::service::getClientInstance();
+    if (!client || client->isShowingLoadingScreen() || client->isShowingProgressScreen()
+        || client->isShowingWorldProgressScreen()) {
         mDimensionTransitionSettledUpdates = 0;
         return;
     }
@@ -1877,6 +1994,45 @@ int ReplaySession::cacheInlineChunkPacket(MinecraftPacketIds packetId, std::stri
     return index;
 }
 
+void ReplaySession::handleConfigurationPacket(PlaybackBuffer& data) {
+    if (!mIsProcessingSnapshot) {
+        throw std::runtime_error("Configuration packet appeared outside a replay snapshot");
+    }
+
+    auto const packetIdValue = data.getVarInt().value();
+    auto const packetId      = static_cast<MinecraftPacketIds>(packetIdValue);
+    auto const remaining     = data.getWritePointer() - data.mReadPointer;
+    std::string payload(data.mView.data() + data.mReadPointer, remaining);
+    data.mReadPointer += remaining;
+
+    auto const policy = getConfigurationPacketCachePolicy(packetId);
+    if (policy == ConfigurationPacketCachePolicy::Ignore) {
+        getLogger().error("Replay contains unsupported configuration packet {}", packetIdValue);
+        mReplayFailed = true;
+        return;
+    }
+
+    auto const applied = mAppliedConfigurationPackets.find(packetIdValue);
+    if (!shouldReplayConfigurationPacketEverySnapshot(packetId) && applied != mAppliedConfigurationPackets.end()
+        && applied->second == payload) {
+        return;
+    }
+
+    // These packets belong to the pre-world resource-pack handshake. The recorded stack is substituted by the
+    // network hook while the replay world joins; dispatching it again here would restart that handshake.
+    if (packetId == MinecraftPacketIds::ResourcePacksInfo || packetId == MinecraftPacketIds::ResourcePackStack) {
+        mAppliedConfigurationPackets.insert_or_assign(packetIdValue, std::move(payload));
+        return;
+    }
+
+    if (!applyGamePacket(packetId, payload)) {
+        getLogger().error("Unable to apply replay configuration packet {}", packetIdValue);
+        mReplayFailed = true;
+        return;
+    }
+    mAppliedConfigurationPackets.insert_or_assign(packetIdValue, std::move(payload));
+}
+
 void ReplaySession::handleGamePacket(PlaybackBuffer& data) {
     auto        packetId  = static_cast<MinecraftPacketIds>(data.getVarInt().value());
     auto const  remaining = data.getWritePointer() - data.mReadPointer;
@@ -2193,19 +2349,9 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     InjectionReset reset{mInjectingPacket};
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 
+    if (addsEntity) mRecordedEntityIds.emplace(entityId);
+
     switch (packetId) {
-    case MinecraftPacketIds::AddActor:
-        mRecordedEntityIds.emplace(*static_cast<AddActorPacket const&>(*packet).mEntityId);
-        break;
-    case MinecraftPacketIds::AddItemActor:
-        mRecordedEntityIds.emplace(*static_cast<AddItemActorPacket const&>(*packet).mId);
-        break;
-    case MinecraftPacketIds::AddPainting:
-        mRecordedEntityIds.emplace(*static_cast<AddPaintingPacket const&>(*packet).mEntityId);
-        break;
-    case MinecraftPacketIds::AddPlayer:
-        mRecordedEntityIds.emplace(*static_cast<AddPlayerPacket const&>(*packet).mEntityId);
-        break;
     case MinecraftPacketIds::RemoveActor:
         mRecordedEntityIds.erase(*static_cast<RemoveActorPacket const&>(*packet).mEntityId);
         break;
@@ -2486,6 +2632,18 @@ bool ReplaySession::isReplayLevel(Level const& level) {
     auto const& session = getInstance();
     return (session.mActive || session.mCleanupState != CleanupState::None) && !session.mReplayLevelId.empty()
         && level.getLevelId() == session.mReplayLevelId;
+}
+
+void ReplaySession::configureReplayDimension(DimensionArguments& arguments) const {
+    auto profile = mReplayDimensionProfile.load(std::memory_order_acquire);
+    if (!profile || arguments.mDerived->mLevel.getLevelId() != profile->levelId) return;
+
+    auto const dimensionId = arguments.mDimId->id;
+    auto const range       = profile->heightRanges.find(dimensionId);
+    if (range == profile->heightRanges.end()) return;
+
+    arguments.mHeightRange->mMin = static_cast<short>(range->second.minimum);
+    arguments.mHeightRange->mMax = static_cast<short>(range->second.maximum);
 }
 
 bool ReplaySession::shouldIsolateChunkPackets() const {

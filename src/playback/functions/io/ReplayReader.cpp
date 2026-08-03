@@ -15,6 +15,8 @@ static constexpr uint64 MAX_STRING_LENGTH = 65536;
 void writeSnapshotContext(PlaybackBuffer& buffer, PlaybackSnapshotContext const& context) {
     buffer.writeVarInt(PlaybackSnapshotContext::FormatVersion, nullptr, nullptr);
     buffer.writeVarInt(context.dimensionId, nullptr, nullptr);
+    buffer.writeVarInt(context.dimensionMinHeight, nullptr, nullptr);
+    buffer.writeVarInt(context.dimensionMaxHeight, nullptr, nullptr);
     buffer.writeFloat(context.x, nullptr, nullptr);
     buffer.writeFloat(context.y, nullptr, nullptr);
     buffer.writeFloat(context.z, nullptr, nullptr);
@@ -27,14 +29,17 @@ PlaybackSnapshotContext readSnapshotContext(PlaybackBuffer& buffer) {
     if (version != PlaybackSnapshotContext::FormatVersion) {
         throw std::runtime_error(std::format("Unsupported replay snapshot context version: {}", version));
     }
-    return PlaybackSnapshotContext{
-        buffer.getVarInt().value(),
-        buffer.getFloat().value(),
-        buffer.getFloat().value(),
-        buffer.getFloat().value(),
-        buffer.getFloat().value(),
-        buffer.getFloat().value()
-    };
+
+    PlaybackSnapshotContext context;
+    context.dimensionId        = buffer.getVarInt().value();
+    context.dimensionMinHeight = buffer.getVarInt().value();
+    context.dimensionMaxHeight = buffer.getVarInt().value();
+    context.x                  = buffer.getFloat().value();
+    context.y                  = buffer.getFloat().value();
+    context.z                  = buffer.getFloat().value();
+    context.yaw                = buffer.getFloat().value();
+    context.pitch              = buffer.getFloat().value();
+    return context;
 }
 
 ReplayReader::ReplayReader(std::string_view data) : mBuffer(data) {
@@ -92,6 +97,47 @@ PlaybackSnapshotContext ReplayReader::readSnapshotContext() {
         }
         mStream.mReadPointer = savedReadPointer;
         return context;
+    } catch (...) {
+        mStream.mReadPointer = savedReadPointer;
+        throw;
+    }
+}
+
+std::vector<PlaybackSerializedGamePacket> ReplayReader::readConfigurationPackets() {
+    auto const savedReadPointer = mStream.mReadPointer;
+    mStream.mReadPointer        = mSnapshotOffset;
+
+    std::vector<PlaybackSerializedGamePacket> packets;
+    try {
+        while (mStream.mReadPointer < mActionsOffset) {
+            auto const actionId = mStream.getVarInt().value();
+            auto const actionIt = mActionMap.find(actionId);
+            if (actionIt == mActionMap.end()) {
+                throw std::runtime_error(std::format("Unknown replay snapshot action id: {}", actionId));
+            }
+
+            auto const dataSize = mStream.getUnsignedInt().value();
+            if (mStream.mReadPointer > mActionsOffset || dataSize > mActionsOffset - mStream.mReadPointer) {
+                throw std::runtime_error(std::format(
+                    "Action {} extends beyond the replay snapshot",
+                    actionIt->second->name
+                ));
+            }
+
+            if (actionIt->second->name == ActionConfigurationPacket::getInstance().name) {
+                std::string    data(mStream.mView.data() + mStream.mReadPointer, dataSize);
+                PlaybackBuffer configuration(data);
+                auto const     packetId = configuration.getVarInt().value();
+                auto const     remaining = configuration.getWritePointer() - configuration.mReadPointer;
+                packets.push_back({
+                    packetId,
+                    std::string(configuration.mView.data() + configuration.mReadPointer, remaining)
+                });
+            }
+            mStream.mReadPointer += dataSize;
+        }
+        mStream.mReadPointer = savedReadPointer;
+        return packets;
     } catch (...) {
         mStream.mReadPointer = savedReadPointer;
         throw;

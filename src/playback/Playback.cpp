@@ -68,6 +68,7 @@ void Playback::registerActions() {
     registry.registerAction(std::make_unique<functions::ActionCreateLocalPlayer>());
     registry.registerAction(std::make_unique<functions::ActionLevelChunkCached>());
     registry.registerAction(std::make_unique<functions::ActionSubChunkCached>());
+    registry.registerAction(std::make_unique<functions::ActionConfigurationPacket>());
     registry.registerAction(std::make_unique<functions::ActionGamePacket>());
     registry.registerAction(std::make_unique<functions::ActionMoveEntities>());
 }

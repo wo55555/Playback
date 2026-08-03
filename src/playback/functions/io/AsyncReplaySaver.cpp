@@ -199,6 +199,27 @@ std::optional<std::string> AsyncReplaySaver::getError() const {
     return mError;
 }
 
+bool AsyncReplaySaver::writeConfigurationPackets(std::vector<PlaybackSerializedGamePacket> packets) {
+    try {
+        auto sharedPackets = std::make_shared<std::vector<PlaybackSerializedGamePacket>>(std::move(packets));
+
+        return submit([packets = std::move(sharedPackets)](ReplayWriter& writer) {
+            auto& action = ActionConfigurationPacket::getInstance();
+            for (auto const& packet : *packets) {
+                writer.startAction(action);
+                writer.mStream.writeVarInt(packet.mPacketId, nullptr, nullptr);
+                writer.mStream.write(packet.mPayload.data(), packet.mPayload.size());
+                writer.finishAction(action);
+            }
+        });
+    } catch (std::exception const& exception) {
+        recordError("Failed to prepare replay configuration packets for writing: " + std::string(exception.what()));
+    } catch (...) {
+        recordError("Failed to prepare replay configuration packets for writing: unknown error");
+    }
+    return false;
+}
+
 bool AsyncReplaySaver::writeGamePackets(std::vector<GamePacket> packets) {
     try {
         auto sharedPackets = std::make_shared<std::vector<GamePacket>>(std::move(packets));

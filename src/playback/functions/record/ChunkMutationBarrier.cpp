@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -36,6 +37,8 @@ struct BarrierState {
     std::mutex         bindingMutex;
     InsertGroupBinding binding;
     MultiPlayerLevel*  activeLevel{};
+    TaskGroup*         pendingInsertGroup{};
+    MultiPlayerLevel*  pendingInsertGroupLevel{};
     bool               discoveryHookInstalled{};
 };
 
@@ -45,6 +48,11 @@ BarrierState& barrierState() {
 }
 
 thread_local MultiPlayerLevel* tickBoundaryLevel{};
+
+MultiPlayerLevel* getCurrentLevel() {
+    auto level = ll::service::getMultiPlayerLevel();
+    return level ? level->asMultiPlayerLevel() : nullptr;
+}
 
 void** vtableOf(IBackgroundTaskOwner* owner) noexcept { return *reinterpret_cast<void***>(owner); }
 
@@ -75,7 +83,52 @@ void publishInsertGroup(MultiPlayerLevel& level, SubChunkManager& manager, TaskG
     auto&           state = barrierState();
     std::lock_guard lock(state.bindingMutex);
     if (!state.discoveryHookInstalled || state.activeLevel != &level) return;
+
     state.binding = {&level, &manager, &group, std::this_thread::get_id()};
+    if (state.pendingInsertGroup == &group) {
+        state.pendingInsertGroup      = nullptr;
+        state.pendingInsertGroupLevel = nullptr;
+    }
+}
+
+void recordTaskGroupConstruction(TaskGroup& group, bool insertGroupName) {
+    if (!insertGroupName) return;
+
+    auto*           currentLevel = getCurrentLevel();
+    auto&           state        = barrierState();
+    std::lock_guard lock(state.bindingMutex);
+    if (!state.discoveryHookInstalled || (currentLevel && state.activeLevel && currentLevel != state.activeLevel)) {
+        return;
+    }
+    if (group.mName.get() != InsertTaskGroupName) return;
+
+    state.pendingInsertGroup      = &group;
+    state.pendingInsertGroupLevel = currentLevel ? currentLevel : state.activeLevel;
+}
+
+bool publishPendingInsertGroup(BarrierState& state, MultiPlayerLevel& level, SubChunkManager* manager) {
+    auto* group = state.pendingInsertGroup;
+    if (!group) return false;
+    if (state.pendingInsertGroupLevel && state.pendingInsertGroupLevel != &level) {
+        state.pendingInsertGroup      = nullptr;
+        state.pendingInsertGroupLevel = nullptr;
+        return false;
+    }
+    if (!manager) return false;
+
+    auto* taskGroupVtable = findTaskGroupVtable(level);
+    if (!taskGroupVtable) return false;
+    if (vtableOf(group) != taskGroupVtable || group->mName.get() != InsertTaskGroupName
+        || group->getState() != TaskGroupState::Running) {
+        state.pendingInsertGroup      = nullptr;
+        state.pendingInsertGroupLevel = nullptr;
+        return false;
+    }
+
+    state.binding                 = {&level, manager, group, std::this_thread::get_id()};
+    state.pendingInsertGroup      = nullptr;
+    state.pendingInsertGroupLevel = nullptr;
+    return true;
 }
 
 InsertGroupBinding readBinding() {
@@ -89,11 +142,6 @@ bool bindingMatches(InsertGroupBinding const& expected) {
     auto&           state = barrierState();
     std::lock_guard lock(state.bindingMutex);
     return state.discoveryHookInstalled && state.activeLevel == expected.level && state.binding == expected;
-}
-
-MultiPlayerLevel* getCurrentLevel() {
-    auto level = ll::service::getMultiPlayerLevel();
-    return level ? level->asMultiPlayerLevel() : nullptr;
 }
 
 bool captureContextMatches(InsertGroupBinding const& binding) {
@@ -202,6 +250,22 @@ LL_TYPE_INSTANCE_HOOK(
     origin(source, chunk, absoluteSubChunkIndex, subChunkVisibilityChanged);
 }
 
+LL_TYPE_INSTANCE_HOOK(
+    ChunkMutationBarrierTaskGroupConstructionHook,
+    ll::memory::HookPriority::Normal,
+    TaskGroup,
+    &TaskGroup::$ctor,
+    void*,
+    WorkerPool& workers,
+    Scheduler&  scheduler,
+    std::string name
+) {
+    bool const insertGroupName = name == InsertTaskGroupName;
+    auto*      result          = origin(workers, scheduler, std::move(name));
+    recordTaskGroupConstruction(*this, insertGroupName);
+    return result;
+}
+
 } // namespace
 
 ChunkMutationBarrier::TickBoundaryGuard::TickBoundaryGuard(MultiPlayerLevel& level) noexcept
@@ -248,36 +312,93 @@ ChunkMutationBarrier::CaptureGuard ChunkMutationBarrier::capture(std::chrono::mi
 }
 
 void ChunkMutationBarrier::setActiveLevel(MultiPlayerLevel* level) {
-    auto&           state = barrierState();
+    auto&            state = barrierState();
+    SubChunkManager* manager{};
+    if (level) {
+        auto currentManager = level->getSubChunkManager();
+        manager             = currentManager.get();
+    }
+
     std::lock_guard captureLock(state.captureMutex);
     std::lock_guard bindingLock(state.bindingMutex);
-    if (state.activeLevel == level) return;
 
-    state.activeLevel = level;
-    state.binding     = {};
+    if (state.activeLevel != level) {
+        state.activeLevel = level;
+        state.binding     = {};
+
+        if (!level || (state.pendingInsertGroupLevel && state.pendingInsertGroupLevel != level)) {
+            state.pendingInsertGroup      = nullptr;
+            state.pendingInsertGroupLevel = nullptr;
+        }
+    }
+
+    if (!level) {
+        state.binding                 = {};
+        state.pendingInsertGroup      = nullptr;
+        state.pendingInsertGroupLevel = nullptr;
+        return;
+    }
+
+    if (state.binding.level == level && state.binding.manager == manager) {
+        state.binding.clientThread = std::this_thread::get_id();
+        if (state.pendingInsertGroup == state.binding.group) {
+            state.pendingInsertGroup      = nullptr;
+            state.pendingInsertGroupLevel = nullptr;
+        }
+    } else {
+        state.binding = {};
+    }
+
+    if (!state.binding.level) publishPendingInsertGroup(state, *level, manager);
 }
 
 bool hookChunkMutationBarrier(bool enable) {
     auto&           state = barrierState();
     std::lock_guard captureLock(state.captureMutex);
 
-    {
-        std::lock_guard bindingLock(state.bindingMutex);
-        if (state.discoveryHookInstalled == enable) return true;
-    }
+    struct HookState {
+        bool taskGroupConstruction{};
+        bool subChunkLoaded{};
+    };
+    static HookState hooks;
+
+    auto allInstalled  = [&] { return hooks.taskGroupConstruction && hooks.subChunkLoaded; };
+    auto noneInstalled = [&] { return !hooks.taskGroupConstruction && !hooks.subChunkLoaded; };
+    auto installAll    = [&] {
+        if (!hooks.taskGroupConstruction) {
+            hooks.taskGroupConstruction = ChunkMutationBarrierTaskGroupConstructionHook::hook() == 0;
+        }
+        if (!hooks.taskGroupConstruction) return false;
+        if (!hooks.subChunkLoaded) hooks.subChunkLoaded = ChunkMutationBarrierDiscoveryHook::hook() == 0;
+        return hooks.subChunkLoaded;
+    };
+    auto removeAll = [&] {
+        if (hooks.subChunkLoaded && ChunkMutationBarrierDiscoveryHook::unhook()) hooks.subChunkLoaded = false;
+        if (hooks.taskGroupConstruction && ChunkMutationBarrierTaskGroupConstructionHook::unhook()) {
+            hooks.taskGroupConstruction = false;
+        }
+        return noneInstalled();
+    };
 
     if (enable) {
-        auto* activeLevel = getCurrentLevel();
         {
             std::lock_guard bindingLock(state.bindingMutex);
-            state.binding                = {};
-            state.activeLevel            = activeLevel;
-            state.discoveryHookInstalled = true;
+            if (allInstalled() && state.discoveryHookInstalled) return true;
+
+            state.binding                 = {};
+            state.activeLevel             = getCurrentLevel();
+            state.pendingInsertGroup      = nullptr;
+            state.pendingInsertGroupLevel = nullptr;
+            state.discoveryHookInstalled  = true;
         }
-        if (ChunkMutationBarrierDiscoveryHook::hook() != 0) {
+        if (!installAll()) {
+            (void)removeAll();
             std::lock_guard bindingLock(state.bindingMutex);
-            state.discoveryHookInstalled = false;
-            state.activeLevel            = nullptr;
+            state.discoveryHookInstalled  = false;
+            state.binding                 = {};
+            state.activeLevel             = nullptr;
+            state.pendingInsertGroup      = nullptr;
+            state.pendingInsertGroupLevel = nullptr;
             return false;
         }
         return true;
@@ -285,19 +406,32 @@ bool hookChunkMutationBarrier(bool enable) {
 
     InsertGroupBinding previousBinding;
     MultiPlayerLevel*  previousActiveLevel{};
+    TaskGroup*         previousPendingInsertGroup{};
+    MultiPlayerLevel*  previousPendingInsertGroupLevel{};
     {
         std::lock_guard bindingLock(state.bindingMutex);
-        previousBinding              = state.binding;
-        previousActiveLevel          = state.activeLevel;
-        state.discoveryHookInstalled = false;
-        state.binding                = {};
-        state.activeLevel            = nullptr;
+        if (noneInstalled() && !state.discoveryHookInstalled) return true;
+
+        previousBinding                 = state.binding;
+        previousActiveLevel             = state.activeLevel;
+        previousPendingInsertGroup      = state.pendingInsertGroup;
+        previousPendingInsertGroupLevel = state.pendingInsertGroupLevel;
+        state.discoveryHookInstalled    = false;
+        state.binding                   = {};
+        state.activeLevel               = nullptr;
+        state.pendingInsertGroup        = nullptr;
+        state.pendingInsertGroupLevel   = nullptr;
     }
-    if (!ChunkMutationBarrierDiscoveryHook::unhook()) {
-        std::lock_guard bindingLock(state.bindingMutex);
-        state.discoveryHookInstalled = true;
-        state.activeLevel            = previousActiveLevel;
-        state.binding                = previousBinding;
+    if (!removeAll()) {
+        bool const restored = installAll();
+        if (restored) {
+            std::lock_guard bindingLock(state.bindingMutex);
+            state.discoveryHookInstalled  = true;
+            state.binding                 = previousBinding;
+            state.activeLevel             = previousActiveLevel;
+            state.pendingInsertGroup      = previousPendingInsertGroup;
+            state.pendingInsertGroupLevel = previousPendingInsertGroupLevel;
+        }
         return false;
     }
     return true;

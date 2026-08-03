@@ -56,15 +56,21 @@ class Recorder {
 private:
     enum class State { Idle, Recording, Paused, Closing };
     enum class SnapshotCaptureResult { Success, NotReady, Failed };
+    struct SnapshotDimension {
+        DimensionType id{};
+        int32_t       minHeight{};
+        int32_t       maxHeight{};
+    };
     std::unique_ptr<AsyncReplaySaver> mAsyncReplaySaver;
 
     std::vector<std::shared_ptr<LevelChunkPacket>> mSnapshotLevelChunks;
     std::vector<std::shared_ptr<SubChunkPacket>>   mSnapshotSubChunks;
+    std::vector<PlaybackSerializedGamePacket>      mSnapshotConfigurationPackets;
     std::vector<PlaybackSerializedGamePacket>      mSnapshotEntityPackets;
     std::optional<std::string>                     mSnapshotLocalPlayerPayload;
+    std::vector<PlaybackSerializedGamePacket>      mConfigurationPackets;
+    std::unordered_map<int32_t, size_t>             mConfigurationPacketIndices;
     std::vector<PlaybackSerializedGamePacket>      mPendingGamePackets;
-    std::string                                    mDimensionDataPayload;
-    std::string                                    mSnapshotDimensionDataPayload;
     mutable std::mutex                             mPendingGamePacketsMutex;
     std::unordered_map<int32_t, uint64_t>          mRecordedGamePacketCounts;
     std::unordered_map<ActorUniqueID, std::string> mLastEntityMovements;
@@ -76,7 +82,7 @@ private:
     std::optional<std::string>                     mLastLocalPlayerArmorPacket;
     std::optional<int>                             mLastLocalPlayerSwingTime;
     std::optional<PlaybackView>                    mSnapshotView;
-    std::optional<DimensionType>                   mSnapshotDimension;
+    std::optional<SnapshotDimension>               mSnapshotDimension;
 
     std::optional<DimensionType>        mRecordingDimension;
     std::string                         mSnapshotFailure;
@@ -137,6 +143,8 @@ private:
     void resetStateForNewRecording();
 
     void resetChunkSnapshot();
+
+    void recordConfigurationPacket(Packet const& packet);
 
 public:
     Recorder();
