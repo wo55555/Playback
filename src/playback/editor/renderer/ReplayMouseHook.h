@@ -13,7 +13,12 @@ namespace playback::editor::renderer {
 void setReplayMouseInputActive(bool active);
 void setReplayUIActive(bool active);
 
-void beginReplayMouseFrame(ui::ReplayUILayout const& layout, float displayWidth, float displayHeight);
+void beginReplayMouseFrame(
+    ui::ReplayUILayout const& layout,
+    float                     displayWidth,
+    float                     displayHeight,
+    bool                      blockGameMouseInput
+);
 void setReplayGameViewport(float left, float top, float right, float bottom);
 
 void endReplayMouseFrame();

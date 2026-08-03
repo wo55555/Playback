@@ -36,13 +36,12 @@
                 "importTooltip": "导入回放文件",
                 "filter": "筛选",
                 "sort": "排序",
-                "grid": "平铺",
-                "list": "列表",
-                "switchToGrid": "切换到平铺视图",
-                "switchToList": "切换到列表视图",
+                "overview": "概况",
+                "details": "详情",
+                "switchToOverview": "切换到概况",
+                "switchToDetails": "切换到详情",
                 "refresh": "刷新回放列表",
-                "settings": "设置",
-                "settingsUnavailable": "回放目录设置暂不可用"
+                "settings": "设置"
             },
             "filter": {
                 "all": "全部",

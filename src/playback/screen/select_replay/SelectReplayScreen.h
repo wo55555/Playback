@@ -33,6 +33,7 @@ private:
     void drawNavigation();
     void drawGrid();
     void drawDetails();
+    void drawDetailsListItem(playback::editor::ReplayBrowserEntry const& replay, std::size_t visibleIndex, float width);
     void drawCard(playback::editor::ReplayBrowserEntry const& replay, std::size_t visibleIndex, float width);
     void drawPreview(playback::editor::ReplayBrowserEntry const& replay, ImVec2 size);
     void drawActionBar();

@@ -36,13 +36,12 @@
                 "importTooltip": "Import replay file",
                 "filter": "Filter",
                 "sort": "Sort",
-                "grid": "Grid",
-                "list": "List",
-                "switchToGrid": "Switch to grid view",
-                "switchToList": "Switch to list view",
+                "overview": "Overview",
+                "details": "Details",
+                "switchToOverview": "Switch to overview",
+                "switchToDetails": "Switch to details",
                 "refresh": "Refresh replay list",
-                "settings": "Settings",
-                "settingsUnavailable": "Replay folder settings are not available yet"
+                "settings": "Settings"
             },
             "filter": {
                 "all": "All",

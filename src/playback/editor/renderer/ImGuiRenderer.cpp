@@ -368,7 +368,7 @@ struct ImGuiRenderer::Impl {
 
         ImGui_ImplDX11_NewFrame();
         input::syncFrame();
-        beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
+        beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
         auto submit = [this](EditorAction action) {
             if (editorContext) editorContext->submit(std::move(action));
@@ -376,7 +376,6 @@ struct ImGuiRenderer::Impl {
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
         if (state.browser.visible) {
-            setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
             replayBrowser.draw(state.browser, submit);
         } else if (state.editorVisible) {
             replayEditor.setGameTexture(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
@@ -389,8 +388,10 @@ struct ImGuiRenderer::Impl {
 
         ID3D11RenderTargetView* rtv = d3d11Rtv.Get();
         d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
-        float clearColor[]{0.055f, 0.055f, 0.065f, 1};
-        d3d11Context->ClearRenderTargetView(rtv, clearColor);
+        if (!state.browser.visible) {
+            float clearColor[]{0.055f, 0.055f, 0.065f, 1};
+            d3d11Context->ClearRenderTargetView(rtv, clearColor);
+        }
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         d3d11FirstFrameLogged = true;
         return true;
@@ -1025,7 +1026,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         ImGui_ImplDX12_NewFrame();
         // Forward MCBE key events to ImGui keyboard state
         input::syncFrame();
-        beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y);
+        beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
         auto submit = [&p](EditorAction action) {
             if (p.editorContext) p.editorContext->submit(std::move(action));
@@ -1033,7 +1034,6 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
         if (state.browser.visible) {
-            setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
             replayBrowser.draw(state.browser, submit);
         } else if (state.editorVisible) {
             replayEditor.setGameTexture(static_cast<ImTextureID>(f.gameSrvGpu.ptr));
@@ -1129,8 +1129,10 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     f.commandList->ResourceBarrier(2, toRT);
     if (uiActive) {
         f.commandList->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
-        float cc[]{0.055f, 0.055f, 0.065f, 1};
-        f.commandList->ClearRenderTargetView(f.rtv, cc, 0, nullptr);
+        if (!browserOpen) {
+            float cc[]{0.055f, 0.055f, 0.065f, 1};
+            f.commandList->ClearRenderTargetView(f.rtv, cc, 0, nullptr);
+        }
         ID3D12DescriptorHeap* dh[]{p.srvHeap.Get()};
         f.commandList->SetDescriptorHeaps(1, dh);
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), f.commandList.Get());
