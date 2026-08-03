@@ -19,7 +19,7 @@ xmake f -y -p windows -a x64 -m release --target_type=client
 xmake -r -y
 ```
 
-打包后的模组位于 `bin/playback/`。翻译文件会复制到 `bin/playback/lang/`，图标字体会复制到 `bin/playback/fonts/`。构建过程不再生成旧 UI 资源包或独立 `.mcpack`。
+打包后的模组位于 `bin/playback/`。原生界面翻译会复制到 `bin/playback/lang/`，图标字体会复制到 `bin/playback/fonts/`，轻量主菜单按钮资源包会安装到 `bin/playback/resource_packs/playback-ui/`。同一按钮资源包还会生成为 `bin/playback-ui.mcpack`，供单独手动导入；原生回放浏览器不在该资源包内。
 
 ## 刷新依赖
 

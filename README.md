@@ -70,14 +70,17 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 - **Replay thumbnails** — Captures a preview image during recording when the game is in a menu-free state.
 - **Timeline controls** — Supports play, pause, seek, speed control, and quick navigation during replay.
 - **Timeline editor** — Provides zoomable tracks, resizable panels, camera/sequence/entity-segment editing, and undo/redo for the active in-memory project.
-- **Bilingual UI** — Localizes commands and the native replay UI in English and Simplified Chinese.
+- **Bilingual UI** — Localizes commands, the native replay UI, and the resource-pack main-menu button in English and Simplified Chinese.
 
 ## Latest Changes
 
-`v0.1.2` expands the native replay browser, adds replay thumbnails, rebuilds the in-game timeline editor, unifies user-facing i18n, and removes the legacy UI resource-pack packaging.
+`v0.1.2` expands the native replay browser, adds replay thumbnails, rebuilds the in-game timeline editor, unifies user-facing i18n, and reduces the legacy UI resource pack to the main-menu button.
 
 > [!CAUTION]
-> This release changes the replay snapshot format. Replays created by `v0.1.1` or earlier must be recorded again. Remove any old `playback-ui.mcpack` file and `mods/playback/resource_packs/playback-ui/` directory before installing, then perform a clean mod installation. The internal `Config` version remains at its initial value (`1`), third-party dependency versions remain unchanged, and no migration is provided.
+> This release changes the replay snapshot format. Replays created by `v0.1.1` or earlier must be recorded again. The internal `Config` version remains at its initial value (`1`), third-party dependency versions remain unchanged, and no migration is provided.
+
+> [!IMPORTANT]
+> The **Playback** main-menu button still uses a lightweight UI resource pack. Complete Lip and release-ZIP installations include it under `mods/playback/resource_packs/playback-ui/`; the Release also provides `playback-ui.mcpack` for standalone manual import.
 
 See the full [changelog](CHANGELOG.md) for release history and detailed changes.
 
