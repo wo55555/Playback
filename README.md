@@ -1,88 +1,103 @@
-# Playback
+<div align="center">
+  <img src="assets/pack_icon.png" alt="Playback icon" width="160">
+  <h1>Playback</h1>
+  <p><strong>Record, revisit, and replay Minecraft Bedrock.</strong></p>
+  <p>A native LeviLamina client mod for recording, exporting, and replaying your sessions.</p>
 
-[![Discord](https://img.shields.io/badge/Discord-Playback-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/mUhRUD8AM)
-[![QQ](https://img.shields.io/badge/QQ-Playback-EB1923?style=for-the-badge&logo=qq&logoColor=white)](https://qm.qq.com/q/ufJatMDcha)
+  <p>
+    <a href="https://discord.gg/mUhRUD8AM"><img src="https://img.shields.io/badge/Discord-Join%20community-5865F2?style=for-the-badge&amp;logo=discord&amp;logoColor=white" alt="Join the Playback Discord server"></a>
+    <a href="https://qm.qq.com/q/ufJatMDcha"><img src="https://img.shields.io/badge/QQ-Join%20group-EA0000?style=for-the-badge&amp;logo=qq&amp;logoColor=white" alt="Join the Playback QQ group"></a>
+    <img src="https://img.shields.io/badge/English-inactive?style=for-the-badge" alt="English">
+    <a href="README_ZH.md"><img src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-informational?style=for-the-badge" alt="简体中文"></a>
+  </p>
 
-![English](https://img.shields.io/badge/English-inactive?style=for-the-badge)
-[![简体中文](https://img.shields.io/badge/简体中文-informational?style=for-the-badge)](README_ZH.md)
-
-Playback is a native [LeviLamina](https://github.com/LiteLDev/LeviLamina) client mod for recording, exporting, and replaying Minecraft Bedrock sessions. Its replay architecture is inspired by the Java Edition [Flashback](https://github.com/Moulberry/Flashback) mod and adapted to the Bedrock client lifecycle.
+  <p>
+    <a href="#quick-start">Quick Start</a>
+    ·
+    <a href="#showcase">Showcase</a>
+    ·
+    <a href="#features">Features</a>
+    ·
+    <a href="#latest-changes">Changelog</a>
+    ·
+    <a href="#development-status-and-roadmap">Roadmap</a>
+    ·
+    <a href="#contributing">Contributing</a>
+  </p>
+</div>
 
 > [!WARNING]
-> `0.1.0-alpha.2` is a public Alpha release. Keep backups of important worlds and recordings. Replay compatibility is not guaranteed across Minecraft, LeviLamina, or Playback version changes.
+> Playback is still in an early stage of development. All currently published releases are test builds. Keep backups of important worlds and recordings; replay compatibility is not guaranteed across Minecraft, LeviLamina, or Playback version changes.
+
+## Quick Start
+
+> [!IMPORTANT]
+> Use a clean LeviLamina client instance when possible. Broad compatibility with other mods is not currently guaranteed.
+
+1. Create or select a clean LeviLamina client instance for the target Minecraft version.
+2. Install the matching Playback `#client` release through LeviLauncher/Lip or from the release ZIP.
+3. Launch the game, record with `record start` / `record pause` / `record stop`, then open the exported replay from the main-menu **Playback** browser.
+
+See the [installation and usage guide](docs/getting-started.md) for screenshots, exact Lip commands, manual installation, recording, and replay instructions.
+
+## Showcase
+
+<p align="center">
+  <strong>Main menu integration</strong><br>
+  <img src="docs/images/showcase/en/main-menu.webp" alt="Playback entry on the Minecraft main menu" width="900">
+</p>
+
+<p align="center">
+  <strong>Native replay browser</strong><br>
+  <img src="docs/images/showcase/en/replay-browser.webp" alt="Playback replay browser" width="900">
+</p>
+
+<p align="center">
+  <strong>In-game timeline editor</strong><br>
+  <img src="docs/images/showcase/en/timeline-editor.webp" alt="Playback in-game timeline editor" width="900">
+</p>
+
+> [!NOTE]
+> The UI is still under active development, and the current interface does not represent the final design.
 
 ## Features
 
-- Captures loaded chunks, block actors, entity movement, player state, time, and selected client-safe game packets.
-- Writes replay snapshots and timeline data asynchronously to reduce recording stalls.
-- Exports recordings as portable replay archives.
-- Opens replays from a native main-menu browser in an isolated local replay world.
-- Provides an in-game timeline for play/pause, seeking, speed control, and exiting the replay.
-- Localizes commands, the replay editor, and the resource-pack UI in English and Simplified Chinese.
+- **Session capture** — Records loaded chunks, block actors, entity movement, player state, time, and selected client-safe game packets.
+- **Low-impact recording** — Writes replay snapshots and timeline data asynchronously to reduce recording stalls.
+- **Portable archives** — Exports recordings as replay files that are easy to store and share.
+- **Isolated playback** — Opens recordings from a native main-menu browser in a dedicated local replay world.
+- **Replay browser** — Searches, imports, filters, sorts, renames, deletes, and opens replay files, with grid and list views.
+- **Replay thumbnails** — Captures a preview image during recording when the game is in a menu-free state.
+- **Timeline controls** — Supports play, pause, seek, speed control, and quick navigation during replay.
+- **Timeline editor** — Provides zoomable tracks, resizable panels, camera/sequence/entity-segment editing, and undo/redo for the active in-memory project.
+- **Bilingual UI** — Localizes commands and the native replay UI in English and Simplified Chinese.
+
+## Latest Changes
+
+`v0.1.2` expands the native replay browser, adds replay thumbnails, rebuilds the in-game timeline editor, unifies user-facing i18n, and removes the legacy UI resource-pack packaging.
+
+> [!CAUTION]
+> This release changes the replay snapshot format. Replays created by `v0.1.1` or earlier must be recorded again. Remove any old `playback-ui.mcpack` file and `mods/playback/resource_packs/playback-ui/` directory before installing, then perform a clean mod installation. The internal `Config` version remains at its initial value (`1`), third-party dependency versions remain unchanged, and no migration is provided.
+
+See the full [changelog](CHANGELOG.md) for release history and detailed changes.
 
 ## Compatibility
 
-- Minecraft Bedrock for Windows
-- LeviLamina client `26.10.*`
+Playback maintains release lines for different Minecraft and LeviLamina versions. This release targets `26.10.*`; use the listed `26.20.*` release until a compatible `v0.1.2` build is published for that runtime.
+
+| Minecraft / LeviLamina | Playback release | Status |
+| --- | --- | --- |
+| `26.10.*` | [`v0.1.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.2-mc26.10) | Maintained |
+| `26.20.*` | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) | Maintained |
+
+Both release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
 
 > [!TIP]
 > Playback is a client-only mod that can record sessions in both local worlds and multiplayer servers.
 
-## Quick Start
-
-### Install a release
-
-1. Download `Playback-client-windows-x64.zip` from the GitHub release.
-2. Extract the included `playback` directory into the LeviLamina instance's `mods` directory.
-3. Restart the client. LeviLamina loads the bundled Playback UI resource pack automatically.
-
-The release also provides `playback-ui.mcpack` as a standalone asset for manual import. It is not required when installing the complete mod ZIP.
-
-The Playback button should now appear on the main menu.
-
-### Record
-
-Join a world, open the client command console, and use:
-
-```text
-record start
-record pause
-record stop
-```
-
-`record start` begins or resumes recording, `record pause` pauses capture, and `record stop` finishes and exports the replay. Exported `.zip` files are stored in Playback's `data/replays` directory.
-
-### Replay
-
-1. Return to the main menu and select **Playback**.
-2. Choose a `.playback` or compatible `.zip` replay from the browser.
-3. Wait for the isolated replay world and initial chunks to finish loading.
-4. Use the bottom timeline to play, pause, seek, change speed, or jump to either end. Use **File > Exit Replay** to leave.
-
 ## Build From Source
 
-Requirements:
-
-- Visual Studio 2022 with the MSVC C++ toolchain
-- [xmake](https://xmake.io/)
-- Git
-
-Configure and build a clean Release client target:
-
-```powershell
-xmake f -y -p windows -a x64 -m release --target_type=client
-xmake -r -y
-```
-
-The packaged mod is written to `bin/playback/`, including translations under `bin/playback/lang/` and the automatically loaded UI pack under `bin/playback/resource_packs/playback-ui/`. The build also generates `bin/playback-ui.mcpack` as a standalone resource-pack asset.
-
-If prelink reports that `bedrock_runtime_data` cannot be found, refresh the package configuration and rebuild:
-
-```powershell
-xmake repo -u
-xmake f -c -y -p windows -a x64 -m release --target_type=client
-xmake -r -y
-```
+Playback builds on Windows x64 with Visual Studio 2022, xmake, and Git. See the [source-build guide](docs/building.md) for clean Release commands, output layout, and dependency troubleshooting.
 
 ## Commands
 
@@ -95,26 +110,32 @@ xmake -r -y
 
 ## Languages
 
-Playback currently includes English (`en_US`) and Simplified Chinese (`zh_CN`) translations. Command and replay-editor translations are stored in `src/lang/`; resource-pack UI translations are stored in `resources/texts/`.
+Playback currently includes English (`en_US`) and Simplified Chinese (`zh_CN`) translations stored in `src/lang/`.
 
 ## Development Status and Roadmap
 
 - The recording, export, and replay GUIs are under active development and optimization.
 - Multiplayer server recording and replay will receive further debugging; testing and feedback are welcome.
-- Planned features include camera movement, video rendering, and video export.
+- Planned features include video rendering and video export.
+
+> [!TIP]
+> **Coming next:** The next release will bring a major UI update and optimization pass, along with the first camera features.
 
 ## Known Limitations
 
 - The replay format is still under development and may change during Alpha releases.
 - Playback reconstructs recorded client-visible state; it is not a deterministic copy of the original server simulation.
 - Pending scheduled ticks and server-owned systems such as villages, raids, and POI state are not currently persisted as authoritative simulation state.
+- Editor changes currently live in memory; project persistence and video export are not available yet.
 - Compatibility must be checked again after updating Minecraft or LeviLamina.
 
 Please report reproducible problems with logs, versions, and a minimal replay where possible.
 
+[Open an issue](https://github.com/wo55555/Playback/issues) to report a reproducible problem.
+
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the build, formatting, and pull request workflow.
+See the [source-build guide](docs/building.md) and [CONTRIBUTING.md](CONTRIBUTING.md) for the build, formatting, and pull request workflow.
 
 Report security issues privately by following [SECURITY.md](SECURITY.md). Do not open a public issue for a security vulnerability.
 

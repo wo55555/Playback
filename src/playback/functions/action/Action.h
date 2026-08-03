@@ -49,6 +49,28 @@ public:
     }
 };
 
+struct ActionSnapshotContext : Action {
+    ActionSnapshotContext() : Action("snapshot_context") {}
+    void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionSnapshotContext& getInstance() {
+        static ActionSnapshotContext instance;
+        return instance;
+    }
+};
+
+struct ActionCreateLocalPlayer : Action {
+    ActionCreateLocalPlayer() : Action("create_local_player") {}
+    void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionCreateLocalPlayer& getInstance() {
+        static ActionCreateLocalPlayer instance;
+        return instance;
+    }
+};
+
 struct ActionLevelChunkCached : Action {
     ActionLevelChunkCached() : Action("level_chunk_cached") {}
     void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;

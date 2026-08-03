@@ -93,7 +93,6 @@ jobs:
           path: artifact
 
       - run: |
-          mv artifact/playback-ui.mcpack playback-ui.mcpack
           cp CHANGELOG.md LICENSE README.md README_ZH.md artifact/
 
       - run: |
@@ -104,7 +103,6 @@ jobs:
         with:
           files: |
             ${{ github.event.repository.name }}-client-windows-x64.zip
-            playback-ui.mcpack
 
   notify-discord:
     needs:

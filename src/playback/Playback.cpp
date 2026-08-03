@@ -64,6 +64,8 @@ void Playback::registerActions() {
     auto& registry = functions::ActionRegistry::getInstance();
 
     registry.registerAction(std::make_unique<functions::ActionNextTick>());
+    registry.registerAction(std::make_unique<functions::ActionSnapshotContext>());
+    registry.registerAction(std::make_unique<functions::ActionCreateLocalPlayer>());
     registry.registerAction(std::make_unique<functions::ActionLevelChunkCached>());
     registry.registerAction(std::make_unique<functions::ActionSubChunkCached>());
     registry.registerAction(std::make_unique<functions::ActionGamePacket>());
@@ -201,9 +203,7 @@ bool Playback::load() {
     configurationLog();
 
     const auto& logger = getSelf().getLogger();
-    logger.debug("Loading...");
 
-    logger.debug("Loading I18n");
     if (auto result = ll::i18n::getInstance().load(getSelf().getLangDir()); !result) {
         logger.error("Failed to load I18n");
         result.error().log(getSelf().getLogger());
@@ -225,7 +225,6 @@ bool Playback::load() {
 
 bool Playback::enable() {
     const auto& logger = getSelf().getLogger();
-    logger.debug("Enabling...");
 
     if (!hook()) {
         logger.error("Playback cannot enable because its required runtime hooks are unavailable");
@@ -240,7 +239,6 @@ bool Playback::enable() {
 
 bool Playback::disable() {
     const auto& logger = getSelf().getLogger();
-    logger.debug("Disabling...");
 
     auto& replaySession = functions::ReplaySession::getInstance();
     if (replaySession.isIsolatingReplayWorld() || replaySession.isReplayWorldCleanupPending()) {

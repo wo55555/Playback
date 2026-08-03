@@ -2,7 +2,7 @@
   "format_version": 3,
   "format_uuid": "289f771f-2c9a-4d73-9f3f-8492495a924d",
   "tooth": "github.com/wo55555/Playback",
-  "version": "0.1.1-mc26.20",
+  "version": "0.1.2-mc26.20",
   "info": {
     "name": "Playback",
     "description": "Record, export, and replay Minecraft Bedrock client sessions.",
@@ -10,7 +10,7 @@
       "platform:levilamina",
       "type:mod"
     ],
-    "avatar_url": "https://raw.githubusercontent.com/wo55555/Playback/main/resources/pack_icon.png"
+    "avatar_url": "https://raw.githubusercontent.com/wo55555/Playback/main/assets/pack_icon.png"
   },
   "variants": [
     {
@@ -34,7 +34,9 @@
           ]
         }
       ],
-      "preserve_files": [],
+      "preserve_files": [
+        "mods/playback/data/"
+      ],
       "remove_files": [],
       "scripts": {
         "pre_install": [],

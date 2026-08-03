@@ -3,7 +3,9 @@
 #include "playback/Playback.h"
 #include "playback/functions/action/Action.h"
 
+#include "ll/api/service/Bedrock.h"
 #include "ll/api/service/TargetedBedrock.h"
+#include "ll/api/thread/ServerThreadExecutor.h"
 
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
@@ -14,6 +16,7 @@
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
+#include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
@@ -29,13 +32,18 @@
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
+#include "mc/network/packet/PlayerActionPacket.h"
+#include "mc/network/packet/PlayerActionType.h"
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
+#include "mc/network/packet/RemoveObjectivePacket.h"
+#include "mc/network/packet/SetDisplayObjectivePacket.h"
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
@@ -93,6 +101,11 @@ bool shouldIgnoreReplayPacket(MinecraftPacketIds packetId) {
     default:
         return false;
     }
+}
+
+bool isSuccessfulSubChunkResult(SubChunkPacket::SubChunkRequestResult result) {
+    return result == SubChunkPacket::SubChunkRequestResult::Success
+        || result == SubChunkPacket::SubChunkRequestResult::SuccessAllAir;
 }
 
 std::string createReplayLevelId() {
@@ -188,7 +201,8 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             stop();
             return false;
         }
-        auto const& view = *mMeta.initialView;
+        if (mSnapshotContexts.empty()) throw std::runtime_error("Replay contains no snapshot contexts");
+        auto const& context = mSnapshotContexts.front();
 
         LevelSettings settings;
         settings.mGameType                  = GameType::Spectator;
@@ -198,7 +212,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         settings.mMultiplayerGameIntent     = false;
         settings.mLANBroadcastIntent        = false;
         settings.mDisablePlayerInteractions = true;
-        settings.mDefaultSpawn              = BlockPos(Vec3{view.x, view.y, view.z});
+        settings.mDefaultSpawn              = BlockPos(Vec3{context.x, context.y, context.z});
 
         mReplayLevelId = createReplayLevelId();
         mCleanupState  = CleanupState::None;
@@ -233,10 +247,23 @@ void ReplaySession::clearReplayData() {
     mPlaybackSpeed           = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
     mReplayTime.reset();
+    mPendingReplayDimension.reset();
+    mPendingSnapshotApply.reset();
+    if (mDimensionTransitionRequest) {
+        mDimensionTransitionRequest->status.store(DimensionTransitionStatus::Cancelled, std::memory_order_release);
+        mDimensionTransitionRequest.reset();
+    }
     mChunkInjectionTicks     = 0;
     mChunkInjectionIdleTicks = 0;
     mPendingLevelChunkCursor = 0;
     mPendingSubChunkCursor   = 0;
+
+    mDimensionTransitionSettledUpdates = 0;
+    mDimensionTransitionStartedAt      = {};
+
+    mCompletedDimensionGeneration  = 0;
+    mDimensionTransitionGeneration = 0;
+
     mInjectedLevelChunks     = 0;
     mInjectedSubChunkPackets = 0;
     mInjectedSubChunkEntries = 0;
@@ -249,8 +276,10 @@ void ReplaySession::clearReplayData() {
     mReplayFilePath.clear();
     mMeta = PlaybackMeta{};
     mReaders.clear();
-    mSnapshotViews.clear();
+    mSnapshotContexts.clear();
     mChunkPackets.clear();
+    mInlineLevelChunkPacketIndices.clear();
+    mInlineSubChunkPacketIndices.clear();
     {
         std::scoped_lock lock(mPendingLevelChunksMutex);
         mPendingLevelChunks.clear();
@@ -260,6 +289,7 @@ void ReplaySession::clearReplayData() {
     mPendingLevelChunkIndices.clear();
     mSnapshotChunks.clear();
     mApplyingSnapshotChunks.clear();
+    mChunkIsolationDimension.reset();
     mAppliedSnapshotColumns.clear();
     mPendingSnapshotColumns.clear();
     mDirtySnapshotColumns.clear();
@@ -268,8 +298,10 @@ void ReplaySession::clearReplayData() {
     mDirectLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
     mPendingSubChunkPackets.clear();
+    mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
     mRecordedEntityIds.clear();
+    mReplayObjectiveNames.clear();
     mCenterChunkPositions.clear();
     mRemainingSubChunkPacketsByColumn.clear();
     mApplyingChunkSnapshot      = false;
@@ -328,9 +360,7 @@ bool ReplaySession::setPaused(bool paused) {
     return true;
 }
 
-int ReplaySession::getTotalTicks() const {
-    return std::max(0, mMeta.totalTicks > 0 ? mMeta.totalTicks : mMeta.duration);
-}
+int ReplaySession::getTotalTicks() const { return std::max(0, mMeta.totalTicks); }
 
 void ReplaySession::adjustPlaybackSpeed(int direction) {
     if (!mActive || direction == 0) return;
@@ -356,14 +386,14 @@ void ReplaySession::adjustPlaybackSpeed(int direction) {
 void ReplaySession::beginSeek(int targetTick) {
     targetTick = std::clamp(targetTick, 0, getTotalTicks());
     if (mReaders.empty()) return;
+    if (!refreshReplayPlayer()) throw std::runtime_error("Replay player is unavailable while seeking");
 
     size_t selectedReader = mReaders.size() - 1;
     int    selectedStart  = 0;
     int    chunkStart     = 0;
     size_t chunkIndex     = 0;
     for (auto const& [_, chunkMeta] : mMeta.chunks) {
-        int const chunkDuration = std::max(0, chunkMeta.duration);
-        int const chunkEnd      = chunkStart + chunkDuration;
+        int const chunkEnd = chunkStart + std::max(0, chunkMeta.duration);
         if (targetTick < chunkEnd || chunkIndex + 1 == mReaders.size()) {
             selectedReader = chunkIndex;
             selectedStart  = chunkStart;
@@ -376,7 +406,28 @@ void ReplaySession::beginSeek(int targetTick) {
     mIsPaused                = true;
     mPlaybackTickAccumulator = 0.0f;
     mSeekTargetTick          = targetTick;
-    if (targetTick >= mCurrentTick) {
+    if (selectedReader >= mSnapshotContexts.size()) {
+        throw std::runtime_error("Replay seek snapshot context index is out of range");
+    }
+
+    auto const currentDimension      = mReplayPlayer->getDimensionId();
+    auto const targetDimension       = DimensionType{mSnapshotContexts[selectedReader].dimensionId};
+    bool const changesDimension      = currentDimension != targetDimension;
+    bool       crossesForcedSnapshot = false;
+    if (selectedReader != mReaderIndex) {
+        size_t const firstReader = std::min(selectedReader, mReaderIndex);
+        size_t const lastReader  = std::max(selectedReader, mReaderIndex);
+        size_t       readerIndex = 0;
+        for (auto const& [_, chunkMeta] : mMeta.chunks) {
+            if (readerIndex > firstReader && readerIndex <= lastReader && chunkMeta.forcePlaySnapshot) {
+                crossesForcedSnapshot = true;
+                break;
+            }
+            ++readerIndex;
+        }
+    }
+    bool const followRecordedPlayer = changesDimension || crossesForcedSnapshot;
+    if (targetTick >= mCurrentTick && !followRecordedPlayer) {
         getLogger().debug(
             "Fast-forwarding replay from tick {} to tick {} without reloading snapshots",
             mCurrentTick,
@@ -387,21 +438,34 @@ void ReplaySession::beginSeek(int targetTick) {
 
     mReaderIndex = selectedReader;
     mCurrentTick = selectedStart;
-    applySnapshot(*mReaders[mReaderIndex], false);
+    applySnapshot(*mReaders[mReaderIndex], followRecordedPlayer);
     getLogger()
         .debug("Seeking replay to tick {} from snapshot {} at tick {}", targetTick, selectedReader, selectedStart);
 }
 
 void ReplaySession::tick() {
     if (!mActive) return;
-    if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
-    if (mStopRequested.exchange(false, std::memory_order_acq_rel)) {
-        stop();
-        return;
-    }
-
     try {
-        if (!mReplayWorldJoined || !mReplayPlayer || !mNetworkHandler) return;
+        if (!mReplayWorldJoined || !mNetworkHandler || !refreshReplayPlayer()) return;
+        if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
+
+        if (mPendingSnapshotApply) {
+            if (mPendingReplayDimension) return;
+            auto pending = *mPendingSnapshotApply;
+            mPendingSnapshotApply.reset();
+            if (pending.readerIndex >= mReaders.size()) {
+                throw std::runtime_error("Pending replay snapshot index is out of range");
+            }
+            if (pending.dimensionGeneration != 0 && pending.dimensionGeneration != mCompletedDimensionGeneration) {
+                throw std::runtime_error("Pending replay snapshot does not match the completed dimension transition");
+            }
+            applySnapshot(*mReaders[pending.readerIndex], pending.followRecordedPlayer, pending.serverPlayerRelocated);
+            return;
+        }
+
+        // A recorded tick can queue source-dimension chunks before its ChangeDimension packet. The transition
+        // deliberately clears mReplayDimension, so wait for the native teleport before touching that stale plan.
+        if (mPendingReplayDimension) return;
 
         if (!mWorldReady) {
             onWorldReady();
@@ -416,13 +480,16 @@ void ReplaySession::tick() {
         }
 
         int const requestedSeek = mRequestedSeekTick.exchange(-1, std::memory_order_acq_rel);
-        if (requestedSeek >= 0) beginSeek(requestedSeek);
-        if (mChunkInjectionPending) return;
+        if (requestedSeek >= 0) {
+            beginSeek(requestedSeek);
+            if (mChunkInjectionPending || mPendingSnapshotApply || mPendingReplayDimension) return;
+        }
+        if (mChunkInjectionPending || mPendingSnapshotApply || mPendingReplayDimension) return;
 
         if (mSeekTargetTick >= 0) {
             int advancedTicks = 0;
-            while (mCurrentTick < mSeekTargetTick && !mChunkInjectionPending && advancedTicks < SeekTicksPerClientTick
-            ) {
+            while (mCurrentTick < mSeekTargetTick && !mChunkInjectionPending && !mPendingSnapshotApply
+                   && !mPendingReplayDimension && advancedTicks < SeekTicksPerClientTick) {
                 if (!advanceReplayTick(false)) {
                     getLogger().warn("Replay ended at tick {} while seeking to tick {}", mCurrentTick, mSeekTargetTick);
                     mSeekTargetTick = -1;
@@ -441,11 +508,58 @@ void ReplaySession::tick() {
         mPlaybackTickAccumulator += mPlaybackSpeed;
         int const ticksToAdvance  = static_cast<int>(mPlaybackTickAccumulator);
         mPlaybackTickAccumulator -= static_cast<float>(ticksToAdvance);
-        for (int tick = 0; tick < ticksToAdvance && !mChunkInjectionPending; ++tick) {
+        for (int tick = 0;
+             tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
+             ++tick) {
             if (!advanceReplayTick(true)) break;
         }
     } catch (std::exception const& e) {
         getLogger().error("Replay session failed: {}", e.what());
+        stop();
+    }
+}
+
+void ReplaySession::updateControlPlane() {
+    if (mStopRequested.exchange(false, std::memory_order_acq_rel)) {
+        if (mActive) stop();
+        return;
+    }
+    if (!mActive || !mReplayWorldJoined || !mPendingReplayDimension) return;
+
+    try {
+        auto request = mDimensionTransitionRequest;
+        if (!request) throw std::runtime_error("Replay dimension transition lost its server request");
+
+        // A seek can supersede a teleport only before the server executor claims it. Once dispatch starts, let the
+        // native client finish that handshake and apply the queued seek afterwards.
+        if (mRequestedSeekTick.load(std::memory_order_acquire) >= 0) {
+            auto expected = DimensionTransitionStatus::Pending;
+            if (request->status.compare_exchange_strong(
+                    expected,
+                    DimensionTransitionStatus::Cancelled,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )) {
+                mPendingSnapshotApply.reset();
+                mPendingReplayDimension.reset();
+                mDimensionTransitionRequest.reset();
+                mDimensionTransitionStartedAt      = {};
+                mDimensionTransitionSettledUpdates = 0;
+                mSeekTargetTick                    = -1;
+                if (!mChunkInjectionPending) resetDimensionScopedReplayState();
+                (void)refreshReplayPlayer();
+                return;
+            }
+        }
+
+        processPendingDimensionTransition();
+    } catch (std::exception const& e) {
+        getLogger().error("Replay control plane failed: {}", e.what());
+        mReplayFailed = true;
+        stop();
+    } catch (...) {
+        getLogger().error("Replay control plane failed");
+        mReplayFailed = true;
         stop();
     }
 }
@@ -471,36 +585,23 @@ bool ReplaySession::init(std::filesystem::path filePath) {
         getLogger().error("Replay archive does not contain replay chunks");
         return false;
     }
-    if (!mMeta.initialView) {
-        getLogger().error("Replay archive does not contain an initial view");
-        return false;
-    }
-
     mReaders.clear();
-    mSnapshotViews.clear();
+    mSnapshotContexts.clear();
     mChunkPackets.clear();
+    mInlineLevelChunkPacketIndices.clear();
+    mInlineSubChunkPacketIndices.clear();
 
-    bool hasSnapshotView = false;
-    bool hasMissingView  = false;
-    for (auto const& [chunkName, chunkMeta] : mMeta.chunks) {
+    for (auto const& [chunkName, _] : mMeta.chunks) {
         auto chunk = readArchiveEntry(archive.get(), chunkName);
         if (!chunk) {
             getLogger().error("Replay archive does not contain {}", chunkName);
             return false;
         }
-        mReaders.emplace_back(std::make_unique<ReplayReader>(*chunk));
-        mSnapshotViews.emplace_back(chunkMeta.initialView);
-        hasSnapshotView = hasSnapshotView || chunkMeta.initialView.has_value();
-        hasMissingView  = hasMissingView || !chunkMeta.initialView.has_value();
+        auto reader  = std::make_unique<ReplayReader>(*chunk);
+        auto context = reader->readSnapshotContext();
+        mReaders.emplace_back(std::move(reader));
+        mSnapshotContexts.emplace_back(context);
     }
-    if (hasSnapshotView && hasMissingView) {
-        getLogger().error("Replay archive contains only some per-snapshot playback views");
-        return false;
-    }
-    if (!hasSnapshotView) {
-        getLogger().warn("Replay archive has no per-snapshot playback views; deriving legacy views from chunk bounds");
-    }
-
     for (int cacheIndex = 0;; ++cacheIndex) {
         auto entryName = "level_chunk_caches/" + std::to_string(cacheIndex) + ".bin";
         if (zip_name_locate(archive.get(), entryName.c_str(), 0) < 0) break;
@@ -519,6 +620,13 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mPlaybackSpeed           = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
     mReplayTime.reset();
+    mPendingReplayDimension.reset();
+    mPendingSnapshotApply.reset();
+    mDimensionTransitionRequest.reset();
+    mDimensionTransitionSettledUpdates = 0;
+    mDimensionTransitionGeneration     = 0;
+    mCompletedDimensionGeneration      = 0;
+    mDimensionTransitionStartedAt      = {};
     mRequestedSeekTick.store(-1, std::memory_order_relaxed);
     mReplayWorldJoined = false;
     mWorldReady        = false;
@@ -544,6 +652,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     }
     mSnapshotChunks.clear();
     mApplyingSnapshotChunks.clear();
+    mChunkIsolationDimension.reset();
     mAppliedSnapshotColumns.clear();
     mPendingSnapshotColumns.clear();
     mDirtySnapshotColumns.clear();
@@ -553,8 +662,10 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mPendingLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
     mPendingSubChunkPackets.clear();
+    mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
     mRecordedEntityIds.clear();
+    mReplayObjectiveNames.clear();
     mCenterChunkPositions.clear();
     mRemainingSubChunkPacketsByColumn.clear();
     mApplyingChunkSnapshot      = false;
@@ -588,23 +699,53 @@ void ReplaySession::onWorldReady() {
 void ReplaySession::applyInitialSnapshot() {
     if (mReaders.empty()) throw std::runtime_error("Replay contains no chunks");
 
-    applySnapshot(*mReaders.front(), true);
+    applySnapshot(*mReaders.front(), true, true);
 }
 
-void ReplaySession::applySnapshot(ReplayReader& reader, bool positionPlayer) {
+void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlayer, bool serverPlayerRelocated) {
     if (mChunkInjectionPending) throw std::runtime_error("Previous replay snapshot is still being applied");
 
-    auto resolveReplayPlayer = [this]() -> Player* {
-        auto  client = ll::service::getClientInstance();
-        auto* player = client ? client->getLocalPlayer() : nullptr;
-        if (!player || player != mReplayPlayer)
-            throw std::runtime_error("Replay player changed while applying snapshot");
-        return player;
-    };
-    auto* replayPlayer = resolveReplayPlayer();
+    if (!refreshReplayPlayer()) throw std::runtime_error("Replay player is unavailable while applying snapshot");
+    auto* replayPlayer = mReplayPlayer;
 
+    if (mReaderIndex >= mSnapshotContexts.size()) {
+        throw std::runtime_error("Replay snapshot context index is out of range");
+    }
+    auto const&        snapshotContext = mSnapshotContexts[mReaderIndex];
+    PlaybackView const snapshotView{
+        snapshotContext.x,
+        snapshotContext.y,
+        snapshotContext.z,
+        snapshotContext.yaw,
+        snapshotContext.pitch
+    };
+    PlaybackView transitionView = snapshotView;
+    if (!followRecordedPlayer) {
+        auto const& position = replayPlayer->getPosition();
+        auto const& rotation = replayPlayer->getRotation();
+        transitionView       = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
+    }
+    bool const relocateWithinDimension = followRecordedPlayer && !serverPlayerRelocated;
+    if (!ensureReplayDimension(DimensionType{snapshotContext.dimensionId}, transitionView, relocateWithinDimension)) {
+        if (!mReplayFailed) {
+            auto const generation = mDimensionTransitionRequest ? mDimensionTransitionRequest->generation : 0;
+            mPendingSnapshotApply = PendingSnapshotApply{
+                mReaderIndex,
+                followRecordedPlayer,
+                serverPlayerRelocated || followRecordedPlayer,
+                generation
+            };
+        }
+        return;
+    }
+
+    mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
     if (!clearRecordedEntities()) {
+        mReplayFailed = true;
+        return;
+    }
+    if (!clearReplayObjectives()) {
         mReplayFailed = true;
         return;
     }
@@ -650,15 +791,16 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool positionPlayer) {
         mApplyingChunkSnapshot = false;
         return;
     }
+    if (!mPendingSnapshotLocalPlayer) {
+        getLogger().error("Replay snapshot {} is missing its CreateLocalPlayer action", mReaderIndex);
+        mReplayFailed          = true;
+        mApplyingChunkSnapshot = false;
+        return;
+    }
 
     PlaybackView view;
-    if (positionPlayer) {
-        if (mReaderIndex >= mSnapshotViews.size())
-            throw std::runtime_error("Replay snapshot view index is out of range");
-        auto snapshotView = mSnapshotViews[mReaderIndex];
-        if (!snapshotView) snapshotView = deriveLegacySnapshotView();
-        if (!snapshotView) throw std::runtime_error("Unable to determine replay snapshot view");
-        view = *snapshotView;
+    if (followRecordedPlayer) {
+        view = snapshotView;
         replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
     } else {
         auto const& position = replayPlayer->getPosition();
@@ -674,12 +816,13 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool positionPlayer) {
     mChunkPlanPreparationMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt).count();
     getLogger().debug(
-        "Prepared replay snapshot {} around ({:.3f}, {:.3f}, {:.3f}) before chunk injection (position player={})",
+        "Prepared replay snapshot {} around ({:.3f}, {:.3f}, {:.3f}) before chunk injection (follow recorded "
+        "player={})",
         mReaderIndex,
         view.x,
         view.y,
         view.z,
-        positionPlayer
+        followRecordedPlayer
     );
 
     mChunkInjectionPending = true;
@@ -691,6 +834,284 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool positionPlayer) {
         MAX_LEVEL_CHUNKS_IN_FLIGHT,
         mChunkPlanPreparationMs
     );
+}
+
+bool ReplaySession::ensureReplayDimension(
+    DimensionType       target,
+    PlaybackView const& view,
+    bool                relocateWithinDimension
+) {
+    if (!mReplayPlayer) return false;
+    bool const changesDimension = mReplayPlayer->getDimensionId() != target;
+    if (!changesDimension && !relocateWithinDimension) {
+        mReplayDimension.store(&mReplayPlayer->getDimension(), std::memory_order_release);
+        return true;
+    }
+    if (mPendingReplayDimension) {
+        if (*mPendingReplayDimension != target) {
+            getLogger().error(
+                "Replay requested dimension {} while dimension {} is still pending",
+                target.id,
+                mPendingReplayDimension->id
+            );
+            mReplayFailed = true;
+        }
+        return false;
+    }
+
+    auto       request         = std::make_shared<DimensionTransitionRequest>();
+    auto       playerUuid      = mReplayPlayer->getUuid();
+    auto       replayLevelId   = mReplayLevelId;
+    auto       sourceDimension = mReplayPlayer->getDimensionId();
+    auto       position        = Vec3{view.x, view.y, view.z};
+    auto       rotation        = Vec2{view.pitch, view.yaw};
+    auto const generation      = mDimensionTransitionGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+    request->generation        = generation;
+    auto* generationCounter    = &mDimensionTransitionGeneration;
+
+    if (!clearRecordedEntities()) {
+        getLogger().error("Unable to clear recorded entities before leaving replay dimension {}", sourceDimension.id);
+        mReplayFailed = true;
+        return false;
+    }
+
+    // Stop applying source-dimension protection before destination packets can arrive.
+    mSnapshotChunks.clear();
+    mApplyingSnapshotChunks.clear();
+    mChunkIsolationDimension.reset();
+    mReplayDimension.store(nullptr, std::memory_order_release);
+
+    mPendingReplayDimension            = target;
+    mDimensionTransitionRequest        = request;
+    mDimensionTransitionSettledUpdates = 0;
+    mDimensionTransitionStartedAt      = std::chrono::steady_clock::now();
+    ll::thread::ServerThreadExecutor::getDefault().execute([request,
+                                                            generation,
+                                                            generationCounter,
+                                                            playerUuid,
+                                                            replayLevelId = std::move(replayLevelId),
+                                                            position,
+                                                            rotation,
+                                                            target] {
+        if (generationCounter->load(std::memory_order_acquire) != generation) return;
+        auto expected = DimensionTransitionStatus::Pending;
+        if (!request->status.compare_exchange_strong(
+                expected,
+                DimensionTransitionStatus::Dispatching,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire
+            )) {
+            return;
+        }
+
+        auto fail = [&request] {
+            auto expectedStatus = DimensionTransitionStatus::Dispatching;
+            request->status.compare_exchange_strong(
+                expectedStatus,
+                DimensionTransitionStatus::Failed,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire
+            );
+        };
+
+        try {
+            if (generationCounter->load(std::memory_order_acquire) != generation) return;
+            auto level = ll::service::getLevel();
+            if (!level || level->getLevelId() != replayLevelId) {
+                getLogger().error("Unable to change replay dimension: replay server level is unavailable");
+                fail();
+                return;
+            }
+
+            auto  targetDimension = level->getOrCreateDimension(target).lock();
+            auto* player          = level->getPlayer(playerUuid);
+            if (!targetDimension || !player) {
+                getLogger().error(
+                    "Unable to change replay dimension to {}: target dimension or server player is unavailable",
+                    target.id
+                );
+                fail();
+                return;
+            }
+
+            if (generationCounter->load(std::memory_order_acquire) != generation) {
+                fail();
+                return;
+            }
+
+            // Revisited dimensions need a fresh native LevelChunk publication.
+            auto const& chunkPublisher = player->mChunkPublisherView.get();
+            if (chunkPublisher) chunkPublisher->clearRegion();
+            player->teleport(position, target, rotation);
+            if (generationCounter->load(std::memory_order_acquire) != generation) {
+                fail();
+                return;
+            }
+            auto expectedStatus = DimensionTransitionStatus::Dispatching;
+            if (!request->status.compare_exchange_strong(
+                    expectedStatus,
+                    DimensionTransitionStatus::Succeeded,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )) {
+                return;
+            }
+        } catch (std::exception const& e) {
+            getLogger().error("Unable to change replay dimension to {}: {}", target.id, e.what());
+            fail();
+        } catch (...) {
+            getLogger().error("Unable to change replay dimension to {}", target.id);
+            fail();
+        }
+    });
+    return false;
+}
+
+void ReplaySession::processPendingDimensionTransition() {
+    if (!mPendingReplayDimension) return;
+    if (!mDimensionTransitionRequest) {
+        mReplayFailed = true;
+        throw std::runtime_error("Replay dimension transition lost its server request");
+    }
+
+    auto const status = mDimensionTransitionRequest->status.load(std::memory_order_acquire);
+    if (status == DimensionTransitionStatus::Failed || status == DimensionTransitionStatus::Cancelled) {
+        mReplayFailed = true;
+        throw std::runtime_error("Replay server dimension transition failed");
+    }
+
+    auto const elapsed          = std::chrono::steady_clock::now() - mDimensionTransitionStartedAt;
+    bool const playerAvailable  = refreshReplayPlayer();
+    bool const dimensionMatches = playerAvailable && mReplayPlayer->getDimensionId() == *mPendingReplayDimension;
+    auto const waitComponent =
+        playerAvailable ? mReplayPlayer->getEntityContext().tryGetComponent<LocalPlayerDimensionWaitComponent>()
+                        : nullptr;
+    bool const waitingForAcknowledgment =
+        waitComponent && waitComponent->mWaitingForServerDimensionChangeAcknowledgment;
+
+    if (elapsed >= DIMENSION_TRANSITION_TIMEOUT) {
+        getLogger().error(
+            "Replay dimension transition generation {} to {} timed out after {} ms with request status {}",
+            mDimensionTransitionRequest->generation,
+            mPendingReplayDimension->id,
+            std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
+            static_cast<int>(status)
+        );
+        mReplayFailed = true;
+        throw std::runtime_error("Replay dimension transition timed out");
+    }
+
+    if (!playerAvailable) {
+        mDimensionTransitionSettledUpdates = 0;
+        return;
+    }
+
+    if (status == DimensionTransitionStatus::Succeeded && dimensionMatches && waitingForAcknowledgment
+        && elapsed >= DIMENSION_ACK_FALLBACK_DELAY) {
+        bool expected = false;
+        if (mDimensionTransitionRequest->acknowledgmentFallbackQueued
+                .compare_exchange_strong(expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            auto  request           = mDimensionTransitionRequest;
+            auto  playerUuid        = mReplayPlayer->getUuid();
+            auto  replayLevelId     = mReplayLevelId;
+            auto  target            = *mPendingReplayDimension;
+            auto* generationCounter = &mDimensionTransitionGeneration;
+            auto  generation        = request->generation;
+            ll::thread::ServerThreadExecutor::getDefault().execute(
+                [request, generation, generationCounter, playerUuid, replayLevelId = std::move(replayLevelId), target] {
+                    if (request->completed.load(std::memory_order_acquire)
+                        || request->status.load(std::memory_order_acquire) != DimensionTransitionStatus::Succeeded
+                        || generationCounter->load(std::memory_order_acquire) != generation) {
+                        return;
+                    }
+
+                    auto  level = ll::service::getLevel();
+                    auto* player =
+                        level && level->getLevelId() == replayLevelId ? level->getPlayer(playerUuid) : nullptr;
+                    if (!player || player->getDimensionId() != target) {
+                        getLogger().warn(
+                            "Unable to send replay dimension acknowledgment fallback for generation {}: the server "
+                            "player is unavailable or has not reached dimension {}",
+                            generation,
+                            target.id
+                        );
+                        return;
+                    }
+
+                    PlayerActionPacket acknowledgment{};
+                    acknowledgment.mAction    = PlayerActionType::ChangeDimensionAck;
+                    acknowledgment.mRuntimeId = player->getRuntimeID();
+                    player->sendNetworkPacket(acknowledgment);
+                }
+            );
+        }
+    }
+
+    if (status != DimensionTransitionStatus::Succeeded || !dimensionMatches || waitingForAcknowledgment) {
+        mDimensionTransitionSettledUpdates = 0;
+        return;
+    }
+
+    if (++mDimensionTransitionSettledUpdates >= DIMENSION_TRANSITION_SETTLE_UPDATES) {
+        completeReplayDimensionTransition();
+    }
+}
+
+void ReplaySession::completeReplayDimensionTransition() {
+    if (!refreshReplayPlayer()) return;
+    auto const completedGeneration = mDimensionTransitionRequest->generation;
+    mDimensionTransitionRequest->completed.store(true, std::memory_order_release);
+    mReplayDimension.store(&mReplayPlayer->getDimension(), std::memory_order_release);
+    mPendingReplayDimension.reset();
+    mDimensionTransitionRequest.reset();
+    mDimensionTransitionSettledUpdates = 0;
+    mDimensionTransitionStartedAt      = {};
+    mCompletedDimensionGeneration      = completedGeneration;
+    resetDimensionScopedReplayState();
+}
+
+void ReplaySession::resetDimensionScopedReplayState() {
+    mChunkInjectionPending      = false;
+    mChunkInjectionPlanPrepared = false;
+    mApplyingChunkSnapshot      = false;
+    mCenterChunksReady          = false;
+    mSnapshotGamePacketPhase    = SnapshotGamePacketPhase::StreamingChunks;
+    mPendingLevelChunkIndices.clear();
+    mPendingSubChunkIndices.clear();
+    mPendingSubChunkPackets.clear();
+    mRemainingSubChunkPacketsByColumn.clear();
+    mPendingSnapshotLocalPlayer.reset();
+    mSnapshotChunks.clear();
+    mApplyingSnapshotChunks.clear();
+    mChunkIsolationDimension.reset();
+    mAppliedSnapshotColumns.clear();
+    mPendingSnapshotColumns.clear();
+    mDirtySnapshotColumns.clear();
+    mReusableSnapshotColumns.clear();
+    mDirectSnapshotColumns.clear();
+    mDirectLevelChunkIndices.clear();
+    mCenterChunkPositions.clear();
+    mRecordedEntityIds.clear();
+    {
+        std::scoped_lock lock(mPendingLevelChunksMutex);
+        mPendingLevelChunks.clear();
+        mCompletedLevelChunkPositions.clear();
+        mRetainedReplayChunks.clear();
+    }
+}
+
+bool ReplaySession::refreshReplayPlayer() {
+    auto  client = ll::service::getClientInstance();
+    auto* player = client ? client->getLocalPlayer() : nullptr;
+    if (!player || !isReplayLevel(player->getLevel())) return false;
+
+    mReplayPlayer = player;
+    if (mPendingReplayDimension && player->getDimensionId() != *mPendingReplayDimension) {
+        mReplayDimension.store(nullptr, std::memory_order_release);
+    } else {
+        mReplayDimension.store(&player->getDimension(), std::memory_order_release);
+    }
+    return true;
 }
 
 bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
@@ -810,55 +1231,48 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         }
 
         PendingSubChunkPacket pending;
-        pending.index      = index;
-        auto const& center = *subChunk.mCenterPos;
+        pending.index                                          = index;
+        auto const&                                     center = *subChunk.mCenterPos;
+        std::vector<SubChunkPacket::SubChunkPacketData> playableEntries;
+        playableEntries.reserve(entries.size());
         for (auto const& entry : entries) {
             auto const result = static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult);
-            if (result != SubChunkPacket::SubChunkRequestResult::Success
-                && result != SubChunkPacket::SubChunkRequestResult::SuccessAllAir) {
-                getLogger().error(
-                    "Replay SubChunk packet {} contains unsuccessful result {}",
-                    index,
-                    static_cast<int>(result)
-                );
-                return false;
-            }
+            if (!isSuccessfulSubChunkResult(result)) continue;
             auto const&    offset = *entry.mSubChunkPosOffset;
             ChunkPos const target{center.x + static_cast<int>(offset.mX), center.z + static_cast<int>(offset.mZ)};
+            if (!levelChunkPositions.contains(target) && !mSnapshotChunks.contains(target)) {
+                if (mApplyingChunkSnapshot) {
+                    getLogger().error(
+                        "Replay snapshot SubChunk packet {} targets column ({}, {}) without a LevelChunk",
+                        index,
+                        target.x,
+                        target.z
+                    );
+                    return false;
+                }
+                continue;
+            }
+
+            playableEntries.emplace_back(entry);
             subChunkIndicesByColumn[target].emplace(center.y + static_cast<int>(offset.mY));
             if (std::find(pending.targets.begin(), pending.targets.end(), target) == pending.targets.end()) {
                 pending.targets.emplace_back(target);
             }
         }
+        if (pending.targets.empty()) continue;
+        if (playableEntries.size() != entries.size()) {
+            auto filteredPacket           = subChunk;
+            *filteredPacket.mSubChunkData = std::move(playableEntries);
+            PlaybackBuffer filteredPayload;
+            filteredPacket.write(filteredPayload);
+            pending.payload = std::move(filteredPayload.mBuffer);
+        }
         int64_t priority = std::numeric_limits<int64_t>::max();
         for (auto const& target : pending.targets) {
-            if (!levelChunkPositions.contains(target) && !mSnapshotChunks.contains(target)) {
-                getLogger().error(
-                    "Replay SubChunk packet {} targets column ({}, {}) without a LevelChunk",
-                    index,
-                    target.x,
-                    target.z
-                );
-                return false;
-            }
             targetColumns[target].subChunkIndices.emplace_back(index);
             priority = std::min(priority, distanceSquared(target));
         }
         subChunks.push_back(PrioritizedSubChunk{std::move(pending), priority});
-    }
-
-    if (mApplyingChunkSnapshot) {
-        for (auto const& pos : requestModeLevelChunks) {
-            auto target = targetColumns.find(pos);
-            if (target == targetColumns.end() || target->second.subChunkIndices.empty()) {
-                getLogger().error(
-                    "Replay request-mode LevelChunk column ({}, {}) has no successful SubChunk packet",
-                    pos.x,
-                    pos.z
-                );
-                return false;
-            }
-        }
     }
 
     for (auto& [_, identity] : targetColumns) {
@@ -884,6 +1298,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         getLogger().error("Replay dimension disappeared while preparing direct chunk updates");
         return false;
     }
+    mChunkIsolationDimension = replayDimension->getDimensionId();
+
     int const    minimumSubChunk = static_cast<int>(replayDimension->mHeightRange->mMin) / 16;
     size_t const subChunkCount   = static_cast<size_t>(replayDimension->getHeightInSubchunks());
     if (subChunkCount == 0) {
@@ -958,11 +1374,6 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             "Skipped {} replay chunk packets that depend on unavailable server blob-cache data",
             skippedBlobCachePackets
         );
-    }
-
-    if (targetColumns.empty() && mApplyingChunkSnapshot) {
-        getLogger().error("Replay snapshot contains no chunk packets");
-        return false;
     }
 
     mPendingSnapshotColumns = std::move(targetColumns);
@@ -1097,7 +1508,7 @@ bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_poi
 
         bool applied = false;
         if (direct) {
-            applied = applyLevelChunkDirect(mChunkPackets[static_cast<size_t>(index)]);
+            applied = applyRequestModeLevelChunkDirect(mChunkPackets[static_cast<size_t>(index)]);
             if (!applied) {
                 getLogger().warn("Direct replay LevelChunk update became unavailable; falling back to native loading");
                 mDirectLevelChunkIndices.clear();
@@ -1141,21 +1552,18 @@ bool ReplaySession::injectReadySubChunkPackets(
             })) {
             continue;
         }
-        bool const direct  = std::all_of(pending.targets.begin(), pending.targets.end(), [this](ChunkPos const& pos) {
+        bool const direct = std::all_of(pending.targets.begin(), pending.targets.end(), [this](ChunkPos const& pos) {
             return mDirectSnapshotColumns.contains(pos) || mReusableSnapshotColumns.contains(pos);
         });
-        bool       applied = direct ? applySubChunkDirect(mChunkPackets[static_cast<size_t>(pending.index)])
-                                    : injectChunkPacket(
-                                    mChunkPackets[static_cast<size_t>(pending.index)],
-                                    MinecraftPacketIds::SubChunkPacket
-                                );
+        std::string_view payload = pending.payload.empty()
+                                     ? std::string_view{mChunkPackets[static_cast<size_t>(pending.index)]}
+                                     : std::string_view{pending.payload};
+        bool             applied =
+            direct ? applySubChunkDirect(payload) : injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
         if (direct && !applied) {
             getLogger().warn("Direct replay SubChunk update became unavailable; falling back to native loading");
             for (auto const& target : pending.targets) mDirectSnapshotColumns.erase(target);
-            applied = injectChunkPacket(
-                mChunkPackets[static_cast<size_t>(pending.index)],
-                MinecraftPacketIds::SubChunkPacket
-            );
+            applied = injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
         }
         if (!applied) {
             getLogger()
@@ -1209,44 +1617,6 @@ void ReplaySession::updateCenterChunkReadiness() {
     );
 }
 
-std::optional<PlaybackView> ReplaySession::deriveLegacySnapshotView() const {
-    if (!mMeta.initialView || mPendingLevelChunkIndices.empty()) return std::nullopt;
-
-    int minX = std::numeric_limits<int>::max();
-    int minZ = std::numeric_limits<int>::max();
-    int maxX = std::numeric_limits<int>::min();
-    int maxZ = std::numeric_limits<int>::min();
-
-    for (int index : mPendingLevelChunkIndices) {
-        if (index < 0 || static_cast<size_t>(index) >= mChunkPackets.size()) return std::nullopt;
-
-        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
-        if (!packet) return std::nullopt;
-
-        ReadOnlyBinaryStream stream(mChunkPackets[static_cast<size_t>(index)], false);
-        if (!packet->read(stream) || !stream.ensureReadCompleted() || !packet->mHandler) return std::nullopt;
-
-        auto const& pos = *static_cast<LevelChunkPacket const&>(*packet).mPos;
-        minX            = std::min(minX, pos.x);
-        minZ            = std::min(minZ, pos.z);
-        maxX            = std::max(maxX, pos.x);
-        maxZ            = std::max(maxZ, pos.z);
-    }
-
-    auto view = *mMeta.initialView;
-    view.x    = static_cast<float>(minX + maxX + 1) * 8.0f;
-    view.z    = static_cast<float>(minZ + maxZ + 1) * 8.0f;
-    getLogger().warn(
-        "Derived legacy replay snapshot {} view from chunk bounds ({}, {}) to ({}, {})",
-        mReaderIndex,
-        minX,
-        minZ,
-        maxX,
-        maxZ
-    );
-    return view;
-}
-
 bool ReplaySession::finishChunkInjection() {
     updateCenterChunkReadiness();
     bool const applyingSnapshot = mApplyingChunkSnapshot;
@@ -1281,6 +1651,10 @@ bool ReplaySession::finishChunkInjection() {
             std::numeric_limits<size_t>::max(),
             std::chrono::steady_clock::time_point::max()
         )) {
+        mReplayFailed = true;
+        return false;
+    }
+    if (applyingSnapshot && !applyPendingSnapshotLocalPlayer()) {
         mReplayFailed = true;
         return false;
     }
@@ -1369,13 +1743,38 @@ void ReplaySession::handleNextTick() {
     if (mIsProcessingSnapshot) {
         throw std::runtime_error("Can't go to next tick while processing snapshot");
     }
-    // TODO: Flash pending entities
-
     mCurrentTick += 1;
     if (mReplayTime) {
         ++*mReplayTime;
         if (mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
     }
+}
+
+void ReplaySession::handleSnapshotContext(PlaybackSnapshotContext const& context) {
+    if (!mIsProcessingSnapshot) {
+        throw std::runtime_error("Snapshot context appeared outside a replay snapshot");
+    }
+    if (mReaderIndex >= mSnapshotContexts.size() || context != mSnapshotContexts[mReaderIndex]) {
+        throw std::runtime_error("Replay snapshot context changed after preflight");
+    }
+}
+
+void ReplaySession::handleCreateLocalPlayer(PlaybackBuffer& data) {
+    auto const  remaining = data.getWritePointer() - data.mReadPointer;
+    std::string payload(data.mView.data() + data.mReadPointer, remaining);
+    data.mReadPointer += remaining;
+
+    if (mIsProcessingSnapshot) {
+        if (mPendingSnapshotLocalPlayer) {
+            getLogger().error("Replay snapshot {} contains more than one CreateLocalPlayer action", mReaderIndex);
+            mReplayFailed = true;
+            return;
+        }
+        mPendingSnapshotLocalPlayer = std::move(payload);
+        return;
+    }
+
+    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload)) mReplayFailed = true;
 }
 
 bool ReplaySession::sendRecordedTickPacket() {
@@ -1410,7 +1809,9 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
                 return false;
             }
 
-            if (stopAtEnd) {
+            auto chunkMeta = mMeta.chunks.begin();
+            std::advance(chunkMeta, static_cast<std::ptrdiff_t>(mReaderIndex));
+            if (chunkMeta->second.forcePlaySnapshot) {
                 applySnapshot(*mReaders[mReaderIndex], false);
             } else {
                 mReaders[mReaderIndex]->resetToStart();
@@ -1418,6 +1819,8 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
             if (mReplayFailed) throw std::runtime_error("Unable to apply a replay action");
             return true;
         }
+
+        if (mPendingReplayDimension) return true;
 
         if (mReplayFailed) throw std::runtime_error("Unable to apply a replay action");
     }
@@ -1456,11 +1859,36 @@ void ReplaySession::handleSubChunkCached(int index) {
     mChunkInjectionPlanPrepared = false;
 }
 
+int ReplaySession::cacheInlineChunkPacket(MinecraftPacketIds packetId, std::string payload) {
+    auto& packetIndices =
+        packetId == MinecraftPacketIds::FullChunkData ? mInlineLevelChunkPacketIndices : mInlineSubChunkPacketIndices;
+    auto const hash    = std::hash<std::string_view>{}(payload);
+    auto&      indices = packetIndices[hash];
+    for (int index : indices) {
+        if (index >= 0 && static_cast<size_t>(index) < mChunkPackets.size()
+            && mChunkPackets[static_cast<size_t>(index)] == payload) {
+            return index;
+        }
+    }
+
+    auto const index = static_cast<int>(mChunkPackets.size());
+    mChunkPackets.emplace_back(std::move(payload));
+    indices.emplace_back(index);
+    return index;
+}
+
 void ReplaySession::handleGamePacket(PlaybackBuffer& data) {
     auto        packetId  = static_cast<MinecraftPacketIds>(data.getVarInt().value());
     auto const  remaining = data.getWritePointer() - data.mReadPointer;
     std::string payload(data.mView.data() + data.mReadPointer, remaining);
     data.mReadPointer += remaining;
+
+    if (packetId == MinecraftPacketIds::FullChunkData || packetId == MinecraftPacketIds::SubChunkPacket) {
+        int const index = cacheInlineChunkPacket(packetId, std::move(payload));
+        if (packetId == MinecraftPacketIds::FullChunkData) handleLevelChunkCached(index);
+        else handleSubChunkCached(index);
+        return;
+    }
 
     if (mIsProcessingSnapshot) {
         if (packetId == MinecraftPacketIds::DimensionDataPacket || packetId == MinecraftPacketIds::SetTime) {
@@ -1646,6 +2074,21 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
     }
 }
 
+bool ReplaySession::applyPendingSnapshotLocalPlayer() {
+    if (!mPendingSnapshotLocalPlayer) {
+        getLogger().error("Replay snapshot {} has no pending local player to create", mReaderIndex);
+        return false;
+    }
+
+    auto payload = std::move(*mPendingSnapshotLocalPlayer);
+    mPendingSnapshotLocalPlayer.reset();
+    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload)) {
+        getLogger().error("Unable to apply the CreateLocalPlayer action for replay snapshot {}", mReaderIndex);
+        return false;
+    }
+    return true;
+}
+
 bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload) {
     // Keep UI packets for a future first-person handler and let the replay world own client chunk publishing.
     if (shouldIgnoreReplayPacket(packetId)) return true;
@@ -1669,12 +2112,14 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         }
     }
 
-    DimensionType changedDimension{};
     if (packetId == MinecraftPacketIds::ChangeDimension) {
         if (!mReplayPlayer) return false;
-        changedDimension = *static_cast<ChangeDimensionPacket const&>(*packet).mDimensionId;
-        auto dimension   = mReplayPlayer->getLevel().getOrCreateDimension(changedDimension).lock();
-        if (!dimension) return false;
+        auto const&        change   = static_cast<ChangeDimensionPacket const&>(*packet);
+        auto const&        position = *change.mPos;
+        auto const&        rotation = mReplayPlayer->getRotation();
+        PlaybackView const view{position.x, position.y, position.z, rotation.y, rotation.x};
+        (void)ensureReplayDimension(*change.mDimensionId, view);
+        return !mReplayFailed;
     }
 
     ActorUniqueID  entityId{};
@@ -1764,37 +2209,14 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     case MinecraftPacketIds::RemoveActor:
         mRecordedEntityIds.erase(*static_cast<RemoveActorPacket const&>(*packet).mEntityId);
         break;
-    case MinecraftPacketIds::ChangeDimension: {
-        auto dimension = mReplayPlayer->getLevel().getOrCreateDimension(changedDimension).lock();
-        if (!dimension) return false;
-
-        mReplayDimension.store(dimension.get(), std::memory_order_release);
-        mChunkInjectionPending      = false;
-        mChunkInjectionPlanPrepared = false;
-        mApplyingChunkSnapshot      = false;
-        mCenterChunksReady          = false;
-        mSnapshotGamePacketPhase    = SnapshotGamePacketPhase::StreamingChunks;
-        mPendingLevelChunkIndices.clear();
-        mPendingSubChunkIndices.clear();
-        mPendingSubChunkPackets.clear();
-        mRemainingSubChunkPacketsByColumn.clear();
-        mSnapshotChunks.clear();
-        mApplyingSnapshotChunks.clear();
-        mAppliedSnapshotColumns.clear();
-        mPendingSnapshotColumns.clear();
-        mDirtySnapshotColumns.clear();
-        mReusableSnapshotColumns.clear();
-        mDirectSnapshotColumns.clear();
-        mDirectLevelChunkIndices.clear();
-        mCenterChunkPositions.clear();
-        {
-            std::scoped_lock lock(mPendingLevelChunksMutex);
-            mPendingLevelChunks.clear();
-            mCompletedLevelChunkPositions.clear();
-            mRetainedReplayChunks.clear();
-        }
+    case MinecraftPacketIds::SetDisplayObjective: {
+        auto const& objectiveName = *static_cast<SetDisplayObjectivePacket const&>(*packet).mObjectiveName;
+        if (!objectiveName.empty()) mReplayObjectiveNames.emplace(objectiveName);
         break;
     }
+    case MinecraftPacketIds::RemoveObjective:
+        mReplayObjectiveNames.erase(*static_cast<RemoveObjectivePacket const&>(*packet).mObjectiveName);
+        break;
     default:
         break;
     }
@@ -1879,11 +2301,10 @@ bool ReplaySession::clearRecordedEntities() {
         InjectionReset reset{mInjectingPacket};
         packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
     }
-    getLogger().debug("Cleared {} recorded entities before applying a replay snapshot", ids.size());
     return true;
 }
 
-bool ReplaySession::applyLevelChunkDirect(std::string_view payload) {
+bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
     auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
     if (!replayDimension) return false;
 
@@ -1932,12 +2353,10 @@ bool ReplaySession::applyLevelChunkDirect(std::string_view payload) {
 
 bool ReplaySession::applySubChunkDirect(std::string_view payload) {
     if (!mNetworkHandler) return false;
+    if (!refreshReplayPlayer()) return false;
+    auto*       localPlayer     = static_cast<LocalPlayer*>(mReplayPlayer);
     auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
     if (!replayDimension) return false;
-
-    auto  client      = ll::service::getClientInstance();
-    auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
-    if (!localPlayer || localPlayer != mReplayPlayer) return false;
 
     auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
     if (!packet) return false;
@@ -1951,10 +2370,16 @@ bool ReplaySession::applySubChunkDirect(std::string_view payload) {
         return false;
     }
 
+    size_t appliedEntries = 0;
     try {
+        localPlayer->getLevel().notifySubChunkRequestManager(subChunk);
         for (auto const& entry : *subChunk.mSubChunkData) {
+            if (!isSuccessfulSubChunkResult(static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult))) {
+                continue;
+            }
             mNetworkHandler
                 ->_handleSubChunkData(mNetworkHandler->mServerGuid.get(), subChunk, entry, localPlayer, true);
+            ++appliedEntries;
         }
     } catch (std::exception const& exception) {
         getLogger().error("Unable to apply replay SubChunk data directly: {}", exception.what());
@@ -1965,7 +2390,7 @@ bool ReplaySession::applySubChunkDirect(std::string_view payload) {
     }
 
     ++mDirectSubChunkPackets;
-    mDirectSubChunkEntries += subChunk.mSubChunkData->size();
+    mDirectSubChunkEntries += appliedEntries;
     return true;
 }
 
@@ -2013,7 +2438,16 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
             || static_cast<DimensionType const&>(subChunk.mDimensionType) != replayDimension->getDimensionId()) {
             return false;
         }
-        subChunkEntries = subChunk.mSubChunkData->size();
+        std::vector<SubChunkPacket::SubChunkPacketData> successfulEntries;
+        successfulEntries.reserve(subChunk.mSubChunkData->size());
+        for (auto const& entry : *subChunk.mSubChunkData) {
+            if (isSuccessfulSubChunkResult(static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult))) {
+                successfulEntries.emplace_back(entry);
+            }
+        }
+        *subChunk.mSubChunkData = std::move(successfulEntries);
+        subChunkEntries         = subChunk.mSubChunkData->size();
+        if (subChunkEntries == 0) return true;
     } else {
         return false;
     }
@@ -2026,6 +2460,24 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
     } else {
         ++mInjectedSubChunkPackets;
         mInjectedSubChunkEntries += subChunkEntries;
+    }
+    return true;
+}
+
+bool ReplaySession::clearReplayObjectives() {
+    if (mReplayObjectiveNames.empty()) return true;
+    if (!mNetworkHandler) return false;
+
+    auto objectiveNames = std::move(mReplayObjectiveNames);
+    mReplayObjectiveNames.clear();
+    for (auto& objectiveName : objectiveNames) {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::RemoveObjective);
+        if (!packet || !packet->mHandler) return false;
+        static_cast<RemoveObjectivePacket&>(*packet).mObjectiveName = std::move(objectiveName);
+
+        mInjectingPacket.store(packet.get(), std::memory_order_release);
+        InjectionReset reset{mInjectingPacket};
+        packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
     }
     return true;
 }
@@ -2043,7 +2495,11 @@ bool ReplaySession::shouldIsolateChunkPackets() const {
     return level && level->getLevelId() == mReplayLevelId;
 }
 
-bool ReplaySession::shouldSuppressNativeChunk(ChunkPos const& pos) const {
+bool ReplaySession::shouldSuppressNativeChunk(ChunkPos const& pos, DimensionType packetDimension) const {
+    // Snapshot column coordinates are only meaningful in their owning dimension.
+    if (mPendingReplayDimension && *mPendingReplayDimension == packetDimension) return false;
+    if (mChunkIsolationDimension && *mChunkIsolationDimension != packetDimension) return false;
+
     if (!mChunkInjectionPlanPrepared && (!mWorldReady || mApplyingChunkSnapshot)) return true;
 
     return mSnapshotChunks.contains(pos) || mApplyingSnapshotChunks.contains(pos);
@@ -2061,9 +2517,9 @@ void ReplaySession::onLevelJoined(Player& player) {
         return;
     }
 
-    mReplayPlayer = &player;
-    mReplayDimension.store(&player.getDimension(), std::memory_order_release);
     mReplayWorldJoined = true;
+    mReplayPlayer      = &player;
+    (void)refreshReplayPlayer();
 }
 
 void ReplaySession::onLevelStartJoin() {
