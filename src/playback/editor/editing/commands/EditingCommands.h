@@ -14,10 +14,10 @@ namespace playback::editor::editing::command {
 
 class IEditCommand : public playback::editor::editing::model::IEditCommand {
 public:
-    virtual ~IEditCommand() = default;
-    void execute(model::EditorStateExt& s) override = 0;
-    void undo(model::EditorStateExt& s) override = 0;
-    [[nodiscard]] std::string label() const override = 0;
+    virtual ~IEditCommand()                                              = default;
+    void                      execute(model::EditorStateExt& s) override = 0;
+    void                      undo(model::EditorStateExt& s) override    = 0;
+    [[nodiscard]] std::string label() const override                     = 0;
 };
 
 // ===== AddClipCommand =====
@@ -25,8 +25,8 @@ public:
 class AddClipCommand : public IEditCommand {
 public:
     AddClipCommand(const std::string& trackId, const model::Clip& clip);
-    void execute(model::EditorStateExt& s) override;
-    void undo(model::EditorStateExt& s) override;
+    void        execute(model::EditorStateExt& s) override;
+    void        undo(model::EditorStateExt& s) override;
     std::string label() const override { return "Add Clip"; }
 
 private:
@@ -40,8 +40,8 @@ private:
 class RemoveClipCommand : public IEditCommand {
 public:
     RemoveClipCommand(const std::string& trackId, const std::string& clipId);
-    void execute(model::EditorStateExt& s) override;
-    void undo(model::EditorStateExt& s) override;
+    void        execute(model::EditorStateExt& s) override;
+    void        undo(model::EditorStateExt& s) override;
     std::string label() const override { return "Remove Clip"; }
 
 private:
@@ -56,15 +56,15 @@ private:
 class SplitClipCommand : public IEditCommand {
 public:
     SplitClipCommand(const std::string& trackId, const std::string& clipId, int atTick);
-    void execute(model::EditorStateExt& s) override;
-    void undo(model::EditorStateExt& s) override;
+    void        execute(model::EditorStateExt& s) override;
+    void        undo(model::EditorStateExt& s) override;
     std::string label() const override;
 
 private:
     std::string mTrackId;
     std::string mClipId;
     int         mAtTick{};
-    model::Clip mRightClip;  // The split-off right half
+    model::Clip mRightClip; // The split-off right half
     std::string mRightClipId;
     int         mOldOutTick{};
 };
@@ -73,10 +73,9 @@ private:
 
 class TrimClipCommand : public IEditCommand {
 public:
-    TrimClipCommand(const std::string& trackId, const std::string& clipId,
-                    int newInTick, int newOutTick);
-    void execute(model::EditorStateExt& s) override;
-    void undo(model::EditorStateExt& s) override;
+    TrimClipCommand(const std::string& trackId, const std::string& clipId, int newInTick, int newOutTick);
+    void        execute(model::EditorStateExt& s) override;
+    void        undo(model::EditorStateExt& s) override;
     std::string label() const override { return "Trim Clip"; }
 
 private:
@@ -93,8 +92,8 @@ private:
 class MoveClipCommand : public IEditCommand {
 public:
     MoveClipCommand(const std::string& trackId, const std::string& clipId, int newTrackTick);
-    void execute(model::EditorStateExt& s) override;
-    void undo(model::EditorStateExt& s) override;
+    void        execute(model::EditorStateExt& s) override;
+    void        undo(model::EditorStateExt& s) override;
     std::string label() const override { return "Move Clip"; }
 
 private:
@@ -108,18 +107,22 @@ private:
 
 class AddTransitionCommand : public IEditCommand {
 public:
-    AddTransitionCommand(const std::string& fromClipId, const std::string& toClipId,
-                         model::TransitionKind kind, int durationTicks);
-    void execute(model::EditorStateExt& s) override;
-    void undo(model::EditorStateExt& s) override;
+    AddTransitionCommand(
+        const std::string&    fromClipId,
+        const std::string&    toClipId,
+        model::TransitionKind kind,
+        int                   durationTicks
+    );
+    void        execute(model::EditorStateExt& s) override;
+    void        undo(model::EditorStateExt& s) override;
     std::string label() const override { return "Add Transition"; }
 
 private:
-    std::string mFromClipId;
-    std::string mToClipId;
+    std::string           mFromClipId;
+    std::string           mToClipId;
     model::TransitionKind mKind;
-    int         mDurationTicks{};
-    std::string mAddedTransitionId;
+    int                   mDurationTicks{};
+    std::string           mAddedTransitionId;
 };
 
 } // namespace playback::editor::editing::command

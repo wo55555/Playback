@@ -234,10 +234,10 @@ LL_TYPE_INSTANCE_HOOK(
             return;
         }
 
-        auto        filteredPacket   = packet;
-        auto        suppressedPacket = packet;
-        auto const& center           = *packet.mCenterPos;
-        auto const  packetDimension  = static_cast<DimensionType const&>(packet.mDimensionType);
+        auto        filteredPacket    = packet;
+        auto        suppressedPacket  = packet;
+        auto const& center            = *packet.mCenterPos;
+        auto const  packetDimension   = static_cast<DimensionType const&>(packet.mDimensionType);
         auto&       filteredEntries   = *filteredPacket.mSubChunkData;
         auto&       suppressedEntries = *suppressedPacket.mSubChunkData;
         filteredEntries.clear();

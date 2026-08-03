@@ -29,10 +29,9 @@ float Splitter::drawVerticalSplit(float ratio, Rect area, float minR, float maxR
         splitX         = area.max.x - area.GetWidth() * ratio;
     }
 
-    ImDrawList* dl    = ImGui::GetForegroundDrawList();
-    ImU32 color = active ? IM_COL32(240, 192, 32, 255)
-                           : (hovered ? IM_COL32(120, 120, 120, 255)
-                                      : IM_COL32(60, 60, 60, 255));
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImU32       color =
+        active ? IM_COL32(240, 192, 32, 255) : (hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(60, 60, 60, 255));
     dl->AddRectFilled({splitX - 1, area.min.y}, {splitX + 1, area.max.y}, color);
 
     return ratio;
@@ -50,16 +49,15 @@ float Splitter::drawHorizontalSplit(float ratio, Rect area, float minR, float ma
     if (hovered || active) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
 
     if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        float mouseY    = ImGui::GetMousePos().y;
-        float newRatio  = (mouseY - area.min.y) / area.GetHeight();
-        ratio           = std::clamp(newRatio, minR, maxR);
-        splitY          = area.min.y + area.GetHeight() * ratio;
+        float mouseY   = ImGui::GetMousePos().y;
+        float newRatio = (mouseY - area.min.y) / area.GetHeight();
+        ratio          = std::clamp(newRatio, minR, maxR);
+        splitY         = area.min.y + area.GetHeight() * ratio;
     }
 
-    ImDrawList* dl   = ImGui::GetForegroundDrawList();
-    ImU32       color = active ? IM_COL32(240, 192, 32, 255)
-                               : (hovered ? IM_COL32(120, 120, 120, 255)
-                                          : IM_COL32(60, 60, 60, 255));
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImU32       color =
+        active ? IM_COL32(240, 192, 32, 255) : (hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(60, 60, 60, 255));
     dl->AddRectFilled({area.min.x, splitY - 1}, {area.max.x, splitY + 1}, color);
 
     return ratio;

@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 #include <windows.h>
+
 #include <shellapi.h>
 
 namespace playback::screen {
@@ -46,9 +47,8 @@ bool hasReplayExtension(std::filesystem::path const& path) {
     return extension == ".playback" || extension == ".zip";
 }
 
-std::optional<std::string> readZipEntry(
-    std::filesystem::path const& archivePath, std::string const& entryName, zip_uint64_t maxBytes
-) {
+std::optional<std::string>
+readZipEntry(std::filesystem::path const& archivePath, std::string const& entryName, zip_uint64_t maxBytes) {
     auto archivePathString = archivePath.string();
     int  zipError          = 0;
     auto archive           = zip_open(archivePathString.c_str(), ZIP_RDONLY, &zipError);
@@ -211,9 +211,9 @@ bool updateZipEntry(
 // 去掉开头/结尾空白，并过滤文件名非法字符。
 std::string sanitizeReplayName(std::string_view input) {
     std::string const cleanedRaw(input);
-    auto const first = cleanedRaw.find_first_not_of(" \t\r\n");
+    auto const        first = cleanedRaw.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return {};
-    auto const last = cleanedRaw.find_last_not_of(" \t\r\n");
+    auto const  last    = cleanedRaw.find_last_not_of(" \t\r\n");
     std::string cleaned = cleanedRaw.substr(first, last - first + 1);
 
     std::string result;
@@ -228,8 +228,10 @@ std::string sanitizeReplayName(std::string_view input) {
         case '"':
         case '<':
         case '>':
-        case '|': continue;
-        default: result.push_back(ch);
+        case '|':
+            continue;
+        default:
+            result.push_back(ch);
         }
     }
     while (!result.empty() && (result.back() == '.' || result.back() == ' ')) {
@@ -388,15 +390,25 @@ bool ReplayBrowser::importReplay(std::filesystem::path const& source, std::strin
     }
     auto directory = utils::PathUtils::getReplaysDir();
     std::filesystem::create_directories(directory, ec);
-    if (ec) { error = ec.message(); return false; }
-    auto destination = directory / source.filename();
-    int suffix = 1;
-    while (std::filesystem::exists(destination, ec)) {
-        destination = directory / (source.stem().string() + " (" + std::to_string(suffix++) + ")" + source.extension().string());
+    if (ec) {
+        error = ec.message();
+        return false;
     }
-    if (ec) { error = ec.message(); return false; }
+    auto destination = directory / source.filename();
+    int  suffix      = 1;
+    while (std::filesystem::exists(destination, ec)) {
+        destination =
+            directory / (source.stem().string() + " (" + std::to_string(suffix++) + ")" + source.extension().string());
+    }
+    if (ec) {
+        error = ec.message();
+        return false;
+    }
     std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, ec);
-    if (ec) { error = ec.message(); return false; }
+    if (ec) {
+        error = ec.message();
+        return false;
+    }
     auto imported = findReplay(destination.string());
     if (!imported || !imported->canOpen) {
         std::filesystem::remove(destination, ec);
@@ -419,7 +431,7 @@ bool ReplayBrowser::deleteReplay(ReplaySummary const& replay, std::string& error
 bool ReplayBrowser::showInFolder(ReplaySummary const& replay) {
     // 使用绝对路径，避免相对路径下资源管理器无法定位文件。
     std::error_code ec;
-    auto const path = std::filesystem::absolute(replay.path, ec);
+    auto const      path = std::filesystem::absolute(replay.path, ec);
     if (ec) return false;
 
     auto const wpath   = path.wstring();
@@ -436,8 +448,10 @@ bool ReplayBrowser::showInFolder(ReplaySummary const& replay) {
 
     // 文件定位失败时，回退为直接打开父目录。
     if (result <= 32) {
-        return reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", wparent.c_str(), nullptr, nullptr, SW_SHOWNORMAL))
-            > 32;
+        return reinterpret_cast<intptr_t>(
+                   ShellExecuteW(nullptr, L"open", wparent.c_str(), nullptr, nullptr, SW_SHOWNORMAL)
+               )
+             > 32;
     }
     return true;
 }
@@ -460,8 +474,8 @@ bool ReplayBrowser::renameReplay(ReplaySummary const& replay, std::string_view n
 
     std::string updatedJson;
     try {
-        auto meta = playback::functions::PlaybackMeta::fromJson(*metadata);
-        meta.name = name;
+        auto meta   = playback::functions::PlaybackMeta::fromJson(*metadata);
+        meta.name   = name;
         updatedJson = meta.toJson();
     } catch (std::exception const& e) {
         error = "playback.replayBrowser.error.parseMetadata"_tr(e.what());

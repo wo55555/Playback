@@ -9,10 +9,10 @@
 namespace playback::editor::editing {
 
 struct RenderPlan {
-    std::string primaryClipId;
+    std::string                primaryClipId;
     std::optional<std::string> secondaryClipId;  // set during transition
-    float blendAlpha{1.0f};                      // 0=primary, 1=secondary
-    model::TransitionKind kind{model::TransitionKind::Cut};
+    float                      blendAlpha{1.0f}; // 0=primary, 1=secondary
+    model::TransitionKind      kind{model::TransitionKind::Cut};
 };
 
 class TransitionEngine {

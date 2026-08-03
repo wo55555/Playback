@@ -54,22 +54,16 @@ float BezierCurve::sample(float t) const {
 
 // ===== BezierCurveEditor =====
 
-void BezierCurveEditor::setCurve(const BezierCurve& curve) {
-    mCurve = curve;
-}
+void BezierCurveEditor::setCurve(const BezierCurve& curve) { mCurve = curve; }
 
 void BezierCurveEditor::setSampleRange(float tMin, float tMax) {
     mTMin = tMin;
     mTMax = tMax;
 }
 
-BezierCurve BezierCurveEditor::curve() const {
-    return mCurve;
-}
+BezierCurve BezierCurveEditor::curve() const { return mCurve; }
 
-float BezierCurveEditor::sampleAt(float t) const {
-    return mCurve.sample(t);
-}
+float BezierCurveEditor::sampleAt(float t) const { return mCurve.sample(t); }
 
 void BezierCurveEditor::draw(ImDrawList* dl, Rect area) {
     // Background
@@ -91,10 +85,7 @@ void BezierCurveEditor::draw(ImDrawList* dl, Rect area) {
     for (int i = 0; i <= 64; ++i) {
         float t = static_cast<float>(i) / 64.0f;
         float y = sampleAt(t);
-        pts.push_back({
-            area.min.x + area.GetWidth() * t,
-            area.max.y - area.GetHeight() * y
-        });
+        pts.push_back({area.min.x + area.GetWidth() * t, area.max.y - area.GetHeight() * y});
     }
 
     for (size_t i = 1; i < pts.size(); ++i) {
@@ -103,10 +94,7 @@ void BezierCurveEditor::draw(ImDrawList* dl, Rect area) {
 
     // Draw control points
     for (const auto& p : mCurve.points) {
-        ImVec2 cp{
-            area.min.x + area.GetWidth() * p.t,
-            area.max.y - area.GetHeight() * p.v
-        };
+        ImVec2 cp{area.min.x + area.GetWidth() * p.t, area.max.y - area.GetHeight() * p.v};
         dl->AddCircleFilled(cp, 5.0f, IM_COL32(0xf0, 0x80, 0x20, 0xff));
         dl->AddCircle(cp, 7.0f, IM_COL32(0xff, 0xff, 0xff, 0x80), 0, 1.0f);
     }
@@ -117,9 +105,8 @@ void BezierCurveEditor::handleInput(const ImGuiIO& io, Rect area) {
     // Will be implemented with per-point hit testing + drag delta
 }
 
-std::optional<BezierCurveEditor::Segment> BezierCurveEditor::locateSegment(
-    const std::vector<BezierPoint>& pts, float t) const
-{
+std::optional<BezierCurveEditor::Segment>
+BezierCurveEditor::locateSegment(const std::vector<BezierPoint>& pts, float t) const {
     if (pts.size() < 2) return std::nullopt;
 
     if (t <= pts.front().t) return Segment{0, 1};

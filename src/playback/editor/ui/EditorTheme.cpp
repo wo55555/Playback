@@ -7,17 +7,17 @@ namespace playback::editor::ui {
 void EditorTheme::apply() const {
     auto& style = ImGui::GetStyle();
 
-    style.WindowPadding    = {panelPadding, panelPadding};
-    style.FramePadding     = {itemSpacing, itemSpacing};
-    style.ItemSpacing      = {itemSpacing, itemSpacing};
-    style.FrameRounding    = frameRounding;
-    style.WindowRounding   = 0.0f;
-    style.GrabRounding     = frameRounding;
-    style.PopupRounding    = frameRounding;
-    style.ScrollbarSize    = 12.0f;
+    style.WindowPadding     = {panelPadding, panelPadding};
+    style.FramePadding      = {itemSpacing, itemSpacing};
+    style.ItemSpacing       = {itemSpacing, itemSpacing};
+    style.FrameRounding     = frameRounding;
+    style.WindowRounding    = 0.0f;
+    style.GrabRounding      = frameRounding;
+    style.PopupRounding     = frameRounding;
+    style.ScrollbarSize     = 12.0f;
     style.ScrollbarRounding = 4.0f;
 
-    auto* colors = style.Colors;
+    auto* colors                       = style.Colors;
     colors[ImGuiCol_WindowBg]          = ImColor(static_cast<int>(bgPanel));
     colors[ImGuiCol_MenuBarBg]         = ImColor(static_cast<int>(bgHeader));
     colors[ImGuiCol_Border]            = ImColor(static_cast<int>(border));

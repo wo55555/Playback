@@ -6,10 +6,10 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/context/EditorContext.h"
-#include "playback/editor/renderer/ReplayUILayout.h"
-#include "playback/functions/render/ReplayThumbnail.h"
-#include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/input/EditorInput.h"
+#include "playback/editor/renderer/ReplayUILayout.h"
+#include "playback/editor/ui/ReplayEditor.h"
+#include "playback/functions/render/ReplayThumbnail.h"
 #include "playback/screen/select_replay/SelectReplayScreen.h"
 
 

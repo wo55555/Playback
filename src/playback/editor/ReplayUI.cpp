@@ -7,8 +7,8 @@
 #include "playback/Playback.h"
 #include "playback/editor/context/EditorContext.h"
 #include "playback/editor/controller/EditorController.h"
-#include "playback/functions/record/Recorder.h"
 #include "playback/editor/ui/ReplayEditor.h"
+#include "playback/functions/record/Recorder.h"
 
 #include <utility>
 

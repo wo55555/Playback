@@ -80,15 +80,11 @@ void DetailsPanel::draw() {
     if (auto const* selected = selection.getAs<editing::model::SelectedSequenceSegment>()) {
         auto const* segment = findById(project->sequence, selected->segmentId);
         if (!segment) {
-            ImGui::TextDisabled(
-                "%s",
-                "playback.refactorEditor.details.sequenceSegmentMissing"_tr().c_str()
-            );
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.sequenceSegmentMissing"_tr().c_str());
             return;
         }
         ImGui::TextUnformatted("playback.refactorEditor.details.sequenceSegment"_tr().c_str());
-        ImGui::TextUnformatted(
-            "playback.refactorEditor.details.range"_tr(segment->startTick, segment->endTick).c_str()
+        ImGui::TextUnformatted("playback.refactorEditor.details.range"_tr(segment->startTick, segment->endTick).c_str()
         );
         ImGui::BeginDisabled(segment->locked);
         std::string preview = "playback.refactorEditor.details.automaticFirstCamera"_tr();
@@ -152,15 +148,11 @@ void DetailsPanel::draw() {
     if (auto const* selected = selection.getAs<editing::model::SelectedWorldActorSegment>()) {
         auto const* segment = findById(project->worldActor.segments, selected->segmentId);
         if (!segment) {
-            ImGui::TextDisabled(
-                "%s",
-                "playback.refactorEditor.details.worldActorSegmentMissing"_tr().c_str()
-            );
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.worldActorSegmentMissing"_tr().c_str());
             return;
         }
         ImGui::TextUnformatted("playback.refactorEditor.details.worldActorSegment"_tr().c_str());
-        ImGui::TextUnformatted(
-            "playback.refactorEditor.details.range"_tr(segment->startTick, segment->endTick).c_str()
+        ImGui::TextUnformatted("playback.refactorEditor.details.range"_tr(segment->startTick, segment->endTick).c_str()
         );
         ImGui::TextUnformatted("playback.refactorEditor.details.sourceTick"_tr(segment->sourceTick).c_str());
         ImGui::BeginDisabled(segment->locked);
@@ -169,13 +161,7 @@ void DetailsPanel::draw() {
             mSpeedEditActive = false;
         }
         if (!mSpeedEditActive) mSpeedValue = segment->speed;
-        ImGui::SliderFloat(
-            "playback.refactorEditor.details.speed"_tr().c_str(),
-            &mSpeedValue,
-            0.1f,
-            10.0f,
-            "%.2fx"
-        );
+        ImGui::SliderFloat("playback.refactorEditor.details.speed"_tr().c_str(), &mSpeedValue, 0.1f, 10.0f, "%.2fx");
         if (ImGui::IsItemActivated()) mSpeedEditActive = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             EditorAction action{EditorActionType::SetWorldActorSpeed};
@@ -208,13 +194,8 @@ void DetailsPanel::draw() {
         }
         ImGui::TextUnformatted("playback.refactorEditor.details.subActor"_tr().c_str());
         ImGui::TextUnformatted("playback.refactorEditor.details.name"_tr(actor->name).c_str());
-        ImGui::TextUnformatted(
-            "playback.refactorEditor.details.boundCameras"_tr(actor->boundCameraIds.size()).c_str()
-        );
-        if (ImGui::Button(
-                "playback.refactorEditor.details.createBindingCamera"_tr().c_str(),
-                {-1.0f, 0.0f}
-            )) {
+        ImGui::TextUnformatted("playback.refactorEditor.details.boundCameras"_tr(actor->boundCameraIds.size()).c_str());
+        if (ImGui::Button("playback.refactorEditor.details.createBindingCamera"_tr().c_str(), {-1.0f, 0.0f})) {
             EditorAction action{EditorActionType::CreateBindingCamera};
             action.id   = actor->id;
             action.name = "playback.refactorEditor.details.bindingCameraName"_tr(actor->name);
@@ -300,9 +281,7 @@ void DetailsPanel::draw() {
         } else if (ImGui::IsItemDeactivated()) {
             mTickEditActive = false;
         }
-        ImGui::TextUnformatted(
-            "playback.refactorEditor.details.easing"_tr(easingName(key->easingType)).c_str()
-        );
+        ImGui::TextUnformatted("playback.refactorEditor.details.easing"_tr(easingName(key->easingType)).c_str());
         if (ImGui::Button("playback.refactorEditor.details.deleteKeyframe"_tr().c_str(), {-1.0f, 0.0f})) {
             EditorAction action{EditorActionType::DeleteCameraKeyframe};
             action.id          = camera->id;

@@ -6,6 +6,7 @@
 #include "playback/screen/ReplayBrowser.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <utility>
 
 namespace playback::editor {
@@ -28,6 +29,11 @@ ReplayBrowserEntry makeBrowserEntry(screen::ReplaySummary summary) {
     return entry;
 }
 
+std::string replayPreferenceKey(std::filesystem::path const& path) {
+    auto const utf8Path = path.lexically_normal().generic_u8string();
+    return {reinterpret_cast<char const*>(utf8Path.data()), utf8Path.size()};
+}
+
 } // namespace
 
 EditorController::EditorController(EditorContext& context)
@@ -41,14 +47,16 @@ void EditorController::reset() {
     mBrowserSnapshot = std::make_shared<ReplayBrowserSnapshot>();
     mProject         = {};
     mCommandStack.clear();
+    mActiveReplayPath.clear();
     mProjectTotalTicks = -1;
 }
 
-void EditorController::ensureProject(int totalTicks) {
+void EditorController::ensureProject(int totalTicks, std::string_view replayPath) {
     totalTicks = std::max(0, totalTicks);
-    if (mProjectTotalTicks == totalTicks) return;
+    if (mProjectTotalTicks == totalTicks && mProject.projectPath == replayPath) return;
 
-    mProject            = {};
+    mProject = {};
+    mProject.projectPath.assign(replayPath);
     mProject.totalTicks = totalTicks;
     mProject.sequence.push_back({"sequence", 0, totalTicks});
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
@@ -136,7 +144,8 @@ void EditorController::publishState(bool hudVisible) {
     state.playbackSpeed = session.getPlaybackSpeed();
     state.currentTick   = std::max(0, session.getCurrentTick());
     state.totalTicks    = std::max(0, session.getTotalTicks());
-    ensureProject(state.totalTicks);
+    if (!state.editorVisible) mActiveReplayPath.clear();
+    ensureProject(state.totalTicks, mActiveReplayPath);
     mProject.currentTick             = state.currentTick;
     mProject.playing                 = !state.paused;
     mProject.playbackSpeed           = state.playbackSpeed;
@@ -229,7 +238,8 @@ void EditorController::tick(bool hudVisible) {
                 } else if (!session.start(replay->path)) {
                     mBrowserError = "Failed to start replay session";
                 } else {
-                    mBrowserVisible = false;
+                    mActiveReplayPath = replayPreferenceKey(replay->path);
+                    mBrowserVisible   = false;
                     mBrowserError.clear();
                 }
             });

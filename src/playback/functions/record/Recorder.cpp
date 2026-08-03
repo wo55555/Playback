@@ -348,10 +348,7 @@ nlohmann::ordered_json metaToJson(PlaybackMeta const& meta) {
 }
 
 PlaybackChunkMeta chunkMetaFromJson(nlohmann::ordered_json const& json) {
-    return PlaybackChunkMeta{
-        json.at("duration").get<int>(),
-        json.at("forcePlaySnapshot").get<bool>()
-    };
+    return PlaybackChunkMeta{json.at("duration").get<int>(), json.at("forcePlaySnapshot").get<bool>()};
 }
 
 PlaybackMeta metaFromJson(nlohmann::ordered_json const& json) {
@@ -427,9 +424,6 @@ void Recorder::start() {
     }
 
     mState = State::Recording;
-    if (auto* provider = mThumbnailCaptureProvider.load(std::memory_order_acquire)) {
-        provider->requestReplayThumbnailCapture();
-    }
     getLogger().info("Recording started");
 }
 
@@ -484,9 +478,10 @@ void Recorder::saveRecording() {
         return;
     }
 
-    auto outputPath = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
+    auto  outputPath        = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
     auto* thumbnailProvider = mThumbnailCaptureProvider.load(std::memory_order_acquire);
-    if (!thumbnailProvider || !thumbnailProvider->saveReplayThumbnail(replayPath / "icon.png")) {
+    if (!mThumbnailCaptureRequested || !thumbnailProvider
+        || !thumbnailProvider->saveReplayThumbnail(replayPath / "icon.png")) {
         getLogger().warn("Unable to save replay thumbnail for {}", replayPath);
     }
     if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
@@ -540,6 +535,7 @@ void Recorder::resetStateForNewRecording() {
     mHasOpenChunk                  = false;
     mOpenChunkHasData              = false;
     mCurrentChunkForcePlaySnapshot = false;
+    mThumbnailCaptureRequested     = false;
     mNeedsInitialSnapshot          = true;
     mDimensionTransitionPending    = false;
     mDimensionTransitionTargetId   = 0;
@@ -621,9 +617,9 @@ void Recorder::endTick(bool close) {
         if (!writeSnapshot() || !commitChunkSnapshot(elapsed, barrierWait)) {
             return;
         }
-        bool const reachedRequestedDimension = !mDimensionTransitionPending.load(std::memory_order_acquire)
-                                            || currentDimensionId
-                                                   == mDimensionTransitionTargetId.load(std::memory_order_acquire);
+        bool const reachedRequestedDimension =
+            !mDimensionTransitionPending.load(std::memory_order_acquire)
+            || currentDimensionId == mDimensionTransitionTargetId.load(std::memory_order_acquire);
         if (reachedRequestedDimension) {
             mDimensionTransitionPending  = false;
             mDimensionTransitionTargetId = 0;
@@ -948,7 +944,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
     }
 
     std::vector<PlaybackSerializedGamePacket> entityPackets;
-    auto appendEntityPacket = [&entityPackets](Packet const& packet) {
+    auto                                      appendEntityPacket = [&entityPackets](Packet const& packet) {
         PlaybackBuffer stream;
         packet.write(stream);
         entityPackets.push_back({static_cast<int32_t>(packet.getId()), std::move(stream.mBuffer)});
@@ -1324,6 +1320,16 @@ bool Recorder::writeTickBoundary() {
 
     ++mTicksInCurrentChunk;
     ++mWrittenTicks;
+    if (!mThumbnailCaptureRequested && mWrittenTicks >= THUMBNAIL_CAPTURE_TICKS
+        && mState.load(std::memory_order_acquire) == State::Recording) {
+        auto clientInstance = ll::service::getClientInstance();
+        if (clientInstance && clientInstance->isInWorldAndNotShowingAnyMenuScreens()) {
+            if (auto* provider = mThumbnailCaptureProvider.load(std::memory_order_acquire)) {
+                provider->requestReplayThumbnailCapture();
+                mThumbnailCaptureRequested = true;
+            }
+        }
+    }
     return true;
 }
 

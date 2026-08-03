@@ -1,6 +1,7 @@
 #include "ReplayThumbnail.h"
 
 #include <windows.h>
+
 #include <wincodec.h>
 #include <wrl/client.h>
 
@@ -21,7 +22,7 @@ class ComInitialize {
 public:
     ComInitialize() {
         HRESULT const hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        mNeedsUninit      = SUCCEEDED(hr);
+        mNeedsUninit     = SUCCEEDED(hr);
         // S_OK and S_FALSE both increment the thread's COM initialization count.
     }
     ~ComInitialize() {
@@ -48,19 +49,17 @@ bool writeReplayThumbnailPng(
     uint32_t                     rowPitch
 ) {
     if (width == 0 || height == 0 || !rgba || rowPitch < width * 4) return false;
-    ComInitialize com;
-    ComPtr<IWICImagingFactory>   factory;
-    ComPtr<IWICStream>           stream;
-    ComPtr<IWICBitmapEncoder>    encoder;
+    ComInitialize                 com;
+    ComPtr<IWICImagingFactory>    factory;
+    ComPtr<IWICStream>            stream;
+    ComPtr<IWICBitmapEncoder>     encoder;
     ComPtr<IWICBitmapFrameEncode> frame;
-    ComPtr<IPropertyBag2>        properties;
-    if (!createFactory(factory)
-        || FAILED(factory->CreateStream(&stream))
+    ComPtr<IPropertyBag2>         properties;
+    if (!createFactory(factory) || FAILED(factory->CreateStream(&stream))
         || FAILED(stream->InitializeFromFilename(output.c_str(), GENERIC_WRITE))
         || FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder))
         || FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache))
-        || FAILED(encoder->CreateNewFrame(&frame, &properties))
-        || FAILED(frame->Initialize(properties.Get()))
+        || FAILED(encoder->CreateNewFrame(&frame, &properties)) || FAILED(frame->Initialize(properties.Get()))
         || FAILED(frame->SetSize(width, height))) {
         return false;
     }
@@ -83,29 +82,33 @@ bool writeReplayThumbnailPng(
         ))) {
         return false;
     }
-    return SUCCEEDED(frame->WriteSource(bitmap.Get(), nullptr))
-        && SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
+    return SUCCEEDED(frame->WriteSource(bitmap.Get(), nullptr)) && SUCCEEDED(frame->Commit())
+        && SUCCEEDED(encoder->Commit());
 }
 
 bool decodeReplayThumbnailPng(std::string_view png, ReplayThumbnailPixels& output) {
     output = {};
     if (png.empty() || png.size() > std::numeric_limits<DWORD>::max()) return false;
-    ComInitialize com;
-    ComPtr<IWICImagingFactory>   factory;
-    ComPtr<IWICStream>           stream;
-    ComPtr<IWICBitmapDecoder>    decoder;
+    ComInitialize                 com;
+    ComPtr<IWICImagingFactory>    factory;
+    ComPtr<IWICStream>            stream;
+    ComPtr<IWICBitmapDecoder>     decoder;
     ComPtr<IWICBitmapFrameDecode> frame;
-    ComPtr<IWICFormatConverter>  converter;
-    if (!createFactory(factory)
-        || FAILED(factory->CreateStream(&stream))
+    ComPtr<IWICFormatConverter>   converter;
+    if (!createFactory(factory) || FAILED(factory->CreateStream(&stream))
         || FAILED(stream->InitializeFromMemory(
-            reinterpret_cast<WICInProcPointer>(const_cast<char*>(png.data())), static_cast<DWORD>(png.size())
+            reinterpret_cast<WICInProcPointer>(const_cast<char*>(png.data())),
+            static_cast<DWORD>(png.size())
         ))
         || FAILED(factory->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder))
-        || FAILED(decoder->GetFrame(0, &frame))
-        || FAILED(factory->CreateFormatConverter(&converter))
+        || FAILED(decoder->GetFrame(0, &frame)) || FAILED(factory->CreateFormatConverter(&converter))
         || FAILED(converter->Initialize(
-            frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom
+            frame.Get(),
+            GUID_WICPixelFormat32bppRGBA,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.0,
+            WICBitmapPaletteTypeCustom
         ))) {
         return false;
     }
@@ -119,9 +122,9 @@ bool decodeReplayThumbnailPng(std::string_view png, ReplayThumbnailPixels& outpu
         return false;
     }
     output.rgba.resize(static_cast<size_t>(byteCount));
-    return SUCCEEDED(converter->CopyPixels(
-        nullptr, output.width * 4, static_cast<UINT>(output.rgba.size()), output.rgba.data()
-    ));
+    return SUCCEEDED(
+        converter->CopyPixels(nullptr, output.width * 4, static_cast<UINT>(output.rgba.size()), output.rgba.data())
+    );
 }
 
 } // namespace playback::functions::render

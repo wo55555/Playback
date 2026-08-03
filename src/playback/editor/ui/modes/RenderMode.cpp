@@ -8,14 +8,17 @@
 
 #include "imgui.h"
 
+#include <algorithm>
+
 namespace playback::editor::ui {
 
 using namespace ll::i18n_literals;
 
 void RenderMode::draw() {
-    auto& editor = ReplayEditor::getInstance();
-    constexpr float kMenuHeight   = 24.0f;
-    constexpr float kStatusHeight = 22.0f;
+    auto&       editor        = ReplayEditor::getInstance();
+    float const uiScale       = std::max(1.0f, ImGui::GetIO().FontGlobalScale);
+    float const kMenuHeight   = 30.0f * uiScale;
+    float const kStatusHeight = 22.0f * uiScale;
 
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
 
@@ -23,9 +26,12 @@ void RenderMode::draw() {
     {
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2(displaySize.x, kMenuHeight));
-        ImGui::Begin("##RenderMenuBar", nullptr,
+        ImGui::Begin(
+            "##RenderMenuBar",
+            nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-            | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_MenuBar);
+                | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_MenuBar
+        );
         editor.mMenuBar.draw();
         ImGui::End();
     }
@@ -39,9 +45,12 @@ void RenderMode::draw() {
 
         ImGui::SetNextWindowPos(ImVec2(cardX, cardY));
         ImGui::SetNextWindowSize(ImVec2(cardWidth, cardHeight));
-        ImGui::Begin("##RenderCard", nullptr,
+        ImGui::Begin(
+            "##RenderCard",
+            nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-            | ImGuiWindowFlags_NoScrollWithMouse);
+                | ImGuiWindowFlags_NoScrollWithMouse
+        );
 
         // Centered render icon
         float iconSize = 48.0f;
@@ -57,7 +66,8 @@ void RenderMode::draw() {
         ImGui::Spacing();
 
         // Progress bar
-        float progress = (mTotalFrames > 0) ? static_cast<float>(mCurrentFrame) / static_cast<float>(mTotalFrames) : 0.0f;
+        float progress =
+            (mTotalFrames > 0) ? static_cast<float>(mCurrentFrame) / static_cast<float>(mTotalFrames) : 0.0f;
         char progressLabel[32];
         std::snprintf(progressLabel, sizeof(progressLabel), "%d%%", mProgressPercent);
 
@@ -65,8 +75,7 @@ void RenderMode::draw() {
         ImGui::Spacing();
 
         // Frame info
-        std::string const frameInfo =
-            "playback.refactorEditor.render.frame"_tr(mCurrentFrame, mTotalFrames);
+        std::string const frameInfo = "playback.refactorEditor.render.frame"_tr(mCurrentFrame, mTotalFrames);
         ImGui::SetCursorPosX((cardWidth - 160.0f) * 0.5f);
         ImGui::TextUnformatted(frameInfo.c_str());
 
@@ -76,9 +85,7 @@ void RenderMode::draw() {
 
         // ETA
         ImGui::SetCursorPosX((cardWidth - 100.0f) * 0.5f);
-        ImGui::TextUnformatted(
-            "playback.refactorEditor.render.eta"_tr(mEta.empty() ? "0:00:00" : mEta).c_str()
-        );
+        ImGui::TextUnformatted("playback.refactorEditor.render.eta"_tr(mEta.empty() ? "0:00:00" : mEta).c_str());
 
         // Output path
         ImGui::Spacing();
@@ -102,9 +109,12 @@ void RenderMode::draw() {
     {
         ImGui::SetNextWindowPos(ImVec2(0, displaySize.y - kStatusHeight));
         ImGui::SetNextWindowSize(ImVec2(displaySize.x, kStatusHeight));
-        ImGui::Begin("##RenderStatus", nullptr,
+        ImGui::Begin(
+            "##RenderStatus",
+            nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-            | ImGuiWindowFlags_NoScrollWithMouse);
+                | ImGuiWindowFlags_NoScrollWithMouse
+        );
         editor.mStatusPanel.draw();
         ImGui::End();
     }

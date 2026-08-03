@@ -10,7 +10,7 @@ struct Rect {
 
     [[nodiscard]] float GetWidth() const { return max.x - min.x; }
     [[nodiscard]] float GetHeight() const { return max.y - min.y; }
-    [[nodiscard]] bool contains(const ImVec2& point) const {
+    [[nodiscard]] bool  contains(const ImVec2& point) const {
         return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
     }
 };

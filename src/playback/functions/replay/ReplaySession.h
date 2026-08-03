@@ -37,6 +37,7 @@ private:
     static constexpr int    CHUNK_INJECTION_STALL_TIMEOUT_TICKS = 20 * 30;
     static constexpr int    DIMENSION_TRANSITION_SETTLE_UPDATES = 2;
     static constexpr int    REPLAY_WORLD_DELETE_TIMEOUT_TICKS   = 20 * 30;
+    static constexpr auto   DIMENSION_ACK_FALLBACK_DELAY        = std::chrono::seconds{1};
     static constexpr auto   DIMENSION_TRANSITION_TIMEOUT        = std::chrono::seconds{30};
 
     enum class CleanupState { None, WaitingForExit, ReadyToDelete, DeleteIssued };
@@ -45,6 +46,8 @@ private:
 
     struct DimensionTransitionRequest {
         std::atomic<DimensionTransitionStatus> status{DimensionTransitionStatus::Pending};
+        std::atomic<bool>                      acknowledgmentFallbackQueued{false};
+        std::atomic<bool>                      completed{false};
         uint64_t                               generation{};
     };
 

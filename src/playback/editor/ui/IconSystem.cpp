@@ -19,8 +19,8 @@ void IconSystem::loadFonts() {
 
     // 2) Icon font (merged, PUA range)
     ImFontConfig cfg;
-    cfg.MergeMode  = true;
-    cfg.PixelSnapH = true;
+    cfg.MergeMode     = true;
+    cfg.PixelSnapH    = true;
     cfg.GlyphOffset.y = 1.0f;
     io.Fonts->AddFontFromFileTTF(Playback::ReplayEditor::Icons::kFontPath, 16.0f, &cfg, getGlyphRange());
 

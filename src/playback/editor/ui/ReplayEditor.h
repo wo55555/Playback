@@ -20,7 +20,9 @@
 #include "playback/editor/ui/modes/ModeManager.h"
 
 #include <functional>
+#include <map>
 #include <string>
+#include <string_view>
 
 namespace playback::editor::ui {
 
@@ -80,12 +82,21 @@ private:
     editing::model::SelectionModel       mSelection;
 
     // Layout
-    float mDetailsWidthRatio{0.28f};
+    float mDetailsWidthRatio{0.20f};
     float mTimelineHeightRatio{0.35f};
     float mVideoAspectRatio{16.0f / 9.0f};
 
+    struct TimelineViewPreferences {
+        float zoomScale{1.0f};
+        float horizontalScroll{};
+    };
+
+    std::map<std::string, TimelineViewPreferences> mTimelineViewPreferences;
+    std::string                                    mActiveReplayPath;
+
     void loadLayoutPreferences();
     void saveLayoutPreferences() const;
+    void syncTimelineViewPreferences(std::string_view replayPath);
 
     // Allow EditMode to access ReplayEditor members
     friend class EditMode;

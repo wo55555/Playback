@@ -20,6 +20,7 @@
 #include <string>
 #include <utility>
 #include <windows.h>
+
 #include <commdlg.h>
 
 namespace playback::screen::select_replay {
@@ -274,14 +275,14 @@ void SelectReplayScreen::openSelected() {
 
 void SelectReplayScreen::importReplay() {
     std::array<wchar_t, 32768> file{};
-    std::wstring filter = ll::string_utils::str2wstr("playback.replayBrowser.openDialog.replayFiles"_tr())
-        + L" (*.playback;*.zip)";
+    std::wstring               filter =
+        ll::string_utils::str2wstr("playback.replayBrowser.openDialog.replayFiles"_tr()) + L" (*.playback;*.zip)";
     filter.push_back(L'\0');
     filter += L"*.playback;*.zip";
     filter.push_back(L'\0');
     filter.push_back(L'\0');
 
-    OPENFILENAMEW              dialog{};
+    OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
     dialog.lpstrFilter = filter.c_str();
     dialog.lpstrFile   = file.data();
@@ -357,21 +358,20 @@ void SelectReplayScreen::drawNavigation() {
     // 文字按钮宽度自适应：按当前标签（含图标）计算，避免文字被裁剪。
     std::string const importLabelText =
         std::string(ICON_EXPORT) + "  " + "playback.replayBrowser.navigation.import"_tr();
-    std::string const filterLabelText = std::string(ICON_FILTER) + "  "
-        + "playback.replayBrowser.navigation.filter"_tr() + "  " + filterLabel(mFilter);
-    std::string const sortLabelText =
-        std::string(ICON_SORT) + "  " + "playback.replayBrowser.navigation.sort"_tr() + "  " + sortLabel(mSort)
-        + (mDescending ? " ↓" : " ↑");
+    std::string const filterLabelText =
+        std::string(ICON_FILTER) + "  " + "playback.replayBrowser.navigation.filter"_tr() + "  " + filterLabel(mFilter);
+    std::string const sortLabelText = std::string(ICON_SORT) + "  " + "playback.replayBrowser.navigation.sort"_tr()
+                                    + "  " + sortLabel(mSort) + (mDescending ? " ↓" : " ↑");
     std::string const viewLabelText = mViewMode == ViewMode::Grid
-        ? std::string(ICON_GRID) + "  " + "playback.replayBrowser.navigation.grid"_tr()
-        : std::string(ICON_LIST) + "  " + "playback.replayBrowser.navigation.list"_tr();
-    float const importW = autoWidth(importLabelText);
-    float const filterW = autoWidth(filterLabelText);
-    float const sortW   = autoWidth(sortLabelText);
-    float const viewW   = autoWidth(viewLabelText);
-    float const ctrlW   = searchW + importW + filterW + sortW + viewW + iconW * 2.0f + gap * 7.0f;
-    float const startX  = std::max(margin + 200.0f, width - margin - ctrlW);
-    float const y       = (kNavHeight - kControlHeight) * 0.5f;
+                                        ? std::string(ICON_GRID) + "  " + "playback.replayBrowser.navigation.grid"_tr()
+                                        : std::string(ICON_LIST) + "  " + "playback.replayBrowser.navigation.list"_tr();
+    float const       importW       = autoWidth(importLabelText);
+    float const       filterW       = autoWidth(filterLabelText);
+    float const       sortW         = autoWidth(sortLabelText);
+    float const       viewW         = autoWidth(viewLabelText);
+    float const       ctrlW         = searchW + importW + filterW + sortW + viewW + iconW * 2.0f + gap * 7.0f;
+    float const       startX        = std::max(margin + 200.0f, width - margin - ctrlW);
+    float const       y             = (kNavHeight - kControlHeight) * 0.5f;
 
     // 返回按钮：← 图标，位于标题左侧，默认透明、悬停浅灰。
     ImGui::SetCursorPos({margin, y});
@@ -399,8 +399,7 @@ void SelectReplayScreen::drawNavigation() {
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, kColorButtonActive);
     ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
     ImGui::PushStyleColor(ImGuiCol_TextDisabled, kColorTextDim);
-    std::string const searchHint =
-        std::string(ICON_SEARCH) + "  " + "playback.replayBrowser.navigation.search"_tr();
+    std::string const searchHint = std::string(ICON_SEARCH) + "  " + "playback.replayBrowser.navigation.search"_tr();
     if (ImGui::InputTextWithHint("##search", searchHint.c_str(), search.data(), search.size())) {
         mSearch = search.data();
         rebuildVisible();
@@ -474,9 +473,8 @@ void SelectReplayScreen::drawNavigation() {
     if (textButton(viewLabelText.c_str(), viewW, true)) {
         mViewMode = mViewMode == ViewMode::Grid ? ViewMode::Details : ViewMode::Grid;
     }
-    std::string const viewTooltip = mViewMode == ViewMode::Grid
-        ? "playback.replayBrowser.navigation.switchToList"_tr()
-        : "playback.replayBrowser.navigation.switchToGrid"_tr();
+    std::string const viewTooltip = mViewMode == ViewMode::Grid ? "playback.replayBrowser.navigation.switchToList"_tr()
+                                                                : "playback.replayBrowser.navigation.switchToGrid"_tr();
     tooltip(viewTooltip.c_str());
     x += viewW + gap;
 
@@ -747,13 +745,8 @@ void SelectReplayScreen::drawDetails() {
                 replay.worldName.empty() ? "playback.replayBrowser.unknownWorld"_tr() : replay.worldName;
             ImGui::GetWindowDrawList()
                 ->AddText(font, 24.0f, {min.x + 16.0f, min.y + 8.0f}, kColorText, replay.displayName().c_str());
-            ImGui::GetWindowDrawList()->AddText(
-                font,
-                18.0f,
-                {min.x + 16.0f, min.y + 44.0f},
-                kColorTextDim,
-                worldName.c_str()
-            );
+            ImGui::GetWindowDrawList()
+                ->AddText(font, 18.0f, {min.x + 16.0f, min.y + 44.0f}, kColorTextDim, worldName.c_str());
             ImGui::GetWindowDrawList()
                 ->AddText(font, 18.0f, {min.x + 16.0f, min.y + 68.0f}, kColorTextDim, summary.c_str());
             ImGui::PopID();
@@ -825,10 +818,8 @@ void SelectReplayScreen::drawDetails() {
             ImGui::TableSetColumnIndex(1);
             ImGui::TextUnformatted(value.c_str());
         };
-        row(
-            "playback.replayBrowser.field.world"_tr().c_str(),
-            (*replay)->worldName.empty() ? "playback.replayBrowser.unknown"_tr() : (*replay)->worldName
-        );
+        row("playback.replayBrowser.field.world"_tr().c_str(),
+            (*replay)->worldName.empty() ? "playback.replayBrowser.unknown"_tr() : (*replay)->worldName);
         row("playback.replayBrowser.field.duration"_tr().c_str(), formatDuration(**replay));
         row("playback.replayBrowser.field.fileSize"_tr().c_str(), formatSize((*replay)->fileSize));
         row("playback.replayBrowser.field.fileFormat"_tr().c_str(), ".playback");
@@ -948,8 +939,7 @@ void SelectReplayScreen::drawDeleteDialog() {
         }
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        std::string const cancel =
-            std::string(ICON_CLOSE) + "  " + "playback.replayBrowser.dialog.cancel"_tr();
+        std::string const cancel = std::string(ICON_CLOSE) + "  " + "playback.replayBrowser.dialog.cancel"_tr();
         if (ImGui::Button(cancel.c_str(), {120.0f, kControlHeight})) {
             mShowDeleteDialog = false;
             ImGui::CloseCurrentPopup();
@@ -980,7 +970,7 @@ void SelectReplayScreen::openRenameDialog() {
 }
 
 void SelectReplayScreen::drawRenameDialog() {
-    auto replay = selectedReplay();
+    auto              replay      = selectedReplay();
     std::string const renameTitle = "playback.replayBrowser.dialog.rename.title"_tr() + "###rename-replay";
     if (mRenameDialogOpen) {
         ImGui::OpenPopup(renameTitle.c_str());
@@ -1010,15 +1000,14 @@ void SelectReplayScreen::drawRenameDialog() {
     bool const empty = mRenameBuffer.empty();
     ImGui::BeginDisabled(empty);
     styleButton();
-    std::string const save = std::string(ICON_CHECK) + "  " + "playback.replayBrowser.dialog.rename.save"_tr();
+    std::string const save  = std::string(ICON_CHECK) + "  " + "playback.replayBrowser.dialog.rename.save"_tr();
     bool const        saved = ImGui::Button(save.c_str(), {140.0f, kControlHeight});
     popButtonStyle();
     ImGui::EndDisabled();
     ImGui::SameLine();
     styleButton();
-    std::string const cancel =
-        std::string(ICON_CLOSE) + "  " + "playback.replayBrowser.dialog.cancel"_tr();
-    bool const cancelled = ImGui::Button(cancel.c_str(), {120.0f, kControlHeight});
+    std::string const cancel    = std::string(ICON_CLOSE) + "  " + "playback.replayBrowser.dialog.cancel"_tr();
+    bool const        cancelled = ImGui::Button(cancel.c_str(), {120.0f, kControlHeight});
     popButtonStyle();
 
     bool const confirm = saved;
