@@ -16,7 +16,7 @@ add_requires("stduuid")
 add_requires("xxhash")
 add_requires("openssl")
 add_requires("libzip")
-add_requires("imgui v1.92.7", {configs = {dx12 = true}})
+add_requires("imgui v1.92.7", {configs = {dx11 = true, dx12 = true}})
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -45,7 +45,7 @@ target("playback")
     add_packages("openssl")
     add_packages("libzip")
     add_packages("imgui")
-    add_syslinks("d3d12", "dxgi", "d3dcompiler")
+    add_syslinks("d3d11", "d3d12", "dxgi", "d3dcompiler", "windowscodecs", "ole32", "comdlg32", "shell32")
     set_exceptions("none") -- To avoid conflicts with /EHa.
     set_kind("shared")
     set_languages("c++20")
@@ -62,8 +62,6 @@ target("playback")
         })
     end)
     after_build(function (target)
-        import("utils.archive")
-
         local output_dir = path.join(os.projectdir(), "bin", target:name())
         os.mkdir(output_dir)
         os.cp(path.join(os.projectdir(), "LICENSE"), output_dir)
@@ -79,22 +77,10 @@ target("playback")
         os.tryrm(lang_dir)
         os.cp(lang_source, lang_dir)
 
-        local resource_dir = path.join(os.projectdir(), "resources")
-        if os.isdir(resource_dir) then
-            local installed_pack = path.join(output_dir, "resource_packs", target:name() .. "-ui")
-            local mcpack = path.join(os.projectdir(), "bin", target:name() .. "-ui.mcpack")
-            local mcpack_zip = mcpack .. ".zip"
-            assert(os.isfile(path.join(resource_dir, "manifest.json")), "resource pack manifest.json was not found")
-            os.tryrm(installed_pack)
-            os.cp(resource_dir, installed_pack)
-            os.tryrm(mcpack)
-            os.tryrm(mcpack_zip)
-            archive.archive(mcpack_zip, "*", {
-                curdir = resource_dir,
-                recurse = true
-            })
-            os.mv(mcpack_zip, mcpack)
-            cprint("${bright green}[Playback]: ${reset}UI resource pack installed to " .. installed_pack)
-            cprint("${bright green}[Playback]: ${reset}Standalone UI resource pack generated to " .. mcpack)
-        end
+        local font_source = path.join(os.projectdir(), "assets", "fonts", "lucide.ttf")
+        local font_dir    = path.join(output_dir, "fonts")
+        assert(os.isfile(font_source), "icon font asset was not found")
+        os.tryrm(font_dir)
+        os.mkdir(font_dir)
+        os.cp(font_source, font_dir)
     end)

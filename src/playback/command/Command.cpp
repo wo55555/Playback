@@ -11,7 +11,7 @@
 namespace playback::command {
 
 void registerPlaybackCommand() {
-    using ll::i18n_literals::operator""_tr;
+    using namespace ll::i18n_literals;
 
     auto& command = ll::command::CommandRegistrar::getClientInstance().getOrCreateCommand(
         "playback",
@@ -21,7 +21,7 @@ void registerPlaybackCommand() {
     command.overload().text("version").execute([](CommandOrigin const&, CommandOutput& output) {
         auto const& version = Playback::getInstance().getSelf().getManifest().version;
         if (!version.has_value()) {
-            output.error(ll::i18n::getInstance().get("playback.command.playback.versionUnavailable", {}));
+            output.error("playback.command.playback.versionUnavailable"_tr());
             return;
         }
         output.success("v{}", version->to_string());

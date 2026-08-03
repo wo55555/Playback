@@ -1,6 +1,10 @@
 #pragma once
 
+#include "playback/functions/render/ReplayThumbnail.h"
+
+#include <filesystem>
 #include <memory>
+#include <string_view>
 
 struct IDXGISwapChain;
 
@@ -11,12 +15,15 @@ class EditorContext;
 
 namespace playback::editor::renderer {
 
-class ImGuiRenderer {
+class ImGuiRenderer final : public functions::render::ReplayThumbnailCaptureProvider {
 public:
     ImGuiRenderer();
     ~ImGuiRenderer();
 
-    void setContext(EditorContext* context);
+    void                setContext(EditorContext* context);
+    void                requestReplayThumbnailCapture() override;
+    [[nodiscard]] bool  saveReplayThumbnail(std::filesystem::path const& output) override;
+    [[nodiscard]] void* acquireReplayThumbnailTexture(std::string_view key, std::string_view png);
 
     bool render(IDXGISwapChain* swapChain);
     bool beforeResize(IDXGISwapChain* swapChain);

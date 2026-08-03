@@ -1,388 +1,453 @@
 #include "TimelinePanel.h"
 
-#include "playback/editor/ui/FormatUtils.h"
-#include "playback/editor/ui/ReplayUILayout.h"
+#include "playback/editor/ui/ReplayEditor.h"
+
+#include "ll/api/i18n/I18n.h"
 
 #include "imgui.h"
-#include "ll/api/i18n/I18n.h"
 
 #include <algorithm>
 #include <cmath>
-#include <string>
-#include <utility>
+#include <cstdio>
 
 namespace playback::editor::ui {
 
-TimelineScale chooseTimelineScale(int totalTicks, float timelineWidth) {
-    float const targetTicksPerMajor =
-        static_cast<float>(std::max(1, totalTicks)) * 60.0f / std::max(1.0f, timelineWidth);
-    if (targetTicksPerMajor < 5.0f) return {1, 5, true};
-    if (targetTicksPerMajor < 8.0f) return {2, 5, true};
-    return {std::max(5, static_cast<int>(std::ceil(targetTicksPerMajor / 20.0f)) * 5), 4, false};
+using namespace ll::i18n_literals;
+
+namespace {
+
+constexpr float kToolbarHeight     = 38.0f;
+constexpr float kTransportHeight   = 34.0f;
+constexpr float kRulerHeight       = 28.0f;
+constexpr float kSplitterThickness = 4.0f;
+constexpr float kMinZoomScale      = 1.0f;
+constexpr float kMaxZoomScale      = 20.0f;
+constexpr float kZoomStep          = 1.15f;
+
+std::string formatTick(int tick) {
+    char value[32]{};
+    tick = std::max(0, tick);
+    std::snprintf(value, sizeof(value), "%02d:%02d", tick / 1200, (tick / 20) % 60);
+    return value;
 }
 
-void drawSkipControl(ImDrawList& drawList, ImVec2 center, float size, bool forwards, ImU32 color) {
-    ImVec2 const min(center.x - size * 0.5f, center.y - size * 0.5f);
-    if (forwards) {
-        drawList.AddTriangleFilled(
-            ImVec2(min.x, min.y),
-            ImVec2(min.x + size * 0.67f, center.y),
-            ImVec2(min.x, min.y + size),
-            color
-        );
-        drawList.AddRectFilled(ImVec2(min.x + size * 0.67f, min.y), ImVec2(min.x + size, min.y + size), color);
-    } else {
-        drawList.AddRectFilled(ImVec2(min.x, min.y), ImVec2(min.x + size * 0.33f, min.y + size), color);
-        drawList.AddTriangleFilled(
-            ImVec2(min.x + size * 0.33f, center.y),
-            ImVec2(min.x + size, min.y),
-            ImVec2(min.x + size, min.y + size),
-            color
-        );
+int majorTickStep(float pixelsPerTick) {
+    constexpr int steps[] = {20, 40, 100, 200, 400, 600, 1200, 2400, 6000, 12000};
+    for (int step : steps)
+        if (step * pixelsPerTick >= 60.0f) return step;
+    return steps[std::size(steps) - 1];
+}
+
+ImU32 color(editing::model::Color4 const& value, int alpha = 220) {
+    return IM_COL32(
+        static_cast<int>(value.r * 255.0f),
+        static_cast<int>(value.g * 255.0f),
+        static_cast<int>(value.b * 255.0f),
+        alpha
+    );
+}
+
+bool contains(ImVec2 const& minimum, ImVec2 const& maximum, ImVec2 const& point) {
+    return point.x >= minimum.x && point.x <= maximum.x && point.y >= minimum.y && point.y <= maximum.y;
+}
+
+} // namespace
+
+void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScale, float horizontalScroll) {
+    mTrackListWidthRatio = std::clamp(trackListWidthRatio, 0.18f, 0.55f);
+    mZoomScale           = std::clamp(zoomScale, kMinZoomScale, kMaxZoomScale);
+    mScrollX             = std::max(0.0f, horizontalScroll);
+    mPendingSeekTick     = -1;
+    mSeekingTimeline     = false;
+    mSeekingTick         = -1;
+    mDraggingSegmentId.clear();
+}
+
+void TimelinePanel::submitSeek(int tick) {
+    auto const& state = ReplayEditor::getInstance().state();
+    mPendingSeekTick  = std::clamp(tick, 0, std::max(0, state.totalTicks));
+    EditorAction action{EditorActionType::Seek};
+    action.tick = mPendingSeekTick;
+    submitEdit(std::move(action));
+}
+
+void TimelinePanel::submitEdit(EditorAction action) { ReplayEditor::getInstance().submitAction(std::move(action)); }
+
+void TimelinePanel::draw() {
+    auto&       editor  = ReplayEditor::getInstance();
+    auto const& state   = editor.state();
+    auto const  project = state.project;
+    if (!project) {
+        ImGui::TextDisabled("%s", "playback.refactorEditor.common.noActiveProject"_tr().c_str());
+        return;
     }
-}
 
-void drawRateControl(ImDrawList& drawList, ImVec2 center, float size, bool forwards, ImU32 color) {
-    float const x = center.x - size * 0.5f;
-    float const y = center.y - size * 0.5f;
-    for (int half = 0; half < 2; ++half) {
-        float const start = x + size * 0.5f * static_cast<float>(half);
-        if (forwards) {
-            drawList.AddTriangleFilled(
-                ImVec2(start, y),
-                ImVec2(start + size * 0.5f, center.y),
-                ImVec2(start, y + size),
-                color
-            );
+    mTrackTree.setSearch(mTrackSearch);
+    mTrackTree.setCamerasExpanded(mCamerasExpanded);
+    mTrackTree.setMarkerExpanded(mMarkersExpanded);
+    mTrackTree.rebuild(*project);
+    int displayTick = mSeekingTimeline && mSeekingTick >= 0
+                        ? mSeekingTick
+                        : (mPendingSeekTick >= 0 ? mPendingSeekTick : state.currentTick);
+    if (mPendingSeekTick >= 0 && state.currentTick == mPendingSeekTick) mPendingSeekTick = -1;
+
+    ImVec2 const fullMin   = ImGui::GetCursorScreenPos();
+    ImVec2 const available = ImGui::GetContentRegionAvail();
+    if (available.x < 220.0f || available.y < 120.0f) return;
+    ImVec2 const fullMax{fullMin.x + available.x, fullMin.y + available.y};
+    auto*        drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(fullMin, fullMax, IM_COL32(18, 19, 23, 255));
+    float const zoomScaleBeforeToolbar = mZoomScale;
+
+    ImGui::SetCursorScreenPos(fullMin);
+    ImGui::BeginChild("##TimelineToolbar", {available.x, kToolbarHeight}, false, ImGuiWindowFlags_NoScrollbar);
+    ImGui::Text("%s / %s", formatTick(displayTick).c_str(), formatTick(state.totalTicks).c_str());
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!state.canUndo);
+    if (ImGui::Button("playback.refactorEditor.menu.undo"_tr().c_str(), {42, 28}))
+        submitEdit({EditorActionType::UndoEditorEdit});
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!state.canRedo);
+    if (ImGui::Button("playback.refactorEditor.menu.redo"_tr().c_str(), {42, 28}))
+        submitEdit({EditorActionType::RedoEditorEdit});
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    auto const* selectedCamera = editor.selection().getAs<editing::model::SelectedCamera>();
+    ImGui::BeginDisabled(selectedCamera == nullptr);
+    if (ImGui::Button("playback.refactorEditor.timeline.addKey"_tr().c_str(), {64, 28})) {
+        EditorAction action{EditorActionType::AddCameraKeyframe};
+        action.id   = selectedCamera->cameraId;
+        action.tick = state.currentTick;
+        submitEdit(std::move(action));
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("playback.refactorEditor.timeline.addCamera"_tr().c_str(), {74, 28})) {
+        EditorAction action{EditorActionType::AddFreeCamera};
+        action.name = "playback.refactorEditor.defaults.camera"_tr(project->cameras.size() + 1);
+        submitEdit(std::move(action));
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted("playback.refactorEditor.timeline.snap"_tr().c_str());
+    ImGui::SameLine();
+    ImGui::Checkbox("##timeline-snap", &mSnapEnabled);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(mZoomScale <= kMinZoomScale);
+    if (ImGui::Button("-", {28, 28})) mZoomScale = std::max(kMinZoomScale, mZoomScale / kZoomStep);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    float percent = mZoomScale * 100.0f;
+    ImGui::SetNextItemWidth(64.0f);
+    if (ImGui::DragFloat("##timeline-zoom", &percent, 1.0f, 100.0f, 2000.0f, "%.0f%%"))
+        mZoomScale = std::clamp(percent / 100.0f, kMinZoomScale, kMaxZoomScale);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(mZoomScale >= kMaxZoomScale);
+    if (ImGui::Button("+", {28, 28})) mZoomScale = std::min(kMaxZoomScale, mZoomScale * kZoomStep);
+    ImGui::EndDisabled();
+    ImGui::EndChild();
+
+    float const workTop          = fullMin.y + kToolbarHeight;
+    float const workBottom       = fullMax.y - kTransportHeight;
+    float const maxListWidth     = std::max(0.0f, available.x - 180.0f);
+    float const minListWidth     = std::min(160.0f, maxListWidth);
+    float const listWidth        = std::clamp(available.x * mTrackListWidthRatio, minListWidth, maxListWidth);
+    float const canvasLeft       = fullMin.x + listWidth + kSplitterThickness;
+    float const canvasWidth      = fullMax.x - canvasLeft;
+    float const bodyTop          = workTop + kRulerHeight;
+    float const bodyBottom       = workBottom;
+    float const fitPixelsPerTick = canvasWidth / static_cast<float>(std::max(1, state.totalTicks));
+    float const pixelsPerTick    = fitPixelsPerTick * mZoomScale;
+    if (mZoomScale != zoomScaleBeforeToolbar) {
+        float const previousPixelsPerTick = fitPixelsPerTick * zoomScaleBeforeToolbar;
+        mScrollX = std::max(0.0f, mScrollX + displayTick * (pixelsPerTick - previousPixelsPerTick));
+    }
+    float const contentWidth = std::max(canvasWidth, state.totalTicks * pixelsPerTick);
+    float const maxScroll    = std::max(0.0f, contentWidth - canvasWidth);
+    mScrollX                 = std::clamp(mScrollX, 0.0f, maxScroll);
+
+    ImGui::SetCursorScreenPos({fullMin.x + listWidth - kSplitterThickness * 0.5f, workTop});
+    ImGui::InvisibleButton("##timeline-list-splitter", {kSplitterThickness, workBottom - workTop});
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        mTrackListWidthRatio = std::clamp((ImGui::GetMousePos().x - fullMin.x) / available.x, 0.18f, 0.55f);
+    }
+    drawList->AddLine(
+        {fullMin.x + listWidth, workTop},
+        {fullMin.x + listWidth, workBottom},
+        IM_COL32(80, 82, 92, 255),
+        2.0f
+    );
+
+    ImGui::SetCursorScreenPos({fullMin.x, workTop});
+    ImGui::BeginChild("##TimelineTrackList", {listWidth, workBottom - workTop}, false, ImGuiWindowFlags_NoScrollbar);
+    char search[128]{};
+    std::snprintf(search, sizeof(search), "%s", mTrackSearch.c_str());
+    ImGui::SetNextItemWidth(listWidth - 8.0f);
+    if (ImGui::InputTextWithHint(
+            "##timeline-search",
+            "playback.refactorEditor.timeline.searchCameras"_tr().c_str(),
+            search,
+            sizeof(search)
+        ))
+        mTrackSearch = search;
+    for (auto const& row : mTrackTree.rows()) {
+        bool selected = (row.kind == editing::model::TrackRowKind::Sequence
+                         && editor.selection().getAs<editing::model::SelectedSequence>())
+                     || (row.kind == editing::model::TrackRowKind::WorldActor
+                         && editor.selection().getAs<editing::model::SelectedWorldActor>())
+                     || (row.kind == editing::model::TrackRowKind::Camera
+                         && editor.selection().getAs<editing::model::SelectedCamera>()
+                         && editor.selection().getAs<editing::model::SelectedCamera>()->cameraId == row.id.substr(7));
+        if (row.kind == editing::model::TrackRowKind::Camera) {
+            ImGui::PushID(row.id.c_str());
+            if (ImGui::Selectable((std::string("C  ") + row.name).c_str(), selected))
+                editor.selection().select(editing::model::SelectedCamera{row.id.substr(7)});
+            ImGui::PopID();
+        } else if (row.kind == editing::model::TrackRowKind::Sequence) {
+            std::string const label = "S  " + "playback.refactorEditor.details.cameraSequence"_tr();
+            if (ImGui::Selectable(label.c_str(), selected))
+                editor.selection().select(editing::model::SelectedSequence{});
+        } else if (row.kind == editing::model::TrackRowKind::WorldActor) {
+            std::string const label = "W  " + "playback.refactorEditor.details.worldActor"_tr();
+            if (ImGui::Selectable(label.c_str(), selected))
+                editor.selection().select(editing::model::SelectedWorldActor{});
         } else {
-            drawList.AddTriangleFilled(
-                ImVec2(start, center.y),
-                ImVec2(start + size * 0.5f, y),
-                ImVec2(start + size * 0.5f, y + size),
-                color
-            );
+            std::string const label = "M  " + "playback.refactorEditor.timeline.markers"_tr();
+            if (ImGui::Selectable(label.c_str(), false)) editor.selection().clear();
+        }
+        if (row.locked) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.lock"_tr().c_str());
         }
     }
-}
+    ImGui::EndChild();
 
-void drawPlaybackAction(ImDrawList& drawList, ImVec2 center, float size, bool paused, ImU32 color) {
-    float const x = center.x - size * 0.5f;
-    float const y = center.y - size * 0.5f;
-    if (paused) {
-        drawList.AddTriangleFilled(
-            ImVec2(x + size / 12.0f, y),
-            ImVec2(x + size, center.y),
-            ImVec2(x + size / 12.0f, y + size),
-            color
+    drawList->AddRectFilled({canvasLeft, workTop}, {fullMax.x, workBottom}, IM_COL32(24, 25, 30, 255));
+    drawList->PushClipRect({canvasLeft, workTop}, {fullMax.x, workBottom}, true);
+    int const majorStep = majorTickStep(pixelsPerTick);
+    int const minorStep = std::max(1, majorStep / 5);
+    int const firstTick = std::max(0, static_cast<int>(std::floor(mScrollX / pixelsPerTick / minorStep)) * minorStep);
+    for (int tick = firstTick; tick <= state.totalTicks; tick += minorStep) {
+        float x = canvasLeft + tick * pixelsPerTick - mScrollX;
+        if (x < canvasLeft || x > fullMax.x) continue;
+        bool const major = tick % majorStep == 0;
+        drawList->AddLine(
+            {x, workTop + (major ? 14.0f : 21.0f)},
+            {x, workTop + kRulerHeight},
+            major ? IM_COL32(155, 158, 168, 255) : IM_COL32(72, 75, 84, 255)
         );
-    } else {
-        drawList.AddRectFilled(ImVec2(x, y), ImVec2(x + size / 3.0f, y + size), color);
-        drawList.AddRectFilled(ImVec2(x + size * 2.0f / 3.0f, y), ImVec2(x + size, y + size), color);
+        if (major)
+            drawList->AddText({x + 3.0f, workTop + 2.0f}, IM_COL32(190, 193, 202, 255), formatTick(tick).c_str());
     }
-}
 
-void drawCenteredFittedText(
-    ImDrawList& drawList,
-    float       x,
-    float       y,
-    float       availableWidth,
-    ImU32       color,
-    char const* text
-) {
-    float const baseFontSize = ImGui::GetFontSize();
-    float const baseWidth    = ImGui::CalcTextSize(text).x;
-    float const fontSize =
-        baseWidth > availableWidth ? std::max(9.0f, baseFontSize * availableWidth / baseWidth) : baseFontSize;
-    float const width = baseWidth * fontSize / baseFontSize;
-    drawList.AddText(ImGui::GetFont(), fontSize, ImVec2(x + (availableWidth - width) * 0.5f, y), color, text);
-}
-
-void drawTimelinePanel(EditorState const& state, ReplayUILayout const& layout, std::vector<EditorAction>& actions) {
-    using ll::i18n_literals::operator""_tr;
-
-    ImGuiIO& io = ImGui::GetIO();
-    if (io.DisplaySize.x < 320.0f || io.DisplaySize.y < 180.0f) return;
-
-    if (layout.timelineHeight < 1.0f) return;
-
-    float const  scale = layout.scale;
-    ImVec2 const windowPos(0.0f, layout.gameViewportBottom);
-    ImVec2 const windowSize(io.DisplaySize.x, layout.timelineHeight);
-
-    ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(28, 28, 32, 255));
-
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove
-                                     | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
-                                     | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar
-                                     | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBringToFrontOnFocus;
-    bool const visible = ImGui::Begin("##PlaybackReplayTimeline", nullptr, flags);
-    if (visible) {
-        ImDrawList&  drawList = *ImGui::GetWindowDrawList();
-        ImVec2 const origin   = ImGui::GetWindowPos();
-        ImVec2 const size     = ImGui::GetWindowSize();
-
-        ImU32 const textColor         = IM_COL32(240, 240, 248, 255);
-        ImU32 const disabledColor     = IM_COL32(160, 160, 170, 110);
-        ImU32 const separatorColor    = IM_COL32(96, 96, 108, 255);
-        ImU32 const subSecondColor    = IM_COL32(128, 128, 140, 255);
-        ImU32 const timelineBodyColor = IM_COL32(22, 22, 26, 255);
-        ImU32 const progressBgColor   = IM_COL32(42, 42, 48, 255);
-        ImU32 const progressFillColor = IM_COL32(70, 130, 210, 210);
-        ImU32 const playheadColor     = IM_COL32(255, 255, 255, 255);
-        ImU32 const accentLineColor   = IM_COL32(70, 130, 210, 255);
-
-        float const leftWidth     = std::min(240.0f * scale, std::max(160.0f * scale, size.x * 0.42f));
-        float const rulerTop      = origin.y + 4.0f * scale;
-        float const rulerBottom   = origin.y + 40.0f * scale;
-        float const dividerX      = origin.x + leftWidth;
-        float const zoomHeight    = std::min(12.0f * scale, std::max(4.0f, size.y * 0.08f));
-        float const bodyBottom    = origin.y + size.y - zoomHeight;
-        float const trackTop      = rulerBottom + 8.0f * scale;
-        float const trackBottom   = std::min(trackTop + 26.0f * scale, bodyBottom - 8.0f * scale);
-        float const timelineLeft  = dividerX + 6.0f * scale;
-        float const timelineRight = origin.x + size.x - 6.0f * scale;
-        float const timelineWidth = std::max(1.0f, timelineRight - timelineLeft);
-        int const   totalTicks    = std::max(1, state.totalTicks);
-
-        static bool scrubbing{};
-        static int  scrubTick{};
-        static int  committedTick{-1};
-        ImGui::SetCursorScreenPos(ImVec2(timelineLeft, origin.y));
-        ImGui::InvisibleButton("##PlaybackTimelineScrub", ImVec2(timelineWidth, std::max(1.0f, bodyBottom - origin.y)));
-        bool const scrubActive  = ImGui::IsItemActive();
-        bool const scrubHovered = ImGui::IsItemHovered();
-        if (scrubActive) {
-            float const ratio  = std::clamp((io.MousePos.x - timelineLeft) / timelineWidth, 0.0f, 1.0f);
-            scrubTick          = std::clamp(static_cast<int>(std::lround(ratio * totalTicks)), 0, state.totalTicks);
-            auto const tooltip = "playback.editor.timeline.scrub"_tr(utils::formatTimestamp(scrubTick), scrubTick);
-            ImGui::SetTooltip("%s", tooltip.c_str());
-        }
-        if (committedTick >= 0 && state.currentTick == committedTick) committedTick = -1;
-        if (scrubbing && !scrubActive) {
-            committedTick = scrubTick;
-            actions.push_back({EditorActionType::Seek, scrubTick});
-        }
-        scrubbing           = scrubActive;
-        int const shownTick = scrubActive ? scrubTick : (committedTick >= 0 ? committedTick : state.currentTick);
-
-        drawList.AddLine(ImVec2(dividerX, origin.y), ImVec2(dividerX, origin.y + size.y), separatorColor);
-        drawList.AddLine(ImVec2(timelineLeft, rulerBottom), ImVec2(timelineRight, rulerBottom), separatorColor);
-        drawList.AddLine(ImVec2(origin.x, origin.y), ImVec2(origin.x + size.x, origin.y), accentLineColor);
-        drawList.AddRectFilled(ImVec2(dividerX, rulerBottom), ImVec2(origin.x + size.x, bodyBottom), timelineBodyColor);
-
-        float const  controlSize = 24.0f * scale;
-        ImVec2 const controlCenter(origin.x + leftWidth * 0.5f, origin.y + 20.0f * scale);
-        auto         controlButton = [&](char const* id, ImVec2 center, char const* tooltip) {
-            ImGui::SetCursorScreenPos(ImVec2(center.x - controlSize * 0.5f, center.y - controlSize * 0.5f));
-            ImGui::InvisibleButton(id, ImVec2(controlSize, controlSize));
-            bool const hovered = ImGui::IsItemHovered();
-            if (hovered) ImGui::SetTooltip("%s", tooltip);
-            return std::pair{ImGui::IsItemClicked(), hovered};
-        };
-
-        if (leftWidth >= 200.0f * scale) {
-            ImVec2 const      skipBackCenter(origin.x + leftWidth / 6.0f, controlCenter.y);
-            ImVec2 const      slowerCenter(origin.x + leftWidth * 2.0f / 6.0f, controlCenter.y);
-            ImVec2 const      fasterCenter(origin.x + leftWidth * 4.0f / 6.0f, controlCenter.y);
-            ImVec2 const      skipForwardCenter(origin.x + leftWidth * 5.0f / 6.0f, controlCenter.y);
-            std::string const slowerTooltip               = "playback.editor.timeline.slowDown"_tr(state.playbackSpeed);
-            std::string const fasterTooltip               = "playback.editor.timeline.speedUp"_tr(state.playbackSpeed);
-            auto const [skipBackClicked, skipBackHovered] = controlButton(
-                "##PlaybackSkipBack",
-                skipBackCenter,
-                "playback.editor.timeline.jumpToStart"_tr().c_str()
-            );
-            auto const [slowerClicked, slowerHovered] =
-                controlButton("##PlaybackSlower", slowerCenter, slowerTooltip.c_str());
-            auto const [pauseClicked, pauseHovered] = controlButton(
-                "##PlaybackPause",
-                controlCenter,
-                (state.paused ? "playback.editor.timeline.play"_tr() : "playback.editor.timeline.pause"_tr()).c_str()
-            );
-            auto const [fasterClicked, fasterHovered] =
-                controlButton("##PlaybackFaster", fasterCenter, fasterTooltip.c_str());
-            auto const [skipForwardClicked, skipForwardHovered] = controlButton(
-                "##PlaybackSkipForward",
-                skipForwardCenter,
-                "playback.editor.timeline.jumpToEnd"_tr().c_str()
-            );
-
-            if (skipBackClicked) actions.push_back({EditorActionType::SkipToStart});
-            if (slowerClicked) actions.push_back({EditorActionType::DecreaseSpeed});
-            if (pauseClicked) actions.push_back({EditorActionType::TogglePause});
-            if (fasterClicked) actions.push_back({EditorActionType::IncreaseSpeed});
-            if (skipForwardClicked) actions.push_back({EditorActionType::SkipToEnd});
-
-            ImU32 const slowerColor = state.playbackSpeed < 1.0f ? IM_COL32(255, 128, 128, 255) : textColor;
-            ImU32 const fasterColor = state.playbackSpeed > 1.0f ? IM_COL32(128, 255, 128, 255) : textColor;
-            drawSkipControl(
-                drawList,
-                skipBackCenter,
-                controlSize,
-                false,
-                skipBackHovered ? IM_COL32(255, 255, 255, 255) : textColor
-            );
-            drawRateControl(
-                drawList,
-                slowerCenter,
-                controlSize,
-                false,
-                slowerHovered ? IM_COL32(255, 255, 255, 255) : slowerColor
-            );
-            drawPlaybackAction(
-                drawList,
-                controlCenter,
-                controlSize,
-                state.paused,
-                pauseHovered ? IM_COL32(255, 255, 255, 255) : textColor
-            );
-            drawRateControl(
-                drawList,
-                fasterCenter,
-                controlSize,
-                true,
-                fasterHovered ? IM_COL32(255, 255, 255, 255) : fasterColor
-            );
-            drawSkipControl(
-                drawList,
-                skipForwardCenter,
-                controlSize,
-                true,
-                skipForwardHovered ? IM_COL32(255, 255, 255, 255) : textColor
-            );
-        } else {
-            auto const [pauseClicked, pauseHovered] = controlButton(
-                "##PlaybackPause",
-                controlCenter,
-                (state.paused ? "playback.editor.timeline.play"_tr() : "playback.editor.timeline.pause"_tr()).c_str()
-            );
-            if (pauseClicked) actions.push_back({EditorActionType::TogglePause});
-            drawPlaybackAction(
-                drawList,
-                controlCenter,
-                controlSize,
-                state.paused,
-                pauseHovered ? IM_COL32(255, 255, 255, 255) : textColor
-            );
-        }
-
-        std::string const timeText =
-            utils::formatTimestamp(shownTick) + " / " + utils::formatTimestamp(state.totalTicks);
-        std::string const tickText =
-            "playback.editor.timeline.ticks"_tr(std::max(0, shownTick), std::max(0, state.totalTicks));
-        drawCenteredFittedText(
-            drawList,
-            origin.x + 8.0f * scale,
-            rulerBottom + 12.0f * scale,
-            leftWidth - 16.0f * scale,
-            textColor,
-            timeText.c_str()
+    auto tickFromMouse = [&] {
+        return std::clamp(
+            static_cast<int>((ImGui::GetMousePos().x - canvasLeft + mScrollX) / pixelsPerTick),
+            0,
+            state.totalTicks
         );
-        drawCenteredFittedText(
-            drawList,
-            origin.x + 8.0f * scale,
-            rulerBottom + 16.0f * scale + ImGui::GetFontSize(),
-            leftWidth - 16.0f * scale,
-            disabledColor,
-            tickText.c_str()
-        );
+    };
+    float const seekAreaHeight = workBottom - workTop - (maxScroll > 0.0f ? 18.0f : 0.0f);
+    ImGui::SetCursorScreenPos({canvasLeft, workTop});
+    ImGui::InvisibleButton("##timeline-seek-area", {canvasWidth, seekAreaHeight});
+    bool const seekAreaActive      = ImGui::IsItemActive();
+    bool const seekAreaDeactivated = ImGui::IsItemDeactivated();
+    if (ImGui::IsItemActivated()) {
+        mSeekingTimeline = true;
+        mSeekingTick     = tickFromMouse();
+    }
+    if (mSeekingTimeline && seekAreaActive && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        mSeekingTick = tickFromMouse();
+        displayTick  = mSeekingTick;
+    }
 
-        auto const timelineScale = chooseTimelineScale(totalTicks, timelineWidth);
-
-        drawList.PushClipRect(ImVec2(dividerX, origin.y), ImVec2(origin.x + size.x, origin.y + size.y), true);
-        for (int tick = 0; tick <= totalTicks;) {
-            float const ratio = static_cast<float>(tick) / static_cast<float>(totalTicks);
-            float const x     = timelineLeft + timelineWidth * ratio;
-            bool const  major = (tick / timelineScale.ticksPerMinor) % timelineScale.minorsPerMajor == 0;
-            float const top   = rulerTop + (major ? 0.0f : 10.0f * layout.scale);
-            drawList.AddLine(ImVec2(x, top), ImVec2(x, rulerBottom), major ? textColor : separatorColor);
-
-            if (major) {
-                std::string const timestamp      = utils::formatTimestamp(tick);
-                float const       timestampWidth = ImGui::CalcTextSize(timestamp.c_str()).x;
-                float const       timestampX =
-                    std::clamp(x - timestampWidth * 0.5f, timelineLeft, timelineRight - timestampWidth);
-                drawList.AddText(ImVec2(timestampX, rulerTop - 2.0f), textColor, timestamp.c_str());
-                if (timelineScale.showSubSeconds) {
-                    std::string const subSecond = "/" + std::to_string(tick % 20);
-                    drawList.AddText(
-                        ImVec2(std::min(timelineRight, timestampX + timestampWidth), rulerTop - 2.0f),
-                        subSecondColor,
-                        subSecond.c_str()
-                    );
+    auto segmentLabel = [&project](editing::model::SequenceSegment const& segment) -> std::string {
+        if (segment.cameraId.empty())
+            return project->cameras.empty() ? "playback.refactorEditor.timeline.noCamera"_tr()
+                                            : "playback.refactorEditor.timeline.autoFirstCamera"_tr();
+        auto it = std::find_if(project->cameras.begin(), project->cameras.end(), [&segment](auto const& camera) {
+            return camera.id == segment.cameraId;
+        });
+        return it == project->cameras.end() ? "playback.refactorEditor.timeline.missingCamera"_tr() : it->name;
+    };
+    bool  timelineObjectClicked = false;
+    float y                     = bodyTop + 2.0f;
+    for (auto const& row : mTrackTree.rows()) {
+        float const rowBottom = y + row.height;
+        drawList->AddRectFilled({canvasLeft, y}, {fullMax.x, rowBottom}, IM_COL32(31, 32, 38, 255));
+        if (row.kind == editing::model::TrackRowKind::Sequence) {
+            for (auto const& segment : project->sequence) {
+                ImVec2 minimum{canvasLeft + segment.startTick * pixelsPerTick - mScrollX, y + 4.0f};
+                ImVec2 maximum{canvasLeft + segment.endTick * pixelsPerTick - mScrollX, rowBottom - 4.0f};
+                bool   selected =
+                    editor.selection().getAs<editing::model::SelectedSequenceSegment>()
+                    && editor.selection().getAs<editing::model::SelectedSequenceSegment>()->segmentId == segment.id;
+                drawList->AddRectFilled(minimum, maximum, color(segment.color), 3.0f);
+                drawList->AddRect(
+                    minimum,
+                    maximum,
+                    selected ? IM_COL32(240, 192, 32, 255) : IM_COL32(100, 160, 225, 255),
+                    3.0f
+                );
+                std::string const label = segmentLabel(segment);
+                drawList->AddText({minimum.x + 5.0f, minimum.y + 6.0f}, IM_COL32(245, 245, 247, 255), label.c_str());
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && contains(minimum, maximum, ImGui::GetMousePos())) {
+                    timelineObjectClicked = true;
+                    editor.selection().select(editing::model::SelectedSequenceSegment{segment.id});
+                    if (!segment.locked
+                        && (std::abs(ImGui::GetMousePos().x - minimum.x) < 8.0f
+                            || std::abs(ImGui::GetMousePos().x - maximum.x) < 8.0f)) {
+                        mDraggingSegmentId  = segment.id;
+                        mDraggingWorldActor = false;
+                        mDraggingStart =
+                            std::abs(ImGui::GetMousePos().x - minimum.x) < std::abs(ImGui::GetMousePos().x - maximum.x);
+                        mDragStartTick = segment.startTick;
+                        mDragEndTick   = segment.endTick;
+                    }
                 }
             }
-
-            if (totalTicks - tick < timelineScale.ticksPerMinor) break;
-            tick += timelineScale.ticksPerMinor;
-        }
-
-        float const progress =
-            state.totalTicks > 0
-                ? std::clamp(static_cast<float>(shownTick) / static_cast<float>(state.totalTicks), 0.0f, 1.0f)
-                : 0.0f;
-        if (trackBottom > trackTop) {
-            float const rounding = 2.0f * scale;
-            drawList.AddRectFilled(
-                ImVec2(timelineLeft, trackTop),
-                ImVec2(timelineRight, trackBottom),
-                scrubHovered ? IM_COL32(48, 48, 56, 255) : progressBgColor,
-                rounding
-            );
-            if (progress > 0.0f) {
-                float const fillRight = timelineLeft + timelineWidth * progress;
-                drawList.AddRectFilled(
-                    ImVec2(timelineLeft, trackTop),
-                    ImVec2(fillRight, trackBottom),
-                    progressFillColor,
-                    rounding
+        } else if (row.kind == editing::model::TrackRowKind::WorldActor) {
+            for (auto const& segment : project->worldActor.segments) {
+                ImVec2 minimum{canvasLeft + segment.startTick * pixelsPerTick - mScrollX, y + 4.0f};
+                ImVec2 maximum{canvasLeft + segment.endTick * pixelsPerTick - mScrollX, rowBottom - 4.0f};
+                bool   selected =
+                    editor.selection().getAs<editing::model::SelectedWorldActorSegment>()
+                    && editor.selection().getAs<editing::model::SelectedWorldActorSegment>()->segmentId == segment.id;
+                drawList->AddRectFilled(minimum, maximum, color(segment.color), 3.0f);
+                drawList->AddRect(
+                    minimum,
+                    maximum,
+                    selected ? IM_COL32(240, 192, 32, 255) : IM_COL32(225, 135, 70, 255),
+                    3.0f
                 );
-                drawList.AddRectFilled(
-                    ImVec2(fillRight - layout.scale, trackTop),
-                    ImVec2(fillRight + layout.scale, trackBottom),
-                    IM_COL32(150, 200, 255, 230)
-                );
+                char label[32]{};
+                std::snprintf(label, sizeof(label), "%.2fx", segment.speed);
+                drawList->AddText({minimum.x + 5.0f, minimum.y + 6.0f}, IM_COL32(245, 245, 247, 255), label);
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && contains(minimum, maximum, ImGui::GetMousePos())) {
+                    timelineObjectClicked = true;
+                    editor.selection().select(editing::model::SelectedWorldActorSegment{segment.id});
+                    if (!segment.locked
+                        && (std::abs(ImGui::GetMousePos().x - minimum.x) < 8.0f
+                            || std::abs(ImGui::GetMousePos().x - maximum.x) < 8.0f)) {
+                        mDraggingSegmentId  = segment.id;
+                        mDraggingWorldActor = true;
+                        mDraggingStart =
+                            std::abs(ImGui::GetMousePos().x - minimum.x) < std::abs(ImGui::GetMousePos().x - maximum.x);
+                        mDragStartTick = segment.startTick;
+                        mDragEndTick   = segment.endTick;
+                    }
+                }
             }
-            drawList
-                .AddRect(ImVec2(timelineLeft, trackTop), ImVec2(timelineRight, trackBottom), separatorColor, rounding);
+        } else if (row.kind == editing::model::TrackRowKind::Camera && row.cameraIndex >= 0
+                   && row.cameraIndex < static_cast<int>(project->cameras.size())) {
+            auto const& camera = project->cameras[row.cameraIndex];
+            for (auto const& key : camera.keys) {
+                float x = canvasLeft + key.tick * pixelsPerTick - mScrollX;
+                drawList->AddCircleFilled({x, (y + rowBottom) * 0.5f}, 5.0f, IM_COL32(128, 192, 240, 255));
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && std::abs(ImGui::GetMousePos().x - x) <= 7.0f
+                    && ImGui::GetMousePos().y >= y && ImGui::GetMousePos().y <= rowBottom) {
+                    timelineObjectClicked = true;
+                    editor.selection().select(editing::model::SelectedKeyframe{camera.id, key.id});
+                }
+            }
+        } else if (row.kind == editing::model::TrackRowKind::Marker) {
+            for (auto const& marker : project->markers) {
+                float x = canvasLeft + marker.tick * pixelsPerTick - mScrollX;
+                drawList->AddLine({x, y}, {x, rowBottom}, IM_COL32(240, 192, 32, 255));
+                drawList->AddText({x + 4.0f, y + 2.0f}, IM_COL32(240, 210, 100, 255), marker.label.c_str());
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && std::abs(ImGui::GetMousePos().x - x) <= 6.0f
+                    && ImGui::GetMousePos().y >= y && ImGui::GetMousePos().y <= rowBottom) {
+                    timelineObjectClicked = true;
+                    editor.selection().select(editing::model::SelectedMarker{marker.id});
+                }
+            }
         }
-
-        float const playheadX = timelineLeft + timelineWidth * progress;
-        drawList.AddTriangleFilled(
-            ImVec2(playheadX, rulerBottom),
-            ImVec2(playheadX - 8.0f * layout.scale, rulerTop + 8.0f * layout.scale),
-            ImVec2(playheadX + 8.0f * layout.scale, rulerTop + 8.0f * layout.scale),
-            playheadColor
-        );
-        drawList.AddRectFilled(
-            ImVec2(playheadX - 1.5f * layout.scale, rulerBottom),
-            ImVec2(playheadX + 1.5f * layout.scale, bodyBottom),
-            playheadColor
-        );
-
-        float const zoomTop = bodyBottom;
-        drawList.AddRectFilled(
-            ImVec2(dividerX, zoomTop),
-            ImVec2(origin.x + size.x, origin.y + size.y),
-            IM_COL32(48, 48, 54, 255)
-        );
-        drawList.AddRectFilled(
-            ImVec2(timelineLeft, zoomTop + zoomHeight * 0.25f),
-            ImVec2(timelineRight, origin.y + size.y - zoomHeight * 0.25f),
-            IM_COL32(210, 210, 216, 255),
-            zoomHeight * 0.5f
-        );
-        drawList.PopClipRect();
+        y = rowBottom + 2.0f;
     }
-    ImGui::End();
 
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(3);
+    if (timelineObjectClicked) {
+        mSeekingTimeline = false;
+        mSeekingTick     = -1;
+    }
+
+    if (!mDraggingSegmentId.empty()) {
+        int tick = tickFromMouse();
+        if (mSnapEnabled) tick = std::clamp(static_cast<int>(std::round(tick / 20.0f)) * 20, 0, state.totalTicks);
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            float x = canvasLeft + tick * pixelsPerTick - mScrollX;
+            drawList->AddLine({x, bodyTop}, {x, bodyBottom}, IM_COL32(240, 192, 32, 180), 2.0f);
+        } else {
+            EditorAction action{
+                mDraggingWorldActor ? EditorActionType::TrimWorldActor : EditorActionType::TrimSequence
+            };
+            action.id   = mDraggingSegmentId;
+            action.tick = mDraggingStart ? tick : mDragStartTick;
+            action.kind = mDraggingStart ? mDragEndTick : tick;
+            submitEdit(std::move(action));
+            mDraggingSegmentId.clear();
+        }
+    }
+
+    if (mSeekingTimeline && seekAreaDeactivated) {
+        submitSeek(mSeekingTick >= 0 ? mSeekingTick : tickFromMouse());
+        mSeekingTimeline = false;
+        mSeekingTick     = -1;
+        displayTick      = mPendingSeekTick;
+    }
+
+    float const playheadX = std::clamp(canvasLeft + displayTick * pixelsPerTick - mScrollX, canvasLeft, fullMax.x);
+    drawList->AddLine({playheadX, workTop}, {playheadX, bodyBottom}, IM_COL32(240, 192, 32, 255), 2.0f);
+    drawList->PopClipRect();
+    if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0.0f) {
+        float const wheel = ImGui::GetIO().MouseWheel;
+        if (ImGui::GetIO().KeyShift) {
+            float const anchorX    = std::clamp(ImGui::GetMousePos().x - canvasLeft, 0.0f, canvasWidth);
+            float const anchorTick = (anchorX + mScrollX) / pixelsPerTick;
+            float const nextZoom =
+                std::clamp(mZoomScale * (wheel > 0.0f ? kZoomStep : 1.0f / kZoomStep), kMinZoomScale, kMaxZoomScale);
+            float const nextPixelsPerTick = fitPixelsPerTick * nextZoom;
+            float const nextMaxScroll     = std::max(0.0f, state.totalTicks * nextPixelsPerTick - canvasWidth);
+            mScrollX                      = std::clamp(anchorTick * nextPixelsPerTick - anchorX, 0.0f, nextMaxScroll);
+            mZoomScale                    = nextZoom;
+        } else {
+            mScrollX = std::clamp(mScrollX - wheel * 60.0f, 0.0f, maxScroll);
+        }
+    }
+
+    ImGui::SetCursorScreenPos({canvasLeft, workBottom - 18.0f});
+    if (maxScroll > 0.0f) {
+        ImGui::SetNextItemWidth(canvasWidth);
+        ImGui::SliderFloat("##timeline-scroll", &mScrollX, 0.0f, maxScroll, "", ImGuiSliderFlags_NoInput);
+    }
+    ImGui::SetCursorScreenPos({fullMin.x, workBottom});
+    ImGui::BeginChild("##TimelineTransport", {available.x, kTransportHeight}, false, ImGuiWindowFlags_NoScrollbar);
+    if (ImGui::Button("|<", {32, 28})) submitEdit({EditorActionType::SkipToStart});
+    ImGui::SameLine();
+    if (ImGui::Button("<<", {32, 28})) {
+        EditorAction action{EditorActionType::Seek};
+        action.tick = std::max(0, state.currentTick - 20);
+        submitEdit(std::move(action));
+    }
+    ImGui::SameLine();
+    std::string const playPause =
+        state.paused ? "playback.refactorEditor.timeline.play"_tr() : "playback.refactorEditor.timeline.pause"_tr();
+    if (ImGui::Button(playPause.c_str(), {52, 28})) submitEdit({EditorActionType::TogglePause});
+    ImGui::SameLine();
+    if (ImGui::Button(">>", {32, 28})) {
+        EditorAction action{EditorActionType::Seek};
+        action.tick = std::min(state.totalTicks, state.currentTick + 20);
+        submitEdit(std::move(action));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(">|", {32, 28})) submitEdit({EditorActionType::SkipToEnd});
+    ImGui::SameLine();
+    ImGui::BeginDisabled();
+    ImGui::Button("playback.refactorEditor.timeline.loop"_tr().c_str(), {48, 28});
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("%.2fx", state.playbackSpeed);
+    ImGui::EndChild();
 }
 
 } // namespace playback::editor::ui

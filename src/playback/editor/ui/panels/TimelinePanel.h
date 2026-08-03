@@ -1,39 +1,41 @@
 #pragma once
 
 #include "playback/editor/context/EditorAction.h"
-#include "playback/editor/context/EditorState.h"
+#include "playback/editor/editing/models/TrackTreeModel.h"
 
-#include "imgui.h"
-
-#include <vector>
+#include <string>
 
 namespace playback::editor::ui {
 
-struct ReplayUILayout;
+class TimelinePanel {
+public:
+    void draw();
 
-void drawTimelinePanel(EditorState const& state, ReplayUILayout const& layout, std::vector<EditorAction>& actions);
+    [[nodiscard]] float trackListWidthRatio() const { return mTrackListWidthRatio; }
+    [[nodiscard]] float zoomScale() const { return mZoomScale; }
+    [[nodiscard]] float horizontalScroll() const { return mScrollX; }
+    void                setViewPreferences(float trackListWidthRatio, float zoomScale, float horizontalScroll);
 
-void drawSkipControl(ImDrawList& drawList, struct ImVec2 center, float size, bool forwards, unsigned int color);
+private:
+    void submitSeek(int tick);
+    void submitEdit(playback::editor::EditorAction action);
 
-void drawRateControl(ImDrawList& drawList, struct ImVec2 center, float size, bool forwards, unsigned int color);
-
-void drawPlaybackAction(ImDrawList& drawList, struct ImVec2 center, float size, bool paused, unsigned int color);
-
-void drawCenteredFittedText(
-    ImDrawList&  drawList,
-    float        x,
-    float        y,
-    float        availableWidth,
-    unsigned int color,
-    char const*  text
-);
-
-struct TimelineScale {
-    int  ticksPerMinor{};
-    int  minorsPerMajor{};
-    bool showSubSeconds{};
+    editing::model::TrackTreeModel mTrackTree;
+    float                          mZoomScale{1.0f};
+    float                          mScrollX{};
+    float                          mTrackListWidthRatio{0.30f};
+    int                            mPendingSeekTick{-1};
+    std::string                    mTrackSearch;
+    bool                           mSnapEnabled{true};
+    bool                           mCamerasExpanded{true};
+    bool                           mMarkersExpanded{true};
+    bool                           mSeekingTimeline{};
+    int                            mSeekingTick{-1};
+    std::string                    mDraggingSegmentId;
+    bool                           mDraggingWorldActor{};
+    bool                           mDraggingStart{};
+    int                            mDragStartTick{};
+    int                            mDragEndTick{};
 };
-
-TimelineScale chooseTimelineScale(int totalTicks, float timelineWidth);
 
 } // namespace playback::editor::ui

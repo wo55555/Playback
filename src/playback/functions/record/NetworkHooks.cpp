@@ -26,6 +26,7 @@
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/world/level/Level.h"
 
 #include <variant>
 
@@ -82,7 +83,7 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto const& network = this->mNetwork.get();
     if (std::holds_alternative<ClientOrServerNetworkSystemRef::ClientRefT>(network)) {
-        Recorder::getInstance().recordGamePacket(packet);
+        Recorder::getInstance().recordNetworkGamePacket(packet);
     }
     origin(source, packet, size);
 }
@@ -102,7 +103,7 @@ LL_TYPE_INSTANCE_HOOK(
         auto  client      = ll::service::getClientInstance();
         auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
         if (localPlayer && target == localPlayer->getNetworkIdentifier()) {
-            Recorder::getInstance().recordGamePacket(packet);
+            Recorder::getInstance().recordNetworkGamePacket(packet);
         }
     }
     origin(target, packet, size);
@@ -119,7 +120,7 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto const runtimeId = *packet.mRuntimeId;
     origin(source, packet);
-    Recorder::getInstance().recordSpawnedActor(runtimeId);
+    Recorder::getInstance().recordSpawnedActor(runtimeId, packet);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -133,7 +134,7 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto const runtimeId = *packet.mRuntimeId;
     origin(source, packet);
-    Recorder::getInstance().recordSpawnedActor(runtimeId);
+    Recorder::getInstance().recordSpawnedActor(runtimeId, packet);
 }
 
 #define PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(HookName, HandlerType, PacketType)                                   \
@@ -200,10 +201,11 @@ LL_TYPE_INSTANCE_HOOK(
             return;
         }
         if (!replaySession.isInjectingPacket(packet.get())) {
-            auto const& pos = *packet->mPos;
-            if (replaySession.shouldSuppressNativeChunk(pos)) return;
-
-            getLogger().debug("Passing native replay-world LevelChunk for unrecorded column ({}, {})", pos.x, pos.z);
+            auto const& pos             = *packet->mPos;
+            auto const  packetDimension = static_cast<DimensionType const&>(packet->mDimensionId);
+            if (replaySession.shouldSuppressNativeChunk(pos, packetDimension)) {
+                return;
+            }
         }
 
         origin(source, packet);
@@ -230,30 +232,33 @@ LL_TYPE_INSTANCE_HOOK(
             return;
         }
 
-        auto        filteredPacket = packet;
-        auto const& center         = *packet.mCenterPos;
-        auto&       entries        = *filteredPacket.mSubChunkData;
-        entries.clear();
-        entries.reserve(packet.mSubChunkData->size());
+        auto        filteredPacket    = packet;
+        auto        suppressedPacket  = packet;
+        auto const& center            = *packet.mCenterPos;
+        auto const  packetDimension   = static_cast<DimensionType const&>(packet.mDimensionType);
+        auto&       filteredEntries   = *filteredPacket.mSubChunkData;
+        auto&       suppressedEntries = *suppressedPacket.mSubChunkData;
+        filteredEntries.clear();
+        filteredEntries.reserve(packet.mSubChunkData->size());
+        suppressedEntries.clear();
+        suppressedEntries.reserve(packet.mSubChunkData->size());
         for (auto const& entry : *packet.mSubChunkData) {
             auto const& offset = *entry.mSubChunkPosOffset;
-            if (!replaySession.shouldSuppressNativeChunk(
-                    ChunkPos{center.x + static_cast<int>(offset.mX), center.z + static_cast<int>(offset.mZ)}
+            if (replaySession.shouldSuppressNativeChunk(
+                    ChunkPos{center.x + static_cast<int>(offset.mX), center.z + static_cast<int>(offset.mZ)},
+                    packetDimension
                 )) {
-                entries.emplace_back(entry);
+                suppressedEntries.emplace_back(entry);
+            } else {
+                filteredEntries.emplace_back(entry);
             }
         }
-        if (entries.empty()) return;
 
-        auto const removed = packet.mSubChunkData->size() - entries.size();
-        if (removed != 0) {
-            getLogger().debug(
-                "Filtered {} recorded entries from a native replay-world SubChunk packet; passing {} unrecorded "
-                "entries",
-                removed,
-                entries.size()
-            );
+        if (!suppressedEntries.empty()) {
+            auto level = ll::service::getMultiPlayerLevel();
+            if (level) level->notifySubChunkRequestManager(suppressedPacket);
         }
+        if (filteredEntries.empty()) return;
 
         origin(source, filteredPacket);
         return;
@@ -304,19 +309,6 @@ void removeNetworkHook(bool& installed) {
 
 bool hookNetwork(bool enable) {
     auto& state = networkHookState();
-    getLogger().debug(
-        "Network hook request (enable={}, LevelChunk={}, SubChunk={}, SetTime={}, completion={}, packetObserver={}, "
-        "packetSender={}, spawnHandlers={}, fastPathHandlers={})",
-        enable,
-        state.levelChunk,
-        state.subChunk,
-        state.setTime,
-        state.completion,
-        state.packetObserver,
-        state.packetSender,
-        state.addActor && state.addItemActor,
-        state.fastPathHandlersInstalled()
-    );
 
     auto allInstalled = [&] {
         return state.levelChunk && state.subChunk && state.setTime && state.completion && state.packetObserver
@@ -387,7 +379,6 @@ bool hookNetwork(bool enable) {
             );
             return false;
         }
-        getLogger().debug("Replay network hooks installed");
         return true;
     }
 
@@ -420,7 +411,6 @@ bool hookNetwork(bool enable) {
         );
         return false;
     }
-    getLogger().debug("Replay network hooks removed");
     return true;
 }
 

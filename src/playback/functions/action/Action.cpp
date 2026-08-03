@@ -8,6 +8,16 @@ namespace playback::functions {
 // ActionNextTick
 void ActionNextTick::handle(functions::ReplaySession& session, PlaybackBuffer&) { session.handleNextTick(); }
 
+// ActionSnapshotContext
+void ActionSnapshotContext::handle(functions::ReplaySession& session, PlaybackBuffer& data) {
+    session.handleSnapshotContext(readSnapshotContext(data));
+}
+
+// ActionCreateLocalPlayer
+void ActionCreateLocalPlayer::handle(functions::ReplaySession& session, PlaybackBuffer& data) {
+    session.handleCreateLocalPlayer(data);
+}
+
 // ActionLevelChunkCached
 void ActionLevelChunkCached::handle(functions::ReplaySession& session, PlaybackBuffer& data) {
     session.handleLevelChunkCached(data.getVarInt().value());

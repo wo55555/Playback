@@ -7,6 +7,10 @@
 #include "playback/Playback.h"
 #include "playback/editor/context/EditorContext.h"
 #include "playback/editor/controller/EditorController.h"
+#include "playback/editor/ui/ReplayEditor.h"
+#include "playback/functions/record/Recorder.h"
+
+#include <utility>
 
 namespace playback::editor {
 
@@ -19,13 +23,21 @@ bool hookReplayUIRendererInit(bool enable) { return renderer::hookRendererInit(e
 
 bool hookReplayUI(bool enable) {
     if (enable) {
+        gController.reset();
         gContext.reset();
         renderer::gImGuiRenderer.setContext(&gContext);
+        functions::Recorder::getInstance().setThumbnailCaptureProvider(&renderer::gImGuiRenderer);
         renderer::setReplayUIActive(true);
 
+        ui::ReplayEditor::getInstance().initialize();
+
+        // Install early because the renderer-init callback is not guaranteed during enable().
         if (!hookReplayUIRendererInit(true)) {
             renderer::setReplayUIActive(false);
+            functions::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
             renderer::gImGuiRenderer.setContext(nullptr);
+            ui::ReplayEditor::getInstance().shutdown();
+            gContext.reset();
             Playback::getInstance().getSelf().getLogger().error(
                 "Unable to install the early D3D12 renderer hook; the replay timeline may be unavailable"
             );
@@ -45,6 +57,8 @@ bool hookReplayUI(bool enable) {
     }
 
     renderer::setReplayUIActive(false);
+    renderer::setReplayMouseInputActive(false);
+    functions::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
 
     bool ok = true;
     if (!hookReplayUIRendererInit(false)) {
@@ -60,13 +74,17 @@ bool hookReplayUI(bool enable) {
         ok = false;
     }
 
-    if (ok) {
-        renderer::gImGuiRenderer.setContext(nullptr);
-        gContext.reset();
-    }
+    if (!ok) return false;
+
+    ui::ReplayEditor::getInstance().shutdown();
+    renderer::gImGuiRenderer.setContext(nullptr);
+    gController.reset();
+    gContext.reset();
     return ok;
 }
 
 void tickReplayUI(bool hudVisible) { gController.tick(hudVisible); }
+
+void submitEditorAction(EditorAction action) { gContext.submit(std::move(action)); }
 
 } // namespace playback::editor

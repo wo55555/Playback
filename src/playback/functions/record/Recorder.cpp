@@ -12,6 +12,7 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
+#include "mc/deps/shared_types/legacy/LevelEvent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
@@ -23,8 +24,10 @@
 #include "mc/network/packet/AddItemActorPacket.h"
 #include "mc/network/packet/AddPlayerPacket.h"
 #include "mc/network/packet/AnimatePacket.h"
+#include "mc/network/packet/ChangeDimensionPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
+#include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/LevelSoundEventPacket.h"
 #include "mc/network/packet/MobArmorEquipmentPacket.h"
 #include "mc/network/packet/MobEffectPacket.h"
@@ -33,9 +36,13 @@
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/PlayerListPacketType.h"
 #include "mc/network/packet/RemoveActorPacket.h"
+#include "mc/network/packet/ScorePacketInfo.h"
 #include "mc/network/packet/SetActorDataPacket.h"
 #include "mc/network/packet/SetActorLinkPacket.h"
 #include "mc/network/packet/SetActorMotionPacket.h"
+#include "mc/network/packet/SetDisplayObjectivePacket.h"
+#include "mc/network/packet/SetScorePacket.h"
+#include "mc/network/packet/SetSpawnPositionPacket.h"
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/TakeItemActorPacket.h"
@@ -47,6 +54,7 @@
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/state/PropertyComponent.h"
+#include "mc/world/effect/MobEffectInstance.h"
 #include "mc/world/item/SaveContextFactory.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/block/BedrockBlockNames.h"
@@ -56,6 +64,10 @@
 #include "mc/world/level/chunk/SubChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/storage/LevelData.h"
+#include "mc/world/scores/DisplayObjective.h"
+#include "mc/world/scores/Objective.h"
+#include "mc/world/scores/ObjectiveCriteria.h"
+#include "mc/world/scores/Scoreboard.h"
 
 #include "nlohmann/json.hpp"
 #include "nlohmann/json_fwd.hpp"
@@ -67,8 +79,10 @@
 #include <cmath>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <random>
@@ -77,6 +91,7 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -87,7 +102,24 @@ namespace {
 constexpr ActorUniqueID  RecordedPlayerUniqueId{std::numeric_limits<int64_t>::max() - 1024};
 constexpr ActorRuntimeID RecordedPlayerRuntimeId{uint64_t{1} << 62};
 
+struct NetworkPacketFilter {
+    [[nodiscard]] static constexpr bool shouldFilter(MinecraftPacketIds packetId) {
+        switch (packetId) {
+        case MinecraftPacketIds::AddActor:
+        case MinecraftPacketIds::AddItemActor:
+            return true;
+        default:
+            return false;
+        }
+    }
+};
+
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
+
+bool isSuccessfulSubChunkResult(SubChunkPacket::SubChunkRequestResult result) {
+    return result == SubChunkPacket::SubChunkRequestResult::Success
+        || result == SubChunkPacket::SubChunkRequestResult::SuccessAllAir;
+}
 
 bool remapRuntimeId(ActorRuntimeID& id, ActorRuntimeID source, ActorRuntimeID target) {
     if (id.rawID != source.rawID) return false;
@@ -292,67 +324,46 @@ snapshotFailure(ChunkPos const& pos, std::optional<int> subChunkY, std::string_v
     return stream.str();
 }
 
+nlohmann::ordered_json chunkMetaToJson(PlaybackChunkMeta const& meta) {
+    return {
+        {"duration",          meta.duration         },
+        {"forcePlaySnapshot", meta.forcePlaySnapshot}
+    };
+}
+
 nlohmann::ordered_json metaToJson(PlaybackMeta const& meta) {
     auto chunks = nlohmann::ordered_json::object();
     for (auto const& [chunkName, chunkMeta] : meta.chunks) {
-        chunks[chunkName] = metaToJson(chunkMeta);
+        chunks[chunkName] = chunkMetaToJson(chunkMeta);
     }
 
     nlohmann::ordered_json json{
         {"name",       meta.name        },
         {"worldName",  meta.worldName   },
-        {"duration",   meta.duration    },
         {"totalTicks", meta.totalTicks  },
         {"chunks",     std::move(chunks)}
     };
 
-    if (meta.initialView) {
-        auto const& view    = *meta.initialView;
-        json["initialView"] = {
-            {"x",     view.x    },
-            {"y",     view.y    },
-            {"z",     view.z    },
-            {"yaw",   view.yaw  },
-            {"pitch", view.pitch}
-        };
-    }
-
     return json;
+}
+
+PlaybackChunkMeta chunkMetaFromJson(nlohmann::ordered_json const& json) {
+    return PlaybackChunkMeta{json.at("duration").get<int>(), json.at("forcePlaySnapshot").get<bool>()};
 }
 
 PlaybackMeta metaFromJson(nlohmann::ordered_json const& json) {
     PlaybackMeta meta;
-    meta.name       = json.value("name", meta.name);
-    meta.worldName  = json.value("worldName", meta.worldName);
-    meta.duration   = json.value("duration", meta.duration);
-    meta.totalTicks = json.value("totalTicks", meta.totalTicks);
+    meta.name       = json.at("name").get<std::string>();
+    meta.worldName  = json.at("worldName").get<std::string>();
+    meta.totalTicks = json.at("totalTicks").get<int>();
 
-    auto initialViewIt = json.find("initialView");
-    if (initialViewIt != json.end()) {
-        if (!initialViewIt->is_object()) {
-            throw std::invalid_argument("Playback metadata initialView must be an object");
-        }
-
-        meta.initialView = PlaybackView{
-            initialViewIt->at("x").get<float>(),
-            initialViewIt->at("y").get<float>(),
-            initialViewIt->at("z").get<float>(),
-            initialViewIt->at("yaw").get<float>(),
-            initialViewIt->at("pitch").get<float>()
-        };
-    }
-
-    auto chunksIt = json.find("chunks");
-    if (chunksIt == json.end() || chunksIt->is_null()) {
-        return meta;
-    }
-
-    if (!chunksIt->is_object()) {
+    auto const& chunks = json.at("chunks");
+    if (!chunks.is_object()) {
         throw std::invalid_argument("Playback metadata chunks must be an object");
     }
 
-    for (auto it = chunksIt->begin(); it != chunksIt->end(); ++it) {
-        meta.chunks.insert_or_assign(it.key(), metaFromJson(it.value()));
+    for (auto it = chunks.begin(); it != chunks.end(); ++it) {
+        meta.chunks.insert_or_assign(it.key(), chunkMetaFromJson(it.value()));
     }
     return meta;
 }
@@ -382,19 +393,16 @@ void Recorder::start() {
 
     if (mState.load() == State::Paused) {
         mState = State::Recording;
-        getLogger().debug("Resume recording");
         return;
     }
 
     auto& playback = playback::Playback::getInstance();
     if (playback.isReplayMode()) {
         mState = State::Idle;
-        getLogger().debug("Skip recording because current save is a replay save");
         return;
     }
 
     if (mState.load() != State::Idle) {
-        getLogger().debug("Recorder is already active");
         return;
     }
 
@@ -424,12 +432,10 @@ void Recorder::pause() {
 void Recorder::stop() {
     State state = mState.exchange(State::Closing);
     if (state == State::Idle) {
-        getLogger().debug("Recorder is not active");
         mState = State::Idle;
         return;
     }
     if (state == State::Closing) {
-        getLogger().debug("Recorder is already closing");
         return;
     }
 
@@ -467,7 +473,12 @@ void Recorder::saveRecording() {
         return;
     }
 
-    auto outputPath = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
+    auto  outputPath        = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
+    auto* thumbnailProvider = mThumbnailCaptureProvider.load(std::memory_order_acquire);
+    if (!mThumbnailCaptureRequested || !thumbnailProvider
+        || !thumbnailProvider->saveReplayThumbnail(replayPath / "icon.png")) {
+        getLogger().warn("Unable to save replay thumbnail for {}", replayPath);
+    }
     if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
         getLogger().error("Failed to save replay data after recording stopped");
         return;
@@ -483,7 +494,7 @@ void Recorder::logRecordedGamePacketSummary() const {
     getLogger().debug(
         "Recorded timeline packet summary: AddActor={}, AddItemActor={}, RemoveActor={}, TakeItemActor={}, "
         "ActorEvent={}, LevelEvent={}, MobEquipment={}, MobArmorEquipment={}, SetActorData={}, UpdateBlock={}, "
-        "UpdateBlockSynced={}, UpdateSubChunkBlocks={}",
+        "UpdateBlockSynced={}, UpdateSubChunkBlocks={}, ChangeDimension={}, LevelChunk={}, SubChunk={}",
         count(MinecraftPacketIds::AddActor),
         count(MinecraftPacketIds::AddItemActor),
         count(MinecraftPacketIds::RemoveActor),
@@ -495,7 +506,10 @@ void Recorder::logRecordedGamePacketSummary() const {
         count(MinecraftPacketIds::SetActorData),
         count(MinecraftPacketIds::UpdateBlock),
         count(MinecraftPacketIds::UpdateBlockSynced),
-        count(MinecraftPacketIds::UpdateSubChunkBlocks)
+        count(MinecraftPacketIds::UpdateSubChunkBlocks),
+        count(MinecraftPacketIds::ChangeDimension),
+        count(MinecraftPacketIds::FullChunkData),
+        count(MinecraftPacketIds::SubChunkPacket)
     );
 }
 
@@ -503,20 +517,23 @@ void Recorder::resetStateForNewRecording() {
     mAsyncReplaySaver = std::make_unique<AsyncReplaySaver>();
 
     mMetadata.chunks.clear();
-    mMetadata.initialView.reset();
+    mMetadata.totalTicks = 0;
     mRecordingDimension.reset();
     resetChunkSnapshot();
-    mOpenChunkView.reset();
     if (auto level = ll::service::getMultiPlayerLevel()) {
         mMetadata.worldName = level->getLevelData().mLevelName;
     }
-    mChunkIndex           = 0;
-    mTicksInCurrentChunk  = 0;
-    mWrittenTicks         = 0;
-    mLongestSnapshotStall = {};
-    mHasOpenChunk         = false;
-    mOpenChunkHasData     = false;
-    mNeedsInitialSnapshot = true;
+    mChunkIndex                    = 0;
+    mTicksInCurrentChunk           = 0;
+    mWrittenTicks                  = 0;
+    mLongestSnapshotStall          = {};
+    mHasOpenChunk                  = false;
+    mOpenChunkHasData              = false;
+    mCurrentChunkForcePlaySnapshot = false;
+    mThumbnailCaptureRequested     = false;
+    mNeedsInitialSnapshot          = true;
+    mDimensionTransitionPending    = false;
+    mDimensionTransitionTargetId   = 0;
     mLastEntityMovements.clear();
     mRecordedLocalPlayerId.reset();
     mRecordedLocalPlayerRuntimeId.reset();
@@ -543,11 +560,17 @@ void Recorder::endTick(bool close) {
         }
     }
 
-    bool dimensionChanged = false;
+    auto  clientInstance   = ll::service::getClientInstance();
+    auto* localPlayer      = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+    bool  dimensionChanged = false;
     if (mRecordingDimension) {
-        auto  clientInstance = ll::service::getClientInstance();
-        auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
         if (!localPlayer) {
+            if (!close && mDimensionTransitionPending.load(std::memory_order_acquire)) {
+                // A dimension transition can temporarily detach the local player. The packets still belong to this
+                // client tick and must not be collapsed into a later snapshot boundary.
+                if (!flushGamePackets() || !writeTickBoundary()) return;
+                return;
+            }
             if (close && mHasOpenChunk) {
                 if (!flushGamePackets() || !writeTickBoundary() || !finishCurrentChunk(true)) return;
                 return;
@@ -559,7 +582,43 @@ void Recorder::endTick(bool close) {
     }
 
     if (dimensionChanged) {
-        if (!flushGamePackets() || !writeTickBoundary() || !finishCurrentChunk(close)) return;
+        auto const currentDimensionId = localPlayer->getDimensionId().id;
+
+        // Finish the client tick in the old chunk before snapshotting the state produced by that tick.
+        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeTickBoundary()
+            || !finishCurrentChunk(close)) {
+            return;
+        }
+        if (close) return;
+
+        auto                                captureStart = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::duration barrierWait{};
+        auto                                captureResult = captureChunkSnapshot(barrierWait);
+        auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
+
+        if (captureResult != SnapshotCaptureResult::Success) {
+            getLogger().error(
+                "New dimension replay snapshot capture failed after {:.3f} ms: {}",
+                std::chrono::duration<double, std::milli>(elapsed).count(),
+                mSnapshotFailure
+            );
+            failRecording(
+                mSnapshotFailure.empty() ? "Unable to prepare the new dimension replay snapshot" : mSnapshotFailure
+            );
+            return;
+        }
+
+        mCurrentChunkForcePlaySnapshot = true;
+        if (!writeSnapshot() || !commitChunkSnapshot(elapsed, barrierWait)) {
+            return;
+        }
+        bool const reachedRequestedDimension =
+            !mDimensionTransitionPending.load(std::memory_order_acquire)
+            || currentDimensionId == mDimensionTransitionTargetId.load(std::memory_order_acquire);
+        if (reachedRequestedDimension) {
+            mDimensionTransitionPending  = false;
+            mDimensionTransitionTargetId = 0;
+        }
         return;
     }
 
@@ -569,10 +628,10 @@ void Recorder::endTick(bool close) {
     if (rotateChunk) {
         auto                                captureStart = std::chrono::steady_clock::now();
         std::chrono::steady_clock::duration barrierWait{};
-        bool                                captured = captureChunkSnapshot(barrierWait);
-        auto                                elapsed  = std::chrono::steady_clock::now() - captureStart;
+        auto                                captureResult = captureChunkSnapshot(barrierWait);
+        auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
 
-        if (!captured) {
+        if (captureResult != SnapshotCaptureResult::Success) {
             getLogger().error(
                 "Replay snapshot capture failed after {:.3f} ms: {}",
                 std::chrono::duration<double, std::milli>(elapsed).count(),
@@ -600,16 +659,20 @@ void Recorder::resetChunkSnapshot() {
     mSnapshotLevelChunks.clear();
     mSnapshotSubChunks.clear();
     mSnapshotEntityPackets.clear();
+    mSnapshotLocalPlayerPayload.reset();
     mSnapshotView.reset();
+    mSnapshotDimension.reset();
     mSnapshotFailure.clear();
 }
 
-bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait) {
+Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait) {
+    resetChunkSnapshot();
+
     auto  clientInstance = ll::service::getClientInstance();
     auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
     if (!localPlayer) {
         mSnapshotFailure = "The local player is not ready for a chunk snapshot";
-        return false;
+        return SnapshotCaptureResult::NotReady;
     }
 
     auto const dimension = localPlayer->getDimensionId();
@@ -618,14 +681,15 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
     barrierWait        = mutationGuard.waited();
     if (!mutationGuard) {
         mSnapshotFailure = "Unable to acquire the chunk mutation barrier";
-        return false;
+        return SnapshotCaptureResult::NotReady;
     }
 
     auto* guardedPlayer = clientInstance->getLocalPlayer();
     if (guardedPlayer != localPlayer || !guardedPlayer || guardedPlayer->getDimensionId() != dimension) {
         mSnapshotFailure = "The player or dimension changed while acquiring the chunk mutation barrier";
-        return false;
+        return SnapshotCaptureResult::NotReady;
     }
+
     auto& dimensionObject = guardedPlayer->getDimension();
 
     struct SnapshotColumn {
@@ -644,11 +708,6 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
             continue;
         }
         columns.push_back(SnapshotColumn{pos, std::move(chunk)});
-    }
-
-    if (columns.empty()) {
-        mSnapshotFailure = "No loaded level chunks are available for the snapshot";
-        return false;
     }
 
     auto const& position = localPlayer->getPosition();
@@ -675,7 +734,7 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
     auto air = Block::tryGetFromRegistry(BedrockBlockNames::Air());
     if (!air) {
         mSnapshotFailure = "Unable to resolve the engine air block for a chunk snapshot";
-        return false;
+        return SnapshotCaptureResult::Failed;
     }
 
     auto const dimensionMinHeight = static_cast<int>(dimensionObject.mHeightRange->mMin);
@@ -684,7 +743,7 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
     if (dimensionMinHeight % 16 != 0 || dimensionMaxHeight <= dimensionMinHeight
         || static_cast<size_t>((dimensionMaxHeight - dimensionMinHeight) / 16) != expectedSubChunks) {
         mSnapshotFailure = "The current dimension has an invalid subchunk height range";
-        return false;
+        return SnapshotCaptureResult::Failed;
     }
 
     // Parallel column serialization
@@ -861,25 +920,22 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
     std::vector<std::shared_ptr<SubChunkPacket>>   subChunkPackets;
     levelChunks.reserve(columns.size());
     subChunkPackets.reserve(columns.size());
-
     for (auto& future : futures) {
         auto batchResults = future.get();
         for (auto& result : batchResults) {
             if (!result.error.empty()) {
                 mSnapshotFailure = std::move(result.error);
-                return false;
+                return SnapshotCaptureResult::Failed;
             }
             levelChunks.emplace_back(std::move(result.levelChunk));
-            if (result.subChunk) {
-                subChunkPackets.emplace_back(std::move(result.subChunk));
-            }
+            if (result.subChunk) subChunkPackets.emplace_back(std::move(result.subChunk));
         }
     }
 
     auto* finalPlayer = clientInstance->getLocalPlayer();
     if (finalPlayer != localPlayer || !finalPlayer || finalPlayer->getDimensionId() != dimension) {
         mSnapshotFailure = "The player or dimension changed while capturing the chunk snapshot";
-        return false;
+        return SnapshotCaptureResult::NotReady;
     }
 
     std::vector<PlaybackSerializedGamePacket> entityPackets;
@@ -900,25 +956,60 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
         auto timePacket = MinecraftPackets::createPacket(MinecraftPacketIds::SetTime);
         if (!timePacket) {
             mSnapshotFailure = "Unable to create the snapshot time packet";
-            return false;
+            return SnapshotCaptureResult::Failed;
         }
         static_cast<SetTimePacket&>(*timePacket).mTime = level.getTime();
         appendEntityPacket(*timePacket);
 
-        auto                 actors = level.getRuntimeActorList();
-        std::vector<Player*> snapshotPlayers;
-        snapshotPlayers.reserve(actors.size());
+        auto spawnPacket = MinecraftPackets::createPacket(MinecraftPacketIds::SetSpawnPosition);
+        if (!spawnPacket) {
+            mSnapshotFailure = "Unable to create the snapshot spawn position packet";
+            return SnapshotCaptureResult::Failed;
+        }
+        auto const& spawnPosition = level.getSharedSpawnPos();
+        auto&       spawn         = static_cast<SetSpawnPositionPacket&>(*spawnPacket);
+        spawn.mPos                = spawnPosition;
+        spawn.mSpawnPosType       = SpawnPositionType::WorldSpawn;
+        spawn.mDimensionType      = dimension;
+        spawn.mSpawnBlockPos      = spawnPosition;
+        appendEntityPacket(*spawnPacket);
 
-        for (auto* actor : actors) {
-            if (!actor || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
-            if (actor->isPlayer()) snapshotPlayers.emplace_back(static_cast<Player*>(actor));
+        auto appendWeatherEvent = [&appendEntityPacket](SharedTypes::Legacy::LevelEvent event) {
+            auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::LevelEvent);
+            if (!packet) return false;
+            auto& weather    = static_cast<LevelEventPacket&>(*packet);
+            weather.mEventId = static_cast<int>(event);
+            weather.mPos     = Vec3{};
+            weather.mData    = 0;
+            appendEntityPacket(*packet);
+            return true;
+        };
+        auto const& levelData = level.getLevelData();
+        if (!appendWeatherEvent(
+                levelData.mRainLevel > 0.0f ? SharedTypes::Legacy::LevelEvent::StartRaining
+                                            : SharedTypes::Legacy::LevelEvent::StopRaining
+            )
+            || !appendWeatherEvent(
+                levelData.mLightningLevel > 0.0f ? SharedTypes::Legacy::LevelEvent::StartThunderstorm
+                                                 : SharedTypes::Legacy::LevelEvent::StopThunderstorm
+            )) {
+            mSnapshotFailure = "Unable to create snapshot weather packets";
+            return SnapshotCaptureResult::Failed;
         }
 
+        auto actors = level.getRuntimeActorList();
+
+        std::vector<Player*> snapshotPlayers{finalPlayer};
+        snapshotPlayers.reserve(actors.size() + 1);
+        for (auto* actor : actors) {
+            if (!actor || actor == finalPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
+            if (actor->isPlayer()) snapshotPlayers.emplace_back(static_cast<Player*>(actor));
+        }
         if (!snapshotPlayers.empty()) {
             auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::PlayerList);
             if (!packet) {
                 mSnapshotFailure = "Unable to create the entity snapshot player list packet";
-                return false;
+                return SnapshotCaptureResult::Failed;
             }
 
             auto&       playerListPacket = static_cast<PlayerListPacket&>(*packet);
@@ -940,56 +1031,115 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
             appendEntityPacket(playerListPacket);
         }
 
-        for (auto* actor : actors) {
-            if (!actor || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
-
-            std::shared_ptr<Packet> packet;
-            if (actor == finalPlayer) packet = std::make_shared<AddPlayerPacket>(*finalPlayer);
-            else packet = actor->tryCreateAddActorPacket();
-            if (!packet) {
-                getLogger().debug("Skipping unsupported replay snapshot actor {}", actor->getOrCreateUniqueID().rawID);
-                continue;
+        auto appendActorState = [&](Actor const& actor, ActorRuntimeID runtimeId) {
+            for (auto const& effect : actor.getAllEffects()) {
+                auto effectPacket = MinecraftPackets::createPacket(MinecraftPacketIds::MobEffect);
+                if (!effectPacket) {
+                    mSnapshotFailure = "Unable to create an entity snapshot effect packet";
+                    return false;
+                }
+                auto& payload                = static_cast<MobEffectPacket&>(*effectPacket);
+                payload.mRuntimeId           = runtimeId;
+                payload.mEffectDurationTicks = *effect.mDuration;
+                payload.mEventId             = MobEffectPacketPayload::Event::Add;
+                payload.mEffectId            = static_cast<int>(effect.mId);
+                payload.mEffectAmplifier     = effect.mAmplifier;
+                payload.mShowParticles       = effect.mEffectVisible;
+                payload.mAmbient             = effect.mAmbient;
+                payload.mTick                = PlayerInputTick{};
+                appendEntityPacket(*effectPacket);
             }
-            if (actor == finalPlayer) {
-                auto& addPlayer           = static_cast<AddPlayerPacket&>(*packet);
-                addPlayer.mUuid           = *mRecordedLocalPlayerUuid;
-                addPlayer.mEntityId       = *mRecordedLocalPlayerId;
-                addPlayer.mRuntimeId      = *mRecordedLocalPlayerRuntimeId;
-                addPlayer.mPlayerGameType = finalPlayer->getPlayerGameType();
-                addPlayer.mPlatformOnlineId->clear();
-                addPlayer.mDeviceId->clear();
-            }
-            appendEntityPacket(*packet);
 
-            auto const runtimeId = actor == finalPlayer ? *mRecordedLocalPlayerRuntimeId : actor->getRuntimeID();
-            if (actor->isPlayer()) {
-                auto const*        player = static_cast<Player const*>(actor);
+            if (actor.isPlayer()) {
+                auto const&        player = static_cast<Player const&>(actor);
                 MobEquipmentPacket equipment(
                     runtimeId,
-                    player->getSelectedItem(),
-                    player->getSelectedItemSlot(),
-                    player->getSelectedItemSlot(),
+                    player.getSelectedItem(),
+                    player.getSelectedItemSlot(),
+                    player.getSelectedItemSlot(),
                     ContainerID::Inventory
                 );
                 appendEntityPacket(equipment);
 
-                MobArmorEquipmentPacket armor(*player);
-                if (actor == finalPlayer) armor.mRuntimeId = *mRecordedLocalPlayerRuntimeId;
+                MobArmorEquipmentPacket armor(player);
+                armor.mRuntimeId = runtimeId;
                 appendEntityPacket(armor);
-            } else if (actor->hasCategory(ActorCategory::Mob)) {
-                MobEquipmentPacket equipment(runtimeId, actor->getCarriedItem(), 0, 0, ContainerID::Inventory);
+            } else if (actor.hasCategory(ActorCategory::Mob)) {
+                MobEquipmentPacket equipment(runtimeId, actor.getCarriedItem(), 0, 0, ContainerID::Inventory);
                 appendEntityPacket(equipment);
 
-                MobArmorEquipmentPacket armor(*actor);
+                MobArmorEquipmentPacket armor(actor);
                 appendEntityPacket(armor);
+            }
+            return true;
+        };
+
+        // The recorded local player is required snapshot state, independent of the transient runtime actor list.
+        AddPlayerPacket recordedPlayer(*finalPlayer);
+        recordedPlayer.mUuid           = *mRecordedLocalPlayerUuid;
+        recordedPlayer.mEntityId       = *mRecordedLocalPlayerId;
+        recordedPlayer.mRuntimeId      = *mRecordedLocalPlayerRuntimeId;
+        recordedPlayer.mPlayerGameType = finalPlayer->getPlayerGameType();
+        recordedPlayer.mPlatformOnlineId->clear();
+        recordedPlayer.mDeviceId->clear();
+        PlaybackBuffer recordedPlayerStream;
+        recordedPlayer.write(recordedPlayerStream);
+        mSnapshotLocalPlayerPayload = std::move(recordedPlayerStream.mBuffer);
+        if (!appendActorState(*finalPlayer, *mRecordedLocalPlayerRuntimeId)) {
+            return SnapshotCaptureResult::Failed;
+        }
+
+        for (auto* actor : actors) {
+            if (!actor || actor == finalPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
+
+            auto packet = actor->tryCreateAddActorPacket();
+            if (!packet) continue;
+            appendEntityPacket(*packet);
+            if (!appendActorState(*actor, actor->getRuntimeID())) return SnapshotCaptureResult::Failed;
+        }
+
+        auto&                                scoreboard = level.getScoreboard();
+        std::unordered_set<Objective const*> displayedObjectives;
+        for (auto const& slot : scoreboard.getDisplayObjectiveSlotNames()) {
+            auto const* display = scoreboard.getDisplayObjective(slot);
+            if (!display || !display->mObjective) continue;
+
+            auto const& objective = *display->mObjective;
+            auto        packet    = MinecraftPackets::createPacket(MinecraftPacketIds::SetDisplayObjective);
+            if (!packet) {
+                mSnapshotFailure = "Unable to create a snapshot display objective packet";
+                return SnapshotCaptureResult::Failed;
+            }
+            auto& payload                 = static_cast<SetDisplayObjectivePacket&>(*packet);
+            payload.mDisplaySlotName      = slot;
+            payload.mObjectiveName        = *objective.mName;
+            payload.mObjectiveDisplayName = *objective.mDisplayName;
+            payload.mCriteriaName         = objective.mCriteria.mName;
+            payload.mSortOrder            = display->mSortOrder;
+            appendEntityPacket(*packet);
+            displayedObjectives.emplace(&objective);
+        }
+
+        auto const localPlayerId = finalPlayer->getOrCreateUniqueID();
+        for (auto const* objective : displayedObjectives) {
+            for (auto const& [scoreboardId, score] : *objective->mScores) {
+                SetScorePacket packet(ScorePacketType::Change, scoreboardId, *objective);
+                for (auto& info : *packet.mScoreInfo) {
+                    info.mScoreValue = score;
+                    if (info.mPlayerId->mActorUniqueId == localPlayerId.rawID) {
+                        info.mPlayerId->mActorUniqueId = mRecordedLocalPlayerId->rawID;
+                    }
+                    if (info.mEntityId == localPlayerId) info.mEntityId = *mRecordedLocalPlayerId;
+                }
+                appendEntityPacket(packet);
             }
         }
     } catch (std::exception const& exception) {
         mSnapshotFailure = "Unable to serialize the entity snapshot: " + std::string(exception.what());
-        return false;
+        return SnapshotCaptureResult::Failed;
     } catch (...) {
         mSnapshotFailure = "Unable to serialize the entity snapshot";
-        return false;
+        return SnapshotCaptureResult::Failed;
     }
 
     mSnapshotLevelChunks   = std::move(levelChunks);
@@ -999,29 +1149,19 @@ bool Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrier
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mSnapshotDimensionDataPayload = mDimensionDataPayload;
     }
-    mSnapshotView = view;
-    if (!mMetadata.initialView) {
-        mMetadata.initialView = view;
-    }
+    mSnapshotView       = view;
+    mSnapshotDimension  = dimension;
     mRecordingDimension = dimension;
 
-    size_t subChunkCount = 0;
-    for (auto const& packet : mSnapshotSubChunks) subChunkCount += packet->mSubChunkData->size();
-    getLogger().debug(
-        "Prepared replay snapshot with {} columns, {} subchunks, and {} entity packets",
-        mSnapshotLevelChunks.size(),
-        subChunkCount,
-        mSnapshotEntityPackets.size()
-    );
-    return true;
+    return SnapshotCaptureResult::Success;
 }
 
 bool Recorder::commitChunkSnapshot(
     std::chrono::steady_clock::duration captureElapsed,
     std::chrono::steady_clock::duration barrierWait
 ) {
-    mOpenChunkView = mSnapshotView;
     mSnapshotView.reset();
+    mSnapshotDimension.reset();
     mLongestSnapshotStall = std::max(mLongestSnapshotStall, captureElapsed);
     mNeedsInitialSnapshot = false;
     mHasOpenChunk         = true;
@@ -1045,10 +1185,11 @@ bool Recorder::writeInitialSnapshotIfNeeded() {
 
     auto                                captureStart = std::chrono::steady_clock::now();
     std::chrono::steady_clock::duration barrierWait{};
-    bool                                captured = captureChunkSnapshot(barrierWait);
-    auto                                elapsed  = std::chrono::steady_clock::now() - captureStart;
+    auto                                captureResult = captureChunkSnapshot(barrierWait);
+    auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
 
-    if (!captured) {
+    if (captureResult == SnapshotCaptureResult::NotReady) return false;
+    if (captureResult == SnapshotCaptureResult::Failed) {
         getLogger().error(
             "Initial snapshot capture failed after {:.3f} ms: {}",
             std::chrono::duration<double, std::milli>(elapsed).count(),
@@ -1064,17 +1205,57 @@ bool Recorder::writeInitialSnapshotIfNeeded() {
     return commitChunkSnapshot(elapsed, barrierWait);
 }
 
+bool Recorder::writeCreateLocalPlayer() {
+    if (!mAsyncReplaySaver || !mSnapshotLocalPlayerPayload) {
+        failRecording("Recorded local player snapshot data is unavailable");
+        return false;
+    }
+
+    auto payload = *mSnapshotLocalPlayerPayload;
+    if (!mAsyncReplaySaver->submit([payload = std::move(payload)](ReplayWriter& writer) {
+            auto& action = ActionCreateLocalPlayer::getInstance();
+            writer.startAction(action);
+            writer.mStream.write(payload.data(), payload.size());
+            writer.finishAction(action);
+        })) {
+        auto error = mAsyncReplaySaver->getError();
+        failRecording(error.value_or("Unable to queue the recorded local player snapshot"));
+        return false;
+    }
+    return true;
+}
+
 bool Recorder::writeSnapshot() {
     if (!mAsyncReplaySaver) {
         failRecording("Replay saver is not initialized while writing a snapshot");
         return false;
     }
-
-    if (!mAsyncReplaySaver->submit([](ReplayWriter& writer) { writer.startSnapshot(); })) {
-        auto error = mAsyncReplaySaver->getError();
-        failRecording(error.value_or("Unable to queue the replay snapshot header"));
+    if (!mSnapshotView || !mSnapshotDimension) {
+        failRecording("Replay snapshot context is unavailable");
         return false;
     }
+
+    PlaybackSnapshotContext const context{
+        mSnapshotDimension->id,
+        mSnapshotView->x,
+        mSnapshotView->y,
+        mSnapshotView->z,
+        mSnapshotView->yaw,
+        mSnapshotView->pitch
+    };
+    if (!mAsyncReplaySaver->submit([context](ReplayWriter& writer) {
+            writer.startSnapshot();
+            auto& action = ActionSnapshotContext::getInstance();
+            writer.startAction(action);
+            writeSnapshotContext(writer.mStream, context);
+            writer.finishAction(action);
+        })) {
+        auto error = mAsyncReplaySaver->getError();
+        failRecording(error.value_or("Unable to queue the replay snapshot context"));
+        return false;
+    }
+
+    if (!writeCreateLocalPlayer()) return false;
 
     std::vector<AsyncReplaySaver::GamePacket> gamePackets;
     gamePackets.reserve(
@@ -1124,6 +1305,16 @@ bool Recorder::writeTickBoundary() {
 
     ++mTicksInCurrentChunk;
     ++mWrittenTicks;
+    if (!mThumbnailCaptureRequested && mWrittenTicks >= THUMBNAIL_CAPTURE_TICKS
+        && mState.load(std::memory_order_acquire) == State::Recording) {
+        auto clientInstance = ll::service::getClientInstance();
+        if (clientInstance && clientInstance->isInWorldAndNotShowingAnyMenuScreens()) {
+            if (auto* provider = mThumbnailCaptureProvider.load(std::memory_order_acquire)) {
+                provider->requestReplayThumbnailCapture();
+                mThumbnailCaptureRequested = true;
+            }
+        }
+    }
     return true;
 }
 
@@ -1299,23 +1490,38 @@ bool Recorder::writeLocalPlayerState() {
     return true;
 }
 
-void Recorder::recordSpawnedActor(ActorRuntimeID runtimeId) {
+void Recorder::recordNetworkGamePacket(Packet const& packet) {
+    if (NetworkPacketFilter::shouldFilter(packet.getId())) return;
+    recordGamePacket(packet);
+}
+
+void Recorder::recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallbackPacket) {
     if (!isActive()) return;
 
     auto  client      = ll::service::getClientInstance();
     auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
     auto* actor       = localPlayer ? localPlayer->getLevel().getRuntimeEntity(runtimeId, false) : nullptr;
     if (!actor) {
-        getLogger().warn("Unable to find spawned actor {} for timeline recording", runtimeId.rawID);
+        getLogger().warn(
+            "Unable to find spawned actor {} for timeline reconstruction; recording the original {}",
+            runtimeId.rawID,
+            fallbackPacket.getName()
+        );
+        recordGamePacket(fallbackPacket);
         return;
     }
 
     auto spawnPacket = actor->tryCreateAddActorPacket();
     if (!spawnPacket) {
-        getLogger().warn("Unable to create a replayable spawn packet for actor {}", runtimeId.rawID);
-        return;
+        getLogger().warn(
+            "Unable to reconstruct a replayable spawn packet for actor {}; recording the original {}",
+            runtimeId.rawID,
+            fallbackPacket.getName()
+        );
+        recordGamePacket(fallbackPacket);
+    } else {
+        recordGamePacket(*spawnPacket);
     }
-    recordGamePacket(*spawnPacket);
 
     if (!actor->hasCategory(ActorCategory::Mob)) return;
 
@@ -1345,13 +1551,25 @@ void Recorder::recordGamePacket(Packet const& packet) {
             && static_cast<bool>(static_cast<LevelChunkPacket const&>(packet).mCacheEnabled)) {
             return;
         }
-        if (packetId == MinecraftPacketIds::SubChunkPacket
-            && static_cast<bool>(static_cast<SubChunkPacket const&>(packet).mCacheEnabled)) {
-            return;
-        }
-
         PlaybackBuffer stream;
-        packet.write(stream);
+        if (packetId == MinecraftPacketIds::SubChunkPacket) {
+            auto filteredPacket = static_cast<SubChunkPacket const&>(packet);
+            if (static_cast<bool>(filteredPacket.mCacheEnabled)) return;
+
+            std::vector<SubChunkPacket::SubChunkPacketData> successfulEntries;
+            successfulEntries.reserve(filteredPacket.mSubChunkData->size());
+            for (auto const& entry : *filteredPacket.mSubChunkData) {
+                if (isSuccessfulSubChunkResult(static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
+                    )) {
+                    successfulEntries.emplace_back(entry);
+                }
+            }
+            *filteredPacket.mSubChunkData = std::move(successfulEntries);
+            if (filteredPacket.mSubChunkData->empty()) return;
+            filteredPacket.write(stream);
+        } else {
+            packet.write(stream);
+        }
 
         {
             std::scoped_lock lock(mPendingGamePacketsMutex);
@@ -1359,6 +1577,12 @@ void Recorder::recordGamePacket(Packet const& packet) {
         }
 
         if (!recordingTimeline) return;
+
+        if (packetId == MinecraftPacketIds::ChangeDimension) {
+            auto const& change = static_cast<ChangeDimensionPacket const&>(packet);
+            mDimensionTransitionTargetId.store(change.mDimensionId->id, std::memory_order_release);
+            mDimensionTransitionPending.store(true, std::memory_order_release);
+        }
 
         if (packetId == MinecraftPacketIds::MoveAbsoluteActor || packetId == MinecraftPacketIds::MovePlayer
             || packetId == MinecraftPacketIds::NetworkChunkPublisherUpdate
@@ -1397,9 +1621,7 @@ void Recorder::recordGamePacket(Packet const& packet) {
         }
         mPendingGamePackets.push_back({static_cast<int32_t>(packetId), std::move(stream.mBuffer)});
         auto& recordedCount = mRecordedGamePacketCounts[static_cast<int32_t>(packetId)];
-        if (recordedCount++ == 0) {
-            getLogger().debug("Recording timeline packet {} ({})", packet.getName(), static_cast<int32_t>(packetId));
-        }
+        ++recordedCount;
     } catch (std::exception const& exception) {
         getLogger().error("Unable to serialize incoming game packet {}: {}", packet.getName(), exception.what());
     } catch (...) {
@@ -1409,18 +1631,12 @@ void Recorder::recordGamePacket(Packet const& packet) {
 
 bool Recorder::finishCurrentChunk(bool close) {
     if (!mHasOpenChunk || !mOpenChunkHasData) return true;
-    if (!mOpenChunkView) {
-        failRecording("Replay chunk has no snapshot playback view");
-        return false;
-    }
 
     std::string chunkName = "chunk_" + std::to_string(mChunkIndex) + ".bin";
 
-    PlaybackMeta chunkMeta;
-    chunkMeta.name        = chunkName;
-    chunkMeta.worldName   = mMetadata.worldName;
-    chunkMeta.duration    = mTicksInCurrentChunk;
-    chunkMeta.initialView = mOpenChunkView;
+    PlaybackChunkMeta chunkMeta;
+    chunkMeta.duration          = mTicksInCurrentChunk;
+    chunkMeta.forcePlaySnapshot = mCurrentChunkForcePlaySnapshot;
     mMetadata.chunks.insert_or_assign(chunkName, chunkMeta);
     mMetadata.totalTicks = mWrittenTicks;
 
@@ -1436,10 +1652,10 @@ bool Recorder::finishCurrentChunk(bool close) {
     }
 
     ++mChunkIndex;
-    mTicksInCurrentChunk = 0;
-    mHasOpenChunk        = false;
-    mOpenChunkHasData    = false;
-    mOpenChunkView.reset();
+    mTicksInCurrentChunk           = 0;
+    mHasOpenChunk                  = false;
+    mOpenChunkHasData              = false;
+    mCurrentChunkForcePlaySnapshot = false;
 
     if (!close) {
         mNeedsInitialSnapshot = true;
@@ -1456,8 +1672,10 @@ void Recorder::cancelRecording(std::string_view reason) {
         mAsyncReplaySaver.reset();
     }
 
-    mState                = State::Idle;
-    mNeedsInitialSnapshot = true;
+    mState                       = State::Idle;
+    mNeedsInitialSnapshot        = true;
+    mDimensionTransitionPending  = false;
+    mDimensionTransitionTargetId = 0;
     resetChunkSnapshot();
     mLastEntityMovements.clear();
     mRecordedLocalPlayerId.reset();
