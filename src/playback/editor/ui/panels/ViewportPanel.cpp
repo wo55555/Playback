@@ -10,8 +10,9 @@
 
 namespace playback::editor::ui {
 
+using namespace ll::i18n_literals;
+
 void ViewportPanel::draw(bool maximized) {
-    using ll::i18n_literals::operator""_tr;
     ImVec2 viewportSize = ImGui::GetContentRegionAvail();
 
     constexpr float kTransportHeight = 42.0f;
@@ -158,16 +159,6 @@ void ViewportPanel::handleCameraControl(bool hovered, bool active) {
     if (hovered && io.MouseWheel != 0.0f) {
         mViewportAnchor.y += io.MouseWheel * 5.0f;
     }
-}
-
-void ViewportPanel::handleGizmoDrag() {
-    // Placeholder: ImGuizmo integration
-    // ImGuizmo::Manipulate(viewMatrix, projMatrix, TRANSLATE, LOCAL, glm::value_ptr(newPos), nullptr, nullptr);
-}
-
-void ViewportPanel::drawGizmo() {
-    // Placeholder: draw ImGuizmo 3-axis arrow + rotation rings
-    // This will be implemented with ImGuizmo::Manipulate when ImGuizmo is available
 }
 
 } // namespace playback::editor::ui

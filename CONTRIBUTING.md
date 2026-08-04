@@ -39,10 +39,10 @@ Runtime-sensitive replay changes should also be tested in Minecraft. A successfu
 
 Playback has two localization layers:
 
-- `src/lang/*.json` contains command and replay-editor translations.
-- `resources/texts/*.lang` contains resource-pack UI translations.
+- `src/lang/*.json` covers commands and the native replay UI.
+- `resources/texts/*.lang` covers the resource-pack main-menu button.
 
-When adding or changing translated text, keep the keys aligned across all supported languages in the relevant layer. Add new locale codes to `resources/texts/languages.json` when introducing a resource-pack language, and verify that the packaged files are present under `bin/playback/lang/` and inside `bin/playback/playback-ui.mcpack`.
+When adding or changing translated text, keep the keys aligned across all supported languages. Verify native translations under `bin/playback/lang/`, and verify the button translations in both `bin/playback/resource_packs/playback-ui/` and `bin/playback-ui.mcpack`.
 
 ## Pull Requests
 

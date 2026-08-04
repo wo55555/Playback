@@ -1,6 +1,6 @@
 #include "ReplayMouseHook.h"
-#include "playback/editor/renderer/ReplayUILayout.h"
 #include "playback/editor/input/EditorInput.h"
+#include "playback/editor/renderer/ReplayUILayout.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/input/KeyInputEvent.h"
@@ -41,6 +41,7 @@ struct QueuedMouseEvent {
 std::atomic<bool>       gMouseHookActive{false};
 std::atomic<bool>       gMouseHookStopping{true};
 std::atomic<bool>       gReplayUiInputActive{false};
+std::atomic<bool>       gBlockGameMouseInput{false};
 std::atomic<bool>       gReplayUIActive{false};
 std::atomic<bool>       gWantCaptureMouse{false};
 std::atomic<bool>       gPopupOpen{false};
@@ -164,12 +165,14 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
     ActiveMouseCallback activeCallback;
     if (!replayUiOwnsMouse()) return;
 
-    char const  action = event.actionButtonId();
-    float const x      = static_cast<float>(event.x()) * gInputScaleX.load(std::memory_order_relaxed);
-    float const y      = static_cast<float>(event.y()) * gInputScaleY.load(std::memory_order_relaxed);
-    bool const  inGame = isGameViewportPoint(x, y);
-    bool const  popup  = gPopupOpen.load(std::memory_order_acquire);
-    auto const  owner  = gMouseOwner.load(std::memory_order_acquire);
+    char const  action         = event.actionButtonId();
+    float const x              = static_cast<float>(event.x()) * gInputScaleX.load(std::memory_order_relaxed);
+    float const y              = static_cast<float>(event.y()) * gInputScaleY.load(std::memory_order_relaxed);
+    bool const  blockGameInput = gBlockGameMouseInput.load(std::memory_order_acquire);
+    bool const  inGame         = !blockGameInput && isGameViewportPoint(x, y);
+    bool const  popup          = gPopupOpen.load(std::memory_order_acquire);
+    bool const  wantCapture    = gWantCaptureMouse.load(std::memory_order_acquire);
+    auto const  owner          = gMouseOwner.load(std::memory_order_acquire);
 
     if (owner != MouseOwner::GameCaptured && action == MouseAction::ActionMove) {
         queueEvent({QueuedEventType::Position, x, y});
@@ -187,6 +190,7 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
             if (button == ImGuiMouseButton_Left && !down) {
                 gReleaseRequested.store(true, std::memory_order_release);
             }
+            if (blockGameInput) event.cancel();
             return;
         }
 
@@ -197,7 +201,7 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
         }
 
         queueEvent({QueuedEventType::Button, x, y, button, down});
-        if (popup || !inGame || gWantCaptureMouse.load(std::memory_order_acquire)) event.cancel();
+        if (popup || !inGame || wantCapture) event.cancel();
         return;
     }
 
@@ -207,7 +211,7 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
         if (wheel != 0.0f) queueEvent({QueuedEventType::Wheel, 0.0f, wheel > 0.0f ? 1.0f : -1.0f});
     }
 
-    if (owner != MouseOwner::GameCaptured && (popup || !inGame || gWantCaptureMouse.load(std::memory_order_acquire))) {
+    if (blockGameInput || (owner != MouseOwner::GameCaptured && (popup || !inGame || wantCapture))) {
         event.cancel();
     }
 }
@@ -458,6 +462,7 @@ void setReplayMouseInputActive(bool active) {
 
     gWantCaptureMouse.store(false, std::memory_order_release);
     gPopupOpen.store(false, std::memory_order_release);
+    gBlockGameMouseInput.store(false, std::memory_order_release);
     gCaptureRequested.store(false, std::memory_order_release);
     gReleaseRequested.store(true, std::memory_order_release);
     gLeftMouseDown.store(false, std::memory_order_release);
@@ -471,13 +476,25 @@ void setReplayUIActive(bool active) {
     if (!active) input::setUiVisible(false);
 }
 
-void beginReplayMouseFrame(ui::ReplayUILayout const& layout, float displayWidth, float displayHeight) {
-    setReplayGameViewport(
-        layout.gameViewportLeft,
-        layout.gameViewportTop,
-        layout.gameViewportRight,
-        layout.gameViewportBottom
-    );
+void beginReplayMouseFrame(
+    ui::ReplayUILayout const& layout,
+    float                     displayWidth,
+    float                     displayHeight,
+    bool                      blockGameMouseInput
+) {
+    // Publish exclusive browser ownership before changing viewport bounds so input callbacks
+    // cannot observe a transient editor viewport.
+    gBlockGameMouseInput.store(blockGameMouseInput, std::memory_order_release);
+    if (blockGameMouseInput) {
+        setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
+    } else {
+        setReplayGameViewport(
+            layout.gameViewportLeft,
+            layout.gameViewportTop,
+            layout.gameViewportRight,
+            layout.gameViewportBottom
+        );
+    }
     setReplayMouseInputActive(true);
     if (!gReplayUiInputActive.load(std::memory_order_acquire)) return;
 

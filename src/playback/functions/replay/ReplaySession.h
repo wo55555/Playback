@@ -25,6 +25,9 @@ class LevelChunk;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
 class Player;
+class ResourcePacksInfoPacket;
+class ResourcePackStackPacket;
+struct DimensionArguments;
 enum class MinecraftPacketIds : int;
 
 namespace playback::functions {
@@ -37,6 +40,7 @@ private:
     static constexpr int    CHUNK_INJECTION_STALL_TIMEOUT_TICKS = 20 * 30;
     static constexpr int    DIMENSION_TRANSITION_SETTLE_UPDATES = 2;
     static constexpr int    REPLAY_WORLD_DELETE_TIMEOUT_TICKS   = 20 * 30;
+    static constexpr auto   DIMENSION_ACK_FALLBACK_DELAY        = std::chrono::seconds{1};
     static constexpr auto   DIMENSION_TRANSITION_TIMEOUT        = std::chrono::seconds{30};
 
     enum class CleanupState { None, WaitingForExit, ReadyToDelete, DeleteIssued };
@@ -45,6 +49,8 @@ private:
 
     struct DimensionTransitionRequest {
         std::atomic<DimensionTransitionStatus> status{DimensionTransitionStatus::Pending};
+        std::atomic<bool>                      acknowledgmentFallbackQueued{false};
+        std::atomic<bool>                      completed{false};
         uint64_t                               generation{};
     };
 
@@ -68,6 +74,18 @@ private:
         bool     followRecordedPlayer{};
         bool     serverPlayerRelocated{};
         uint64_t dimensionGeneration{};
+    };
+
+    struct RecordedDimensionHeightRange {
+        int32_t minimum{};
+        int32_t maximum{};
+
+        bool operator==(RecordedDimensionHeightRange const&) const = default;
+    };
+
+    struct ReplayDimensionProfile {
+        std::string                                           levelId;
+        std::unordered_map<int, RecordedDimensionHeightRange> heightRanges;
     };
 
     int    mCurrentTick             = 0;
@@ -121,8 +139,9 @@ private:
     int          mCleanupWaitTicks          = 0;
     bool         mOrphanReplayWorldsScanned = false;
 
-    std::filesystem::path mReplayFilePath;
-    std::string           mReplayLevelId;
+    std::filesystem::path                                      mReplayFilePath;
+    std::string                                                mReplayLevelId;
+    std::atomic<std::shared_ptr<ReplayDimensionProfile const>> mReplayDimensionProfile;
 
     PlaybackMeta mMeta;
 
@@ -148,6 +167,7 @@ private:
     std::vector<PendingSubChunkPacket>                      mPendingSubChunkPackets;
     std::optional<std::string>                              mPendingSnapshotLocalPlayer;
     std::vector<std::pair<MinecraftPacketIds, std::string>> mPendingSnapshotGamePackets;
+    std::unordered_map<int32_t, std::string>                mAppliedConfigurationPackets;
     std::unordered_set<ActorUniqueID>                       mRecordedEntityIds;
     std::unordered_set<std::string>                         mReplayObjectiveNames;
     std::unordered_set<ChunkPos>                            mCenterChunkPositions;
@@ -158,6 +178,10 @@ private:
     std::weak_ptr<MinecraftScreenModel> mScreenModel;
     Player*                             mReplayPlayer   = nullptr;
     LegacyClientNetworkHandler*         mNetworkHandler = nullptr;
+
+    std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
+    std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
+    bool                                                       mReplayCachedResourcePacksLoaded{};
 
 public:
     bool mIsProcessingSnapshot = false;
@@ -200,6 +224,10 @@ private:
     [[nodiscard]] bool applySubChunkDirect(std::string_view payload);
 
     [[nodiscard]] bool applyGamePacket(MinecraftPacketIds packetId, std::string_view payload);
+
+    [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
+
+    void releaseReplayResourcePacks();
 
     [[nodiscard]] bool applyPendingSnapshotLocalPlayer();
 
@@ -263,6 +291,14 @@ public:
 
     [[nodiscard]] bool isIsolatingReplayWorld() const { return mActive; }
 
+    [[nodiscard]] std::shared_ptr<ResourcePacksInfoPacket const> getReplayResourcePacksInfo() const {
+        return mReplayResourcePacksInfo.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] std::shared_ptr<ResourcePackStackPacket const> getReplayResourcePackStack() const {
+        return mReplayResourcePackStack.load(std::memory_order_acquire);
+    }
+
     [[nodiscard]] bool shouldIsolateChunkPackets() const;
 
     [[nodiscard]] bool shouldSuppressNativeChunk(ChunkPos const& pos, DimensionType packetDimension) const;
@@ -270,6 +306,8 @@ public:
     [[nodiscard]] bool isReplayWorldCleanupPending() const { return mCleanupState != CleanupState::None; }
 
     [[nodiscard]] static bool isReplayLevel(Level const& level);
+
+    void configureReplayDimension(DimensionArguments& arguments) const;
 
     void setMinecraftScreenModel(std::shared_ptr<MinecraftScreenModel> const& screenModel);
 
@@ -302,6 +340,8 @@ public:
     void handleSubChunkCached(int index);
 
     [[nodiscard]] int cacheInlineChunkPacket(MinecraftPacketIds packetId, std::string payload);
+
+    void handleConfigurationPacket(PlaybackBuffer& data);
 
     void handleGamePacket(PlaybackBuffer& data);
 

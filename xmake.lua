@@ -12,24 +12,6 @@ add_requires("levilamina 26.10.*", {configs = {target_type = get_config("target_
 
 add_requires("levibuildscript")
 
--- 内置静态 FFmpeg（GPL）：先运行 scripts/build-ffmpeg/build-ffmpeg.ps1 生成 third_party/ffmpeg 产物
-option("playback_ffmpeg")
-    set_showmenu(true)
-    set_default(os.isdir("third_party/ffmpeg/include") and os.isdir("third_party/ffmpeg/lib"))
-    set_description("Link built-in static FFmpeg from third_party/ffmpeg (GPL)")
-option_end()
-
-local function setup_ffmpeg(target)
-    if has_config("playback_ffmpeg") then
-        target:add("defines", "PLAYBACK_HAVE_FFMPEG=1")
-        target:add("includedirs", "third_party/ffmpeg/include")
-        target:add("linkdirs", "third_party/ffmpeg/lib")
-        target:add("links", "avformat", "avcodec", "avutil", "swscale", "swresample",
-                   "x264", "x265", "vpx", "opus", "zlib")
-        target:add("syslinks", "bcrypt", "ws2_32", "secur32", "avrt", "user32", "ole32")
-    end
-end
-
 add_requires("stduuid")
 add_requires("xxhash")
 add_requires("openssl")
@@ -57,7 +39,6 @@ target("playback")
     add_rules("@levibuildscript/linkrule")
     add_cxflags( "/EHa", "/utf-8", "/W4", "/w44265", "/w44289", "/w44296", "/w45263", "/w44738", "/w45204")
     add_defines("NOMINMAX", "UNICODE")
-    setup_ffmpeg(target)
     add_packages("levilamina")
     add_packages("stduuid")
     add_packages("xxhash")
@@ -80,30 +61,10 @@ target("playback")
             modVersion = get_version(os),
         })
     end)
-
-target("refactor-model-tests")
-    set_default(false)
-    set_kind("binary")
-    set_languages("c++20")
-    add_includedirs("src")
-    add_files("tests/refactor/models/ModelTests.cpp")
-    add_files("src/playback/editor/ui/EditorProjectCodec.cpp")
-    add_files("src/playback/editor/editing/models/SelectionModel.cpp")
-    add_files("src/playback/editor/editing/models/TrackTreeModel.cpp")
-    add_files("src/playback/editor/editing/commands/CommandStack.cpp")
-    add_files("src/playback/editor/editing/commands/CommandFactory.cpp")
-    add_files("src/playback/editor/editing/SequenceOps.cpp")
-    add_files("src/playback/editor/editing/WorldActorOps.cpp")
-    add_files("src/playback/editor/editing/CameraBindingOps.cpp")
-    add_files("src/playback/editor/editing/commands/SequenceCommands.cpp")
-    add_files("src/playback/editor/editing/commands/WorldActorCommands.cpp")
-    add_files("src/playback/editor/editing/commands/CameraCommands.cpp")
-    add_files("src/playback/editor/editing/commands/SubActorCommands.cpp")
-    add_files("src/playback/editor/editing/commands/EditingCommands.cpp")
     after_build(function (target)
         import("utils.archive")
 
-        local output_dir = path.join(os.projectdir(), "bin", "playback")
+        local output_dir = path.join(os.projectdir(), "bin", target:name())
         os.mkdir(output_dir)
         os.cp(path.join(os.projectdir(), "LICENSE"), output_dir)
         os.cp(path.join(os.projectdir(), "THIRD_PARTY_NOTICES.md"), output_dir)
@@ -118,12 +79,23 @@ target("refactor-model-tests")
         os.tryrm(lang_dir)
         os.cp(lang_source, lang_dir)
 
+        local font_source = path.join(os.projectdir(), "assets", "fonts", "lucide.ttf")
+        local font_dir    = path.join(output_dir, "fonts")
+        assert(os.isfile(font_source), "icon font asset was not found")
+        os.tryrm(font_dir)
+        os.mkdir(font_dir)
+        os.cp(font_source, font_dir)
+
         local resource_dir = path.join(os.projectdir(), "resources")
         if os.isdir(resource_dir) then
-            local installed_pack = path.join(output_dir, "resource_packs", "playback-ui")
-            local mcpack = path.join(output_dir, "playback-ui.mcpack")
-            local mcpack_zip = mcpack .. ".zip"
+            local installed_pack = path.join(output_dir, "resource_packs", target:name() .. "-ui")
+            local mcpack         = path.join(os.projectdir(), "bin", target:name() .. "-ui.mcpack")
+            local mcpack_zip     = mcpack .. ".zip"
             assert(os.isfile(path.join(resource_dir, "manifest.json")), "resource pack manifest.json was not found")
+            assert(
+                os.isfile(path.join(resource_dir, "ui", "start_screen.json")),
+                "main-menu button resource was not found"
+            )
             os.tryrm(installed_pack)
             os.cp(resource_dir, installed_pack)
             os.tryrm(mcpack)
@@ -133,19 +105,7 @@ target("refactor-model-tests")
                 recurse = true
             })
             os.mv(mcpack_zip, mcpack)
-            cprint("${bright green}[Playback]: ${reset}UI resource pack installed to " .. installed_pack)
+            cprint("${bright green}[Playback]: ${reset}Main-menu button resource pack installed to " .. installed_pack)
             cprint("${bright green}[Playback]: ${reset}Standalone UI resource pack generated to " .. mcpack)
         end
     end)
-
--- FFmpeg 链接 smoke test（步骤 1 验证：静态库可链接、libav 可初始化）
-if has_config("playback_ffmpeg") then
-    target("refactor-ffmpeg-tests")
-        set_default(false)
-        set_kind("binary")
-        set_languages("c++20")
-        setup_ffmpeg(target)
-        add_includedirs("src")
-        add_files("tests/refactor/ffmpeg/FfmpegSmokeTest.cpp")
-        add_files("src/playback/refactor/export-pipeline/FfmpegBuildInfo.cpp")
-end

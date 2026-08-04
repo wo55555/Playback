@@ -3,6 +3,8 @@
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/components/PropertyControls.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -10,6 +12,8 @@
 #include <cstdio>
 
 namespace playback::editor::ui {
+
+using namespace ll::i18n_literals;
 
 namespace {
 
@@ -55,14 +59,14 @@ void submit(EditorAction action) {
     ReplayEditor::getInstance().submitAction(std::move(action));
 }
 
-}
+} // namespace
 
 void DetailsPanel::draw() {
-    auto& editor = ReplayEditor::getInstance();
-    auto const& state = editor.state();
-    auto const project = state.project;
+    auto&       editor  = ReplayEditor::getInstance();
+    auto const& state   = editor.state();
+    auto const  project = state.project;
     if (!project) {
-        ImGui::TextDisabled("No replay project is active.");
+        ImGui::TextDisabled("%s", "playback.refactorEditor.common.noActiveProject"_tr().c_str());
         return;
     }
 
@@ -111,7 +115,7 @@ void DetailsPanel::draw() {
     if (auto const* selected = selection.getAs<editing::model::SelectedSequenceSegment>()) {
         auto const* segment = findById(project->sequence, selected->segmentId);
         if (!segment) {
-            ImGui::TextDisabled("Sequence segment no longer exists.");
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.sequenceSegmentMissing"_tr().c_str());
             return;
         }
         bool const isFirst = &project->sequence.front() == segment;
@@ -151,7 +155,7 @@ void DetailsPanel::draw() {
             for (auto const& camera : project->cameras) {
                 if (ImGui::Selectable(camera.name.c_str(), camera.id == segment->cameraId)) {
                     EditorAction action{EditorActionType::BindSequenceCamera};
-                    action.id = segment->id;
+                    action.id          = segment->id;
                     action.secondaryId = camera.id;
                     submit(std::move(action));
                 }
@@ -225,7 +229,7 @@ void DetailsPanel::draw() {
     if (auto const* selected = selection.getAs<editing::model::SelectedWorldActorSegment>()) {
         auto const* segment = findById(project->worldActor.segments, selected->segmentId);
         if (!segment) {
-            ImGui::TextDisabled("World actor segment no longer exists.");
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.worldActorSegmentMissing"_tr().c_str());
             return;
         }
         bool const isFirst = &project->worldActor.segments.front() == segment;
@@ -283,7 +287,7 @@ void DetailsPanel::draw() {
     if (auto const* selected = selection.getAs<editing::model::SelectedSubActor>()) {
         auto const* actor = findById(project->worldActor.subActors, selected->subActorId);
         if (!actor) {
-            ImGui::TextDisabled("Sub actor no longer exists.");
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.subActorMissing"_tr().c_str());
             return;
         }
         if (property::beginSection("Sub Actor")) {
@@ -336,8 +340,8 @@ void DetailsPanel::draw() {
         ImGui::Spacing();
         if (property::actionButton("Create Binding Camera")) {
             EditorAction action{EditorActionType::CreateBindingCamera};
-            action.id = actor->id;
-            action.name = actor->name + " Camera";
+            action.id   = actor->id;
+            action.name = "playback.refactorEditor.details.bindingCameraName"_tr(actor->name);
             submit(std::move(action));
         }
         property::endSection();
@@ -349,19 +353,21 @@ void DetailsPanel::draw() {
     if (auto const* selectedCamera = selection.getAs<editing::model::SelectedCamera>()) {
         auto const* camera = findById(project->cameras, selectedCamera->cameraId);
         if (!camera) {
-            ImGui::TextDisabled("Camera no longer exists.");
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.cameraMissing"_tr().c_str());
             return;
         }
         if (property::beginSection("Camera")) {
         ImGui::Text("Name: %s", camera->name.c_str());
         ImGui::Text("Keyframes: %zu", camera->keys.size());
         ImGui::BeginDisabled(camera->locked);
-        if (ImGui::BeginCombo("Kind", cameraKindName(camera->kind))) {
+        std::string const selectedKindName = cameraKindName(camera->kind);
+        if (ImGui::BeginCombo("playback.refactorEditor.details.kind"_tr().c_str(), selectedKindName.c_str())) {
             for (int index = 0; index < 4; ++index) {
-                auto kind = static_cast<editing::model::CameraKind>(index);
-                if (ImGui::Selectable(cameraKindName(kind), kind == camera->kind)) {
+                auto const        kind     = static_cast<editing::model::CameraKind>(index);
+                std::string const kindName = cameraKindName(kind);
+                if (ImGui::Selectable(kindName.c_str(), kind == camera->kind)) {
                     EditorAction action{EditorActionType::SetCameraKind};
-                    action.id = camera->id;
+                    action.id   = camera->id;
                     action.kind = index;
                     submit(std::move(action));
                 }
@@ -415,7 +421,7 @@ void DetailsPanel::draw() {
         property::separator();
         if (property::actionButton("Add Keyframe at Playhead")) {
             EditorAction action{EditorActionType::AddCameraKeyframe};
-            action.id = camera->id;
+            action.id   = camera->id;
             action.tick = state.currentTick;
             submit(std::move(action));
         }
@@ -452,21 +458,18 @@ void DetailsPanel::draw() {
     // ===== Camera Keyframe =====
     if (auto const* selected = selection.getAs<editing::model::SelectedKeyframe>()) {
         auto const* camera = findById(project->cameras, selected->trackId);
-        auto const* key = camera ? findById(camera->keys, selected->keyframeId) : nullptr;
+        auto const* key    = camera ? findById(camera->keys, selected->keyframeId) : nullptr;
         if (!camera || !key) {
-            ImGui::TextDisabled("Keyframe no longer exists.");
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
             return;
         }
         if (property::beginSection("Camera Keyframe")) {
         ImGui::Text("Camera: %s", camera->name.c_str());
         ImGui::BeginDisabled(camera->locked);
-        int tick = key->tick;
-        if (ImGui::InputInt("Tick", &tick) && ImGui::IsItemDeactivatedAfterEdit()) {
-            EditorAction action{EditorActionType::MoveCameraKeyframe};
-            action.id = camera->id;
-            action.secondaryId = key->id;
-            action.tick = tick;
-            submit(std::move(action));
+        auto const keyframeId = camera->id + ":" + key->id;
+        if (mTickKeyframeId != keyframeId) {
+            mTickKeyframeId = keyframeId;
+            mTickEditActive = false;
         }
         ImGui::Text("Position: (%.1f, %.1f, %.1f)", key->position.x, key->position.y, key->position.z);
         ImGui::Text("Rotation: yaw %.1f  pitch %.1f", key->yaw, key->pitch);
@@ -487,7 +490,7 @@ void DetailsPanel::draw() {
         }
         if (property::actionButton("Delete Keyframe")) {
             EditorAction action{EditorActionType::DeleteCameraKeyframe};
-            action.id = camera->id;
+            action.id          = camera->id;
             action.secondaryId = key->id;
             submit(std::move(action));
         }
@@ -529,7 +532,7 @@ void DetailsPanel::draw() {
     ImGui::Spacing();
     if (property::actionButton("Add Free Camera")) {
         EditorAction action{EditorActionType::AddFreeCamera};
-        action.name = "Camera " + std::to_string(project->cameras.size() + 1);
+        action.name = "playback.refactorEditor.defaults.camera"_tr(project->cameras.size() + 1);
         submit(std::move(action));
     }
     property::endSection();

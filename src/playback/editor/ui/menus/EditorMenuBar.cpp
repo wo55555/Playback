@@ -8,13 +8,20 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <string>
 
 namespace playback::editor::ui {
 
+using namespace ll::i18n_literals;
+
 void EditorMenuBar::draw() {
-    using ll::i18n_literals::operator""_tr;
     auto&       editor       = ReplayEditor::getInstance();
     auto const& capabilities = editor.state().capabilities;
+    float const uiScale      = std::max(1.0f, ImGui::GetIO().FontGlobalScale);
+    auto const& style        = ImGui::GetStyle();
+    ImGui::PushFont(nullptr, std::max(16.0f, style.FontSizeBase * 1.15f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.0f * uiScale, 5.0f * uiScale});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8.0f * uiScale, 4.0f * uiScale});
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
             ImGui::MenuItem("playback.refactorEditor.menu.openReplay"_tr().c_str(), "Ctrl+O", false, false);
@@ -66,6 +73,8 @@ void EditorMenuBar::draw() {
 
         ImGui::EndMenuBar();
     }
+    ImGui::PopStyleVar(2);
+    ImGui::PopFont();
 
     if (mShortcutDialogOpen) ImGui::OpenPopup("##KeyboardShortcuts");
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -114,12 +123,18 @@ void EditorMenuBar::draw() {
             &mExportDialogOpen,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize
         )) {
-        constexpr const char* aspectOptions[] = {"16:9  Widescreen", "9:16  Vertical", "1:1  Square", "Custom"};
-        constexpr const char* resolutionOptions[] =
-            {"1920 x 1080  Full HD", "1280 x 720  HD", "2560 x 1440  QHD", "3840 x 2160  4K", "Custom"};
-        constexpr const char* fpsOptions[] = {"30 FPS", "60 FPS", "120 FPS", "Custom"};
-        constexpr const char* bitrateOptions[] =
-            {"10 Mbps  Compact", "20 Mbps  Balanced", "40 Mbps  High quality", "Custom"};
+        std::string const custom          = "playback.refactorEditor.export.custom"_tr();
+        std::string const widescreen      = "16:9  " + "playback.refactorEditor.export.widescreen"_tr();
+        std::string const vertical        = "9:16  " + "playback.refactorEditor.export.vertical"_tr();
+        std::string const square          = "1:1  " + "playback.refactorEditor.export.square"_tr();
+        const char*       aspectOptions[] = {widescreen.c_str(), vertical.c_str(), square.c_str(), custom.c_str()};
+        const char*       resolutionOptions[] =
+            {"1920 x 1080  Full HD", "1280 x 720  HD", "2560 x 1440  QHD", "3840 x 2160  4K", custom.c_str()};
+        const char*       fpsOptions[]     = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
+        std::string const compact          = "10 Mbps  " + "playback.refactorEditor.export.compact"_tr();
+        std::string const balanced         = "20 Mbps  " + "playback.refactorEditor.export.balanced"_tr();
+        std::string const highQuality      = "40 Mbps  " + "playback.refactorEditor.export.highQuality"_tr();
+        const char*       bitrateOptions[] = {compact.c_str(), balanced.c_str(), highQuality.c_str(), custom.c_str()};
         constexpr const char* formatOptions[]   = {"MP4", "MKV", "WebM", "MOV", "AVI"};
         constexpr const char* codecOptions[][5] = {
             {"H.264", "H.265 / HEVC", nullptr},
@@ -168,7 +183,7 @@ void EditorMenuBar::draw() {
         ImGui::TextUnformatted("playback.refactorEditor.export.video"_tr().c_str());
         ImGui::Separator();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Aspect ratio");
+        ImGui::TextUnformatted("playback.refactorEditor.export.aspect"_tr().c_str());
         ImGui::SameLine(150.0f);
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::Combo("##export-aspect", &mAspectPreset, aspectOptions, IM_ARRAYSIZE(aspectOptions))
@@ -177,7 +192,7 @@ void EditorMenuBar::draw() {
             mHeight      = std::max(1, static_cast<int>(mWidth / aspect + 0.5f));
         }
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Resolution");
+        ImGui::TextUnformatted("playback.refactorEditor.export.resolution"_tr().c_str());
         ImGui::SameLine(150.0f);
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::Combo("##export-resolution", &mResolutionPreset, resolutionOptions, IM_ARRAYSIZE(resolutionOptions))
@@ -200,7 +215,7 @@ void EditorMenuBar::draw() {
             mHeight = std::clamp(mHeight, 16, 4320);
         }
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Frame rate");
+        ImGui::TextUnformatted("playback.refactorEditor.export.frameRate"_tr().c_str());
         ImGui::SameLine(150.0f);
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::Combo("##export-fps", &mFpsPreset, fpsOptions, IM_ARRAYSIZE(fpsOptions)) && mFpsPreset < 3)
@@ -212,7 +227,7 @@ void EditorMenuBar::draw() {
             mFps = std::clamp(mFps, 1, 240);
         }
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Bitrate");
+        ImGui::TextUnformatted("playback.refactorEditor.export.bitrate"_tr().c_str());
         ImGui::SameLine(150.0f);
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::Combo("##export-bitrate", &mBitratePreset, bitrateOptions, IM_ARRAYSIZE(bitrateOptions))
@@ -242,18 +257,20 @@ void EditorMenuBar::draw() {
             formatOptions[mFormatPreset],
             codecOptions[mFormatPreset][mCodecPreset]
         );
-        ImGui::TextDisabled("OUTPUT SUMMARY");
+        ImGui::TextDisabled("%s", "playback.refactorEditor.export.summary"_tr().c_str());
         ImGui::SameLine();
         ImGui::TextUnformatted(summary);
-        ImGui::TextDisabled("File: %s/%s.%s", mExportDirectory.data(), mExportName.data(), extensions[mFormatPreset]);
+        std::string const outputFile =
+            std::string(mExportDirectory.data()) + "/" + mExportName.data() + "." + extensions[mFormatPreset];
+        ImGui::TextDisabled("%s", "playback.refactorEditor.export.file"_tr(outputFile).c_str());
         ImGui::Spacing();
         ImGui::BeginDisabled();
-        ImGui::Button("Export Video", ImVec2(140.0f, 32.0f));
+        ImGui::Button("playback.refactorEditor.export.export"_tr().c_str(), ImVec2(140.0f, 32.0f));
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Export backend is not available yet");
+            ImGui::SetTooltip("%s", "playback.refactorEditor.export.backendUnavailable"_tr().c_str());
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(110.0f, 32.0f))) {
+        if (ImGui::Button("playback.refactorEditor.export.cancel"_tr().c_str(), ImVec2(110.0f, 32.0f))) {
             mExportDialogOpen = false;
             ImGui::CloseCurrentPopup();
         }

@@ -93,6 +93,17 @@ public:
     }
 };
 
+struct ActionConfigurationPacket : Action {
+    ActionConfigurationPacket() : Action("configuration_packet") {}
+    void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionConfigurationPacket& getInstance() {
+        static ActionConfigurationPacket instance;
+        return instance;
+    }
+};
+
 struct ActionGamePacket : Action {
     ActionGamePacket() : Action("game_packet") {}
     void handle(functions::ReplaySession& replaySession, PlaybackBuffer& data) override;

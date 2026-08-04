@@ -16,13 +16,13 @@ enum class TrackRowKind {
 
 struct TrackTreeRow {
     TrackRowKind kind;
-    std::string id;
-    std::string name;
-    int cameraIndex{-1};
-    float height{};
-    bool active{};
-    bool locked{};
-    bool visible{true};
+    std::string  id;
+    std::string  name;
+    int          cameraIndex{-1};
+    float        height{};
+    bool         active{};
+    bool         locked{};
+    bool         visible{true};
 };
 
 class TrackTreeModel {
@@ -37,7 +37,7 @@ public:
     [[nodiscard]] const std::vector<TrackTreeRow>& rows() const;
 
 private:
-    std::string mSearch;
+    std::string               mSearch;
     std::vector<TrackTreeRow> mRows;
     bool mCamerasExpanded{true};
 };

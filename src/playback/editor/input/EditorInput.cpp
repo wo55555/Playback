@@ -106,8 +106,7 @@ bool routeKeyEvent(uint32_t keyCode, bool down) {
     std::scoped_lock lock(gKeyMutex);
 
     bool const gameOwnsKey = !gUiVisible.load(std::memory_order_acquire)
-                          || gGameInputCaptured.load(std::memory_order_acquire)
-                          || gGamePressedKeys.contains(keyCode);
+                          || gGameInputCaptured.load(std::memory_order_acquire) || gGamePressedKeys.contains(keyCode);
     if (gameOwnsKey) {
         if (down) gGamePressedKeys.insert(keyCode);
         else gGamePressedKeys.erase(keyCode);
@@ -129,7 +128,7 @@ bool isUiVisible() { return gUiVisible.load(std::memory_order_acquire); }
 
 void setGameInputCaptured(bool captured) {
     std::scoped_lock lock(gKeyMutex);
-    bool const      changed = gGameInputCaptured.exchange(captured, std::memory_order_acq_rel) != captured;
+    bool const       changed = gGameInputCaptured.exchange(captured, std::memory_order_acq_rel) != captured;
     if (captured && changed) releaseEditorKeysLocked();
 }
 

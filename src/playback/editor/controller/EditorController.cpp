@@ -5,8 +5,13 @@
 #include "playback/editor/editing/CameraBindingOps.h"
 #include "playback/editor/editing/commands/CameraCommands.h"
 #include "playback/editor/editing/commands/CommandFactory.h"
+#include "playback/functions/replay/ReplaySession.h"
+#include "playback/screen/ReplayBrowser.h"
+
+#include "ll/api/i18n/I18n.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <utility>
 
 namespace playback::editor {
@@ -29,6 +34,11 @@ ReplayBrowserEntry makeBrowserEntry(screen::ReplaySummary summary) {
     return entry;
 }
 
+std::string replayPreferenceKey(std::filesystem::path const& path) {
+    auto const utf8Path = path.lexically_normal().generic_u8string();
+    return {reinterpret_cast<char const*>(utf8Path.data()), utf8Path.size()};
+}
+
 } // namespace
 
 EditorController::EditorController(EditorContext& context)
@@ -40,14 +50,15 @@ void EditorController::reset() {
     mBrowserOperation = ReplayBrowserOperation::None;
     mBrowserError.clear();
     mBrowserSnapshot = std::make_shared<ReplayBrowserSnapshot>();
-    mProject = {};
+    mProject         = {};
     mCommandStack.clear();
+    mActiveReplayPath.clear();
     mProjectTotalTicks = -1;
 }
 
-void EditorController::ensureProject(int totalTicks) {
+void EditorController::ensureProject(int totalTicks, std::string_view replayPath) {
     totalTicks = std::max(0, totalTicks);
-    if (mProjectTotalTicks == totalTicks) return;
+    if (mProjectTotalTicks == totalTicks && mProject.projectPath == replayPath) return;
 
     mProject = {};
     mProject.version = 4;
@@ -108,7 +119,10 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick), mProject);
         break;
     case EditorActionType::MoveCameraKeyframe:
-        mCommandStack.push(CommandFactory::createMoveCameraKeyframe(action.id, action.secondaryId, action.tick), mProject);
+        mCommandStack.push(
+            CommandFactory::createMoveCameraKeyframe(action.id, action.secondaryId, action.tick),
+            mProject
+        );
         break;
     case EditorActionType::DeleteCameraKeyframe:
         mCommandStack.push(CommandFactory::createDeleteCameraKeyframe(action.id, action.secondaryId), mProject);
@@ -123,7 +137,10 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(CommandFactory::createUnbindCamera(action.id), mProject);
         break;
     case EditorActionType::SetCameraKind:
-        mCommandStack.push(CommandFactory::createSetCameraKind(action.id, static_cast<editing::model::CameraKind>(action.kind)), mProject);
+        mCommandStack.push(
+            CommandFactory::createSetCameraKind(action.id, static_cast<editing::model::CameraKind>(action.kind)),
+            mProject
+        );
         break;
     case EditorActionType::CreateBindingCamera:
         mCommandStack.push(CommandFactory::createCreateBindingCamera(action.id, action.name), mProject);
@@ -143,26 +160,27 @@ void EditorController::publishState(bool hudVisible) {
     auto& session = functions::ReplaySession::getInstance();
 
     EditorState state;
-    state.replayVisible     = session.isActive() && session.hasJoinedReplayWorld();
-    state.editorVisible     = session.isActive();
-    state.hudVisible        = hudVisible;
-    state.paused            = session.isPaused();
-    state.playbackSpeed     = session.getPlaybackSpeed();
-    state.currentTick       = std::max(0, session.getCurrentTick());
-    state.totalTicks        = std::max(0, session.getTotalTicks());
-    ensureProject(state.totalTicks);
-    mProject.currentTick = state.currentTick;
-    mProject.playing = !state.paused;
-    mProject.playbackSpeed = state.playbackSpeed;
-    state.project = std::make_shared<editing::model::EditorStateExt>(mProject);
-    state.canUndo = mCommandStack.canUndo();
-    state.canRedo = mCommandStack.canRedo();
+    state.replayVisible = session.isActive() && session.hasJoinedReplayWorld();
+    state.editorVisible = session.isActive();
+    state.hudVisible    = hudVisible;
+    state.paused        = session.isPaused();
+    state.playbackSpeed = session.getPlaybackSpeed();
+    state.currentTick   = std::max(0, session.getCurrentTick());
+    state.totalTicks    = std::max(0, session.getTotalTicks());
+    if (!state.editorVisible) mActiveReplayPath.clear();
+    ensureProject(state.totalTicks, mActiveReplayPath);
+    mProject.currentTick             = state.currentTick;
+    mProject.playing                 = !state.paused;
+    mProject.playbackSpeed           = state.playbackSpeed;
+    state.project                    = std::make_shared<editing::model::EditorStateExt>(mProject);
+    state.canUndo                    = mCommandStack.canUndo();
+    state.canRedo                    = mCommandStack.canRedo();
     state.capabilities.cameraEditing = state.editorVisible;
-    state.capabilities.videoEditing = state.editorVisible;
-    state.browser.visible   = mBrowserVisible;
-    state.browser.operation = mBrowserOperation;
-    state.browser.error     = mBrowserError;
-    state.browser.snapshot  = mBrowserSnapshot;
+    state.capabilities.videoEditing  = state.editorVisible;
+    state.browser.visible            = mBrowserVisible;
+    state.browser.operation          = mBrowserOperation;
+    state.browser.error              = mBrowserError;
+    state.browser.snapshot           = mBrowserSnapshot;
     mContext.publish(std::move(state));
 }
 
@@ -186,6 +204,8 @@ ReplayBrowserEntry const* EditorController::findBrowserEntry(std::string_view re
 }
 
 void EditorController::tick(bool hudVisible) {
+    using namespace ll::i18n_literals;
+
     auto& session = functions::ReplaySession::getInstance();
 
     for (auto const& action : mContext.takeActions()) {
@@ -237,13 +257,15 @@ void EditorController::tick(bool hudVisible) {
                 auto replay = action.path.empty() ? screen::ReplayBrowser::findReplay(action.replayId)
                                                   : screen::ReplayBrowser::findReplay(action.path.string());
                 if (!replay) {
-                    mBrowserError = "Replay file no longer exists";
+                    mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                 } else if (!replay->canOpen) {
-                    mBrowserError = replay->problem.empty() ? "Replay archive is invalid" : replay->problem;
+                    mBrowserError =
+                        replay->problem.empty() ? "playback.replayBrowser.error.invalidArchive"_tr() : replay->problem;
                 } else if (!session.start(replay->path)) {
-                    mBrowserError = "Failed to start replay session";
+                    mBrowserError = "playback.replayBrowser.error.openFailed"_tr();
                 } else {
-                    mBrowserVisible = false;
+                    mActiveReplayPath = replayPreferenceKey(replay->path);
+                    mBrowserVisible   = false;
                     mBrowserError.clear();
                 }
             });
@@ -260,7 +282,7 @@ void EditorController::tick(bool hudVisible) {
                 for (auto const& replayId : action.replayIds) {
                     auto const* entry = findBrowserEntry(replayId);
                     if (!entry) {
-                        mBrowserError = "Replay file no longer exists";
+                        mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                         break;
                     }
                     auto replay = screen::ReplayBrowser::findReplay(entry->path.string());
@@ -275,7 +297,7 @@ void EditorController::tick(bool hudVisible) {
                 auto const* entry  = findBrowserEntry(action.replayId);
                 auto        replay = entry ? screen::ReplayBrowser::findReplay(entry->path.string()) : std::nullopt;
                 if (!replay) {
-                    mBrowserError = "Replay file no longer exists";
+                    mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                 } else if (screen::ReplayBrowser::renameReplay(*replay, action.name, mBrowserError)) {
                     refreshBrowser();
                 }
@@ -286,9 +308,9 @@ void EditorController::tick(bool hudVisible) {
                 auto const* entry  = findBrowserEntry(action.replayId);
                 auto        replay = entry ? screen::ReplayBrowser::findReplay(entry->path.string()) : std::nullopt;
                 if (!replay) {
-                    mBrowserError = "Replay file no longer exists";
+                    mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                 } else if (!screen::ReplayBrowser::showInFolder(*replay)) {
-                    mBrowserError = "Unable to show replay in File Explorer";
+                    mBrowserError = "playback.replayBrowser.error.showInFolderFailed"_tr();
                 } else {
                     mBrowserError.clear();
                 }

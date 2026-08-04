@@ -133,13 +133,11 @@ bool ReplayExporter::exportReplay(
 
     auto closeZip = true;
 
-    // Write metadata
     std::string metadataJson = meta->toJson();
     if (!writeBufferEntry(zip, "metadata.json", metadataJson)) {
         closeZip = false;
     }
 
-    // Write chunked level chunk caches
     auto levelChunkCaches = recordDir / "level_chunk_caches";
     if (std::filesystem::exists(levelChunkCaches) && std::filesystem::is_directory(levelChunkCaches)) {
         for (auto const& entry : std::filesystem::directory_iterator(levelChunkCaches)) {
@@ -153,19 +151,16 @@ bool ReplayExporter::exportReplay(
         }
     }
 
-    // Write level chunk cache
     auto levelChunkCachePath = recordDir / "level_chunk_cache";
     if (closeZip && std::filesystem::exists(levelChunkCachePath)) {
         closeZip = writeFileEntry(zip, levelChunkCachePath, "level_chunk_cache");
     }
 
-    // Write icon
     auto iconPath = recordDir / "icon.png";
     if (closeZip && std::filesystem::exists(iconPath)) {
         closeZip = writeFileEntry(zip, iconPath, "icon.png");
     }
 
-    // Write chunks
     if (closeZip) {
         for (auto const& [chunkName, _] : meta->chunks) {
             auto chunkPath = recordDir / chunkName;
@@ -196,8 +191,6 @@ bool ReplayExporter::exportReplay(
 }
 
 std::optional<PlaybackMeta> ReplayExporter::tryReadMeta(std::filesystem::path const& file) {
-    getLogger().debug("Trying to read metadata json {}", file);
-
     std::ifstream metadata(file, std::ios::binary);
     if (!metadata.is_open()) {
         getLogger().error("Metadata JSON doesn't exist!");

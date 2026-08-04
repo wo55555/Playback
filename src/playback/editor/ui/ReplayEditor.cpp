@@ -2,9 +2,9 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/ui/ErrorDialog.h"
-#include "playback/editor/ui/iconfont.h"
 
 #include "imgui.h"
+#include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +12,19 @@
 #include <utility>
 
 namespace playback::editor::ui {
+
+namespace {
+
+constexpr char kLayoutPreferencesPath[] = "mods/playback/editor-layout.json";
+
+float readFiniteFloat(nlohmann::ordered_json const& object, char const* key, float fallback) {
+    auto const value = object.find(key);
+    if (value == object.end() || !value->is_number()) return fallback;
+    float const result = value->get<float>();
+    return std::isfinite(result) ? result : fallback;
+}
+
+} // namespace
 
 ReplayEditor& ReplayEditor::getInstance() {
     static ReplayEditor instance;
@@ -26,6 +39,8 @@ void ReplayEditor::initialize() {
 
 void ReplayEditor::shutdown() {
     saveLayoutPreferences();
+    mTimelineViewPreferences.clear();
+    mActiveReplayPath.clear();
     mViewportMaximized = false;
     mCurveEditorPanel.setOpen(false);
     mFrameState = nullptr;
@@ -40,41 +55,93 @@ void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
 }
 
 void ReplayEditor::loadLayoutPreferences() {
-    std::ifstream input("mods/playback/editor-layout.ini");
-    float         detailsRatio{};
-    float         timelineRatio{};
-    float         aspectRatio{};
-    float         trackListRatio{};
-    float         pixelsPerTick{};
-    float         horizontalScroll{};
-    std::string   version;
-    if (input >> version >> detailsRatio >> timelineRatio >> aspectRatio >> trackListRatio >> pixelsPerTick
-            >> horizontalScroll
-        && version == "v4" && std::isfinite(detailsRatio) && std::isfinite(timelineRatio) && std::isfinite(aspectRatio)
-        && std::isfinite(trackListRatio) && std::isfinite(pixelsPerTick) && std::isfinite(horizontalScroll)) {
-        mDetailsWidthRatio   = std::clamp(detailsRatio, 0.15f, 0.50f);
-        mTimelineHeightRatio = std::clamp(timelineRatio, 0.18f, 0.65f);
-        mVideoAspectRatio    = std::clamp(aspectRatio, 0.25f, 4.0f);
-        mTimelinePanel.setViewPreferences(trackListRatio, pixelsPerTick, horizontalScroll);
-    } else {
-        input.clear();
-        input.seekg(0);
-        if (input >> detailsRatio >> timelineRatio >> aspectRatio && std::isfinite(detailsRatio)
-            && std::isfinite(timelineRatio) && std::isfinite(aspectRatio)) {
-            mDetailsWidthRatio   = std::clamp(detailsRatio, 0.15f, 0.50f);
-            mTimelineHeightRatio = std::clamp(timelineRatio, 0.18f, 0.65f);
-            mVideoAspectRatio    = std::clamp(aspectRatio, 0.25f, 4.0f);
+    mDetailsWidthRatio   = 0.20f;
+    mTimelineHeightRatio = 0.35f;
+    mVideoAspectRatio    = 16.0f / 9.0f;
+    mTimelinePanel.setViewPreferences(0.30f, 1.0f, 0.0f);
+    mTimelineViewPreferences.clear();
+    mActiveReplayPath.clear();
+
+    std::ifstream input(kLayoutPreferencesPath);
+    if (input) {
+        auto const config = nlohmann::ordered_json::parse(input, nullptr, false);
+        if (config.is_object()) {
+            mDetailsWidthRatio =
+                std::clamp(readFiniteFloat(config, "detailsWidthRatio", mDetailsWidthRatio), 0.15f, 0.50f);
+            mTimelineHeightRatio =
+                std::clamp(readFiniteFloat(config, "timelineHeightRatio", mTimelineHeightRatio), 0.18f, 0.65f);
+            mVideoAspectRatio = std::clamp(readFiniteFloat(config, "videoAspectRatio", mVideoAspectRatio), 0.25f, 4.0f);
+            float const trackListWidthRatio =
+                readFiniteFloat(config, "trackListWidthRatio", mTimelinePanel.trackListWidthRatio());
+            mTimelinePanel.setViewPreferences(trackListWidthRatio, 1.0f, 0.0f);
+
+            auto const views = config.find("timelineViews");
+            if (views != config.end() && views->is_object()) {
+                for (auto const& [replayPath, view] : views->items()) {
+                    if (replayPath.empty() || !view.is_object()) continue;
+                    mTimelineViewPreferences.insert_or_assign(
+                        replayPath,
+                        TimelineViewPreferences{
+                            std::clamp(readFiniteFloat(view, "zoomScale", 1.0f), 1.0f, 20.0f),
+                            std::max(0.0f, readFiniteFloat(view, "horizontalScroll", 0.0f))
+                        }
+                    );
+                }
+            }
         }
     }
     mViewportPanel.setVideoAspectRatio(mVideoAspectRatio);
 }
 
 void ReplayEditor::saveLayoutPreferences() const {
-    std::ofstream output("mods/playback/editor-layout.ini", std::ios::trunc);
+    nlohmann::ordered_json timelineViews = nlohmann::ordered_json::object();
+    for (auto const& [replayPath, preferences] : mTimelineViewPreferences) {
+        if (replayPath == mActiveReplayPath) continue;
+        timelineViews[replayPath] = {
+            {"zoomScale",        preferences.zoomScale       },
+            {"horizontalScroll", preferences.horizontalScroll}
+        };
+    }
+    if (!mActiveReplayPath.empty()) {
+        timelineViews[mActiveReplayPath] = {
+            {"zoomScale",        mTimelinePanel.zoomScale()       },
+            {"horizontalScroll", mTimelinePanel.horizontalScroll()}
+        };
+    }
+
+    nlohmann::ordered_json const config{
+        {"detailsWidthRatio",   mDetailsWidthRatio                  },
+        {"timelineHeightRatio", mTimelineHeightRatio                },
+        {"videoAspectRatio",    mVideoAspectRatio                   },
+        {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()},
+        {"timelineViews",       std::move(timelineViews)            }
+    };
+    std::ofstream output(kLayoutPreferencesPath, std::ios::trunc);
     if (output) {
-        output << "v4 " << mDetailsWidthRatio << ' ' << mTimelineHeightRatio << ' ' << mVideoAspectRatio << ' '
-               << mTimelinePanel.trackListWidthRatio() << ' ' << mTimelinePanel.pixelsPerTick() << ' '
-               << mTimelinePanel.horizontalScroll();
+        output << config.dump(2);
+    }
+}
+
+void ReplayEditor::syncTimelineViewPreferences(std::string_view replayPath) {
+    if (mActiveReplayPath == replayPath) return;
+
+    if (!mActiveReplayPath.empty()) {
+        mTimelineViewPreferences.insert_or_assign(
+            mActiveReplayPath,
+            TimelineViewPreferences{mTimelinePanel.zoomScale(), mTimelinePanel.horizontalScroll()}
+        );
+    }
+
+    mActiveReplayPath.assign(replayPath);
+    auto const preferences = mTimelineViewPreferences.find(mActiveReplayPath);
+    if (preferences == mTimelineViewPreferences.end()) {
+        mTimelinePanel.setViewPreferences(mTimelinePanel.trackListWidthRatio(), 1.0f, 0.0f);
+    } else {
+        mTimelinePanel.setViewPreferences(
+            mTimelinePanel.trackListWidthRatio(),
+            preferences->second.zoomScale,
+            preferences->second.horizontalScroll
+        );
     }
 }
 
@@ -89,6 +156,9 @@ void ReplayEditor::submitAction(playback::editor::EditorAction action) const {
 
 void ReplayEditor::draw(playback::editor::EditorState const& state, SubmitAction const& submit) {
     if (!state.editorVisible) return;
+    std::string_view replayPath;
+    if (state.project) replayPath = state.project->projectPath;
+    syncTimelineViewPreferences(replayPath);
     mFrameState = &state;
     mSubmit     = &submit;
 
@@ -132,12 +202,10 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
 
-    // ── Playback control ──
     if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
         submitAction({playback::editor::EditorActionType::TogglePause});
     }
 
-    // ── Seek ──
     if (ImGui::IsKeyPressed(ImGuiKey_Home)) {
         submitAction({playback::editor::EditorActionType::SkipToStart});
     }
@@ -157,7 +225,6 @@ void ReplayEditor::handleKeyboardShortcuts() {
         submitAction(std::move(action));
     }
 
-    // ── Speed ──
     // Note: -/= are handled as separate checks since IsKeyPressed consumes the event
     if (ImGui::IsKeyPressed(ImGuiKey_Minus)) {
         submitAction({playback::editor::EditorActionType::DecreaseSpeed});

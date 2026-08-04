@@ -18,13 +18,13 @@ public:
 
     [[nodiscard]] std::vector<std::string> undoLabels() const;
     [[nodiscard]] std::vector<std::string> redoLabels() const;
-    [[nodiscard]] bool canUndo() const;
-    [[nodiscard]] bool canRedo() const;
+    [[nodiscard]] bool                     canUndo() const;
+    [[nodiscard]] bool                     canRedo() const;
 
 private:
     std::vector<std::unique_ptr<model::IEditCommand>> mUndo;
     std::vector<std::unique_ptr<model::IEditCommand>> mRedo;
-    size_t mMaxSteps{100};
+    size_t                                            mMaxSteps{100};
 };
 
 } // namespace playback::editor::editing::command

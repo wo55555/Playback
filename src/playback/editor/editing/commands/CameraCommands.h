@@ -1,8 +1,11 @@
 #pragma once
+
 #include "playback/editor/editing/models/EditorStateExt.h"
 #include "playback/editor/editing/models/IEditCommand.h"
+
 #include <optional>
 #include <string>
+
 namespace playback::editor::editing::command {
 class AddFreeCamera final : public model::IEditCommand { public: explicit AddFreeCamera(std::string); void execute(model::EditorStateExt&) override; void undo(model::EditorStateExt&) override; std::string label() const override; private: std::string mName; std::optional<model::EditorStateExt> mBefore; };
 class DeleteCamera final : public model::IEditCommand { public: explicit DeleteCamera(std::string); void execute(model::EditorStateExt&) override; void undo(model::EditorStateExt&) override; std::string label() const override; private: std::string mId; std::optional<model::EditorStateExt> mBefore; };

@@ -11,9 +11,9 @@ namespace playback::editor::editing {
 //        EventBus::emit(SomeEvent{...});
 
 struct StateChangedEvent {
-    int currentTick{};
-    int totalTicks{};
-    bool playing{};
+    int   currentTick{};
+    int   totalTicks{};
+    bool  playing{};
     float playbackSpeed{};
 };
 
@@ -23,7 +23,7 @@ struct SelectionChangedEvent {
 
 struct CommandExecutedEvent {
     std::string commandLabel;
-    bool isUndo{false};
+    bool        isUndo{false};
 };
 
 struct ReplayStartedEvent {
@@ -38,36 +38,36 @@ class EventBus {
 public:
     using Token = size_t;
 
-    template<typename E>
+    template <typename E>
     using Handler = std::function<void(E const&)>;
 
-    template<typename E>
+    template <typename E>
     static Token on(Handler<E> handler) {
         std::scoped_lock lock(mMutex());
-        auto& handlers = handlersFor<E>();
-        Token token = nextToken();
-        handlers[token] = std::move(handler);
+        auto&            handlers = handlersFor<E>();
+        Token            token    = nextToken();
+        handlers[token]           = std::move(handler);
         return token;
     }
 
-    template<typename E>
+    template <typename E>
     static void off(Token token) {
         std::scoped_lock lock(mMutex());
-        auto& handlers = handlersFor<E>();
+        auto&            handlers = handlersFor<E>();
         handlers.erase(token);
     }
 
-    template<typename E>
+    template <typename E>
     static void emit(E const& event) {
         std::scoped_lock lock(mMutex());
-        auto& handlers = handlersFor<E>();
+        auto&            handlers = handlersFor<E>();
         for (auto& [_, handler] : handlers) {
             if (handler) handler(event);
         }
     }
 
 private:
-    template<typename E>
+    template <typename E>
     static std::unordered_map<Token, Handler<E>>& handlersFor() {
         static std::unordered_map<Token, Handler<E>> sHandlers;
         return sHandlers;

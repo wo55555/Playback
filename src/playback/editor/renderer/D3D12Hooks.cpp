@@ -66,11 +66,11 @@ struct DeviceQueueCandidate {
     bool                       ambiguous{};
 };
 
-std::mutex                                                    gDeviceQueueMapMutex;
-std::unordered_map<ID3D12Device*, DeviceQueueCandidate>       gDeviceQueueMap;
+std::mutex                                              gDeviceQueueMapMutex;
+std::unordered_map<ID3D12Device*, DeviceQueueCandidate> gDeviceQueueMap;
 
-std::atomic<bool>   gTimelineHooksStopping{true};
-std::atomic<bool>   gRendererInitHookStopping{true};
+std::atomic<bool> gTimelineHooksStopping{true};
+std::atomic<bool> gRendererInitHookStopping{true};
 
 std::atomic<uint32_t>   gActiveDetours{};
 std::mutex              gActiveDetoursMutex;
@@ -261,7 +261,7 @@ DECLARE_DETOUR_FN(
     DXGI_SWAP_CHAIN_DESC* description,
     IDXGISwapChain**      swapChain
 ) {
-    ActiveDetour activeDetour;
+    ActiveDetour  activeDetour;
     HRESULT const result =
         reinterpret_cast<CreateSwapChainFn>(gOriginalCreateSwapChain)(factory, device, description, swapChain);
     if (SUCCEEDED(result) && swapChain && *swapChain) {
@@ -281,7 +281,7 @@ DECLARE_DETOUR_FN(
     IDXGIOutput*                           restrictToOutput,
     IDXGISwapChain1**                      swapChain
 ) {
-    ActiveDetour activeDetour;
+    ActiveDetour  activeDetour;
     HRESULT const result = reinterpret_cast<CreateSwapChainForHwndFn>(gOriginalCreateSwapChainForHwnd)(
         factory,
         device,
@@ -353,9 +353,11 @@ DECLARE_DETOUR_FN(
     REFIID                          riid,
     void**                          ppCommandQueue
 ) {
-    ActiveDetour activeDetour;
-    HRESULT const result = reinterpret_cast<CreateCommandQueueFn>(gOriginalCreateCommandQueue)(device, desc, riid, ppCommandQueue);
-    if (FAILED(result) || !desc || desc->Type != D3D12_COMMAND_LIST_TYPE_DIRECT || !ppCommandQueue || !*ppCommandQueue) {
+    ActiveDetour  activeDetour;
+    HRESULT const result =
+        reinterpret_cast<CreateCommandQueueFn>(gOriginalCreateCommandQueue)(device, desc, riid, ppCommandQueue);
+    if (FAILED(result) || !desc || desc->Type != D3D12_COMMAND_LIST_TYPE_DIRECT || !ppCommandQueue
+        || !*ppCommandQueue) {
         return result;
     }
 
@@ -606,7 +608,7 @@ bool getDirectCommandQueue(IUnknown* object, ComPtr<ID3D12CommandQueue>& queue) 
 }
 
 // ── Swap chain queue fallback map (used when private data is lost) ──
-std::mutex                         gSwapChainQueueFallbackMutex;
+std::mutex                           gSwapChainQueueFallbackMutex;
 std::unordered_map<void*, IUnknown*> gSwapChainQueueFallback;
 
 void bindSwapChainQueue(IDXGISwapChain* swapChain, IUnknown* queueObject) {
@@ -630,8 +632,7 @@ ComPtr<ID3D12CommandQueue> getSwapChainQueue(IDXGISwapChain* swapChain) {
     ComPtr<IUnknown> queueObject;
     UINT             dataSize = sizeof(IUnknown*);
     if (SUCCEEDED(swapChain->GetPrivateData(SwapChainQueueGuid, &dataSize, queueObject.GetAddressOf()))
-        && dataSize == sizeof(IUnknown*))
-    {
+        && dataSize == sizeof(IUnknown*)) {
         ComPtr<ID3D12CommandQueue> queue;
         if (getDirectCommandQueue(queueObject.Get(), queue)) {
             return queue;
@@ -640,7 +641,7 @@ ComPtr<ID3D12CommandQueue> getSwapChainQueue(IDXGISwapChain* swapChain) {
     // Fallback: global map (survives IFramebuffer recreation etc.)
     {
         std::scoped_lock lk(gSwapChainQueueFallbackMutex);
-        auto it = gSwapChainQueueFallback.find(swapChain);
+        auto             it = gSwapChainQueueFallback.find(swapChain);
         if (it != gSwapChainQueueFallback.end() && it->second) {
             ComPtr<ID3D12CommandQueue> queue;
             if (SUCCEEDED(it->second->QueryInterface(IID_PPV_ARGS(&queue))) && queue) {
@@ -663,7 +664,7 @@ void unbindSwapChainQueue(IDXGISwapChain* swapChain) {
     if (swapChain) {
         swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
         std::scoped_lock lk(gSwapChainQueueFallbackMutex);
-        auto it = gSwapChainQueueFallback.find(swapChain);
+        auto             it = gSwapChainQueueFallback.find(swapChain);
         if (it != gSwapChainQueueFallback.end()) {
             if (it->second) it->second->Release();
             gSwapChainQueueFallback.erase(it);
@@ -864,9 +865,8 @@ bool hookD3D12(bool enable) {
         }
         bool const captureOk = installCaptureHooks(state);
         if (!captureOk) {
-            getLogger().warn(
-                "One or more replay queue capture hooks are unavailable; existing swap chains require a unique captured Direct queue"
-            );
+            getLogger().warn("One or more replay queue capture hooks are unavailable; existing swap chains require a "
+                             "unique captured Direct queue");
         }
         if (installCoreHooks(state)) {
             gTimelineHooksStopping.store(false, std::memory_order_release);

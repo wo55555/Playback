@@ -11,7 +11,7 @@ public:
     void put(const std::vector<model::Clip>& clips, const std::vector<model::Transition>& transitions);
     [[nodiscard]] std::vector<model::Clip>       getClips() const;
     [[nodiscard]] std::vector<model::Transition> getTransitions() const;
-    void clear();
+    void                                         clear();
 
     [[nodiscard]] bool hasContent() const;
 

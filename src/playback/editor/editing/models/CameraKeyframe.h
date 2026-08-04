@@ -22,11 +22,11 @@ struct CameraKeyframe {
     std::string id;
     int         tick{};
 
-    Vec3  position{0, 80, 0};
-    float yaw{0.0f};
-    float pitch{0.0f};
-    float fov{90.0f};
-    Color4 tint{1,1,1,1};
+    Vec3   position{0, 80, 0};
+    float  yaw{0.0f};
+    float  pitch{0.0f};
+    float  fov{90.0f};
+    Color4 tint{1, 1, 1, 1};
 
     EasingType easingType{EasingType::Linear};
     Vec2 bezierCtrl1{0.42f, 0.0f};

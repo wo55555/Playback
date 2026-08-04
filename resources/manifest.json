@@ -2,7 +2,7 @@
   "format_version": 2,
   "header": {
     "name": "Playback UI",
-    "description": "Client UI resources for Playback.",
+    "description": "Main-menu button resources for Playback.",
     "uuid": "e2c7d334-1b48-4f61-a6eb-4bb33a9da0da",
     "version": [
       0,

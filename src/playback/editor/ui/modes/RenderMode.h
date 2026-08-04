@@ -9,9 +9,9 @@ public:
     void draw();
 
 private:
-    int    mCurrentFrame{};
-    int    mTotalFrames{};
-    int    mProgressPercent{};
+    int         mCurrentFrame{};
+    int         mTotalFrames{};
+    int         mProgressPercent{};
     std::string mOutputPath;
     std::string mEta;
 };

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace playback::editor {
@@ -19,7 +20,7 @@ public:
 
 private:
     void publishState(bool hudVisible);
-    void ensureProject(int totalTicks);
+    void ensureProject(int totalTicks, std::string_view replayPath);
     void applyEditorAction(EditorAction const& action);
     void refreshBrowser();
     void runBrowserOperation(ReplayBrowserOperation operation, bool hudVisible, auto&& callback) {
@@ -39,6 +40,7 @@ private:
     std::shared_ptr<ReplayBrowserSnapshot const> mBrowserSnapshot;
     editing::model::EditorStateExt               mProject;
     editing::command::CommandStack               mCommandStack;
+    std::string                                  mActiveReplayPath;
     int                                          mProjectTotalTicks{-1};
 };
 
