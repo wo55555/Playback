@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/functions/action/Action.h"
+#include "playback/functions/packet/PacketLifecycle.h"
 
 #include "ll/api/service/Bedrock.h"
 #include "ll/api/service/TargetedBedrock.h"
@@ -2005,22 +2006,26 @@ void ReplaySession::handleConfigurationPacket(PlaybackBuffer& data) {
     std::string payload(data.mView.data() + data.mReadPointer, remaining);
     data.mReadPointer += remaining;
 
-    auto const policy = getConfigurationPacketCachePolicy(packetId);
-    if (policy == ConfigurationPacketCachePolicy::Ignore) {
-        getLogger().error("Replay contains unsupported configuration packet {}", packetIdValue);
+    auto const semantics = describePacketLifecycle(packetId);
+    if (!semantics.isConfiguration()) {
+        getLogger().error(
+            "Replay contains packet {} with lifecycle {} in a configuration action",
+            packetIdValue,
+            packetLifecycleName(semantics.lifecycle)
+        );
         mReplayFailed = true;
         return;
     }
 
     auto const applied = mAppliedConfigurationPackets.find(packetIdValue);
-    if (!shouldReplayConfigurationPacketEverySnapshot(packetId) && applied != mAppliedConfigurationPackets.end()
+    if (!semantics.shouldReplayEverySnapshot() && applied != mAppliedConfigurationPackets.end()
         && applied->second == payload) {
         return;
     }
 
-    // These packets belong to the pre-world resource-pack handshake. The recorded stack is substituted by the
-    // network hook while the replay world joins; dispatching it again here would restart that handshake.
-    if (packetId == MinecraftPacketIds::ResourcePacksInfo || packetId == MinecraftPacketIds::ResourcePackStack) {
+    // Pre-world packets are substituted by their network hooks while the replay world joins. Dispatching them
+    // again from a snapshot would restart the handshake.
+    if (semantics.lifecycle == PacketLifecycle::PreWorldHandshake) {
         mAppliedConfigurationPackets.insert_or_assign(packetIdValue, std::move(payload));
         return;
     }

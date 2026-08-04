@@ -4,18 +4,10 @@
 #include <string>
 #include <unordered_map>
 
-enum class MinecraftPacketIds : int;
-
 namespace playback::functions {
 
 class ReplaySession;
 class PlaybackBuffer;
-
-enum class ConfigurationPacketCachePolicy { Ignore, Latest, Sequence };
-
-[[nodiscard]] ConfigurationPacketCachePolicy getConfigurationPacketCachePolicy(MinecraftPacketIds packetId);
-
-[[nodiscard]] bool shouldReplayConfigurationPacketEverySnapshot(MinecraftPacketIds packetId);
 
 struct Action {
     std::string name;

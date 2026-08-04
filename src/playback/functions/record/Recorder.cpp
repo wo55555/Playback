@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/functions/action/Action.h"
 #include "playback/functions/io/AsyncReplaySaver.h"
+#include "playback/functions/packet/PacketLifecycle.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/utils/PathUtils.h"
 
@@ -1543,11 +1544,11 @@ void Recorder::recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallba
     recordGamePacket(armor);
 }
 
-void Recorder::recordConfigurationPacket(Packet const& packet) {
+void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSemantics const& semantics) {
     try {
+        if (!semantics.isConfiguration()) return;
+
         auto const packetType = packet.getId();
-        auto const policy     = getConfigurationPacketCachePolicy(packetType);
-        if (policy == ConfigurationPacketCachePolicy::Ignore) return;
 
         PlaybackBuffer stream;
         packet.write(stream);
@@ -1555,18 +1556,20 @@ void Recorder::recordConfigurationPacket(Packet const& packet) {
         auto const packetId = static_cast<int32_t>(packetType);
         std::scoped_lock lock(mPendingGamePacketsMutex);
 
-        if (packetType == MinecraftPacketIds::ResourcePacksInfo) {
+        if (semantics.startsConfigurationEpoch) {
             mConfigurationPackets.clear();
             mConfigurationPacketIndices.clear();
         }
 
-        if (packetType == MinecraftPacketIds::AvailableCommands) {
-            auto const softEnumId = static_cast<int32_t>(MinecraftPacketIds::UpdateSoftEnum);
+        if (semantics.supersedes) {
+            auto const supersededPacketId = static_cast<int32_t>(*semantics.supersedes);
             mConfigurationPackets.erase(
                 std::remove_if(
                     mConfigurationPackets.begin(),
                     mConfigurationPackets.end(),
-                    [softEnumId](auto const& cached) { return cached.mPacketId == softEnumId; }
+                    [supersededPacketId](auto const& cached) {
+                        return cached.mPacketId == supersededPacketId;
+                    }
                 ),
                 mConfigurationPackets.end()
             );
@@ -1580,7 +1583,7 @@ void Recorder::recordConfigurationPacket(Packet const& packet) {
         if (existing != mConfigurationPacketIndices.end()) {
             auto& cached = mConfigurationPackets[existing->second];
             if (cached.mPayload == stream.mBuffer) return;
-            if (policy == ConfigurationPacketCachePolicy::Sequence) {
+            if (semantics.keepsSequence()) {
                 mConfigurationPacketIndices.insert_or_assign(packetId, mConfigurationPackets.size());
                 mConfigurationPackets.push_back({packetId, std::move(stream.mBuffer)});
             } else {
@@ -1599,10 +1602,18 @@ void Recorder::recordConfigurationPacket(Packet const& packet) {
 }
 
 void Recorder::recordGamePacket(Packet const& packet) {
-    auto const packetId          = packet.getId();
-    if (getConfigurationPacketCachePolicy(packetId) != ConfigurationPacketCachePolicy::Ignore) {
-        recordConfigurationPacket(packet);
+    auto const packetId  = packet.getId();
+    auto const semantics = describePacketLifecycle(packetId);
+    switch (semantics.lifecycle) {
+    case PacketLifecycle::Ignore:
         return;
+    case PacketLifecycle::PreWorldHandshake:
+    case PacketLifecycle::SnapshotLatest:
+    case PacketLifecycle::SnapshotSequence:
+        recordConfigurationPacket(packet, semantics);
+        return;
+    case PacketLifecycle::Timeline:
+        break;
     }
 
     auto const state             = mState.load(std::memory_order_acquire);
@@ -1646,12 +1657,6 @@ void Recorder::recordGamePacket(Packet const& packet) {
             auto const& change = static_cast<ChangeDimensionPacket const&>(packet);
             mDimensionTransitionTargetId.store(change.mDimensionId->id, std::memory_order_release);
             mDimensionTransitionPending.store(true, std::memory_order_release);
-        }
-
-        if (packetId == MinecraftPacketIds::MoveAbsoluteActor || packetId == MinecraftPacketIds::MovePlayer
-            || packetId == MinecraftPacketIds::NetworkChunkPublisherUpdate
-            || packetId == MinecraftPacketIds::ChunkRadiusUpdated) {
-            return;
         }
 
         auto  clientInstance = ll::service::getClientInstance();

@@ -28,6 +28,8 @@ class Packet;
 
 namespace playback::functions {
 
+struct PacketLifecycleSemantics;
+
 struct PlaybackView {
     float x     = 0.0f;
     float y     = 0.0f;
@@ -144,7 +146,7 @@ private:
 
     void resetChunkSnapshot();
 
-    void recordConfigurationPacket(Packet const& packet);
+    void recordConfigurationPacket(Packet const& packet, PacketLifecycleSemantics const& semantics);
 
 public:
     Recorder();
