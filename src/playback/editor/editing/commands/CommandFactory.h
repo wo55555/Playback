@@ -1,14 +1,18 @@
 #pragma once
 
-#include "playback/editor/editing/models/CameraEntity.h"
 #include "playback/editor/editing/models/EditorStateExt.h"
 #include "playback/editor/editing/models/IEditCommand.h"
 #include "playback/editor/editing/models/Track.h"
+#include "playback/editor/editing/models/CameraEntity.h"
 
 #include <memory>
 #include <string>
 
 namespace playback::editor::editing::command {
+
+// ===== CommandFactory =====
+// Creates IEditCommand instances for common editor operations.
+// Retained for the future editing backend.
 
 class CommandFactory {
 public:
@@ -17,46 +21,46 @@ public:
     static std::unique_ptr<model::IEditCommand> createSplitSequence(int atTick);
     static std::unique_ptr<model::IEditCommand> createTrimSequence(const std::string& id, int start, int end);
     static std::unique_ptr<model::IEditCommand> createDeleteSequenceSegment(const std::string& id);
-    static std::unique_ptr<model::IEditCommand>
-    createBindSequenceToCamera(const std::string& id, const std::string& cameraId);
+    static std::unique_ptr<model::IEditCommand> createBindSequenceToCamera(const std::string& id, const std::string& cameraId);
     static std::unique_ptr<model::IEditCommand> createSplitWorldActor(int tick);
     static std::unique_ptr<model::IEditCommand> createTrimWorldActor(const std::string& id, int start, int end);
     static std::unique_ptr<model::IEditCommand> createSetWorldActorSpeed(const std::string& id, float speed);
     static std::unique_ptr<model::IEditCommand> createRippleDeleteWorldActorSegment(const std::string& id);
     static std::unique_ptr<model::IEditCommand> createAddFreeCamera(const std::string& name);
     static std::unique_ptr<model::IEditCommand> createDeleteCamera(const std::string& id);
-    static std::unique_ptr<model::IEditCommand>
-    createCreateBindingCamera(const std::string& id, const std::string& name);
+    static std::unique_ptr<model::IEditCommand> createCreateBindingCamera(const std::string& id, const std::string& name);
     static std::unique_ptr<model::IEditCommand> createUnbindCamera(const std::string& id);
     static std::unique_ptr<model::IEditCommand> createAddCameraKeyframe(const std::string& id, int tick);
-    static std::unique_ptr<model::IEditCommand> createCaptureCameraKeyframe(const std::string& id, int tick, model::Vec3 position, float yaw, float pitch, float fov);
     static std::unique_ptr<model::IEditCommand> createMoveCameraKeyframe(const std::string& id, const std::string& keyframeId, int tick);
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframe(const std::string& id, const std::string& keyframeId);
-    static std::unique_ptr<model::IEditCommand> createSetKeyframeEasing(const std::string& id, const std::string& keyframeId, model::EasingType easing);
-    static std::unique_ptr<model::IEditCommand> createApplyCameraTransitionPreset(const std::string& id, const std::string& keyframeId, model::CameraTransitionPreset preset);
     static std::unique_ptr<model::IEditCommand> createSetCameraKind(const std::string& id, model::CameraKind kind);
+    static std::unique_ptr<model::IEditCommand> createSetSubActorDetails(const std::string& id, model::AgentDetails details);
 
-    static std::unique_ptr<model::IEditCommand>
-    createSplitClip(const std::string& trackId, const std::string& clipId, int atTick);
+    // ── Clip commands ──
+    static std::unique_ptr<model::IEditCommand> createSplitClip(
+        const std::string& trackId, const std::string& clipId, int atTick);
 
-    static std::unique_ptr<model::IEditCommand> createRemoveClip(const std::string& trackId, const std::string& clipId);
+    static std::unique_ptr<model::IEditCommand> createRemoveClip(
+        const std::string& trackId, const std::string& clipId);
 
-    static std::unique_ptr<model::IEditCommand>
-    createTrimClip(const std::string& trackId, const std::string& clipId, int newInTick, int newOutTick);
+    static std::unique_ptr<model::IEditCommand> createTrimClip(
+        const std::string& trackId, const std::string& clipId,
+        int newInTick, int newOutTick);
 
-    static std::unique_ptr<model::IEditCommand>
-    createMoveClip(const std::string& trackId, const std::string& clipId, int newTrackTick);
+    static std::unique_ptr<model::IEditCommand> createMoveClip(
+        const std::string& trackId, const std::string& clipId, int newTrackTick);
 
+    // ── Transition commands ──
     static std::unique_ptr<model::IEditCommand> createAddTransition(
-        const std::string&    fromClipId,
-        const std::string&    toClipId,
-        model::TransitionKind kind,
-        int                   durationTicks
-    );
+        const std::string& fromClipId, const std::string& toClipId,
+        model::TransitionKind kind, int durationTicks);
 
-    static std::unique_ptr<model::IEditCommand> createAddTrack(model::TrackKind kind, const std::string& name);
+    // ── Track commands ──
+    static std::unique_ptr<model::IEditCommand> createAddTrack(
+        model::TrackKind kind, const std::string& name);
 
-    static std::unique_ptr<model::IEditCommand> createRemoveTrack(const std::string& trackId);
+    static std::unique_ptr<model::IEditCommand> createRemoveTrack(
+        const std::string& trackId);
 };
 
 } // namespace playback::editor::editing::command

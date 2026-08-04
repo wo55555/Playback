@@ -3,6 +3,7 @@
 #include "playback/editor/editing/commands/CameraCommands.h"
 #include "playback/editor/editing/commands/EditingCommands.h"
 #include "playback/editor/editing/commands/SequenceCommands.h"
+#include "playback/editor/editing/commands/SubActorCommands.h"
 #include "playback/editor/editing/commands/WorldActorCommands.h"
 
 namespace playback::editor::editing::command {
@@ -22,11 +23,8 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteCamera(const st
 std::unique_ptr<model::IEditCommand> CommandFactory::createCreateBindingCamera(const std::string& id, const std::string& name) { return std::make_unique<CreateBindingCamera>(id, name); }
 std::unique_ptr<model::IEditCommand> CommandFactory::createUnbindCamera(const std::string& id) { return std::make_unique<UnbindCamera>(id); }
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddCameraKeyframe(const std::string& id, int tick) { return std::make_unique<AddKeyframe>(id, tick); }
-std::unique_ptr<model::IEditCommand> CommandFactory::createCaptureCameraKeyframe(const std::string& id, int tick, model::Vec3 position, float yaw, float pitch, float fov) { return std::make_unique<CaptureCameraKeyframe>(id, tick, position, yaw, pitch, fov); }
 std::unique_ptr<model::IEditCommand> CommandFactory::createMoveCameraKeyframe(const std::string& id, const std::string& keyframeId, int tick) { return std::make_unique<MoveKeyframe>(id, keyframeId, tick); }
 std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteCameraKeyframe(const std::string& id, const std::string& keyframeId) { return std::make_unique<DeleteKeyframe>(id, keyframeId); }
-std::unique_ptr<model::IEditCommand> CommandFactory::createSetKeyframeEasing(const std::string& id, const std::string& keyframeId, model::EasingType easing) { return std::make_unique<SetKeyframeEasing>(id, keyframeId, easing); }
-std::unique_ptr<model::IEditCommand> CommandFactory::createApplyCameraTransitionPreset(const std::string& id, const std::string& keyframeId, model::CameraTransitionPreset preset) { return std::make_unique<ApplyCameraTransitionPreset>(id, keyframeId, preset); }
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraKind(const std::string& id, model::CameraKind kind) { return std::make_unique<SetCameraKind>(id, kind); }
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetSubActorDetails(const std::string& id, model::AgentDetails details) { return std::make_unique<SetSubActorDetails>(id, std::move(details)); }
 

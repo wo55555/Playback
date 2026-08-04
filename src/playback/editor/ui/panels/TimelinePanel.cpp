@@ -79,8 +79,6 @@ void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScal
     mZoomScale           = std::clamp(zoomScale, kMinZoomScale, kMaxZoomScale);
     mScrollX             = std::max(0.0f, horizontalScroll);
     mPendingSeekTick     = -1;
-    mSeekingTimeline     = false;
-    mSeekingTick         = -1;
     mDraggingSegmentId.clear();
 }
 
@@ -106,9 +104,7 @@ void TimelinePanel::draw() {
     mTrackTree.setSearch(mTrackSearch);
     mTrackTree.setCamerasExpanded(mCamerasExpanded);
     mTrackTree.rebuild(*project);
-    int displayTick = mSeekingTimeline && mSeekingTick >= 0
-                        ? mSeekingTick
-                        : (mPendingSeekTick >= 0 ? mPendingSeekTick : state.currentTick);
+    int displayTick = mPendingSeekTick >= 0 ? mPendingSeekTick : state.currentTick;
     if (mPendingSeekTick >= 0 && state.currentTick == mPendingSeekTick) mPendingSeekTick = -1;
 
     ImVec2 const fullMin   = ImGui::GetCursorScreenPos();
@@ -194,7 +190,9 @@ void TimelinePanel::draw() {
     float const canvasWidth = fullMax.x - canvasLeft;
     float const bodyTop = workTop + rulerHeight;
     float const bodyBottom = workBottom;
-    float const contentWidth = std::max(canvasWidth, state.totalTicks * mPixelsPerTick);
+    float const fitPixelsPerTick = state.totalTicks > 0 ? canvasWidth / static_cast<float>(state.totalTicks) : mPixelsPerTick;
+    float const pixelsPerTick = fitPixelsPerTick * mZoomScale;
+    float const contentWidth = std::max(canvasWidth, state.totalTicks * pixelsPerTick);
     float const maxScroll = std::max(0.0f, contentWidth - canvasWidth);
     mScrollX = std::clamp(mScrollX, 0.0f, maxScroll);
 

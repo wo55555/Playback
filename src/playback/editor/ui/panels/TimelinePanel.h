@@ -22,6 +22,7 @@ private:
 
     editing::model::TrackTreeModel mTrackTree;
     float mPixelsPerTick{0.25f};
+    float mZoomScale{1.0f};
     float mScrollX{};
     float mTrackListWidthRatio{0.30f};
     int mPendingSeekTick{-1};

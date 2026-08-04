@@ -61,12 +61,9 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     if (mProjectTotalTicks == totalTicks && mProject.projectPath == replayPath) return;
 
     mProject = {};
-    mProject.version = 4;
+    mProject.projectPath = std::string(replayPath);
     mProject.totalTicks = totalTicks;
     editing::CameraBindingOps::addFreeCamera(mProject, "Camera 1");
-    mProject.worldActor.id = "worldActor";
-    mProject.worldActor.name = "World Actor";
-    mProject.worldActor.totalTicks = totalTicks;
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
     mProjectTotalTicks = totalTicks;
@@ -126,9 +123,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::DeleteCameraKeyframe:
         mCommandStack.push(CommandFactory::createDeleteCameraKeyframe(action.id, action.secondaryId), mProject);
-        break;
-    case EditorActionType::SetKeyframeEasing:
-        mCommandStack.push(CommandFactory::createSetKeyframeEasing(action.id, action.secondaryId, static_cast<editing::model::EasingType>(action.kind)), mProject);
         break;
     case EditorActionType::DeleteCamera:
         mCommandStack.push(CommandFactory::createDeleteCamera(action.id), mProject);
