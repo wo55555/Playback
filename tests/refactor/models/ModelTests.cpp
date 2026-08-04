@@ -207,30 +207,29 @@ void testTrackTreeModel() {
     editor::TrackTreeModel model;
     model.rebuild(state);
     const auto& rows = model.rows();
-    require(rows.size() == 5, "expanded track tree must contain sequence, world actor, cameras, and marker");
+    require(rows.size() == 3, "expanded track tree must contain the optional sequence and cameras only");
     require(rows[0].kind == editor::TrackRowKind::Sequence && rows[0].id == "sequence" && rows[0].height == editor::TrackTreeModel::kSequenceRowHeight, "sequence row must be stable");
-    require(rows[1].kind == editor::TrackRowKind::WorldActor && rows[1].id == "worldActor" && rows[1].height == editor::TrackTreeModel::kWorldActorRowHeight, "world actor row must be stable");
-    require(rows[2].id == "camera:camera-main" && rows[2].cameraIndex == 0 && rows[2].active, "first camera row must preserve state order and active status");
-    require(rows[3].id == "camera:camera-actor" && rows[3].cameraIndex == 1 && rows[3].locked, "second camera row must preserve state order and locked status");
-    require(rows[4].kind == editor::TrackRowKind::Marker && rows[4].id == "marker" && rows[4].height == editor::TrackTreeModel::kMarkerRowHeight, "marker row must use the shared marker height");
+    require(rows[1].id == "camera:camera-main" && rows[1].cameraIndex == 0 && rows[1].active, "first camera row must preserve state order and active status");
+    require(rows[2].id == "camera:camera-actor" && rows[2].cameraIndex == 1 && rows[2].locked, "second camera row must preserve state order and locked status");
 
     model.setSearch("ACTOR");
     model.rebuild(state);
-    require(model.rows().size() == 4 && model.rows()[2].id == "camera:camera-actor", "search must match a bound sub actor without hiding permanent rows");
+    require(model.rows().size() == 2 && model.rows()[1].id == "camera:camera-actor", "search must match a bound sub actor without hiding the sequence row");
 
     state.cameras[1].bindingEntityUuid = "deleted-actor";
     model.setSearch("follow");
     model.rebuild(state);
-    require(model.rows().size() == 4 && model.rows()[2].id == "camera:camera-actor", "camera name search must retain cameras with deleted bindings");
+    require(model.rows().size() == 2 && model.rows()[1].id == "camera:camera-actor", "camera name search must retain cameras with deleted bindings");
 
     model.setCamerasExpanded(false);
-    model.setMarkerExpanded(false);
     model.rebuild(state);
-    require(model.rows().size() == 2, "collapsed groups must not hide permanent rows");
+    require(model.rows().size() == 1 && model.rows()[0].kind == editor::TrackRowKind::Sequence, "collapsed cameras must retain the sequence row");
 
     editor::TrackTreeModel emptyModel;
-    emptyModel.rebuild(makeState());
-    require(emptyModel.rows().size() == 3 && emptyModel.rows()[2].kind == editor::TrackRowKind::Marker, "marker display setting must retain the marker row when no markers exist");
+    auto noSequenceState = makeState();
+    noSequenceState.sequence.clear();
+    emptyModel.rebuild(noSequenceState);
+    require(emptyModel.rows().empty(), "empty sequence and camera collections must not create hidden world actor or marker rows");
 }
 
 void testEditorProjectCodec() {
