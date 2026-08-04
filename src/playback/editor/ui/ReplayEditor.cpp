@@ -92,6 +92,9 @@ void ReplayEditor::draw(playback::editor::EditorState const& state, SubmitAction
     mFrameState = &state;
     mSubmit     = &submit;
 
+    auto& io = ImGui::GetIO();
+    float const savedFontScale = io.FontGlobalScale;
+    io.FontGlobalScale = savedFontScale * (18.0f / 14.0f);
     mTheme.apply();
 
     if (!state.capabilities.videoExport && mModeManager.current() != EditorMode::Edit) {
@@ -102,6 +105,7 @@ void ReplayEditor::draw(playback::editor::EditorState const& state, SubmitAction
     ErrorDialog::getInstance().draw();
     handleKeyboardShortcuts();
 
+    io.FontGlobalScale = savedFontScale;
     mFrameState = nullptr;
     mSubmit     = nullptr;
 }

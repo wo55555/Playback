@@ -11,13 +11,15 @@ namespace playback::editor::ui {
 void EditMode::draw() {
     auto& editor = ReplayEditor::getInstance();
 
-    constexpr float kMenuHeight   = 24.0f;
-    constexpr float kStatusHeight = 22.0f;
-    constexpr float kCurveWidth   = 280.0f;
-    constexpr float kSplitterThickness = 4.0f;
-    constexpr float kDetailsMinWidth = 220.0f;
-    constexpr float kViewportMinWidth = 320.0f;
-    constexpr float kViewportMinHeight = 180.0f;
+    float const fontSize = ImGui::GetFontSize();
+    float const kMenuHeight = fontSize + 14.0f;
+    float const kStatusHeight = fontSize + 10.0f;
+    float const kCurveWidth = std::max(280.0f, fontSize * 16.0f);
+    float const kSplitterThickness = 4.0f;
+    float const kDetailsMinWidth = std::max(260.0f, fontSize * 15.0f);
+    float const kViewportMinWidth = std::max(320.0f, fontSize * 22.0f);
+    float const kViewportMinHeight = std::max(180.0f, fontSize * 12.0f);
+    float const kTimelineMinHeight = fontSize * 9.0f;
 
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
     float contentHeight = std::max(1.0f, displaySize.y - kMenuHeight - kStatusHeight);
@@ -29,8 +31,8 @@ void EditMode::draw() {
     editor.mDetailsWidthRatio = std::clamp(editor.mDetailsWidthRatio, minDetailsRatio, maxDetailsRatio);
     float detailsWidth = displaySize.x * editor.mDetailsWidthRatio;
     float leftWidth = displaySize.x - detailsWidth;
-    float maxTimelineRatio = std::min(0.65f, 1.0f - kViewportMinHeight / contentHeight);
-    float minTimelineRatio = std::min(0.18f, maxTimelineRatio);
+    float maxTimelineRatio = std::min(0.70f, 1.0f - kViewportMinHeight / contentHeight);
+    float minTimelineRatio = std::min(kTimelineMinHeight / contentHeight, maxTimelineRatio);
     editor.mTimelineHeightRatio = std::clamp(editor.mTimelineHeightRatio, minTimelineRatio, maxTimelineRatio);
     float timelineHeight = contentHeight * editor.mTimelineHeightRatio;
     float viewportHeight = contentHeight - timelineHeight - kSplitterThickness;
@@ -77,8 +79,7 @@ void EditMode::draw() {
         ImGui::SetNextWindowPos(ImVec2(detailsX, detailsY));
         ImGui::SetNextWindowSize(ImVec2(detailsWidth, detailsH));
         ImGui::Begin("##DetailsPanel", nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-            | ImGuiWindowFlags_NoScrollWithMouse);
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
         editor.mDetailsPanel.draw();
         ImGui::End();
     }

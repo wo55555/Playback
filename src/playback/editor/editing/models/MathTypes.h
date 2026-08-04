@@ -26,7 +26,8 @@ enum class EasingType : uint8_t {
     Linear = 0,
     EaseIn,
     EaseOut,
-    EaseInOut
+    EaseInOut,
+    CubicBezier
 };
 
 } // namespace playback::editor::editing::model

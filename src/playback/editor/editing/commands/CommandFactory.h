@@ -16,6 +16,8 @@ namespace playback::editor::editing::command {
 
 class CommandFactory {
 public:
+    static std::unique_ptr<model::IEditCommand> createAddCameraSequence();
+    static std::unique_ptr<model::IEditCommand> createDeleteCameraSequence();
     static std::unique_ptr<model::IEditCommand> createSplitSequence(int atTick);
     static std::unique_ptr<model::IEditCommand> createTrimSequence(const std::string& id, int start, int end);
     static std::unique_ptr<model::IEditCommand> createDeleteSequenceSegment(const std::string& id);
@@ -29,9 +31,11 @@ public:
     static std::unique_ptr<model::IEditCommand> createCreateBindingCamera(const std::string& id, const std::string& name);
     static std::unique_ptr<model::IEditCommand> createUnbindCamera(const std::string& id);
     static std::unique_ptr<model::IEditCommand> createAddCameraKeyframe(const std::string& id, int tick);
+    static std::unique_ptr<model::IEditCommand> createCaptureCameraKeyframe(const std::string& id, int tick, model::Vec3 position, float yaw, float pitch, float fov);
     static std::unique_ptr<model::IEditCommand> createMoveCameraKeyframe(const std::string& id, const std::string& keyframeId, int tick);
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframe(const std::string& id, const std::string& keyframeId);
     static std::unique_ptr<model::IEditCommand> createSetKeyframeEasing(const std::string& id, const std::string& keyframeId, model::EasingType easing);
+    static std::unique_ptr<model::IEditCommand> createApplyCameraTransitionPreset(const std::string& id, const std::string& keyframeId, model::CameraTransitionPreset preset);
     static std::unique_ptr<model::IEditCommand> createSetCameraKind(const std::string& id, model::CameraKind kind);
     static std::unique_ptr<model::IEditCommand> createSetSubActorDetails(const std::string& id, model::AgentDetails details);
 

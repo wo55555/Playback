@@ -34,15 +34,10 @@ void TrackTreeModel::setCamerasExpanded(bool expanded) {
     mCamerasExpanded = expanded;
 }
 
-void TrackTreeModel::setMarkerExpanded(bool expanded) {
-    mMarkerExpanded = expanded;
-}
-
 void TrackTreeModel::rebuild(const EditorStateExt& state) {
     mRows.clear();
-    mRows.reserve(2 + state.cameras.size() + (mMarkerExpanded ? 1 : 0));
-    mRows.push_back({TrackRowKind::Sequence, "sequence", "Sequence", -1, kSequenceRowHeight, false, false, true});
-    mRows.push_back({TrackRowKind::WorldActor, "worldActor", "World Actor", -1, kWorldActorRowHeight, false, false, true});
+    mRows.reserve(state.sequence.empty() ? state.cameras.size() : state.cameras.size() + 1);
+    if (!state.sequence.empty()) mRows.push_back({TrackRowKind::Sequence, "sequence", "Sequence", -1, kSequenceRowHeight, false, false, true});
 
     if (mCamerasExpanded) {
         for (int index = 0; index < static_cast<int>(state.cameras.size()); ++index) {
@@ -52,9 +47,6 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
         }
     }
 
-    if (mMarkerExpanded) {
-        mRows.push_back({TrackRowKind::Marker, "marker", "Markers", -1, kMarkerRowHeight, false, false, true});
-    }
 }
 
 const std::vector<TrackTreeRow>& TrackTreeModel::rows() const {

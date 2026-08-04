@@ -10,7 +10,6 @@ struct EditorStateExt;
 
 enum class TrackRowKind {
     Sequence,
-    WorldActor,
     Camera,
     Marker
 };
@@ -28,14 +27,12 @@ struct TrackTreeRow {
 
 class TrackTreeModel {
 public:
-    static constexpr float kSequenceRowHeight = 48.0f;
-    static constexpr float kWorldActorRowHeight = 48.0f;
-    static constexpr float kCameraRowHeight = 24.0f;
-    static constexpr float kMarkerRowHeight = 20.0f;
+    static constexpr float kSequenceRowHeight = 52.0f;
+    static constexpr float kCameraRowHeight = 36.0f;
+    static constexpr float kMarkerRowHeight = 32.0f;
 
     void setSearch(std::string_view query);
     void setCamerasExpanded(bool expanded);
-    void setMarkerExpanded(bool expanded);
     void rebuild(const EditorStateExt& state);
     [[nodiscard]] const std::vector<TrackTreeRow>& rows() const;
 
@@ -43,7 +40,6 @@ private:
     std::string mSearch;
     std::vector<TrackTreeRow> mRows;
     bool mCamerasExpanded{true};
-    bool mMarkerExpanded{true};
 };
 
 } // namespace playback::editor::editing::model
