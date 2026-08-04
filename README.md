@@ -5,25 +5,22 @@
   <p>A native LeviLamina client mod for recording, exporting, and replaying your sessions.</p>
 
   <p>
-    <a href="https://discord.gg/mUhRUD8AM"><img src="https://img.shields.io/discord/1531092797367652403?style=for-the-badge&amp;logo=discord" alt="Playback Discord online member count"></a>
-    <a href="https://qm.qq.com/q/ufJatMDcha"><img src="https://img.shields.io/badge/QQ-Join%20group-EA0000?style=for-the-badge&amp;logo=qq&amp;logoColor=white" alt="Join the Playback QQ group"></a>
-  </p>
-
-  <p>
-    <img src="https://img.shields.io/badge/English-inactive?style=for-the-badge" alt="English">
-    <a href="README_ZH.md"><img src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-informational?style=for-the-badge" alt="简体中文"></a>
-  </p>
-
-  <p>
-    <a href="docs/getting-started.md">Documentation</a>
+    <a href="docs/getting-started.md">Get started</a>
     ·
     <a href="https://github.com/wo55555/Playback/releases">Releases</a>
     ·
     <a href="CHANGELOG.md">Changelog</a>
     ·
-    <a href="https://github.com/wo55555/Playback/issues">Issues</a>
+    <a href="https://github.com/wo55555/Playback/issues">Report an issue</a>
     ·
     <a href="CONTRIBUTING.md">Contributing</a>
+    ·
+    <a href="README_ZH.md">简体中文</a>
+  </p>
+
+  <p>
+    <a href="https://discord.gg/mUhRUD8AM"><img src="https://img.shields.io/discord/1531092797367652403?style=for-the-badge&amp;logo=discord" alt="Playback Discord online member count"></a>
+    <a href="https://qm.qq.com/q/ufJatMDcha"><img src="https://img.shields.io/badge/QQ-Join%20group-EA0000?style=for-the-badge&amp;logo=qq&amp;logoColor=white" alt="Join the Playback QQ group"></a>
   </p>
 </div>
 

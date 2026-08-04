@@ -5,17 +5,7 @@
   <p>用于录制、导出和回放 Minecraft 基岩版游戏过程的 LeviLamina 客户端原生模组。</p>
 
   <p>
-    <a href="https://discord.gg/mUhRUD8AM"><img src="https://img.shields.io/discord/1531092797367652403?style=for-the-badge&amp;logo=discord" alt="Playback Discord 在线人数"></a>
-    <a href="https://qm.qq.com/q/ufJatMDcha"><img src="https://img.shields.io/badge/QQ-%E5%8A%A0%E5%85%A5%E7%BE%A4%E8%81%8A-EA0000?style=for-the-badge&amp;logo=qq&amp;logoColor=white" alt="加入 Playback QQ 群"></a>
-  </p>
-
-  <p>
-    <a href="README.md"><img src="https://img.shields.io/badge/English-informational?style=for-the-badge" alt="English"></a>
-    <img src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-inactive?style=for-the-badge" alt="简体中文">
-  </p>
-
-  <p>
-    <a href="docs/getting-started.zh-CN.md">使用文档</a>
+    <a href="docs/getting-started.zh-CN.md">开始使用</a>
     ·
     <a href="https://github.com/wo55555/Playback/releases">发行版本</a>
     ·
@@ -24,6 +14,13 @@
     <a href="https://github.com/wo55555/Playback/issues">问题反馈</a>
     ·
     <a href="CONTRIBUTING.md">参与贡献</a>
+    ·
+    <a href="README.md">English</a>
+  </p>
+
+  <p>
+    <a href="https://discord.gg/mUhRUD8AM"><img src="https://img.shields.io/discord/1531092797367652403?style=for-the-badge&amp;logo=discord" alt="Playback Discord 在线人数"></a>
+    <a href="https://qm.qq.com/q/ufJatMDcha"><img src="https://img.shields.io/badge/QQ-%E5%8A%A0%E5%85%A5%E7%BE%A4%E8%81%8A-EA0000?style=for-the-badge&amp;logo=qq&amp;logoColor=white" alt="加入 Playback QQ 群"></a>
   </p>
 </div>
 
