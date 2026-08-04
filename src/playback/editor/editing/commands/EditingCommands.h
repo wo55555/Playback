@@ -10,8 +10,6 @@
 
 namespace playback::editor::editing::command {
 
-// ===== IEditCommand (video-editing version) =====
-
 class IEditCommand : public playback::editor::editing::model::IEditCommand {
 public:
     virtual ~IEditCommand()                                              = default;
@@ -19,8 +17,6 @@ public:
     void                      undo(model::EditorStateExt& s) override    = 0;
     [[nodiscard]] std::string label() const override                     = 0;
 };
-
-// ===== AddClipCommand =====
 
 class AddClipCommand : public IEditCommand {
 public:
@@ -35,8 +31,6 @@ private:
     std::string mAddedClipId;
 };
 
-// ===== RemoveClipCommand =====
-
 class RemoveClipCommand : public IEditCommand {
 public:
     RemoveClipCommand(const std::string& trackId, const std::string& clipId);
@@ -50,8 +44,6 @@ private:
     model::Clip mSavedClip;
     size_t      mSavedIndex{};
 };
-
-// ===== SplitClipCommand =====
 
 class SplitClipCommand : public IEditCommand {
 public:
@@ -69,8 +61,6 @@ private:
     int         mOldOutTick{};
 };
 
-// ===== TrimClipCommand =====
-
 class TrimClipCommand : public IEditCommand {
 public:
     TrimClipCommand(const std::string& trackId, const std::string& clipId, int newInTick, int newOutTick);
@@ -87,8 +77,6 @@ private:
     int         mNewOutTick{};
 };
 
-// ===== MoveClipCommand =====
-
 class MoveClipCommand : public IEditCommand {
 public:
     MoveClipCommand(const std::string& trackId, const std::string& clipId, int newTrackTick);
@@ -102,8 +90,6 @@ private:
     int         mOldTrackTick{};
     int         mNewTrackTick{};
 };
-
-// ===== AddTransitionCommand =====
 
 class AddTransitionCommand : public IEditCommand {
 public:

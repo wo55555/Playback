@@ -198,12 +198,10 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
 
-    // ── Playback control ──
     if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
         submitAction({playback::editor::EditorActionType::TogglePause});
     }
 
-    // ── Seek ──
     if (ImGui::IsKeyPressed(ImGuiKey_Home)) {
         submitAction({playback::editor::EditorActionType::SkipToStart});
     }
@@ -223,7 +221,6 @@ void ReplayEditor::handleKeyboardShortcuts() {
         submitAction(std::move(action));
     }
 
-    // ── Speed ──
     // Note: -/= are handled as separate checks since IsKeyPressed consumes the event
     if (ImGui::IsKeyPressed(ImGuiKey_Minus)) {
         submitAction({playback::editor::EditorActionType::DecreaseSpeed});

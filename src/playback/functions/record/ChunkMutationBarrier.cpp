@@ -308,7 +308,7 @@ ChunkMutationBarrier::CaptureGuard ChunkMutationBarrier::capture(std::chrono::mi
 
     // The guard lives inside the post-_subTick client-thread hook. With all worker groups empty, that occupied
     // client thread prevents new root chunk work and client chunk-GC flushes until serialization finishes.
-    return CaptureGuard(true, std::chrono::steady_clock::now() - started);
+    return {true, std::chrono::steady_clock::now() - started};
 }
 
 void ChunkMutationBarrier::setActiveLevel(MultiPlayerLevel* level) {

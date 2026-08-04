@@ -61,8 +61,6 @@ CommandFactory::createSetCameraKind(const std::string& id, model::CameraKind kin
     return std::make_unique<SetCameraKind>(id, kind);
 }
 
-// ===== Clip commands =====
-
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createSplitClip(const std::string& trackId, const std::string& clipId, int atTick) {
     return std::make_unique<SplitClipCommand>(trackId, clipId, atTick);
@@ -83,8 +81,6 @@ CommandFactory::createMoveClip(const std::string& trackId, const std::string& cl
     return std::make_unique<MoveClipCommand>(trackId, clipId, newTrackTick);
 }
 
-// ===== Transition commands =====
-
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddTransition(
     const std::string&    fromClipId,
     const std::string&    toClipId,
@@ -93,8 +89,6 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createAddTransition(
 ) {
     return std::make_unique<AddTransitionCommand>(fromClipId, toClipId, kind, durationTicks);
 }
-
-// ===== Track commands =====
 
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddTrack(model::TrackKind kind, const std::string& name) {
     (void)kind;

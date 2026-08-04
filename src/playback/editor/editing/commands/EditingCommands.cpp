@@ -12,8 +12,6 @@ using model::Track;
 using model::Transition;
 using model::TransitionKind;
 
-// ===== AddClipCommand =====
-
 AddClipCommand::AddClipCommand(const std::string& trackId, const Clip& clip) : mTrackId(trackId), mClip(clip) {}
 
 void AddClipCommand::execute(EditorStateExt& s) {
@@ -39,8 +37,6 @@ void AddClipCommand::undo(EditorStateExt& s) {
         it->clips.erase(clipIt, it->clips.end());
     }
 }
-
-// ===== RemoveClipCommand =====
 
 RemoveClipCommand::RemoveClipCommand(const std::string& trackId, const std::string& clipId)
 : mTrackId(trackId),
@@ -70,8 +66,6 @@ void RemoveClipCommand::undo(EditorStateExt& s) {
         it->clips.push_back(mSavedClip);
     }
 }
-
-// ===== SplitClipCommand =====
 
 SplitClipCommand::SplitClipCommand(const std::string& trackId, const std::string& clipId, int atTick)
 : mTrackId(trackId),
@@ -132,8 +126,6 @@ void SplitClipCommand::undo(EditorStateExt& s) {
 
 std::string SplitClipCommand::label() const { return std::format("Split Clip at {}", mAtTick); }
 
-// ===== TrimClipCommand =====
-
 TrimClipCommand::TrimClipCommand(const std::string& trackId, const std::string& clipId, int newInTick, int newOutTick)
 : mTrackId(trackId),
   mClipId(clipId),
@@ -169,8 +161,6 @@ void TrimClipCommand::undo(EditorStateExt& s) {
     clipIt->outTick = mOldOutTick;
 }
 
-// ===== MoveClipCommand =====
-
 MoveClipCommand::MoveClipCommand(const std::string& trackId, const std::string& clipId, int newTrackTick)
 : mTrackId(trackId),
   mClipId(clipId),
@@ -205,8 +195,6 @@ void MoveClipCommand::undo(EditorStateExt& s) {
         return a.trackTick < b.trackTick;
     });
 }
-
-// ===== AddTransitionCommand =====
 
 AddTransitionCommand::AddTransitionCommand(
     const std::string& fromClipId,

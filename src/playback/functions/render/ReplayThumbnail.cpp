@@ -16,14 +16,11 @@ using Microsoft::WRL::ComPtr;
 constexpr uint32_t MaxThumbnailDimension = 4096;
 constexpr uint64_t MaxThumbnailBytes     = 64ull * 1024 * 1024;
 
-// 确保当前线程 COM 已初始化（WIC 依赖 COM）。游戏主线程通常已初始化；
-// 若在某辅助线程首次调用，这里完成初始化并在函数结束时清理。
 class ComInitialize {
 public:
     ComInitialize() {
         HRESULT const hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         mNeedsUninit     = SUCCEEDED(hr);
-        // S_OK and S_FALSE both increment the thread's COM initialization count.
     }
     ~ComInitialize() {
         if (mNeedsUninit) CoUninitialize();
@@ -67,9 +64,6 @@ bool writeReplayThumbnailPng(
     if (FAILED(frame->SetPixelFormat(&format))) return false;
     uint64_t const size = static_cast<uint64_t>(rowPitch) * height;
     if (size > std::numeric_limits<UINT>::max()) return false;
-    // PNG 编码器会把 SetPixelFormat 请求的格式改写为其首选格式（如 32bppBGRA），因此不能
-    // 严格校验 format 是否保持 32bppRGBA，也不能直接 WritePixels（会按改写后的格式解释数据，
-    // 造成 R/B 通道错乱）。改用 IWICBitmap 包装像素并经 WriteSource 写入，让 WIC 自动转换。
     ComPtr<IWICBitmap> bitmap;
     if (FAILED(factory->CreateBitmapFromMemory(
             width,

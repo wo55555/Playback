@@ -22,7 +22,6 @@ void RenderMode::draw() {
 
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
 
-    // === Menu ===
     {
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2(displaySize.x, kMenuHeight));
@@ -36,7 +35,6 @@ void RenderMode::draw() {
         ImGui::End();
     }
 
-    // === Render card (centered) ===
     {
         float cardWidth  = 480.0f;
         float cardHeight = 360.0f;
@@ -52,12 +50,10 @@ void RenderMode::draw() {
                 | ImGuiWindowFlags_NoScrollWithMouse
         );
 
-        // Centered render icon
         float iconSize = 48.0f;
         ImGui::SetCursorPosX((cardWidth - iconSize) * 0.5f);
         ImGui::Text("%s", ICON_RENDER);
 
-        // Title
         std::string const rendering = "playback.refactorEditor.render.rendering"_tr();
         ImGui::SetCursorPosX((cardWidth - ImGui::CalcTextSize(rendering.c_str()).x) * 0.5f);
         ImGui::TextUnformatted(rendering.c_str());
@@ -65,7 +61,6 @@ void RenderMode::draw() {
         ImGui::Spacing();
         ImGui::Spacing();
 
-        // Progress bar
         float progress =
             (mTotalFrames > 0) ? static_cast<float>(mCurrentFrame) / static_cast<float>(mTotalFrames) : 0.0f;
         char progressLabel[32];
@@ -74,20 +69,16 @@ void RenderMode::draw() {
         ImGui::ProgressBar(progress, ImVec2(cardWidth - 40, 24.0f), progressLabel);
         ImGui::Spacing();
 
-        // Frame info
         std::string const frameInfo = "playback.refactorEditor.render.frame"_tr(mCurrentFrame, mTotalFrames);
         ImGui::SetCursorPosX((cardWidth - 160.0f) * 0.5f);
         ImGui::TextUnformatted(frameInfo.c_str());
 
-        // Format info
         ImGui::SetCursorPosX((cardWidth - 200.0f) * 0.5f);
         ImGui::Text("1920x1080 60fps H.264");
 
-        // ETA
         ImGui::SetCursorPosX((cardWidth - 100.0f) * 0.5f);
         ImGui::TextUnformatted("playback.refactorEditor.render.eta"_tr(mEta.empty() ? "0:00:00" : mEta).c_str());
 
-        // Output path
         ImGui::Spacing();
         ImGui::SetCursorPosX((cardWidth - 300.0f) * 0.5f);
         std::string const outputPath = mOutputPath.empty() ? "D:\\exports\\replay-001.mp4" : mOutputPath;
@@ -96,7 +87,6 @@ void RenderMode::draw() {
         ImGui::Spacing();
         ImGui::Spacing();
 
-        // Cancel button
         ImGui::SetCursorPosX((cardWidth - 160.0f) * 0.5f);
         if (ImGui::Button("playback.refactorEditor.render.cancel"_tr().c_str(), ImVec2(160.0f, 32.0f))) {
             ModeManager::getInstance().switchTo(EditorMode::Edit);
@@ -105,7 +95,6 @@ void RenderMode::draw() {
         ImGui::End();
     }
 
-    // === Status ===
     {
         ImGui::SetNextWindowPos(ImVec2(0, displaySize.y - kStatusHeight));
         ImGui::SetNextWindowSize(ImVec2(displaySize.x, kStatusHeight));
