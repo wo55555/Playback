@@ -1,0 +1,51 @@
+name: ✨ Feature Request
+description: Suggest an idea for this project
+title: "[Feature] "
+labels: ["enhancement"]
+
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the problem or limitation this feature would address.
+      placeholder: |
+        The current behavior is...
+
+        This makes it difficult to...
+
+        I would like to improve...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the solution or behavior you would like to see.
+      placeholder: |
+        I would like Playback to...
+
+        This feature should...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Describe any alternative solutions or workarounds you have considered.
+      placeholder: |
+        I also considered...
+
+        However...
+        
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any additional information that may help explain your proposal.
+      placeholder: |
+        - Mockups or screenshots
+        - Links to similar implementations
+        - Additional notes or references

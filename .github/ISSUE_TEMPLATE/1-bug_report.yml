@@ -1,0 +1,112 @@
+name: 🐛 Bug Report
+description: Report a reproducible Playback problem
+title: "[Bug] "
+labels: ["bug"]
+
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: Provide a clear and concise description of the problem.
+      placeholder: |
+        Game crashes when...
+        
+        This started after...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: To Reproduce
+      description: Provide the steps required to reproduce the issue.
+      placeholder: |
+        1. Launch Minecraft
+        2. Open...
+        3. Click...
+        4. Observe the issue
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what you expected to happen instead.
+      placeholder: |
+        Button should...
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Attach sanitized screenshots or screen recordings if they help explain the issue.
+      placeholder: |
+        Drag and drop screenshots or videos here.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste sanitized logs that help reproduce the issue. Remove any sensitive information such as server addresses, access tokens, or personal data.
+      placeholder: |
+        Paste logs here.
+      render: shell
+
+  - type: textarea
+    id: replay
+    attributes:
+      label: Replay file
+      description: Attach a minimal replay file that reproduces the issue, if applicable.
+      placeholder: |
+        Drag and drop the replay file here, or click to upload.
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Specify the operating system and version.
+      placeholder: |
+        Windows 11 24H2
+    validations:
+      required: true
+
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft Bedrock Version
+      description: Specify the Minecraft Bedrock version.
+      placeholder: 1.21.110
+    validations:
+      required: true
+
+  - type: input
+    id: levilamina-version
+    attributes:
+      label: LeviLamina Version
+      description: Specify the LeviLamina version.
+      placeholder: 26.10.14
+    validations:
+      required: true
+
+  - type: input
+    id: playback-version
+    attributes:
+      label: Playback Version
+      description: Specify the Playback version.
+      placeholder: 0.1.0-alpha.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other relevant information that may help investigate the issue.
+      placeholder: |
+        - Does the issue occur every time?
+        - Any recent changes?
+        - Additional observations...
