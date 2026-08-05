@@ -1,6 +1,7 @@
 #pragma once
 
 #include "playback/functions/io/AsyncReplaySaver.h"
+#include "playback/functions/packet/PlaybackSetEquipmentPacket.h"
 #include "playback/functions/render/ReplayThumbnail.h"
 #include "playback/utils/container/LinkedHashMap.h"
 
@@ -80,8 +81,7 @@ private:
     std::optional<ActorRuntimeID>                  mRecordedLocalPlayerRuntimeId;
     std::optional<mce::UUID>                       mRecordedLocalPlayerUuid;
     std::optional<std::string>                     mLastLocalPlayerDataPacket;
-    std::optional<std::string>                     mLastLocalPlayerEquipmentPacket;
-    std::optional<std::string>                     mLastLocalPlayerArmorPacket;
+    std::optional<PlaybackSetEquipmentPacket>      mLastLocalPlayerEquipmentPacket;
     std::optional<int>                             mLastLocalPlayerSwingTime;
     std::optional<PlaybackView>                    mSnapshotView;
     std::optional<SnapshotDimension>               mSnapshotDimension;

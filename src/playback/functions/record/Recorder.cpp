@@ -548,7 +548,6 @@ void Recorder::resetStateForNewRecording() {
     mRecordedLocalPlayerUuid.reset();
     mLastLocalPlayerDataPacket.reset();
     mLastLocalPlayerEquipmentPacket.reset();
-    mLastLocalPlayerArmorPacket.reset();
     mLastLocalPlayerSwingTime.reset();
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
@@ -1064,26 +1063,12 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
                 appendEntityPacket(*effectPacket);
             }
 
-            if (actor.isPlayer()) {
-                auto const&        player = static_cast<Player const&>(actor);
-                MobEquipmentPacket equipment(
-                    runtimeId,
-                    player.getSelectedItem(),
-                    player.getSelectedItemSlot(),
-                    player.getSelectedItemSlot(),
-                    ContainerID::Inventory
-                );
-                appendEntityPacket(equipment);
-
-                MobArmorEquipmentPacket armor(player);
-                armor.mRuntimeId = runtimeId;
-                appendEntityPacket(armor);
-            } else if (actor.hasCategory(ActorCategory::Mob)) {
-                MobEquipmentPacket equipment(runtimeId, actor.getCarriedItem(), 0, 0, ContainerID::Inventory);
-                appendEntityPacket(equipment);
-
-                MobArmorEquipmentPacket armor(actor);
-                appendEntityPacket(armor);
+            if (actor.isPlayer() || actor.hasCategory(ActorCategory::Mob)) {
+                auto const selectedSlot = actor.isPlayer() ? static_cast<Player const&>(actor).getSelectedItemSlot() : 0;
+                PlaybackSetEquipmentPacket equipment(actor, runtimeId, selectedSlot);
+                for (auto const& packet : equipment.createPackets()) {
+                    appendEntityPacket(*packet);
+                }
             }
             return true;
         };
@@ -1467,17 +1452,17 @@ bool Recorder::writeLocalPlayerState() {
     SetActorDataPacket actorData(localPlayer->getRuntimeID(), *localPlayer->mEntityData, properties, 0, true);
     recordChanged(actorData, mLastLocalPlayerDataPacket);
 
-    MobEquipmentPacket equipment(
+    PlaybackSetEquipmentPacket equipment(
+        *localPlayer,
         localPlayer->getRuntimeID(),
-        localPlayer->getSelectedItem(),
-        localPlayer->getSelectedItemSlot(),
-        localPlayer->getSelectedItemSlot(),
-        ContainerID::Inventory
+        localPlayer->getSelectedItemSlot()
     );
-    recordChanged(equipment, mLastLocalPlayerEquipmentPacket);
-
-    MobArmorEquipmentPacket armor(*localPlayer);
-    recordChanged(armor, mLastLocalPlayerArmorPacket);
+    auto const* previousEquipment = mLastLocalPlayerEquipmentPacket ? &*mLastLocalPlayerEquipmentPacket : nullptr;
+    auto        equipmentPackets = equipment.createPackets(previousEquipment);
+    mLastLocalPlayerEquipmentPacket = std::move(equipment);
+    for (auto const& packet : equipmentPackets) {
+        recordGamePacket(*packet);
+    }
 
     bool const swinging  = localPlayer->mSwinging;
     int const  swingTime = localPlayer->mSwingTime;
@@ -1537,11 +1522,10 @@ void Recorder::recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallba
 
     if (!actor->hasCategory(ActorCategory::Mob)) return;
 
-    MobEquipmentPacket equipment(runtimeId, actor->getCarriedItem(), 0, 0, ContainerID::Inventory);
-    recordGamePacket(equipment);
-
-    MobArmorEquipmentPacket armor(*actor);
-    recordGamePacket(armor);
+    PlaybackSetEquipmentPacket equipment(*actor, runtimeId);
+    for (auto const& packet : equipment.createPackets()) {
+        recordGamePacket(*packet);
+    }
 }
 
 void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSemantics const& semantics) {
@@ -1752,7 +1736,6 @@ void Recorder::cancelRecording(std::string_view reason) {
     mRecordedLocalPlayerUuid.reset();
     mLastLocalPlayerDataPacket.reset();
     mLastLocalPlayerEquipmentPacket.reset();
-    mLastLocalPlayerArmorPacket.reset();
     mLastLocalPlayerSwingTime.reset();
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
