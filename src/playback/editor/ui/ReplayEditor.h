@@ -80,12 +80,12 @@ private:
     editing::model::SelectionModel       mSelection;
 
     // Layout
-    float mDetailsWidthRatio{0.20f};
+    float mDetailsWidthRatio{0.28f};
     float mTimelineHeightRatio{0.35f};
     float mVideoAspectRatio{16.0f / 9.0f};
 
     struct TimelineViewPreferences {
-        float zoomScale{1.0f};
+        float pixelsPerTick{0.25f};
         float horizontalScroll{};
     };
 

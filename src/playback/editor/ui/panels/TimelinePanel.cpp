@@ -18,9 +18,6 @@ using namespace ll::i18n_literals;
 namespace {
 
 constexpr float kSplitterThickness = 4.0f;
-constexpr float kMinZoomScale      = 1.0f;
-constexpr float kMaxZoomScale      = 20.0f;
-constexpr float kZoomStep          = 1.15f;
 
 constexpr ImU32 kBackground = IM_COL32(27, 27, 27, 255);
 constexpr ImU32 kSidebarBackground = IM_COL32(41, 41, 41, 255);
@@ -74,9 +71,9 @@ bool contains(ImVec2 const& minimum, ImVec2 const& maximum, ImVec2 const& point)
 
 } // namespace
 
-void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScale, float horizontalScroll) {
+void TimelinePanel::setViewPreferences(float trackListWidthRatio, float pixelsPerTick, float horizontalScroll) {
     mTrackListWidthRatio = std::clamp(trackListWidthRatio, 0.18f, 0.55f);
-    mZoomScale           = std::clamp(zoomScale, kMinZoomScale, kMaxZoomScale);
+    mPixelsPerTick       = std::clamp(pixelsPerTick, 0.05f, 5.0f);
     mScrollX             = std::max(0.0f, horizontalScroll);
     mPendingSeekTick     = -1;
     mDraggingSegmentId.clear();
@@ -190,9 +187,7 @@ void TimelinePanel::draw() {
     float const canvasWidth = fullMax.x - canvasLeft;
     float const bodyTop = workTop + rulerHeight;
     float const bodyBottom = workBottom;
-    float const fitPixelsPerTick = state.totalTicks > 0 ? canvasWidth / static_cast<float>(state.totalTicks) : mPixelsPerTick;
-    float const pixelsPerTick = fitPixelsPerTick * mZoomScale;
-    float const contentWidth = std::max(canvasWidth, state.totalTicks * pixelsPerTick);
+    float const contentWidth = std::max(canvasWidth, state.totalTicks * mPixelsPerTick);
     float const maxScroll = std::max(0.0f, contentWidth - canvasWidth);
     mScrollX = std::clamp(mScrollX, 0.0f, maxScroll);
 
@@ -268,11 +263,11 @@ void TimelinePanel::draw() {
 
     drawList->AddRectFilled({canvasLeft, workTop}, {fullMax.x, workBottom}, kBackground);
     drawList->PushClipRect({canvasLeft, workTop}, {fullMax.x, workBottom}, true);
-    int const majorStep = majorTickStep(pixelsPerTick);
+    int const majorStep = majorTickStep(mPixelsPerTick);
     int const minorStep = std::max(1, majorStep / 5);
-    int const firstTick = std::max(0, static_cast<int>(std::floor(mScrollX / pixelsPerTick / minorStep)) * minorStep);
+    int const firstTick = std::max(0, static_cast<int>(std::floor(mScrollX / mPixelsPerTick / minorStep)) * minorStep);
     for (int tick = firstTick; tick <= state.totalTicks; tick += minorStep) {
-        float x = canvasLeft + tick * pixelsPerTick - mScrollX;
+        float x = canvasLeft + tick * mPixelsPerTick - mScrollX;
         if (x < canvasLeft || x > fullMax.x) continue;
         bool const major = tick % majorStep == 0;
         drawList->AddLine({x, workTop + (major ? rulerHeight * 0.5f : rulerHeight * 0.75f)}, {x, workTop + rulerHeight}, major ? IM_COL32(155, 158, 168, 255) : IM_COL32(72, 75, 84, 255));
@@ -367,7 +362,7 @@ void TimelinePanel::draw() {
         int tick = tickFromMouse();
         if (mSnapEnabled) tick = std::clamp(static_cast<int>(std::round(tick / 20.0f)) * 20, 0, state.totalTicks);
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            float x = canvasLeft + tick * pixelsPerTick - mScrollX;
+            float x = canvasLeft + tick * mPixelsPerTick - mScrollX;
             drawList->AddLine({x, bodyTop}, {x, bodyBottom}, IM_COL32(240, 192, 32, 180), 2.0f);
         } else {
             EditorAction action{EditorActionType::TrimSequence};
@@ -385,14 +380,11 @@ void TimelinePanel::draw() {
     if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0.0f) {
         float const wheel = ImGui::GetIO().MouseWheel;
         if (ImGui::GetIO().KeyShift) {
-            float const anchorX    = std::clamp(ImGui::GetMousePos().x - canvasLeft, 0.0f, canvasWidth);
-            float const anchorTick = (anchorX + mScrollX) / pixelsPerTick;
-            float const nextZoom =
-                std::clamp(mZoomScale * (wheel > 0.0f ? kZoomStep : 1.0f / kZoomStep), kMinZoomScale, kMaxZoomScale);
-            float const nextPixelsPerTick = fitPixelsPerTick * nextZoom;
-            float const nextMaxScroll     = std::max(0.0f, state.totalTicks * nextPixelsPerTick - canvasWidth);
-            mScrollX                      = std::clamp(anchorTick * nextPixelsPerTick - anchorX, 0.0f, nextMaxScroll);
-            mZoomScale                    = nextZoom;
+            float const anchorX = std::clamp(ImGui::GetMousePos().x - canvasLeft, 0.0f, canvasWidth);
+            float const anchorTick = (anchorX + mScrollX) / mPixelsPerTick;
+            mPixelsPerTick = std::clamp(mPixelsPerTick * (wheel > 0.0f ? 1.15f : 1.0f / 1.15f), 0.05f, 5.0f);
+            float const nextMaxScroll = std::max(0.0f, state.totalTicks * mPixelsPerTick - canvasWidth);
+            mScrollX = std::clamp(anchorTick * mPixelsPerTick - anchorX, 0.0f, nextMaxScroll);
         } else {
             mScrollX = std::clamp(mScrollX - wheel * 60.0f, 0.0f, maxScroll);
         }

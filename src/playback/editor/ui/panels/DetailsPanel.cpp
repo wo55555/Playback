@@ -466,10 +466,13 @@ void DetailsPanel::draw() {
         if (property::beginSection("Camera Keyframe")) {
         ImGui::Text("Camera: %s", camera->name.c_str());
         ImGui::BeginDisabled(camera->locked);
-        auto const keyframeId = camera->id + ":" + key->id;
-        if (mTickKeyframeId != keyframeId) {
-            mTickKeyframeId = keyframeId;
-            mTickEditActive = false;
+        int tick = key->tick;
+        if (ImGui::InputInt("Tick", &tick) && ImGui::IsItemDeactivatedAfterEdit()) {
+            EditorAction action{EditorActionType::MoveCameraKeyframe};
+            action.id = camera->id;
+            action.secondaryId = key->id;
+            action.tick = tick;
+            submit(std::move(action));
         }
         ImGui::Text("Position: (%.1f, %.1f, %.1f)", key->position.x, key->position.y, key->position.z);
         ImGui::Text("Rotation: yaw %.1f  pitch %.1f", key->yaw, key->pitch);
