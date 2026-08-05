@@ -12,16 +12,16 @@ public:
     void draw();
 
     [[nodiscard]] float trackListWidthRatio() const { return mTrackListWidthRatio; }
-    [[nodiscard]] float pixelsPerTick() const { return mPixelsPerTick; }
+    [[nodiscard]] float zoomScale() const { return mZoomScale; }
     [[nodiscard]] float horizontalScroll() const { return mScrollX; }
-    void                setViewPreferences(float trackListWidthRatio, float pixelsPerTick, float horizontalScroll);
+    void                setViewPreferences(float trackListWidthRatio, float zoomScale, float horizontalScroll);
 
 private:
     void submitSeek(int tick);
     void submitEdit(playback::editor::EditorAction action);
 
     editing::model::TrackTreeModel mTrackTree;
-    float mPixelsPerTick{0.25f};
+    float mZoomScale{1.0f};
     float mScrollX{};
     float mTrackListWidthRatio{0.30f};
     int mPendingSeekTick{-1};

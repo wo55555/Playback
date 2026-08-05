@@ -85,7 +85,7 @@ private:
     float mVideoAspectRatio{16.0f / 9.0f};
 
     struct TimelineViewPreferences {
-        float pixelsPerTick{0.25f};
+        float zoomScale{1.0f};
         float horizontalScroll{};
     };
 

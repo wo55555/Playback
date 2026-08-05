@@ -58,7 +58,7 @@ void ReplayEditor::loadLayoutPreferences() {
     mDetailsWidthRatio   = 0.28f;
     mTimelineHeightRatio = 0.35f;
     mVideoAspectRatio    = 16.0f / 9.0f;
-    mTimelinePanel.setViewPreferences(0.30f, 0.25f, 0.0f);
+    mTimelinePanel.setViewPreferences(0.30f, 1.0f, 0.0f);
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
 
@@ -73,22 +73,24 @@ void ReplayEditor::loadLayoutPreferences() {
             mVideoAspectRatio = std::clamp(readFiniteFloat(config, "videoAspectRatio", mVideoAspectRatio), 0.25f, 4.0f);
             float const trackListWidthRatio =
                 readFiniteFloat(config, "trackListWidthRatio", mTimelinePanel.trackListWidthRatio());
-            mTimelinePanel.setViewPreferences(trackListWidthRatio, 0.25f, 0.0f);
+            mTimelinePanel.setViewPreferences(trackListWidthRatio, 1.0f, 0.0f);
 
             auto const views = config.find("timelineViews");
             if (views != config.end() && views->is_object()) {
                 for (auto const& [replayPath, view] : views->items()) {
                     if (replayPath.empty() || !view.is_object()) continue;
-                    // Convert the legacy fit-relative zoom into the new absolute scale on first load.
+                    auto const zoomScale = view.find("zoomScale");
+                    // Absolute pixelsPerTick preferences from older builds cannot be
+                    // converted without the replay canvas dimensions. Start them fitted.
                     mTimelineViewPreferences.insert_or_assign(
                         replayPath,
                         TimelineViewPreferences{
-                            std::clamp(
-                                readFiniteFloat(view, "pixelsPerTick", 0.25f * readFiniteFloat(view, "zoomScale", 1.0f)),
-                                0.05f,
-                                5.0f
-                            ),
-                            std::max(0.0f, readFiniteFloat(view, "horizontalScroll", 0.0f))
+                            zoomScale == view.end()
+                                ? 1.0f
+                                : std::clamp(readFiniteFloat(view, "zoomScale", 1.0f), 1.0f, 20.0f),
+                            zoomScale == view.end()
+                                ? 0.0f
+                                : std::max(0.0f, readFiniteFloat(view, "horizontalScroll", 0.0f))
                         }
                     );
                 }
@@ -103,13 +105,13 @@ void ReplayEditor::saveLayoutPreferences() const {
     for (auto const& [replayPath, preferences] : mTimelineViewPreferences) {
         if (replayPath == mActiveReplayPath) continue;
         timelineViews[replayPath] = {
-            {"pixelsPerTick",    preferences.pixelsPerTick   },
+            {"zoomScale",        preferences.zoomScale       },
             {"horizontalScroll", preferences.horizontalScroll}
         };
     }
     if (!mActiveReplayPath.empty()) {
         timelineViews[mActiveReplayPath] = {
-            {"pixelsPerTick",    mTimelinePanel.pixelsPerTick()   },
+            {"zoomScale",        mTimelinePanel.zoomScale()       },
             {"horizontalScroll", mTimelinePanel.horizontalScroll()}
         };
     }
@@ -129,22 +131,23 @@ void ReplayEditor::saveLayoutPreferences() const {
 
 void ReplayEditor::syncTimelineViewPreferences(std::string_view replayPath) {
     if (mActiveReplayPath == replayPath) return;
+    bool const enteringReplay = mActiveReplayPath.empty() && !replayPath.empty();
 
     if (!mActiveReplayPath.empty()) {
         mTimelineViewPreferences.insert_or_assign(
             mActiveReplayPath,
-            TimelineViewPreferences{mTimelinePanel.pixelsPerTick(), mTimelinePanel.horizontalScroll()}
+            TimelineViewPreferences{mTimelinePanel.zoomScale(), mTimelinePanel.horizontalScroll()}
         );
     }
 
     mActiveReplayPath.assign(replayPath);
     auto const preferences = mTimelineViewPreferences.find(mActiveReplayPath);
-    if (preferences == mTimelineViewPreferences.end()) {
-        mTimelinePanel.setViewPreferences(mTimelinePanel.trackListWidthRatio(), 0.25f, 0.0f);
+    if (enteringReplay || preferences == mTimelineViewPreferences.end()) {
+        mTimelinePanel.setViewPreferences(mTimelinePanel.trackListWidthRatio(), 1.0f, 0.0f);
     } else {
         mTimelinePanel.setViewPreferences(
             mTimelinePanel.trackListWidthRatio(),
-            preferences->second.pixelsPerTick,
+            preferences->second.zoomScale,
             preferences->second.horizontalScroll
         );
     }
@@ -160,7 +163,16 @@ void ReplayEditor::submitAction(playback::editor::EditorAction action) const {
 }
 
 void ReplayEditor::draw(playback::editor::EditorState const& state, SubmitAction const& submit) {
-    if (!state.editorVisible) return;
+    if (!state.editorVisible) {
+        if (!mActiveReplayPath.empty()) {
+            mTimelineViewPreferences.insert_or_assign(
+                mActiveReplayPath,
+                TimelineViewPreferences{mTimelinePanel.zoomScale(), mTimelinePanel.horizontalScroll()}
+            );
+            mActiveReplayPath.clear();
+        }
+        return;
+    }
     std::string_view replayPath;
     if (state.project) replayPath = state.project->projectPath;
     syncTimelineViewPreferences(replayPath);

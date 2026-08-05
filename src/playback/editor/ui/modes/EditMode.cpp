@@ -186,18 +186,18 @@ void EditMode::draw() {
         static float savedDetailsRatio     = editor.mDetailsWidthRatio;
         static float savedTimelineRatio    = editor.mTimelineHeightRatio;
         static float savedTrackListRatio   = editor.mTimelinePanel.trackListWidthRatio();
-        static float savedPixelsPerTick   = editor.mTimelinePanel.pixelsPerTick();
+        static float savedZoomScale       = editor.mTimelinePanel.zoomScale();
         static float savedHorizontalScroll = editor.mTimelinePanel.horizontalScroll();
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)
             && (savedDetailsRatio != editor.mDetailsWidthRatio || savedTimelineRatio != editor.mTimelineHeightRatio
                 || savedTrackListRatio != editor.mTimelinePanel.trackListWidthRatio()
-                || savedPixelsPerTick != editor.mTimelinePanel.pixelsPerTick()
+                || savedZoomScale != editor.mTimelinePanel.zoomScale()
                 || savedHorizontalScroll != editor.mTimelinePanel.horizontalScroll())) {
             editor.saveLayoutPreferences();
             savedDetailsRatio     = editor.mDetailsWidthRatio;
             savedTimelineRatio    = editor.mTimelineHeightRatio;
             savedTrackListRatio   = editor.mTimelinePanel.trackListWidthRatio();
-            savedPixelsPerTick   = editor.mTimelinePanel.pixelsPerTick();
+            savedZoomScale       = editor.mTimelinePanel.zoomScale();
             savedHorizontalScroll = editor.mTimelinePanel.horizontalScroll();
         }
         ImGui::End();
