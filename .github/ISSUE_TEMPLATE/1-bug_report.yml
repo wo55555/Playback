@@ -11,7 +11,7 @@ body:
       description: Provide a clear and concise description of the problem.
       placeholder: |
         Game crashes when...
-        
+
         This started after...
     validations:
       required: true

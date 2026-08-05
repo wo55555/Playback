@@ -39,7 +39,7 @@ body:
         I also considered...
 
         However...
-        
+
   - type: textarea
     id: additional-context
     attributes:
