@@ -8,6 +8,8 @@ namespace playback::editor {
 
 [[nodiscard]] bool hookReplayUI(bool enable);
 
+[[nodiscard]] bool isReplayBrowserVisible();
+
 void tickReplayUI(bool hudVisible);
 
 void submitEditorAction(EditorAction action);
