@@ -19,9 +19,10 @@ void EditorMenuBar::draw() {
     auto const& capabilities = editor.state().capabilities;
     float const uiScale      = std::max(1.0f, ImGui::GetIO().FontGlobalScale);
     auto const& style        = ImGui::GetStyle();
-    ImGui::PushFont(nullptr, std::max(16.0f, style.FontSizeBase * 1.15f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.0f * uiScale, 5.0f * uiScale});
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8.0f * uiScale, 4.0f * uiScale});
+    float const menuFontSize = std::max(ImGui::GetFontSize(), style.FontSizeBase * 1.08f);
+    ImGui::PushFont(nullptr, menuFontSize);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {7.0f * uiScale, 4.0f * uiScale});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {7.0f * uiScale, 2.0f * uiScale});
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
             ImGui::MenuItem("playback.refactorEditor.menu.openReplay"_tr().c_str(), "Ctrl+O", false, false);

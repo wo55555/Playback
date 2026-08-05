@@ -28,9 +28,11 @@ constexpr ImU32 kLine = IM_COL32(73, 73, 73, 255);
 constexpr ImU32 kSequenceColor = IM_COL32(98, 98, 98, 255);
 constexpr ImU32 kCameraColor = IM_COL32(77, 63, 83, 255);
 
+float iconButtonSize() { return std::max(25.0f, ImGui::GetFontSize() + 12.0f); }
+
 bool iconButton(char const* id, char const* icon, char const* tooltip, bool enabled = true) {
     ImGui::BeginDisabled(!enabled);
-    float const buttonSize = std::max(25.0f, ImGui::GetFontSize() + 12.0f);
+    float const buttonSize = iconButtonSize();
     ImVec2 const cursor = ImGui::GetCursorScreenPos();
     ImVec2 const mouse = ImGui::GetMousePos();
     bool const hovered = enabled && mouse.x >= cursor.x && mouse.x <= cursor.x + buttonSize && mouse.y >= cursor.y && mouse.y <= cursor.y + buttonSize;
@@ -120,6 +122,7 @@ void TimelinePanel::draw() {
     float const zoomScaleBeforeToolbar = mZoomScale;
 
     ImGui::SetCursorScreenPos(fullMin);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::BeginChild("##TimelineToolbar", {available.x, toolbarHeight}, false, ImGuiWindowFlags_NoScrollbar);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(32, 32, 32, 255));
     auto sameIcon = [] { ImGui::SameLine(0.0f, 1.0f); };
@@ -183,6 +186,7 @@ void TimelinePanel::draw() {
     if (iconButton("zoom-in", "+", "Zoom in")) mZoomScale = std::min(kMaxZoomScale, mZoomScale * kZoomStep);
     ImGui::PopStyleColor();
     ImGui::EndChild();
+    ImGui::PopStyleVar();
 
     float const workTop = fullMin.y + toolbarHeight;
     float const workBottom = fullMax.y - transportHeight;
@@ -212,12 +216,13 @@ void TimelinePanel::draw() {
 
     drawList->AddRectFilled({fullMin.x, workTop}, {fullMin.x + listWidth, workBottom}, kSidebarBackground);
     ImGui::SetCursorScreenPos({fullMin.x, workTop});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::BeginChild("##TimelineTrackControls", {listWidth, rulerHeight}, false, ImGuiWindowFlags_NoScrollbar);
     char search[128]{};
     std::snprintf(search, sizeof(search), "%s", mTrackSearch.c_str());
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(28, 122, 190, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(40, 142, 214, 255));
-    if (ImGui::Button("+ Camera")) {
+    if (ImGui::Button("+ Camera", {0.0f, iconButtonSize()})) {
         EditorAction action{EditorActionType::AddFreeCamera};
         action.name = "Camera " + std::to_string(project->cameras.size() + 1);
         submitEdit(std::move(action));
@@ -226,15 +231,16 @@ void TimelinePanel::draw() {
     if (iconButton("sequence", ICON_SPLIT, project->sequence.empty() ? "Add camera sequence" : "Delete camera sequence")) {
         submitEdit({project->sequence.empty() ? EditorActionType::AddCameraSequence : EditorActionType::DeleteCameraSequence});
     }
-    float const addWidth = ImGui::GetItemRectSize().x;
     ImGui::PopStyleColor(2);
     ImGui::SameLine(0.0f, 5.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f);
-    ImGui::SetNextItemWidth(std::max(32.0f, listWidth - addWidth - 14.0f));
+    ImGui::SetNextItemWidth(std::max(32.0f, ImGui::GetContentRegionAvail().x - 5.0f));
     if (ImGui::InputTextWithHint("##timeline-search", "Search Tracks", search, sizeof(search))) mTrackSearch = search;
     ImGui::PopStyleVar();
     ImGui::EndChild();
+    ImGui::PopStyleVar();
     ImGui::SetCursorScreenPos({fullMin.x, bodyTop + 2.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::BeginChild("##TimelineTrackList", {listWidth, workBottom - bodyTop - 2.0f}, false, ImGuiWindowFlags_NoScrollbar);
     float listY = bodyTop + 2.0f;
     for (auto const& row : mTrackTree.rows()) {
@@ -271,8 +277,11 @@ void TimelinePanel::draw() {
         listY = rowBottom + 2.0f;
     }
     ImGui::EndChild();
+    ImGui::PopStyleVar();
 
     drawList->AddRectFilled({canvasLeft, workTop}, {fullMax.x, workBottom}, kBackground);
+    drawList->AddRectFilled({fullMin.x, workBottom}, {canvasLeft, fullMax.y}, kSidebarBackground);
+    drawList->AddLine({fullMin.x, workBottom}, {fullMax.x, workBottom}, kLine);
     drawList->PushClipRect({canvasLeft, workTop}, {fullMax.x, workBottom}, true);
     int const majorStep = majorTickStep(pixelsPerTick);
     int const minorStep = std::max(1, majorStep / 5);
@@ -402,16 +411,28 @@ void TimelinePanel::draw() {
         }
     }
 
-    ImGui::SetCursorScreenPos({canvasLeft, workBottom + 7.0f});
+    float const scrollbarHeight = ImGui::GetFrameHeight();
+    float const scrollbarY = workBottom + std::max(0.0f, (transportHeight - scrollbarHeight) * 0.5f);
+    ImGui::SetCursorScreenPos({canvasLeft, scrollbarY});
     if (maxScroll > 0.0f) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(54, 54, 54, 255));
         ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(137, 137, 137, 255));
         ImGui::SetNextItemWidth(canvasWidth);
         ImGui::SliderFloat("##timeline-scroll", &mScrollX, 0.0f, maxScroll, "", ImGuiSliderFlags_NoInput);
         ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar();
     }
     ImGui::SetCursorScreenPos({fullMin.x, workBottom});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::BeginChild("##TimelineTransport", {listWidth, transportHeight}, false, ImGuiWindowFlags_NoScrollbar);
+    float const buttonSize = iconButtonSize();
+    char speedLabel[32]{};
+    std::snprintf(speedLabel, sizeof(speedLabel), "%.2fx", state.playbackSpeed);
+    float const controlsWidth = buttonSize * 7.0f + 5.0f + 2.0f * 2.0f + ImGui::CalcTextSize(speedLabel).x;
+    float const transportContentWidth = ImGui::GetContentRegionAvail().x;
+    ImGui::SetCursorPosX(std::max(0.0f, (transportContentWidth - controlsWidth) * 0.5f));
+    ImGui::SetCursorPosY(std::max(0.0f, (transportHeight - buttonSize) * 0.5f));
     if (iconButton("transport-start", ICON_SKIP_BACK, "Skip to start")) submitEdit({EditorActionType::SkipToStart});
     sameIcon();
     if (iconButton("transport-prev", ICON_CHEVRONS_LEFT, "Previous frame")) { EditorAction action{EditorActionType::Seek}; action.tick = std::max(0, state.currentTick - 1); submitEdit(std::move(action)); }
@@ -424,10 +445,12 @@ void TimelinePanel::draw() {
     sameIcon();
     if (iconButton("speed-down", "-", "Decrease speed")) submitEdit({EditorActionType::DecreaseSpeed});
     ImGui::SameLine(0.0f, 2.0f);
-    ImGui::TextDisabled("%.2fx", state.playbackSpeed);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", speedLabel);
     ImGui::SameLine(0.0f, 2.0f);
     if (iconButton("speed-up", "+", "Increase speed")) submitEdit({EditorActionType::IncreaseSpeed});
     ImGui::EndChild();
+    ImGui::PopStyleVar();
 }
 
 } // namespace playback::editor::ui

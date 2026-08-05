@@ -146,6 +146,7 @@ void DetailsPanel::draw() {
         ImGui::EndDisabled();
         char const* preview = "Automatic: first camera";
         if (auto const* camera = findById(project->cameras, segment->cameraId)) preview = camera->name.c_str();
+        ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::BeginCombo("Camera", preview)) {
             if (ImGui::Selectable("Automatic: first camera", segment->cameraId.empty())) {
                 EditorAction action{EditorActionType::BindSequenceCamera};
@@ -357,10 +358,12 @@ void DetailsPanel::draw() {
             return;
         }
         if (property::beginSection("Camera")) {
-        ImGui::Text("Name: %s", camera->name.c_str());
-        ImGui::Text("Keyframes: %zu", camera->keys.size());
         ImGui::BeginDisabled(camera->locked);
+        property::textRow("Name", camera->name.c_str());
+        std::string const keyframeCount = std::to_string(camera->keys.size());
+        property::textRow("Keyframes", keyframeCount.c_str());
         std::string const selectedKindName = cameraKindName(camera->kind);
+        ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::BeginCombo("playback.refactorEditor.details.kind"_tr().c_str(), selectedKindName.c_str())) {
             for (int index = 0; index < 4; ++index) {
                 auto const        kind     = static_cast<editing::model::CameraKind>(index);
@@ -467,6 +470,7 @@ void DetailsPanel::draw() {
         ImGui::Text("Camera: %s", camera->name.c_str());
         ImGui::BeginDisabled(camera->locked);
         int tick = key->tick;
+        ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::InputInt("Tick", &tick) && ImGui::IsItemDeactivatedAfterEdit()) {
             EditorAction action{EditorActionType::MoveCameraKeyframe};
             action.id = camera->id;
@@ -478,6 +482,7 @@ void DetailsPanel::draw() {
         ImGui::Text("Rotation: yaw %.1f  pitch %.1f", key->yaw, key->pitch);
         ImGui::Text("FOV: %.1f", key->fov);
         int easing = static_cast<int>(key->easingType);
+        ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::BeginCombo("Easing", easingName(key->easingType))) {
             for (int index = 0; index < 5; ++index) {
                 auto value = static_cast<editing::model::EasingType>(index);
