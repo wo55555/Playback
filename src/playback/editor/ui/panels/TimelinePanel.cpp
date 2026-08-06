@@ -24,9 +24,11 @@ constexpr float kZoomStep          = 1.15f;
 
 constexpr ImU32 kBackground = IM_COL32(27, 27, 27, 255);
 constexpr ImU32 kSidebarBackground = IM_COL32(41, 41, 41, 255);
+constexpr ImU32 kRulerBackground = IM_COL32(32, 32, 32, 255);
 constexpr ImU32 kLine = IM_COL32(73, 73, 73, 255);
 constexpr ImU32 kSequenceColor = IM_COL32(98, 98, 98, 255);
 constexpr ImU32 kCameraColor = IM_COL32(77, 63, 83, 255);
+constexpr ImU32 kPlayheadColor = IM_COL32(58, 140, 240, 255);
 
 float iconButtonSize() { return std::max(25.0f, ImGui::GetFontSize() + 12.0f); }
 
@@ -54,10 +56,10 @@ std::string formatTick(int tick) {
     return value;
 }
 
-int majorTickStep(float pixelsPerTick) {
+int majorTickStep(float pixelsPerTick, float minimumSpacing) {
     constexpr int steps[] = {20, 40, 100, 200, 400, 600, 1200, 2400, 6000, 12000};
     for (int step : steps)
-        if (step * pixelsPerTick >= 60.0f) return step;
+        if (step * pixelsPerTick >= minimumSpacing) return step;
     return steps[std::size(steps) - 1];
 }
 
@@ -116,7 +118,7 @@ void TimelinePanel::draw() {
     float const fontSize = ImGui::GetFontSize();
     float const toolbarHeight = fontSize + 16.0f;
     float const transportHeight = iconButtonSize() + 8.0f;
-    float const rulerHeight = fontSize + 12.0f;
+    float const rulerHeight = fontSize + 18.0f;
     auto* drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(fullMin, fullMax, kBackground);
     float const zoomScaleBeforeToolbar = mZoomScale;
@@ -218,6 +220,7 @@ void TimelinePanel::draw() {
     ImGui::SetCursorScreenPos({fullMin.x, workTop});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::BeginChild("##TimelineTrackControls", {listWidth, rulerHeight}, false, ImGuiWindowFlags_NoScrollbar);
+    ImGui::SetCursorPosY(std::max(0.0f, (rulerHeight - iconButtonSize()) * 0.5f));
     char search[128]{};
     std::snprintf(search, sizeof(search), "%s", mTrackSearch.c_str());
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(28, 122, 190, 255));
@@ -280,18 +283,37 @@ void TimelinePanel::draw() {
     ImGui::PopStyleVar();
 
     drawList->AddRectFilled({canvasLeft, workTop}, {fullMax.x, workBottom}, kBackground);
+    drawList->AddRectFilled({canvasLeft, workTop}, {fullMax.x, bodyTop}, kRulerBackground);
+    drawList->AddLine({canvasLeft, bodyTop - 1.0f}, {fullMax.x, bodyTop - 1.0f}, kLine);
     drawList->AddRectFilled({fullMin.x, workBottom}, {canvasLeft, fullMax.y}, kSidebarBackground);
     drawList->AddLine({fullMin.x, workBottom}, {fullMax.x, workBottom}, kLine);
     drawList->PushClipRect({canvasLeft, workTop}, {fullMax.x, workBottom}, true);
-    int const majorStep = majorTickStep(pixelsPerTick);
+    std::string const longestRulerLabel = formatTick(state.totalTicks);
+    float const minimumMajorSpacing = std::max(90.0f, ImGui::CalcTextSize(longestRulerLabel.c_str()).x + 24.0f);
+    int const majorStep = majorTickStep(pixelsPerTick, minimumMajorSpacing);
     int const minorStep = std::max(1, majorStep / 5);
     int const firstTick = std::max(0, static_cast<int>(std::floor(mScrollX / pixelsPerTick / minorStep)) * minorStep);
+    float const rulerBaseline = bodyTop - 2.0f;
     for (int tick = firstTick; tick <= state.totalTicks; tick += minorStep) {
         float x = canvasLeft + tick * pixelsPerTick - mScrollX;
         if (x < canvasLeft || x > fullMax.x) continue;
         bool const major = tick % majorStep == 0;
-        drawList->AddLine({x, workTop + (major ? rulerHeight * 0.5f : rulerHeight * 0.75f)}, {x, workTop + rulerHeight}, major ? IM_COL32(155, 158, 168, 255) : IM_COL32(72, 75, 84, 255));
-        if (major) drawList->AddText({x + 3.0f, workTop + 2.0f}, IM_COL32(190, 193, 202, 255), formatTick(tick).c_str());
+        float const tickHeight = major ? 9.0f : 5.0f;
+        drawList->AddLine(
+            {x, rulerBaseline - tickHeight},
+            {x, rulerBaseline},
+            major ? IM_COL32(155, 158, 168, 255) : IM_COL32(82, 85, 94, 255)
+        );
+        if (major) {
+            std::string const label = formatTick(tick);
+            float const labelWidth = ImGui::CalcTextSize(label.c_str()).x;
+            float const labelX = std::clamp(
+                x - labelWidth * 0.5f,
+                canvasLeft + 6.0f,
+                fullMax.x - labelWidth - 6.0f
+            );
+            drawList->AddText({labelX, workTop + 3.0f}, IM_COL32(205, 208, 216, 255), label.c_str());
+        }
     }
 
     ImGui::SetCursorScreenPos({canvasLeft, workTop});
@@ -394,8 +416,18 @@ void TimelinePanel::draw() {
         }
     }
 
-    float const visiblePlayheadX = std::clamp(canvasLeft + displayTick * pixelsPerTick - mScrollX, canvasLeft, fullMax.x);
-    drawList->AddLine({visiblePlayheadX, workTop}, {visiblePlayheadX, bodyBottom}, IM_COL32(215, 215, 215, 255), 1.0f);
+    float const visiblePlayheadX = std::clamp(
+        canvasLeft + displayTick * pixelsPerTick - mScrollX,
+        canvasLeft + 5.0f,
+        fullMax.x - 5.0f
+    );
+    drawList->AddLine({visiblePlayheadX, bodyTop - 2.0f}, {visiblePlayheadX, bodyBottom}, kPlayheadColor, 1.5f);
+    drawList->AddTriangleFilled(
+        {visiblePlayheadX - 5.0f, bodyTop - 11.0f},
+        {visiblePlayheadX + 5.0f, bodyTop - 11.0f},
+        {visiblePlayheadX, bodyTop - 2.0f},
+        kPlayheadColor
+    );
     drawList->PopClipRect();
     if (ImGui::IsWindowHovered() && ImGui::GetIO().MouseWheel != 0.0f) {
         float const wheel = ImGui::GetIO().MouseWheel;
