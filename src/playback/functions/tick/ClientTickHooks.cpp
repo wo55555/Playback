@@ -58,6 +58,25 @@ LL_TYPE_INSTANCE_HOOK(
                                   && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
                                   && !isShowingProgressScreen();
     RecordingControls::getInstance().setGameHudVisible(recordingHudVisible);
+    if (recordingHudVisible) {
+        auto const action = RecordingControls::getInstance().consumePendingAction();
+        auto&       recorder = Recorder::getInstance();
+        switch (action) {
+        case RecordingControlAction::ToggleRecording:
+            if (recorder.isActive()) recorder.stop();
+            else recorder.start();
+            break;
+        case RecordingControlAction::TogglePause:
+            if (recorder.isActive()) {
+                if (recorder.isPaused()) recorder.start();
+                else recorder.pause();
+            }
+            break;
+        case RecordingControlAction::None:
+        default:
+            break;
+        }
+    }
     editor::tickReplayUI(hudVisible);
     replay.tryFinalizeWorldCleanup();
     return result;

@@ -15,6 +15,7 @@ struct State {
     std::array<bool, 256>  pressed{};
     bool                   hudVisible{};
     bool                   captureKey{};
+    RecordingControlAction pendingAction{RecordingControlAction::None};
 };
 
 State& state() {
@@ -53,19 +54,24 @@ bool RecordingControls::onKeyInput(UINT key, bool isDown, bool uiOwnsKeyboard) {
     if (current.captureKey || uiOwnsKeyboard || !current.hudVisible || current.pressed[key]) return false;
     current.pressed[key] = true;
 
-    auto& config  = Playback::getInstance().getConfig().recordingControls;
-    auto& recorder = Recorder::getInstance();
+    auto& config = Playback::getInstance().getConfig().recordingControls;
     if (key == config.toggleRecordingKey) {
-        if (recorder.isActive()) recorder.stop();
-        else recorder.start();
+        current.pendingAction = RecordingControlAction::ToggleRecording;
         return true;
     }
-    if (key == config.togglePauseKey && recorder.isActive()) {
-        if (recorder.isPaused()) recorder.start();
-        else recorder.pause();
+    if (key == config.togglePauseKey) {
+        current.pendingAction = RecordingControlAction::TogglePause;
         return true;
     }
     return false;
+}
+
+RecordingControlAction RecordingControls::consumePendingAction() {
+    auto& current = state();
+    std::scoped_lock lock(current.mutex);
+    auto const action = current.pendingAction;
+    current.pendingAction = RecordingControlAction::None;
+    return action;
 }
 
 bool RecordingControls::isGameHudVisible() const {

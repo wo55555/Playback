@@ -101,3 +101,56 @@ struct RecordingStatusSnapshot {
 - 单元测试：对配置序列化/迁移、按键冲突校验、状态层文案和累计时长计算执行独立测试。
 - 集成测试：以输入钩子驱动录制状态机，验证场景过滤、去抖、快捷键映射与世界退出清理。
 - 手动测试：在 Minecraft 普通世界中录制至少一次，检查状态层视觉、四角位置、暂停计时与回放文件完整性。
+
+## 键盘录制链路修复
+
+### 问题
+
+录制指令通过客户端命令执行器直接调用 `Recorder`，而快捷键原先依赖 Replay UI 的输入 Hook，并在键盘事件回调中直接调用录制状态机。这样会导致普通游戏场景下监听器未注册，或录制操作不在客户端游戏更新线程执行，最终表现为按键无法启动录制。
+
+### 修复架构
+
+- `KeyInputEvent` 只负责检测按键边沿、场景门禁和提交待处理录制意图。
+- `ClientInstance` 更新 Hook 在客户端游戏线程消费意图，并调用现有 `Recorder::start()`、`pause()`、`stop()`。
+- 录制键盘监听独立于 Replay UI 鼠标 Hook；编辑器 UI 初始化失败不能影响普通游戏录制快捷键。
+- 指令、设置页面按钮和键盘入口统一复用 `Recorder` 状态机，不新增第二套录制业务逻辑。
+
+### 执行链路
+
+```text
+KeyInputEvent
+  → RecordingControls::onKeyInput
+  → PendingStartOrStop / PendingPauseOrResume
+  → ClientInstance update Hook
+  → RecordingControls::consumePendingAction
+  → Recorder::start / pause / stop
+  → RecordingStatusSnapshot
+```
+
+### 修复验收
+
+- Replay UI 或 D3D UI 初始化失败时，普通游戏中的 `P/L` 仍可触发录制控制。
+- 按键回调不直接访问 `ClientInstance`、`LocalPlayer` 或录制网络 Hook。
+- `P`、`L` 按键意图只消费一次，按住按键不会重复执行。
+- 录制状态层以 `Recorder` 实际状态为准，不显示虚假的“录制中”。
+- `record start/pause/stop` 指令和设置页面按钮行为不改变。
+
+## 录制期间游戏输入保护
+
+### 问题
+
+录制状态层属于只绘制 Overlay，不属于 Replay 浏览器或编辑器交互界面。此前渲染器把 `recordingOverlayActive` 与完整 Replay UI 等同处理，导致 `beginReplayMouseFrame()` 激活 Replay 鼠标输入；由于状态层没有 Replay 游戏视口，鼠标事件被错误判断为视口外并取消，录制时无法正常点击、攻击、交互或使用滚轮。
+
+### 修复原则
+
+- 将“需要绘制录制状态层”和“需要接管 Replay 鼠标输入”拆成两个独立条件。
+- 录制状态层可以进入 ImGui 绘制帧，但不能调用 `setReplayMouseInputActive(true)`。
+- 只有回放浏览器或回放编辑器真正可见时，才启用 Replay 鼠标输入、游戏视口判定和 UI 输入拦截。
+- 录制期间普通游戏鼠标事件必须完整交给 Minecraft；只有配置中的录制快捷键按键事件被消费。
+- 不通过伪造 Replay 游戏视口、删除 `!inGame` 保护或放宽 Replay 编辑器拦截条件来修复。
+
+### 验收
+
+- 录制状态层显示期间可以正常移动视角、左键攻击、右键交互、滚轮切换物品和使用游戏鼠标操作。
+- 打开回放浏览器或编辑器后，原有 Replay UI 鼠标捕获和视口外拦截行为保持不变。
+- 录制状态层仍保持无背景，D3D11/D3D12 画面不黑屏。

@@ -4,6 +4,7 @@
 #include "playback/Playback.h"
 #include "playback/command/Command.h"
 #include "playback/editor/ReplayUI.h"
+#include "playback/editor/renderer/ReplayMouseHook.h"
 #include "playback/functions/action/Action.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/functions/record/Recorder.h"
@@ -89,6 +90,12 @@ bool Playback::hook() {
         screen::hookMainMenu(false);
         return false;
     }
+    if (!editor::renderer::hookRecordingKeyboard(true)) {
+        (void)functions::hookClientTick(false);
+        (void)functions::hookNetwork(false);
+        screen::hookMainMenu(false);
+        return false;
+    }
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -123,6 +130,7 @@ bool Playback::hook() {
             if (recorder.isActive()) recorder.stop();
             functions::RecordingControls::getInstance().setGameHudVisible(false);
             functions::RecordingControls::getInstance().resetPressedKeys();
+            (void)functions::RecordingControls::getInstance().consumePendingAction();
             functions::ChunkMutationBarrier::setActiveLevel(nullptr);
             impl->mLevelId.clear();
             impl->mMode.store(PlaybackMode::Unknown);
@@ -143,6 +151,7 @@ bool Playback::unhook() {
         );
         return false;
     }
+    (void)editor::renderer::hookRecordingKeyboard(false);
     if (!editor::hookReplayUI(false)) {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = functions::hookNetwork(true);

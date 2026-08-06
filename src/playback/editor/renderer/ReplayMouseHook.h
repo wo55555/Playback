@@ -3,6 +3,7 @@
 namespace playback::editor::renderer {
 
 [[nodiscard]] bool hookReplayMouse(bool enable);
+[[nodiscard]] bool hookRecordingKeyboard(bool enable);
 
 void setReplayMouseInputActive(bool active);
 void setReplayUIActive(bool active);

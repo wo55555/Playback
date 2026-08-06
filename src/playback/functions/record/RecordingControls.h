@@ -6,6 +6,8 @@
 
 namespace playback::functions {
 
+enum class RecordingControlAction { None, ToggleRecording, TogglePause };
+
 class RecordingControls {
 public:
     static RecordingControls& getInstance();
@@ -13,6 +15,7 @@ public:
     void setGameHudVisible(bool visible);
     void resetPressedKeys();
     bool onKeyInput(UINT key, bool isDown, bool uiOwnsKeyboard = false);
+    RecordingControlAction consumePendingAction();
 
     [[nodiscard]] bool isGameHudVisible() const;
     [[nodiscard]] bool isCapturingKey() const;
