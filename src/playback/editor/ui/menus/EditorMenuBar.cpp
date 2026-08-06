@@ -17,12 +17,6 @@ using namespace ll::i18n_literals;
 void EditorMenuBar::draw() {
     auto&       editor       = ReplayEditor::getInstance();
     auto const& capabilities = editor.state().capabilities;
-    float const uiScale      = std::max(1.0f, ImGui::GetIO().FontGlobalScale);
-    auto const& style        = ImGui::GetStyle();
-    float const menuFontSize = std::max(ImGui::GetFontSize(), style.FontSizeBase * 1.08f);
-    ImGui::PushFont(nullptr, menuFontSize);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {7.0f * uiScale, 4.0f * uiScale});
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {7.0f * uiScale, 2.0f * uiScale});
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
             ImGui::MenuItem("playback.refactorEditor.menu.openReplay"_tr().c_str(), "Ctrl+O", false, false);
@@ -74,8 +68,6 @@ void EditorMenuBar::draw() {
 
         ImGui::EndMenuBar();
     }
-    ImGui::PopStyleVar(2);
-    ImGui::PopFont();
 
     if (mShortcutDialogOpen) ImGui::OpenPopup("##KeyboardShortcuts");
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));

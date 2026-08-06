@@ -115,7 +115,7 @@ void TimelinePanel::draw() {
     ImVec2 const fullMax{fullMin.x + available.x, fullMin.y + available.y};
     float const fontSize = ImGui::GetFontSize();
     float const toolbarHeight = fontSize + 16.0f;
-    float const transportHeight = fontSize + 14.0f;
+    float const transportHeight = iconButtonSize() + 8.0f;
     float const rulerHeight = fontSize + 12.0f;
     auto* drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(fullMin, fullMax, kBackground);

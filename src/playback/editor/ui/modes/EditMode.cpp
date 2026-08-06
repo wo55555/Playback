@@ -12,8 +12,9 @@ void EditMode::draw() {
     auto& editor = ReplayEditor::getInstance();
 
     float const fontSize = ImGui::GetFontSize();
-    float const kMenuHeight = fontSize + 18.0f;
-    float const kStatusHeight = fontSize + 10.0f;
+    auto const& style = ImGui::GetStyle();
+    float const kMenuHeight = ImGui::GetFrameHeight() + style.WindowBorderSize * 2.0f;
+    float const kStatusHeight = fontSize + style.WindowPadding.y * 2.0f;
     float const kCurveWidth = std::max(280.0f, fontSize * 16.0f);
     float const kSplitterThickness = 4.0f;
     float const kDetailsMinWidth = std::max(260.0f, fontSize * 15.0f);
@@ -40,7 +41,6 @@ void EditMode::draw() {
     {
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2(displaySize.x, kMenuHeight));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
         ImGui::Begin(
             "##EditorMenuBar",
             nullptr,
@@ -49,7 +49,6 @@ void EditMode::draw() {
         );
         editor.mMenuBar.draw();
         ImGui::End();
-        ImGui::PopStyleVar();
     }
 
     if (editor.isViewportMaximized()) {
