@@ -1,5 +1,8 @@
 #include "EditorController.h"
 
+#include "playback/functions/replay/ReplaySession.h"
+#include "playback/screen/ReplayBrowser.h"
+#include "playback/editor/editing/CameraBindingOps.h"
 #include "playback/editor/editing/commands/CameraCommands.h"
 #include "playback/editor/editing/commands/CommandFactory.h"
 #include "playback/functions/replay/ReplaySession.h"
@@ -58,9 +61,9 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     if (mProjectTotalTicks == totalTicks && mProject.projectPath == replayPath) return;
 
     mProject = {};
-    mProject.projectPath.assign(replayPath);
+    mProject.projectPath = std::string(replayPath);
     mProject.totalTicks = totalTicks;
-    mProject.sequence.push_back({"sequence", 0, totalTicks});
+    editing::CameraBindingOps::addFreeCamera(mProject, "Camera 1");
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
     mProjectTotalTicks = totalTicks;
@@ -78,6 +81,12 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::AddFreeCamera:
         mCommandStack.push(CommandFactory::createAddFreeCamera(action.name), mProject);
+        break;
+    case EditorActionType::AddCameraSequence:
+        mCommandStack.push(CommandFactory::createAddCameraSequence(), mProject);
+        break;
+    case EditorActionType::DeleteCameraSequence:
+        mCommandStack.push(CommandFactory::createDeleteCameraSequence(), mProject);
         break;
     case EditorActionType::SplitSequence:
         mCommandStack.push(CommandFactory::createSplitSequence(action.tick), mProject);
@@ -129,6 +138,12 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::CreateBindingCamera:
         mCommandStack.push(CommandFactory::createCreateBindingCamera(action.id, action.name), mProject);
+        break;
+    case EditorActionType::SetSubActorDetails:
+        mCommandStack.push(CommandFactory::createSetSubActorDetails(action.id, action.details), mProject);
+        break;
+    case EditorActionType::SetPreviewCamera:
+    case EditorActionType::ClearPreviewCamera:
         break;
     default:
         break;

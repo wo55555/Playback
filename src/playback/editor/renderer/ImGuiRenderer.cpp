@@ -368,7 +368,7 @@ struct ImGuiRenderer::Impl {
 
         ImGui_ImplDX11_NewFrame();
         input::syncFrame();
-        beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
+        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
         auto submit = [this](EditorAction action) {
             if (editorContext) editorContext->submit(std::move(action));
@@ -1026,7 +1026,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         ImGui_ImplDX12_NewFrame();
         // Forward MCBE key events to ImGui keyboard state
         input::syncFrame();
-        beginReplayMouseFrame(layout, io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
+        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
         auto submit = [&p](EditorAction action) {
             if (p.editorContext) p.editorContext->submit(std::move(action));

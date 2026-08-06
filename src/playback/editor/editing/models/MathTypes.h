@@ -22,6 +22,12 @@ struct Color4 {
     static Color4 Green() { return {0, 1, 0, 1}; }
 };
 
-enum class EasingType : uint8_t { Linear = 0, EaseIn, EaseOut, EaseInOut };
+enum class EasingType : uint8_t {
+    Linear = 0,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    CubicBezier
+};
 
 } // namespace playback::editor::editing::model

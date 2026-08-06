@@ -14,6 +14,26 @@ void restore(std::optional<model::EditorStateExt> const& before, model::EditorSt
 
 } // namespace
 
+void AddCameraSequence::execute(model::EditorStateExt& state) {
+    mChanged = state.sequence.empty();
+    if (!mChanged) return;
+    mBefore = state;
+    state.sequence.push_back({"sequence", 0, state.totalTicks});
+}
+
+void        AddCameraSequence::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string AddCameraSequence::label() const { return "Add Camera Sequence"; }
+
+void DeleteCameraSequence::execute(model::EditorStateExt& state) {
+    mChanged = !state.sequence.empty();
+    if (!mChanged) return;
+    mBefore = state;
+    state.sequence.clear();
+}
+
+void        DeleteCameraSequence::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string DeleteCameraSequence::label() const { return "Delete Camera Sequence"; }
+
 SplitSequenceAtPlayhead::SplitSequenceAtPlayhead(int tick) : mTick(tick) {}
 
 void SplitSequenceAtPlayhead::execute(model::EditorStateExt& state) {
