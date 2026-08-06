@@ -7,6 +7,7 @@
 #include "playback/functions/action/Action.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/functions/record/Recorder.h"
+#include "playback/functions/record/RecordingControls.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/functions/tick/ClientTickHooks.h"
 #include "playback/screen/MainMenuHooks.h"
@@ -120,6 +121,8 @@ bool Playback::hook() {
             replaySession.onLevelExit();
             auto& recorder = functions::Recorder::getInstance();
             if (recorder.isActive()) recorder.stop();
+            functions::RecordingControls::getInstance().setGameHudVisible(false);
+            functions::RecordingControls::getInstance().resetPressedKeys();
             functions::ChunkMutationBarrier::setActiveLevel(nullptr);
             impl->mLevelId.clear();
             impl->mMode.store(PlaybackMode::Unknown);
@@ -204,6 +207,7 @@ bool Playback::load() {
     configurationLog();
 
     const auto& logger = getSelf().getLogger();
+    impl->mConfig = config::load();
 
     if (auto result = ll::i18n::getInstance().load(getSelf().getLangDir()); !result) {
         logger.error("Failed to load I18n");

@@ -4,6 +4,7 @@
 #include "playback/editor/ReplayUI.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/functions/record/Recorder.h"
+#include "playback/functions/record/RecordingControls.h"
 #include "playback/functions/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
@@ -44,7 +45,7 @@ LL_TYPE_INSTANCE_HOOK(
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
     bool hudVisible = false;
-    if (isInitFinished && replay.isActive()) {
+    if (isInitFinished && playback::Playback::getInstance().getMode() == playback::PlaybackMode::Replay) {
         auto const topScene     = static_cast<unsigned int>(getTopSceneType());
         auto const hudScene     = static_cast<unsigned int>(ui::SceneType::HudScene);
         bool const replayReady  = replay.hasJoinedReplayWorld();
@@ -52,6 +53,11 @@ LL_TYPE_INSTANCE_HOOK(
         hudVisible              = sceneVisible && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
                   && !isShowingProgressScreen();
     }
+    bool const recordingHudVisible = isInitFinished
+                                  && playback::Playback::getInstance().getMode() == playback::PlaybackMode::Record
+                                  && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
+                                  && !isShowingProgressScreen();
+    RecordingControls::getInstance().setGameHudVisible(recordingHudVisible);
     editor::tickReplayUI(hudVisible);
     replay.tryFinalizeWorldCleanup();
     return result;

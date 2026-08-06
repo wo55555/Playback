@@ -29,6 +29,13 @@ class Packet;
 
 namespace playback::functions {
 
+enum class RecordingState { Idle, Recording, Paused, Closing };
+
+struct RecordingStatusSnapshot {
+    RecordingState             state{RecordingState::Idle};
+    std::chrono::seconds       elapsed{};
+};
+
 struct PacketLifecycleSemantics;
 
 struct PlaybackView {
@@ -97,6 +104,8 @@ private:
     std::atomic_bool                                     mNeedsInitialSnapshot       = true;
     std::atomic_bool                                     mDimensionTransitionPending = false;
     std::atomic<int>                                     mDimensionTransitionTargetId{0};
+    std::chrono::steady_clock::time_point                mRecordingStartedAt{};
+    std::chrono::steady_clock::duration                  mRecordedDuration{};
 
     int mChunkIndex          = 0;
     int mTicksInCurrentChunk = 0;
@@ -157,6 +166,8 @@ public:
     }
 
     [[nodiscard]] bool isPaused() const { return mState.load() == State::Paused; }
+
+    [[nodiscard]] RecordingStatusSnapshot getStatusSnapshot() const;
 
     void start();
     void pause();

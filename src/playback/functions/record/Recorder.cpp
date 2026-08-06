@@ -384,6 +384,31 @@ Recorder::Recorder() : mSnapshotLevelChunks{}, mSnapshotSubChunks{} {
     }
 }
 
+RecordingStatusSnapshot Recorder::getStatusSnapshot() const {
+    auto const state = mState.load(std::memory_order_acquire);
+    RecordingState publicState = RecordingState::Idle;
+    switch (state) {
+    case State::Recording:
+        publicState = RecordingState::Recording;
+        break;
+    case State::Paused:
+        publicState = RecordingState::Paused;
+        break;
+    case State::Closing:
+        publicState = RecordingState::Closing;
+        break;
+    case State::Idle:
+    default:
+        break;
+    }
+
+    auto duration = mRecordedDuration;
+    if (state == State::Recording && mRecordingStartedAt.time_since_epoch().count() != 0) {
+        duration += std::chrono::steady_clock::now() - mRecordingStartedAt;
+    }
+    return {publicState, std::chrono::duration_cast<std::chrono::seconds>(duration)};
+}
+
 void Recorder::start() {
     auto  clientInstance = ll::service::getClientInstance();
     auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
@@ -393,6 +418,7 @@ void Recorder::start() {
     }
 
     if (mState.load() == State::Paused) {
+        mRecordingStartedAt = std::chrono::steady_clock::now();
         mState = State::Recording;
         return;
     }
@@ -422,11 +448,15 @@ void Recorder::start() {
     }
 
     mState = State::Recording;
+    mRecordedDuration    = {};
+    mRecordingStartedAt  = std::chrono::steady_clock::now();
     getLogger().info("Recording started");
 }
 
 void Recorder::pause() {
     if (mState.load() != State::Recording) return;
+    mRecordedDuration += std::chrono::steady_clock::now() - mRecordingStartedAt;
+    mRecordingStartedAt = {};
     mState = State::Paused;
 }
 
@@ -438,6 +468,11 @@ void Recorder::stop() {
     }
     if (state == State::Closing) {
         return;
+    }
+
+    if (state == State::Recording) {
+        mRecordedDuration += std::chrono::steady_clock::now() - mRecordingStartedAt;
+        mRecordingStartedAt = {};
     }
 
     endTick(true);
@@ -1726,6 +1761,8 @@ void Recorder::cancelRecording(std::string_view reason) {
     }
 
     mState                       = State::Idle;
+    mRecordingStartedAt          = {};
+    mRecordedDuration            = {};
     mNeedsInitialSnapshot        = true;
     mDimensionTransitionPending  = false;
     mDimensionTransitionTargetId = 0;

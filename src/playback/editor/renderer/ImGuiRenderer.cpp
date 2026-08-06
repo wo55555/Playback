@@ -9,7 +9,9 @@
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/renderer/ReplayUILayout.h"
 #include "playback/editor/ui/ReplayEditor.h"
+#include "playback/editor/ui/RecordingStatusOverlay.h"
 #include "playback/functions/render/ReplayThumbnail.h"
+#include "playback/functions/record/RecordingControls.h"
 #include "playback/screen/select_replay/SelectReplayScreen.h"
 
 
@@ -370,6 +372,11 @@ struct ImGuiRenderer::Impl {
         input::syncFrame();
         beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
+        ui::drawRecordingStatusOverlay(
+            functions::Recorder::getInstance().getStatusSnapshot(),
+            Playback::getInstance().getConfig().recordingControls,
+            io.DisplaySize
+        );
         auto submit = [this](EditorAction action) {
             if (editorContext) editorContext->submit(std::move(action));
         };
@@ -388,7 +395,7 @@ struct ImGuiRenderer::Impl {
 
         ID3D11RenderTargetView* rtv = d3d11Rtv.Get();
         d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
-        if (!state.browser.visible) {
+        if (state.editorVisible && !state.browser.visible) {
             float clearColor[]{0.055f, 0.055f, 0.065f, 1};
             d3d11Context->ClearRenderTargetView(rtv, clearColor);
         }
@@ -919,6 +926,8 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     bool const browserOpen = state.browser.visible;
     bool const editorOpen  = state.editorVisible && state.hudVisible;
     bool const uiActive    = browserOpen || editorOpen;
+    bool const recordingOverlayActive = functions::RecordingControls::getInstance().isGameHudVisible()
+                                     && functions::Recorder::getInstance().isActive();
     input::setUiVisible(uiActive);
 
     auto const browserRevision = state.browser.snapshot ? state.browser.snapshot->revision : 0;
@@ -930,14 +939,14 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     // Thumbnail capture pipeline is active while a request is pending or a readback is in flight.
     // It must bypass the UI gates below so thumbnails are captured even during recording.
     bool const thumbnailActive = p.thumbnailCaptureRequested || p.thumbnailReadback != nullptr;
-    if (!uiActive && !thumbnailActive) {
+    if (!uiActive && !recordingOverlayActive && !thumbnailActive) {
         setReplayMouseInputActive(false);
         if (p.initialized || p.d3d11Initialized) p.shutdown();
         return false;
     }
     auto now = std::chrono::steady_clock::now();
     if (p.initialized && swapChain == p.swapChain) p.lastPresent = now;
-    if (!uiActive) {
+    if (!uiActive && !recordingOverlayActive) {
         setReplayMouseInputActive(false);
         if (!thumbnailActive) return false;
     }
@@ -945,7 +954,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     ComPtr<ID3D11Device> d3d11Device;
     if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d11Device)))) {
         if (p.initialized) p.shutdown();
-        if (uiActive) {
+        if (uiActive || recordingOverlayActive) {
             MouseInputAttempt inputAttempt;
             if (!p.renderD3D11(swapChain, true, state)) return false;
             inputAttempt.commit();
@@ -1012,7 +1021,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     if (bd.Width == 0 || bd.Height == 0) return false;
 
     ImGuiContextRestore cr;
-    if (uiActive) {
+    if (uiActive || recordingOverlayActive) {
         ImGui::SetCurrentContext(p.imguiCtx);
         auto& io                   = ImGui::GetIO();
         io.DisplaySize             = ImVec2(static_cast<float>(bd.Width), static_cast<float>(bd.Height));
@@ -1028,6 +1037,11 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         input::syncFrame();
         beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
+        ui::drawRecordingStatusOverlay(
+            functions::Recorder::getInstance().getStatusSnapshot(),
+            Playback::getInstance().getConfig().recordingControls,
+            io.DisplaySize
+        );
         auto submit = [&p](EditorAction action) {
             if (p.editorContext) p.editorContext->submit(std::move(action));
         };
@@ -1127,9 +1141,9 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     toRT[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
     toRT[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
     f.commandList->ResourceBarrier(2, toRT);
-    if (uiActive) {
+    if (uiActive || recordingOverlayActive) {
         f.commandList->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
-        if (!browserOpen) {
+        if (editorOpen && !browserOpen) {
             float cc[]{0.055f, 0.055f, 0.065f, 1};
             f.commandList->ClearRenderTargetView(f.rtv, cc, 0, nullptr);
         }

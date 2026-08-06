@@ -1,5 +1,20 @@
 {
     "playback": {
+        "recording": {
+            "settings": {
+                "title": "录制设置",
+                "subtitle": "快捷键和游戏内状态显示",
+                "toggleRecording": "开始 / 结束录制",
+                "togglePause": "暂停 / 继续录制",
+                "pressKey": "请按下按键",
+                "showOverlay": "显示录制状态",
+                "positionLabel": "显示位置",
+                "position": {"topLeft": "左上角", "topRight": "右上角", "bottomLeft": "左下角", "bottomRight": "右下角"},
+                "error": {"duplicate": "两个快捷键不能相同", "unsupported": "不支持的快捷键", "saveFailed": "设置保存失败"}
+            },
+            "status": {"recording": "录制中", "paused": "已暂停"}
+            ,"controls": {"start": "开始录制", "pause": "暂停录制", "resume": "继续录制", "stop": "结束录制"}
+        },
         "command": {
             "playback": {
                 "description": "Playback 模组命令",

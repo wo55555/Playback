@@ -1,5 +1,20 @@
 {
     "playback": {
+        "recording": {
+            "settings": {
+                "title": "Recording settings",
+                "subtitle": "Shortcuts and in-game status display",
+                "toggleRecording": "Start / stop recording",
+                "togglePause": "Pause / resume recording",
+                "pressKey": "Press a key",
+                "showOverlay": "Show recording status",
+                "positionLabel": "Display position",
+                "position": {"topLeft": "Top left", "topRight": "Top right", "bottomLeft": "Bottom left", "bottomRight": "Bottom right"},
+                "error": {"duplicate": "Shortcuts must be different", "unsupported": "Unsupported shortcut", "saveFailed": "Failed to save settings"}
+            },
+            "status": {"recording": "Recording", "paused": "Paused"}
+            ,"controls": {"start": "Start recording", "pause": "Pause recording", "resume": "Resume recording", "stop": "Stop recording"}
+        },
         "command": {
             "playback": {
                 "description": "Playback Mod commands",

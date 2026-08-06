@@ -1,5 +1,6 @@
 #include "ReplayMouseHook.h"
 #include "playback/editor/input/EditorInput.h"
+#include "playback/functions/record/RecordingControls.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/input/KeyInputEvent.h"
@@ -225,6 +226,16 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
 
 void handleKeyInput(ll::event::KeyInputEvent& event) {
     ActiveMouseCallback activeCallback;
+    bool const uiOwnsKeyboard = input::isUiVisible() && input::isGameInputCaptured();
+    bool const recordingHandled = playback::functions::RecordingControls::getInstance().onKeyInput(
+        static_cast<UINT>(event.keyCode()),
+        event.isDown(),
+        uiOwnsKeyboard
+    );
+    if (recordingHandled) {
+        event.cancel();
+        return;
+    }
     if (!gMouseHookActive.load(std::memory_order_acquire)) return;
 
     if (input::isUiVisible() && input::isGameInputCaptured() && event.keyCode() == Keyboard::Escape) {

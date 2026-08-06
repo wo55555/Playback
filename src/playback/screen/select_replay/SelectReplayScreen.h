@@ -60,6 +60,7 @@ private:
     ViewMode                                    mViewMode   = ViewMode::Grid;
     bool                                        mShowDeleteDialog{};
     bool                                        mRenameDialogOpen{};
+    bool                                        mRecordingSettingsOpen{};
     std::string                                 mRenameBuffer;
 };
 
