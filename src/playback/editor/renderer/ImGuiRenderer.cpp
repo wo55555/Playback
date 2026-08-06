@@ -1,6 +1,8 @@
 #include "ImGuiRenderer.h"
 
+#include "playback/editor/renderer/D3D11FrameTapBackend.h"
 #include "playback/editor/renderer/D3D12Compat.h"
+#include "playback/editor/renderer/D3D12FrameTapBackend.h"
 #include "playback/editor/renderer/D3D12Hooks.h"
 #include "playback/editor/renderer/ReplayMouseHook.h"
 
@@ -26,6 +28,7 @@
 #include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -122,41 +125,40 @@ void freeSrv(
 } // namespace
 
 struct ImGuiRenderer::Impl {
-    std::mutex                            mutex;
-    EditorContext*                        editorContext{};
-    IDXGISwapChain*                       swapChain{};
-    ComPtr<IDXGISwapChain3>               swapChain3;
-    ComPtr<ID3D12Device>                  device;
-    ComPtr<ID3D12CommandQueue>            commandQueue;
-    ComPtr<ID3D12DescriptorHeap>          rtvHeap;
-    ComPtr<ID3D12DescriptorHeap>          srvHeap;
-    ComPtr<ID3D12Fence>                   fence;
-    std::vector<FrameResources>           frames;
-    std::vector<UINT64>                   frameFences;
-    std::array<bool, SrvDescriptorCount>  srvUsed{};
-    HANDLE                                fenceEvent{};
-    ImGuiContext*                         imguiCtx{};
-    DXGI_FORMAT                           rtvFormat{};
-    UINT                                  rtvDescSize{};
-    UINT                                  srvDescSize{};
-    UINT64                                lastFenceValue{};
-    size_t                                frameCursor{};
-    uint64_t                              surfaceArea{};
-    bool                                  unfenced{};
-    bool                                  initialized{};
-    bool                                  backendInit{};
-    bool                                  renderingDisabled{};
-    bool                                  initFailed{};
-    bool                                  missingQueue{};
-    ComPtr<ID3D12Resource>                thumbnailReadback;
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT    thumbnailFootprint{};
-    UINT                                  thumbnailReadbackRows{};
-    UINT64                                thumbnailReadbackBytes{};
-    UINT64                                thumbnailReadbackFence{};
-    DXGI_FORMAT                           thumbnailFormat{};
-    std::chrono::steady_clock::time_point lastInitAttempt{};
-    std::chrono::steady_clock::time_point lastFrameTime{};
-    std::chrono::steady_clock::time_point lastPresent{};
+    std::mutex                                        mutex;
+    functions::render::FrameTap                       frameTap;
+    D3D11FrameTapBackend                              d3d11FrameTap{frameTap};
+    D3D12FrameTapBackend                              d3d12FrameTap{frameTap};
+    std::mutex                                        thumbnailMutex;
+    std::optional<functions::render::FrameTapSession> thumbnailSession;
+    EditorContext*                                    editorContext{};
+    IDXGISwapChain*                                   swapChain{};
+    ComPtr<IDXGISwapChain3>                           swapChain3;
+    ComPtr<ID3D12Device>                              device;
+    ComPtr<ID3D12CommandQueue>                        commandQueue;
+    ComPtr<ID3D12DescriptorHeap>                      rtvHeap;
+    ComPtr<ID3D12DescriptorHeap>                      srvHeap;
+    ComPtr<ID3D12Fence>                               fence;
+    std::vector<FrameResources>                       frames;
+    std::vector<UINT64>                               frameFences;
+    std::array<bool, SrvDescriptorCount>              srvUsed{};
+    HANDLE                                            fenceEvent{};
+    ImGuiContext*                                     imguiCtx{};
+    DXGI_FORMAT                                       rtvFormat{};
+    UINT                                              rtvDescSize{};
+    UINT                                              srvDescSize{};
+    UINT64                                            lastFenceValue{};
+    size_t                                            frameCursor{};
+    uint64_t                                          surfaceArea{};
+    bool                                              unfenced{};
+    bool                                              initialized{};
+    bool                                              backendInit{};
+    bool                                              renderingDisabled{};
+    bool                                              initFailed{};
+    bool                                              missingQueue{};
+    std::chrono::steady_clock::time_point             lastInitAttempt{};
+    std::chrono::steady_clock::time_point             lastFrameTime{};
+    std::chrono::steady_clock::time_point             lastPresent{};
 
     ComPtr<ID3D11Device>             d3d11Device;
     ComPtr<ID3D11DeviceContext>      d3d11Context;
@@ -169,10 +171,6 @@ struct ImGuiRenderer::Impl {
     bool                             d3d11BackendInit{};
     bool                             d3d11Initialized{};
     bool                             d3d11FirstFrameLogged{};
-    bool                             thumbnailCaptureRequested{};
-    std::vector<uint8_t>             thumbnailPixels;
-    uint32_t                         thumbnailWidth{};
-    uint32_t                         thumbnailHeight{};
     struct D3D11ThumbnailTexture {
         ComPtr<ID3D11Texture2D>          texture;
         ComPtr<ID3D11ShaderResourceView> srv;
@@ -279,7 +277,13 @@ struct ImGuiRenderer::Impl {
         return true;
     }
 
-    void shutdownD3D11() {
+    void shutdownD3D11(
+        functions::render::FrameTapError frameTapError   = functions::render::FrameTapError::BackendUnavailable,
+        std::string                      frameTapMessage = "D3D11 frame capture backend was released"
+    ) {
+        if (d3d11Initialized) {
+            d3d11FrameTap.reset(frameTapError, std::move(frameTapMessage));
+        }
         if (d3d11Context) d3d11Context->ClearState();
         if (d3d11ImguiCtx) {
             auto* previous = ImGui::GetCurrentContext();
@@ -302,46 +306,6 @@ struct ImGuiRenderer::Impl {
         d3d11FirstFrameLogged = false;
     }
 
-    void captureD3D11Thumbnail(D3D11_TEXTURE2D_DESC const& sourceDesc) {
-        if (!thumbnailCaptureRequested || !d3d11Device || !d3d11Context || !d3d11GameTexture) return;
-        if (sourceDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && sourceDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM) return;
-        D3D11_TEXTURE2D_DESC stagingDesc = sourceDesc;
-        stagingDesc.BindFlags            = 0;
-        stagingDesc.MiscFlags            = 0;
-        stagingDesc.Usage                = D3D11_USAGE_STAGING;
-        stagingDesc.CPUAccessFlags       = D3D11_CPU_ACCESS_READ;
-        ComPtr<ID3D11Texture2D> staging;
-        if (FAILED(d3d11Device->CreateTexture2D(&stagingDesc, nullptr, &staging))) return;
-        d3d11Context->CopyResource(staging.Get(), d3d11GameTexture.Get());
-        D3D11_MAPPED_SUBRESOURCE mapped{};
-        if (FAILED(d3d11Context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return;
-        uint32_t const targetWidth  = 640;
-        uint32_t const targetHeight = 360;
-        thumbnailPixels.resize(static_cast<size_t>(targetWidth) * targetHeight * 4);
-        for (uint32_t y = 0; y < targetHeight; ++y) {
-            auto const  sourceY = static_cast<uint32_t>((static_cast<uint64_t>(y) * sourceDesc.Height) / targetHeight);
-            auto const* row =
-                static_cast<uint8_t const*>(mapped.pData) + static_cast<size_t>(sourceY) * mapped.RowPitch;
-            for (uint32_t x = 0; x < targetWidth; ++x) {
-                auto const sourceX = static_cast<uint32_t>((static_cast<uint64_t>(x) * sourceDesc.Width) / targetWidth);
-                auto const* pixel  = row + static_cast<size_t>(sourceX) * 4;
-                auto*       target = thumbnailPixels.data() + (static_cast<size_t>(y) * targetWidth + x) * 4;
-                if (sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM) {
-                    target[0] = pixel[2];
-                    target[1] = pixel[1];
-                    target[2] = pixel[0];
-                    target[3] = pixel[3];
-                } else {
-                    std::copy_n(pixel, 4, target);
-                }
-            }
-        }
-        d3d11Context->Unmap(staging.Get(), 0);
-        thumbnailWidth            = targetWidth;
-        thumbnailHeight           = targetHeight;
-        thumbnailCaptureRequested = false;
-    }
-
     bool renderD3D11(IDXGISwapChain* sc, bool renderUi, EditorState const& state) {
         if (d3d11Initialized && sc != d3d11SwapChain) shutdownD3D11();
         if (!d3d11Initialized && !initD3D11(sc)) return false;
@@ -349,7 +313,7 @@ struct ImGuiRenderer::Impl {
         D3D11_TEXTURE2D_DESC desc{};
         d3d11BackBuffer->GetDesc(&desc);
         d3d11Context->CopyResource(d3d11GameTexture.Get(), d3d11BackBuffer.Get());
-        captureD3D11Thumbnail(desc);
+        (void)d3d11FrameTap.capture(d3d11Device.Get(), d3d11Context.Get(), d3d11GameTexture.Get());
 
         // Capture-only pass: copy the frame and grab the thumbnail, but never render
         // the ImGui overlay or clear the back buffer while the user is playing.
@@ -625,9 +589,13 @@ struct ImGuiRenderer::Impl {
         return true;
     }
 
-    void shutdown() {
+    void shutdown(
+        functions::render::FrameTapError frameTapError   = functions::render::FrameTapError::BackendUnavailable,
+        std::string                      frameTapMessage = "D3D12 frame capture backend was released"
+    ) {
         setReplayMouseInputActive(false);
-        shutdownD3D11();
+        shutdownD3D11(frameTapError, frameTapMessage);
+        if (initialized) frameTap.failActive(frameTapError, frameTapMessage);
         if (fence && commandQueue && unfenced) {
             UINT64 fv = lastFenceValue + 1;
             if (SUCCEEDED(commandQueue->Signal(fence.Get(), fv))) {
@@ -636,6 +604,7 @@ struct ImGuiRenderer::Impl {
             }
         }
         if (lastFenceValue != 0) waitForFence(lastFenceValue, fence, fenceEvent);
+        if (initialized) d3d12FrameTap.reset(frameTapError, std::move(frameTapMessage));
         if (imguiCtx) {
             auto* prev = ImGui::GetCurrentContext();
             ImGui::SetCurrentContext(imguiCtx);
@@ -667,51 +636,6 @@ struct ImGuiRenderer::Impl {
         missingQueue      = false;
         srvUsed.fill(false);
         d3d12ThumbnailTextures.clear();
-        thumbnailReadback.Reset();
-        thumbnailReadbackFence = 0;
-        thumbnailReadbackBytes = 0;
-    }
-
-    void consumeD3D12Thumbnail() {
-        if (!thumbnailReadback || thumbnailReadbackFence == 0 || !fence
-            || fence->GetCompletedValue() < thumbnailReadbackFence)
-            return;
-        if (thumbnailFormat != DXGI_FORMAT_B8G8R8A8_UNORM && thumbnailFormat != DXGI_FORMAT_R8G8B8A8_UNORM) {
-            thumbnailReadback.Reset();
-            thumbnailReadbackFence = 0;
-            return;
-        }
-        void*       mapped{};
-        D3D12_RANGE readRange{0, static_cast<SIZE_T>(thumbnailReadbackBytes)};
-        if (FAILED(thumbnailReadback->Map(0, &readRange, &mapped))) return;
-        uint32_t const targetWidth  = 640;
-        uint32_t const targetHeight = 360;
-        thumbnailPixels.resize(static_cast<size_t>(targetWidth) * targetHeight * 4);
-        for (uint32_t y = 0; y < targetHeight; ++y) {
-            auto const  sourceY = static_cast<uint32_t>((static_cast<uint64_t>(y) * thumbnailHeight) / targetHeight);
-            auto const* row     = static_cast<uint8_t const*>(mapped) + thumbnailFootprint.Offset
-                            + static_cast<size_t>(sourceY) * thumbnailFootprint.Footprint.RowPitch;
-            for (uint32_t x = 0; x < targetWidth; ++x) {
-                auto const  sourceX = static_cast<uint32_t>((static_cast<uint64_t>(x) * thumbnailWidth) / targetWidth);
-                auto const* pixel   = row + static_cast<size_t>(sourceX) * 4;
-                auto*       target  = thumbnailPixels.data() + (static_cast<size_t>(y) * targetWidth + x) * 4;
-                if (thumbnailFormat == DXGI_FORMAT_B8G8R8A8_UNORM) {
-                    target[0] = pixel[2];
-                    target[1] = pixel[1];
-                    target[2] = pixel[0];
-                    target[3] = pixel[3];
-                } else {
-                    std::copy_n(pixel, 4, target);
-                }
-            }
-        }
-        thumbnailReadback->Unmap(0, nullptr);
-        thumbnailWidth  = targetWidth;
-        thumbnailHeight = targetHeight;
-        thumbnailReadback.Reset();
-        thumbnailReadbackFence    = 0;
-        thumbnailReadbackBytes    = 0;
-        thumbnailCaptureRequested = false;
     }
 
     // Uploads a decoded RGBA8 thumbnail into a D3D12 SRV on the game's command queue and waits
@@ -849,28 +773,41 @@ void ImGuiRenderer::setContext(EditorContext* context) {
 }
 
 void ImGuiRenderer::requestReplayThumbnailCapture() {
-    std::scoped_lock lock(mImpl->mutex);
-    mImpl->thumbnailPixels.clear();
-    mImpl->thumbnailWidth            = 0;
-    mImpl->thumbnailHeight           = 0;
-    mImpl->thumbnailCaptureRequested = true;
+    std::scoped_lock lock(mImpl->thumbnailMutex);
+    if (mImpl->thumbnailSession) {
+        mImpl->frameTap.cancel(*mImpl->thumbnailSession);
+        mImpl->frameTap.close(*mImpl->thumbnailSession);
+        mImpl->thumbnailSession.reset();
+    }
+    functions::render::FrameTapSession session;
+    auto const                         opened = mImpl->frameTap.open({1, true}, session);
+    if (opened != functions::render::FrameTapOpenResult::Opened) return;
+    functions::render::FrameTicket const ticket{0, 0, 1};
+    if (mImpl->frameTap.tryArm(session, ticket) != functions::render::FrameTapArmResult::Armed) {
+        mImpl->frameTap.close(session);
+        return;
+    }
+    mImpl->thumbnailSession = session;
 }
 
 bool ImGuiRenderer::saveReplayThumbnail(std::filesystem::path const& output) {
-    std::scoped_lock lock(mImpl->mutex);
-    if (mImpl->thumbnailReadback && mImpl->thumbnailReadbackFence != 0) {
-        if (!waitForFence(mImpl->thumbnailReadbackFence, mImpl->fence, mImpl->fenceEvent)) return false;
-        mImpl->consumeD3D12Thumbnail();
+    std::optional<functions::render::FrameTapSession> session;
+    {
+        std::scoped_lock lock(mImpl->thumbnailMutex);
+        session = mImpl->thumbnailSession;
     }
-    if (mImpl->thumbnailPixels.empty() || mImpl->thumbnailWidth == 0 || mImpl->thumbnailHeight == 0) return false;
-    return functions::render::writeReplayThumbnailPng(
-        output,
-        mImpl->thumbnailWidth,
-        mImpl->thumbnailHeight,
-        mImpl->thumbnailPixels.data(),
-        mImpl->thumbnailWidth * 4
-    );
+    if (!session) return false;
+    auto       frame = mImpl->frameTap.waitPop(*session, std::chrono::milliseconds(GpuWaitTimeoutMs));
+    bool const saved = frame && functions::render::writeReplayThumbnailPng(output, *frame, 640, 360);
+    mImpl->frameTap.close(*session);
+    {
+        std::scoped_lock lock(mImpl->thumbnailMutex);
+        if (mImpl->thumbnailSession && mImpl->thumbnailSession->id == session->id) mImpl->thumbnailSession.reset();
+    }
+    return saved;
 }
+
+functions::render::FrameTap& ImGuiRenderer::frameTap() { return mImpl->frameTap; }
 
 void* ImGuiRenderer::acquireReplayThumbnailTexture(std::string_view key, std::string_view png) {
     auto& p      = *mImpl;
@@ -927,10 +864,9 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         p.browserVisible          = browserOpen;
         p.browserSnapshotRevision = browserRevision;
     }
-    // Thumbnail capture pipeline is active while a request is pending or a readback is in flight.
-    // It must bypass the UI gates below so thumbnails are captured even during recording.
-    bool const thumbnailActive = p.thumbnailCaptureRequested || p.thumbnailReadback != nullptr;
-    if (!uiActive && !thumbnailActive) {
+    // Armed or in-flight frame captures must bypass the UI gates, including during recording.
+    bool const captureActive = p.frameTap.requiresRenderPass();
+    if (!uiActive && !captureActive) {
         setReplayMouseInputActive(false);
         if (p.initialized || p.d3d11Initialized) p.shutdown();
         return false;
@@ -939,7 +875,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     if (p.initialized && swapChain == p.swapChain) p.lastPresent = now;
     if (!uiActive) {
         setReplayMouseInputActive(false);
-        if (!thumbnailActive) return false;
+        if (!captureActive) return false;
     }
 
     ComPtr<ID3D11Device> d3d11Device;
@@ -999,7 +935,6 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     }
 
     if (p.renderingDisabled || !p.swapChain3 || p.frames.empty()) return false;
-    p.consumeD3D12Thumbnail();
     UINT fi = p.swapChain3->GetCurrentBackBufferIndex();
     if (fi >= static_cast<UINT>(p.frames.size())) return false;
     auto& f = p.frames[fi];
@@ -1061,59 +996,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     toCopy[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
     f.commandList->ResourceBarrier(2, toCopy);
     f.commandList->CopyResource(f.gameTexture.Get(), f.backBuffer.Get());
-    bool const shouldCaptureThumbnail =
-        p.thumbnailCaptureRequested && !p.thumbnailReadback
-        && (bd.Format == DXGI_FORMAT_B8G8R8A8_UNORM || bd.Format == DXGI_FORMAT_R8G8B8A8_UNORM);
-    if (shouldCaptureThumbnail) {
-        D3D12_RESOURCE_DESC const bufferDesc{
-            D3D12_RESOURCE_DIMENSION_BUFFER,
-            0,
-            0,
-            1,
-            1,
-            1,
-            DXGI_FORMAT_UNKNOWN,
-            {1, 0},
-            D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            D3D12_RESOURCE_FLAG_NONE
-        };
-        UINT64 totalBytes{};
-        p.device->GetCopyableFootprints(
-            &bd,
-            0,
-            1,
-            0,
-            &p.thumbnailFootprint,
-            &p.thumbnailReadbackRows,
-            nullptr,
-            &totalBytes
-        );
-        D3D12_HEAP_PROPERTIES const
-             heap{D3D12_HEAP_TYPE_READBACK, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1};
-        auto readbackDesc  = bufferDesc;
-        readbackDesc.Width = totalBytes;
-        if (totalBytes > 0
-            && SUCCEEDED(p.device->CreateCommittedResource(
-                &heap,
-                D3D12_HEAP_FLAG_NONE,
-                &readbackDesc,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                nullptr,
-                IID_PPV_ARGS(&p.thumbnailReadback)
-            ))) {
-            D3D12_TEXTURE_COPY_LOCATION source{f.backBuffer.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
-            D3D12_TEXTURE_COPY_LOCATION destination{
-                p.thumbnailReadback.Get(),
-                D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT
-            };
-            destination.PlacedFootprint = p.thumbnailFootprint;
-            f.commandList->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
-            p.thumbnailReadbackBytes = totalBytes;
-            p.thumbnailFormat        = bd.Format;
-            p.thumbnailWidth         = static_cast<uint32_t>(bd.Width);
-            p.thumbnailHeight        = bd.Height;
-        }
-    }
+    bool const frameTapSubmitted = p.d3d12FrameTap.capture(p.device.Get(), f.commandList.Get(), f.backBuffer.Get());
 
     D3D12_RESOURCE_BARRIER toRT[2]{};
     toRT[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1146,12 +1029,26 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     toPresent.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     toPresent.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
     f.commandList->ResourceBarrier(1, &toPresent);
-    if (FAILED(f.commandList->Close())) return false;
+    if (FAILED(f.commandList->Close())) {
+        if (frameTapSubmitted) {
+            p.d3d12FrameTap.submissionFailed(
+                functions::render::FrameTapError::BackendUnavailable,
+                "Unable to close the D3D12 frame capture command list"
+            );
+        }
+        return false;
+    }
     ID3D12CommandList* cl[]{f.commandList.Get()};
     p.commandQueue->ExecuteCommandLists(1, cl);
     p.unfenced = true;
     UINT64 fv  = p.lastFenceValue + 1;
     if (FAILED(p.commandQueue->Signal(p.fence.Get(), fv))) {
+        if (frameTapSubmitted) {
+            p.d3d12FrameTap.submissionFailed(
+                functions::render::FrameTapError::FenceFailed,
+                "Unable to signal the D3D12 frame capture fence"
+            );
+        }
         p.renderingDisabled = true;
         getLogger().error("Replay ImGui timeline disabled: fence signal failed");
         return false;
@@ -1160,7 +1057,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     p.unfenced          = false;
     f.fenceValue        = fv;
     p.frameFences[slot] = fv;
-    if (shouldCaptureThumbnail && p.thumbnailReadback) p.thumbnailReadbackFence = fv;
+    if (frameTapSubmitted) p.d3d12FrameTap.submitted(p.fence.Get(), fv);
     ia.commit();
     return true;
 }
@@ -1168,7 +1065,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
 bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
-        mImpl->shutdown();
+        mImpl->shutdown(functions::render::FrameTapError::Resize, "Swap chain resized during frame capture");
         mImpl->initFailed      = false;
         mImpl->lastInitAttempt = {};
     }
@@ -1178,7 +1075,9 @@ bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
 void ImGuiRenderer::afterPresent(IDXGISwapChain* sc, long result) {
     if (result != DXGI_ERROR_DEVICE_REMOVED && result != DXGI_ERROR_DEVICE_RESET) return;
     std::scoped_lock lk(mImpl->mutex);
-    if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) mImpl->shutdown();
+    if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
+        mImpl->shutdown(functions::render::FrameTapError::DeviceLost, "Graphics device was lost during frame capture");
+    }
     unbindSwapChainQueue(sc);
 }
 

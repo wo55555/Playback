@@ -5,7 +5,9 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <cstring>
 #include <limits>
+#include <vector>
 
 namespace playback::functions::render {
 
@@ -78,6 +80,43 @@ bool writeReplayThumbnailPng(
     }
     return SUCCEEDED(frame->WriteSource(bitmap.Get(), nullptr)) && SUCCEEDED(frame->Commit())
         && SUCCEEDED(encoder->Commit());
+}
+
+bool writeReplayThumbnailPng(
+    std::filesystem::path const& output,
+    CapturedFrame const&         frame,
+    uint32_t                     targetWidth,
+    uint32_t                     targetHeight
+) {
+    if (frame.width == 0 || frame.height == 0 || frame.rowPitch < frame.width * 4 || targetWidth == 0
+        || targetHeight == 0) {
+        return false;
+    }
+    auto const requiredBytes = static_cast<uint64_t>(frame.rowPitch) * frame.height;
+    if (requiredBytes > frame.pixels.size()) return false;
+
+    auto const targetBytes = static_cast<uint64_t>(targetWidth) * targetHeight * 4;
+    if (targetBytes > std::numeric_limits<size_t>::max()) return false;
+    std::vector<uint8_t> rgba(static_cast<size_t>(targetBytes));
+    for (uint32_t y = 0; y < targetHeight; ++y) {
+        auto const  sourceY = static_cast<uint32_t>((static_cast<uint64_t>(y) * frame.height) / targetHeight);
+        auto const* row =
+            reinterpret_cast<uint8_t const*>(frame.pixels.data()) + static_cast<size_t>(sourceY) * frame.rowPitch;
+        for (uint32_t x = 0; x < targetWidth; ++x) {
+            auto const  sourceX = static_cast<uint32_t>((static_cast<uint64_t>(x) * frame.width) / targetWidth);
+            auto const* source  = row + static_cast<size_t>(sourceX) * 4;
+            auto*       target  = rgba.data() + (static_cast<size_t>(y) * targetWidth + x) * 4;
+            if (frame.pixelFormat == FramePixelFormat::Bgra8) {
+                target[0] = source[2];
+                target[1] = source[1];
+                target[2] = source[0];
+                target[3] = source[3];
+            } else {
+                std::memcpy(target, source, 4);
+            }
+        }
+    }
+    return writeReplayThumbnailPng(output, targetWidth, targetHeight, rgba.data(), targetWidth * 4);
 }
 
 bool decodeReplayThumbnailPng(std::string_view png, ReplayThumbnailPixels& output) {

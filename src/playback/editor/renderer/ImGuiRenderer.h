@@ -20,9 +20,10 @@ public:
     ImGuiRenderer();
     ~ImGuiRenderer();
 
-    void                setContext(EditorContext* context);
-    void                requestReplayThumbnailCapture() override;
-    [[nodiscard]] bool  saveReplayThumbnail(std::filesystem::path const& output) override;
+    void                                       setContext(EditorContext* context);
+    void                                       requestReplayThumbnailCapture() override;
+    [[nodiscard]] bool                         saveReplayThumbnail(std::filesystem::path const& output) override;
+    [[nodiscard]] functions::render::FrameTap& frameTap();
     [[nodiscard]] void* acquireReplayThumbnailTexture(std::string_view key, std::string_view png);
 
     bool render(IDXGISwapChain* swapChain);

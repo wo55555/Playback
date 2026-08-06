@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FrameTap.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <string_view>
@@ -27,6 +29,13 @@ struct ReplayThumbnailPixels {
     uint32_t                     height,
     uint8_t const*               rgba,
     uint32_t                     rowPitch
+);
+
+[[nodiscard]] bool writeReplayThumbnailPng(
+    std::filesystem::path const& output,
+    CapturedFrame const&         frame,
+    uint32_t                     targetWidth,
+    uint32_t                     targetHeight
 );
 
 [[nodiscard]] bool decodeReplayThumbnailPng(std::string_view png, ReplayThumbnailPixels& output);
