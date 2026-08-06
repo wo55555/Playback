@@ -447,12 +447,14 @@ void TimelinePanel::draw() {
 
     float const scrollbarHeight = ImGui::GetFrameHeight();
     float const scrollbarY = workBottom + std::max(0.0f, (transportHeight - scrollbarHeight) * 0.5f);
-    ImGui::SetCursorScreenPos({canvasLeft, scrollbarY});
+    float const scrollbarHorizontalPadding = std::min(8.0f, canvasWidth * 0.25f);
+    float const scrollbarWidth = std::max(1.0f, canvasWidth - scrollbarHorizontalPadding * 2.0f);
+    ImGui::SetCursorScreenPos({canvasLeft + scrollbarHorizontalPadding, scrollbarY});
     if (maxScroll > 0.0f) {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(54, 54, 54, 255));
         ImGui::PushStyleColor(ImGuiCol_SliderGrab, IM_COL32(137, 137, 137, 255));
-        ImGui::SetNextItemWidth(canvasWidth);
+        ImGui::SetNextItemWidth(scrollbarWidth);
         ImGui::SliderFloat("##timeline-scroll", &mScrollX, 0.0f, maxScroll, "", ImGuiSliderFlags_NoInput);
         ImGui::PopStyleColor(2);
         ImGui::PopStyleVar();
