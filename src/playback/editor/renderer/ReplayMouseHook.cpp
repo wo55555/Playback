@@ -1,6 +1,5 @@
 #include "ReplayMouseHook.h"
 #include "playback/editor/input/EditorInput.h"
-#include "playback/editor/renderer/ReplayUILayout.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/input/KeyInputEvent.h"
@@ -38,6 +37,13 @@ struct QueuedMouseEvent {
     bool            down{};
 };
 
+struct GameViewportBounds {
+    float left{};
+    float top{};
+    float right{};
+    float bottom{};
+};
+
 std::atomic<bool>       gMouseHookActive{false};
 std::atomic<bool>       gMouseHookStopping{true};
 std::atomic<bool>       gReplayUiInputActive{false};
@@ -52,12 +58,12 @@ std::atomic<bool>       gCaptureRequested{false};
 std::atomic<bool>       gReleaseRequested{false};
 std::atomic<MouseOwner> gMouseOwner{MouseOwner::Inactive};
 
-std::atomic<float> gGameViewportLeft{};
-std::atomic<float> gGameViewportTop{};
-std::atomic<float> gGameViewportRight{1.0f};
-std::atomic<float> gGameViewportBottom{1.0f};
+std::mutex         gGameViewportMutex;
+GameViewportBounds gGameViewport{};
 std::atomic<float> gInputScaleX{1.0f};
 std::atomic<float> gInputScaleY{1.0f};
+std::atomic<float> gCaptureRequestX{};
+std::atomic<float> gCaptureRequestY{};
 
 std::atomic<LONG> gRestoreCursorX{};
 std::atomic<LONG> gRestoreCursorY{};
@@ -115,10 +121,9 @@ bool isCurrentProcessForeground(HWND* window = nullptr) {
 }
 
 bool isGameViewportPoint(float x, float y) {
-    return x >= gGameViewportLeft.load(std::memory_order_relaxed)
-        && x < gGameViewportRight.load(std::memory_order_relaxed)
-        && y >= gGameViewportTop.load(std::memory_order_relaxed)
-        && y < gGameViewportBottom.load(std::memory_order_relaxed);
+    std::scoped_lock lock(gGameViewportMutex);
+    return x >= gGameViewport.left && x < gGameViewport.right && y >= gGameViewport.top
+        && y < gGameViewport.bottom;
 }
 
 void queueEvent(QueuedMouseEvent event) {
@@ -196,6 +201,8 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
 
         if (button == ImGuiMouseButton_Left && down && inGame && !popup) {
             saveCursorPosition();
+            gCaptureRequestX.store(x, std::memory_order_relaxed);
+            gCaptureRequestY.store(y, std::memory_order_relaxed);
             gCaptureRequested.store(true, std::memory_order_release);
             return;
         }
@@ -270,8 +277,16 @@ void applyMouseTransition(ClientInstance& client) {
         gCaptureRequested.store(false, std::memory_order_release);
         gLeftMouseDown.store(false, std::memory_order_release);
     }
-    if (owner == MouseOwner::UiReleased && focused && gLeftMouseDown.load(std::memory_order_acquire)
-        && gCaptureRequested.exchange(false, std::memory_order_acq_rel)) {
+    bool const shouldCapture = owner == MouseOwner::UiReleased && focused
+                            && gLeftMouseDown.load(std::memory_order_acquire)
+                            && gCaptureRequested.exchange(false, std::memory_order_acq_rel)
+                            && !gBlockGameMouseInput.load(std::memory_order_acquire)
+                            && !gPopupOpen.load(std::memory_order_acquire)
+                            && isGameViewportPoint(
+                                gCaptureRequestX.load(std::memory_order_relaxed),
+                                gCaptureRequestY.load(std::memory_order_relaxed)
+                            );
+    if (shouldCapture) {
         gReleaseRequested.store(false, std::memory_order_release);
         gApplyingMouseTransition = true;
         if (!client.getMouseGrabbed()) client.grabMouse();
@@ -467,6 +482,7 @@ void setReplayMouseInputActive(bool active) {
     gReleaseRequested.store(true, std::memory_order_release);
     gLeftMouseDown.store(false, std::memory_order_release);
     gImGuiFocusKnown.store(false, std::memory_order_release);
+    setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
     std::scoped_lock lock(gQueuedEventsMutex);
     gQueuedEvents.clear();
 }
@@ -477,23 +493,15 @@ void setReplayUIActive(bool active) {
 }
 
 void beginReplayMouseFrame(
-    ui::ReplayUILayout const& layout,
-    float                     displayWidth,
-    float                     displayHeight,
-    bool                      blockGameMouseInput
+    float displayWidth,
+    float displayHeight,
+    bool  blockGameMouseInput
 ) {
-    // Publish exclusive browser ownership before changing viewport bounds so input callbacks
-    // cannot observe a transient editor viewport.
+    bool const inputWasActive = gReplayUiInputActive.load(std::memory_order_acquire);
     gBlockGameMouseInput.store(blockGameMouseInput, std::memory_order_release);
-    if (blockGameMouseInput) {
+    // The editor publishes fresh video bounds after drawing; retain the previous frame until then.
+    if (blockGameMouseInput || !inputWasActive) {
         setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
-    } else {
-        setReplayGameViewport(
-            layout.gameViewportLeft,
-            layout.gameViewportTop,
-            layout.gameViewportRight,
-            layout.gameViewportBottom
-        );
     }
     setReplayMouseInputActive(true);
     if (!gReplayUiInputActive.load(std::memory_order_acquire)) return;
@@ -557,10 +565,12 @@ void beginReplayMouseFrame(
 }
 
 void setReplayGameViewport(float left, float top, float right, float bottom) {
-    gGameViewportLeft.store(left, std::memory_order_relaxed);
-    gGameViewportTop.store(top, std::memory_order_relaxed);
-    gGameViewportRight.store(right, std::memory_order_relaxed);
-    gGameViewportBottom.store(bottom, std::memory_order_relaxed);
+    std::scoped_lock lock(gGameViewportMutex);
+    if (right <= left || bottom <= top) {
+        gGameViewport = {};
+        return;
+    }
+    gGameViewport = {left, top, right, bottom};
 }
 
 void endReplayMouseFrame() {

@@ -205,7 +205,9 @@ void TimelinePanel::draw() {
         mScrollX = std::max(0.0f, mScrollX + displayTick * (pixelsPerTick - previousPixelsPerTick));
     }
     float const contentWidth = std::max(canvasWidth, state.totalTicks * pixelsPerTick);
-    float const maxScroll = std::max(0.0f, contentWidth - canvasWidth);
+    float const overflowWidth = std::max(0.0f, contentWidth - canvasWidth);
+    bool const hasHorizontalOverflow = mZoomScale > kMinZoomScale + 0.001f && overflowWidth > 0.5f;
+    float const maxScroll = hasHorizontalOverflow ? overflowWidth : 0.0f;
     mScrollX = std::clamp(mScrollX, 0.0f, maxScroll);
 
     ImGui::SetCursorScreenPos({fullMin.x + listWidth - kSplitterThickness * 0.5f, workTop});
