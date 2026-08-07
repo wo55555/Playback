@@ -21,6 +21,8 @@ xmake -r -y
 
 打包后的模组位于 `bin/playback/`。原生界面翻译会复制到 `bin/playback/lang/`，图标字体会复制到 `bin/playback/fonts/`，轻量主菜单按钮资源包会安装到 `bin/playback/resource_packs/playback-ui/`。同一按钮资源包还会生成为 `bin/playback-ui.mcpack`，供单独手动导入；原生回放浏览器不在该资源包内。
 
+Xmake 会使用 x264 构建固定版本的 FFmpeg 7.1 命令行运行时，并将静态可执行文件复制到 `bin/playback/tools/ffmpeg.exe`。发行版用户无需单独安装 FFmpeg。首次源码构建需要下载并编译这套工具链，因此依赖配置会比后续命中缓存的构建耗时更长。
+
 ## 刷新依赖
 
 如果 prelink 报告无法找到 `bedrock_runtime_data`，请刷新包配置并重新构建：

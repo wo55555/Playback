@@ -17,8 +17,11 @@
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
+#include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
+#include "mc/entity/components/RenderPositionComponent.h"
+#include "mc/entity/components/RenderRotationComponent.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/NetworkIdentifier.h"
@@ -33,14 +36,14 @@
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
+#include "mc/network/packet/PackInfoData.h"
 #include "mc/network/packet/PlayerActionPacket.h"
 #include "mc/network/packet/PlayerActionType.h"
-#include "mc/network/packet/PackInfoData.h"
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/RemoveObjectivePacket.h"
-#include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
+#include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/network/packet/SetDisplayObjectivePacket.h"
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
@@ -50,6 +53,8 @@
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
+#include "mc/world/actor/Actor.h"
+#include "mc/world/actor/BuiltInActorComponents.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
@@ -176,9 +181,205 @@ struct InjectionReset {
     ~InjectionReset() { injecting.store(nullptr, std::memory_order_release); }
 };
 
+float interpolateAngle(float previous, float current, float partialTick) {
+    return previous + std::remainder(current - previous, 360.0f) * partialTick;
+}
+
+float decodeRotationByte(uchar value) { return static_cast<schar>(value) * (360.0f / 256.0f); }
+
 } // namespace
 
+struct ReplayExportRenderPoseState {
+    struct ActorState {
+        RenderPositionComponent*    renderPosition{};
+        Vec3                        renderPositionValue;
+        Vec3                        exportPosition;
+        RenderRotationComponent*    renderRotation{};
+        Vec2                        renderRotationValue;
+        ActorRotationComponent*     actorRotation{};
+        Vec2                        actorRotationValue;
+        Vec2                        actorRotationPreviousValue;
+        ActorHeadRotationComponent* headRotation{};
+        float                       headYaw{};
+        float                       previousHeadYaw{};
+        MobBodyRotationComponent*   bodyRotation{};
+        float                       bodyYaw{};
+        float                       previousBodyYaw{};
+    };
+
+    std::vector<ActorState> actors;
+};
+
+ReplaySession::ReplaySession()  = default;
 ReplaySession::~ReplaySession() = default;
+
+ReplaySession::EntityRenderPose ReplaySession::captureEntityRenderPose(Actor const& actor) const {
+    auto const& context  = actor.getEntityContext();
+    auto const  rotation = actor.getRotation();
+
+    float headYaw = rotation.y;
+    if (auto const headRotation = context.tryGetComponent<ActorHeadRotationComponent>()) {
+        headYaw = headRotation->mYHeadRot;
+    }
+
+    float bodyYaw = rotation.y;
+    if (auto const bodyRotation = context.tryGetComponent<MobBodyRotationComponent>()) {
+        bodyYaw = bodyRotation->mYBodyRot;
+    }
+
+    return EntityRenderPose{actor.getPosition(), rotation, headYaw, bodyYaw};
+}
+
+void ReplaySession::queueEntityRenderPose(ActorUniqueID id, Actor const& actor, EntityRenderPose pose) {
+    if (!mEntityRenderPoses.contains(id)) {
+        auto const current = captureEntityRenderPose(actor);
+        mEntityRenderPoses.emplace(id, EntityRenderPoseTrack{current, current});
+    }
+    mPendingEntityRenderPoses.insert_or_assign(id, std::move(pose));
+}
+
+void ReplaySession::commitEntityRenderPoses() {
+    for (auto& [_, track] : mEntityRenderPoses) track.previous = track.current;
+    for (auto& [id, pose] : mPendingEntityRenderPoses) {
+        auto track = mEntityRenderPoses.find(id);
+        if (track == mEntityRenderPoses.end()) {
+            mEntityRenderPoses.emplace(id, EntityRenderPoseTrack{pose, pose});
+        } else {
+            track->second.current = pose;
+        }
+    }
+    mPendingEntityRenderPoses.clear();
+}
+
+void ReplaySession::clearEntityRenderPoses() {
+    endExportRenderPose();
+    mEntityRenderPoses.clear();
+    mPendingEntityRenderPoses.clear();
+}
+
+bool ReplaySession::beginExportRenderPose(float partialTick) {
+    if (!std::isfinite(partialTick) || partialTick < 0.0f || partialTick >= 1.0f || mAppliedExportRenderPose) {
+        return false;
+    }
+    if (!mActive || !mReplayWorldJoined || !mWorldReady || !refreshReplayPlayer()) return false;
+
+    try {
+        mAppliedExportRenderPose = std::make_unique<ReplayExportRenderPoseState>();
+        auto& applied            = *mAppliedExportRenderPose;
+        applied.actors.reserve(mRecordedEntityIds.size());
+
+        for (auto const& id : mRecordedEntityIds) {
+            auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+            if (!actor) {
+                getLogger().error("Recorded entity {} is unavailable while applying an export render pose", id.rawID);
+                endExportRenderPose();
+                return false;
+            }
+
+            auto track = mEntityRenderPoses.find(id);
+            if (track == mEntityRenderPoses.end()) {
+                auto const pose = captureEntityRenderPose(*actor);
+                track           = mEntityRenderPoses.emplace(id, EntityRenderPoseTrack{pose, pose}).first;
+            }
+
+            auto& context        = actor->getEntityContext();
+            auto* renderPosition = context.tryGetComponent<RenderPositionComponent>().as_ptr();
+            if (!renderPosition) {
+                getLogger().error("Recorded entity {} has no RenderPositionComponent during export", id.rawID);
+                endExportRenderPose();
+                return false;
+            }
+
+            auto* renderRotation = context.tryGetComponent<RenderRotationComponent>().as_ptr();
+            auto* actorRotation  = actor->mBuiltInComponents->mActorRotationComponent.get();
+            auto* headRotation   = context.tryGetComponent<ActorHeadRotationComponent>().as_ptr();
+            auto* bodyRotation   = context.tryGetComponent<MobBodyRotationComponent>().as_ptr();
+
+            applied.actors.emplace_back(ReplayExportRenderPoseState::ActorState{
+                renderPosition,
+                renderPosition->mValue.get(),
+                {},
+                renderRotation,
+                renderRotation ? renderRotation->mRot.get() : Vec2{},
+                actorRotation,
+                actorRotation->mRot.get(),
+                actorRotation->mRotPrev.get(),
+                headRotation,
+                headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
+                headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
+                bodyRotation,
+                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
+                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
+            });
+
+            auto const& previous = track->second.previous;
+            auto const& current  = track->second.current;
+            Vec3 const  position{
+                std::lerp(previous.position.x, current.position.x, partialTick),
+                std::lerp(previous.position.y, current.position.y, partialTick),
+                std::lerp(previous.position.z, current.position.z, partialTick),
+            };
+            Vec2 const rotation{
+                interpolateAngle(previous.rotation.x, current.rotation.x, partialTick),
+                interpolateAngle(previous.rotation.y, current.rotation.y, partialTick),
+            };
+            float const headYaw = interpolateAngle(previous.headYaw, current.headYaw, partialTick);
+            float const bodyYaw = interpolateAngle(previous.bodyYaw, current.bodyYaw, partialTick);
+
+            applied.actors.back().exportPosition = position;
+            renderPosition->mValue               = position;
+            if (renderRotation) renderRotation->mRot = rotation;
+            actorRotation->mRot     = rotation;
+            actorRotation->mRotPrev = rotation;
+            if (headRotation) {
+                headRotation->mYHeadRot  = headYaw;
+                headRotation->mYHeadRotO = headYaw;
+            }
+            if (bodyRotation) {
+                bodyRotation->mYBodyRot  = bodyYaw;
+                bodyRotation->mYBodyRotO = bodyYaw;
+            }
+        }
+        return true;
+    } catch (...) {
+        getLogger().error("Unable to apply fractional replay entity poses during export");
+        endExportRenderPose();
+        return false;
+    }
+}
+
+bool ReplaySession::applyExportRenderPosition(RenderPositionComponent& renderPosition) const {
+    if (!mAppliedExportRenderPose) return false;
+
+    for (auto const& state : mAppliedExportRenderPose->actors) {
+        if (state.renderPosition != &renderPosition) continue;
+
+        renderPosition.mValue = state.exportPosition;
+        return true;
+    }
+    return false;
+}
+
+void ReplaySession::endExportRenderPose() {
+    if (!mAppliedExportRenderPose) return;
+
+    for (auto state = mAppliedExportRenderPose->actors.rbegin(); state != mAppliedExportRenderPose->actors.rend();
+         ++state) {
+        state->renderPosition->mValue = state->renderPositionValue;
+        if (state->renderRotation) state->renderRotation->mRot = state->renderRotationValue;
+        state->actorRotation->mRot     = state->actorRotationValue;
+        state->actorRotation->mRotPrev = state->actorRotationPreviousValue;
+        if (state->headRotation) {
+            state->headRotation->mYHeadRot  = state->headYaw;
+            state->headRotation->mYHeadRotO = state->previousHeadYaw;
+        }
+        if (state->bodyRotation) {
+            state->bodyRotation->mYBodyRot  = state->bodyYaw;
+            state->bodyRotation->mYBodyRotO = state->previousBodyYaw;
+        }
+    }
+    mAppliedExportRenderPose.reset();
+}
 
 bool ReplaySession::start(std::filesystem::path filePath) {
     if (mActive || mCleanupState != CleanupState::None || !mReplayLevelId.empty()) {
@@ -269,6 +470,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
 }
 
 void ReplaySession::clearReplayData() {
+    clearEntityRenderPoses();
     mReplayDimensionProfile.store({}, std::memory_order_release);
     mStopRequested.store(false, std::memory_order_release);
     mRequestedSeekTick.store(-1, std::memory_order_release);
@@ -286,6 +488,8 @@ void ReplaySession::clearReplayData() {
     mCurrentTick             = 0;
     mReaderIndex             = 0;
     mSeekTargetTick          = -1;
+    mExportSeekRequested     = false;
+    mSnapMovementDuringSeek  = false;
     mPlaybackSpeed           = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
     mReplayTime.reset();
@@ -404,6 +608,40 @@ bool ReplaySession::setPaused(bool paused) {
     return true;
 }
 
+ReplayExportTickState ReplaySession::prepareExportTick(int targetTick) {
+    if (!mActive) return ReplayExportTickState::Unavailable;
+    if (mReplayFailed) return ReplayExportTickState::Failed;
+
+    targetTick               = std::clamp(targetTick, 0, getTotalTicks());
+    mIsPaused                = true;
+    mPlaybackTickAccumulator = 0.0f;
+
+    if (!mReplayWorldJoined || !mWorldReady || !mNetworkHandler) {
+        return ReplayExportTickState::Waiting;
+    }
+
+    auto const requestedTick = mRequestedSeekTick.load(std::memory_order_acquire);
+    if (requestedTick >= 0) {
+        mExportSeekRequested = true;
+        if (requestedTick != targetTick) mRequestedSeekTick.store(targetTick, std::memory_order_release);
+        return ReplayExportTickState::Waiting;
+    }
+    if (mSeekTargetTick >= 0 || mPendingReplayDimension || mPendingSnapshotApply || mChunkInjectionPending) {
+        return ReplayExportTickState::Waiting;
+    }
+    if (mCurrentTick == targetTick) {
+        mExportSeekRequested = false;
+        return ReplayExportTickState::Ready;
+    }
+    if (mReaderIndex >= mReaders.size() && mCurrentTick < targetTick) {
+        mExportSeekRequested = false;
+        return ReplayExportTickState::Failed;
+    }
+    mExportSeekRequested = true;
+    mRequestedSeekTick.store(targetTick, std::memory_order_release);
+    return ReplayExportTickState::Waiting;
+}
+
 int ReplaySession::getTotalTicks() const { return std::max(0, mMeta.totalTicks); }
 
 void ReplaySession::adjustPlaybackSpeed(int direction) {
@@ -447,9 +685,11 @@ void ReplaySession::beginSeek(int targetTick) {
         ++chunkIndex;
     }
 
+    bool const exportSeek    = mExportSeekRequested;
     mIsPaused                = true;
     mPlaybackTickAccumulator = 0.0f;
     mSeekTargetTick          = targetTick;
+    mSnapMovementDuringSeek  = !exportSeek;
     if (selectedReader >= mSnapshotContexts.size()) {
         throw std::runtime_error("Replay seek snapshot context index is out of range");
     }
@@ -472,6 +712,9 @@ void ReplaySession::beginSeek(int targetTick) {
     }
     bool const followRecordedPlayer = changesDimension || crossesForcedSnapshot;
     if (targetTick >= mCurrentTick && !followRecordedPlayer) {
+        // Export samples advance monotonically. Keep native movement processing for this
+        // fast-forward path so the actor walk animation can accumulate between frames.
+        if (exportSeek) mSnapMovementDuringSeek = false;
         getLogger().debug(
             "Fast-forwarding replay from tick {} to tick {} without reloading snapshots",
             mCurrentTick,
@@ -536,14 +779,18 @@ void ReplaySession::tick() {
                    && !mPendingReplayDimension && advancedTicks < SeekTicksPerClientTick) {
                 if (!advanceReplayTick(false)) {
                     getLogger().warn("Replay ended at tick {} while seeking to tick {}", mCurrentTick, mSeekTargetTick);
-                    mSeekTargetTick = -1;
+                    mSeekTargetTick         = -1;
+                    mExportSeekRequested    = false;
+                    mSnapMovementDuringSeek = false;
                     return;
                 }
                 ++advancedTicks;
             }
             if (mCurrentTick >= mSeekTargetTick) {
                 getLogger().debug("Replay seek completed at tick {}", mCurrentTick);
-                mSeekTargetTick = -1;
+                mSeekTargetTick         = -1;
+                mExportSeekRequested    = false;
+                mSnapMovementDuringSeek = false;
             }
             return;
         }
@@ -590,6 +837,8 @@ void ReplaySession::updateControlPlane() {
                 mDimensionTransitionStartedAt      = {};
                 mDimensionTransitionSettledUpdates = 0;
                 mSeekTargetTick                    = -1;
+                mExportSeekRequested               = false;
+                mSnapMovementDuringSeek            = false;
                 if (!mChunkInjectionPending) resetDimensionScopedReplayState();
                 (void)refreshReplayPlayer();
                 return;
@@ -661,6 +910,8 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mCurrentTick             = 0;
     mReaderIndex             = 0;
     mSeekTargetTick          = -1;
+    mExportSeekRequested     = false;
+    mSnapMovementDuringSeek  = false;
     mPlaybackSpeed           = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
     mReplayTime.reset();
@@ -743,21 +994,20 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
 
         ReadOnlyBinaryStream stream(serialized.mPayload, false);
         if (!packet->read(stream) || !stream.ensureReadCompleted()) {
-            throw std::runtime_error(std::format(
-                "Unable to decode recorded resource-pack packet {}",
-                serialized.mPacketId
-            ));
+            throw std::runtime_error(
+                std::format("Unable to decode recorded resource-pack packet {}", serialized.mPacketId)
+            );
         }
         return packet;
     };
 
-    auto&       repository     = client->getResourcePackRepository();
-    auto const* serializedInfo = findPacket(MinecraftPacketIds::ResourcePacksInfo);
+    auto&       repository      = client->getResourcePackRepository();
+    auto const* serializedInfo  = findPacket(MinecraftPacketIds::ResourcePacksInfo);
     auto const* serializedStack = findPacket(MinecraftPacketIds::ResourcePackStack);
 
     std::shared_ptr<ResourcePacksInfoPacket> info;
     if (serializedInfo) {
-        info = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
+        info      = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
         auto keys = info->mData->collectKeys();
         mReplayCachedResourcePacksLoaded = true;
         repository.addCachedResourcePacks(&keys);
@@ -1189,6 +1439,7 @@ void ReplaySession::completeReplayDimensionTransition() {
 }
 
 void ReplaySession::resetDimensionScopedReplayState() {
+    clearEntityRenderPoses();
     mChunkInjectionPending      = false;
     mChunkInjectionPlanPrepared = false;
     mApplyingChunkSnapshot      = false;
@@ -1861,6 +2112,7 @@ void ReplaySession::handleNextTick() {
     if (mIsProcessingSnapshot) {
         throw std::runtime_error("Can't go to next tick while processing snapshot");
     }
+    commitEntityRenderPoses();
     mCurrentTick += 1;
     if (mReplayTime) {
         ++*mReplayTime;
@@ -2000,9 +2252,9 @@ void ReplaySession::handleConfigurationPacket(PlaybackBuffer& data) {
         throw std::runtime_error("Configuration packet appeared outside a replay snapshot");
     }
 
-    auto const packetIdValue = data.getVarInt().value();
-    auto const packetId      = static_cast<MinecraftPacketIds>(packetIdValue);
-    auto const remaining     = data.getWritePointer() - data.mReadPointer;
+    auto const  packetIdValue = data.getVarInt().value();
+    auto const  packetId      = static_cast<MinecraftPacketIds>(packetIdValue);
+    auto const  remaining     = data.getWritePointer() - data.mReadPointer;
     std::string payload(data.mView.data() + data.mReadPointer, remaining);
     data.mReadPointer += remaining;
 
@@ -2082,7 +2334,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         auto const count = data.getVarInt().value();
         if (count < 0) throw std::runtime_error("Entity movement count cannot be negative");
 
-        bool const snapMovement = mSeekTargetTick >= 0;
+        bool const snapMovement = mSeekTargetTick >= 0 && mSnapMovementDuringSeek;
         for (int index = 0; index < count; ++index) {
             ActorUniqueID const id{data.getVarInt64().value()};
             Vec3 const          position{data.getFloat().value(), data.getFloat().value(), data.getFloat().value()};
@@ -2094,6 +2346,8 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
             auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
             if (!actor) continue;
+
+            queueEntityRenderPose(id, *actor, EntityRenderPose{position, rotation, headYaw, bodyYaw});
 
             auto const previousRotation = actor->getRotation();
             auto&      entityContext    = actor->getEntityContext();
@@ -2193,6 +2447,18 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
             if (!actor || !actor->isPlayer()) continue;
 
+            Vec2 const rotation{pitch, yaw};
+            queueEntityRenderPose(
+                id,
+                *actor,
+                EntityRenderPose{
+                    Vec3{x, y, z},
+                    rotation,
+                    headYaw,
+                    yaw
+            }
+            );
+
             packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
             if (!packet) {
                 mReplayFailed = true;
@@ -2201,7 +2467,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             auto& move          = static_cast<MovePlayerPacket&>(*packet);
             move.mPlayerID      = actor->getRuntimeID();
             move.mPos           = Vec3{x, y, z};
-            move.mRot           = Vec2{pitch, yaw};
+            move.mRot           = rotation;
             move.mYHeadRot      = headYaw;
             move.mResetPosition = PlayerPositionModeComponent::PositionMode::Normal;
             move.mOnGround      = onGround;
@@ -2215,6 +2481,18 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
             auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
             if (!actor || actor->isPlayer()) continue;
+
+            Vec2 const rotation{decodeRotationByte(rotX), decodeRotationByte(rotY)};
+            queueEntityRenderPose(
+                id,
+                *actor,
+                EntityRenderPose{
+                    Vec3{x, y, z},
+                    rotation,
+                    decodeRotationByte(headRotY),
+                    decodeRotationByte(bodyRotY),
+            }
+            );
 
             packet = MinecraftPackets::createPacket(MinecraftPacketIds::MoveAbsoluteActor);
             if (!packet) {
@@ -2354,12 +2632,24 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     InjectionReset reset{mInjectingPacket};
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 
-    if (addsEntity) mRecordedEntityIds.emplace(entityId);
+    if (addsEntity) {
+        mRecordedEntityIds.emplace(entityId);
+        if (mReplayPlayer) {
+            if (auto* actor = mReplayPlayer->getLevel().fetchEntity(entityId, false); actor) {
+                auto const pose = captureEntityRenderPose(*actor);
+                mEntityRenderPoses.try_emplace(entityId, EntityRenderPoseTrack{pose, pose});
+            }
+        }
+    }
 
     switch (packetId) {
-    case MinecraftPacketIds::RemoveActor:
-        mRecordedEntityIds.erase(*static_cast<RemoveActorPacket const&>(*packet).mEntityId);
+    case MinecraftPacketIds::RemoveActor: {
+        auto const id = *static_cast<RemoveActorPacket const&>(*packet).mEntityId;
+        mRecordedEntityIds.erase(id);
+        mEntityRenderPoses.erase(id);
+        mPendingEntityRenderPoses.erase(id);
         break;
+    }
     case MinecraftPacketIds::SetDisplayObjective: {
         auto const& objectiveName = *static_cast<SetDisplayObjectivePacket const&>(*packet).mObjectiveName;
         if (!objectiveName.empty()) mReplayObjectiveNames.emplace(objectiveName);
@@ -2438,6 +2728,7 @@ bool ReplaySession::flushPendingSnapshotGamePackets(
 }
 
 bool ReplaySession::clearRecordedEntities() {
+    clearEntityRenderPoses();
     if (mRecordedEntityIds.empty()) return true;
     if (!mNetworkHandler) return false;
 

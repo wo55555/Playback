@@ -1,6 +1,5 @@
 #include "FrameTap.h"
 
-#include <algorithm>
 #include <utility>
 
 namespace playback::functions::render {
@@ -47,6 +46,7 @@ void FrameTap::cancel(FrameTapSession session) {
         mActive->error = FrameTapError::Cancelled;
         mActive->message.assign("Frame capture was cancelled");
         mActive->armedTicket.reset();
+        mActive->startedCaptures.clear();
         mActive->readyFrames.clear();
         mActive->inFlightFrames = 0;
     }
@@ -64,6 +64,14 @@ FrameTapArmResult FrameTap::tryArm(FrameTapSession session, FrameTicket ticket) 
     if (outstanding >= mActive->config.capacity) return FrameTapArmResult::Backpressured;
     mActive->armedTicket = ticket;
     return FrameTapArmResult::Armed;
+}
+
+std::optional<FrameTapBackendCapture> FrameTap::tryPopStarted(FrameTapSession session) {
+    std::scoped_lock lock(mMutex);
+    if (!matches(session) || mActive->startedCaptures.empty()) return std::nullopt;
+    auto capture = std::move(mActive->startedCaptures.front());
+    mActive->startedCaptures.pop_front();
+    return capture;
 }
 
 std::optional<CapturedFrame> FrameTap::tryPop(FrameTapSession session) {
@@ -87,14 +95,12 @@ FrameTapStatus FrameTap::status(FrameTapSession session) const {
     FrameTapStatus   result;
     if (!mActive || (session && !matches(session))) return result;
 
-    result.state           = mActive->state;
-    result.error           = mActive->error;
-    result.message         = mActive->message;
-    result.submittedFrames = mActive->submittedFrames;
-    result.deliveredFrames = mActive->deliveredFrames;
-    result.bufferedFrames  = static_cast<uint32_t>(mActive->readyFrames.size());
-    result.inFlightFrames  = mActive->inFlightFrames;
-    result.armed           = mActive->armedTicket.has_value();
+    result.state          = mActive->state;
+    result.error          = mActive->error;
+    result.message        = mActive->message;
+    result.bufferedFrames = static_cast<uint32_t>(mActive->readyFrames.size());
+    result.inFlightFrames = mActive->inFlightFrames;
+    result.armed          = mActive->armedTicket.has_value();
     return result;
 }
 
@@ -110,17 +116,21 @@ uint32_t FrameTap::captureCapacity() const {
 }
 
 std::optional<FrameTapBackendCapture> FrameTap::beginCapture() {
-    std::scoped_lock lock(mMutex);
-    if (!mActive || mActive->state != FrameTapState::Active || !mActive->armedTicket) return std::nullopt;
-    if (mActive->inFlightFrames + mActive->readyFrames.size() >= mActive->config.capacity) return std::nullopt;
-
     FrameTapBackendCapture capture;
-    capture.session   = mActive->handle;
-    capture.ticket    = *mActive->armedTicket;
-    capture.captureId = mNextCaptureId++;
-    mActive->armedTicket.reset();
-    ++mActive->inFlightFrames;
-    ++mActive->submittedFrames;
+    {
+        std::scoped_lock lock(mMutex);
+        if (!mActive || mActive->state != FrameTapState::Active || !mActive->armedTicket) return std::nullopt;
+        if (mActive->inFlightFrames + mActive->readyFrames.size() >= mActive->config.capacity) return std::nullopt;
+
+        capture.session   = mActive->handle;
+        capture.ticket    = *mActive->armedTicket;
+        capture.captureId = mNextCaptureId++;
+        mActive->armedTicket.reset();
+        mActive->startedCaptures.emplace_back(capture);
+        ++mActive->inFlightFrames;
+        ++mActive->submittedFrames;
+    }
+    mChanged.notify_all();
     return capture;
 }
 
@@ -164,7 +174,6 @@ std::optional<CapturedFrame> FrameTap::popReadyFrame() {
     if (!mActive || mActive->readyFrames.empty()) return std::nullopt;
     auto frame = std::move(mActive->readyFrames.front());
     mActive->readyFrames.pop_front();
-    ++mActive->deliveredFrames;
     return frame;
 }
 
@@ -173,6 +182,7 @@ void FrameTap::faultActive(FrameTapError error, std::string message) {
     mActive->error   = error;
     mActive->message = std::move(message);
     mActive->armedTicket.reset();
+    mActive->startedCaptures.clear();
     mActive->readyFrames.clear();
     mActive->inFlightFrames = 0;
 }

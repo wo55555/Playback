@@ -26,6 +26,7 @@ bool hookReplayUI(bool enable) {
         gController.reset();
         gContext.reset();
         renderer::gImGuiRenderer.setContext(&gContext);
+        gController.setFrameTap(&renderer::gImGuiRenderer.frameTap());
         functions::Recorder::getInstance().setThumbnailCaptureProvider(&renderer::gImGuiRenderer);
         renderer::setReplayUIActive(true);
 
@@ -35,6 +36,7 @@ bool hookReplayUI(bool enable) {
         if (!hookReplayUIRendererInit(true)) {
             renderer::setReplayUIActive(false);
             functions::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
+            gController.setFrameTap(nullptr);
             renderer::gImGuiRenderer.setContext(nullptr);
             ui::ReplayEditor::getInstance().shutdown();
             gContext.reset();
@@ -59,6 +61,7 @@ bool hookReplayUI(bool enable) {
     renderer::setReplayUIActive(false);
     renderer::setReplayMouseInputActive(false);
     functions::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
+    gController.setFrameTap(nullptr);
 
     bool ok = true;
     if (!hookReplayUIRendererInit(false)) {

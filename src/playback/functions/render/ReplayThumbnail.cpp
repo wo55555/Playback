@@ -40,7 +40,7 @@ private:
 
 } // namespace
 
-bool writeReplayThumbnailPng(
+bool writeRgbaPng(
     std::filesystem::path const& output,
     uint32_t                     width,
     uint32_t                     height,
@@ -84,6 +84,16 @@ bool writeReplayThumbnailPng(
 
 bool writeReplayThumbnailPng(
     std::filesystem::path const& output,
+    uint32_t                     width,
+    uint32_t                     height,
+    uint8_t const*               rgba,
+    uint32_t                     rowPitch
+) {
+    return writeRgbaPng(output, width, height, rgba, rowPitch);
+}
+
+bool writeReplayThumbnailPng(
+    std::filesystem::path const& output,
     CapturedFrame const&         frame,
     uint32_t                     targetWidth,
     uint32_t                     targetHeight
@@ -116,7 +126,7 @@ bool writeReplayThumbnailPng(
             }
         }
     }
-    return writeReplayThumbnailPng(output, targetWidth, targetHeight, rgba.data(), targetWidth * 4);
+    return writeRgbaPng(output, targetWidth, targetHeight, rgba.data(), targetWidth * 4);
 }
 
 bool decodeReplayThumbnailPng(std::string_view png, ReplayThumbnailPixels& output) {

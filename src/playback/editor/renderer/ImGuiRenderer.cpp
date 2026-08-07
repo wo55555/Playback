@@ -1062,6 +1062,11 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     return true;
 }
 
+bool ImGuiRenderer::ownsSwapChain(IDXGISwapChain* swapChain) const {
+    std::scoped_lock lock(mImpl->mutex);
+    return swapChain && (swapChain == mImpl->swapChain || swapChain == mImpl->d3d11SwapChain);
+}
+
 bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {

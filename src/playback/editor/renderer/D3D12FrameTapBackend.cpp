@@ -2,6 +2,8 @@
 
 #include "playback/editor/renderer/D3D12Compat.h"
 
+#include "playback/Playback.h"
+
 #include <Windows.h>
 #include <wrl/client.h>
 
@@ -34,6 +36,8 @@ bool isSupported(DXGI_FORMAT format) {
 FramePixelFormat pixelFormat(DXGI_FORMAT format) {
     return format == DXGI_FORMAT_B8G8R8A8_UNORM ? FramePixelFormat::Bgra8 : FramePixelFormat::Rgba8;
 }
+
+auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
 } // namespace
 
@@ -304,7 +308,8 @@ bool D3D12FrameTapBackend::capture(
 
     slot->capture            = *capture;
     slot->state              = Impl::SlotState::AwaitingFence;
-    mImpl->pendingSubmission = static_cast<size_t>(std::distance(mImpl->slots.begin(), slot));
+    auto const slotIndex     = static_cast<size_t>(std::distance(mImpl->slots.begin(), slot));
+    mImpl->pendingSubmission = slotIndex;
     return true;
 }
 
@@ -336,7 +341,16 @@ void D3D12FrameTapBackend::submissionFailed(FrameTapError error, std::string mes
         slot.state = Impl::SlotState::Retired;
         mImpl->pendingSubmission.reset();
     }
-    if (capture) mImpl->frameTap.fail(*capture, error, std::move(message));
+    if (capture) {
+        getLogger().error(
+            "D3D12 frame capture submission failed (capture {}, frame {}, error {}): {}",
+            capture->captureId,
+            capture->ticket.frameIndex,
+            static_cast<int>(error),
+            message
+        );
+        mImpl->frameTap.fail(*capture, error, std::move(message));
+    }
 }
 
 void D3D12FrameTapBackend::reset(FrameTapError error, std::string message) { mImpl->reset(error, std::move(message)); }

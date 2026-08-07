@@ -46,6 +46,7 @@ void ReplayEditor::shutdown() {
     mFrameState = nullptr;
     mSubmit     = nullptr;
     mSelection.clear();
+    mLastExportState = exporting::ExportState::Idle;
 }
 
 void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
@@ -85,12 +86,10 @@ void ReplayEditor::loadLayoutPreferences() {
                     mTimelineViewPreferences.insert_or_assign(
                         replayPath,
                         TimelineViewPreferences{
-                            zoomScale == view.end()
-                                ? 1.0f
-                                : std::clamp(readFiniteFloat(view, "zoomScale", 1.0f), 1.0f, 20.0f),
-                            zoomScale == view.end()
-                                ? 0.0f
-                                : std::max(0.0f, readFiniteFloat(view, "horizontalScroll", 0.0f))
+                            zoomScale == view.end() ? 1.0f
+                                                    : std::clamp(readFiniteFloat(view, "zoomScale", 1.0f), 1.0f, 20.0f),
+                            zoomScale == view.end() ? 0.0f
+                                                    : std::max(0.0f, readFiniteFloat(view, "horizontalScroll", 0.0f))
                         }
                     );
                 }
@@ -179,22 +178,32 @@ void ReplayEditor::draw(playback::editor::EditorState const& state, SubmitAction
     mFrameState = &state;
     mSubmit     = &submit;
 
-    auto& io = ImGui::GetIO();
+    auto&       io             = ImGui::GetIO();
     float const savedFontScale = io.FontGlobalScale;
-    io.FontGlobalScale = savedFontScale * (18.0f / 14.0f);
+    io.FontGlobalScale         = savedFontScale * (18.0f / 14.0f);
     mTheme.apply();
 
-    if (!state.capabilities.videoExport && mModeManager.current() != EditorMode::Edit) {
+    auto const exportActive = exporting::isExportActive(state.exportStatus.state);
+    if (exportActive && mModeManager.current() != EditorMode::Render) {
+        mModeManager.switchTo(EditorMode::Render);
+    } else if (!exportActive && mModeManager.current() != EditorMode::Edit) {
         mModeManager.switchTo(EditorMode::Edit);
     }
-    mEditMode.draw();
+    if (state.exportStatus.state == exporting::ExportState::Faulted
+        && mLastExportState != exporting::ExportState::Faulted) {
+        ErrorDialog::getInstance().show(std::string_view{}, state.exportStatus.message);
+    }
+    mLastExportState = state.exportStatus.state;
+
+    if (mModeManager.current() == EditorMode::Render) mRenderMode.draw();
+    else mEditMode.draw();
 
     ErrorDialog::getInstance().draw();
-    handleKeyboardShortcuts();
+    if (!exportActive) handleKeyboardShortcuts();
 
     io.FontGlobalScale = savedFontScale;
-    mFrameState = nullptr;
-    mSubmit     = nullptr;
+    mFrameState        = nullptr;
+    mSubmit            = nullptr;
 }
 
 void ReplayEditor::handleKeyboardShortcuts() {

@@ -2,6 +2,8 @@
 
 #include "playback/functions/record/Recorder.h"
 
+#include "mc/deps/core/math/Vec2.h"
+#include "mc/deps/core/math/Vec3.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/world/level/ChunkPos.h"
 
@@ -20,6 +22,7 @@
 #include <vector>
 
 class Level;
+class Actor;
 class Dimension;
 class LevelChunk;
 class LegacyClientNetworkHandler;
@@ -28,9 +31,14 @@ class Player;
 class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
 struct DimensionArguments;
+struct RenderPositionComponent;
 enum class MinecraftPacketIds : int;
 
 namespace playback::functions {
+
+enum class ReplayExportTickState : uint8_t { Unavailable, Waiting, Ready, Failed };
+
+struct ReplayExportRenderPoseState;
 
 class ReplaySession {
 private:
@@ -88,6 +96,18 @@ private:
         std::unordered_map<int, RecordedDimensionHeightRange> heightRanges;
     };
 
+    struct EntityRenderPose {
+        Vec3  position;
+        Vec2  rotation;
+        float headYaw{};
+        float bodyYaw{};
+    };
+
+    struct EntityRenderPoseTrack {
+        EntityRenderPose previous;
+        EntityRenderPose current;
+    };
+
     int    mCurrentTick             = 0;
     size_t mReaderIndex             = 0;
     int    mChunkInjectionTicks     = 0;
@@ -120,6 +140,8 @@ private:
     std::atomic<bool>                           mStopRequested{false};
     std::atomic<int>                            mRequestedSeekTick{-1};
     int                                         mSeekTargetTick{-1};
+    bool                                        mExportSeekRequested{};
+    bool                                        mSnapMovementDuringSeek{};
     float                                       mPlaybackSpeed{1.0f};
     float                                       mPlaybackTickAccumulator{};
     std::optional<int>                          mReplayTime;
@@ -145,33 +167,36 @@ private:
 
     PlaybackMeta mMeta;
 
-    std::vector<std::unique_ptr<ReplayReader>>              mReaders;
-    std::vector<PlaybackSnapshotContext>                    mSnapshotContexts;
-    std::vector<std::string>                                mChunkPackets;
-    std::unordered_map<size_t, std::vector<int>>            mInlineLevelChunkPacketIndices;
-    std::unordered_map<size_t, std::vector<int>>            mInlineSubChunkPacketIndices;
-    std::mutex                                              mPendingLevelChunksMutex;
-    std::unordered_multiset<ChunkPos>                       mPendingLevelChunks;
-    std::unordered_set<ChunkPos>                            mCompletedLevelChunkPositions;
-    std::vector<int>                                        mPendingLevelChunkIndices;
-    std::unordered_set<ChunkPos>                            mSnapshotChunks;
-    std::unordered_set<ChunkPos>                            mApplyingSnapshotChunks;
-    std::optional<DimensionType>                            mChunkIsolationDimension;
-    std::unordered_map<ChunkPos, SnapshotColumnIdentity>    mAppliedSnapshotColumns;
-    std::unordered_map<ChunkPos, SnapshotColumnIdentity>    mPendingSnapshotColumns;
-    std::unordered_set<ChunkPos>                            mDirtySnapshotColumns;
-    std::unordered_set<ChunkPos>                            mReusableSnapshotColumns;
-    std::unordered_set<ChunkPos>                            mDirectSnapshotColumns;
-    std::unordered_set<int>                                 mDirectLevelChunkIndices;
-    std::vector<int>                                        mPendingSubChunkIndices;
-    std::vector<PendingSubChunkPacket>                      mPendingSubChunkPackets;
-    std::optional<std::string>                              mPendingSnapshotLocalPlayer;
-    std::vector<std::pair<MinecraftPacketIds, std::string>> mPendingSnapshotGamePackets;
-    std::unordered_map<int32_t, std::string>                mAppliedConfigurationPackets;
-    std::unordered_set<ActorUniqueID>                       mRecordedEntityIds;
-    std::unordered_set<std::string>                         mReplayObjectiveNames;
-    std::unordered_set<ChunkPos>                            mCenterChunkPositions;
-    std::unordered_map<ChunkPos, size_t>                    mRemainingSubChunkPacketsByColumn;
+    std::vector<std::unique_ptr<ReplayReader>>               mReaders;
+    std::vector<PlaybackSnapshotContext>                     mSnapshotContexts;
+    std::vector<std::string>                                 mChunkPackets;
+    std::unordered_map<size_t, std::vector<int>>             mInlineLevelChunkPacketIndices;
+    std::unordered_map<size_t, std::vector<int>>             mInlineSubChunkPacketIndices;
+    std::mutex                                               mPendingLevelChunksMutex;
+    std::unordered_multiset<ChunkPos>                        mPendingLevelChunks;
+    std::unordered_set<ChunkPos>                             mCompletedLevelChunkPositions;
+    std::vector<int>                                         mPendingLevelChunkIndices;
+    std::unordered_set<ChunkPos>                             mSnapshotChunks;
+    std::unordered_set<ChunkPos>                             mApplyingSnapshotChunks;
+    std::optional<DimensionType>                             mChunkIsolationDimension;
+    std::unordered_map<ChunkPos, SnapshotColumnIdentity>     mAppliedSnapshotColumns;
+    std::unordered_map<ChunkPos, SnapshotColumnIdentity>     mPendingSnapshotColumns;
+    std::unordered_set<ChunkPos>                             mDirtySnapshotColumns;
+    std::unordered_set<ChunkPos>                             mReusableSnapshotColumns;
+    std::unordered_set<ChunkPos>                             mDirectSnapshotColumns;
+    std::unordered_set<int>                                  mDirectLevelChunkIndices;
+    std::vector<int>                                         mPendingSubChunkIndices;
+    std::vector<PendingSubChunkPacket>                       mPendingSubChunkPackets;
+    std::optional<std::string>                               mPendingSnapshotLocalPlayer;
+    std::vector<std::pair<MinecraftPacketIds, std::string>>  mPendingSnapshotGamePackets;
+    std::unordered_map<int32_t, std::string>                 mAppliedConfigurationPackets;
+    std::unordered_set<ActorUniqueID>                        mRecordedEntityIds;
+    std::unordered_map<ActorUniqueID, EntityRenderPoseTrack> mEntityRenderPoses;
+    std::unordered_map<ActorUniqueID, EntityRenderPose>      mPendingEntityRenderPoses;
+    std::unique_ptr<ReplayExportRenderPoseState>             mAppliedExportRenderPose;
+    std::unordered_set<std::string>                          mReplayObjectiveNames;
+    std::unordered_set<ChunkPos>                             mCenterChunkPositions;
+    std::unordered_map<ChunkPos, size_t>                     mRemainingSubChunkPacketsByColumn;
 
     std::unordered_map<ChunkPos, std::shared_ptr<LevelChunk>> mRetainedReplayChunks;
 
@@ -181,7 +206,7 @@ private:
 
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
-    bool                                                       mReplayCachedResourcePacksLoaded{};
+    bool                                                        mReplayCachedResourcePacksLoaded{};
 
 public:
     bool mIsProcessingSnapshot = false;
@@ -241,6 +266,14 @@ private:
 
     [[nodiscard]] bool clearRecordedEntities();
 
+    [[nodiscard]] EntityRenderPose captureEntityRenderPose(Actor const& actor) const;
+
+    void queueEntityRenderPose(ActorUniqueID id, Actor const& actor, EntityRenderPose pose);
+
+    void commitEntityRenderPoses();
+
+    void clearEntityRenderPoses();
+
     [[nodiscard]] bool refreshReplayPlayer();
 
     [[nodiscard]] bool clearReplayObjectives();
@@ -284,6 +317,24 @@ public:
     void adjustPlaybackSpeed(int direction);
 
     [[nodiscard]] bool setPaused(bool paused);
+
+    // Prepare one deterministic integer replay sample for the export driver.  The
+    // actual seek remains in tick(), so chunk and dimension handshakes stay on the
+    // normal replay lifecycle.
+    [[nodiscard]] ReplayExportTickState prepareExportTick(int targetTick);
+
+    [[nodiscard]] bool beginExportRenderPose(float partialTick);
+    [[nodiscard]] bool applyExportRenderPosition(RenderPositionComponent& renderPosition) const;
+    void               endExportRenderPose();
+
+    void clearExportSeekRequest() {
+        if (mExportSeekRequested) {
+            mRequestedSeekTick.store(-1, std::memory_order_release);
+            mSeekTargetTick         = -1;
+            mSnapMovementDuringSeek = false;
+        }
+        mExportSeekRequested = false;
+    }
 
     [[nodiscard]] bool isInjectingPacket(Packet const* packet) const {
         return packet && mInjectingPacket.load(std::memory_order_acquire) == packet;
@@ -348,7 +399,7 @@ public:
     void handleMoveEntities(PlaybackBuffer& data);
 
 private:
-    ReplaySession() = default;
+    ReplaySession();
     ~ReplaySession();
 
 public:

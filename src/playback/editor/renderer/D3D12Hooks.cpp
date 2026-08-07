@@ -1,6 +1,7 @@
 #include "D3D12Hooks.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/exporting/ExportActivity.h"
 #include "playback/editor/renderer/D3D12Compat.h"
 #include "playback/editor/renderer/ImGuiRenderer.h"
 
@@ -162,7 +163,9 @@ DECLARE_DETOUR_FN(present, HRESULT, IDXGISwapChain* swapChain, UINT syncInterval
     if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
         (void)gImGuiRenderer.render(swapChain);
     }
-    HRESULT const result = reinterpret_cast<PresentFn>(gOriginalPresent)(swapChain, syncInterval, flags);
+    bool const offlinePresent = exporting::isOfflineRenderActivityActive() && gImGuiRenderer.ownsSwapChain(swapChain);
+    UINT const effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
+    HRESULT const result = reinterpret_cast<PresentFn>(gOriginalPresent)(swapChain, effectiveSyncInterval, flags);
     gImGuiRenderer.afterPresent(swapChain, result);
     return result;
 }
@@ -192,8 +195,10 @@ DECLARE_DETOUR_FN(
         effectiveParameters                = &fullSurfacePresent;
     }
 
+    bool const offlinePresent = exporting::isOfflineRenderActivityActive() && gImGuiRenderer.ownsSwapChain(swapChain);
+    UINT const effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
     HRESULT const result =
-        reinterpret_cast<Present1Fn>(gOriginalPresent1)(swapChain, syncInterval, flags, effectiveParameters);
+        reinterpret_cast<Present1Fn>(gOriginalPresent1)(swapChain, effectiveSyncInterval, flags, effectiveParameters);
     gImGuiRenderer.afterPresent(swapChain, result);
     return result;
 }

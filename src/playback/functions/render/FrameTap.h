@@ -20,10 +20,6 @@ enum class FrameTapState : uint8_t { Idle, Active, Completed, Cancelled, Faulted
 
 enum class FrameTapError : uint8_t {
     None,
-    Busy,
-    InvalidConfig,
-    InactiveSession,
-    InvalidTicket,
     BackendUnavailable,
     UnsupportedFormat,
     Resize,
@@ -68,8 +64,6 @@ struct FrameTapStatus {
     FrameTapState state{FrameTapState::Idle};
     FrameTapError error{FrameTapError::None};
     std::string   message;
-    uint64_t      submittedFrames{};
-    uint64_t      deliveredFrames{};
     uint32_t      bufferedFrames{};
     uint32_t      inFlightFrames{};
     bool          armed{};
@@ -91,10 +85,11 @@ public:
     void               close(FrameTapSession session);
     void               cancel(FrameTapSession session);
 
-    [[nodiscard]] FrameTapArmResult            tryArm(FrameTapSession session, FrameTicket ticket);
-    [[nodiscard]] std::optional<CapturedFrame> tryPop(FrameTapSession session);
+    [[nodiscard]] FrameTapArmResult                     tryArm(FrameTapSession session, FrameTicket ticket);
+    [[nodiscard]] std::optional<FrameTapBackendCapture> tryPopStarted(FrameTapSession session);
+    [[nodiscard]] std::optional<CapturedFrame>          tryPop(FrameTapSession session);
     [[nodiscard]] std::optional<CapturedFrame> waitPop(FrameTapSession session, std::chrono::milliseconds timeout);
-    [[nodiscard]] FrameTapStatus               status(FrameTapSession session = {}) const;
+    [[nodiscard]] FrameTapStatus               status(FrameTapSession session) const;
 
     [[nodiscard]] bool     requiresRenderPass() const;
     [[nodiscard]] uint32_t captureCapacity() const;
@@ -107,16 +102,16 @@ public:
 
 private:
     struct ActiveSession {
-        FrameTapSession            handle;
-        FrameTapConfig             config;
-        FrameTapState              state{FrameTapState::Active};
-        FrameTapError              error{FrameTapError::None};
-        std::string                message;
-        std::optional<FrameTicket> armedTicket;
-        std::deque<CapturedFrame>  readyFrames;
-        uint32_t                   inFlightFrames{};
-        uint64_t                   submittedFrames{};
-        uint64_t                   deliveredFrames{};
+        FrameTapSession                    handle;
+        FrameTapConfig                     config;
+        FrameTapState                      state{FrameTapState::Active};
+        FrameTapError                      error{FrameTapError::None};
+        std::string                        message;
+        std::optional<FrameTicket>         armedTicket;
+        std::deque<FrameTapBackendCapture> startedCaptures;
+        std::deque<CapturedFrame>          readyFrames;
+        uint32_t                           inFlightFrames{};
+        uint64_t                           submittedFrames{};
     };
 
     [[nodiscard]] bool                         matches(FrameTapSession session) const;

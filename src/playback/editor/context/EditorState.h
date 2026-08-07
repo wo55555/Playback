@@ -2,6 +2,7 @@
 
 #include "playback/editor/context/ReplayBrowserState.h"
 #include "playback/editor/editing/models/EditorStateExt.h"
+#include "playback/editor/exporting/ExportTypes.h"
 
 #include <memory>
 
@@ -11,6 +12,7 @@ struct EditorCapabilities {
     bool cameraEditing{};
     bool videoEditing{};
     bool videoExport{};
+    bool ffmpegVideoExport{};
 };
 
 struct EditorState {
@@ -25,6 +27,7 @@ struct EditorState {
     bool                                                  canRedo{};
     std::shared_ptr<editing::model::EditorStateExt const> project;
     EditorCapabilities                                    capabilities;
+    exporting::ExportStatus                               exportStatus;
     ReplayBrowserState                                    browser;
 };
 

@@ -2,13 +2,14 @@
 
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/iconfont.h"
-#include "playback/editor/ui/modes/ModeManager.h"
 
 #include "ll/api/i18n/I18n.h"
 
 #include "imgui.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <string>
 
 namespace playback::editor::ui {
 
@@ -16,6 +17,7 @@ using namespace ll::i18n_literals;
 
 void RenderMode::draw() {
     auto&       editor        = ReplayEditor::getInstance();
+    auto const& status        = editor.state().exportStatus;
     float const uiScale       = std::max(1.0f, ImGui::GetIO().FontGlobalScale);
     float const kMenuHeight   = 30.0f * uiScale;
     float const kStatusHeight = 22.0f * uiScale;
@@ -37,7 +39,7 @@ void RenderMode::draw() {
 
     {
         float cardWidth  = 480.0f;
-        float cardHeight = 360.0f;
+        float cardHeight = 390.0f;
         float cardX      = (displaySize.x - cardWidth) * 0.5f;
         float cardY      = (displaySize.y - cardHeight) * 0.5f;
 
@@ -61,36 +63,55 @@ void RenderMode::draw() {
         ImGui::Spacing();
         ImGui::Spacing();
 
-        float progress =
-            (mTotalFrames > 0) ? static_cast<float>(mCurrentFrame) / static_cast<float>(mTotalFrames) : 0.0f;
-        char progressLabel[32];
-        std::snprintf(progressLabel, sizeof(progressLabel), "%d%%", mProgressPercent);
+        auto const  completedFrames = std::min(status.writtenFrames, status.totalFrames);
+        float const progress        = status.totalFrames > 0
+                                        ? static_cast<float>(completedFrames) / static_cast<float>(status.totalFrames)
+                                        : 0.0f;
+        char        progressLabel[32];
+        std::snprintf(progressLabel, sizeof(progressLabel), "%d%%", static_cast<int>(progress * 100.0f));
 
         ImGui::ProgressBar(progress, ImVec2(cardWidth - 40, 24.0f), progressLabel);
         ImGui::Spacing();
 
-        std::string const frameInfo = "playback.refactorEditor.render.frame"_tr(mCurrentFrame, mTotalFrames);
+        std::string const frameInfo = "playback.refactorEditor.render.frame"_tr(completedFrames, status.totalFrames);
         ImGui::SetCursorPosX((cardWidth - 160.0f) * 0.5f);
         ImGui::TextUnformatted(frameInfo.c_str());
 
-        ImGui::SetCursorPosX((cardWidth - 200.0f) * 0.5f);
-        ImGui::Text("1920x1080 60fps H.264");
-
-        ImGui::SetCursorPosX((cardWidth - 100.0f) * 0.5f);
-        ImGui::TextUnformatted("playback.refactorEditor.render.eta"_tr(mEta.empty() ? "0:00:00" : mEta).c_str());
+        std::string const format = status.format == exporting::ExportFormat::Mp4Video
+                                     ? "playback.refactorEditor.export.mp4"_tr()
+                                     : "playback.refactorEditor.export.pngSequence"_tr();
+        ImGui::SetCursorPosX((cardWidth - ImGui::CalcTextSize(format.c_str()).x) * 0.5f);
+        ImGui::TextUnformatted(format.c_str());
 
         ImGui::Spacing();
         ImGui::SetCursorPosX((cardWidth - 300.0f) * 0.5f);
-        std::string const outputPath = mOutputPath.empty() ? "D:\\exports\\replay-001.mp4" : mOutputPath;
-        ImGui::TextUnformatted("playback.refactorEditor.render.output"_tr(outputPath).c_str());
+        auto const        outputUtf8 = status.outputPath.generic_u8string();
+        std::string const outputPath{reinterpret_cast<char const*>(outputUtf8.data()), outputUtf8.size()};
+        ImGui::PushTextWrapPos(cardWidth - 20.0f);
+        ImGui::TextWrapped("%s", "playback.refactorEditor.render.output"_tr(outputPath).c_str());
+        ImGui::PopTextWrapPos();
+
+        if (!status.latestFramePath.empty()) {
+            auto const        latestUtf8 = status.latestFramePath.filename().generic_u8string();
+            std::string const latestFrame{reinterpret_cast<char const*>(latestUtf8.data()), latestUtf8.size()};
+            ImGui::TextWrapped("%s", "playback.refactorEditor.render.latestFrame"_tr(latestFrame).c_str());
+        }
 
         ImGui::Spacing();
         ImGui::Spacing();
 
         ImGui::SetCursorPosX((cardWidth - 160.0f) * 0.5f);
-        if (ImGui::Button("playback.refactorEditor.render.cancel"_tr().c_str(), ImVec2(160.0f, 32.0f))) {
-            ModeManager::getInstance().switchTo(EditorMode::Edit);
+        bool const cancelling = status.state == exporting::ExportState::Cancelling;
+        ImGui::BeginDisabled(cancelling);
+        if (ImGui::Button(
+                (cancelling ? "playback.refactorEditor.render.cancelling"_tr()
+                            : "playback.refactorEditor.render.cancel"_tr())
+                    .c_str(),
+                ImVec2(160.0f, 32.0f)
+            )) {
+            editor.submitAction({EditorActionType::CancelExport});
         }
+        ImGui::EndDisabled();
 
         ImGui::End();
     }

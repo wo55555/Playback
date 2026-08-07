@@ -1,10 +1,9 @@
 #include "EditorController.h"
 
-#include "playback/functions/replay/ReplaySession.h"
-#include "playback/screen/ReplayBrowser.h"
 #include "playback/editor/editing/CameraBindingOps.h"
 #include "playback/editor/editing/commands/CameraCommands.h"
 #include "playback/editor/editing/commands/CommandFactory.h"
+#include "playback/functions/render/FrameTap.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/screen/ReplayBrowser.h"
 
@@ -43,9 +42,18 @@ std::string replayPreferenceKey(std::filesystem::path const& path) {
 
 EditorController::EditorController(EditorContext& context)
 : mContext(context),
-  mBrowserSnapshot(std::make_shared<ReplayBrowserSnapshot>()) {}
+  mBrowserSnapshot(std::make_shared<ReplayBrowserSnapshot>()),
+  mExportDriver(
+      std::make_unique<exporting::ReplayExportDriver>(mExportCoordinator, functions::ReplaySession::getInstance())
+  ) {}
+
+void EditorController::setFrameTap(functions::render::FrameTap* frameTap) {
+    if (mExportDriver) mExportDriver->setFrameTap(frameTap);
+}
 
 void EditorController::reset() {
+    if (mExportDriver) mExportDriver->reset();
+    else mExportCoordinator.reset();
     mBrowserVisible   = false;
     mBrowserOperation = ReplayBrowserOperation::None;
     mBrowserError.clear();
@@ -60,9 +68,9 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     totalTicks = std::max(0, totalTicks);
     if (mProjectTotalTicks == totalTicks && mProject.projectPath == replayPath) return;
 
-    mProject = {};
+    mProject             = {};
     mProject.projectPath = std::string(replayPath);
-    mProject.totalTicks = totalTicks;
+    mProject.totalTicks  = totalTicks;
     editing::CameraBindingOps::addFreeCamera(mProject, "Camera 1");
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
@@ -171,10 +179,15 @@ void EditorController::publishState(bool hudVisible) {
     state.canRedo                    = mCommandStack.canRedo();
     state.capabilities.cameraEditing = state.editorVisible;
     state.capabilities.videoEditing  = state.editorVisible;
-    state.browser.visible            = mBrowserVisible;
-    state.browser.operation          = mBrowserOperation;
-    state.browser.error              = mBrowserError;
-    state.browser.snapshot           = mBrowserSnapshot;
+    state.capabilities.videoExport   = state.editorVisible && mExportDriver && mExportDriver->isAvailable();
+    state.capabilities.ffmpegVideoExport =
+        state.capabilities.videoExport
+        && exporting::ExportCoordinator::isFormatAvailable(exporting::ExportFormat::Mp4Video);
+    state.exportStatus      = mExportCoordinator.status();
+    state.browser.visible   = mBrowserVisible;
+    state.browser.operation = mBrowserOperation;
+    state.browser.error     = mBrowserError;
+    state.browser.snapshot  = mBrowserSnapshot;
     mContext.publish(std::move(state));
 }
 
@@ -203,6 +216,10 @@ void EditorController::tick(bool hudVisible) {
     auto& session = functions::ReplaySession::getInstance();
 
     for (auto const& action : mContext.takeActions()) {
+        if (mExportDriver && mExportDriver->isActive() && action.type != EditorActionType::CancelExport
+            && action.type != EditorActionType::StopReplay) {
+            continue;
+        }
         if (action.type >= EditorActionType::UndoEditorEdit) {
             applyEditorAction(action);
             continue;
@@ -227,7 +244,20 @@ void EditorController::tick(bool hudVisible) {
             session.adjustPlaybackSpeed(1);
             break;
         case EditorActionType::StopReplay:
+            if (mExportDriver) mExportDriver->cancel();
             session.requestStop();
+            break;
+        case EditorActionType::StartExport: {
+            auto settings = action.exportSettings.value_or(exporting::ExportSettings{});
+            if (!action.exportSettings) {
+                settings.startTick = 0;
+                settings.endTick   = std::max<int64_t>(0, session.getTotalTicks());
+            }
+            if (mExportDriver) (void)mExportDriver->start(std::move(settings), mProject);
+            break;
+        }
+        case EditorActionType::CancelExport:
+            if (mExportDriver) mExportDriver->cancel();
             break;
         case EditorActionType::OpenReplayBrowser:
             if (!session.isActive()) {
@@ -316,6 +346,7 @@ void EditorController::tick(bool hudVisible) {
         }
     }
 
+    if (mExportDriver) mExportDriver->tick();
     publishState(hudVisible);
 }
 
