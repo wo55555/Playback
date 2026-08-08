@@ -15,6 +15,9 @@
     ·
     <a href="CONTRIBUTING.md">Contributing</a>
     ·
+    <a href="#contributing">Contributing</a>
+    .
+    <a href="#code-of-conduct">Code of Conduct</a>
     <a href="README_ZH.md">简体中文</a>
   </p>
 
@@ -138,7 +141,13 @@ Please report reproducible problems with logs, versions, and a minimal replay wh
 
 See the [source-build guide](docs/building.md) and [CONTRIBUTING.md](CONTRIBUTING.md) for the build, formatting, and pull request workflow.
 
+Please read and follow our [Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project, you agree to abide by its terms.
+
 Report security issues privately by following [SECURITY.md](SECURITY.md). Do not open a public issue for a security vulnerability.
+
+## Code of Conduct
+
+Playback follows the Contributor Covenant Code of Conduct. Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before participating in issues, pull requests, discussions, or community spaces.
 
 ## Acknowledgements
 
