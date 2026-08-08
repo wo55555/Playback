@@ -10,6 +10,7 @@
 #include "playback/editor/renderer/ReplayUILayout.h"
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/RecordingStatusOverlay.h"
+#include "playback/editor/ui/SettingsPage.h"
 #include "playback/functions/render/ReplayThumbnail.h"
 #include "playback/functions/record/RecordingControls.h"
 #include "playback/screen/select_replay/SelectReplayScreen.h"
@@ -372,24 +373,28 @@ struct ImGuiRenderer::Impl {
         input::syncFrame();
         beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
-        ui::drawRecordingStatusOverlay(
-            functions::Recorder::getInstance().getStatusSnapshot(),
-            Playback::getInstance().getConfig().recordingControls,
-            io.DisplaySize
-        );
+        bool const settingsOpen = ui::isSettingsPageOpen();
+        if (!settingsOpen) {
+            ui::drawRecordingStatusOverlay(
+                functions::Recorder::getInstance().getStatusSnapshot(),
+                Playback::getInstance().getConfig().recordingControls,
+                io.DisplaySize
+            );
+        }
         auto submit = [this](EditorAction action) {
             if (editorContext) editorContext->submit(std::move(action));
         };
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
-        if (state.browser.visible) {
+        if (!settingsOpen && state.browser.visible) {
             replayBrowser.draw(state.browser, submit);
-        } else if (state.editorVisible) {
+        } else if (!settingsOpen && state.editorVisible) {
             replayEditor.setGameTexture(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
             replayEditor.draw(state, submit);
             auto viewport = replayEditor.viewportVideoRect();
             setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
         }
+        ui::drawSettingsPage();
         endReplayMouseFrame();
         ImGui::Render();
 
@@ -925,7 +930,8 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     auto const state       = p.editorContext->snapshot();
     bool const browserOpen = state.browser.visible;
     bool const editorOpen  = state.editorVisible && state.hudVisible;
-    bool const uiActive    = browserOpen || editorOpen;
+    bool const settingsOpen = ui::isSettingsPageOpen();
+    bool const uiActive    = browserOpen || editorOpen || settingsOpen;
     bool const recordingOverlayActive = functions::RecordingControls::getInstance().isGameHudVisible()
                                      && functions::Recorder::getInstance().isActive();
     input::setUiVisible(uiActive);
@@ -1037,24 +1043,27 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         input::syncFrame();
         beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
-        ui::drawRecordingStatusOverlay(
-            functions::Recorder::getInstance().getStatusSnapshot(),
-            Playback::getInstance().getConfig().recordingControls,
-            io.DisplaySize
-        );
+        if (!settingsOpen) {
+            ui::drawRecordingStatusOverlay(
+                functions::Recorder::getInstance().getStatusSnapshot(),
+                Playback::getInstance().getConfig().recordingControls,
+                io.DisplaySize
+            );
+        }
         auto submit = [&p](EditorAction action) {
             if (p.editorContext) p.editorContext->submit(std::move(action));
         };
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
-        if (state.browser.visible) {
+        if (!settingsOpen && state.browser.visible) {
             replayBrowser.draw(state.browser, submit);
-        } else if (state.editorVisible) {
+        } else if (!settingsOpen && state.editorVisible) {
             replayEditor.setGameTexture(static_cast<ImTextureID>(f.gameSrvGpu.ptr));
             replayEditor.draw(state, submit);
             auto viewport = replayEditor.viewportVideoRect();
             setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
         }
+        ui::drawSettingsPage();
         endReplayMouseFrame();
         ImGui::Render();
     }

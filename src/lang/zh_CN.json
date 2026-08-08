@@ -15,6 +15,30 @@
             "status": {"recording": "录制中", "paused": "已暂停"}
             ,"controls": {"start": "开始录制", "pause": "暂停录制", "resume": "继续录制", "stop": "结束录制"}
         },
+        "settings": {
+            "title": "Playback 设置",
+            "menu": {"open": "设置"},
+            "sections": {"recording": "录制", "browser": "回放浏览器", "editor": "编辑器", "export": "导出", "general": "通用"},
+            "actions": {"close": "关闭", "save": "保存设置", "cancel": "取消", "restoreDefaults": "恢复默认", "saveAndExit": "保存并退出", "discardChanges": "放弃修改", "keepEditing": "继续编辑"},
+            "unsavedChanges": "有未保存的修改。要如何关闭设置？",
+            "unavailable": "此分类的持久化设置将在对应业务模块完成后开放。",
+            "recording": {
+                "description": "游戏内录制快捷键与状态显示",
+                "shortcuts": "快捷键",
+                "toggleRecordingDescription": "游戏中切换录制状态",
+                "togglePauseDescription": "暂停时不累计录制时长",
+                "overlay": "状态显示",
+                "overlayDescription": "在游戏 HUD 中显示录制状态和时长",
+                "positionDescription": "录制状态层的屏幕锚点",
+                "preview": "状态层预览",
+                "previewText": "录制中 3:25",
+                "current": "当前录制"
+            },
+            "browser": {"description": "默认排序、筛选和视图偏好正在接入配置模型。"},
+            "editor": {"description": "布局和快捷键设置将继续使用独立的编辑器偏好文件。"},
+            "export": {"description": "导出后端暂不可用，默认导出参数尚未开放保存。"},
+            "general": {"description": "通用配置和语言策略将在统一配置迁移后开放。"}
+        },
         "command": {
             "playback": {
                 "description": "Playback 模组命令",

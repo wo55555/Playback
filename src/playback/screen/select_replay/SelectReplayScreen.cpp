@@ -3,7 +3,7 @@
 #include "playback/editor/renderer/ImGuiRenderer.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/iconfont.h"
-#include "playback/editor/ui/RecordingSettingsPanel.h"
+#include "playback/editor/ui/SettingsPage.h"
 #include "playback/utils/PathUtils.h"
 
 #include "ll/api/i18n/I18n.h"
@@ -927,12 +927,9 @@ void SelectReplayScreen::drawNavigation() {
         if (popupIconMenuItem("##refresh-replay-list", ICON_REFRESH, refreshLabel)) {
             submit({playback::editor::EditorActionType::RefreshReplayBrowser});
         }
-        if (ImGui::MenuItem("录制设置")) {
-            mRecordingSettingsOpen = true;
-        }
+        if (ImGui::MenuItem("playback.settings.menu.open"_tr().c_str())) playback::editor::ui::openSettingsPage();
         ImGui::EndPopup();
     }
-    playback::editor::ui::drawRecordingSettingsPanel(mRecordingSettingsOpen);
     x += iconW + kNavigationLayout.viewGroupGap;
 
     ImGui::SetCursorPos({x, y});

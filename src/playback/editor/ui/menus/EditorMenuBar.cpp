@@ -1,6 +1,7 @@
 #include "EditorMenuBar.h"
 
 #include "playback/editor/ui/ReplayEditor.h"
+#include "playback/editor/ui/SettingsPage.h"
 #include "playback/editor/ui/iconfont.h"
 
 #include "imgui.h"
@@ -55,6 +56,8 @@ void EditorMenuBar::draw() {
             ImGui::MenuItem("playback.refactorEditor.menu.hintBar"_tr().c_str(), "F1", false, false);
             ImGui::Separator();
             ImGui::MenuItem("playback.refactorEditor.menu.curveEditor"_tr().c_str(), nullptr, false, false);
+            ImGui::Separator();
+            if (ImGui::MenuItem("playback.settings.menu.open"_tr().c_str())) openSettingsPage(SettingsSection::Editor);
             ImGui::EndMenu();
         }
 

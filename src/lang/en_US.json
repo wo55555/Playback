@@ -15,6 +15,30 @@
             "status": {"recording": "Recording", "paused": "Paused"}
             ,"controls": {"start": "Start recording", "pause": "Pause recording", "resume": "Resume recording", "stop": "Stop recording"}
         },
+        "settings": {
+            "title": "Playback settings",
+            "menu": {"open": "Settings"},
+            "sections": {"recording": "Recording", "browser": "Replay browser", "editor": "Editor", "export": "Export", "general": "General"},
+            "actions": {"close": "Close", "save": "Save settings", "cancel": "Cancel", "restoreDefaults": "Restore defaults", "saveAndExit": "Save and exit", "discardChanges": "Discard changes", "keepEditing": "Keep editing"},
+            "unsavedChanges": "You have unsaved changes. How do you want to close settings?",
+            "unavailable": "Persistent settings for this section will be available when its module is complete.",
+            "recording": {
+                "description": "In-game recording shortcuts and status display",
+                "shortcuts": "Shortcuts",
+                "toggleRecordingDescription": "Toggle recording while playing",
+                "togglePauseDescription": "Paused time is excluded from the recording duration",
+                "overlay": "Status display",
+                "overlayDescription": "Show recording status and duration on the game HUD",
+                "positionDescription": "Screen anchor for the recording status overlay",
+                "preview": "Status overlay preview",
+                "previewText": "Recording 3:25",
+                "current": "Current recording"
+            },
+            "browser": {"description": "Default sorting, filtering, and view preferences are being added to the configuration model."},
+            "editor": {"description": "Layout and shortcut settings will continue using the dedicated editor preferences file."},
+            "export": {"description": "The export backend is unavailable, so default export parameters cannot be saved yet."},
+            "general": {"description": "General configuration and language policy will be available after the unified configuration migration."}
+        },
         "command": {
             "playback": {
                 "description": "Playback Mod commands",
