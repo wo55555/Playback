@@ -40,6 +40,8 @@ struct PlaybackSnapshotContext {
     static constexpr int32_t FormatVersion = 1;
 
     int32_t dimensionId{};
+    int32_t dimensionMinHeight{};
+    int32_t dimensionMaxHeight{};
     float   x{};
     float   y{};
     float   z{};
@@ -135,6 +137,8 @@ public:
 
     [[nodiscard]] PlaybackSnapshotContext readSnapshotContext();
 
+    [[nodiscard]] std::vector<PlaybackSerializedGamePacket> readConfigurationPackets();
+
     void handleSnapshot(ReplaySession& replaySession);
 
     bool handleNextAction(ReplaySession& replaySession);
@@ -191,6 +195,8 @@ public:
     [[nodiscard]] bool hasError() const;
 
     [[nodiscard]] std::optional<std::string> getError() const;
+
+    bool writeConfigurationPackets(std::vector<PlaybackSerializedGamePacket> packets);
 
     bool writeGamePackets(std::vector<GamePacket> packets);
 

@@ -1,6 +1,10 @@
 #pragma once
 
+#include "playback/editor/exporting/ExportTypes.h"
+
 #include <filesystem>
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,6 +18,8 @@ enum class EditorActionType {
     DecreaseSpeed,
     IncreaseSpeed,
     StopReplay,
+    StartExport,
+    CancelExport,
     OpenReplayBrowser,
     CloseReplayBrowser,
     RefreshReplayBrowser,
@@ -26,6 +32,8 @@ enum class EditorActionType {
     UndoEditorEdit,
     RedoEditorEdit,
     AddFreeCamera,
+    AddCameraSequence,
+    DeleteCameraSequence,
     SplitSequence,
     TrimSequence,
     DeleteSequenceSegment,
@@ -37,23 +45,29 @@ enum class EditorActionType {
     AddCameraKeyframe,
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
+    SetKeyframeEasing,
     DeleteCamera,
     UnbindCamera,
     SetCameraKind,
     CreateBindingCamera,
+    SetSubActorDetails,
+    SetPreviewCamera,
+    ClearPreviewCamera,
 };
 
 struct EditorAction {
-    EditorActionType         type{};
-    int                      tick{};
-    std::filesystem::path    path;
-    std::string              replayId;
-    std::string              name;
-    std::string              id;
-    std::string              secondaryId;
-    float                    speed{};
-    int                      kind{};
-    std::vector<std::string> replayIds;
+    EditorActionType                         type{};
+    int                                      tick{};
+    std::filesystem::path                    path;
+    std::string                              replayId;
+    std::string                              name;
+    std::string                              id;
+    std::string                              secondaryId;
+    float                                    speed{};
+    int                                      kind{};
+    std::optional<exporting::ExportSettings> exportSettings;
+    std::vector<std::string>                 replayIds;
+    std::map<std::string, std::string>       details;
 };
 
 } // namespace playback::editor

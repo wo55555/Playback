@@ -12,10 +12,8 @@
 namespace playback::functions {
 
 void ReplayWriter::writeHeader() {
-    // write file metadata
     mStream.writeVarInt(MAGIC_NUMBER, nullptr, nullptr);
 
-    // write registry actions
     auto&                         actions = functions::ActionRegistry::getInstance().getActions();
     std::vector<std::string_view> names;
 

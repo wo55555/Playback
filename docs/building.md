@@ -21,6 +21,8 @@ xmake -r -y
 
 The packaged mod is written to `bin/playback/`. Native translations are copied to `bin/playback/lang/`, the icon font is copied to `bin/playback/fonts/`, and the lightweight main-menu button pack is installed under `bin/playback/resource_packs/playback-ui/`. The same button pack is generated as `bin/playback-ui.mcpack` for standalone manual import; it does not contain the replay browser, which is rendered natively.
 
+Xmake builds the pinned FFmpeg 7.1 command-line runtime with x264 and copies the static executable to `bin/playback/tools/ffmpeg.exe`. Release users do not need to install FFmpeg separately. The first source build downloads and compiles this toolchain, so dependency setup takes longer than subsequent cached builds.
+
 ## Refresh Dependencies
 
 If prelink reports that `bedrock_runtime_data` cannot be found, refresh the package configuration and rebuild:

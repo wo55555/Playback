@@ -36,13 +36,12 @@
                 "importTooltip": "Import replay file",
                 "filter": "Filter",
                 "sort": "Sort",
-                "grid": "Grid",
-                "list": "List",
-                "switchToGrid": "Switch to grid view",
-                "switchToList": "Switch to list view",
+                "overview": "Overview",
+                "details": "Details",
+                "switchToOverview": "Switch to overview",
+                "switchToDetails": "Switch to details",
                 "refresh": "Refresh replay list",
-                "settings": "Settings",
-                "settingsUnavailable": "Replay folder settings are not available yet"
+                "settings": "Settings"
             },
             "filter": {
                 "all": "All",
@@ -171,9 +170,9 @@
                 "duration": "Duration: {} ticks",
                 "addFreeCamera": "Add Free Camera"
             },
-            "render": {"rendering":"Rendering...","frame":"Frame {} / {}","eta":"ETA {}","output":"Output: {}","cancel":"Cancel Render"},
+            "render": {"rendering":"Exporting replay...","frame":"Frame {} / {}","output":"Output: {}","latestFrame":"Latest frame: {}","cancel":"Cancel Export","cancelling":"Cancelling..."},
             "status": {"replay":"[Replay]","tick":"Tick {} / {}","backendsUnavailable":"Editing backends unavailable"},
-            "export": {"title":"Export Video","subtitle":"Configure output settings","output":"OUTPUT","video":"VIDEO","name":"Name","location":"Location","format":"Format","codec":"Video codec","aspect":"Aspect ratio","resolution":"Resolution","frameRate":"Frame rate","bitrate":"Bitrate","summary":"OUTPUT SUMMARY","file":"File: {}","export":"Export Video","cancel":"Cancel","backendUnavailable":"Export backend is not available yet","custom":"Custom","widescreen":"Widescreen","vertical":"Vertical","square":"Square","balanced":"Balanced","compact":"Compact","highQuality":"High quality"},
+            "export": {"title":"Export Replay","subtitle":"Configure output settings","output":"OUTPUT","name":"Name","location":"Location","format":"Format","timeline":"TIMELINE","frameRate":"Frame rate","startTick":"Start tick","endTick":"End tick","summary":"OUTPUT SUMMARY","summaryValue":"{} FPS | ticks {} - {}","destination":"Destination: {}","export":"Start Export","cancel":"Cancel","mp4":"MP4 video","pngSequence":"PNG sequence","custom":"Custom"},
             "shortcuts": {"title":"Keyboard Shortcuts","playback":"Playback","editing":"Editing","application":"Application","space":"Space: Play / Pause","homeEnd":"Home / End: Jump to start / end","arrows":"Left / Right: Seek one frame","zoom":"Shift + Mouse Wheel: Zoom timeline","undoRedo":"Ctrl + Z / Ctrl + Y: Undo / Redo","keyframe":"K: Add camera keyframe","marker":"M: Insert marker","delete":"Delete: Delete selected item","save":"Ctrl + S: Save project","exit":"Esc (hold): Exit editor","close":"Close"},
             "timeline": {"searchCameras":"Search cameras","snap":"Snap","loop":"Loop","addKey":"+ Key","addCamera":"+ Camera","markers":"Markers","lock":"LOCK","maximize":"Maximize viewport (Ctrl+Shift+F)","restore":"Restore viewport (Esc)","play":"Play","pause":"Pause","noCamera":"No camera","autoFirstCamera":"Auto (first camera)","missingCamera":"Missing camera"},
             "defaults": {"camera":"Camera {}"}

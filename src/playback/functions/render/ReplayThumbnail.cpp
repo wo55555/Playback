@@ -5,7 +5,9 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <cstring>
 #include <limits>
+#include <vector>
 
 namespace playback::functions::render {
 
@@ -16,14 +18,11 @@ using Microsoft::WRL::ComPtr;
 constexpr uint32_t MaxThumbnailDimension = 4096;
 constexpr uint64_t MaxThumbnailBytes     = 64ull * 1024 * 1024;
 
-// 确保当前线程 COM 已初始化（WIC 依赖 COM）。游戏主线程通常已初始化；
-// 若在某辅助线程首次调用，这里完成初始化并在函数结束时清理。
 class ComInitialize {
 public:
     ComInitialize() {
         HRESULT const hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         mNeedsUninit     = SUCCEEDED(hr);
-        // S_OK and S_FALSE both increment the thread's COM initialization count.
     }
     ~ComInitialize() {
         if (mNeedsUninit) CoUninitialize();
@@ -41,7 +40,7 @@ private:
 
 } // namespace
 
-bool writeReplayThumbnailPng(
+bool writeRgbaPng(
     std::filesystem::path const& output,
     uint32_t                     width,
     uint32_t                     height,
@@ -67,9 +66,6 @@ bool writeReplayThumbnailPng(
     if (FAILED(frame->SetPixelFormat(&format))) return false;
     uint64_t const size = static_cast<uint64_t>(rowPitch) * height;
     if (size > std::numeric_limits<UINT>::max()) return false;
-    // PNG 编码器会把 SetPixelFormat 请求的格式改写为其首选格式（如 32bppBGRA），因此不能
-    // 严格校验 format 是否保持 32bppRGBA，也不能直接 WritePixels（会按改写后的格式解释数据，
-    // 造成 R/B 通道错乱）。改用 IWICBitmap 包装像素并经 WriteSource 写入，让 WIC 自动转换。
     ComPtr<IWICBitmap> bitmap;
     if (FAILED(factory->CreateBitmapFromMemory(
             width,
@@ -84,6 +80,53 @@ bool writeReplayThumbnailPng(
     }
     return SUCCEEDED(frame->WriteSource(bitmap.Get(), nullptr)) && SUCCEEDED(frame->Commit())
         && SUCCEEDED(encoder->Commit());
+}
+
+bool writeReplayThumbnailPng(
+    std::filesystem::path const& output,
+    uint32_t                     width,
+    uint32_t                     height,
+    uint8_t const*               rgba,
+    uint32_t                     rowPitch
+) {
+    return writeRgbaPng(output, width, height, rgba, rowPitch);
+}
+
+bool writeReplayThumbnailPng(
+    std::filesystem::path const& output,
+    CapturedFrame const&         frame,
+    uint32_t                     targetWidth,
+    uint32_t                     targetHeight
+) {
+    if (frame.width == 0 || frame.height == 0 || frame.rowPitch < frame.width * 4 || targetWidth == 0
+        || targetHeight == 0) {
+        return false;
+    }
+    auto const requiredBytes = static_cast<uint64_t>(frame.rowPitch) * frame.height;
+    if (requiredBytes > frame.pixels.size()) return false;
+
+    auto const targetBytes = static_cast<uint64_t>(targetWidth) * targetHeight * 4;
+    if (targetBytes > std::numeric_limits<size_t>::max()) return false;
+    std::vector<uint8_t> rgba(static_cast<size_t>(targetBytes));
+    for (uint32_t y = 0; y < targetHeight; ++y) {
+        auto const  sourceY = static_cast<uint32_t>((static_cast<uint64_t>(y) * frame.height) / targetHeight);
+        auto const* row =
+            reinterpret_cast<uint8_t const*>(frame.pixels.data()) + static_cast<size_t>(sourceY) * frame.rowPitch;
+        for (uint32_t x = 0; x < targetWidth; ++x) {
+            auto const  sourceX = static_cast<uint32_t>((static_cast<uint64_t>(x) * frame.width) / targetWidth);
+            auto const* source  = row + static_cast<size_t>(sourceX) * 4;
+            auto*       target  = rgba.data() + (static_cast<size_t>(y) * targetWidth + x) * 4;
+            if (frame.pixelFormat == FramePixelFormat::Bgra8) {
+                target[0] = source[2];
+                target[1] = source[1];
+                target[2] = source[0];
+                target[3] = source[3];
+            } else {
+                std::memcpy(target, source, 4);
+            }
+        }
+    }
+    return writeRgbaPng(output, targetWidth, targetHeight, rgba.data(), targetWidth * 4);
 }
 
 bool decodeReplayThumbnailPng(std::string_view png, ReplayThumbnailPixels& output) {

@@ -46,6 +46,7 @@ void ReplayEditor::shutdown() {
     mFrameState = nullptr;
     mSubmit     = nullptr;
     mSelection.clear();
+    mLastExportState = exporting::ExportState::Idle;
 }
 
 void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
@@ -55,7 +56,7 @@ void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
 }
 
 void ReplayEditor::loadLayoutPreferences() {
-    mDetailsWidthRatio   = 0.20f;
+    mDetailsWidthRatio   = 0.28f;
     mTimelineHeightRatio = 0.35f;
     mVideoAspectRatio    = 16.0f / 9.0f;
     mTimelinePanel.setViewPreferences(0.30f, 1.0f, 0.0f);
@@ -79,11 +80,16 @@ void ReplayEditor::loadLayoutPreferences() {
             if (views != config.end() && views->is_object()) {
                 for (auto const& [replayPath, view] : views->items()) {
                     if (replayPath.empty() || !view.is_object()) continue;
+                    auto const zoomScale = view.find("zoomScale");
+                    // Absolute pixelsPerTick preferences from older builds cannot be
+                    // converted without the replay canvas dimensions. Start them fitted.
                     mTimelineViewPreferences.insert_or_assign(
                         replayPath,
                         TimelineViewPreferences{
-                            std::clamp(readFiniteFloat(view, "zoomScale", 1.0f), 1.0f, 20.0f),
-                            std::max(0.0f, readFiniteFloat(view, "horizontalScroll", 0.0f))
+                            zoomScale == view.end() ? 1.0f
+                                                    : std::clamp(readFiniteFloat(view, "zoomScale", 1.0f), 1.0f, 20.0f),
+                            zoomScale == view.end() ? 0.0f
+                                                    : std::max(0.0f, readFiniteFloat(view, "horizontalScroll", 0.0f))
                         }
                     );
                 }
@@ -124,6 +130,7 @@ void ReplayEditor::saveLayoutPreferences() const {
 
 void ReplayEditor::syncTimelineViewPreferences(std::string_view replayPath) {
     if (mActiveReplayPath == replayPath) return;
+    bool const enteringReplay = mActiveReplayPath.empty() && !replayPath.empty();
 
     if (!mActiveReplayPath.empty()) {
         mTimelineViewPreferences.insert_or_assign(
@@ -134,7 +141,7 @@ void ReplayEditor::syncTimelineViewPreferences(std::string_view replayPath) {
 
     mActiveReplayPath.assign(replayPath);
     auto const preferences = mTimelineViewPreferences.find(mActiveReplayPath);
-    if (preferences == mTimelineViewPreferences.end()) {
+    if (enteringReplay || preferences == mTimelineViewPreferences.end()) {
         mTimelinePanel.setViewPreferences(mTimelinePanel.trackListWidthRatio(), 1.0f, 0.0f);
     } else {
         mTimelinePanel.setViewPreferences(
@@ -155,25 +162,48 @@ void ReplayEditor::submitAction(playback::editor::EditorAction action) const {
 }
 
 void ReplayEditor::draw(playback::editor::EditorState const& state, SubmitAction const& submit) {
-    if (!state.editorVisible) return;
+    if (!state.editorVisible) {
+        if (!mActiveReplayPath.empty()) {
+            mTimelineViewPreferences.insert_or_assign(
+                mActiveReplayPath,
+                TimelineViewPreferences{mTimelinePanel.zoomScale(), mTimelinePanel.horizontalScroll()}
+            );
+            mActiveReplayPath.clear();
+        }
+        return;
+    }
     std::string_view replayPath;
     if (state.project) replayPath = state.project->projectPath;
     syncTimelineViewPreferences(replayPath);
     mFrameState = &state;
     mSubmit     = &submit;
 
+    auto&       io             = ImGui::GetIO();
+    float const savedFontScale = io.FontGlobalScale;
+    io.FontGlobalScale         = savedFontScale * (18.0f / 14.0f);
     mTheme.apply();
 
-    if (!state.capabilities.videoExport && mModeManager.current() != EditorMode::Edit) {
+    auto const exportActive = exporting::isExportActive(state.exportStatus.state);
+    if (exportActive && mModeManager.current() != EditorMode::Render) {
+        mModeManager.switchTo(EditorMode::Render);
+    } else if (!exportActive && mModeManager.current() != EditorMode::Edit) {
         mModeManager.switchTo(EditorMode::Edit);
     }
-    mEditMode.draw();
+    if (state.exportStatus.state == exporting::ExportState::Faulted
+        && mLastExportState != exporting::ExportState::Faulted) {
+        ErrorDialog::getInstance().show(std::string_view{}, state.exportStatus.message);
+    }
+    mLastExportState = state.exportStatus.state;
+
+    if (mModeManager.current() == EditorMode::Render) mRenderMode.draw();
+    else mEditMode.draw();
 
     ErrorDialog::getInstance().draw();
-    handleKeyboardShortcuts();
+    if (!exportActive) handleKeyboardShortcuts();
 
-    mFrameState = nullptr;
-    mSubmit     = nullptr;
+    io.FontGlobalScale = savedFontScale;
+    mFrameState        = nullptr;
+    mSubmit            = nullptr;
 }
 
 void ReplayEditor::handleKeyboardShortcuts() {
@@ -198,12 +228,10 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
 
-    // ── Playback control ──
     if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
         submitAction({playback::editor::EditorActionType::TogglePause});
     }
 
-    // ── Seek ──
     if (ImGui::IsKeyPressed(ImGuiKey_Home)) {
         submitAction({playback::editor::EditorActionType::SkipToStart});
     }
@@ -223,7 +251,6 @@ void ReplayEditor::handleKeyboardShortcuts() {
         submitAction(std::move(action));
     }
 
-    // ── Speed ──
     // Note: -/= are handled as separate checks since IsKeyPressed consumes the event
     if (ImGui::IsKeyPressed(ImGuiKey_Minus)) {
         submitAction({playback::editor::EditorActionType::DecreaseSpeed});

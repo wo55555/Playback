@@ -78,9 +78,10 @@ private:
     playback::editor::EditorState const* mFrameState{};
     SubmitAction const*                  mSubmit{};
     editing::model::SelectionModel       mSelection;
+    exporting::ExportState               mLastExportState{exporting::ExportState::Idle};
 
     // Layout
-    float mDetailsWidthRatio{0.20f};
+    float mDetailsWidthRatio{0.28f};
     float mTimelineHeightRatio{0.35f};
     float mVideoAspectRatio{16.0f / 9.0f};
 

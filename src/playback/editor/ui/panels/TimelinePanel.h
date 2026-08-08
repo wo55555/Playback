@@ -21,21 +21,18 @@ private:
     void submitEdit(playback::editor::EditorAction action);
 
     editing::model::TrackTreeModel mTrackTree;
-    float                          mZoomScale{1.0f};
-    float                          mScrollX{};
-    float                          mTrackListWidthRatio{0.30f};
-    int                            mPendingSeekTick{-1};
-    std::string                    mTrackSearch;
-    bool                           mSnapEnabled{true};
-    bool                           mCamerasExpanded{true};
-    bool                           mMarkersExpanded{true};
-    bool                           mSeekingTimeline{};
-    int                            mSeekingTick{-1};
-    std::string                    mDraggingSegmentId;
-    bool                           mDraggingWorldActor{};
-    bool                           mDraggingStart{};
-    int                            mDragStartTick{};
-    int                            mDragEndTick{};
+    float mZoomScale{1.0f};
+    float mScrollX{};
+    float mTrackListWidthRatio{0.30f};
+    int mPendingSeekTick{-1};
+    std::string mTrackSearch;
+    bool mSnapEnabled{true};
+    bool mCamerasExpanded{true};
+    std::string mDraggingSegmentId;
+    bool mDraggingStart{};
+    bool mDraggingPlayhead{};
+    int mDragStartTick{};
+    int mDragEndTick{};
 };
 
 } // namespace playback::editor::ui

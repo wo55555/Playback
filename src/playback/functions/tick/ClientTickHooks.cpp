@@ -12,9 +12,30 @@
 #include "mc/client/gui/SceneType.h"
 #include "mc/client/multiplayer/MultiPlayerLevel.h"
 
+#include <atomic>
+#include <mutex>
+#include <optional>
+
 namespace playback::functions {
 
 namespace {
+
+struct OfflineTickGateState {
+    bool                    active{};
+    uint64_t                nextTokenId{1};
+    std::optional<uint64_t> pendingToken;
+    std::optional<uint64_t> inFlightToken;
+    std::optional<uint64_t> completedToken;
+};
+
+struct OfflineTickClaim {
+    bool                    controlled{};
+    std::optional<uint64_t> token;
+};
+
+std::atomic_bool     gClientTickHooksInstalled{false};
+std::mutex           gOfflineTickGateMutex;
+OfflineTickGateState gOfflineTickGate;
 
 void tickPlayback() {
     switch (playback::Playback::getInstance().getMode()) {
@@ -28,6 +49,29 @@ void tickPlayback() {
     default:
         break;
     }
+}
+
+OfflineTickClaim claimOfflineTick() {
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    if (!gOfflineTickGate.active) return {};
+
+    OfflineTickClaim claim{true, std::nullopt};
+    if (!gOfflineTickGate.pendingToken || gOfflineTickGate.inFlightToken) return claim;
+
+    claim.token                    = gOfflineTickGate.pendingToken;
+    gOfflineTickGate.inFlightToken = gOfflineTickGate.pendingToken;
+    gOfflineTickGate.pendingToken.reset();
+    return claim;
+}
+
+void completeOfflineTick(uint64_t token) {
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    if (!gOfflineTickGate.active || !gOfflineTickGate.inFlightToken || *gOfflineTickGate.inFlightToken != token) {
+        return;
+    }
+
+    gOfflineTickGate.inFlightToken.reset();
+    gOfflineTickGate.completedToken = token;
 }
 
 } // namespace
@@ -65,6 +109,18 @@ LL_TYPE_INSTANCE_HOOK(
     void
 ) {
     ChunkMutationBarrier::setActiveLevel(this);
+
+    auto const offlineTick = claimOfflineTick();
+    if (offlineTick.controlled) {
+        if (!offlineTick.token) return;
+
+        tickPlayback();
+        origin();
+        [[maybe_unused]] auto tickBoundary = ChunkMutationBarrier::enterTickBoundary(*this);
+        completeOfflineTick(*offlineTick.token);
+        return;
+    }
+
     origin();
     [[maybe_unused]] auto tickBoundary = ChunkMutationBarrier::enterTickBoundary(*this);
     tickPlayback();
@@ -92,10 +148,17 @@ bool hookClientTick(bool enable) {
     };
 
     if (enable) {
-        if (allInstalled()) return true;
-        if (installAll()) return true;
+        if (allInstalled()) {
+            gClientTickHooksInstalled.store(true, std::memory_order_release);
+            return true;
+        }
+        if (installAll()) {
+            gClientTickHooksInstalled.store(true, std::memory_order_release);
+            return true;
+        }
 
         bool removed = removeAll();
+        gClientTickHooksInstalled.store(false, std::memory_order_release);
         Playback::getInstance().getSelf().getLogger().error(
             "Unable to install client tick hooks (update={}, levelTick={}, rollback={})",
             state.update,
@@ -105,10 +168,18 @@ bool hookClientTick(bool enable) {
         return false;
     }
 
-    if (noneInstalled()) return true;
-    if (removeAll()) return true;
+    endOfflineReplayTickGate();
+    if (noneInstalled()) {
+        gClientTickHooksInstalled.store(false, std::memory_order_release);
+        return true;
+    }
+    if (removeAll()) {
+        gClientTickHooksInstalled.store(false, std::memory_order_release);
+        return true;
+    }
 
     bool restored = installAll();
+    gClientTickHooksInstalled.store(restored, std::memory_order_release);
     Playback::getInstance().getSelf().getLogger().error(
         "Unable to remove client tick hooks (update={}, levelTick={}, restoration={})",
         state.update,
@@ -116,6 +187,55 @@ bool hookClientTick(bool enable) {
         restored
     );
     return false;
+}
+
+bool beginOfflineReplayTickGate() {
+    if (!gClientTickHooksInstalled.load(std::memory_order_acquire)) return false;
+
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    if (!gClientTickHooksInstalled.load(std::memory_order_relaxed) || gOfflineTickGate.active) return false;
+
+    gOfflineTickGate.active = true;
+    gOfflineTickGate.pendingToken.reset();
+    gOfflineTickGate.inFlightToken.reset();
+    gOfflineTickGate.completedToken.reset();
+    return true;
+}
+
+void endOfflineReplayTickGate() {
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    gOfflineTickGate.active = false;
+    gOfflineTickGate.pendingToken.reset();
+    gOfflineTickGate.inFlightToken.reset();
+    gOfflineTickGate.completedToken.reset();
+}
+
+OfflineReplayTickRequestResult requestOfflineReplayTick(OfflineReplayTickToken& token) {
+    token = {};
+    if (!gClientTickHooksInstalled.load(std::memory_order_acquire)) {
+        return OfflineReplayTickRequestResult::Unavailable;
+    }
+
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    if (!gOfflineTickGate.active || !gClientTickHooksInstalled.load(std::memory_order_relaxed)) {
+        return OfflineReplayTickRequestResult::Unavailable;
+    }
+    if (gOfflineTickGate.pendingToken || gOfflineTickGate.inFlightToken) {
+        return OfflineReplayTickRequestResult::Busy;
+    }
+
+    token.id = gOfflineTickGate.nextTokenId++;
+    if (gOfflineTickGate.nextTokenId == 0) ++gOfflineTickGate.nextTokenId;
+    gOfflineTickGate.pendingToken = token.id;
+    gOfflineTickGate.completedToken.reset();
+    return OfflineReplayTickRequestResult::Requested;
+}
+
+bool wasOfflineReplayTickCompleted(OfflineReplayTickToken token) {
+    if (!token) return false;
+
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    return gOfflineTickGate.active && gOfflineTickGate.completedToken && *gOfflineTickGate.completedToken == token.id;
 }
 
 } // namespace playback::functions

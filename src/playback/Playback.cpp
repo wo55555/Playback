@@ -4,11 +4,13 @@
 #include "playback/Playback.h"
 #include "playback/command/Command.h"
 #include "playback/editor/ReplayUI.h"
+#include "playback/editor/exporting/OfflineRenderClockHooks.h"
 #include "playback/functions/action/Action.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/functions/record/Recorder.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/functions/tick/ClientTickHooks.h"
+#include "playback/screen/IdleDetectionHooks.h"
 #include "playback/screen/MainMenuHooks.h"
 
 #include "ll/api/event/EventBus.h"
@@ -68,6 +70,7 @@ void Playback::registerActions() {
     registry.registerAction(std::make_unique<functions::ActionCreateLocalPlayer>());
     registry.registerAction(std::make_unique<functions::ActionLevelChunkCached>());
     registry.registerAction(std::make_unique<functions::ActionSubChunkCached>());
+    registry.registerAction(std::make_unique<functions::ActionConfigurationPacket>());
     registry.registerAction(std::make_unique<functions::ActionGamePacket>());
     registry.registerAction(std::make_unique<functions::ActionMoveEntities>());
 }
@@ -76,7 +79,17 @@ bool Playback::hook() {
     if (impl->mRuntimeInstalled) return true;
 
     screen::hookMainMenu(true);
+    if (!screen::hookIdleDetection(true)) {
+        getSelf().getLogger().warn("Unable to install the idle detection guard; video export is disabled");
+    }
+    if (!editor::exporting::hookOfflineRenderClock(true)) {
+        getSelf().getLogger().warn("Unable to install the fractional render clock; video export is disabled");
+    }
     if (!functions::hookNetwork(true)) {
+        if (!editor::exporting::hookOfflineRenderClock(false)) {
+            getSelf().getLogger().error("Unable to roll back the fractional render clock after network hook failure");
+        }
+        (void)screen::hookIdleDetection(false);
         screen::hookMainMenu(false);
         return false;
     }
@@ -84,6 +97,10 @@ bool Playback::hook() {
         if (!functions::hookNetwork(false)) {
             getSelf().getLogger().error("Unable to roll back replay network hooks after client tick hook failure");
         }
+        if (!editor::exporting::hookOfflineRenderClock(false)) {
+            getSelf().getLogger().error("Unable to roll back fractional render clock after client tick hook failure");
+        }
+        (void)screen::hookIdleDetection(false);
         screen::hookMainMenu(false);
         return false;
     }
@@ -146,6 +163,34 @@ bool Playback::unhook() {
         getSelf().getLogger().error(
             "Unable to remove replay UI hooks (ui restoration={}, network restoration={}, "
             "client tick restoration={})",
+            uiRestored,
+            networkRestored,
+            tickRestored
+        );
+        return false;
+    }
+    if (!editor::exporting::hookOfflineRenderClock(false)) {
+        bool uiRestored      = editor::hookReplayUI(true);
+        bool networkRestored = functions::hookNetwork(true);
+        bool tickRestored    = functions::hookClientTick(true);
+        getSelf().getLogger().error(
+            "Unable to remove the fractional render clock (UI restoration={}, network restoration={}, "
+            "client tick restoration={})",
+            uiRestored,
+            networkRestored,
+            tickRestored
+        );
+        return false;
+    }
+    if (!screen::hookIdleDetection(false)) {
+        bool clockRestored   = editor::exporting::hookOfflineRenderClock(true);
+        bool uiRestored      = editor::hookReplayUI(true);
+        bool networkRestored = functions::hookNetwork(true);
+        bool tickRestored    = functions::hookClientTick(true);
+        getSelf().getLogger().error(
+            "Unable to remove the idle detection guard (clock restoration={}, UI restoration={}, "
+            "network restoration={}, client tick restoration={})",
+            clockRestored,
             uiRestored,
             networkRestored,
             tickRestored

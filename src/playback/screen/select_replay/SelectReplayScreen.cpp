@@ -3,6 +3,7 @@
 #include "playback/editor/renderer/ImGuiRenderer.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/iconfont.h"
+#include "playback/utils/PathUtils.h"
 
 #include "ll/api/i18n/I18n.h"
 #include "ll/api/utils/StringUtils.h"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -29,29 +31,142 @@ using namespace ll::i18n_literals;
 
 namespace {
 
-constexpr float kNavHeight       = 84.0f;
-constexpr float kActionBarHeight = 104.0f;
-constexpr float kScreenMargin    = 50.0f;
-constexpr float kCardGap         = 24.0f;
-constexpr float kCardPadding     = 16.0f;
-constexpr float kControlHeight   = 52.0f;
-// 统一字号：基础字体 14px，全 UI 只允许 18 / 24 / 30 三档。
-constexpr float kFontScaleSmall = 18.0f / 14.0f; // 18px
-constexpr float kFontScaleBody  = 24.0f / 14.0f; // 24px
-constexpr float kFontScaleLarge = 30.0f / 14.0f; // 30px
+constexpr float kBaseFontSize       = 14.0f;
+constexpr float kNavHeight          = 84.0f;
+constexpr float kActionBarHeight    = 82.0f;
+constexpr float kScreenMargin       = 24.0f;
+constexpr float kCardGap            = 16.0f;
+constexpr float kControlHeight      = 52.0f;
+constexpr float kPanelWidthScale    = 0.86f;
+constexpr float kPanelHeightScale   = 0.90f;
+constexpr float kPanelMinimumMargin = 24.0f;
+constexpr float kTextOpticalOffsetY = -2.0f;
+
+struct NavigationLayoutConfig {
+    float titleFontSize       = 28.0f;
+    float backIconFontSize    = 24.0f;
+    float controlFontSize     = 20.0f;
+    float horizontalMargin    = 24.0f;
+    float controlGap          = 12.0f;
+    float viewGroupGap        = 24.0f;
+    float viewSegmentMinWidth = 88.0f;
+    float viewRounding        = 4.0f;
+    float iconTextGap         = 10.0f;
+    float buttonPadding       = 16.0f;
+    float popupItemHeight     = 36.0f;
+    float searchWidth         = 300.0f;
+};
+
+constexpr NavigationLayoutConfig kNavigationLayout{};
+
+struct ContentLayoutConfig {
+    float horizontalMargin    = kScreenMargin;
+    float bottomMargin        = 16.0f;
+    float locationHeight      = 42.0f;
+    float locationVerticalGap = 12.0f;
+};
+
+constexpr ContentLayoutConfig kContentLayout{};
+
+struct CardLayoutConfig {
+    static constexpr int metadataRowCount = 3;
+
+    float previewInset      = 2.0f;
+    float horizontalPadding = 14.0f;
+    float verticalPadding   = 14.0f;
+    float titleFontSize     = 20.0f;
+    float metadataFontSize  = 16.0f;
+    // These values are actual gaps between adjacent text boxes, not the more ambiguous baseline advances.
+    float titleToMetadataGap = 22.0f;
+    float metadataRowGap     = 18.0f;
+
+    [[nodiscard]] constexpr float titleToMetadataAdvance() const { return titleFontSize + titleToMetadataGap; }
+
+    [[nodiscard]] constexpr float metadataRowAdvance() const { return metadataFontSize + metadataRowGap; }
+
+    [[nodiscard]] constexpr float bodyHeight() const {
+        return verticalPadding * 2.0f + titleFontSize + titleToMetadataGap + metadataFontSize * metadataRowCount
+             + metadataRowGap * (metadataRowCount - 1);
+    }
+};
+
+constexpr CardLayoutConfig kCardLayout{};
+
+struct DetailsLayoutConfig {
+    static constexpr int metadataRowCount = 7;
+
+    float panelGap                    = 16.0f;
+    float stackedBreakpoint           = 1080.0f;
+    float listWidthRatio              = 0.35f;
+    float listMinWidth                = 440.0f;
+    float listMaxWidth                = 560.0f;
+    float stackedListHeightRatio      = 0.38f;
+    float stackedListMinHeight        = 280.0f;
+    float stackedListMaxHeight        = 420.0f;
+    float panelRounding               = 6.0f;
+    float panelPadding                = 16.0f;
+    float listFooterHeight            = 42.0f;
+    float listFooterPaddingX          = 16.0f;
+    float listItemHeight              = 120.0f;
+    float listItemGap                 = 10.0f;
+    float listItemHorizontalPadding   = 8.0f;
+    float listTextVerticalPadding     = 12.0f;
+    float thumbnailToTextGap          = 14.0f;
+    float footerGroupGap              = 12.0f;
+    float thumbnailWidthRatio         = 0.34f;
+    float thumbnailMinWidth           = 112.0f;
+    float thumbnailMaxWidth           = 168.0f;
+    float listTitleFontSize           = 20.0f;
+    float listMetadataFontSize        = 16.0f;
+    float detailPreviewAspectRatio    = 16.0f / 9.0f;
+    float detailPreviewMaxHeightRatio = 0.54f;
+    float detailPreviewMinHeight      = 180.0f;
+    float previewToMetadataGap        = 16.0f;
+    float detailContentBottomGap      = 16.0f;
+    float detailMetadataFontSize      = 18.0f;
+    float metadataLabelWidth          = 150.0f;
+    float metadataCellPaddingX        = 16.0f;
+    float metadataCellPaddingY        = 10.0f;
+    float metadataWrapReserve         = 18.0f;
+    float actionButtonGap             = 12.0f;
+
+    [[nodiscard]] constexpr float actionAreaHeight() const { return kControlHeight + panelPadding * 2.0f; }
+};
+
+constexpr DetailsLayoutConfig kDetailsLayout{};
+
+constexpr float kFontScaleCardMeta    = kCardLayout.metadataFontSize / kBaseFontSize;
+constexpr float kFontScaleSmall       = 18.0f / kBaseFontSize;
+constexpr float kFontScaleCardTitle   = kCardLayout.titleFontSize / kBaseFontSize;
+constexpr float kFontScaleListTitle   = kDetailsLayout.listTitleFontSize / kBaseFontSize;
+constexpr float kFontScaleListMeta    = kDetailsLayout.listMetadataFontSize / kBaseFontSize;
+constexpr float kFontScaleBody        = 24.0f / kBaseFontSize;
+constexpr float kFontScaleLarge       = 30.0f / kBaseFontSize;
+constexpr float kFontScaleNavTitle    = kNavigationLayout.titleFontSize / kBaseFontSize;
+constexpr float kFontScaleNavBackIcon = kNavigationLayout.backIconFontSize / kBaseFontSize;
+constexpr float kFontScaleNavControl  = kNavigationLayout.controlFontSize / kBaseFontSize;
 
 constexpr ImU32 kColorAccent       = IM_COL32(58, 140, 240, 255);
-constexpr ImU32 kColorAccentDim    = IM_COL32(58, 140, 240, 130);
-constexpr ImU32 kColorBg           = IM_COL32(28, 28, 28, 255);
-constexpr ImU32 kColorCardBg       = IM_COL32(48, 48, 48, 255);
-constexpr ImU32 kColorCardSelected = IM_COL32(85, 85, 85, 255);
-constexpr ImU32 kColorButton       = IM_COL32(55, 55, 55, 255);
-constexpr ImU32 kColorButtonHover  = IM_COL32(70, 70, 70, 255);
-constexpr ImU32 kColorButtonActive = IM_COL32(90, 90, 90, 255);
+constexpr ImU32 kColorAccentHover  = IM_COL32(78, 158, 250, 255);
+constexpr ImU32 kColorBg           = IM_COL32(22, 23, 25, 255);
+constexpr ImU32 kColorPanelBg      = IM_COL32(30, 32, 35, 255);
+constexpr ImU32 kColorCardBg       = IM_COL32(25, 27, 29, 255);
+constexpr ImU32 kColorCardSelected = IM_COL32(29, 36, 46, 255);
+constexpr ImU32 kColorListSelected = IM_COL32(30, 58, 92, 255);
+constexpr ImU32 kColorCardBorder   = IM_COL32(76, 80, 86, 220);
+constexpr ImU32 kColorCardHover    = IM_COL32(104, 110, 120, 255);
+constexpr ImU32 kColorButton       = IM_COL32(48, 50, 54, 255);
+constexpr ImU32 kColorButtonHover  = IM_COL32(64, 67, 72, 255);
+constexpr ImU32 kColorButtonActive = IM_COL32(78, 81, 88, 255);
 constexpr ImU32 kColorPreviewBg    = IM_COL32(30, 42, 58, 255);
 constexpr ImU32 kColorDanger       = IM_COL32(210, 60, 60, 255);
-constexpr ImU32 kColorText         = IM_COL32(255, 255, 255, 255);
-constexpr ImU32 kColorTextDim      = IM_COL32(180, 180, 180, 255);
+constexpr ImU32 kColorText         = IM_COL32(238, 240, 244, 255);
+constexpr ImU32 kColorTextDim      = IM_COL32(164, 168, 176, 255);
+constexpr ImU32 kColorBackdrop     = IM_COL32(0, 0, 0, 88);
+
+float cardPreviewHeight(float width) { return std::max(0.0f, width - kCardLayout.previewInset * 2.0f) * 9.0f / 16.0f; }
+
+float cardHeight(float width) { return kCardLayout.previewInset + cardPreviewHeight(width) + kCardLayout.bodyHeight(); }
 
 std::string formatSize(std::uintmax_t bytes) {
     constexpr std::array<char const*, 4> units{"B", "KB", "MB", "GB"};
@@ -84,8 +199,108 @@ std::string formatModifiedTime(std::filesystem::file_time_type const& time) {
     return buf.data();
 }
 
-// 按钮自适应宽度：文字（含图标）+ 左右留白。
-float autoWidth(std::string const& text) { return ImGui::CalcTextSize(text.c_str()).x + 34.0f; }
+float textWidth(std::string_view text) {
+    if (text.empty()) return 0.0f;
+    return ImGui::CalcTextSize(text.data(), text.data() + text.size()).x;
+}
+
+ImWchar firstCodepoint(char const* text) {
+    auto const* bytes = reinterpret_cast<unsigned char const*>(text);
+    if ((bytes[0] & 0x80u) == 0) return bytes[0];
+    if ((bytes[0] & 0xe0u) == 0xc0u) {
+        return static_cast<ImWchar>(((bytes[0] & 0x1fu) << 6) | (bytes[1] & 0x3fu));
+    }
+    return static_cast<ImWchar>(((bytes[0] & 0x0fu) << 12) | ((bytes[1] & 0x3fu) << 6) | (bytes[2] & 0x3fu));
+}
+
+ImFontGlyph const* iconGlyph(char const* icon) {
+    auto* baked = ImGui::GetFontBaked();
+    return baked ? baked->FindGlyphNoFallback(firstCodepoint(icon)) : nullptr;
+}
+
+float iconVisualWidth(char const* icon) {
+    if (auto const* glyph = iconGlyph(icon)) return glyph->X1 - glyph->X0;
+    return ImGui::CalcTextSize(icon).x;
+}
+
+float iconDrawX(char const* icon, float visualLeft) {
+    if (auto const* glyph = iconGlyph(icon)) return visualLeft - glyph->X0;
+    return visualLeft;
+}
+
+float centeredIconY(char const* icon, float minimumY, float maximumY) {
+    if (auto const* glyph = iconGlyph(icon)) {
+        return minimumY + (maximumY - minimumY - (glyph->Y1 - glyph->Y0)) * 0.5f - glyph->Y0;
+    }
+    return minimumY + (maximumY - minimumY - ImGui::CalcTextSize(icon).y) * 0.5f;
+}
+
+float centeredIconX(char const* icon, float minimumX, float maximumX) {
+    float const visualLeft = minimumX + (maximumX - minimumX - iconVisualWidth(icon)) * 0.5f;
+    return iconDrawX(icon, visualLeft);
+}
+
+float iconLabelWidth(char const* icon, std::string_view text, float gap = 6.0f, char const* trailingIcon = nullptr) {
+    float const leadingGap    = text.empty() ? 0.0f : gap;
+    float const trailingGap   = trailingIcon ? gap : 0.0f;
+    float const trailingWidth = trailingIcon ? iconVisualWidth(trailingIcon) : 0.0f;
+    return iconVisualWidth(icon) + leadingGap + textWidth(text) + trailingGap + trailingWidth;
+}
+
+float toolbarButtonWidth(char const* icon, std::string_view text, char const* trailingIcon = nullptr) {
+    return std::ceil(
+        iconLabelWidth(icon, text, kNavigationLayout.iconTextGap, trailingIcon) + kNavigationLayout.buttonPadding * 2.0f
+    );
+}
+
+bool beginAnchoredPopup(char const* popupId, ImVec2 buttonMinimum, ImVec2 buttonMaximum) {
+    constexpr float popupGap      = 4.0f;
+    constexpr float popupMinWidth = 200.0f;
+    float const     popupWidth    = std::max(buttonMaximum.x - buttonMinimum.x, popupMinWidth);
+
+    ImGui::SetNextWindowPos({buttonMinimum.x, buttonMaximum.y + popupGap}, ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints({popupWidth, 0.0f}, {popupWidth, FLT_MAX});
+    return ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoMove);
+}
+
+void drawClippedText(std::string_view text, ImVec2 position, float clipRight, ImU32 color) {
+    if (text.empty() || clipRight <= position.x) return;
+    ImVec4 const clip{position.x, position.y, clipRight, position.y + ImGui::GetFontSize() + 2.0f};
+    ImGui::GetWindowDrawList()->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        position,
+        color,
+        text.data(),
+        text.data() + text.size(),
+        0.0f,
+        &clip
+    );
+}
+
+void drawIconTextLine(
+    char const*      icon,
+    std::string_view text,
+    ImVec2           position,
+    float            clipRight,
+    ImU32            color,
+    float            gap = 6.0f
+) {
+    float const lineBottom = position.y + ImGui::GetFontSize();
+    ImGui::GetWindowDrawList()->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        {iconDrawX(icon, position.x), centeredIconY(icon, position.y, lineBottom)},
+        color,
+        icon
+    );
+    drawClippedText(
+        text,
+        {position.x + iconVisualWidth(icon) + gap, position.y + kTextOpticalOffsetY},
+        clipRight,
+        color
+    );
+}
 
 std::string sortLabel(BrowserSort sort) {
     switch (sort) {
@@ -132,13 +347,11 @@ void tooltip(char const* text) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", text);
 }
 
-void pushTextColor(ImU32 col) { ImGui::PushStyleColor(ImGuiCol_Text, col); }
-
 void styleButton(bool active = false) {
     if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, kColorButtonActive);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kColorButtonActive);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kColorButtonActive);
+        ImGui::PushStyleColor(ImGuiCol_Button, kColorAccent);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kColorAccentHover);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kColorAccent);
     } else {
         ImGui::PushStyleColor(ImGuiCol_Button, kColorButton);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kColorButtonHover);
@@ -148,28 +361,214 @@ void styleButton(bool active = false) {
 
 void popButtonStyle() { ImGui::PopStyleColor(3); }
 
-bool textButton(char const* label, float width, bool active = false) {
+void drawCenteredIconLabel(
+    ImVec2           minimum,
+    ImVec2           maximum,
+    char const*      icon,
+    std::string_view text,
+    char const*      trailingIcon = nullptr
+) {
+    float const iconWidth   = iconVisualWidth(icon);
+    float const leadingGap  = text.empty() ? 0.0f : kNavigationLayout.iconTextGap;
+    float const labelWidth  = textWidth(text);
+    float const trailingGap = trailingIcon ? kNavigationLayout.iconTextGap : 0.0f;
+    float const groupWidth  = iconLabelWidth(icon, text, kNavigationLayout.iconTextGap, trailingIcon);
+    float const groupX      = minimum.x + (maximum.x - minimum.x - groupWidth) * 0.5f;
+    float const iconX =
+        text.empty() && !trailingIcon ? centeredIconX(icon, minimum.x, maximum.x) : iconDrawX(icon, groupX);
+
+    ImDrawList* const draw  = ImGui::GetWindowDrawList();
+    ImU32 const       color = ImGui::GetColorU32(kColorText);
+    draw->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        {iconX, centeredIconY(icon, minimum.y, maximum.y)},
+        color,
+        icon
+    );
+    if (!text.empty()) {
+        ImVec2 const textSize = ImGui::CalcTextSize(text.data(), text.data() + text.size());
+        draw->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            {
+                groupX + iconWidth + leadingGap,
+                minimum.y + (maximum.y - minimum.y - textSize.y) * 0.5f + kTextOpticalOffsetY,
+            },
+            color,
+            text.data(),
+            text.data() + text.size()
+        );
+    }
+    if (trailingIcon) {
+        float const trailingX = groupX + iconWidth + leadingGap + labelWidth + trailingGap;
+        draw->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            {iconDrawX(trailingIcon, trailingX), centeredIconY(trailingIcon, minimum.y, maximum.y)},
+            color,
+            trailingIcon
+        );
+    }
+}
+
+bool toolbarButton(
+    char const*      id,
+    char const*      icon,
+    std::string_view text,
+    float            width,
+    bool             active       = false,
+    char const*      trailingIcon = nullptr
+) {
     styleButton(active);
-    bool clicked = ImGui::Button(label, {width, kControlHeight});
+    bool const clicked = ImGui::Button(id, {width, kControlHeight});
     popButtonStyle();
+
+    drawCenteredIconLabel(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), icon, text, trailingIcon);
     return clicked;
 }
 
-bool iconButton(char const* icon, float width, bool active = false) {
-    styleButton(active);
-    bool clicked = ImGui::Button(icon, {width, kControlHeight});
-    popButtonStyle();
+bool popupIconMenuItem(char const* id, char const* icon, std::string_view text) {
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kColorButtonHover);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, kColorButtonActive);
+    bool const clicked = ImGui::Selectable(
+        id,
+        false,
+        ImGuiSelectableFlags_None,
+        {ImGui::GetContentRegionAvail().x, kNavigationLayout.popupItemHeight}
+    );
+    ImGui::PopStyleColor(2);
+
+    drawCenteredIconLabel(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), icon, text);
     return clicked;
 }
 
-// 返回按钮：默认透明，悬停才显示浅灰色。
-bool backButton(char const* icon, float size) {
+bool viewToggleButton(
+    char const*      id,
+    std::string_view overviewText,
+    std::string_view detailsText,
+    float            segmentWidth,
+    bool             overviewSelected
+) {
+    ImVec2 const size{segmentWidth * 2.0f, kControlHeight};
+    bool const   clicked  = ImGui::InvisibleButton(id, size);
+    bool const   hovered  = ImGui::IsItemHovered();
+    bool const   held     = ImGui::IsItemActive();
+    ImVec2 const minimum  = ImGui::GetItemRectMin();
+    ImVec2 const maximum  = ImGui::GetItemRectMax();
+    float const  dividerX = minimum.x + segmentWidth;
+
+    auto const backgroundFor = [hovered, held](bool selected) {
+        if (selected) return hovered ? kColorAccentHover : kColorAccent;
+        if (held) return kColorButtonActive;
+        if (hovered) return kColorButtonHover;
+        return kColorButton;
+    };
+
+    ImDrawList* const draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(
+        minimum,
+        {dividerX, maximum.y},
+        backgroundFor(overviewSelected),
+        kNavigationLayout.viewRounding,
+        ImDrawFlags_RoundCornersLeft
+    );
+    draw->AddRectFilled(
+        {dividerX, minimum.y},
+        maximum,
+        backgroundFor(!overviewSelected),
+        kNavigationLayout.viewRounding,
+        ImDrawFlags_RoundCornersRight
+    );
+
+    auto const drawLabel = [draw, minimum, segmentWidth](std::string_view text, float segmentMinimumX) {
+        ImVec2 const textSize = ImGui::CalcTextSize(text.data(), text.data() + text.size());
+        draw->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            {
+                segmentMinimumX + (segmentWidth - textSize.x) * 0.5f,
+                minimum.y + (kControlHeight - textSize.y) * 0.5f + kTextOpticalOffsetY,
+            },
+            kColorText,
+            text.data(),
+            text.data() + text.size()
+        );
+    };
+    drawLabel(overviewText, minimum.x);
+    drawLabel(detailsText, dividerX);
+
+    draw->AddRect(minimum, maximum, kColorCardBorder, kNavigationLayout.viewRounding, ImDrawFlags_RoundCornersAll);
+    draw->AddLine({dividerX, minimum.y}, {dividerX, maximum.y}, kColorCardBorder);
+    return clicked;
+}
+
+bool backButton(char const* id, char const* icon, float size) {
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kColorButtonHover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kColorButtonActive);
-    bool clicked = ImGui::Button(icon, {size, size});
+    bool const clicked = ImGui::Button(id, {size, size});
     ImGui::PopStyleColor(3);
+
+    ImVec2 const minimum = ImGui::GetItemRectMin();
+    ImVec2 const maximum = ImGui::GetItemRectMax();
+    ImGui::GetWindowDrawList()->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        {
+            centeredIconX(icon, minimum.x, maximum.x),
+            centeredIconY(icon, minimum.y, maximum.y),
+        },
+        ImGui::GetColorU32(kColorText),
+        icon
+    );
     return clicked;
+}
+
+bool searchInput(
+    char const*      id,
+    char const*      icon,
+    std::string_view hint,
+    char*            buffer,
+    std::size_t      bufferSize,
+    float            width
+) {
+    ImVec2 const minimum = ImGui::GetCursorScreenPos();
+    ImVec2 const maximum{minimum.x + width, minimum.y + kControlHeight};
+    bool const   hovered = ImGui::IsMouseHoveringRect(minimum, maximum);
+    ImU32 const  bg      = ImGui::GetColorU32(hovered ? kColorButtonHover : kColorButton);
+    ImDrawList*  draw    = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(minimum, maximum, bg, ImGui::GetStyle().FrameRounding);
+
+    constexpr float iconAreaWidth = 44.0f;
+    ImGui::InvisibleButton("##search-leading", {iconAreaWidth, kControlHeight});
+    bool const focusFromIcon = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+
+    draw->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        {
+            centeredIconX(icon, minimum.x, minimum.x + iconAreaWidth),
+            centeredIconY(icon, minimum.y, maximum.y),
+        },
+        ImGui::GetColorU32(kColorTextDim),
+        icon
+    );
+
+    ImGui::SetCursorScreenPos({minimum.x + iconAreaWidth, minimum.y + kTextOpticalOffsetY});
+    ImGui::SetNextItemWidth(width - iconAreaWidth - 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.0f, (kControlHeight - ImGui::GetFontSize()) * 0.5f});
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled, kColorTextDim);
+    if (focusFromIcon) ImGui::SetKeyboardFocusHere();
+    std::string const hintText{hint};
+    bool const        changed = ImGui::InputTextWithHint(id, hintText.c_str(), buffer, bufferSize);
+    ImGui::PopStyleColor(5);
+    ImGui::PopStyleVar();
+    return changed;
 }
 
 } // namespace
@@ -303,14 +702,40 @@ void SelectReplayScreen::draw(playback::editor::ReplayBrowserState const& state,
     theme.apply();
     auto const& io = ImGui::GetIO();
 
+    ImVec2 const panelSize{
+        std::max(0.0f, std::min(io.DisplaySize.x * kPanelWidthScale, io.DisplaySize.x - kPanelMinimumMargin * 2.0f)),
+        std::max(0.0f, std::min(io.DisplaySize.y * kPanelHeightScale, io.DisplaySize.y - kPanelMinimumMargin * 2.0f)),
+    };
+    ImVec2 const panelMinimum{
+        (io.DisplaySize.x - panelSize.x) * 0.5f,
+        (io.DisplaySize.y - panelSize.y) * 0.5f,
+    };
     ImGui::SetNextWindowPos({0.0f, 0.0f});
     ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, kColorBg);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::Begin(
         "##replay-browser",
         nullptr,
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
-            | ImGuiWindowFlags_NoSavedSettings
+            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+            | ImGuiWindowFlags_NoBackground
+    );
+    ImGui::PopStyleVar();
+    ImGui::SetWindowFontScale(kFontScaleBody);
+
+    ImDrawList* const draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled({0.0f, 0.0f}, io.DisplaySize, kColorBackdrop);
+
+    ImGui::SetCursorPos(panelMinimum);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorBg);
+    ImGui::PushStyleColor(ImGuiCol_Border, kColorCardBorder);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+    ImGui::BeginChild(
+        "##replay-browser-panel",
+        panelSize,
+        true,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
     );
 
     ImGui::SetWindowFontScale(kFontScaleBody);
@@ -331,12 +756,15 @@ void SelectReplayScreen::draw(playback::editor::ReplayBrowserState const& state,
     if (mViewMode == ViewMode::Grid && !mSelectedIds.empty()) drawActionBar();
     ImGui::EndDisabled();
 
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
+
+    ImGui::SetWindowFontScale(kFontScaleBody);
     drawDeleteDialog();
     drawRenameDialog();
 
-    ImGui::SetWindowFontScale(kFontScaleBody);
     ImGui::End();
-    ImGui::PopStyleColor();
     mState  = nullptr;
     mSubmit = nullptr;
 }
@@ -350,100 +778,87 @@ void SelectReplayScreen::drawNavigation() {
     );
 
     float const width   = ImGui::GetWindowWidth();
-    float const margin  = 24.0f;
-    float const gap     = 12.0f;
+    float const margin  = kNavigationLayout.horizontalMargin;
+    float const gap     = kNavigationLayout.controlGap;
     float const iconW   = kControlHeight;
-    float const searchW = 300.0f;
+    float const searchW = kNavigationLayout.searchWidth;
 
-    // 文字按钮宽度自适应：按当前标签（含图标）计算，避免文字被裁剪。
-    std::string const importLabelText =
-        std::string(ICON_EXPORT) + "  " + "playback.replayBrowser.navigation.import"_tr();
-    std::string const filterLabelText =
-        std::string(ICON_FILTER) + "  " + "playback.replayBrowser.navigation.filter"_tr() + "  " + filterLabel(mFilter);
-    std::string const sortLabelText = std::string(ICON_SORT) + "  " + "playback.replayBrowser.navigation.sort"_tr()
-                                    + "  " + sortLabel(mSort) + (mDescending ? " ↓" : " ↑");
-    std::string const viewLabelText = mViewMode == ViewMode::Grid
-                                        ? std::string(ICON_GRID) + "  " + "playback.replayBrowser.navigation.grid"_tr()
-                                        : std::string(ICON_LIST) + "  " + "playback.replayBrowser.navigation.list"_tr();
-    float const       importW       = autoWidth(importLabelText);
-    float const       filterW       = autoWidth(filterLabelText);
-    float const       sortW         = autoWidth(sortLabelText);
-    float const       viewW         = autoWidth(viewLabelText);
-    float const       ctrlW         = searchW + importW + filterW + sortW + viewW + iconW * 2.0f + gap * 7.0f;
-    float const       startX        = std::max(margin + 200.0f, width - margin - ctrlW);
-    float const       y             = (kNavHeight - kControlHeight) * 0.5f;
+    std::string const importLabelText   = "playback.replayBrowser.navigation.import"_tr();
+    std::string const filterLabelText   = "playback.replayBrowser.navigation.filter"_tr();
+    std::string const sortLabelText     = "playback.replayBrowser.navigation.sort"_tr();
+    std::string const overviewLabelText = "playback.replayBrowser.navigation.overview"_tr();
+    std::string const detailsLabelText  = "playback.replayBrowser.navigation.details"_tr();
+    std::string const title             = "playback.replayBrowser.title"_tr();
 
-    // 返回按钮：← 图标，位于标题左侧，默认透明、悬停浅灰。
+    ImGui::SetWindowFontScale(kFontScaleNavTitle);
+    ImVec2 const titleSize  = ImGui::CalcTextSize(title.c_str());
+    float const  titleX     = margin + iconW + gap;
+    float const  titleRight = titleX + titleSize.x;
+
+    ImGui::SetWindowFontScale(kFontScaleNavControl);
+    float const importW      = toolbarButtonWidth(ICON_EXPORT, importLabelText);
+    float const sortW        = toolbarButtonWidth(ICON_SORT, sortLabelText, ICON_CHEVRON_DOWN);
+    float const viewSegmentW = std::max(
+        kNavigationLayout.viewSegmentMinWidth,
+        std::ceil(
+            std::max(textWidth(overviewLabelText), textWidth(detailsLabelText)) + kNavigationLayout.buttonPadding * 2.0f
+        )
+    );
+    float const viewW  = viewSegmentW * 2.0f;
+    float const ctrlW  = searchW + importW + sortW + iconW + viewW + gap * 3.0f + kNavigationLayout.viewGroupGap;
+    float const startX = std::max(titleRight + margin, width - margin - ctrlW);
+    float const y      = (kNavHeight - kControlHeight) * 0.5f;
+
+    ImGui::SetWindowFontScale(kFontScaleNavBackIcon);
     ImGui::SetCursorPos({margin, y});
-    if (backButton(ICON_BACK, iconW)) submit({playback::editor::EditorActionType::CloseReplayBrowser});
+    if (backButton("##back", ICON_BACK, iconW)) submit({playback::editor::EditorActionType::CloseReplayBrowser});
+    ImGui::SetWindowFontScale(kFontScaleNavControl);
     tooltip("playback.replayBrowser.navigation.back"_tr().c_str());
 
-    // 标题：30px
-    ImGui::SetCursorPos({margin + iconW + gap, (kNavHeight - 30.0f * 1.4f) * 0.5f});
-    ImGui::SetWindowFontScale(kFontScaleLarge);
-    pushTextColor(kColorText);
-    ImGui::TextUnformatted("playback.replayBrowser.title"_tr().c_str());
+    ImGui::SetWindowFontScale(kFontScaleNavTitle);
+    ImGui::SetCursorPos({titleX, (kNavHeight - titleSize.y) * 0.5f + kTextOpticalOffsetY});
+    ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
+    ImGui::TextUnformatted(title.c_str());
     ImGui::PopStyleColor();
-    ImGui::SetWindowFontScale(kFontScaleBody);
+    ImGui::SetWindowFontScale(kFontScaleNavControl);
 
     float x = startX;
 
-    // 搜索框：修正为深灰底、白字，与按钮风格一致。
     ImGui::SetCursorPos({x, y});
-    ImGui::SetNextItemWidth(searchW);
     std::array<char, 256> search{};
     std::copy_n(mSearch.data(), std::min(mSearch.size(), search.size() - 1), search.data());
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.0f, (kControlHeight - 24.0f) * 0.5f});
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, kColorButton);
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, kColorButtonHover);
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, kColorButtonActive);
-    ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
-    ImGui::PushStyleColor(ImGuiCol_TextDisabled, kColorTextDim);
-    std::string const searchHint = std::string(ICON_SEARCH) + "  " + "playback.replayBrowser.navigation.search"_tr();
-    if (ImGui::InputTextWithHint("##search", searchHint.c_str(), search.data(), search.size())) {
+    std::string const searchHint = "playback.replayBrowser.navigation.search"_tr();
+    if (searchInput("##search", ICON_SEARCH, searchHint, search.data(), search.size(), searchW)) {
         mSearch = search.data();
         rebuildVisible();
     }
-    ImGui::PopStyleColor(5);
-    ImGui::PopStyleVar();
     x += searchW + gap;
 
-    // 导入
     ImGui::SetCursorPos({x, y});
-    styleButton();
-    if (ImGui::Button(importLabelText.c_str(), {importW, kControlHeight})) importReplay();
-    popButtonStyle();
+    if (toolbarButton("##import", ICON_EXPORT, importLabelText, importW)) importReplay();
     tooltip("playback.replayBrowser.navigation.importTooltip"_tr().c_str());
     x += importW + gap;
 
-    // 过滤下拉框：图标在左，宽度随文字自适应，无下拉箭头。
+    // Keep filtering and sorting in one fixed-label menu so the toolbar stays compact and stable.
     ImGui::SetCursorPos({x, y});
-    styleButton(mFilter != ReplayFilter::All);
-    if (ImGui::Button(filterLabelText.c_str(), {filterW, kControlHeight})) {
-        ImGui::OpenPopup("##filter-menu");
-    }
-    popButtonStyle();
-    if (ImGui::BeginPopup("##filter-menu")) {
-        ImGui::SetWindowFontScale(kFontScaleBody);
+    bool const sortClicked =
+        toolbarButton("##sort", ICON_SORT, sortLabelText, sortW, mFilter != ReplayFilter::All, ICON_CHEVRON_DOWN);
+    ImVec2 const sortButtonMinimum = ImGui::GetItemRectMin();
+    ImVec2 const sortButtonMaximum = ImGui::GetItemRectMax();
+    if (sortClicked) ImGui::OpenPopup("##sort-menu");
+    std::string const sortTooltip = filterLabelText + " / " + sortLabelText;
+    tooltip(sortTooltip.c_str());
+    if (beginAnchoredPopup("##sort-menu", sortButtonMinimum, sortButtonMaximum)) {
+        ImGui::SetWindowFontScale(kFontScaleNavControl);
+        ImGui::TextDisabled("%s", filterLabelText.c_str());
         for (auto filter : {ReplayFilter::All, ReplayFilter::Playable, ReplayFilter::Broken}) {
             if (ImGui::MenuItem(filterLabel(filter).c_str(), nullptr, mFilter == filter)) {
                 mFilter = filter;
                 rebuildVisible();
             }
         }
-        ImGui::EndPopup();
-    }
-    x += filterW + gap;
-
-    // 排序下拉框：图标在左，宽度随文字自适应，无下拉箭头。
-    ImGui::SetCursorPos({x, y});
-    styleButton();
-    if (ImGui::Button(sortLabelText.c_str(), {sortW, kControlHeight})) {
-        ImGui::OpenPopup("##sort-menu");
-    }
-    popButtonStyle();
-    if (ImGui::BeginPopup("##sort-menu")) {
-        ImGui::SetWindowFontScale(kFontScaleBody);
+        ImGui::Separator();
+        ImGui::TextDisabled("%s", sortLabelText.c_str());
         for (auto sort :
              {BrowserSort::LastModified,
               BrowserSort::ReplayName,
@@ -468,32 +883,37 @@ void SelectReplayScreen::drawNavigation() {
     }
     x += sortW + gap;
 
-    // 视图切换：单个按钮，点击在平铺/列表之间切换。
+    // Keep refresh available under Settings instead of consuming another toolbar slot.
     ImGui::SetCursorPos({x, y});
-    if (textButton(viewLabelText.c_str(), viewW, true)) {
-        mViewMode = mViewMode == ViewMode::Grid ? ViewMode::Details : ViewMode::Grid;
-    }
-    std::string const viewTooltip = mViewMode == ViewMode::Grid ? "playback.replayBrowser.navigation.switchToList"_tr()
-                                                                : "playback.replayBrowser.navigation.switchToGrid"_tr();
-    tooltip(viewTooltip.c_str());
-    x += viewW + gap;
-
-    ImGui::SetCursorPos({x, y});
-    if (iconButton(ICON_REFRESH, iconW)) {
-        submit({playback::editor::EditorActionType::RefreshReplayBrowser});
-    }
-    tooltip("playback.replayBrowser.navigation.refresh"_tr().c_str());
-    x += iconW + gap;
-
-    // 设置
-    ImGui::SetCursorPos({x, y});
-    if (iconButton(ICON_SETTINGS, iconW)) ImGui::OpenPopup("##settings");
+    bool const   settingsClicked       = toolbarButton("##settings-button", ICON_SETTINGS, {}, iconW);
+    ImVec2 const settingsButtonMinimum = ImGui::GetItemRectMin();
+    ImVec2 const settingsButtonMaximum = ImGui::GetItemRectMax();
+    if (settingsClicked) ImGui::OpenPopup("##settings");
     tooltip("playback.replayBrowser.navigation.settings"_tr().c_str());
-    if (ImGui::BeginPopup("##settings")) {
-        ImGui::SetWindowFontScale(kFontScaleBody);
-        ImGui::TextDisabled("%s", "playback.replayBrowser.navigation.settingsUnavailable"_tr().c_str());
+    if (beginAnchoredPopup("##settings", settingsButtonMinimum, settingsButtonMaximum)) {
+        ImGui::SetWindowFontScale(kFontScaleNavControl);
+        std::string const refreshLabel = "playback.replayBrowser.navigation.refresh"_tr();
+        if (popupIconMenuItem("##refresh-replay-list", ICON_REFRESH, refreshLabel)) {
+            submit({playback::editor::EditorActionType::RefreshReplayBrowser});
+        }
         ImGui::EndPopup();
     }
+    x += iconW + kNavigationLayout.viewGroupGap;
+
+    ImGui::SetCursorPos({x, y});
+    if (viewToggleButton(
+            "##view-mode",
+            overviewLabelText,
+            detailsLabelText,
+            viewSegmentW,
+            mViewMode == ViewMode::Grid
+        )) {
+        mViewMode = mViewMode == ViewMode::Grid ? ViewMode::Details : ViewMode::Grid;
+    }
+    std::string const viewTooltip = mViewMode == ViewMode::Grid
+                                      ? "playback.replayBrowser.navigation.switchToDetails"_tr()
+                                      : "playback.replayBrowser.navigation.switchToOverview"_tr();
+    tooltip(viewTooltip.c_str());
 
     ImGui::EndChild();
 }
@@ -508,7 +928,7 @@ void SelectReplayScreen::drawPreview(playback::editor::ReplayBrowserEntry const&
         replay.thumbnailPng
     );
     if (texture) {
-        // 缩略图源固定为 16:9，按目标区域比例居中裁剪，绝不拉伸。
+        // Thumbnail sources are 16:9; center-crop to the target aspect ratio without stretching.
         constexpr float sourceAspect = 16.0f / 9.0f;
         float const     targetAspect = size.x / size.y;
         ImVec2          uv0{0.0f, 0.0f};
@@ -538,31 +958,37 @@ void SelectReplayScreen::drawCard(
     std::size_t                                 visibleIndex,
     float                                       width
 ) {
-    bool const  selected   = mSelectedIds.contains(replay.replayId);
-    float const cardHeight = width * 6.0f / 5.0f;
+    bool const  selected      = mSelectedIds.contains(replay.replayId);
+    float const previewWidth  = width - kCardLayout.previewInset * 2.0f;
+    float const previewHeight = cardPreviewHeight(width);
+    float const height        = cardHeight(width);
+    float const previewBottom = kCardLayout.previewInset + previewHeight;
+    float const titleY        = previewBottom + kCardLayout.verticalPadding;
+    float const worldY        = titleY + kCardLayout.titleToMetadataAdvance();
+    float const modifiedY     = worldY + kCardLayout.metadataRowAdvance();
+    float const footerY       = modifiedY + kCardLayout.metadataRowAdvance();
 
     ImGui::PushID(replay.replayId.c_str());
     ImGui::PushStyleColor(ImGuiCol_ChildBg, selected ? kColorCardSelected : kColorCardBg);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
     ImGui::BeginChild(
         "##card",
-        {width, cardHeight},
+        {width, height},
         false,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
     );
+    ImVec2 const cardMinimum = ImGui::GetWindowPos();
+    ImVec2 const cardMaximum{cardMinimum.x + width, cardMinimum.y + height};
 
-    // 卡片为 5:6，顶部缩略图始终严格保持 4:3。
-    float const previewWidth  = width - kCardPadding * 2.0f;
-    float const previewHeight = previewWidth * 3.0f / 4.0f;
-    ImGui::SetCursorPos({kCardPadding, kCardPadding});
+    ImGui::SetCursorPos({kCardLayout.previewInset, kCardLayout.previewInset});
     drawPreview(replay, {previewWidth, previewHeight});
 
-    // Clickable full-card overlay (after preview so it receives clicks over the whole card)
-    // 注意：InvisibleButton 默认在“释放”时返回 true，而 IsMouseDoubleClicked 只在第二次“按下”
-    // 那一帧为 true，二者不同帧，因此不能把双击判定放进按钮返回值分支里。改为在按下帧结合悬停判定。
+    // InvisibleButton activates on release, but ImGui reports a double-click on the second press.
+    // Detect it on that press while the card is hovered.
     ImGui::SetCursorPos({0.0f, 0.0f});
-    ImGui::InvisibleButton("##select-card", {width, cardHeight});
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::InvisibleButton("##select-card", {width, height});
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
         && ImGui::IsItemHovered()) {
         select(replay.replayId, visibleIndex, false, false);
@@ -570,18 +996,18 @@ void SelectReplayScreen::drawCard(
     } else if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
         select(replay.replayId, visibleIndex, ImGui::GetIO().KeyCtrl, ImGui::GetIO().KeyShift);
     }
+    bool const cardHovered = ImGui::IsItemHovered();
 
-    // 右下角详细信息图标：透明背景，悬停时图标本身变白并显示详细信息。
-    float const infoSize = 36.0f;
-    ImGui::SetCursorPos({width - 44.0f, cardHeight - 44.0f});
+    // Keep full file details in the info-button tooltip without crowding the card body.
+    float const infoSize = 28.0f;
+    float const infoX    = width - kCardLayout.horizontalPadding - infoSize;
+    float const infoY    = titleY - 4.0f;
+    ImGui::SetWindowFontScale(kFontScaleCardMeta);
+    ImGui::SetCursorPos({infoX, infoY});
     ImGui::InvisibleButton("##card-info", {infoSize, infoSize});
     bool const infoHovered = ImGui::IsItemHovered();
 
-    // tooltip 淡入：悬停瞬间透明度为 0，0.5s 后开始渐显，0.8s 时恢复为 1，
-    // 规避首次悬停时 tooltip 短暂渲染异常。
-    // 注意：悬停起始时间不能用成员变量保存——多张卡片共享同一成员，悬停卡片之后
-    // 绘制的其它卡片每帧会把状态重置为 -1，导致 elapsed 恒为 0、tooltip 恒透明。
-    // 改用 ImGuiStorage 按 per-card ID（PushID 已隔离卡片）保存，互不干扰。
+    // Store fade timing in per-card ImGui state; shared state would be reset by every non-hovered card.
     double const        now         = ImGui::GetTime();
     ImGuiStorage* const fadeStorage = ImGui::GetStateStorage();
     ImGuiID const       fadeKey     = ImGui::GetID("##info-fade");
@@ -596,19 +1022,22 @@ void SelectReplayScreen::drawCard(
         tooltipAlpha         = elapsed <= 0.5 ? 0.0f : static_cast<float>(std::clamp((elapsed - 0.5) / 0.3, 0.0, 1.0));
     }
 
-    auto const infoMin  = ImGui::GetItemRectMin();
-    auto const infoText = ImGui::CalcTextSize(ICON_INFO);
+    ImVec2 const infoMin = ImGui::GetItemRectMin();
+    ImVec2 const infoMax{infoMin.x + infoSize, infoMin.y + infoSize};
+    if (infoHovered) {
+        ImGui::GetWindowDrawList()->AddRectFilled(infoMin, infoMax, kColorButtonHover, 4.0f);
+    }
     ImGui::GetWindowDrawList()->AddText(
         ImGui::GetFont(),
         ImGui::GetFontSize(),
-        {infoMin.x + (infoSize - infoText.x) * 0.5f, infoMin.y + (infoSize - infoText.y) * 0.5f},
+        {centeredIconX(ICON_MORE, infoMin.x, infoMax.x), centeredIconY(ICON_MORE, infoMin.y, infoMax.y)},
         infoHovered ? kColorText : kColorTextDim,
-        ICON_INFO
+        ICON_MORE
     );
     if (infoHovered) {
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, tooltipAlpha);
         ImGui::BeginTooltip();
-        ImGui::SetWindowFontScale(kFontScaleSmall);
+        ImGui::SetWindowFontScale(kFontScaleCardMeta);
         auto detailRow = [](char const* label, std::string const& value) {
             ImGui::TextDisabled("%s", label);
             ImGui::SameLine();
@@ -637,28 +1066,84 @@ void SelectReplayScreen::drawCard(
         ImGui::PopStyleVar();
     }
 
-    // Info section：标题 30px，元信息 18px
-    float textY = kCardPadding + previewHeight + 16.0f;
-    ImGui::SetCursorPos({kCardPadding, textY});
-    ImGui::SetWindowFontScale(kFontScaleLarge);
-    pushTextColor(kColorText);
-    ImGui::TextUnformatted(replay.displayName().c_str());
-    ImGui::PopStyleColor();
-
-    ImGui::SetWindowFontScale(kFontScaleSmall);
-    ImGui::SetCursorPos({kCardPadding, textY + 46.0f});
+    std::string const displayName = replay.displayName();
     std::string const worldName =
         replay.worldName.empty() ? "playback.replayBrowser.unknownWorld"_tr() : replay.worldName;
-    ImGui::TextDisabled("%s", worldName.c_str());
+    std::string const modified     = formatModifiedTime(replay.lastModified);
+    std::string const duration     = formatDuration(replay);
+    std::string const size         = formatSize(replay.fileSize);
+    float const       contentX     = cardMinimum.x + kCardLayout.horizontalPadding;
+    float const       contentRight = cardMaximum.x - kCardLayout.horizontalPadding;
+    float const       warningSize  = replay.canOpen ? 0.0f : 26.0f;
+    float const       titleRight   = contentRight - infoSize - warningSize - 8.0f;
 
-    ImGui::SetCursorPos({kCardPadding, textY + 76.0f});
-    ImGui::TextDisabled("%s  ·  %s", formatDuration(replay).c_str(), formatSize(replay.fileSize).c_str());
+    ImGui::SetWindowFontScale(kFontScaleCardTitle);
+    drawClippedText(displayName, {contentX, cardMinimum.y + titleY}, titleRight, kColorText);
+
+    ImGui::SetWindowFontScale(kFontScaleCardMeta);
+    drawIconTextLine(ICON_WORLD, worldName, {contentX, cardMinimum.y + worldY}, contentRight, kColorTextDim);
+    drawIconTextLine(ICON_CALENDAR, modified, {contentX, cardMinimum.y + modifiedY}, contentRight, kColorTextDim);
+
+    float const sizeWidth = iconLabelWidth(ICON_FILE, size);
+    float const sizeX     = std::max(contentX, contentRight - sizeWidth);
+    drawIconTextLine(
+        ICON_CLOCK,
+        duration,
+        {contentX, cardMinimum.y + footerY},
+        std::max(contentX, sizeX - 12.0f),
+        kColorTextDim
+    );
+    drawIconTextLine(ICON_FILE, size, {sizeX, cardMinimum.y + footerY}, contentRight, kColorTextDim);
 
     if (!replay.canOpen) {
-        ImGui::SetCursorPos({width - 44.0f, textY + 72.0f});
-        ImGui::TextDisabled(ICON_WARNING);
+        float const warningX = infoX - warningSize - 2.0f;
+        ImGui::SetCursorPos({warningX, infoY + 1.0f});
+        ImGui::InvisibleButton("##card-warning", {warningSize, warningSize});
+        ImVec2 const warningMin = ImGui::GetItemRectMin();
+        ImVec2 const warningMax{warningMin.x + warningSize, warningMin.y + warningSize};
+        ImGui::GetWindowDrawList()->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            {
+                centeredIconX(ICON_WARNING, warningMin.x, warningMax.x),
+                centeredIconY(ICON_WARNING, warningMin.y, warningMax.y),
+            },
+            kColorDanger,
+            ICON_WARNING
+        );
         tooltip(replay.problem.c_str());
     }
+
+    if (selected) {
+        constexpr float badgeSize = 28.0f;
+        ImVec2 const    badgeMinimum{
+            cardMinimum.x + kCardLayout.previewInset + 8.0f,
+            cardMinimum.y + kCardLayout.previewInset + 8.0f,
+        };
+        ImVec2 const badgeMaximum{badgeMinimum.x + badgeSize, badgeMinimum.y + badgeSize};
+        ImGui::GetWindowDrawList()->AddRectFilled(badgeMinimum, badgeMaximum, kColorAccent, 4.0f);
+        ImGui::GetWindowDrawList()->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            {
+                centeredIconX(ICON_CHECK, badgeMinimum.x, badgeMaximum.x),
+                centeredIconY(ICON_CHECK, badgeMinimum.y, badgeMaximum.y),
+            },
+            kColorText,
+            ICON_CHECK
+        );
+    }
+
+    ImGui::GetWindowDrawList()->AddRect(
+        {cardMinimum.x + 1.0f, cardMinimum.y + 1.0f},
+        {cardMaximum.x - 1.0f, cardMaximum.y - 1.0f},
+        selected      ? kColorAccent
+        : cardHovered ? kColorCardHover
+                      : kColorCardBorder,
+        8.0f,
+        0,
+        selected ? 2.0f : 1.0f
+    );
 
     ImGui::SetWindowFontScale(kFontScaleBody);
     ImGui::EndChild();
@@ -668,205 +1153,493 @@ void SelectReplayScreen::drawCard(
 }
 
 void SelectReplayScreen::drawGrid() {
+    auto clearSelectionOnBlankClick = [&] {
+        if (mSelectedIds.empty()) return;
+        if (!ImGui::IsWindowHovered() || !ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsAnyItemHovered()) {
+            return;
+        }
+        mSelectedIds.clear();
+        mSelectionAnchor.reset();
+    };
+
+    float const availableWidth = ImGui::GetContentRegionAvail().x;
+    float const contentOriginX = ImGui::GetCursorPosX();
+    float const gridWidth      = std::max(0.0f, availableWidth - kContentLayout.horizontalMargin * 2.0f);
+    float const gridX = contentOriginX + std::max(kContentLayout.horizontalMargin, (availableWidth - gridWidth) * 0.5f);
+    float const locationY   = ImGui::GetCursorPosY() + kContentLayout.locationVerticalGap;
+    std::string const path  = playback::utils::PathUtils::getReplaysDir().generic_string();
+    std::string const count = "playback.replayBrowser.visibleCount"_tr(mVisible.size());
+
+    ImGui::SetCursorPos({gridX, locationY});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorPanelBg);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.0f);
+    ImGui::BeginChild(
+        "##grid-location",
+        {gridWidth, kContentLayout.locationHeight},
+        false,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+    );
+    ImGui::SetWindowFontScale(kFontScaleCardMeta);
+    ImVec2 const locationMinimum = ImGui::GetWindowPos();
+    float const  textY           = locationMinimum.y + (kContentLayout.locationHeight - ImGui::GetFontSize()) * 0.5f;
+    ImVec2 const countSize       = ImGui::CalcTextSize(count.c_str());
+    float const  countRight      = locationMinimum.x + gridWidth - 12.0f;
+    float const  countX          = std::max(locationMinimum.x + 12.0f, countRight - countSize.x);
+    drawIconTextLine(ICON_OPEN, path, {locationMinimum.x + 12.0f, textY}, countX - 18.0f, kColorTextDim);
+    drawClippedText(count, {countX, textY + kTextOpticalOffsetY}, countRight, kColorTextDim);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    ImGui::SetWindowFontScale(kFontScaleBody);
+
+    float const gridStartY = locationY + kContentLayout.locationHeight + kContentLayout.locationVerticalGap;
+
     if (mVisible.empty()) {
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 60.0f);
         ImGui::SetWindowFontScale(kFontScaleLarge);
-        ImGui::TextDisabled("%s", "playback.replayBrowser.empty"_tr().c_str());
+        std::string const empty     = "playback.replayBrowser.empty"_tr();
+        ImVec2 const      emptySize = ImGui::CalcTextSize(empty.c_str());
+        ImGui::SetCursorPos({gridX + std::max(0.0f, (gridWidth - emptySize.x) * 0.5f), gridStartY + 56.0f});
+        ImGui::TextDisabled("%s", empty.c_str());
         ImGui::SetWindowFontScale(kFontScaleBody);
-        styleButton();
-        std::string const importFirstLabel =
-            std::string(ICON_EXPORT) + "  " + "playback.replayBrowser.importFirst"_tr();
-        if (ImGui::Button(importFirstLabel.c_str(), {240.0f, kControlHeight})) importReplay();
-        popButtonStyle();
+        std::string const importFirstLabel = "playback.replayBrowser.importFirst"_tr();
+        float const       importWidth      = toolbarButtonWidth(ICON_EXPORT, importFirstLabel);
+        ImGui::SetCursorPos({gridX + std::max(0.0f, (gridWidth - importWidth) * 0.5f), gridStartY + 104.0f});
+        if (toolbarButton("##import-first", ICON_EXPORT, importFirstLabel, importWidth)) importReplay();
+        clearSelectionOnBlankClick();
         return;
     }
 
-    float available = ImGui::GetContentRegionAvail().x - kScreenMargin * 2.0f;
-    int   columns   = 5;
-    if (available < 5.0f * 240.0f + 4.0f * kCardGap) {
-        columns = std::max(1, static_cast<int>((available + kCardGap) / (240.0f + kCardGap)));
-    }
-    float width = (available - (columns - 1) * kCardGap) / columns;
-
-    // Header count
-    ImGui::SetWindowFontScale(kFontScaleSmall);
-    ImGui::SetCursorPosX(kScreenMargin);
-    ImGui::TextDisabled("%s", "playback.replayBrowser.visibleCount"_tr(mVisible.size()).c_str());
-    ImGui::SetWindowFontScale(kFontScaleBody);
-    ImGui::Dummy({0.0f, 16.0f});
-
-    ImGui::SetCursorPosX(kScreenMargin);
-
+    constexpr float minimumCardWidth = 330.0f;
+    int const       capacity = std::max(1, static_cast<int>((gridWidth + kCardGap) / (minimumCardWidth + kCardGap)));
+    int const       defaultColumns = std::min(4, capacity);
+    int const       columns        = std::min(capacity, std::max(defaultColumns, static_cast<int>(mVisible.size())));
+    float const     width          = (gridWidth - (columns - 1) * kCardGap) / columns;
+    float const     height         = cardHeight(width);
     for (int item = 0; item < static_cast<int>(mVisible.size()); ++item) {
-        if (item > 0 && item % columns != 0) ImGui::SameLine(0.0f, kCardGap);
-        if (item % columns == 0 && item > 0) {
-            ImGui::SetCursorPosX(kScreenMargin);
-        }
+        int const column = item % columns;
+        int const row    = item / columns;
+        ImGui::SetCursorPos({gridX + column * (width + kCardGap), gridStartY + row * (height + kCardGap)});
         drawCard(replays()[mVisible[static_cast<size_t>(item)]], static_cast<std::size_t>(item), width);
     }
+
+    int const   rows       = (static_cast<int>(mVisible.size()) + columns - 1) / columns;
+    float const gridHeight = rows * height + std::max(0, rows - 1) * kCardGap;
+    ImGui::SetCursorPos({gridX, gridStartY + gridHeight + kContentLayout.bottomMargin});
+    ImGui::Dummy({gridWidth, 1.0f});
+
+    // Only clicks on the true blank canvas reach here; cards, the scrollbar, and header controls are excluded.
+    clearSelectionOnBlankClick();
+}
+
+void SelectReplayScreen::drawDetailsListItem(
+    playback::editor::ReplayBrowserEntry const& replay,
+    std::size_t                                 visibleIndex,
+    float                                       width
+) {
+    bool const  selected       = mSelectedIds.contains(replay.replayId);
+    float const itemHeight     = kDetailsLayout.listItemHeight;
+    float const thumbnailWidth = std::clamp(
+        width * kDetailsLayout.thumbnailWidthRatio,
+        kDetailsLayout.thumbnailMinWidth,
+        kDetailsLayout.thumbnailMaxWidth
+    );
+    float const thumbnailHeight = thumbnailWidth * 9.0f / 16.0f;
+    float const thumbnailY      = (itemHeight - thumbnailHeight) * 0.5f;
+
+    ImGui::PushID(replay.replayId.c_str());
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, selected ? kColorListSelected : kColorCardBg);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, kDetailsLayout.panelRounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
+    ImGui::BeginChild(
+        "##details-list-item",
+        {width, itemHeight},
+        false,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+    );
+
+    ImVec2 const itemMinimum = ImGui::GetWindowPos();
+    ImVec2 const itemMaximum{itemMinimum.x + width, itemMinimum.y + itemHeight};
+    ImGui::SetCursorPos({kDetailsLayout.listItemHorizontalPadding, thumbnailY});
+    ImVec2 const thumbnailMinimum = ImGui::GetCursorScreenPos();
+    drawPreview(replay, {thumbnailWidth, thumbnailHeight});
+    ImVec2 const thumbnailMaximum{thumbnailMinimum.x + thumbnailWidth, thumbnailMinimum.y + thumbnailHeight};
+    ImGui::GetWindowDrawList()->AddRect(thumbnailMinimum, thumbnailMaximum, kColorCardBorder, 3.0f);
+
+    ImGui::SetCursorPos({0.0f, 0.0f});
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::InvisibleButton("##select-details-item", {width, itemHeight});
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+        && ImGui::IsItemHovered()) {
+        select(replay.replayId, visibleIndex, false, false);
+        openSelected();
+    } else if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        select(replay.replayId, visibleIndex, false, false);
+    }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        select(replay.replayId, visibleIndex, false, false);
+    }
+    bool const itemHovered = ImGui::IsItemHovered();
+
+    // Keep secondary file operations available without crowding the primary action bar.
+    if (ImGui::BeginPopupContextItem("##details-item-menu")) {
+        ImGui::SetWindowFontScale(kFontScaleNavControl);
+        ImGui::BeginDisabled(!replay.canOpen);
+        if (ImGui::MenuItem("playback.replayBrowser.action.open"_tr().c_str())) openSelected();
+        if (ImGui::MenuItem("playback.replayBrowser.action.edit"_tr().c_str())) openRenameDialog();
+        ImGui::EndDisabled();
+        ImGui::Separator();
+        if (ImGui::MenuItem("playback.replayBrowser.action.copyPath"_tr().c_str())) {
+            ImGui::SetClipboardText(replay.path.string().c_str());
+        }
+        if (ImGui::MenuItem("playback.replayBrowser.action.showInFolder"_tr().c_str())) {
+            playback::editor::EditorAction action{playback::editor::EditorActionType::ShowReplayInFolder};
+            action.replayId = replay.replayId;
+            submit(std::move(action));
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("playback.replayBrowser.action.delete"_tr().c_str())) mShowDeleteDialog = true;
+        ImGui::EndPopup();
+    }
+
+    std::string const displayName = replay.displayName();
+    std::string const worldName =
+        replay.worldName.empty() ? "playback.replayBrowser.unknownWorld"_tr() : replay.worldName;
+    std::string const modified = formatModifiedTime(replay.lastModified);
+    std::string const duration = formatDuration(replay);
+    float const       textX    = thumbnailMaximum.x + kDetailsLayout.thumbnailToTextGap;
+    float const textRight = itemMaximum.x - kDetailsLayout.listItemHorizontalPadding - (replay.canOpen ? 0.0f : 28.0f);
+
+    ImGui::SetWindowFontScale(kFontScaleListTitle);
+    float const titleY      = itemMinimum.y + kDetailsLayout.listTextVerticalPadding;
+    float const titleHeight = ImGui::CalcTextSize(displayName.c_str()).y;
+    drawClippedText(displayName, {textX, titleY}, textRight, kColorText);
+
+    ImGui::SetWindowFontScale(kFontScaleListMeta);
+    float const metadataHeight = ImGui::CalcTextSize(worldName.c_str()).y;
+    float const footerY        = itemMaximum.y - kDetailsLayout.listTextVerticalPadding - metadataHeight;
+    float const worldY =
+        ((titleY + titleHeight * 0.5f) + (footerY + metadataHeight * 0.5f)) * 0.5f - metadataHeight * 0.5f;
+    drawClippedText(worldName, {textX, worldY + kTextOpticalOffsetY}, textRight, kColorTextDim);
+
+    float const durationWidth = iconLabelWidth(ICON_CLOCK, duration);
+    float const durationX = std::max(textX, itemMaximum.x - kDetailsLayout.listItemHorizontalPadding - durationWidth);
+    drawIconTextLine(
+        ICON_CALENDAR,
+        modified,
+        {textX, footerY},
+        durationX - kDetailsLayout.footerGroupGap,
+        kColorTextDim
+    );
+    drawIconTextLine(
+        ICON_CLOCK,
+        duration,
+        {durationX, footerY},
+        itemMaximum.x - kDetailsLayout.listItemHorizontalPadding,
+        kColorTextDim
+    );
+
+    if (!replay.canOpen) {
+        ImGui::GetWindowDrawList()->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            {itemMaximum.x - kDetailsLayout.listItemHorizontalPadding - 20.0f, titleY},
+            kColorDanger,
+            ICON_WARNING
+        );
+    }
+
+    ImGui::GetWindowDrawList()->AddRect(
+        {itemMinimum.x + 1.0f, itemMinimum.y + 1.0f},
+        {itemMaximum.x - 1.0f, itemMaximum.y - 1.0f},
+        selected      ? kColorAccent
+        : itemHovered ? kColorCardHover
+                      : kColorCardBorder,
+        kDetailsLayout.panelRounding,
+        0,
+        selected ? 2.0f : 1.0f
+    );
+
+    ImGui::SetWindowFontScale(kFontScaleBody);
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+    ImGui::PopID();
 }
 
 void SelectReplayScreen::drawDetails() {
-    ImVec2 const available  = ImGui::GetContentRegionAvail();
-    bool const   stacked    = available.x < 960.0f;
-    float const  gap        = 20.0f;
-    float const  listWidth  = stacked ? available.x : std::clamp(available.x * 0.34f, 360.0f, 480.0f);
-    float const  listHeight = stacked ? 260.0f : available.y;
+    ImVec2 const available      = ImGui::GetContentRegionAvail();
+    float const  contentOriginX = ImGui::GetCursorPosX();
+    float const  contentOriginY = ImGui::GetCursorPosY();
+    float const  contentWidth   = std::max(0.0f, available.x - kContentLayout.horizontalMargin * 2.0f);
+    float const  contentX =
+        contentOriginX + std::max(kContentLayout.horizontalMargin, (available.x - contentWidth) * 0.5f);
 
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorCardBg);
-    ImGui::BeginChild("##details-list", {listWidth, listHeight}, false);
-    ImGui::SetWindowFontScale(kFontScaleSmall);
-    ImGui::TextDisabled("%s", "playback.replayBrowser.fileCount"_tr(mVisible.size()).c_str());
-    ImGui::Separator();
+    float const locationY = contentOriginY + kContentLayout.locationVerticalGap;
+    ImGui::SetCursorPos({contentX, locationY});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorPanelBg);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, kDetailsLayout.panelRounding);
+    ImGui::BeginChild(
+        "##details-location",
+        {contentWidth, kContentLayout.locationHeight},
+        false,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+    );
+    ImGui::SetWindowFontScale(kFontScaleCardMeta);
+    ImVec2 const      locationMinimum = ImGui::GetWindowPos();
+    float const       locationTextY = locationMinimum.y + (kContentLayout.locationHeight - ImGui::GetFontSize()) * 0.5f;
+    std::string const replayPath    = playback::utils::PathUtils::getReplaysDir().generic_string();
+    drawIconTextLine(
+        ICON_OPEN,
+        replayPath,
+        {locationMinimum.x + 12.0f, locationTextY},
+        locationMinimum.x + contentWidth - 12.0f,
+        kColorTextDim
+    );
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    ImGui::SetWindowFontScale(kFontScaleBody);
 
+    float const panelsY      = locationY + kContentLayout.locationHeight + kContentLayout.locationVerticalGap;
+    float const panelsHeight = std::max(
+        0.0f,
+        available.y - kContentLayout.locationHeight - kContentLayout.locationVerticalGap * 2.0f
+            - kContentLayout.bottomMargin
+    );
+    bool const stacked = contentWidth < kDetailsLayout.stackedBreakpoint;
+
+    float listWidth   = contentWidth;
+    float listHeight  = panelsHeight;
+    float panelWidth  = contentWidth;
+    float panelHeight = panelsHeight;
+    float panelX      = contentX;
+    float panelY      = panelsY;
+    if (stacked) {
+        float const preferredListHeight = std::clamp(
+            panelsHeight * kDetailsLayout.stackedListHeightRatio,
+            kDetailsLayout.stackedListMinHeight,
+            kDetailsLayout.stackedListMaxHeight
+        );
+        float const maxListHeight = std::max(160.0f, panelsHeight - kDetailsLayout.panelGap - 320.0f);
+        listHeight                = std::min(preferredListHeight, maxListHeight);
+        panelHeight               = std::max(0.0f, panelsHeight - listHeight - kDetailsLayout.panelGap);
+        panelY                    = panelsY + listHeight + kDetailsLayout.panelGap;
+    } else {
+        listWidth = std::clamp(
+            contentWidth * kDetailsLayout.listWidthRatio,
+            kDetailsLayout.listMinWidth,
+            kDetailsLayout.listMaxWidth
+        );
+        panelX     = contentX + listWidth + kDetailsLayout.panelGap;
+        panelWidth = std::max(0.0f, contentWidth - listWidth - kDetailsLayout.panelGap);
+    }
+
+    ImGui::SetCursorPos({contentX, panelsY});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorPanelBg);
+    ImGui::PushStyleColor(ImGuiCol_Border, kColorCardBorder);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, kDetailsLayout.panelRounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+    ImGui::BeginChild(
+        "##details-list",
+        {listWidth, listHeight},
+        true,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+    );
+
+    ImGui::BeginChild("##details-list-scroll", {0.0f, -kDetailsLayout.listFooterHeight}, false);
     if (mVisible.empty()) {
+        ImGui::SetWindowFontScale(kFontScaleSmall);
         ImGui::TextDisabled("%s", "playback.replayBrowser.empty"_tr().c_str());
     } else {
-        auto* const font = ImGui::GetFont();
         for (std::size_t visibleIndex = 0; visibleIndex < mVisible.size(); ++visibleIndex) {
-            auto const& replay   = replays()[mVisible[visibleIndex]];
-            bool const  selected = mSelectedIds.contains(replay.replayId);
-            ImGui::PushID(replay.replayId.c_str());
-            ImGui::PushStyleColor(ImGuiCol_Header, kColorCardSelected);
-            ImGui::Selectable("##detail-item", selected, ImGuiSelectableFlags_AllowDoubleClick, {0.0f, 92.0f});
-            ImGui::PopStyleColor();
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
-                && ImGui::IsItemHovered()) {
-                select(replay.replayId, visibleIndex, false, false);
-                openSelected();
-            } else if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-                select(replay.replayId, visibleIndex, false, false);
-            }
-            auto const min = ImGui::GetItemRectMin();
-            auto const max = ImGui::GetItemRectMax();
-            if (selected) ImGui::GetWindowDrawList()->AddRectFilled(min, {min.x + 4.0f, max.y}, kColorAccent);
-            std::string const summary = formatDuration(replay) + "  ·  " + formatSize(replay.fileSize);
-            std::string const worldName =
-                replay.worldName.empty() ? "playback.replayBrowser.unknownWorld"_tr() : replay.worldName;
-            ImGui::GetWindowDrawList()
-                ->AddText(font, 24.0f, {min.x + 16.0f, min.y + 8.0f}, kColorText, replay.displayName().c_str());
-            ImGui::GetWindowDrawList()
-                ->AddText(font, 18.0f, {min.x + 16.0f, min.y + 44.0f}, kColorTextDim, worldName.c_str());
-            ImGui::GetWindowDrawList()
-                ->AddText(font, 18.0f, {min.x + 16.0f, min.y + 68.0f}, kColorTextDim, summary.c_str());
-            ImGui::PopID();
+            float const itemWidth = ImGui::GetContentRegionAvail().x;
+            drawDetailsListItem(replays()[mVisible[visibleIndex]], visibleIndex, itemWidth);
+            if (visibleIndex + 1 < mVisible.size()) ImGui::Dummy({0.0f, kDetailsLayout.listItemGap});
         }
     }
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-
-    if (stacked) {
-        ImGui::Dummy({0.0f, gap});
-    } else {
-        ImGui::SameLine(0.0f, gap);
+    if (!mSelectedIds.empty() && ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+        && !ImGui::IsAnyItemHovered()) {
+        mSelectedIds.clear();
+        mSelectionAnchor.reset();
     }
+    ImGui::EndChild();
 
-    ImVec2 const panelSize =
-        stacked ? ImVec2{available.x, std::max(420.0f, available.y - listHeight - gap)} : ImVec2{0.0f, available.y};
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorCardBg);
-    ImGui::BeginChild("##details-panel", panelSize, false);
+    ImGui::Separator();
+    ImGui::SetWindowFontScale(kFontScaleListMeta);
+    float const footerY = ImGui::GetCursorPosY()
+                        + std::max(0.0f, (ImGui::GetContentRegionAvail().y - ImGui::GetFontSize()) * 0.5f)
+                        + kTextOpticalOffsetY;
+    ImGui::SetCursorPos({kDetailsLayout.listFooterPaddingX, footerY});
+    ImGui::TextDisabled("%s", "playback.replayBrowser.fileCount"_tr(mVisible.size()).c_str());
+    ImGui::SetWindowFontScale(kFontScaleBody);
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
+
+    ImGui::SetCursorPos({panelX, panelY});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorPanelBg);
+    ImGui::PushStyleColor(ImGuiCol_Border, kColorCardBorder);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, kDetailsLayout.panelRounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+    ImGui::BeginChild(
+        "##details-panel",
+        {panelWidth, panelHeight},
+        true,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+    );
 
     auto replay = selectedReplay();
     if (!replay) {
+        float const panelW = ImGui::GetWindowWidth();
+        float const panelH = ImGui::GetWindowHeight();
+        ImGui::SetWindowFontScale(kFontScaleLarge);
+        ImVec2 const iconSize = ImGui::CalcTextSize(ICON_FILE_VIDEO);
+        float const  emptyY   = std::max(24.0f, panelH * 0.40f - iconSize.y);
+        ImGui::SetCursorPos({std::max(0.0f, (panelW - iconSize.x) * 0.5f), emptyY});
+        ImGui::TextDisabled("%s", ICON_FILE_VIDEO);
+
+        ImGui::SetWindowFontScale(kFontScaleSmall);
         std::string const selectHint = "playback.replayBrowser.selectForDetails"_tr();
-        ImVec2 const      textSize   = ImGui::CalcTextSize(selectHint.c_str());
-        ImGui::SetCursorPos({(ImGui::GetWindowWidth() - textSize.x) * 0.5f, 60.0f});
+        ImVec2 const      hintSize   = ImGui::CalcTextSize(selectHint.c_str());
+        ImGui::SetCursorPos({std::max(0.0f, (panelW - hintSize.x) * 0.5f), emptyY + iconSize.y + 14.0f});
         ImGui::TextDisabled("%s", selectHint.c_str());
+    } else {
+        auto const& selectedReplayEntry = **replay;
+        float const panelW              = ImGui::GetWindowWidth();
+        float const panelH              = ImGui::GetWindowHeight();
+        float const dividerY            = panelH - kDetailsLayout.actionAreaHeight();
+        float const scrollWidth         = std::max(0.0f, panelW - kDetailsLayout.panelPadding * 2.0f);
+        float const scrollHeight        = std::max(0.0f, dividerY - kDetailsLayout.panelPadding);
+
+        ImGui::SetCursorPos({kDetailsLayout.panelPadding, kDetailsLayout.panelPadding});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
+        ImGui::BeginChild("##details-scroll", {scrollWidth, scrollHeight}, false);
+        ImGui::PopStyleVar();
+
+        float const detailWidth = ImGui::GetContentRegionAvail().x;
+        float const estimatedMetadataHeight =
+            kDetailsLayout.metadataRowCount
+                * (kDetailsLayout.detailMetadataFontSize + kDetailsLayout.metadataCellPaddingY * 2.0f)
+            + kDetailsLayout.metadataWrapReserve;
+        float const contentLimitedPreviewHeight = ImGui::GetWindowHeight() - kDetailsLayout.previewToMetadataGap
+                                                - estimatedMetadataHeight - kDetailsLayout.detailContentBottomGap;
+        float const ratioLimitedPreviewHeight = ImGui::GetWindowHeight() * kDetailsLayout.detailPreviewMaxHeightRatio;
+        float const maxPreviewHeight          = std::max(
+            kDetailsLayout.detailPreviewMinHeight,
+            std::min(contentLimitedPreviewHeight, ratioLimitedPreviewHeight)
+        );
+        float const previewWidth  = std::min(detailWidth, maxPreviewHeight * kDetailsLayout.detailPreviewAspectRatio);
+        float const previewHeight = previewWidth / kDetailsLayout.detailPreviewAspectRatio;
+        float const previewX      = std::max(0.0f, (detailWidth - previewWidth) * 0.5f);
+        ImGui::SetCursorPosX(previewX);
+        ImVec2 const previewMinimum = ImGui::GetCursorScreenPos();
+        drawPreview(selectedReplayEntry, {previewWidth, previewHeight});
+        ImVec2 const previewMaximum{previewMinimum.x + previewWidth, previewMinimum.y + previewHeight};
+        ImGui::GetWindowDrawList()->AddRect(previewMinimum, previewMaximum, kColorCardBorder, 3.0f);
+        ImGui::SetCursorPosX(0.0f);
+        ImGui::Dummy({0.0f, kDetailsLayout.previewToMetadataGap});
+
+        ImGui::SetWindowFontScale(kFontScaleSmall);
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_CellPadding,
+            {kDetailsLayout.metadataCellPaddingX, kDetailsLayout.metadataCellPaddingY}
+        );
+        ImGui::PushStyleColor(ImGuiCol_TableBorderStrong, kColorCardBorder);
+        ImGui::PushStyleColor(ImGuiCol_TableBorderLight, kColorCardBorder);
+        ImGui::PushStyleColor(ImGuiCol_TableRowBg, kColorCardBg);
+        ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, kColorPanelBg);
+        if (ImGui::BeginTable(
+                "##metadata",
+                2,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp
+            )) {
+            float const labelWidth =
+                std::clamp(kDetailsLayout.metadataLabelWidth, 100.0f, std::max(100.0f, detailWidth * 0.32f));
+            ImGui::TableSetupColumn("##metadata-key", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##metadata-value", ImGuiTableColumnFlags_WidthStretch);
+            auto row = [](char const* label, std::string const& value, bool wrap = false) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextDisabled("%s", label);
+                ImGui::TableSetColumnIndex(1);
+                if (wrap) ImGui::TextWrapped("%s", value.c_str());
+                else ImGui::TextUnformatted(value.c_str());
+            };
+
+            std::string fileFormat = selectedReplayEntry.path.extension().string();
+            if (fileFormat.empty()) fileFormat = "playback.replayBrowser.unknown"_tr();
+            row("playback.replayBrowser.field.name"_tr().c_str(), selectedReplayEntry.displayName());
+            row("playback.replayBrowser.field.world"_tr().c_str(),
+                selectedReplayEntry.worldName.empty() ? "playback.replayBrowser.unknown"_tr()
+                                                      : selectedReplayEntry.worldName);
+            row("playback.replayBrowser.field.duration"_tr().c_str(), formatDuration(selectedReplayEntry));
+            row("playback.replayBrowser.field.modified"_tr().c_str(),
+                formatModifiedTime(selectedReplayEntry.lastModified));
+            row("playback.replayBrowser.field.fileSize"_tr().c_str(), formatSize(selectedReplayEntry.fileSize));
+            row("playback.replayBrowser.field.fileFormat"_tr().c_str(), fileFormat);
+            row("playback.replayBrowser.field.filePath"_tr().c_str(), selectedReplayEntry.path.string(), true);
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleColor(4);
+        ImGui::PopStyleVar();
+
+        if (!selectedReplayEntry.canOpen) {
+            ImGui::Dummy({0.0f, 8.0f});
+            ImGui::TextColored(
+                ImGui::ColorConvertU32ToFloat4(kColorDanger),
+                "%s",
+                "playback.replayBrowser.problemValue"_tr(selectedReplayEntry.problem).c_str()
+            );
+        }
+        ImGui::SetWindowFontScale(kFontScaleBody);
         ImGui::EndChild();
-        ImGui::PopStyleColor();
-        return;
+
+        ImVec2 const panelMinimum = ImGui::GetWindowPos();
+        ImGui::GetWindowDrawList()->AddLine(
+            {panelMinimum.x + kDetailsLayout.panelPadding, panelMinimum.y + dividerY},
+            {panelMinimum.x + panelW - kDetailsLayout.panelPadding, panelMinimum.y + dividerY},
+            kColorCardBorder
+        );
+
+        float const buttonWidth = std::max(
+            0.0f,
+            (panelW - kDetailsLayout.panelPadding * 2.0f - kDetailsLayout.actionButtonGap * 2.0f) / 3.0f
+        );
+        float const buttonY = dividerY + kDetailsLayout.panelPadding;
+        ImGui::SetWindowFontScale(kFontScaleSmall);
+        ImGui::SetCursorPos({kDetailsLayout.panelPadding, buttonY});
+        ImGui::BeginDisabled(!selectedReplayEntry.canOpen);
+        styleButton(true);
+        if (ImGui::Button("playback.replayBrowser.action.open"_tr().c_str(), {buttonWidth, kControlHeight})) {
+            openSelected();
+        }
+        popButtonStyle();
+        ImGui::SameLine(0.0f, kDetailsLayout.actionButtonGap);
+        styleButton();
+        if (ImGui::Button("playback.replayBrowser.action.edit"_tr().c_str(), {buttonWidth, kControlHeight})) {
+            openRenameDialog();
+        }
+        popButtonStyle();
+        ImGui::EndDisabled();
+        ImGui::SameLine(0.0f, kDetailsLayout.actionButtonGap);
+        ImGui::PushStyleColor(ImGuiCol_Button, kColorDanger);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kColorDanger);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kColorDanger);
+        if (ImGui::Button("playback.replayBrowser.action.delete"_tr().c_str(), {buttonWidth, kControlHeight})) {
+            mShowDeleteDialog = true;
+        }
+        ImGui::PopStyleColor(3);
     }
-
-    // 下方内容全部左对齐，距左边框 50px；元素上下间隔 2px；表格行内文字间隔 0.75px。
-    float const margin           = 50.0f;
-    float const panelW           = ImGui::GetWindowWidth();
-    float const contentW         = panelW - margin * 2.0f;
-    float const maxPreviewHeight = std::max(220.0f, ImGui::GetWindowHeight() * 0.53f);
-    float       previewWidth     = contentW;
-    float       previewHeight    = previewWidth * 9.0f / 16.0f;
-    if (previewHeight > maxPreviewHeight) {
-        previewHeight = maxPreviewHeight;
-        previewWidth  = previewHeight * 16.0f / 9.0f;
-    }
-    ImGui::SetCursorPos({(panelW - previewWidth) * 0.5f, 24.0f});
-    drawPreview(**replay, {previewWidth, previewHeight});
-
-    float y = 24.0f + previewHeight + 2.0f;
-
-    // 标题：最大字号 30px
-    ImGui::SetCursorPos({margin, y});
-    ImGui::SetWindowFontScale(kFontScaleLarge);
-    pushTextColor(kColorText);
-    ImGui::TextUnformatted((*replay)->displayName().c_str());
-    ImGui::PopStyleColor();
-    y += ImGui::GetItemRectSize().y + 2.0f;
-
-    ImGui::SetCursorPos({margin, y});
-    ImGui::SetWindowFontScale(kFontScaleSmall);
-    ImGui::Separator();
-    y += ImGui::GetItemRectSize().y + 2.0f;
-
-    ImGui::SetCursorPos({margin, y});
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {12.0f, 0.75f});
-    if (ImGui::BeginTable("##metadata", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("##key", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-        ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
-        auto row = [](char const* label, std::string const& value) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextDisabled("%s", label);
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted(value.c_str());
-        };
-        row("playback.replayBrowser.field.world"_tr().c_str(),
-            (*replay)->worldName.empty() ? "playback.replayBrowser.unknown"_tr() : (*replay)->worldName);
-        row("playback.replayBrowser.field.duration"_tr().c_str(), formatDuration(**replay));
-        row("playback.replayBrowser.field.fileSize"_tr().c_str(), formatSize((*replay)->fileSize));
-        row("playback.replayBrowser.field.fileFormat"_tr().c_str(), ".playback");
-        row("playback.replayBrowser.field.fileName"_tr().c_str(), (*replay)->replayId);
-        row("playback.replayBrowser.field.filePath"_tr().c_str(), (*replay)->path.string());
-        ImGui::EndTable();
-    }
-    ImGui::PopStyleVar();
-    y += ImGui::GetItemRectSize().y + 2.0f;
 
     ImGui::SetWindowFontScale(kFontScaleBody);
-    ImGui::SetCursorPos({margin, y});
-    ImGui::BeginDisabled(!(*replay)->canOpen);
-    styleButton();
-    if (ImGui::Button("playback.replayBrowser.action.openReplay"_tr().c_str(), {150.0f, kControlHeight})) {
-        openSelected();
-    }
-    popButtonStyle();
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    styleButton();
-    if (ImGui::Button("playback.replayBrowser.action.copyPath"_tr().c_str(), {140.0f, kControlHeight})) {
-        ImGui::SetClipboardText((*replay)->path.string().c_str());
-    }
-    popButtonStyle();
-    ImGui::SameLine();
-    styleButton();
-    if (ImGui::Button("playback.replayBrowser.action.showInFolder"_tr().c_str(), {160.0f, kControlHeight})) {
-        playback::editor::EditorAction action{playback::editor::EditorActionType::ShowReplayInFolder};
-        action.replayId = (*replay)->replayId;
-        submit(std::move(action));
-    }
-    popButtonStyle();
-    ImGui::SameLine();
-    styleButton();
-    if (ImGui::Button("playback.replayBrowser.action.delete"_tr().c_str(), {110.0f, kControlHeight})) {
-        mShowDeleteDialog = true;
-    }
-    popButtonStyle();
-
     ImGui::EndChild();
-    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
 }
 
 void SelectReplayScreen::drawActionBar() {
     auto replay = selectedReplay();
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorCardBg);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorPanelBg);
     ImGui::BeginChild(
         "##actions",
         {0.0f, kActionBarHeight},
@@ -874,44 +1647,57 @@ void SelectReplayScreen::drawActionBar() {
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
     );
 
-    float const contentW = ImGui::GetWindowWidth();
+    float const  contentW   = ImGui::GetWindowWidth();
+    ImVec2 const barMinimum = ImGui::GetWindowPos();
+    ImGui::GetWindowDrawList()->AddLine(barMinimum, {barMinimum.x + contentW, barMinimum.y}, kColorCardBorder);
 
-    if (mSelectedIds.size() == 1 && replay) {
-        ImGui::SetCursorPos({24.0f, 10.0f});
-        ImGui::SetWindowFontScale(kFontScaleLarge);
-        pushTextColor(kColorText);
-        ImGui::TextUnformatted((*replay)->displayName().c_str());
-        ImGui::PopStyleColor();
-        ImGui::SetWindowFontScale(kFontScaleSmall);
-        ImGui::SetCursorPos({24.0f, 62.0f});
-        ImGui::TextDisabled("%s  ·  %s", formatDuration(**replay).c_str(), formatSize((*replay)->fileSize).c_str());
-    } else {
-        ImGui::SetCursorPos({24.0f, 28.0f});
-        ImGui::SetWindowFontScale(kFontScaleLarge);
-        pushTextColor(kColorText);
-        ImGui::TextUnformatted("playback.replayBrowser.selectedCount"_tr(mSelectedIds.size()).c_str());
-        ImGui::PopStyleColor();
+    std::uintmax_t selectedBytes{};
+    for (auto const& item : replays()) {
+        if (mSelectedIds.contains(item.replayId)) selectedBytes += item.fileSize;
     }
-    ImGui::SetWindowFontScale(kFontScaleBody);
+    std::string const summary =
+        "playback.replayBrowser.selectedCount"_tr(mSelectedIds.size()) + "  ·  " + formatSize(selectedBytes);
 
-    float const right = contentW - 24.0f;
-    float const btnW  = 120.0f;
-    ImGui::SetCursorPos({right - btnW * 3.0f - 24.0f, 20.0f});
+    float const buttonWidth    = 140.0f;
+    float const buttonGap      = 10.0f;
+    float const groupWidth     = buttonWidth * 3.0f + buttonGap * 2.0f;
+    float const buttonY        = (kActionBarHeight - kControlHeight) * 0.5f;
+    float const availableWidth = ImGui::GetContentRegionAvail().x;
+    float const contentOriginX = ImGui::GetCursorPosX();
+    float const innerWidth     = std::max(0.0f, availableWidth - kScreenMargin * 2.0f);
+    float const innerX         = contentOriginX + std::max(kScreenMargin, (availableWidth - innerWidth) * 0.5f);
+    float const buttonX        = innerX + innerWidth - groupWidth;
+
+    ImGui::SetWindowFontScale(kFontScaleSmall);
+    drawClippedText(
+        summary,
+        {barMinimum.x + innerX, barMinimum.y + (kActionBarHeight - ImGui::GetFontSize()) * 0.5f},
+        barMinimum.x + buttonX - 24.0f,
+        kColorText
+    );
+    ImGui::SetWindowFontScale(kFontScaleBody);
+    ImGui::SetCursorPos({buttonX, buttonY});
 
     ImGui::BeginDisabled(!replay || !(*replay)->canOpen);
+    ImGui::PushStyleColor(ImGuiCol_Button, kColorAccent);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kColorAccentHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kColorAccent);
+    if (ImGui::Button("playback.replayBrowser.action.open"_tr().c_str(), {buttonWidth, kControlHeight})) {
+        openSelected();
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::SameLine(0.0f, buttonGap);
     styleButton();
-    if (ImGui::Button("playback.replayBrowser.action.open"_tr().c_str(), {btnW, kControlHeight})) openSelected();
-    popButtonStyle();
-    ImGui::SameLine();
-    styleButton();
-    if (ImGui::Button("playback.replayBrowser.action.edit"_tr().c_str(), {btnW, kControlHeight})) openRenameDialog();
+    if (ImGui::Button("playback.replayBrowser.action.edit"_tr().c_str(), {buttonWidth, kControlHeight})) {
+        openRenameDialog();
+    }
     popButtonStyle();
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    ImGui::SameLine(0.0f, buttonGap);
     ImGui::PushStyleColor(ImGuiCol_Button, kColorDanger);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kColorDanger);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kColorDanger);
-    if (ImGui::Button("playback.replayBrowser.action.delete"_tr().c_str(), {btnW, kControlHeight})) {
+    if (ImGui::Button("playback.replayBrowser.action.delete"_tr().c_str(), {buttonWidth, kControlHeight})) {
         mShowDeleteDialog = true;
     }
     ImGui::PopStyleColor(3);
@@ -1010,8 +1796,7 @@ void SelectReplayScreen::drawRenameDialog() {
     bool const        cancelled = ImGui::Button(cancel.c_str(), {120.0f, kControlHeight});
     popButtonStyle();
 
-    bool const confirm = saved;
-    if (confirm && replay) {
+    if (saved && replay) {
         playback::editor::EditorAction action{playback::editor::EditorActionType::RenameReplay};
         action.replayId = (*replay)->replayId;
         action.name     = mRenameBuffer;

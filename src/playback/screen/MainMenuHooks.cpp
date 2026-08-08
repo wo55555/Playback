@@ -7,6 +7,7 @@
 
 #include "mc/client/gui/ViewRequest.h"
 #include "mc/client/gui/controls/UIPropertyBag.h"
+#include "mc/client/gui/screens/ScreenView.h"
 #include "mc/client/gui/screens/controllers/MainMenuScreenController.h"
 #include "mc/client/gui/screens/controllers/MinecraftScreenController.h"
 #include "mc/client/gui/screens/controllers/StartMenuScreenController.h"
@@ -66,7 +67,23 @@ LL_TYPE_INSTANCE_HOOK(
     ::ui::DirtyFlag
 ) {
     functions::ReplaySession::getInstance().setMinecraftScreenModel(mMinecraftScreenModel);
+    setSuspendInput(editor::isReplayBrowserVisible());
     return origin();
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    ScreenViewPointerLocationHook,
+    ll::memory::HookPriority::High,
+    ScreenView,
+    &ScreenView::_handlePointerLocation,
+    void,
+    ::glm::vec2 const& position,
+    ::FocusImpact      focusImpact,
+    bool               forceHandleWhenMotionless,
+    bool               isRightStickScrolling
+) {
+    if (editor::isReplayBrowserVisible()) return;
+    origin(position, focusImpact, forceHandleWhenMotionless, isRightStickScrolling);
 }
 
 void hookMainMenu(bool enable) {
@@ -76,7 +93,9 @@ void hookMainMenu(bool enable) {
         MainMenuOpenHook::hook();
         StartMenuEventsHook::hook();
         StartMenuTickHook::hook();
+        ScreenViewPointerLocationHook::hook();
     } else {
+        ScreenViewPointerLocationHook::unhook();
         StartMenuTickHook::unhook();
         StartMenuEventsHook::unhook();
         MainMenuOpenHook::unhook();

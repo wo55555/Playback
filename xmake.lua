@@ -2,6 +2,36 @@ add_rules("mode.debug", "mode.release")
 
 add_repositories("levimc-repo https://github.com/LiteLDev/xmake-repo.git")
 
+package("playback-ffmpeg")
+    set_kind("binary")
+    set_base("ffmpeg")
+    add_urls("https://ffmpeg.org/releases/ffmpeg-$(version).tar.bz2")
+    add_versions("7.1", "fd59e6160476095082e94150ada5a6032d7dcc282fe38ce682a00c18e7820528")
+    on_load(function (package)
+        package:add("deps", "nasm")
+        if package:config("libx264") then
+            package:add("deps", "x264")
+        end
+        package:add("deps", "msys2", {configs = {msystem = "MINGW64", base_devel = true}})
+    end)
+    on_install("@windows", function (package)
+        local msys2      = assert(package:dep("msys2"), "MSYS2 dependency was not resolved")
+        local msys2_base = assert(msys2:dep("msys2-base"), "MSYS2 base dependency was not resolved")
+        local bash        = path.join(msys2_base:installdir("usr", "bin"), "bash.exe")
+        os.vrunv(bash, {
+            "-leo",
+            "pipefail",
+            "-c",
+            "pacman --noconfirm -S --needed --overwrite '*' make mingw-w64-x86_64-uchardet " ..
+                "mingw-w64-x86_64-gcc mingw-w64-x86_64-iconv mingw-w64-x86_64-pkgconf"
+        })
+        package:base():script("install")(package)
+    end)
+    on_test(function (package)
+        os.vrun("ffmpeg -version")
+    end)
+package_end()
+
 option("target_type")
     set_default("client")
     set_showmenu(true)
@@ -17,6 +47,16 @@ add_requires("xxhash")
 add_requires("openssl")
 add_requires("libzip")
 add_requires("imgui v1.92.7", {configs = {dx11 = true, dx12 = true}})
+add_requires("playback-ffmpeg 7.1", {
+    configs = {
+        shared = false,
+        gpl = true,
+        ffmpeg = true,
+        ffprobe = false,
+        ffplay = false,
+        libx264 = true,
+    }
+})
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -61,8 +101,10 @@ target("playback")
             modVersion = get_version(os),
         })
     end)
+
     after_build(function (target)
         import("utils.archive")
+        import("core.project.project")
 
         local output_dir = path.join(os.projectdir(), "bin", target:name())
         os.mkdir(output_dir)
@@ -85,6 +127,16 @@ target("playback")
         os.tryrm(font_dir)
         os.mkdir(font_dir)
         os.cp(font_source, font_dir)
+
+        local ffmpeg_package = assert(
+            project.required_package("playback-ffmpeg"),
+            "FFmpeg package was not resolved"
+        )
+        local ffmpeg_source  = path.join(ffmpeg_package:installdir(), "bin", "ffmpeg.exe")
+        local tools_dir      = path.join(output_dir, "tools")
+        assert(os.isfile(ffmpeg_source), "bundled ffmpeg executable was not found")
+        os.mkdir(tools_dir)
+        os.cp(ffmpeg_source, path.join(tools_dir, "ffmpeg.exe"))
 
         local resource_dir = path.join(os.projectdir(), "resources")
         if os.isdir(resource_dir) then

@@ -11,26 +11,29 @@ namespace playback::editor::ui {
 void EditMode::draw() {
     auto& editor = ReplayEditor::getInstance();
 
-    float const     uiScale            = std::max(1.0f, ImGui::GetIO().FontGlobalScale);
-    float const     kMenuHeight        = 30.0f * uiScale;
-    float const     kStatusHeight      = 22.0f * uiScale;
-    constexpr float kCurveWidth        = 280.0f;
-    constexpr float kSplitterThickness = 4.0f;
-    constexpr float kDetailsMinWidth   = 220.0f;
-    constexpr float kViewportMinWidth  = 320.0f;
-    constexpr float kViewportMinHeight = 180.0f;
+    float const fontSize = ImGui::GetFontSize();
+    auto const& style = ImGui::GetStyle();
+    float const kMenuHeight = ImGui::GetFrameHeight() + style.WindowBorderSize * 2.0f;
+    float const kStatusHeight = fontSize + style.WindowPadding.y * 2.0f;
+    float const kCurveWidth = std::max(280.0f, fontSize * 16.0f);
+    float const kSplitterThickness = 4.0f;
+    float const kDetailsMinWidth = std::max(260.0f, fontSize * 15.0f);
+    float const kViewportMinWidth = std::max(320.0f, fontSize * 22.0f);
+    float const kViewportMinHeight = std::max(180.0f, fontSize * 12.0f);
+    float const kTimelineMinHeight = fontSize * 9.0f;
 
-    ImVec2 displaySize        = ImGui::GetIO().DisplaySize;
-    float  contentHeight      = std::max(1.0f, displaySize.y - kMenuHeight - kStatusHeight);
-    float  curveReservedWidth = editor.mCurveEditorPanel.isOpen() ? kCurveWidth + kSplitterThickness : 0.0f;
-    float  maxDetailsRatio =
-        std::min(0.50f, 1.0f - (kViewportMinWidth + curveReservedWidth) / std::max(1.0f, displaySize.x));
-    float minDetailsRatio       = std::min(kDetailsMinWidth / std::max(1.0f, displaySize.x), maxDetailsRatio);
-    editor.mDetailsWidthRatio   = std::clamp(editor.mDetailsWidthRatio, minDetailsRatio, maxDetailsRatio);
-    float detailsWidth          = displaySize.x * editor.mDetailsWidthRatio;
-    float leftWidth             = displaySize.x - detailsWidth;
-    float maxTimelineRatio      = std::min(0.65f, 1.0f - kViewportMinHeight / contentHeight);
-    float minTimelineRatio      = std::min(0.18f, maxTimelineRatio);
+    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    float contentHeight = std::max(1.0f, displaySize.y - kMenuHeight - kStatusHeight);
+    float curveReservedWidth = editor.mCurveEditorPanel.isOpen() ? kCurveWidth + kSplitterThickness : 0.0f;
+    float maxDetailsRatio = std::min(
+        0.50f,
+        1.0f - (kViewportMinWidth + curveReservedWidth) / std::max(1.0f, displaySize.x));
+    float minDetailsRatio = std::min(kDetailsMinWidth / std::max(1.0f, displaySize.x), maxDetailsRatio);
+    editor.mDetailsWidthRatio = std::clamp(editor.mDetailsWidthRatio, minDetailsRatio, maxDetailsRatio);
+    float detailsWidth = displaySize.x * editor.mDetailsWidthRatio;
+    float leftWidth = displaySize.x - detailsWidth;
+    float maxTimelineRatio = std::min(0.70f, 1.0f - kViewportMinHeight / contentHeight);
+    float minTimelineRatio = std::min(kTimelineMinHeight / contentHeight, maxTimelineRatio);
     editor.mTimelineHeightRatio = std::clamp(editor.mTimelineHeightRatio, minTimelineRatio, maxTimelineRatio);
     float timelineHeight        = contentHeight * editor.mTimelineHeightRatio;
     float viewportHeight        = contentHeight - timelineHeight - kSplitterThickness;
@@ -85,12 +88,8 @@ void EditMode::draw() {
 
         ImGui::SetNextWindowPos(ImVec2(detailsX, detailsY));
         ImGui::SetNextWindowSize(ImVec2(detailsWidth, detailsH));
-        ImGui::Begin(
-            "##DetailsPanel",
-            nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse
-        );
+        ImGui::Begin("##DetailsPanel", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
         editor.mDetailsPanel.draw();
         ImGui::End();
     }
@@ -188,7 +187,7 @@ void EditMode::draw() {
         static float savedDetailsRatio     = editor.mDetailsWidthRatio;
         static float savedTimelineRatio    = editor.mTimelineHeightRatio;
         static float savedTrackListRatio   = editor.mTimelinePanel.trackListWidthRatio();
-        static float savedZoomScale        = editor.mTimelinePanel.zoomScale();
+        static float savedZoomScale       = editor.mTimelinePanel.zoomScale();
         static float savedHorizontalScroll = editor.mTimelinePanel.horizontalScroll();
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)
             && (savedDetailsRatio != editor.mDetailsWidthRatio || savedTimelineRatio != editor.mTimelineHeightRatio
@@ -199,7 +198,7 @@ void EditMode::draw() {
             savedDetailsRatio     = editor.mDetailsWidthRatio;
             savedTimelineRatio    = editor.mTimelineHeightRatio;
             savedTrackListRatio   = editor.mTimelinePanel.trackListWidthRatio();
-            savedZoomScale        = editor.mTimelinePanel.zoomScale();
+            savedZoomScale       = editor.mTimelinePanel.zoomScale();
             savedHorizontalScroll = editor.mTimelinePanel.horizontalScroll();
         }
         ImGui::End();

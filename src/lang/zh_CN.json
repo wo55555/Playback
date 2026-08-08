@@ -36,13 +36,12 @@
                 "importTooltip": "导入回放文件",
                 "filter": "筛选",
                 "sort": "排序",
-                "grid": "平铺",
-                "list": "列表",
-                "switchToGrid": "切换到平铺视图",
-                "switchToList": "切换到列表视图",
+                "overview": "概况",
+                "details": "详情",
+                "switchToOverview": "切换到概况",
+                "switchToDetails": "切换到详情",
                 "refresh": "刷新回放列表",
-                "settings": "设置",
-                "settingsUnavailable": "回放目录设置暂不可用"
+                "settings": "设置"
             },
             "filter": {
                 "all": "全部",
@@ -171,9 +170,9 @@
                 "duration": "时长：{} 游戏刻",
                 "addFreeCamera": "添加自由相机"
             },
-            "render": {"rendering":"正在渲染…","frame":"帧 {} / {}","eta":"预计剩余时间 {}","output":"输出：{}","cancel":"取消渲染"},
+            "render": {"rendering":"正在导出回放…","frame":"帧 {} / {}","output":"输出：{}","latestFrame":"最新帧：{}","cancel":"取消导出","cancelling":"正在取消…"},
             "status": {"replay":"[回放]","tick":"游戏刻 {} / {}","backendsUnavailable":"编辑后端不可用"},
-            "export": {"title":"导出视频","subtitle":"配置输出参数","output":"输出","video":"视频","name":"名称","location":"导出位置","format":"格式","codec":"视频编码","aspect":"画面比例","resolution":"分辨率","frameRate":"帧率","bitrate":"码率","summary":"输出摘要","file":"文件：{}","export":"导出视频","cancel":"取消","backendUnavailable":"导出后端暂不可用","custom":"自定义","widescreen":"宽屏","vertical":"竖屏","square":"方形","balanced":"均衡","compact":"紧凑","highQuality":"高质量"},
+            "export": {"title":"导出回放","subtitle":"配置输出参数","output":"输出","name":"名称","location":"导出位置","format":"格式","timeline":"时间范围","frameRate":"帧率","startTick":"起始游戏刻","endTick":"结束游戏刻","summary":"输出摘要","summaryValue":"{} FPS | 游戏刻 {} - {}","destination":"目标：{}","export":"开始导出","cancel":"取消","mp4":"MP4 视频","pngSequence":"PNG 序列","custom":"自定义"},
             "shortcuts": {"title":"快捷键","playback":"播放","editing":"编辑","application":"应用","space":"空格：播放 / 暂停","homeEnd":"Home / End：跳至开头 / 结尾","arrows":"左 / 右方向键：逐帧定位","zoom":"Shift + 鼠标滚轮：缩放时间轴","undoRedo":"Ctrl + Z / Ctrl + Y：撤销 / 重做","keyframe":"K：添加相机关键帧","marker":"M：插入标记","delete":"Delete：删除选中项","save":"Ctrl + S：保存项目","exit":"长按 Esc：退出编辑器","close":"关闭"},
             "timeline": {"searchCameras":"搜索相机","snap":"吸附","loop":"循环","addKey":"+ 关键帧","addCamera":"+ 相机","markers":"标记","lock":"锁定","maximize":"最大化视口（Ctrl+Shift+F）","restore":"还原视口（Esc）","play":"播放","pause":"暂停","noCamera":"无相机","autoFirstCamera":"自动（第一台相机）","missingCamera":"相机缺失"},
             "defaults": {"camera":"相机 {}"}

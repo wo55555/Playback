@@ -8,6 +8,30 @@
 
 namespace playback::editor::editing::command {
 
+class AddCameraSequence final : public model::IEditCommand {
+public:
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mChanged; }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::optional<model::EditorStateExt> mBefore;
+    bool                                 mChanged{};
+};
+
+class DeleteCameraSequence final : public model::IEditCommand {
+public:
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mChanged; }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::optional<model::EditorStateExt> mBefore;
+    bool                                 mChanged{};
+};
+
 class SplitSequenceAtPlayhead final : public model::IEditCommand {
 public:
     explicit SplitSequenceAtPlayhead(int tick);

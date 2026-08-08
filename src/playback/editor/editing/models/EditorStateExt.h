@@ -41,11 +41,14 @@ struct EditorStateExt {
     std::vector<CameraTrackExt> cameraTracks;
     int                         activeCameraIndex{};
 
+    // Video tracks (multi-track per 04-video-editing)
     std::vector<Track> videoTracks;
     int                activeVideoTrackIdx{};
 
+    // Transitions
     std::vector<Transition> transitions;
 
+    // Markers
     std::vector<Marker> markers;
 
     // Performance

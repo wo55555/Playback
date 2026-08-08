@@ -20,6 +20,8 @@
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
+#include "mc/network/packet/ResourcePacksInfoPacket.h"
+#include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/TakeItemActorPacket.h"
@@ -27,7 +29,10 @@
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/world/level/Level.h"
+#include "mc/world/level/dimension/Dimension.h"
+#include "mc/world/level/dimension/DimensionArguments.h"
 
+#include <utility>
 #include <variant>
 
 namespace playback::functions {
@@ -37,9 +42,12 @@ namespace {
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
 
 struct NetworkHookState {
+    bool dimensionConstructor{};
     bool levelChunk{};
     bool subChunk{};
     bool setTime{};
+    bool resourcePacksInfo{};
+    bool resourcePackStack{};
     bool completion{};
     bool packetObserver{};
     bool packetSender{};
@@ -61,6 +69,14 @@ struct NetworkHookState {
     [[nodiscard]] bool fastPathHandlersRemoved() const {
         return !removeActor && !takeItemActor && !actorEvent && !levelEvent && !updateBlock && !updateBlockSynced
             && !updateSubChunkBlocks;
+    }
+
+    [[nodiscard]] bool resourceHandlersInstalled() const {
+        return resourcePacksInfo && resourcePackStack;
+    }
+
+    [[nodiscard]] bool resourceHandlersRemoved() const {
+        return !resourcePacksInfo && !resourcePackStack;
     }
 };
 
@@ -107,6 +123,40 @@ LL_TYPE_INSTANCE_HOOK(
         }
     }
     origin(target, packet, size);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackResourcePacksInfoHook,
+    ll::memory::HookPriority::Normal,
+    ClientNetworkHandler,
+    &ClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&      source,
+    ResourcePacksInfoPacket const& packet
+) {
+    auto& replaySession = ReplaySession::getInstance();
+    if (replaySession.isIsolatingReplayWorld()) {
+        auto recordedInfo = replaySession.getReplayResourcePacksInfo();
+        if (recordedInfo) {
+            origin(source, *recordedInfo);
+            return;
+        }
+    } else {
+        Recorder::getInstance().recordGamePacket(packet);
+    }
+    origin(source, packet);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackDimensionConstructorHook,
+    ll::memory::HookPriority::Normal,
+    Dimension,
+    &Dimension::$ctor,
+    void*,
+    DimensionArguments&& arguments
+) {
+    functions::ReplaySession::getInstance().configureReplayDimension(arguments);
+    return origin(std::move(arguments));
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -283,6 +333,28 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 LL_TYPE_INSTANCE_HOOK(
+    PlaybackResourcePackStackHook,
+    ll::memory::HookPriority::Normal,
+    ClientNetworkHandler,
+    &ClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&        source,
+    ResourcePackStackPacket const& packet
+) {
+    auto& replaySession = ReplaySession::getInstance();
+    if (replaySession.isIsolatingReplayWorld()) {
+        auto recordedStack = replaySession.getReplayResourcePackStack();
+        if (recordedStack) {
+            origin(source, *recordedStack);
+            return;
+        }
+    } else {
+        Recorder::getInstance().recordGamePacket(packet);
+    }
+    origin(source, packet);
+}
+
+LL_TYPE_INSTANCE_HOOK(
     PlaybackChunkHandleCompletedHook,
     ll::memory::HookPriority::Normal,
     ClientNetworkHandler,
@@ -311,17 +383,23 @@ bool hookNetwork(bool enable) {
     auto& state = networkHookState();
 
     auto allInstalled = [&] {
-        return state.levelChunk && state.subChunk && state.setTime && state.completion && state.packetObserver
-            && state.packetSender && state.addActor && state.addItemActor && state.fastPathHandlersInstalled();
+        return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
+            && state.resourceHandlersInstalled() && state.completion && state.packetObserver && state.packetSender
+            && state.addActor && state.addItemActor
+            && state.fastPathHandlersInstalled();
     };
     auto noneInstalled = [&] {
-        return !state.levelChunk && !state.subChunk && !state.setTime && !state.completion && !state.packetObserver
-            && !state.packetSender && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved();
+        return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime
+            && state.resourceHandlersRemoved() && !state.completion && !state.packetObserver && !state.packetSender
+            && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved();
     };
     auto installAll = [&] {
-        return installNetworkHook<PlaybackLevelChunkHook>(state.levelChunk)
+        return installNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor)
+            && installNetworkHook<PlaybackLevelChunkHook>(state.levelChunk)
             && installNetworkHook<PlaybackSubChunkHook>(state.subChunk)
             && installNetworkHook<PlaybackSetTimeHook>(state.setTime)
+            && installNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo)
+            && installNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack)
             && installNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion)
             && installNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver)
             && installNetworkHook<PlaybackPacketSentHook>(state.packetSender)
@@ -348,9 +426,12 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackPacketSentHook>(state.packetSender);
         removeNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver);
         removeNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion);
+        removeNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack);
+        removeNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo);
         removeNetworkHook<PlaybackSetTimeHook>(state.setTime);
         removeNetworkHook<PlaybackSubChunkHook>(state.subChunk);
         removeNetworkHook<PlaybackLevelChunkHook>(state.levelChunk);
+        removeNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor);
         return noneInstalled();
     };
 
@@ -365,11 +446,14 @@ bool hookNetwork(bool enable) {
             bool removed = removeAll();
             if (removed) (void)hookChunkMutationBarrier(false);
             getLogger().error(
-                "Unable to install replay network hooks (LevelChunk={}, SubChunk={}, SetTime={}, completion={}, "
-                "packetObserver={}, packetSender={}, spawnHandlers={}, fastPathHandlers={}, rollback={})",
+                "Unable to install replay network hooks (dimensionConstructor={}, LevelChunk={}, SubChunk={}, "
+                "SetTime={}, resourceHandlers={}, completion={}, packetObserver={}, packetSender={}, "
+                "spawnHandlers={}, fastPathHandlers={}, rollback={})",
+                state.dimensionConstructor,
                 state.levelChunk,
                 state.subChunk,
                 state.setTime,
+                state.resourceHandlersInstalled(),
                 state.completion,
                 state.packetObserver,
                 state.packetSender,
@@ -385,12 +469,15 @@ bool hookNetwork(bool enable) {
     if (!removeAll()) {
         bool restored = installAll();
         getLogger().error(
-            "Unable to remove all replay network hooks; runtime restoration={} (LevelChunk={}, SubChunk={}, "
-            "SetTime={}, completion={}, packetObserver={}, packetSender={}, spawnHandlers={}, fastPathHandlers={})",
+            "Unable to remove all replay network hooks; runtime restoration={} (dimensionConstructor={}, "
+            "LevelChunk={}, SubChunk={}, SetTime={}, resourceHandlers={}, completion={}, packetObserver={}, "
+            "packetSender={}, spawnHandlers={}, fastPathHandlers={})",
             restored,
+            state.dimensionConstructor,
             state.levelChunk,
             state.subChunk,
             state.setTime,
+            state.resourceHandlersInstalled(),
             state.completion,
             state.packetObserver,
             state.packetSender,
