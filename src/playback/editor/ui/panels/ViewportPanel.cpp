@@ -107,15 +107,13 @@ void ViewportPanel::drawTransportControls() {
             dl->AddLine({c.x - 9, c.y - 8}, {c.x - 9, c.y + 8}, color, 2);
             dl->AddTriangleFilled({c.x - 7, c.y}, {c.x + 7, c.y - 8}, {c.x + 7, c.y + 8}, color);
         })) {
-        editor.submitAction({playback::editor::EditorActionType::SkipToStart});
+        editor.seekTo(0);
     }
     if (button("##viewport-back", startX + (buttonSize + gap), [](ImDrawList* dl, ImVec2 c, ImU32 color) {
             dl->AddTriangleFilled({c.x - 9, c.y}, {c.x + 5, c.y - 8}, {c.x + 5, c.y + 8}, color);
             dl->AddTriangleFilled({c.x - 2, c.y}, {c.x + 10, c.y - 8}, {c.x + 10, c.y + 8}, color);
         })) {
-        playback::editor::EditorAction action{playback::editor::EditorActionType::Seek};
-        action.tick = std::max(0, state.currentTick - 200);
-        editor.submitAction(std::move(action));
+        editor.seekRelative(-200);
     }
     if (button("##viewport-play", startX + (buttonSize + gap) * 2, [&state](ImDrawList* dl, ImVec2 c, ImU32 color) {
             if (!state.paused) {
@@ -129,15 +127,13 @@ void ViewportPanel::drawTransportControls() {
             dl->AddTriangleFilled({c.x - 10, c.y - 8}, {c.x - 10, c.y + 8}, {c.x + 2, c.y}, color);
             dl->AddTriangleFilled({c.x - 3, c.y - 8}, {c.x - 3, c.y + 8}, {c.x + 9, c.y}, color);
         })) {
-        playback::editor::EditorAction action{playback::editor::EditorActionType::Seek};
-        action.tick = std::min(state.totalTicks, state.currentTick + 200);
-        editor.submitAction(std::move(action));
+        editor.seekRelative(200);
     }
     if (button("##viewport-end", startX + (buttonSize + gap) * 4, [](ImDrawList* dl, ImVec2 c, ImU32 color) {
             dl->AddTriangleFilled({c.x - 7, c.y - 8}, {c.x - 7, c.y + 8}, {c.x + 7, c.y}, color);
             dl->AddLine({c.x + 9, c.y - 8}, {c.x + 9, c.y + 8}, color, 2);
         })) {
-        editor.submitAction({playback::editor::EditorActionType::SkipToEnd});
+        editor.seekTo(state.totalTicks);
     }
 }
 

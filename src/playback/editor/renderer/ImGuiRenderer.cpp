@@ -8,6 +8,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/context/EditorContext.h"
+#include "playback/editor/exporting/ExportActivity.h"
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/renderer/ReplayUILayout.h"
 #include "playback/editor/ui/ReplayEditor.h"
@@ -57,6 +58,46 @@ public:
 private:
     bool mCommitted{};
 };
+
+struct ImGuiSurfaceMetrics {
+    ImVec2 displaySize;
+    ImVec2 framebufferScale;
+};
+
+// Keep ImGui coordinates in window-client pixels while allowing Bedrock to use
+// a larger offline backbuffer. The DX backends map those logical coordinates
+// through FramebufferScale when they emit draw commands.
+ImGuiSurfaceMetrics getImGuiSurfaceMetrics(IDXGISwapChain* swapChain, uint32_t width, uint32_t height) {
+    ImGuiSurfaceMetrics metrics{
+        ImVec2(static_cast<float>(width), static_cast<float>(height)),
+        ImVec2(1.0f, 1.0f),
+    };
+
+    DXGI_SWAP_CHAIN_DESC swapChainDesc{};
+    RECT                 clientRect{};
+    if (!swapChain || FAILED(swapChain->GetDesc(&swapChainDesc))) {
+        return metrics;
+    }
+
+    HWND window = swapChainDesc.OutputWindow;
+    if (!window) {
+        HWND const foreground = GetForegroundWindow();
+        DWORD      processId{};
+        if (foreground && GetWindowThreadProcessId(foreground, &processId) != 0 && processId == GetCurrentProcessId()) {
+            window = foreground;
+        }
+    }
+    if (!window || !GetClientRect(window, &clientRect)) return metrics;
+
+    auto const clientWidth  = clientRect.right - clientRect.left;
+    auto const clientHeight = clientRect.bottom - clientRect.top;
+    if (clientWidth <= 0 || clientHeight <= 0) return metrics;
+
+    metrics.displaySize = ImVec2(static_cast<float>(clientWidth), static_cast<float>(clientHeight));
+    metrics.framebufferScale =
+        ImVec2(static_cast<float>(width) / metrics.displaySize.x, static_cast<float>(height) / metrics.displaySize.y);
+    return metrics;
+}
 
 uint64_t getSwapChainArea(IDXGISwapChain* swapChain) {
     ComPtr<ID3D12Resource> backBuffer;
@@ -306,14 +347,32 @@ struct ImGuiRenderer::Impl {
         d3d11FirstFrameLogged = false;
     }
 
-    bool renderD3D11(IDXGISwapChain* sc, bool renderUi, EditorState const& state) {
+    bool renderD3D11(
+        IDXGISwapChain*               sc,
+        bool                          renderUi,
+        bool                          captureFrame,
+        EditorState const&            state,
+        std::optional<std::uint32_t> backBufferIndex = std::nullopt
+    ) {
         if (d3d11Initialized && sc != d3d11SwapChain) shutdownD3D11();
         if (!d3d11Initialized && !initD3D11(sc)) return false;
 
         D3D11_TEXTURE2D_DESC desc{};
         d3d11BackBuffer->GetDesc(&desc);
-        d3d11Context->CopyResource(d3d11GameTexture.Get(), d3d11BackBuffer.Get());
-        (void)d3d11FrameTap.capture(d3d11Device.Get(), d3d11Context.Get(), d3d11GameTexture.Get());
+        d3d11FrameTap.poll(d3d11Context.Get());
+        ComPtr<ID3D11Texture2D> source = d3d11BackBuffer;
+        if (backBufferIndex && *backBufferIndex != 0) {
+            ComPtr<IDXGISwapChain3> indexedSwapChain;
+            if (FAILED(sc->QueryInterface(IID_PPV_ARGS(&indexedSwapChain)))
+                || FAILED(indexedSwapChain->GetBuffer(*backBufferIndex, IID_PPV_ARGS(&source)))) {
+                return false;
+            }
+            source->GetDesc(&desc);
+        }
+        d3d11Context->CopyResource(d3d11GameTexture.Get(), source.Get());
+        if (captureFrame) {
+            (void)d3d11FrameTap.capture(d3d11Device.Get(), d3d11Context.Get(), d3d11GameTexture.Get());
+        }
 
         // Capture-only pass: copy the frame and grab the thumbnail, but never render
         // the ImGui overlay or clear the back buffer while the user is playing.
@@ -321,9 +380,10 @@ struct ImGuiRenderer::Impl {
 
         ImGuiContextRestore restore;
         ImGui::SetCurrentContext(d3d11ImguiCtx);
-        auto& io                   = ImGui::GetIO();
-        io.DisplaySize             = ImVec2(static_cast<float>(desc.Width), static_cast<float>(desc.Height));
-        io.DisplayFramebufferScale = ImVec2(1, 1);
+        auto const surfaceMetrics  = getImGuiSurfaceMetrics(sc, desc.Width, desc.Height);
+        auto&      io              = ImGui::GetIO();
+        io.DisplaySize             = surfaceMetrics.displaySize;
+        io.DisplayFramebufferScale = surfaceMetrics.framebufferScale;
         auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
         io.FontGlobalScale         = std::max(1.0f, layout.scale);
         auto frameNow              = std::chrono::steady_clock::now();
@@ -431,7 +491,8 @@ struct ImGuiRenderer::Impl {
             f.rtv = rtv;
             device->CreateRenderTargetView(f.backBuffer.Get(), nullptr, f.rtv);
             rtv.ptr += static_cast<SIZE_T>(rtvDescSize);
-            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
+            if (FAILED(
+                    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
                 )) {
                 initialized = true;
                 this->shutdown();
@@ -844,35 +905,72 @@ void* ImGuiRenderer::acquireReplayThumbnailTexture(std::string_view key, std::st
     return nullptr;
 }
 
-bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
+bool ImGuiRenderer::render(IDXGISwapChain* swapChain, bool allowFrameCapture) {
+    return renderInternal(swapChain, true, allowFrameCapture);
+}
+
+bool ImGuiRenderer::captureOfflineFrame(
+    IDXGISwapChain*              swapChain,
+    std::optional<std::uint32_t> backBufferIndex
+) {
+    if (!swapChain || !mImpl->frameTap.hasArmedCapture()) return false;
+    bool const rendered = renderInternal(swapChain, false, true, backBufferIndex);
+    auto const tapState = mImpl->frameTap.status({});
+    bool const consumed = rendered && tapState.state == functions::render::FrameTapState::Active && !tapState.armed;
+    if (!consumed && !mImpl->frameTap.hasArmedCapture()) {
+        getLogger().error("Offline frame capture lost its armed FrameTap ticket");
+    }
+    return consumed;
+}
+
+void ImGuiRenderer::pollFrameCapture() {
+    std::scoped_lock lock(mImpl->mutex);
+    if (mImpl->d3d11Initialized) mImpl->d3d11FrameTap.poll(mImpl->d3d11Context.Get());
+}
+
+bool ImGuiRenderer::renderInternal(
+    IDXGISwapChain*              swapChain,
+    bool                         allowUi,
+    bool                         allowFrameCapture,
+    std::optional<std::uint32_t> backBufferIndex
+) {
     auto&            p = *mImpl;
     std::scoped_lock lk(p.mutex);
 
     if (!isTimelineRenderingEnabled()) return false;
     if (!swapChain) return false;
-    if (!p.editorContext) return false;
+    bool const offlineBoundaryCapture = !allowUi && allowFrameCapture;
+    if (allowUi && !p.editorContext) return false;
 
-    auto const state       = p.editorContext->snapshot();
-    bool const browserOpen = state.browser.visible;
-    bool const editorOpen  = state.editorVisible && state.hudVisible;
+    auto const state       = p.editorContext ? p.editorContext->snapshot() : EditorState{};
+    bool const browserOpen = allowUi && state.browser.visible;
+    // Keep the editor overlay alive while Minecraft displays a native menu
+    // (for example the pause screen). The game frame is drawn inside the
+    // editor viewport, so the menu remains contained by the game window.
+    bool const editorOpen  = allowUi && state.editorVisible;
     bool const uiActive    = browserOpen || editorOpen;
-    input::setUiVisible(uiActive);
+    if (allowUi) input::setUiVisible(uiActive);
 
-    auto const browserRevision = state.browser.snapshot ? state.browser.snapshot->revision : 0;
-    if (p.browserVisible != browserOpen || p.browserSnapshotRevision != browserRevision) {
+    auto const browserRevision = allowUi && state.browser.snapshot ? state.browser.snapshot->revision : 0;
+    if (allowUi && (p.browserVisible != browserOpen || p.browserSnapshotRevision != browserRevision)) {
         p.clearBrowserThumbnailTextures();
         p.browserVisible          = browserOpen;
         p.browserSnapshotRevision = browserRevision;
     }
-    // Armed or in-flight frame captures must bypass the UI gates, including during recording.
-    bool const captureActive = p.frameTap.requiresRenderPass();
+    if (p.d3d11Initialized) p.d3d11FrameTap.poll(p.d3d11Context.Get());
+    bool const captureActive = allowFrameCapture && p.frameTap.hasArmedCapture();
     if (!uiActive && !captureActive) {
-        setReplayMouseInputActive(false);
-        if (p.initialized || p.d3d11Initialized) p.shutdown();
+        if (allowUi) {
+            setReplayMouseInputActive(false);
+            if (!exporting::isOfflineRenderActivityActive() && !p.frameTap.requiresRenderPass()
+                && (p.initialized || p.d3d11Initialized)) {
+                p.shutdown();
+            }
+        }
         return false;
     }
     auto now = std::chrono::steady_clock::now();
-    if (p.initialized && swapChain == p.swapChain) p.lastPresent = now;
+    if (allowUi && p.initialized && swapChain == p.swapChain) p.lastPresent = now;
     if (!uiActive) {
         setReplayMouseInputActive(false);
         if (!captureActive) return false;
@@ -883,9 +981,9 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         if (p.initialized) p.shutdown();
         if (uiActive) {
             MouseInputAttempt inputAttempt;
-            if (!p.renderD3D11(swapChain, true, state)) return false;
+            if (!p.renderD3D11(swapChain, true, allowFrameCapture, state, backBufferIndex)) return false;
             inputAttempt.commit();
-        } else if (!p.renderD3D11(swapChain, false, state)) {
+        } else if (!p.renderD3D11(swapChain, false, allowFrameCapture, state, backBufferIndex)) {
             return false;
         }
         return true;
@@ -899,7 +997,8 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     if (p.initialized && swapChain != p.swapChain) {
         q         = getSwapChainQueue(swapChain);
         auto area = getSwapChainArea(swapChain);
-        if (!q || area == 0 || (!(now - p.lastPresent >= SwapChainReplacementDelay) && area <= p.surfaceArea))
+        bool const replacementDelayElapsed = now - p.lastPresent >= SwapChainReplacementDelay;
+        if (!q || area == 0 || (!offlineBoundaryCapture && !replacementDelayElapsed && area <= p.surfaceArea))
             return false;
         p.shutdown();
     }
@@ -935,7 +1034,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     }
 
     if (p.renderingDisabled || !p.swapChain3 || p.frames.empty()) return false;
-    UINT fi = p.swapChain3->GetCurrentBackBufferIndex();
+    UINT fi = backBufferIndex ? *backBufferIndex : p.swapChain3->GetCurrentBackBufferIndex();
     if (fi >= static_cast<UINT>(p.frames.size())) return false;
     auto& f = p.frames[fi];
     if (!waitForFence(f.fenceValue, p.fence, p.fenceEvent)) return false;
@@ -949,9 +1048,10 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     ImGuiContextRestore cr;
     if (uiActive) {
         ImGui::SetCurrentContext(p.imguiCtx);
-        auto& io                   = ImGui::GetIO();
-        io.DisplaySize             = ImVec2(static_cast<float>(bd.Width), static_cast<float>(bd.Height));
-        io.DisplayFramebufferScale = ImVec2(1, 1);
+        auto const surfaceMetrics  = getImGuiSurfaceMetrics(swapChain, static_cast<uint32_t>(bd.Width), bd.Height);
+        auto&      io              = ImGui::GetIO();
+        io.DisplaySize             = surfaceMetrics.displaySize;
+        io.DisplayFramebufferScale = surfaceMetrics.framebufferScale;
         auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
         io.FontGlobalScale         = std::max(1.0f, layout.scale);
         auto fn                    = std::chrono::steady_clock::now();
@@ -996,20 +1096,29 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
     toCopy[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
     f.commandList->ResourceBarrier(2, toCopy);
     f.commandList->CopyResource(f.gameTexture.Get(), f.backBuffer.Get());
-    bool const frameTapSubmitted = p.d3d12FrameTap.capture(p.device.Get(), f.commandList.Get(), f.backBuffer.Get());
 
     D3D12_RESOURCE_BARRIER toRT[2]{};
     toRT[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     toRT[0].Transition.pResource   = f.gameTexture.Get();
     toRT[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     toRT[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    toRT[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    toRT[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
     toRT[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     toRT[1].Transition.pResource   = f.backBuffer.Get();
     toRT[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     toRT[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
     toRT[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
     f.commandList->ResourceBarrier(2, toRT);
+    bool const frameTapSubmitted =
+        allowFrameCapture && p.d3d12FrameTap.capture(p.device.Get(), f.commandList.Get(), f.gameTexture.Get());
+
+    D3D12_RESOURCE_BARRIER gameTextureToSrv{};
+    gameTextureToSrv.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    gameTextureToSrv.Transition.pResource   = f.gameTexture.Get();
+    gameTextureToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    gameTextureToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    gameTextureToSrv.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    f.commandList->ResourceBarrier(1, &gameTextureToSrv);
     if (uiActive) {
         f.commandList->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
         if (!browserOpen) {

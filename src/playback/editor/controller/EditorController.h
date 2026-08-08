@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -20,6 +21,7 @@ namespace playback::editor {
 class EditorController {
 public:
     explicit EditorController(EditorContext& context);
+    ~EditorController();
 
     void setFrameTap(functions::render::FrameTap* frameTap);
     void reset();
@@ -27,8 +29,10 @@ public:
 
 private:
     void publishState(bool hudVisible);
+    void publishCameraTimeline();
     void ensureProject(int totalTicks, std::string_view replayPath);
     void applyEditorAction(EditorAction const& action);
+    [[nodiscard]] std::optional<editing::model::CameraKeyframe> captureCameraKeyframe() const;
     void refreshBrowser();
     void runBrowserOperation(ReplayBrowserOperation operation, bool hudVisible, auto&& callback) {
         mBrowserOperation = operation;
@@ -50,6 +54,7 @@ private:
     exporting::ExportCoordinator                   mExportCoordinator;
     std::unique_ptr<exporting::ReplayExportDriver> mExportDriver;
     std::string                                    mActiveReplayPath;
+    std::optional<std::string>                     mPreviewCameraId;
     int                                            mProjectTotalTicks{-1};
 };
 

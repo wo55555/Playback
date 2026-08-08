@@ -44,6 +44,12 @@ public:
     [[nodiscard]] editing::model::SelectionModel const& selection() const { return mSelection; }
     editing::model::SelectionModel&                     selection() { return mSelection; }
     void                                                submitAction(playback::editor::EditorAction action) const;
+    void                                                openExportDialog();
+    void                                                seekTo(int tick);
+    void                                                seekRelative(int tickDelta);
+    bool                                                deleteSelection();
+    bool                                                addKeyframeAtPlayhead();
+    bool                                                splitAtPlayhead();
     CurveEditorPanel&                                   curveEditorPanel() { return mCurveEditorPanel; }
     void                setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     void                setVideoAspectRatio(float aspectRatio);

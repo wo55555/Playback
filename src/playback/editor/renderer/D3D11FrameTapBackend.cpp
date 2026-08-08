@@ -1,5 +1,7 @@
 #include "D3D11FrameTapBackend.h"
 
+#include "playback/Playback.h"
+
 #include <d3d11.h>
 #include <wrl/client.h>
 
@@ -28,10 +30,13 @@ FramePixelFormat pixelFormat(DXGI_FORMAT format) {
     return format == DXGI_FORMAT_B8G8R8A8_UNORM ? FramePixelFormat::Bgra8 : FramePixelFormat::Rgba8;
 }
 
+auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
+
 } // namespace
 
 struct D3D11FrameTapBackend::Impl {
     struct Slot {
+        ComPtr<ID3D11Device>                  device;
         ComPtr<ID3D11Texture2D>               staging;
         ComPtr<ID3D11Query>                   completionQuery;
         D3D11_TEXTURE2D_DESC                  sourceDesc{};
@@ -44,11 +49,12 @@ struct D3D11FrameTapBackend::Impl {
     std::vector<Slot>            slots;
 
     bool prepareSlot(Slot& slot, ID3D11Device* device, D3D11_TEXTURE2D_DESC const& sourceDesc) {
-        bool const reusable = slot.staging && slot.completionQuery && slot.sourceDesc.Width == sourceDesc.Width
-                           && slot.sourceDesc.Height == sourceDesc.Height
-                           && slot.sourceDesc.Format == sourceDesc.Format;
+        bool const reusable = slot.device.Get() == device && slot.staging && slot.completionQuery
+                           && slot.sourceDesc.Width == sourceDesc.Width
+                           && slot.sourceDesc.Height == sourceDesc.Height && slot.sourceDesc.Format == sourceDesc.Format;
         if (reusable) return true;
 
+        slot.device.Reset();
         slot.staging.Reset();
         slot.completionQuery.Reset();
         auto stagingDesc           = sourceDesc;
@@ -63,6 +69,7 @@ struct D3D11FrameTapBackend::Impl {
             slot.completionQuery.Reset();
             return false;
         }
+        slot.device     = device;
         slot.sourceDesc = sourceDesc;
         return true;
     }
@@ -86,8 +93,20 @@ void D3D11FrameTapBackend::poll(ID3D11DeviceContext* context) {
         HRESULT const ready = context->GetData(slot->completionQuery.Get(), nullptr, 0, D3D11_ASYNC_GETDATA_DONOTFLUSH);
         if (ready == S_FALSE) return;
         if (FAILED(ready)) {
-            mImpl->frameTap.fail(*slot->capture, FrameTapError::MapFailed, "D3D11 frame completion query failed");
+            HRESULT const deviceReason = slot->device ? slot->device->GetDeviceRemovedReason() : E_POINTER;
+            auto const    error = FAILED(deviceReason) ? FrameTapError::DeviceLost : FrameTapError::MapFailed;
+            getLogger().error(
+                "D3D11 frame completion query failed (capture={}, frame={}, query=0x{:08X}, device=0x{:08X})",
+                slot->capture->captureId,
+                slot->capture->ticket.frameIndex,
+                static_cast<uint32_t>(ready),
+                static_cast<uint32_t>(deviceReason)
+            );
+            mImpl->frameTap.fail(*slot->capture, error, "D3D11 frame completion query failed");
             slot->capture.reset();
+            slot->device.Reset();
+            slot->staging.Reset();
+            slot->completionQuery.Reset();
             continue;
         }
 
@@ -96,8 +115,22 @@ void D3D11FrameTapBackend::poll(ID3D11DeviceContext* context) {
             context->Map(slot->staging.Get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
         if (mappedResult == DXGI_ERROR_WAS_STILL_DRAWING) return;
         if (FAILED(mappedResult)) {
-            mImpl->frameTap.fail(*slot->capture, FrameTapError::MapFailed, "Unable to map a completed D3D11 frame");
+            HRESULT const deviceReason = slot->device ? slot->device->GetDeviceRemovedReason() : E_POINTER;
+            auto const    error = FAILED(deviceReason) ? FrameTapError::DeviceLost : FrameTapError::MapFailed;
+            getLogger().error(
+                "D3D11 readback Map failed (capture={}, frame={}, map=0x{:08X}, device=0x{:08X}, size={}x{})",
+                slot->capture->captureId,
+                slot->capture->ticket.frameIndex,
+                static_cast<uint32_t>(mappedResult),
+                static_cast<uint32_t>(deviceReason),
+                slot->sourceDesc.Width,
+                slot->sourceDesc.Height
+            );
+            mImpl->frameTap.fail(*slot->capture, error, "Unable to map a completed D3D11 frame");
             slot->capture.reset();
+            slot->device.Reset();
+            slot->staging.Reset();
+            slot->completionQuery.Reset();
             continue;
         }
 
@@ -128,6 +161,17 @@ void D3D11FrameTapBackend::poll(ID3D11DeviceContext* context) {
 
 bool D3D11FrameTapBackend::capture(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* source) {
     if (!device || !context || !source) return false;
+    ComPtr<ID3D11Device> contextDevice;
+    ComPtr<ID3D11Device> sourceDevice;
+    context->GetDevice(contextDevice.GetAddressOf());
+    source->GetDevice(sourceDevice.GetAddressOf());
+    if (contextDevice.Get() != device || sourceDevice.Get() != device) {
+        mImpl->frameTap.failActive(
+            FrameTapError::BackendUnavailable,
+            "The D3D11 frame source or context belongs to a different device"
+        );
+        return false;
+    }
     poll(context);
     if (!mImpl->frameTap.requiresRenderPass()) return false;
 

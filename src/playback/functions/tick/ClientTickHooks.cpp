@@ -21,11 +21,12 @@ namespace playback::functions {
 namespace {
 
 struct OfflineTickGateState {
-    bool                    active{};
-    uint64_t                nextTokenId{1};
-    std::optional<uint64_t> pendingToken;
-    std::optional<uint64_t> inFlightToken;
-    std::optional<uint64_t> completedToken;
+    bool                                       active{};
+    uint64_t                                   nextTokenId{1};
+    std::optional<uint64_t>                    pendingToken;
+    std::optional<uint64_t>                    inFlightToken;
+    std::optional<uint64_t>                    completedToken;
+    std::optional<OfflineReplayTickCompletion> completion;
 };
 
 struct OfflineTickClaim {
@@ -64,7 +65,7 @@ OfflineTickClaim claimOfflineTick() {
     return claim;
 }
 
-void completeOfflineTick(uint64_t token) {
+void completeOfflineTick(uint64_t token, int replayTickBefore, int replayTickAfter) {
     std::scoped_lock lock(gOfflineTickGateMutex);
     if (!gOfflineTickGate.active || !gOfflineTickGate.inFlightToken || *gOfflineTickGate.inFlightToken != token) {
         return;
@@ -72,6 +73,12 @@ void completeOfflineTick(uint64_t token) {
 
     gOfflineTickGate.inFlightToken.reset();
     gOfflineTickGate.completedToken = token;
+    gOfflineTickGate.completion     = OfflineReplayTickCompletion{
+        token,
+        replayTickBefore,
+        replayTickAfter,
+        true,
+    };
 }
 
 } // namespace
@@ -114,10 +121,13 @@ LL_TYPE_INSTANCE_HOOK(
     if (offlineTick.controlled) {
         if (!offlineTick.token) return;
 
+        auto&     replay           = ReplaySession::getInstance();
+        int const beforeReplayTick = replay.getAppliedReplayTick();
         tickPlayback();
         origin();
-        [[maybe_unused]] auto tickBoundary = ChunkMutationBarrier::enterTickBoundary(*this);
-        completeOfflineTick(*offlineTick.token);
+        [[maybe_unused]] auto tickBoundary    = ChunkMutationBarrier::enterTickBoundary(*this);
+        int const             afterReplayTick = replay.getAppliedReplayTick();
+        completeOfflineTick(*offlineTick.token, beforeReplayTick, afterReplayTick);
         return;
     }
 
@@ -199,6 +209,7 @@ bool beginOfflineReplayTickGate() {
     gOfflineTickGate.pendingToken.reset();
     gOfflineTickGate.inFlightToken.reset();
     gOfflineTickGate.completedToken.reset();
+    gOfflineTickGate.completion.reset();
     return true;
 }
 
@@ -208,6 +219,7 @@ void endOfflineReplayTickGate() {
     gOfflineTickGate.pendingToken.reset();
     gOfflineTickGate.inFlightToken.reset();
     gOfflineTickGate.completedToken.reset();
+    gOfflineTickGate.completion.reset();
 }
 
 OfflineReplayTickRequestResult requestOfflineReplayTick(OfflineReplayTickToken& token) {
@@ -228,6 +240,7 @@ OfflineReplayTickRequestResult requestOfflineReplayTick(OfflineReplayTickToken& 
     if (gOfflineTickGate.nextTokenId == 0) ++gOfflineTickGate.nextTokenId;
     gOfflineTickGate.pendingToken = token.id;
     gOfflineTickGate.completedToken.reset();
+    gOfflineTickGate.completion.reset();
     return OfflineReplayTickRequestResult::Requested;
 }
 
@@ -236,6 +249,16 @@ bool wasOfflineReplayTickCompleted(OfflineReplayTickToken token) {
 
     std::scoped_lock lock(gOfflineTickGateMutex);
     return gOfflineTickGate.active && gOfflineTickGate.completedToken && *gOfflineTickGate.completedToken == token.id;
+}
+
+std::optional<OfflineReplayTickCompletion> getOfflineReplayTickCompletion(OfflineReplayTickToken token) {
+    if (!token) return std::nullopt;
+
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    if (!gOfflineTickGate.active || !gOfflineTickGate.completion || gOfflineTickGate.completion->token != token.id) {
+        return std::nullopt;
+    }
+    return gOfflineTickGate.completion;
 }
 
 } // namespace playback::functions

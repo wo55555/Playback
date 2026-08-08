@@ -2,21 +2,51 @@
 
 #include <Windows.h>
 
+#include <cstdint>
 #include <string>
 
 namespace playback::editor::input {
 
-// Central key binding registry
+enum class EditorKeybind : uint8_t {
+    OpenExport,
+    Undo,
+    Redo,
+    DeleteSelection,
+    PlayPause,
+    JumpStart,
+    JumpEnd,
+    SeekSecondLeft,
+    SeekSecondRight,
+    SeekTickLeft,
+    SeekTickRight,
+    PreviousEditPoint,
+    NextEditPoint,
+    DecreaseSpeed,
+    IncreaseSpeed,
+    AddKeyframe,
+    SplitAtPlayhead,
+    ZoomInTimeline,
+    ZoomOutTimeline,
+    ResetTimelineZoom,
+    ToggleViewportMaximized,
+    // Named-only entries retained for older hook/menu callers. They are not
+    // dispatched by ReplayEditor until a matching editor action exists.
+    NamedOnly,
+};
+
 class KeyMap {
 public:
-    // Check if a Windows virtual key matches a named action
+    // Retained for hook-side callers that still route Windows virtual keys.
     static bool matches(const std::string& actionName, WPARAM wParam);
+    static bool matches(EditorKeybind binding, WPARAM wParam);
 
-    // Initialize all default bindings
     static void initialize();
 
-    // Get display string for a shortcut (e.g. "Ctrl+Z")
+    // Query the current ImGui frame using exact modifier matching.
+    static bool pressed(EditorKeybind binding, bool repeat = false);
+
     static std::string displayString(const std::string& actionName);
+    static std::string displayString(EditorKeybind binding);
 };
 
 } // namespace playback::editor::input

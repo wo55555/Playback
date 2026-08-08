@@ -37,8 +37,10 @@ void EditMode::draw() {
     editor.mTimelineHeightRatio = std::clamp(editor.mTimelineHeightRatio, minTimelineRatio, maxTimelineRatio);
     float timelineHeight        = contentHeight * editor.mTimelineHeightRatio;
     float viewportHeight        = contentHeight - timelineHeight - kSplitterThickness;
+    bool const popupOpen        = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
+    ImGuiWindowFlags const inputBlock = popupOpen ? ImGuiWindowFlags_NoInputs : ImGuiWindowFlags_None;
 
-    {
+    auto drawMenuBar = [&] {
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2(displaySize.x, kMenuHeight));
         ImGui::Begin(
@@ -49,7 +51,7 @@ void EditMode::draw() {
         );
         editor.mMenuBar.draw();
         ImGui::End();
-    }
+    };
 
     if (editor.isViewportMaximized()) {
         ImGui::SetNextWindowPos(ImVec2(0, kMenuHeight));
@@ -58,7 +60,7 @@ void EditMode::draw() {
             "##MaximizedViewport",
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse
+                | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
         editor.mViewportPanel.draw(true);
         ImGui::End();
@@ -69,10 +71,11 @@ void EditMode::draw() {
             "##StatusPanel",
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse
+                | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
         editor.mStatusPanel.draw();
         ImGui::End();
+        drawMenuBar();
         return;
     }
 
@@ -88,8 +91,11 @@ void EditMode::draw() {
 
         ImGui::SetNextWindowPos(ImVec2(detailsX, detailsY));
         ImGui::SetNextWindowSize(ImVec2(detailsWidth, detailsH));
-        ImGui::Begin("##DetailsPanel", nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
+        ImGui::Begin(
+            "##DetailsPanel",
+            nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | inputBlock
+        );
         editor.mDetailsPanel.draw();
         ImGui::End();
     }
@@ -109,7 +115,7 @@ void EditMode::draw() {
             "##CurveEditorPanel",
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse
+                | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
         editor.mCurveEditorPanel.draw();
         ImGui::End();
@@ -124,7 +130,7 @@ void EditMode::draw() {
             "##ViewportPanel",
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse
+                | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
         editor.mViewportPanel.draw(false);
         ImGui::End();
@@ -138,9 +144,9 @@ void EditMode::draw() {
             "##TimelinePanel",
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse
+                | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
-        editor.mTimelinePanel.draw();
+        editor.mTimelinePanel.draw(!popupOpen);
         ImGui::End();
     }
 
@@ -157,6 +163,7 @@ void EditMode::draw() {
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
                 | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground
+                | inputBlock
         );
         editor.mDetailsWidthRatio =
             editor.mSplitter.drawVerticalSplit(editor.mDetailsWidthRatio, fullArea, minDetailsRatio, maxDetailsRatio);
@@ -176,6 +183,7 @@ void EditMode::draw() {
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
                 | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground
+                | inputBlock
         );
         editor.mTimelineHeightRatio = editor.mSplitter.drawHorizontalSplit(
             1.0f - editor.mTimelineHeightRatio,
@@ -211,11 +219,15 @@ void EditMode::draw() {
             "##StatusPanel",
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse
+                | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
         editor.mStatusPanel.draw();
         ImGui::End();
     }
+
+    // Submit the menu after the workspace so modal dialogs remain the frontmost
+    // interactive layer for this frame.
+    drawMenuBar();
 }
 
 } // namespace playback::editor::ui

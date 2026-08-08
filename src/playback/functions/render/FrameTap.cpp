@@ -104,6 +104,11 @@ FrameTapStatus FrameTap::status(FrameTapSession session) const {
     return result;
 }
 
+bool FrameTap::hasArmedCapture() const {
+    std::scoped_lock lock(mMutex);
+    return mActive && mActive->state == FrameTapState::Active && mActive->armedTicket.has_value();
+}
+
 bool FrameTap::requiresRenderPass() const {
     std::scoped_lock lock(mMutex);
     return mActive && mActive->state == FrameTapState::Active

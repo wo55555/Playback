@@ -9,7 +9,17 @@ namespace playback::editor::ui {
 
 class TimelinePanel {
 public:
-    void draw();
+    void draw(bool allowInput);
+
+    void seekTo(int tick);
+    void seekRelative(int tickDelta);
+    void seekAdjacentEditPoint(bool forward);
+    bool addKeyframeAtPlayhead();
+    bool splitAtPlayhead();
+    bool deleteSelection();
+    void zoomIn();
+    void zoomOut();
+    void resetZoom();
 
     [[nodiscard]] float trackListWidthRatio() const { return mTrackListWidthRatio; }
     [[nodiscard]] float zoomScale() const { return mZoomScale; }
@@ -25,6 +35,7 @@ private:
     float mScrollX{};
     float mTrackListWidthRatio{0.30f};
     int mPendingSeekTick{-1};
+    int mRulerDragTick{-1};
     std::string mTrackSearch;
     bool mSnapEnabled{true};
     bool mCamerasExpanded{true};

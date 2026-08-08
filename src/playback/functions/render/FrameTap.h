@@ -91,6 +91,7 @@ public:
     [[nodiscard]] std::optional<CapturedFrame> waitPop(FrameTapSession session, std::chrono::milliseconds timeout);
     [[nodiscard]] FrameTapStatus               status(FrameTapSession session) const;
 
+    [[nodiscard]] bool     hasArmedCapture() const;
     [[nodiscard]] bool     requiresRenderPass() const;
     [[nodiscard]] uint32_t captureCapacity() const;
 

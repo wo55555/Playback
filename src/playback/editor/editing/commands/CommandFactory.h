@@ -6,6 +6,7 @@
 #include "playback/editor/editing/models/CameraEntity.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace playback::editor::editing::command {
@@ -31,8 +32,12 @@ public:
     static std::unique_ptr<model::IEditCommand> createCreateBindingCamera(const std::string& id, const std::string& name);
     static std::unique_ptr<model::IEditCommand> createUnbindCamera(const std::string& id);
     static std::unique_ptr<model::IEditCommand> createAddCameraKeyframe(const std::string& id, int tick);
+    static std::unique_ptr<model::IEditCommand>
+    createAddCameraKeyframe(const std::string& id, int tick, std::optional<model::CameraKeyframe> captured);
     static std::unique_ptr<model::IEditCommand> createMoveCameraKeyframe(const std::string& id, const std::string& keyframeId, int tick);
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframe(const std::string& id, const std::string& keyframeId);
+    static std::unique_ptr<model::IEditCommand>
+    createSetKeyframeEasing(const std::string& id, const std::string& keyframeId, model::EasingType easing);
     static std::unique_ptr<model::IEditCommand> createSetCameraKind(const std::string& id, model::CameraKind kind);
     static std::unique_ptr<model::IEditCommand> createSetSubActorDetails(const std::string& id, model::AgentDetails details);
 

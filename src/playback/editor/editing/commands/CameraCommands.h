@@ -68,6 +68,7 @@ private:
 class AddKeyframe final : public model::IEditCommand {
 public:
     AddKeyframe(std::string cameraId, int tick);
+    AddKeyframe(std::string cameraId, int tick, std::optional<model::CameraKeyframe> captured);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mChanged; }
@@ -76,6 +77,7 @@ public:
 private:
     std::string                          mCameraId;
     int                                  mTick;
+    std::optional<model::CameraKeyframe> mCaptured;
     std::optional<model::EditorStateExt> mBefore;
     bool                                 mChanged{};
 };
@@ -107,6 +109,22 @@ public:
 private:
     std::string                          mCameraId;
     std::string                          mKeyframeId;
+    std::optional<model::EditorStateExt> mBefore;
+    bool                                 mChanged{};
+};
+
+class SetKeyframeEasing final : public model::IEditCommand {
+public:
+    SetKeyframeEasing(std::string cameraId, std::string keyframeId, model::EasingType easing);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mChanged; }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    std::string                          mKeyframeId;
+    model::EasingType                    mEasing;
     std::optional<model::EditorStateExt> mBefore;
     bool                                 mChanged{};
 };

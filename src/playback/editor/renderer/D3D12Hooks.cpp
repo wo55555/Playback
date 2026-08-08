@@ -8,6 +8,7 @@
 
 #include "ll/api/memory/Hook.h"
 
+#include "mc/external/bgfx/RendererContextD3D11.h"
 #include "mc/external/bgfx/RendererContextD3D12.h"
 
 #include <d3d11.h>
@@ -16,7 +17,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdint>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <unordered_map>
 
@@ -31,12 +34,30 @@ using ResizeBuffers1Fn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, UINT const*, IUnknown* const*);
 using CreateSwapChainFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
-using CreateSwapChainForHwndFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, DXGI_SWAP_CHAIN_DESC1 const*, DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*, IDXGIOutput*, IDXGISwapChain1**);
-using CreateSwapChainForCoreWindowFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
-using CreateSwapChainForCompositionFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
+using CreateSwapChainForHwndFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    HWND,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
+using CreateSwapChainForCoreWindowFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    IUnknown*,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
+using CreateSwapChainForCompositionFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
 using CreateCommandQueueFn =
     HRESULT(STDMETHODCALLTYPE*)(ID3D12Device*, D3D12_COMMAND_QUEUE_DESC const*, REFIID, void**);
 
@@ -104,6 +125,59 @@ public:
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
+struct OfflinePresentCaptureBoundary {
+    IDXGISwapChain*              swapChain{};
+    std::optional<std::uint32_t> backBufferIndex;
+    bool                         presentObserved{};
+    bool                         captureAttempted{};
+    bool                         captureSucceeded{};
+};
+
+thread_local OfflinePresentCaptureBoundary* gOfflinePresentCaptureBoundary{};
+
+class ScopedOfflinePresentCaptureBoundary {
+public:
+    ScopedOfflinePresentCaptureBoundary(
+        IDXGISwapChain*              swapChain,
+        std::optional<std::uint32_t> backBufferIndex
+    )
+    : mPrevious(gOfflinePresentCaptureBoundary),
+      mBoundary{swapChain, backBufferIndex} {
+        gOfflinePresentCaptureBoundary = &mBoundary;
+    }
+
+    ~ScopedOfflinePresentCaptureBoundary() { gOfflinePresentCaptureBoundary = mPrevious; }
+
+    void failIfIncomplete() const {
+        if (mBoundary.captureSucceeded || !gImGuiRenderer.frameTap().hasArmedCapture()) return;
+        auto const* message = !mBoundary.presentObserved
+                            ? "The matching BGFX flip returned without reaching Present"
+                            : !mBoundary.captureAttempted
+                            ? "The matching Present did not accept its offline frame capture"
+                            : "The offline frame capture failed before Present";
+        gImGuiRenderer.frameTap().failActive(functions::render::FrameTapError::BackendUnavailable, message);
+    }
+
+private:
+    OfflinePresentCaptureBoundary* mPrevious{};
+    OfflinePresentCaptureBoundary  mBoundary;
+};
+
+bool captureOfflineFrameBeforePresent(IDXGISwapChain* swapChain, UINT flags) {
+    auto* boundary = gOfflinePresentCaptureBoundary;
+    if (!boundary || boundary->swapChain != swapChain || boundary->presentObserved
+        || (flags & DXGI_PRESENT_TEST) != 0) {
+        return false;
+    }
+
+    boundary->presentObserved = true;
+    if (!exporting::isOfflineRenderActivityActive() || !gImGuiRenderer.frameTap().hasArmedCapture()) return false;
+
+    boundary->captureAttempted = true;
+    boundary->captureSucceeded = gImGuiRenderer.captureOfflineFrame(swapChain, boundary->backBufferIndex);
+    return boundary->captureSucceeded;
+}
+
 template <class T>
 void* getVtableEntry(T* object, size_t index) {
     return (*reinterpret_cast<void***>(object))[index];
@@ -160,11 +234,14 @@ bool noneInstalled(HookState const& state) {
 
 DECLARE_DETOUR_FN(present, HRESULT, IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     ActiveDetour activeDetour;
-    if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
+    bool const   offlineCapture = captureOfflineFrameBeforePresent(swapChain, flags);
+    bool const   offlineRender  = exporting::isOfflineRenderActivityActive();
+    if (!offlineRender && (flags & DXGI_PRESENT_TEST) == 0
+        && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
         (void)gImGuiRenderer.render(swapChain);
     }
-    bool const offlinePresent = exporting::isOfflineRenderActivityActive() && gImGuiRenderer.ownsSwapChain(swapChain);
-    UINT const effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
+    bool const    offlinePresent = offlineRender && (offlineCapture || gImGuiRenderer.ownsSwapChain(swapChain));
+    UINT const    effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
     HRESULT const result = reinterpret_cast<PresentFn>(gOriginalPresent)(swapChain, effectiveSyncInterval, flags);
     gImGuiRenderer.afterPresent(swapChain, result);
     return result;
@@ -179,8 +256,12 @@ DECLARE_DETOUR_FN(
     DXGI_PRESENT_PARAMETERS const* parameters
 ) {
     ActiveDetour activeDetour;
+    auto* const  baseSwapChain     = static_cast<IDXGISwapChain*>(swapChain);
+    bool const   offlineCapture    = captureOfflineFrameBeforePresent(baseSwapChain, flags);
     bool         timelineRendered = false;
-    if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
+    bool const   offlineRender    = exporting::isOfflineRenderActivityActive();
+    if (!offlineRender && (flags & DXGI_PRESENT_TEST) == 0
+        && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
         timelineRendered = gImGuiRenderer.render(swapChain);
     }
 
@@ -195,8 +276,8 @@ DECLARE_DETOUR_FN(
         effectiveParameters                = &fullSurfacePresent;
     }
 
-    bool const offlinePresent = exporting::isOfflineRenderActivityActive() && gImGuiRenderer.ownsSwapChain(swapChain);
-    UINT const effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
+    bool const    offlinePresent = offlineRender && (offlineCapture || gImGuiRenderer.ownsSwapChain(baseSwapChain));
+    UINT const    effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
     HRESULT const result =
         reinterpret_cast<Present1Fn>(gOriginalPresent1)(swapChain, effectiveSyncInterval, flags, effectiveParameters);
     gImGuiRenderer.afterPresent(swapChain, result);
@@ -570,6 +651,60 @@ bool removeAll(HookState& state) {
 }
 
 LL_TYPE_INSTANCE_HOOK(
+    RendererD3D12FlipHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d12::RendererContextD3D12,
+    &bgfx::d3d12::RendererContextD3D12::$flip,
+    void
+) {
+    ActiveRendererInitDetour activeDetour;
+    auto* const swapChain = this->m_swapChain;
+    bool const  captureRequested = swapChain && !gRendererInitHookStopping.load(std::memory_order_acquire)
+                               && exporting::isOfflineRenderActivityActive()
+                               && gImGuiRenderer.frameTap().hasArmedCapture();
+    if (!captureRequested) {
+        origin();
+        return;
+    }
+
+    ScopedOfflinePresentCaptureBoundary boundary{
+        swapChain,
+        static_cast<std::uint32_t>(this->m_backBufferColorIdx),
+    };
+    origin();
+    boundary.failIfIncomplete();
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    RendererD3D11FlipHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d11::RendererContextD3D11,
+    &bgfx::d3d11::RendererContextD3D11::$flip,
+    void
+) {
+    ActiveRendererInitDetour activeDetour;
+    auto* const swapChain = this->m_swapChain;
+    bool const  captureRequested = swapChain && !gRendererInitHookStopping.load(std::memory_order_acquire)
+                               && exporting::isOfflineRenderActivityActive()
+                               && gImGuiRenderer.frameTap().hasArmedCapture();
+    std::optional<std::uint32_t> backBufferIndex;
+    if (captureRequested) {
+        ComPtr<IDXGISwapChain3> indexedSwapChain;
+        if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&indexedSwapChain)))) {
+            backBufferIndex = indexedSwapChain->GetCurrentBackBufferIndex();
+        }
+    }
+    if (!captureRequested) {
+        origin();
+        return;
+    }
+
+    ScopedOfflinePresentCaptureBoundary boundary{swapChain, backBufferIndex};
+    origin();
+    boundary.failIfIncomplete();
+}
+
+LL_TYPE_INSTANCE_HOOK(
     RendererInitHook,
     ll::memory::HookPriority::Highest,
     bgfx::d3d12::RendererContextD3D12,
@@ -805,26 +940,59 @@ bool resolveHookTargets(
 
 bool hookRendererInit(bool enable) {
     std::scoped_lock lock(gRendererInitHookMutex);
-    static bool      installed{};
+    static bool      initInstalled{};
+    static bool      d3d12FlipInstalled{};
+    static bool      d3d11FlipInstalled{};
 
     if (enable) {
-        gRendererInitHookStopping.store(false, std::memory_order_release);
-        if (installed) return true;
-        if (RendererInitHook::hook() != 0) {
-            gRendererInitHookStopping.store(true, std::memory_order_release);
-            return false;
+        if (initInstalled && d3d12FlipInstalled && d3d11FlipInstalled) {
+            gRendererInitHookStopping.store(false, std::memory_order_release);
+            return true;
         }
-        installed = true;
+        gRendererInitHookStopping.store(true, std::memory_order_release);
+
+        bool installedInitHere{};
+        bool installedD3D12Here{};
+        if (!initInstalled) {
+            if (RendererInitHook::hook() != 0) return false;
+            initInstalled      = true;
+            installedInitHere = true;
+        }
+        if (!d3d12FlipInstalled) {
+            if (RendererD3D12FlipHook::hook() != 0) {
+                if (installedInitHere && RendererInitHook::unhook()) initInstalled = false;
+                return false;
+            }
+            d3d12FlipInstalled = true;
+            installedD3D12Here = true;
+        }
+        if (!d3d11FlipInstalled) {
+            if (RendererD3D11FlipHook::hook() != 0) {
+                if (installedD3D12Here && RendererD3D12FlipHook::unhook()) d3d12FlipInstalled = false;
+                if (installedInitHere && RendererInitHook::unhook()) initInstalled = false;
+                return false;
+            }
+            d3d11FlipInstalled = true;
+        }
+        gRendererInitHookStopping.store(false, std::memory_order_release);
         return true;
     }
 
     gRendererInitHookStopping.store(true, std::memory_order_release);
-    if (!installed) return waitForActiveRendererInitDetours();
-    if (!RendererInitHook::unhook()) {
-        gRendererInitHookStopping.store(false, std::memory_order_release);
-        return false;
+    bool unhooked = true;
+    if (d3d11FlipInstalled) {
+        if (RendererD3D11FlipHook::unhook()) d3d11FlipInstalled = false;
+        else unhooked = false;
     }
-    installed = false;
+    if (d3d12FlipInstalled) {
+        if (RendererD3D12FlipHook::unhook()) d3d12FlipInstalled = false;
+        else unhooked = false;
+    }
+    if (initInstalled) {
+        if (RendererInitHook::unhook()) initInstalled = false;
+        else unhooked = false;
+    }
+    if (!unhooked) return false;
     return waitForActiveRendererInitDetours();
 }
 
@@ -870,8 +1038,10 @@ bool hookD3D12(bool enable) {
         }
         bool const captureOk = installCaptureHooks(state);
         if (!captureOk) {
-            getLogger().warn("One or more replay queue capture hooks are unavailable; existing swap chains require a "
-                             "unique captured Direct queue");
+            getLogger().warn(
+                "One or more replay queue capture hooks are unavailable; existing swap chains require a "
+                "unique captured Direct queue"
+            );
         }
         if (installCoreHooks(state)) {
             gTimelineHooksStopping.store(false, std::memory_order_release);

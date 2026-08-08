@@ -1,13 +1,15 @@
 #pragma once
 
+#include "playback/functions/render/ReplaySampleTime.h"
+
 #include <cstdint>
 
 namespace playback::editor::exporting {
 
 struct OfflineRenderClockSample {
-    uint64_t frameIndex{};
-    float    partialTick{};
-    float    deltaTicks{};
+    functions::render::ReplaySampleTime replayTime;
+    float                               deltaTicks{};
+    int                                 wholeTicks{};
 };
 
 struct OfflineRenderClockToken {
@@ -24,7 +26,6 @@ enum class OfflineRenderClockPublishResult : uint8_t { Published, Unavailable, B
 [[nodiscard]] OfflineRenderClockPublishResult
                    publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
 [[nodiscard]] bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token);
-[[nodiscard]] bool didOfflineRenderClockSampleFail(OfflineRenderClockToken token);
 void               clearOfflineRenderClockSample(OfflineRenderClockToken token);
 void               resetOfflineRenderClock();
 

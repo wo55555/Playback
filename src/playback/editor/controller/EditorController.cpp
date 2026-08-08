@@ -3,13 +3,20 @@
 #include "playback/editor/editing/CameraBindingOps.h"
 #include "playback/editor/editing/commands/CameraCommands.h"
 #include "playback/editor/editing/commands/CommandFactory.h"
+#include "playback/editor/keyframe/CameraTimelineEvaluator.h"
+#include "playback/editor/keyframe/CameraTimelineRegistry.h"
 #include "playback/functions/render/FrameTap.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/screen/ReplayBrowser.h"
 
 #include "ll/api/i18n/I18n.h"
+#include "ll/api/service/TargetedBedrock.h"
+
+#include "mc/client/game/ClientInstance.h"
+#include "mc/deps/renderer/Camera.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <utility>
 
@@ -47,8 +54,44 @@ EditorController::EditorController(EditorContext& context)
       std::make_unique<exporting::ReplayExportDriver>(mExportCoordinator, functions::ReplaySession::getInstance())
   ) {}
 
+EditorController::~EditorController() { keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview); }
+
 void EditorController::setFrameTap(functions::render::FrameTap* frameTap) {
     if (mExportDriver) mExportDriver->setFrameTap(frameTap);
+}
+
+void EditorController::publishCameraTimeline() {
+    if (mProject.cameras.empty()) {
+        keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
+        return;
+    }
+    keyframe::publishCameraTimeline(
+        keyframe::CameraTimelineSource::Preview,
+        std::make_shared<keyframe::CameraTimelineEvaluator>(mProject, mPreviewCameraId)
+    );
+}
+
+std::optional<editing::model::CameraKeyframe> EditorController::captureCameraKeyframe() const {
+    auto client = ll::service::getClientInstance();
+    if (!client) return std::nullopt;
+
+    auto const& camera   = client->getCamera();
+    auto const  position = *camera.mPosition;
+    auto const  forward  = *camera.mForward;
+    auto const  fov      = camera.mFov;
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
+        || !std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)
+        || !std::isfinite(fov)) {
+        return std::nullopt;
+    }
+
+    constexpr float RadiansToDegrees = 57.2957795130823208768f;
+    editing::model::CameraKeyframe key;
+    key.position = {position.x, position.y, position.z};
+    key.yaw      = std::atan2(-forward.x, forward.z) * RadiansToDegrees;
+    key.pitch    = std::atan2(-forward.y, std::hypot(forward.x, forward.z)) * RadiansToDegrees;
+    key.fov      = std::clamp(fov, 1.0f, 179.0f);
+    return key;
 }
 
 void EditorController::reset() {
@@ -59,6 +102,8 @@ void EditorController::reset() {
     mBrowserError.clear();
     mBrowserSnapshot = std::make_shared<ReplayBrowserSnapshot>();
     mProject         = {};
+    mPreviewCameraId.reset();
+    keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
     mCommandStack.clear();
     mActiveReplayPath.clear();
     mProjectTotalTicks = -1;
@@ -74,7 +119,9 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     editing::CameraBindingOps::addFreeCamera(mProject, "Camera 1");
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
+    mPreviewCameraId.reset();
     mProjectTotalTicks = totalTicks;
+    publishCameraTimeline();
 }
 
 void EditorController::applyEditorAction(EditorAction const& action) {
@@ -121,7 +168,10 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(CommandFactory::createRippleDeleteWorldActorSegment(action.id), mProject);
         break;
     case EditorActionType::AddCameraKeyframe:
-        mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick), mProject);
+        mCommandStack.push(
+            CommandFactory::createAddCameraKeyframe(action.id, action.tick, captureCameraKeyframe()),
+            mProject
+        );
         break;
     case EditorActionType::MoveCameraKeyframe:
         mCommandStack.push(
@@ -131,6 +181,16 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::DeleteCameraKeyframe:
         mCommandStack.push(CommandFactory::createDeleteCameraKeyframe(action.id, action.secondaryId), mProject);
+        break;
+    case EditorActionType::SetKeyframeEasing:
+        mCommandStack.push(
+            CommandFactory::createSetKeyframeEasing(
+                action.id,
+                action.secondaryId,
+                static_cast<editing::model::EasingType>(action.kind)
+            ),
+            mProject
+        );
         break;
     case EditorActionType::DeleteCamera:
         mCommandStack.push(CommandFactory::createDeleteCamera(action.id), mProject);
@@ -151,11 +211,22 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(CommandFactory::createSetSubActorDetails(action.id, action.details), mProject);
         break;
     case EditorActionType::SetPreviewCamera:
+        if (std::ranges::any_of(mProject.cameras, [&](auto const& camera) { return camera.id == action.id; })) {
+            mPreviewCameraId = action.id;
+        }
+        break;
     case EditorActionType::ClearPreviewCamera:
+        mPreviewCameraId.reset();
         break;
     default:
         break;
     }
+
+    if (mPreviewCameraId
+        && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) { return camera.id == *mPreviewCameraId; })) {
+        mPreviewCameraId.reset();
+    }
+    publishCameraTimeline();
 }
 
 void EditorController::publishState(bool hudVisible) {

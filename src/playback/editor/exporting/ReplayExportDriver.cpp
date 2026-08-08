@@ -1,6 +1,7 @@
 #include "ReplayExportDriver.h"
 
 #include "ExportActivity.h"
+#include "FrameWriterUtils.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/editing/models/EditorStateExt.h"
@@ -60,23 +61,7 @@ bool ReplayExportDriver::start(ExportSettings settings, editing::model::EditorSt
         return false;
     }
 
-    mPreviousPaused = mReplay.isPaused();
-    if (!mReplay.setPaused(true)) {
-        mCoordinator.fail(ExportError::ReplayUnavailable, "Unable to pause the replay for export");
-        mPhase = Phase::Faulted;
-        return false;
-    }
-    mRestorePaused = true;
-
-    if (!mRenderBoundary->open(ExportCaptureCapacity, settings.endTick)) {
-        restoreReplayState();
-        mCoordinator.fail(ExportError::CaptureUnavailable, "The renderer frame download queue is busy");
-        mPhase = Phase::Faulted;
-        return false;
-    }
     if (!mCoordinator.start(std::move(settings), project)) {
-        closeCapture(true);
-        restoreReplayState();
         mPhase = Phase::Faulted;
         return false;
     }
@@ -86,13 +71,31 @@ bool ReplayExportDriver::start(ExportSettings settings, editing::model::EditorSt
         fail(ExportError::InvalidSettings, "The export plan was not retained by the coordinator");
         return false;
     }
+
+    mPreviousPaused = mReplay.isPaused();
+    if (!mReplay.setPaused(true)) {
+        fail(ExportError::ReplayUnavailable, "Unable to pause the replay for export");
+        return false;
+    }
+    mRestorePaused = true;
+
+    if (!mRenderBoundary->open(ExportCaptureCapacity, mPlan->settings, project)) {
+        auto const boundaryStatus = mRenderBoundary->status();
+        fail(
+            ExportError::CaptureUnavailable,
+            boundaryStatus.executor.message.empty() ? "The offline renderer could not be opened"
+                                                    : boundaryStatus.executor.message
+        );
+        return false;
+    }
     mReadyFrames.clear();
-    mNextFrameIndex = 0;
+    mSourceFrameLogged = false;
+    mNextFrameIndex    = 0;
     setExportActivityActive(true);
-    setOfflineRenderActivityActive(true);
     mPhase = Phase::Rendering;
     getLogger().info(
-        "Video export started: output={}, format={}, frames={}, ticks={}-{}, fps={}/{}, replayTick={}",
+        "Video export started: output={}, format={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
+        "warmup={}, replayTick={}",
         mPlan->outputPath,
         static_cast<int>(mPlan->settings.format),
         mPlan->frameCount,
@@ -100,7 +103,11 @@ bool ReplayExportDriver::start(ExportSettings settings, editing::model::EditorSt
         mPlan->settings.endTick,
         mPlan->settings.frameRate.numerator,
         mPlan->settings.frameRate.denominator,
-        mReplay.getCurrentTick()
+        mPlan->settings.resolutionX,
+        mPlan->settings.resolutionY,
+        mPlan->settings.ssaa,
+        mPlan->settings.warmupFrames,
+        mReplay.getAppliedReplayTick()
     );
     return true;
 }
@@ -220,8 +227,9 @@ void ReplayExportDriver::reset() {
     setExportActivityActive(false);
     mPlan.reset();
     mReadyFrames.clear();
-    mNextFrameIndex = 0;
-    mPhase          = Phase::Idle;
+    mSourceFrameLogged = false;
+    mNextFrameIndex    = 0;
+    mPhase             = Phase::Idle;
 }
 
 bool ReplayExportDriver::isAvailable() const {
@@ -253,6 +261,24 @@ ReplayExportDriver::SubmissionResult ReplayExportDriver::collectDownloads() {
     while (mReadyFrames.size() < ExportCaptureCapacity) {
         auto frame = mRenderBoundary->finishDownload();
         if (!frame) break;
+        if (!mSourceFrameLogged && mPlan) {
+            auto const executor = mRenderBoundary->status().executor;
+            getLogger().info(
+                "First video export frame downloaded: source={}x{}, rowPitch={}, target={}x{}, offlineRender={}x{}",
+                frame->width,
+                frame->height,
+                frame->rowPitch,
+                mPlan->settings.resolutionX,
+                mPlan->settings.resolutionY,
+                executor.renderWidth,
+                executor.renderHeight
+            );
+            mSourceFrameLogged = true;
+        }
+        if (!mPlan || !detail::normalizeFrame(*frame, mPlan->settings.resolutionX, mPlan->settings.resolutionY)) {
+            fail(ExportError::InvalidFrame, "The captured frame could not be normalized to the export resolution");
+            return SubmissionResult::Failed;
+        }
         mReadyFrames.emplace_back(std::move(*frame));
     }
     return submitReadyFrames();

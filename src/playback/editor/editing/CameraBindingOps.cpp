@@ -77,7 +77,7 @@ bool deleteCamera(model::EditorStateExt& state, std::string const& cameraId) {
     auto it = std::find_if(state.cameras.begin(), state.cameras.end(), [&](auto const& camera) {
         return camera.id == cameraId;
     });
-    if (it == state.cameras.end() || it->locked) return false;
+    if (it == state.cameras.end() || it->locked || state.cameras.size() <= 1) return false;
 
     for (auto& actor : state.worldActor.subActors) {
         actor.boundCameraIds.erase(

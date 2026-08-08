@@ -27,6 +27,13 @@ struct ExportSettings {
     int64_t               endTick{};
     FrameRate             frameRate{};
     ExportFormat          format{ExportFormat::PngSequence};
+    // A zero resolution keeps the current Bedrock render size. When a
+    // resolution is supplied, both axes are required and SSAA is applied
+    // before the captured frame is reduced to the requested output size.
+    uint32_t resolutionX{};
+    uint32_t resolutionY{};
+    uint32_t ssaa{1};
+    uint32_t warmupFrames{60};
 };
 
 enum class ExportError : uint8_t {

@@ -12,6 +12,10 @@ namespace {
 constexpr int64_t  ReplayTicksPerSecond = 20;
 constexpr int64_t  MaxFrameRateValue    = 1'000'000;
 constexpr uint64_t MaxExportFrames      = 1'000'000;
+constexpr uint32_t MaxResolution        = 16'384;
+constexpr uint32_t MaxSsaa              = 8;
+constexpr uint32_t MaxWarmupFrames      = 3'600;
+constexpr uint64_t MaxFramePixels       = (512ull * 1024 * 1024) / 4;
 
 [[nodiscard]] int64_t gcd(int64_t left, int64_t right) {
     while (right != 0) {
@@ -101,6 +105,12 @@ constexpr uint64_t MaxExportFrames      = 1'000'000;
     return label;
 }
 
+[[nodiscard]] std::string resolutionLabel(ExportSettings const& settings) {
+    if (settings.resolutionX == 0 && settings.resolutionY == 0) return "native";
+    return std::to_string(settings.resolutionX) + "x" + std::to_string(settings.resolutionY) + "_ssaa"
+         + std::to_string(settings.ssaa);
+}
+
 [[nodiscard]] std::filesystem::path utf8Path(std::string const& value) {
     auto const* begin = reinterpret_cast<char8_t const*>(value.data());
     return std::filesystem::path(std::u8string{begin, begin + value.size()});
@@ -115,7 +125,7 @@ constexpr uint64_t MaxExportFrames      = 1'000'000;
 std::filesystem::path buildExportOutputPath(ExportSettings const& settings) {
     auto const baseName = outputBaseName(settings.outputName);
     auto const variant  = baseName + "_t" + std::to_string(settings.startTick) + "-" + std::to_string(settings.endTick)
-                       + "_" + frameRateLabel(settings.frameRate);
+                       + "_" + frameRateLabel(settings.frameRate) + "_" + resolutionLabel(settings);
     auto const root = settings.outputDirectory / utf8Path(baseName);
 
     if (settings.format == ExportFormat::Mp4Video) return root / utf8Path(variant + ".mp4");
@@ -166,6 +176,31 @@ ExportPlanCompiler::compile(ExportSettings const& settings, editing::model::Edit
     if (settings.frameRate.numerator <= 0 || settings.frameRate.denominator <= 0
         || settings.frameRate.numerator > MaxFrameRateValue || settings.frameRate.denominator > MaxFrameRateValue) {
         return failure(ExportError::InvalidSettings, "The export frame rate is invalid");
+    }
+    if ((settings.resolutionX == 0) != (settings.resolutionY == 0)) {
+        return failure(ExportError::InvalidSettings, "The export resolution must specify both width and height");
+    }
+    if (settings.resolutionX == 0 && settings.ssaa != 1) {
+        return failure(ExportError::InvalidSettings, "SSAA requires an explicit output resolution");
+    }
+    if (settings.resolutionX > MaxResolution || settings.resolutionY > MaxResolution || settings.ssaa == 0
+        || settings.ssaa > MaxSsaa) {
+        return failure(ExportError::InvalidSettings, "The export resolution or SSAA value is invalid");
+    }
+    if (settings.resolutionX != 0) {
+        if (settings.resolutionX < 16 || settings.resolutionY < 16) {
+            return failure(ExportError::InvalidSettings, "The export resolution is too small");
+        }
+        auto const scaledWidth  = static_cast<uint64_t>(settings.resolutionX) * settings.ssaa;
+        auto const scaledHeight = static_cast<uint64_t>(settings.resolutionY) * settings.ssaa;
+        if (scaledWidth > MaxResolution || scaledHeight > MaxResolution
+            || static_cast<uint64_t>(settings.resolutionX) * settings.resolutionY > MaxFramePixels
+            || scaledWidth * scaledHeight > MaxFramePixels) {
+            return failure(ExportError::InvalidSettings, "The supersampled render resolution is too large");
+        }
+    }
+    if (settings.warmupFrames > MaxWarmupFrames) {
+        return failure(ExportError::InvalidSettings, "The export warm-up frame count is too large");
     }
 
     ExportSettings normalized = settings;

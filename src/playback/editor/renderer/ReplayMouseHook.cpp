@@ -227,9 +227,13 @@ void handleKeyInput(ll::event::KeyInputEvent& event) {
     ActiveMouseCallback activeCallback;
     if (!gMouseHookActive.load(std::memory_order_acquire)) return;
 
-    if (input::isUiVisible() && input::isGameInputCaptured() && event.keyCode() == Keyboard::Escape) {
-        if (event.isDown()) gReleaseRequested.store(true, std::memory_order_release);
-        event.cancel();
+    if (input::isUiVisible() && event.keyCode() == Keyboard::Escape) {
+        if (input::isGameInputCaptured() && event.isDown()) {
+            gReleaseRequested.store(true, std::memory_order_release);
+        }
+        // Let Minecraft handle Escape so it can open its native pause screen.
+        // The mouse release request keeps the editor viewport from retaining a
+        // captured cursor while that screen is active.
         return;
     }
 

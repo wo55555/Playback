@@ -161,6 +161,25 @@ void ReplayEditor::submitAction(playback::editor::EditorAction action) const {
     if (mSubmit) (*mSubmit)(std::move(action));
 }
 
+void ReplayEditor::openExportDialog() {
+    auto const& currentState = state();
+    if (!currentState.capabilities.videoExport || currentState.totalTicks <= 0
+        || exporting::isExportActive(currentState.exportStatus.state)) {
+        return;
+    }
+    mMenuBar.openExportDialog(currentState.totalTicks, currentState.capabilities.ffmpegVideoExport);
+}
+
+void ReplayEditor::seekTo(int tick) { mTimelinePanel.seekTo(tick); }
+
+void ReplayEditor::seekRelative(int tickDelta) { mTimelinePanel.seekRelative(tickDelta); }
+
+bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(); }
+
+bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(); }
+
+bool ReplayEditor::splitAtPlayhead() { return mTimelinePanel.splitAtPlayhead(); }
+
 void ReplayEditor::draw(playback::editor::EditorState const& state, SubmitAction const& submit) {
     if (!state.editorVisible) {
         if (!mActiveReplayPath.empty()) {
@@ -207,55 +226,100 @@ void ReplayEditor::draw(playback::editor::EditorState const& state, SubmitAction
 }
 
 void ReplayEditor::handleKeyboardShortcuts() {
-    ImGuiIO&    io           = ImGui::GetIO();
-    auto const& currentState = state();
+    using input::EditorKeybind;
 
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape) && mViewportMaximized) {
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantTextInput || ImGui::IsAnyItemActive()
+        || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+        return;
+    }
+
+    if (mViewportMaximized && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         mViewportMaximized = false;
         return;
     }
-    if (io.WantTextInput) return;
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) {
+    if (input::KeyMap::pressed(EditorKeybind::Undo)) {
         submitAction({playback::editor::EditorActionType::UndoEditorEdit});
         return;
     }
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) {
+    if (input::KeyMap::pressed(EditorKeybind::Redo)) {
         submitAction({playback::editor::EditorActionType::RedoEditorEdit});
         return;
     }
-    if (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_F)) {
+    if (input::KeyMap::pressed(EditorKeybind::ToggleViewportMaximized)) {
         toggleViewportMaximized();
         return;
     }
+    if (input::KeyMap::pressed(EditorKeybind::OpenExport)) {
+        openExportDialog();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::DeleteSelection)) {
+        (void)deleteSelection();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::AddKeyframe)) {
+        (void)addKeyframeAtPlayhead();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SplitAtPlayhead)) {
+        (void)splitAtPlayhead();
+        return;
+    }
 
-    if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
+    if (input::KeyMap::pressed(EditorKeybind::PlayPause)) {
         submitAction({playback::editor::EditorActionType::TogglePause});
+        return;
     }
-
-    if (ImGui::IsKeyPressed(ImGuiKey_Home)) {
-        submitAction({playback::editor::EditorActionType::SkipToStart});
+    if (input::KeyMap::pressed(EditorKeybind::JumpStart)) {
+        seekTo(0);
+        return;
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_End)) {
-        submitAction({playback::editor::EditorActionType::SkipToEnd});
+    if (input::KeyMap::pressed(EditorKeybind::JumpEnd)) {
+        seekTo(state().totalTicks);
+        return;
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
-        int                            step = io.KeyShift ? 20 : 1;
-        playback::editor::EditorAction action{playback::editor::EditorActionType::Seek};
-        action.tick = std::max(0, currentState.currentTick - step);
-        submitAction(std::move(action));
+    if (input::KeyMap::pressed(EditorKeybind::SeekTickLeft, true)) {
+        mTimelinePanel.seekRelative(-1);
+        return;
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
-        int                            step = io.KeyShift ? 20 : 1;
-        playback::editor::EditorAction action{playback::editor::EditorActionType::Seek};
-        action.tick = std::min(currentState.totalTicks, currentState.currentTick + step);
-        submitAction(std::move(action));
+    if (input::KeyMap::pressed(EditorKeybind::SeekTickRight, true)) {
+        mTimelinePanel.seekRelative(1);
+        return;
     }
-
-    // Note: -/= are handled as separate checks since IsKeyPressed consumes the event
-    if (ImGui::IsKeyPressed(ImGuiKey_Minus)) {
+    if (input::KeyMap::pressed(EditorKeybind::SeekSecondLeft, true)) {
+        mTimelinePanel.seekRelative(-20);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SeekSecondRight, true)) {
+        mTimelinePanel.seekRelative(20);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::PreviousEditPoint, true)) {
+        mTimelinePanel.seekAdjacentEditPoint(false);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::NextEditPoint, true)) {
+        mTimelinePanel.seekAdjacentEditPoint(true);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ZoomOutTimeline, true)) {
+        mTimelinePanel.zoomOut();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ZoomInTimeline, true)) {
+        mTimelinePanel.zoomIn();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ResetTimelineZoom)) {
+        mTimelinePanel.resetZoom();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::DecreaseSpeed, true)) {
         submitAction({playback::editor::EditorActionType::DecreaseSpeed});
+        return;
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_Equal)) {
+    if (input::KeyMap::pressed(EditorKeybind::IncreaseSpeed, true)) {
         submitAction({playback::editor::EditorActionType::IncreaseSpeed});
     }
 }

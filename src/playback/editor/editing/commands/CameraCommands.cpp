@@ -78,6 +78,11 @@ std::string UnbindCamera::label() const { return "Unbind Camera"; }
 
 AddKeyframe::AddKeyframe(std::string cameraId, int tick) : mCameraId(std::move(cameraId)), mTick(tick) {}
 
+AddKeyframe::AddKeyframe(std::string cameraId, int tick, std::optional<model::CameraKeyframe> captured)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mCaptured(std::move(captured)) {}
+
 void AddKeyframe::execute(model::EditorStateExt& state) {
     mChanged          = false;
     auto*      camera = findCamera(state, mCameraId);
@@ -91,7 +96,8 @@ void AddKeyframe::execute(model::EditorStateExt& state) {
 
     mBefore = state;
     model::CameraKeyframe key;
-    if (!camera->keys.empty()) key = camera->keys.back();
+    if (mCaptured) key = *mCaptured;
+    else if (!camera->keys.empty()) key = camera->keys.back();
     key.id   = makeKeyframeId(*camera);
     key.tick = tick;
     camera->keys.push_back(std::move(key));
@@ -167,6 +173,35 @@ void DeleteKeyframe::execute(model::EditorStateExt& state) {
 
 void        DeleteKeyframe::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string DeleteKeyframe::label() const { return "Delete Keyframe"; }
+
+SetKeyframeEasing::SetKeyframeEasing(std::string cameraId, std::string keyframeId, model::EasingType easing)
+: mCameraId(std::move(cameraId)),
+  mKeyframeId(std::move(keyframeId)),
+  mEasing(easing) {}
+
+void SetKeyframeEasing::execute(model::EditorStateExt& state) {
+    mChanged     = false;
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto key = std::find_if(camera->keys.begin(), camera->keys.end(), [&](auto const& value) {
+        return value.id == mKeyframeId;
+    });
+    if (key == camera->keys.end() || key->easingType == mEasing) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore           = state;
+    key->easingType   = mEasing;
+    mChanged          = true;
+}
+
+void        SetKeyframeEasing::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframeEasing::label() const { return "Set Keyframe Easing"; }
 
 SetCameraKind::SetCameraKind(std::string cameraId, model::CameraKind kind)
 : mCameraId(std::move(cameraId)),

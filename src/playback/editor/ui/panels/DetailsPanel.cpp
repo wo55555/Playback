@@ -36,7 +36,7 @@ char const* cameraKindName(editing::model::CameraKind kind) {
 }
 
 char const* easingName(editing::model::EasingType easing) {
-    static constexpr std::array names{"Linear", "Ease In", "Ease Out", "Ease InOut", "Cubic Bezier"};
+    static constexpr std::array names{"Linear", "Ease In", "Ease Out", "Ease InOut", "Cubic Bezier", "Hold"};
     return names[std::clamp(static_cast<int>(easing), 0, static_cast<int>(names.size()) - 1)];
 }
 
@@ -439,9 +439,7 @@ void DetailsPanel::draw() {
                 EditorAction previewAction{EditorActionType::SetPreviewCamera};
                 previewAction.id = camera->id;
                 submit(std::move(previewAction));
-                EditorAction action{EditorActionType::Seek};
-                action.tick = key.tick;
-                submit(std::move(action));
+                editor.seekTo(key.tick);
             }
             ImGui::PopStyleColor(3);
         }
@@ -484,7 +482,7 @@ void DetailsPanel::draw() {
         int easing = static_cast<int>(key->easingType);
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::BeginCombo("Easing", easingName(key->easingType))) {
-            for (int index = 0; index < 5; ++index) {
+            for (int index = 0; index < 6; ++index) {
                 auto value = static_cast<editing::model::EasingType>(index);
                 if (ImGui::Selectable(easingName(value), index == easing)) {
                     EditorAction action{EditorActionType::SetKeyframeEasing};

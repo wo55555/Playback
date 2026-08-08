@@ -32,9 +32,8 @@ struct FrameDownloadQueueStatus {
     bool                              renderRequested{};
 };
 
-// Export-owned FIFO around FrameTap. A framebuffer download queue:
-// rendering starts a GPU download, completed downloads are reused in order, and
-// the export loop decides when to poll or drain them.
+// Export-owned FIFO around FrameTap. The render executor starts each GPU
+// download from its own output; the export loop polls and drains in order.
 class SaveableFramebufferQueue {
 public:
     explicit SaveableFramebufferQueue(functions::render::FrameTap& frameTap) : mFrameTap(frameTap) {}
