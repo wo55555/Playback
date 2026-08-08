@@ -244,25 +244,23 @@ void drawSettingsPage() {
     initializeDraft();
     auto& io = ImGui::GetIO();
     if (!page.captureRecordingKey && !page.capturePauseKey && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) requestClose();
+    float const baseFontSize = ImGui::GetFontSize();
+    float const fontScale = baseFontSize > 0.0f ? 16.0f / baseFontSize : 1.0f;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {32.0f, 24.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {12.0f, 10.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.0f, 7.0f});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.0f, 0.0f, 0.0f, 0.8f});
     ImGui::SetNextWindowPos({0.0f, 0.0f});
     ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.0f, 0.0f, 0.0f, 0.73f});
     ImGui::Begin("##playback-settings-overlay", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::PopStyleColor();
-    ImVec2 const panelSize{std::min(io.DisplaySize.x - 80.0f, 1240.0f), std::min(io.DisplaySize.y - 80.0f, 820.0f)};
-    ImGui::SetCursorPos({(io.DisplaySize.x - panelSize.x) * 0.5f, (io.DisplaySize.y - panelSize.y) * 0.5f});
-    EditorTheme const theme;
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme.bgPanel);
-    ImGui::PushStyleColor(ImGuiCol_Border, theme.border);
-    ImGui::BeginChild("##playback-settings-panel", panelSize, ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
-    ImGui::PopStyleColor(2);
+    ImGui::SetWindowFontScale(fontScale);
     ImGui::TextUnformatted("playback.settings.title"_tr().c_str());
-    ImGui::SameLine(panelSize.x - 65.0f);
+    ImGui::SameLine(io.DisplaySize.x - 110.0f);
     if (ImGui::Button("playback.settings.actions.close"_tr().c_str())) requestClose();
     ImGui::Separator();
-    float const footerHeight = 56.0f;
-    float const navigationWidth = 190.0f;
-    ImGui::BeginChild("##settings-navigation", {navigationWidth, -footerHeight}, ImGuiChildFlags_Borders);
+    float const footerHeight = 64.0f;
+    float const navigationWidth = 220.0f;
+    ImGui::BeginChild("##settings-navigation", {navigationWidth, -footerHeight}, ImGuiChildFlags_None);
     sectionButton(SettingsSection::Recording, "playback.settings.sections.recording"_tr().c_str());
     sectionButton(SettingsSection::Browser, "playback.settings.sections.browser"_tr().c_str());
     sectionButton(SettingsSection::Editor, "playback.settings.sections.editor"_tr().c_str());
@@ -291,7 +289,7 @@ void drawSettingsPage() {
     ImGui::EndChild();
     ImGui::Separator();
     if (!page.error.empty()) ImGui::TextColored({1.0f, 0.35f, 0.35f, 1.0f}, "%s", page.error.c_str());
-    ImGui::SameLine(panelSize.x - 285.0f);
+    ImGui::SameLine(io.DisplaySize.x - 390.0f);
     if (ImGui::Button("playback.settings.actions.restoreDefaults"_tr().c_str())) {
         page.draft = config::RecordingControlsConfig::defaults();
         page.error.clear();
@@ -314,8 +312,9 @@ void drawSettingsPage() {
         }
     }
     drawCloseConfirmation();
-    ImGui::EndChild();
     ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
 }
 
 } // namespace playback::editor::ui

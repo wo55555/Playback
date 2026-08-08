@@ -599,7 +599,7 @@ void SelectReplayScreen::submit(playback::editor::EditorAction action) const {
 }
 
 void SelectReplayScreen::updateAnimations() {
-    float const delta = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.1f);
+    float const delta = std::max(0.0f, ImGui::GetIO().DeltaTime);
     if (mViewTransitionActive) {
         mViewTransition = std::min(1.0f, mViewTransition + delta / kAnimationDuration);
         if (mViewTransition >= 1.0f) mViewTransitionActive = false;
@@ -608,10 +608,11 @@ void SelectReplayScreen::updateAnimations() {
 
 float SelectReplayScreen::animate(std::string_view key, float target) {
     auto& value = mAnimationValues[std::string(key)];
-    float const delta = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.1f);
+    float const delta = std::max(0.0f, ImGui::GetIO().DeltaTime);
     float const step  = std::min(1.0f, delta / kAnimationDuration);
-    value += (target - value) * (step * 1.5f);
-    if (std::abs(target - value) < 0.001f) value = target;
+    value += target > value ? step : -step;
+    value = std::clamp(value, 0.0f, 1.0f);
+    if (step >= 1.0f || std::abs(target - value) < 0.001f) value = target;
     return value;
 }
 
@@ -746,7 +747,7 @@ void SelectReplayScreen::draw(playback::editor::ReplayBrowserState const& state,
         "##replay-browser",
         nullptr,
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
-            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar
             | ImGuiWindowFlags_NoBackground
     );
     ImGui::PopStyleVar();
@@ -764,7 +765,7 @@ void SelectReplayScreen::draw(playback::editor::ReplayBrowserState const& state,
         "##replay-browser-panel",
         panelSize,
         true,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
 
     ImGui::SetWindowFontScale(kFontScaleBody);
@@ -805,7 +806,7 @@ void SelectReplayScreen::drawNavigation() {
         "##header",
         {0.0f, kNavHeight},
         false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
 
     float const width   = ImGui::GetWindowWidth();
@@ -1016,7 +1017,7 @@ void SelectReplayScreen::drawCard(
         "##card",
         {width, height},
         false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
     ImVec2 const cardMinimum = ImGui::GetWindowPos();
     ImVec2 const cardMaximum{cardMinimum.x + width, cardMinimum.y + height};
@@ -1197,7 +1198,7 @@ void SelectReplayScreen::drawGrid() {
         "##grid-location",
         {gridWidth, kContentLayout.locationHeight},
         false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
     ImGui::SetWindowFontScale(kFontScaleCardMeta);
     ImVec2 const locationMinimum = ImGui::GetWindowPos();
@@ -1229,6 +1230,11 @@ void SelectReplayScreen::drawGrid() {
         return;
     }
 
+    ImGui::SetCursorPos({gridX, gridStartY});
+    ImGui::BeginChild("##grid-scroll", {gridWidth, -kContentLayout.bottomMargin}, false, ImGuiWindowFlags_NoScrollbar);
+
+    float const cardGridX   = 0.0f;
+    float const cardGridStartY = 0.0f;
     constexpr float minimumCardWidth = 330.0f;
     int const       capacity = std::max(1, static_cast<int>((gridWidth + kCardGap) / (minimumCardWidth + kCardGap)));
     int const       defaultColumns = std::min(4, capacity);
@@ -1238,14 +1244,15 @@ void SelectReplayScreen::drawGrid() {
     for (int item = 0; item < static_cast<int>(mVisible.size()); ++item) {
         int const column = item % columns;
         int const row    = item / columns;
-        ImGui::SetCursorPos({gridX + column * (width + kCardGap), gridStartY + row * (height + kCardGap)});
+        ImGui::SetCursorPos({cardGridX + column * (width + kCardGap), cardGridStartY + row * (height + kCardGap)});
         drawCard(replays()[mVisible[static_cast<size_t>(item)]], static_cast<std::size_t>(item), width);
     }
 
     int const   rows       = (static_cast<int>(mVisible.size()) + columns - 1) / columns;
     float const gridHeight = rows * height + std::max(0, rows - 1) * kCardGap;
-    ImGui::SetCursorPos({gridX, gridStartY + gridHeight + kContentLayout.bottomMargin});
+    ImGui::SetCursorPos({cardGridX, cardGridStartY + gridHeight + kContentLayout.bottomMargin});
     ImGui::Dummy({gridWidth, 1.0f});
+    ImGui::EndChild();
 
     // Only clicks on the true blank canvas reach here; cards, the scrollbar, and header controls are excluded.
     clearSelectionOnBlankClick();
@@ -1272,7 +1279,7 @@ void SelectReplayScreen::drawDetailsListItem(
         "##details-list-item",
         {width, itemHeight},
         false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
 
     ImVec2 const itemMinimum = ImGui::GetWindowPos();
@@ -1388,7 +1395,7 @@ void SelectReplayScreen::drawDetails() {
         "##details-location",
         {contentWidth, kContentLayout.locationHeight},
         false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
     ImGui::SetWindowFontScale(kFontScaleCardMeta);
     ImVec2 const      locationMinimum = ImGui::GetWindowPos();
@@ -1449,10 +1456,15 @@ void SelectReplayScreen::drawDetails() {
         "##details-list",
         {listWidth, listHeight},
         true,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
 
-    ImGui::BeginChild("##details-list-scroll", {0.0f, -kDetailsLayout.listFooterHeight}, false);
+    ImGui::BeginChild(
+        "##details-list-scroll",
+        {0.0f, -kDetailsLayout.listFooterHeight},
+        false,
+        ImGuiWindowFlags_NoScrollbar
+    );
     if (mVisible.empty()) {
         ImGui::SetWindowFontScale(kFontScaleSmall);
         ImGui::TextDisabled("%s", "playback.replayBrowser.empty"_tr().c_str());
@@ -1491,7 +1503,7 @@ void SelectReplayScreen::drawDetails() {
         "##details-panel",
         {panelWidth, panelHeight},
         true,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
 
     auto replay = selectedReplay();
@@ -1519,7 +1531,7 @@ void SelectReplayScreen::drawDetails() {
 
         ImGui::SetCursorPos({kDetailsLayout.panelPadding, kDetailsLayout.panelPadding});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
-        ImGui::BeginChild("##details-scroll", {scrollWidth, scrollHeight}, false);
+        ImGui::BeginChild("##details-scroll", {scrollWidth, scrollHeight}, false, ImGuiWindowFlags_NoScrollbar);
         ImGui::PopStyleVar();
 
         float const detailWidth = ImGui::GetContentRegionAvail().x;
@@ -1650,7 +1662,7 @@ void SelectReplayScreen::drawActionBar() {
         "##actions",
         {0.0f, kActionBarHeight},
         false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
 
     float const  contentW   = ImGui::GetWindowWidth();
