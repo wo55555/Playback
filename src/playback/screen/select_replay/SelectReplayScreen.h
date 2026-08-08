@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -35,7 +36,7 @@ private:
     void drawDetails();
     void drawDetailsListItem(playback::editor::ReplayBrowserEntry const& replay, std::size_t visibleIndex, float width);
     void drawCard(playback::editor::ReplayBrowserEntry const& replay, std::size_t visibleIndex, float width);
-    void drawPreview(playback::editor::ReplayBrowserEntry const& replay, ImVec2 size);
+    void drawPreview(playback::editor::ReplayBrowserEntry const& replay, ImVec2 size, float rounding);
     void drawActionBar();
     void drawDeleteDialog();
     void drawRenameDialog();
@@ -43,6 +44,8 @@ private:
     void select(std::string_view replayId, std::size_t visibleIndex, bool toggle, bool range);
     void openSelected();
     void importReplay();
+    void updateAnimations();
+    float animate(std::string_view key, float target);
     [[nodiscard]] std::vector<playback::editor::ReplayBrowserEntry> const&   replays() const;
     [[nodiscard]] std::optional<playback::editor::ReplayBrowserEntry const*> selectedReplay() const;
     void submit(playback::editor::EditorAction action) const;
@@ -62,6 +65,9 @@ private:
     bool                                        mRenameDialogOpen{};
     bool                                        mRecordingSettingsOpen{};
     std::string                                 mRenameBuffer;
+    std::unordered_map<std::string, float>      mAnimationValues;
+    float                                       mViewTransition{};
+    bool                                        mViewTransitionActive{};
 };
 
 } // namespace playback::screen::select_replay

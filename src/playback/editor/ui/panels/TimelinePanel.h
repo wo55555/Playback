@@ -23,6 +23,7 @@ private:
     editing::model::TrackTreeModel mTrackTree;
     float mZoomScale{1.0f};
     float mScrollX{};
+    float mScrollY{};
     float mTrackListWidthRatio{0.30f};
     int mPendingSeekTick{-1};
     std::string mTrackSearch;

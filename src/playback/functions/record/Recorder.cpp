@@ -117,6 +117,12 @@ struct NetworkPacketFilter {
 
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
 
+void displayRecordingMessage(char const* message) {
+    auto client = ll::service::getClientInstance();
+    auto player = client ? client->getLocalPlayer() : nullptr;
+    if (player) player->displayClientMessage(message, std::nullopt);
+}
+
 bool isSuccessfulSubChunkResult(SubChunkPacket::SubChunkRequestResult result) {
     return result == SubChunkPacket::SubChunkRequestResult::Success
         || result == SubChunkPacket::SubChunkRequestResult::SuccessAllAir;
@@ -450,6 +456,7 @@ void Recorder::start() {
     mState = State::Recording;
     mRecordedDuration    = {};
     mRecordingStartedAt  = std::chrono::steady_clock::now();
+    displayRecordingMessage("§6[PlayBack]录制已开始");
     getLogger().info("Recording started");
 }
 
@@ -469,6 +476,8 @@ void Recorder::stop() {
     if (state == State::Closing) {
         return;
     }
+
+    displayRecordingMessage("§6[PlayBack]录制已结束");
 
     if (state == State::Recording) {
         mRecordedDuration += std::chrono::steady_clock::now() - mRecordingStartedAt;
