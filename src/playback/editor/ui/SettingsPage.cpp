@@ -95,10 +95,31 @@ void sectionButton(SettingsSection section, char const* label) {
     if (selected) ImGui::PopStyleColor();
 }
 
-void settingRow(char const* label, char const* description) {
-    ImGui::TextUnformatted(label);
-    if (description && *description) ImGui::TextDisabled("%s", description);
-    ImGui::SameLine(330.0f);
+template <typename DrawControl>
+void settingControlRow(char const* label, char const* description, DrawControl&& drawControl) {
+    ImGui::PushID(label);
+    float const tableWidth = std::min(ImGui::GetContentRegionAvail().x, 1220.0f);
+    if (ImGui::BeginTable(
+            "##setting-row",
+            3,
+            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings,
+            {tableWidth, 0.0f}
+        )) {
+        ImGui::TableSetupColumn("##setting-label", ImGuiTableColumnFlags_WidthFixed, 300.0f);
+        ImGui::TableSetupColumn("##setting-description", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("##setting-control", ImGuiTableColumnFlags_WidthFixed, 240.0f);
+        ImGui::TableNextRow(ImGuiTableRowFlags_None, 58.0f);
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextDisabled("%s", description);
+        ImGui::TableSetColumnIndex(2);
+        ImGui::SetNextItemWidth(-1.0f);
+        drawControl();
+        ImGui::EndTable();
+    }
+    ImGui::PopID();
 }
 
 void drawRecordingSection() {
@@ -109,48 +130,54 @@ void drawRecordingSection() {
     ImGui::Separator();
     ImGui::Spacing();
     ImGui::TextUnformatted("playback.settings.recording.shortcuts"_tr().c_str());
-    settingRow(
+    settingControlRow(
         "playback.recording.settings.toggleRecording"_tr().c_str(),
-        "playback.settings.recording.toggleRecordingDescription"_tr().c_str()
+        "playback.settings.recording.toggleRecordingDescription"_tr().c_str(),
+        [&] {
+            if (page.captureRecordingKey) {
+                ImGui::Button("playback.recording.settings.pressKey"_tr().c_str(), {180.0f, 0.0f});
+                captureKey(page.draft.toggleRecordingKey, page.captureRecordingKey);
+            } else if (ImGui::Button(page.draft.keyDisplayName(page.draft.toggleRecordingKey).c_str(), {180.0f, 0.0f})) {
+                page.captureRecordingKey = true;
+                page.error.clear();
+            }
+        }
     );
-    if (page.captureRecordingKey) {
-        ImGui::Button("playback.recording.settings.pressKey"_tr().c_str());
-        captureKey(page.draft.toggleRecordingKey, page.captureRecordingKey);
-    } else if (ImGui::Button(page.draft.keyDisplayName(page.draft.toggleRecordingKey).c_str(), {120.0f, 0.0f})) {
-        page.captureRecordingKey = true;
-        page.error.clear();
-    }
-    settingRow(
+    settingControlRow(
         "playback.recording.settings.togglePause"_tr().c_str(),
-        "playback.settings.recording.togglePauseDescription"_tr().c_str()
+        "playback.settings.recording.togglePauseDescription"_tr().c_str(),
+        [&] {
+            if (page.capturePauseKey) {
+                ImGui::Button("playback.recording.settings.pressKey"_tr().c_str(), {180.0f, 0.0f});
+                captureKey(page.draft.togglePauseKey, page.capturePauseKey);
+            } else if (ImGui::Button(page.draft.keyDisplayName(page.draft.togglePauseKey).c_str(), {180.0f, 0.0f})) {
+                page.capturePauseKey = true;
+                page.error.clear();
+            }
+        }
     );
-    if (page.capturePauseKey) {
-        ImGui::Button("playback.recording.settings.pressKey"_tr().c_str());
-        captureKey(page.draft.togglePauseKey, page.capturePauseKey);
-    } else if (ImGui::Button(page.draft.keyDisplayName(page.draft.togglePauseKey).c_str(), {120.0f, 0.0f})) {
-        page.capturePauseKey = true;
-        page.error.clear();
-    }
     ImGui::Spacing();
     ImGui::TextUnformatted("playback.settings.recording.overlay"_tr().c_str());
-    settingRow(
+    settingControlRow(
         "playback.recording.settings.showOverlay"_tr().c_str(),
-        "playback.settings.recording.overlayDescription"_tr().c_str()
+        "playback.settings.recording.overlayDescription"_tr().c_str(),
+        [&] { ImGui::Checkbox("##show-recording-overlay", &page.draft.showStatusOverlay); }
     );
-    ImGui::Checkbox("##show-recording-overlay", &page.draft.showStatusOverlay);
     std::string const topLeft = "playback.recording.settings.position.topLeft"_tr();
     std::string const topRight = "playback.recording.settings.position.topRight"_tr();
     std::string const bottomLeft = "playback.recording.settings.position.bottomLeft"_tr();
     std::string const bottomRight = "playback.recording.settings.position.bottomRight"_tr();
     char const* positions[]{topLeft.c_str(), topRight.c_str(), bottomLeft.c_str(), bottomRight.c_str()};
     int position = static_cast<int>(page.draft.overlayPosition);
-    settingRow(
+    settingControlRow(
         "playback.recording.settings.positionLabel"_tr().c_str(),
-        "playback.settings.recording.positionDescription"_tr().c_str()
+        "playback.settings.recording.positionDescription"_tr().c_str(),
+        [&] {
+            if (ImGui::Combo("##recording-overlay-position", &position, positions, IM_ARRAYSIZE(positions))) {
+                page.draft.overlayPosition = static_cast<config::RecordingOverlayPosition>(position);
+            }
+        }
     );
-    if (ImGui::Combo("##recording-overlay-position", &position, positions, IM_ARRAYSIZE(positions))) {
-        page.draft.overlayPosition = static_cast<config::RecordingOverlayPosition>(position);
-    }
     ImGui::Spacing();
     ImGui::TextUnformatted("playback.settings.recording.preview"_tr().c_str());
     ImGui::TextColored({0.92f, 0.22f, 0.22f, 1.0f}, "●");
@@ -244,23 +271,47 @@ void drawSettingsPage() {
     initializeDraft();
     auto& io = ImGui::GetIO();
     if (!page.captureRecordingKey && !page.capturePauseKey && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) requestClose();
-    float const baseFontSize = ImGui::GetFontSize();
-    float const fontScale = baseFontSize > 0.0f ? 16.0f / baseFontSize : 1.0f;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {32.0f, 24.0f});
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {12.0f, 10.0f});
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {10.0f, 7.0f});
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.0f, 0.0f, 0.0f, 0.8f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {48.0f, 36.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {18.0f, 18.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {14.0f, 10.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.0f, 0.0f, 0.0f, 0.0f});
     ImGui::SetNextWindowPos({0.0f, 0.0f});
     ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::Begin("##playback-settings-overlay", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::SetWindowFontScale(fontScale);
-    ImGui::TextUnformatted("playback.settings.title"_tr().c_str());
-    ImGui::SameLine(io.DisplaySize.x - 110.0f);
+    ImGui::Begin(
+        "##playback-settings-overlay",
+        nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
+            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar
+    );
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        ImGui::GetWindowPos(),
+        {ImGui::GetWindowPos().x + io.DisplaySize.x, ImGui::GetWindowPos().y + io.DisplaySize.y},
+        IM_COL32(0, 0, 0, 248)
+    );
+    ImFont* settingsFont = io.Fonts->Fonts.size() > 1 ? io.Fonts->Fonts[1] : nullptr;
+    ImFont* titleFont    = io.Fonts->Fonts.size() > 2 ? io.Fonts->Fonts[2] : nullptr;
+    if (settingsFont) ImGui::PushFont(settingsFont);
+    if (titleFont) {
+        if (settingsFont) ImGui::PopFont();
+        ImGui::PushFont(titleFont);
+        ImGui::TextUnformatted("playback.settings.title"_tr().c_str());
+        ImGui::PopFont();
+        if (settingsFont) ImGui::PushFont(settingsFont);
+    } else {
+        ImGui::TextUnformatted("playback.settings.title"_tr().c_str());
+    }
+    ImGui::SameLine(io.DisplaySize.x - 140.0f);
     if (ImGui::Button("playback.settings.actions.close"_tr().c_str())) requestClose();
     ImGui::Separator();
-    float const footerHeight = 64.0f;
-    float const navigationWidth = 220.0f;
-    ImGui::BeginChild("##settings-navigation", {navigationWidth, -footerHeight}, ImGuiChildFlags_None);
+    float const footerHeight = 86.0f;
+    float const navigationWidth = 300.0f;
+    ImGui::BeginChild(
+        "##settings-navigation",
+        {navigationWidth, -footerHeight},
+        ImGuiChildFlags_None,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+    );
     sectionButton(SettingsSection::Recording, "playback.settings.sections.recording"_tr().c_str());
     sectionButton(SettingsSection::Browser, "playback.settings.sections.browser"_tr().c_str());
     sectionButton(SettingsSection::Editor, "playback.settings.sections.editor"_tr().c_str());
@@ -268,7 +319,12 @@ void drawSettingsPage() {
     sectionButton(SettingsSection::General, "playback.settings.sections.general"_tr().c_str());
     ImGui::EndChild();
     ImGui::SameLine();
-    ImGui::BeginChild("##settings-content", {0.0f, -footerHeight}, ImGuiChildFlags_None, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    ImGui::BeginChild(
+        "##settings-content",
+        {0.0f, -footerHeight},
+        ImGuiChildFlags_None,
+        ImGuiWindowFlags_AlwaysVerticalScrollbar
+    );
     switch (page.section) {
     case SettingsSection::Recording:
         drawRecordingSection();
@@ -289,7 +345,8 @@ void drawSettingsPage() {
     ImGui::EndChild();
     ImGui::Separator();
     if (!page.error.empty()) ImGui::TextColored({1.0f, 0.35f, 0.35f, 1.0f}, "%s", page.error.c_str());
-    ImGui::SameLine(io.DisplaySize.x - 390.0f);
+    float const footerButtonsWidth = 390.0f;
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - footerButtonsWidth);
     if (ImGui::Button("playback.settings.actions.restoreDefaults"_tr().c_str())) {
         page.draft = config::RecordingControlsConfig::defaults();
         page.error.clear();
@@ -312,9 +369,10 @@ void drawSettingsPage() {
         }
     }
     drawCloseConfirmation();
+    if (settingsFont) ImGui::PopFont();
     ImGui::End();
     ImGui::PopStyleColor();
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(4);
 }
 
 } // namespace playback::editor::ui

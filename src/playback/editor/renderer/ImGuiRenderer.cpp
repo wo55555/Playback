@@ -250,6 +250,20 @@ struct ImGuiRenderer::Impl {
                                                 );
         if (font) io.FontDefault = font;
         else io.Fonts->AddFontDefault();
+        if (!fontPathString.empty()) {
+            io.Fonts->AddFontFromFileTTF(
+                fontPathString.c_str(),
+                28.0f,
+                nullptr,
+                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+            );
+            io.Fonts->AddFontFromFileTTF(
+                fontPathString.c_str(),
+                34.0f,
+                nullptr,
+                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+            );
+        }
         ImFontConfig cfg;
         cfg.MergeMode     = true;
         cfg.PixelSnapH    = true;
@@ -371,9 +385,9 @@ struct ImGuiRenderer::Impl {
 
         ImGui_ImplDX11_NewFrame();
         input::syncFrame();
-        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
-        ImGui::NewFrame();
         bool const settingsOpen = ui::isSettingsPageOpen();
+        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible || settingsOpen);
+        ImGui::NewFrame();
         if (!settingsOpen) {
             ui::drawRecordingStatusOverlay(
                 functions::Recorder::getInstance().getStatusSnapshot(),
@@ -573,6 +587,14 @@ struct ImGuiRenderer::Impl {
             io.FontDefault = font;
         } else {
             io.Fonts->AddFontDefault();
+        }
+        if (!fontPathString.empty()) {
+            io.Fonts->AddFontFromFileTTF(
+                fontPathString.c_str(),
+                34.0f,
+                nullptr,
+                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+            );
         }
 
         // Merge the bundled Lucide font before the DX12 backend creates its font texture.
@@ -1041,7 +1063,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         ImGui_ImplDX12_NewFrame();
         // Forward MCBE key events to ImGui keyboard state
         input::syncFrame();
-        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
+        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible || settingsOpen);
         ImGui::NewFrame();
         if (!settingsOpen) {
             ui::drawRecordingStatusOverlay(

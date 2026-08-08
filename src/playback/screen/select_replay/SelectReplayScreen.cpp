@@ -918,19 +918,8 @@ void SelectReplayScreen::drawNavigation() {
     // Keep refresh available under Settings instead of consuming another toolbar slot.
     ImGui::SetCursorPos({x, y});
     bool const   settingsClicked       = toolbarButton("##settings-button", ICON_SETTINGS, {}, iconW);
-    ImVec2 const settingsButtonMinimum = ImGui::GetItemRectMin();
-    ImVec2 const settingsButtonMaximum = ImGui::GetItemRectMax();
-    if (settingsClicked) ImGui::OpenPopup("##settings");
+    if (settingsClicked) playback::editor::ui::openSettingsPage();
     tooltip("playback.replayBrowser.navigation.settings"_tr().c_str());
-    if (beginAnchoredPopup("##settings", settingsButtonMinimum, settingsButtonMaximum)) {
-        ImGui::SetWindowFontScale(kFontScaleNavControl);
-        std::string const refreshLabel = "playback.replayBrowser.navigation.refresh"_tr();
-        if (popupIconMenuItem("##refresh-replay-list", ICON_REFRESH, refreshLabel)) {
-            submit({playback::editor::EditorActionType::RefreshReplayBrowser});
-        }
-        if (ImGui::MenuItem("playback.settings.menu.open"_tr().c_str())) playback::editor::ui::openSettingsPage();
-        ImGui::EndPopup();
-    }
     x += iconW + kNavigationLayout.viewGroupGap;
 
     ImGui::SetCursorPos({x, y});
