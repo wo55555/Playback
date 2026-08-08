@@ -250,20 +250,23 @@ struct ImGuiRenderer::Impl {
                                                 );
         if (font) io.FontDefault = font;
         else io.Fonts->AddFontDefault();
-        if (!fontPathString.empty()) {
-            io.Fonts->AddFontFromFileTTF(
-                fontPathString.c_str(),
-                28.0f,
-                nullptr,
-                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-            );
-            io.Fonts->AddFontFromFileTTF(
-                fontPathString.c_str(),
-                34.0f,
-                nullptr,
-                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-            );
-        }
+        auto* settingsBody = fontPathString.empty()
+                           ? nullptr
+                           : io.Fonts->AddFontFromFileTTF(
+                                 fontPathString.c_str(),
+                                 20.0f,
+                                 nullptr,
+                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                             );
+        auto* settingsTitle = fontPathString.empty()
+                            ? nullptr
+                            : io.Fonts->AddFontFromFileTTF(
+                                  fontPathString.c_str(),
+                                  24.0f,
+                                  nullptr,
+                                  io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                              );
+        ui::setSettingsFonts({settingsBody, settingsTitle});
         ImFontConfig cfg;
         cfg.MergeMode     = true;
         cfg.PixelSnapH    = true;
@@ -385,24 +388,21 @@ struct ImGuiRenderer::Impl {
 
         ImGui_ImplDX11_NewFrame();
         input::syncFrame();
-        bool const settingsOpen = ui::isSettingsPageOpen();
-        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible || settingsOpen);
+        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
-        if (!settingsOpen) {
-            ui::drawRecordingStatusOverlay(
-                functions::Recorder::getInstance().getStatusSnapshot(),
-                Playback::getInstance().getConfig().recordingControls,
-                io.DisplaySize
-            );
-        }
+        ui::drawRecordingStatusOverlay(
+            functions::Recorder::getInstance().getStatusSnapshot(),
+            Playback::getInstance().getConfig().recordingControls,
+            io.DisplaySize
+        );
         auto submit = [this](EditorAction action) {
             if (editorContext) editorContext->submit(std::move(action));
         };
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
-        if (!settingsOpen && state.browser.visible) {
+        if (state.browser.visible) {
             replayBrowser.draw(state.browser, submit);
-        } else if (!settingsOpen && state.editorVisible) {
+        } else if (state.editorVisible) {
             replayEditor.setGameTexture(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
             replayEditor.draw(state, submit);
             auto viewport = replayEditor.viewportVideoRect();
@@ -588,14 +588,23 @@ struct ImGuiRenderer::Impl {
         } else {
             io.Fonts->AddFontDefault();
         }
-        if (!fontPathString.empty()) {
-            io.Fonts->AddFontFromFileTTF(
-                fontPathString.c_str(),
-                34.0f,
-                nullptr,
-                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-            );
-        }
+        auto* settingsBody = fontPathString.empty()
+                           ? nullptr
+                           : io.Fonts->AddFontFromFileTTF(
+                                 fontPathString.c_str(),
+                                 20.0f,
+                                 nullptr,
+                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                             );
+        auto* settingsTitle = fontPathString.empty()
+                            ? nullptr
+                            : io.Fonts->AddFontFromFileTTF(
+                                  fontPathString.c_str(),
+                                  24.0f,
+                                  nullptr,
+                                  io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                              );
+        ui::setSettingsFonts({settingsBody, settingsTitle});
 
         // Merge the bundled Lucide font before the DX12 backend creates its font texture.
         {
@@ -1063,7 +1072,7 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         ImGui_ImplDX12_NewFrame();
         // Forward MCBE key events to ImGui keyboard state
         input::syncFrame();
-        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible || settingsOpen);
+        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
         ImGui::NewFrame();
         if (!settingsOpen) {
             ui::drawRecordingStatusOverlay(
@@ -1077,9 +1086,9 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain) {
         };
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
-        if (!settingsOpen && state.browser.visible) {
+        if (state.browser.visible) {
             replayBrowser.draw(state.browser, submit);
-        } else if (!settingsOpen && state.editorVisible) {
+        } else if (state.editorVisible) {
             replayEditor.setGameTexture(static_cast<ImTextureID>(f.gameSrvGpu.ptr));
             replayEditor.draw(state, submit);
             auto viewport = replayEditor.viewportVideoRect();

@@ -19,6 +19,8 @@ using namespace ll::i18n_literals;
 
 namespace {
 
+SettingsFonts gFonts;
+
 struct SettingsPageState {
     bool                           open{};
     bool                           initialized{};
@@ -105,10 +107,10 @@ void settingControlRow(char const* label, char const* description, DrawControl&&
             ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings,
             {tableWidth, 0.0f}
         )) {
-        ImGui::TableSetupColumn("##setting-label", ImGuiTableColumnFlags_WidthFixed, 300.0f);
+        ImGui::TableSetupColumn("##setting-label", ImGuiTableColumnFlags_WidthFixed, 220.0f);
         ImGui::TableSetupColumn("##setting-description", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("##setting-control", ImGuiTableColumnFlags_WidthFixed, 240.0f);
-        ImGui::TableNextRow(ImGuiTableRowFlags_None, 58.0f);
+        ImGui::TableSetupColumn("##setting-control", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+        ImGui::TableNextRow(ImGuiTableRowFlags_None, 72.0f);
         ImGui::TableSetColumnIndex(0);
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
@@ -289,23 +291,23 @@ void drawSettingsPage() {
         {ImGui::GetWindowPos().x + io.DisplaySize.x, ImGui::GetWindowPos().y + io.DisplaySize.y},
         IM_COL32(0, 0, 0, 248)
     );
-    ImFont* settingsFont = io.Fonts->Fonts.size() > 1 ? io.Fonts->Fonts[1] : nullptr;
-    ImFont* titleFont    = io.Fonts->Fonts.size() > 2 ? io.Fonts->Fonts[2] : nullptr;
-    if (settingsFont) ImGui::PushFont(settingsFont);
+    auto* bodyFont  = static_cast<ImFont*>(gFonts.body);
+    auto* titleFont = static_cast<ImFont*>(gFonts.title);
+    if (bodyFont) ImGui::PushFont(bodyFont);
     if (titleFont) {
-        if (settingsFont) ImGui::PopFont();
+        if (bodyFont) ImGui::PopFont();
         ImGui::PushFont(titleFont);
         ImGui::TextUnformatted("playback.settings.title"_tr().c_str());
         ImGui::PopFont();
-        if (settingsFont) ImGui::PushFont(settingsFont);
+        if (bodyFont) ImGui::PushFont(bodyFont);
     } else {
         ImGui::TextUnformatted("playback.settings.title"_tr().c_str());
     }
     ImGui::SameLine(io.DisplaySize.x - 140.0f);
     if (ImGui::Button("playback.settings.actions.close"_tr().c_str())) requestClose();
     ImGui::Separator();
-    float const footerHeight = 86.0f;
-    float const navigationWidth = 300.0f;
+    float const footerHeight = 78.0f;
+    float const navigationWidth = 240.0f;
     ImGui::BeginChild(
         "##settings-navigation",
         {navigationWidth, -footerHeight},
@@ -369,10 +371,12 @@ void drawSettingsPage() {
         }
     }
     drawCloseConfirmation();
-    if (settingsFont) ImGui::PopFont();
+    if (bodyFont) ImGui::PopFont();
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(4);
 }
+
+void setSettingsFonts(SettingsFonts fonts) { gFonts = fonts; }
 
 } // namespace playback::editor::ui
