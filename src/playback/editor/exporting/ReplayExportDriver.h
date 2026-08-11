@@ -25,7 +25,11 @@ public:
 
     void setFrameTap(functions::render::FrameTap* frameTap);
 
-    [[nodiscard]] bool start(ExportSettings settings, editing::model::EditorStateExt const& project);
+    [[nodiscard]] bool start(
+        ExportSettings settings,
+        editing::model::EditorStateExt const& project,
+        std::optional<std::string> cameraFallback = std::nullopt
+    );
     void               tick();
     void               cancel();
     void               reset();

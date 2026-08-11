@@ -331,7 +331,7 @@ void EditorController::tick(bool hudVisible) {
                 settings.startTick = 0;
                 settings.endTick   = std::max<int64_t>(0, session.getTotalTicks());
             }
-            if (mExportDriver && mExportDriver->start(std::move(settings), mProject)) {
+            if (mExportDriver && mExportDriver->start(std::move(settings), mProject, mPreviewCameraId)) {
                 // The first warm-up render can run later in this controller tick.
                 // Publish RenderMode before that Present so the supersampled game
                 // surface is never shown directly in the visible window.

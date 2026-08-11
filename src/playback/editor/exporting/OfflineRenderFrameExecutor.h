@@ -31,7 +31,11 @@ public:
     OfflineRenderFrameExecutor(OfflineRenderFrameExecutor const&)            = delete;
     OfflineRenderFrameExecutor& operator=(OfflineRenderFrameExecutor const&) = delete;
 
-    [[nodiscard]] bool open(ExportSettings const& settings, editing::model::EditorStateExt const& project);
+    [[nodiscard]] bool open(
+        ExportSettings const& settings,
+        editing::model::EditorStateExt const& project,
+        std::optional<std::string> cameraFallback = std::nullopt
+    );
     void               close();
 
     [[nodiscard]] OfflineRenderFrameExecutionResult

@@ -3,6 +3,7 @@
 #include "CameraTimelineEvaluator.h"
 
 #include <cstdint>
+#include <atomic>
 #include <memory>
 #include <optional>
 
@@ -17,19 +18,22 @@ struct CameraTimelineSample {
     std::optional<float> aspectRatio;
 };
 
-using CameraTimelineAppliedCallback = void (*)(void*) noexcept;
+using CameraTimelineAppliedFlag = std::shared_ptr<std::atomic_bool>;
 
 // A render pass captures one immutable timeline source and one exact replay
 // sample.  Hooks consume this context without reaching into editor state.
 struct CameraTimelineRenderContext {
     functions::render::ReplaySampleTime time;
     CameraTimelineSource                source{CameraTimelineSource::Preview};
-    // Export computes this once before the native render pass. Preview may
-    // leave it empty and let the camera hook sample the active timeline.
+    // The producer computes this once before the native render pass so camera
+    // and entity interpolation consume the same fractional replay sample.
     std::optional<CameraTimelineSample> sample;
-    CameraTimelineAppliedCallback       appliedCallback{};
-    void*                               appliedContext{};
+    // The flag is shared with the export boundary so a renderer-thread camera
+    // hook can acknowledge the same sample after updateGraphics returns.
+    CameraTimelineAppliedFlag           appliedFlag;
 };
+
+using CameraTimelineRenderContextHandle = std::shared_ptr<CameraTimelineRenderContext const>;
 
 class ScopedCameraTimelineRenderContext {
 public:
@@ -37,8 +41,7 @@ public:
         functions::render::ReplaySampleTime time,
         CameraTimelineSource                source,
         std::optional<CameraTimelineSample> sample = std::nullopt,
-        CameraTimelineAppliedCallback       appliedCallback = nullptr,
-        void*                               appliedContext = nullptr
+        CameraTimelineAppliedFlag           appliedFlag = {}
     ) noexcept;
     ~ScopedCameraTimelineRenderContext();
 
@@ -63,5 +66,10 @@ sampleCameraTimeline(CameraTimelineSource source, functions::render::ReplaySampl
 [[nodiscard]] bool hasCameraTimeline(CameraTimelineSource source) noexcept;
 
 [[nodiscard]] std::optional<CameraTimelineRenderContext> currentCameraTimelineRenderContext() noexcept;
+
+// Export keeps its immutable render context alive independently of the game
+// thread. This is required when LevelRendererPlayer runs on a renderer thread.
+void publishCameraTimelineRenderContext(CameraTimelineRenderContextHandle context);
+void clearCameraTimelineRenderContext(CameraTimelineRenderContextHandle const& expected = {});
 
 } // namespace playback::editor::keyframe

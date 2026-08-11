@@ -22,7 +22,8 @@ class CameraTimelineEvaluator {
 public:
     explicit CameraTimelineEvaluator(
         editing::model::EditorStateExt project,
-        std::optional<std::string>     cameraOverride = std::nullopt
+        std::optional<std::string>     cameraOverride = std::nullopt,
+        std::optional<std::string>     cameraFallback = std::nullopt
     );
 
     [[nodiscard]] std::optional<CameraRenderState> sample(functions::render::ReplaySampleTime const& time) const;
@@ -34,6 +35,7 @@ private:
 
     editing::model::EditorStateExt mProject;
     std::optional<std::string>     mCameraOverride;
+    std::optional<std::string>     mCameraFallback;
 };
 
 } // namespace playback::editor::keyframe

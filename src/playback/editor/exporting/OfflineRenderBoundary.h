@@ -66,7 +66,12 @@ public:
     OfflineRenderBoundary& operator=(OfflineRenderBoundary const&) = delete;
 
     [[nodiscard]] bool
-         open(uint32_t capacity, ExportSettings const& settings, editing::model::EditorStateExt const& project);
+    open(
+        uint32_t                              capacity,
+        ExportSettings const&                 settings,
+        editing::model::EditorStateExt const& project,
+        std::optional<std::string>            cameraFallback = std::nullopt
+    );
     void close();
     void cancel();
 

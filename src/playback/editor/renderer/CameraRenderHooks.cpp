@@ -75,7 +75,7 @@ LL_TYPE_INSTANCE_HOOK(
     if (!sample) return;
 
     applyCameraState(camera, *sample);
-    if (context->appliedCallback) context->appliedCallback(context->appliedContext);
+    if (context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
 }
 
 std::atomic_bool gInstalled{false};

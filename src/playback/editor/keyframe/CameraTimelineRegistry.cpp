@@ -15,6 +15,7 @@ struct Binding {
 
 std::atomic<std::shared_ptr<Binding const>> gPreview;
 std::atomic<std::shared_ptr<Binding const>> gExport;
+std::atomic<CameraTimelineRenderContextHandle> gExportRenderContext;
 thread_local std::optional<CameraTimelineRenderContext> gRenderContext;
 
 std::atomic<std::shared_ptr<Binding const>>& bindingFor(CameraTimelineSource source) {
@@ -27,12 +28,11 @@ ScopedCameraTimelineRenderContext::ScopedCameraTimelineRenderContext(
     functions::render::ReplaySampleTime time,
     CameraTimelineSource                source,
     std::optional<CameraTimelineSample> sample,
-    CameraTimelineAppliedCallback       appliedCallback,
-    void*                               appliedContext
+    CameraTimelineAppliedFlag           appliedFlag
 ) noexcept
 : mPrevious(gRenderContext),
   mHadPrevious(gRenderContext.has_value()) {
-    gRenderContext = CameraTimelineRenderContext{time, source, std::move(sample), appliedCallback, appliedContext};
+    gRenderContext = CameraTimelineRenderContext{time, source, std::move(sample), std::move(appliedFlag)};
 }
 
 ScopedCameraTimelineRenderContext::~ScopedCameraTimelineRenderContext() {
@@ -82,6 +82,28 @@ bool hasCameraTimeline(CameraTimelineSource source) noexcept {
     return current && current->timeline;
 }
 
-std::optional<CameraTimelineRenderContext> currentCameraTimelineRenderContext() noexcept { return gRenderContext; }
+std::optional<CameraTimelineRenderContext> currentCameraTimelineRenderContext() noexcept {
+    if (gRenderContext) return gRenderContext;
+    auto const global = gExportRenderContext.load(std::memory_order_acquire);
+    return global ? std::optional<CameraTimelineRenderContext>{*global} : std::nullopt;
+}
+
+void publishCameraTimelineRenderContext(CameraTimelineRenderContextHandle context) {
+    gExportRenderContext.store(std::move(context), std::memory_order_release);
+}
+
+void clearCameraTimelineRenderContext(CameraTimelineRenderContextHandle const& expected) {
+    auto current = gExportRenderContext.load(std::memory_order_acquire);
+    while (current && (!expected || current == expected)) {
+        if (gExportRenderContext.compare_exchange_weak(
+                current,
+                {},
+                std::memory_order_acq_rel,
+                std::memory_order_acquire
+            )) {
+            return;
+        }
+    }
+}
 
 } // namespace playback::editor::keyframe
