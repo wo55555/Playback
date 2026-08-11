@@ -39,6 +39,7 @@ void ReplayEditor::initialize() {
 
 void ReplayEditor::shutdown() {
     saveLayoutPreferences();
+    mViewportPanel.resetCameraControl();
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
     mViewportMaximized = false;

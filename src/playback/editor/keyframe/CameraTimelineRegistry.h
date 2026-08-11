@@ -6,6 +6,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace playback::editor::keyframe {
 
@@ -63,7 +64,22 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
 [[nodiscard]] std::optional<CameraTimelineSample>
 sampleCameraTimeline(CameraTimelineSource source, functions::render::ReplaySampleTime const& time) noexcept;
 
+// Samples one immutable evaluator handle across a bounded integer-tick range.
+// The viewport uses this to visualize exactly the same path as preview/export.
+[[nodiscard]] std::vector<CameraRenderState> sampleCameraTimelineRange(
+    CameraTimelineSource source,
+    int64_t              startTick,
+    int64_t              endTick,
+    size_t               maxSamples
+) noexcept;
+
 [[nodiscard]] bool hasCameraTimeline(CameraTimelineSource source) noexcept;
+
+// A paused editor may temporarily inspect the timeline from an operator
+// camera. This render-only state never participates in export evaluation.
+void publishPreviewCameraOverride(CameraRenderState state) noexcept;
+void clearPreviewCameraOverride() noexcept;
+[[nodiscard]] std::optional<CameraRenderState> currentPreviewCameraOverride() noexcept;
 
 [[nodiscard]] std::optional<CameraTimelineRenderContext> currentCameraTimelineRenderContext() noexcept;
 

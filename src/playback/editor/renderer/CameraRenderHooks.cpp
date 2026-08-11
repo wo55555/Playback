@@ -1,13 +1,18 @@
 #include "CameraRenderHooks.h"
 
+#include "playback/Playback.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
 
 #include "ll/api/memory/Hook.h"
+#include "ll/api/service/TargetedBedrock.h"
 
+#include "mc/client/game/ClientInstance.h"
+#include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/deps/renderer/Camera.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -17,6 +22,17 @@ namespace playback::editor::renderer {
 namespace {
 
 constexpr float RadiansPerDegree = 3.14159265358979323846f / 180.0f;
+
+std::array<std::atomic_uint64_t, 2> gApplyCounts{};
+std::array<std::atomic_bool, 2>     gMissingSampleLogged{};
+
+size_t sourceIndex(keyframe::CameraTimelineSource source) noexcept {
+    return source == keyframe::CameraTimelineSource::Export ? 1U : 0U;
+}
+
+char const* sourceName(keyframe::CameraTimelineSource source) noexcept {
+    return source == keyframe::CameraTimelineSource::Export ? "export" : "preview";
+}
 
 void applyCameraState(mce::Camera& camera, keyframe::CameraTimelineSample const& sample) noexcept {
     auto const& state        = sample.state;
@@ -49,6 +65,75 @@ void applyCameraState(mce::Camera& camera, keyframe::CameraTimelineSample const&
     camera.updateViewMatrixDependencies();
 }
 
+bool applyCurrentCameraTimelineState(mce::Camera* setupCamera, char const* stage) noexcept {
+    auto const context = keyframe::currentCameraTimelineRenderContext();
+    if (!context) return false;
+
+    std::optional<keyframe::CameraTimelineSample> sample;
+    bool                                          operatorOverride = false;
+    if (context->source == keyframe::CameraTimelineSource::Preview) {
+        if (auto const preview = keyframe::currentPreviewCameraOverride()) {
+            sample = keyframe::CameraTimelineSample{
+                *preview,
+                context->sample ? context->sample->aspectRatio : std::optional<float>{},
+            };
+            operatorOverride = true;
+        }
+    }
+    if (!sample) {
+        sample = context->sample
+            ? context->sample
+            : keyframe::sampleCameraTimeline(context->source, context->time);
+    }
+    if (!sample) {
+        auto& logged = gMissingSampleLogged[sourceIndex(context->source)];
+        if (!logged.exchange(true, std::memory_order_acq_rel)) {
+            Playback::getInstance().getSelf().getLogger().debug(
+                "Camera timeline has no sample at {} boundary; native camera remains active "
+                "(source={}, tick={}/{})",
+                stage,
+                sourceName(context->source),
+                context->time.numerator,
+                context->time.denominator
+            );
+        }
+        return false;
+    }
+
+    mce::Camera* clientCamera = nullptr;
+    if (auto client = ll::service::getClientInstance()) clientCamera = &client->getCamera();
+
+    if (setupCamera) applyCameraState(*setupCamera, *sample);
+    if (clientCamera && clientCamera != setupCamera) applyCameraState(*clientCamera, *sample);
+    if (!setupCamera && !clientCamera) return false;
+
+    if (context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
+
+    auto const count = gApplyCounts[sourceIndex(context->source)].fetch_add(1, std::memory_order_relaxed) + 1;
+    if (count <= 4 || count % 600 == 0) {
+        auto const& state = sample->state;
+        Playback::getInstance().getSelf().getLogger().debug(
+            "Camera timeline applied at {} boundary (source={}, tick={}/{}, position=({}, {}, {}), yaw={}, "
+            "pitch={}, fov={}, override={}, setupCamera={}, clientCamera={}, sameCamera={})",
+            stage,
+            sourceName(context->source),
+            context->time.numerator,
+            context->time.denominator,
+            state.x,
+            state.y,
+            state.z,
+            state.yaw,
+            state.pitch,
+            state.fov,
+            operatorOverride,
+            static_cast<void*>(setupCamera),
+            static_cast<void*>(clientCamera),
+            setupCamera && setupCamera == clientCamera
+        );
+    }
+    return true;
+}
+
 LL_TYPE_INSTANCE_HOOK(
     ReplayCameraSetupHook,
     ll::memory::HookPriority::Lowest,
@@ -60,22 +145,23 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     origin(camera, partialTick);
 
-    // The controller publishes one immutable context for the current render
-    // pass.  Applying after native setup makes this the sole final camera
-    // authority and leaves replay/player simulation untouched.
-    auto const context = keyframe::currentCameraTimelineRenderContext();
-    if (!context) return;
+    // Bedrock may pass a transient camera here, so update both this instance
+    // and IClientInstance's final camera after native setup.
+    (void)applyCurrentCameraTimelineState(&camera, "setupCamera");
+}
 
-    // Export passes carry an immutable sample from the clock publisher. This
-    // keeps keyframe evaluation out of the native render call and guarantees
-    // that the camera and entity pose use the same fractional replay tick.
-    auto const sample = context->sample
-        ? context->sample
-        : keyframe::sampleCameraTimeline(context->source, context->time);
-    if (!sample) return;
-
-    applyCameraState(camera, *sample);
-    if (context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
+LL_TYPE_INSTANCE_HOOK(
+    ReplayCameraFrameHook,
+    ll::memory::HookPriority::Highest,
+    GameRenderer,
+    &GameRenderer::renderCurrentFrame,
+    void,
+    float partialTick
+) {
+    // Some render paths consume IClientInstance::getCamera() without calling
+    // LevelRendererPlayer::setupCamera for every captured frame.
+    (void)applyCurrentCameraTimelineState(nullptr, "renderCurrentFrame");
+    origin(partialTick);
 }
 
 std::atomic_bool gInstalled{false};
@@ -83,16 +169,24 @@ std::atomic_bool gInstalled{false};
 } // namespace
 
 bool hookCameraRender(bool enable) {
-    static bool installed = false;
+    struct HookState {
+        bool setupCamera{};
+        bool gameFrame{};
+    };
+    static HookState state;
+
     if (enable) {
-        if (!installed) installed = ReplayCameraSetupHook::hook() == 0;
+        if (!state.setupCamera) state.setupCamera = ReplayCameraSetupHook::hook() == 0;
+        if (!state.gameFrame) state.gameFrame = ReplayCameraFrameHook::hook() == 0;
+        bool const installed = state.setupCamera && state.gameFrame;
         gInstalled.store(installed, std::memory_order_release);
         return installed;
     }
 
-    if (installed && ReplayCameraSetupHook::unhook()) installed = false;
-    gInstalled.store(installed, std::memory_order_release);
-    return !installed;
+    gInstalled.store(false, std::memory_order_release);
+    if (state.gameFrame && ReplayCameraFrameHook::unhook()) state.gameFrame = false;
+    if (state.setupCamera && ReplayCameraSetupHook::unhook()) state.setupCamera = false;
+    return !state.setupCamera && !state.gameFrame;
 }
 
 bool isCameraRenderInstalled() { return gInstalled.load(std::memory_order_acquire); }
