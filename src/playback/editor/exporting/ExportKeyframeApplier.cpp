@@ -11,6 +11,7 @@ void ExportKeyframeApplier::configure(
     std::optional<float>                  aspectRatio
 ) {
     reset();
+    if (project.cameras.empty()) return;
     mTimeline = std::make_shared<keyframe::CameraTimelineEvaluator>(project);
     keyframe::publishCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline, aspectRatio);
 }

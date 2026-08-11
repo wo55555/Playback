@@ -2,7 +2,7 @@
 
 #include "ExportActivity.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
-#include "playback/functions/render/ReplayEntityInterpolator.h"
+#include "playback/functions/render/ReplayEntityRenderHooks.h"
 #include "playback/functions/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
@@ -11,11 +11,6 @@
 #include "mc/client/game/IClientInstance.h"
 #include "mc/client/game/MinecraftGame.h"
 #include "mc/client/renderer/game/GameRenderer.h"
-#include "mc/client/renderer/game/LevelRendererPlayer.h"
-#include "mc/deps/ecs/strict/StrictEntityContext.h"
-#include "mc/deps/vanilla_components/StateVectorComponent.h"
-#include "mc/entity/components/RenderPositionComponent.h"
-#include "mc/entity/systems/UpdateRenderPosSystem.h"
 #include "mc/external/bgfx/Context.h"
 #include "mc/external/bgfx/Frame.h"
 #include "mc/platform/threading/Mutex.h"
@@ -24,7 +19,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <limits>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -36,6 +30,7 @@ namespace {
 struct ActiveClockSample {
     OfflineRenderClockToken  token;
     OfflineRenderClockSample sample;
+    std::optional<keyframe::CameraTimelineSample> cameraSample;
     uint64_t                 renderSerial{};
     void const*              expectedBgfxFrame{};
     void const*              submittedBgfxFrame{};
@@ -44,6 +39,8 @@ struct ActiveClockSample {
     bool                     claimed{};
     bool                     renderReady{};
     bool                     boundaryClaimed{};
+    bool                     cameraRequired{};
+    bool                     cameraApplied{};
     bool                     applied{};
     bool                     completed{};
 };
@@ -51,6 +48,8 @@ struct ActiveClockSample {
 struct AcquiredClockSample {
     OfflineRenderClockToken  token;
     OfflineRenderClockSample sample;
+    std::optional<keyframe::CameraTimelineSample> cameraSample;
+    bool                     cameraRequired{};
     uint64_t                 renderSerial{};
 };
 
@@ -60,6 +59,11 @@ struct ActiveRenderSample {
     OfflineRenderClockToken             token;
     uint64_t                            renderSerial{};
     uint32_t                            gameRenderCalls{};
+};
+
+struct CameraRenderAcknowledgement {
+    OfflineRenderClockToken token;
+    uint64_t                renderSerial{};
 };
 
 std::atomic_bool                               gHookInstalled{false};
@@ -182,16 +186,35 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     gActiveSample->gameRenderOrdinal       = 0;
     gActiveSample->renderReady             = false;
     gActiveSample->boundaryClaimed         = false;
+    gActiveSample->cameraApplied           = false;
     gActiveSample->applied                 = false;
     gActiveSample->completed               = false;
     if (gNextRenderSerial == 0) ++gNextRenderSerial;
-    return AcquiredClockSample{gActiveSample->token, gActiveSample->sample, gActiveSample->renderSerial};
+    return AcquiredClockSample{
+        gActiveSample->token,
+        gActiveSample->sample,
+        gActiveSample->cameraSample,
+        gActiveSample->cameraRequired,
+        gActiveSample->renderSerial
+    };
 }
 
-void completeClockSample(OfflineRenderClockToken token, uint64_t renderSerial, bool applied) {
+void markClockSampleCameraApplied(OfflineRenderClockToken token, uint64_t renderSerial) {
     std::scoped_lock lock(gClockMutex);
     if (!gActiveSample || gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial) return;
-    gActiveSample->applied = applied;
+    gActiveSample->cameraApplied = true;
+}
+
+void acknowledgeCameraRender(void* opaque) noexcept {
+    auto* const acknowledgement = static_cast<CameraRenderAcknowledgement*>(opaque);
+    if (!acknowledgement) return;
+    markClockSampleCameraApplied(acknowledgement->token, acknowledgement->renderSerial);
+}
+
+void completeClockSample(OfflineRenderClockToken token, uint64_t renderSerial, bool entityApplied) {
+    std::scoped_lock lock(gClockMutex);
+    if (!gActiveSample || gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial) return;
+    gActiveSample->applied = entityApplied && (!gActiveSample->cameraRequired || gActiveSample->cameraApplied);
 }
 
 void markClockSampleRenderReady(OfflineRenderClockToken token, uint64_t renderSerial, bool ready) {
@@ -235,39 +258,6 @@ bool recordClockSampleBgfxFrame(
     return true;
 }
 
-std::optional<ActiveRenderSample> currentRenderSample() noexcept { return gRenderSample; }
-
-void applyCameraSample(mce::Camera& camera, keyframe::CameraTimelineSample const& sample) noexcept {
-    auto const& state        = sample.state;
-    float const yawRadians   = state.yaw * 3.14159265358979323846f / 180.0f;
-    float const pitchRadians = state.pitch * 3.14159265358979323846f / 180.0f;
-    float const cosPitch     = std::cos(pitchRadians);
-    float const sinPitch     = std::sin(pitchRadians);
-    float const sinYaw       = std::sin(yawRadians);
-    float const cosYaw       = std::cos(yawRadians);
-
-    ::glm::vec3 forward{-sinYaw * cosPitch, -sinPitch, cosYaw * cosPitch};
-    ::glm::vec3 right{cosYaw, 0.0f, sinYaw};
-    ::glm::vec3 up{-sinYaw * sinPitch, cosPitch, cosYaw * sinPitch};
-    float const rollRadians = state.roll * 3.14159265358979323846f / 180.0f;
-    if (std::abs(rollRadians) > std::numeric_limits<float>::epsilon()) {
-        float const       cosine      = std::cos(rollRadians);
-        float const       sine        = std::sin(rollRadians);
-        ::glm::vec3 const rolledRight = right * cosine + up * sine;
-        ::glm::vec3 const rolledUp    = up * cosine - right * sine;
-        right                         = rolledRight;
-        up                            = rolledUp;
-    }
-
-    camera.mPosition = ::glm::vec3{state.x, state.y, state.z};
-    camera.mForward  = forward;
-    camera.mRight    = right;
-    camera.mUp       = up;
-    camera.mFov      = std::clamp(state.fov, 1.0f, 179.0f);
-    if (sample.aspectRatio) camera.mAspectRatio = *sample.aspectRatio;
-    camera.updateViewMatrixDependencies();
-}
-
 LL_TYPE_INSTANCE_HOOK(
     OfflineRenderClockUpdateGraphicsHook,
     ll::memory::HookPriority::Lowest,
@@ -280,6 +270,7 @@ LL_TYPE_INSTANCE_HOOK(
     auto const sample = acquireClockSampleForRender();
     if (sample) {
         bool poseApplied = false;
+        CameraRenderAcknowledgement cameraAcknowledgement{sample->token, sample->renderSerial};
         {
             ScopedTimerOverride timerOverride(timer, sample->sample);
             ScopedRenderSample  renderSample(
@@ -288,10 +279,21 @@ LL_TYPE_INSTANCE_HOOK(
                 sample->token,
                 sample->renderSerial
             );
+            keyframe::ScopedCameraTimelineRenderContext renderContext(
+                sample->sample.replayTime,
+                keyframe::CameraTimelineSource::Export,
+                sample->cameraSample,
+                acknowledgeCameraRender,
+                &cameraAcknowledgement
+            );
             auto pose =
                 functions::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
             poseApplied = pose != nullptr;
-            markClockSampleRenderReady(sample->token, sample->renderSerial, poseApplied);
+            markClockSampleRenderReady(
+                sample->token,
+                sample->renderSerial,
+                poseApplied && (!sample->cameraRequired || sample->cameraSample.has_value())
+            );
             origin(client, timer);
         }
         completeClockSample(sample->token, sample->renderSerial, poseApplied);
@@ -309,18 +311,16 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
 
-    auto const appliedTick = std::max(0, replay.getAppliedReplayTick());
-    auto       previewTime = replay.isPaused() ? functions::render::ReplaySampleTime::fromRational(appliedTick, 1)
-                                               : functions::render::ReplaySampleTime::fromPreview(
-                                               std::max(0, appliedTick - 1),
-                                               static_cast<float>(timer.mAlpha)
-                                           );
+    auto const previewTime = replay.getRenderSampleTime(static_cast<float>(timer.mAlpha));
     if (!previewTime) {
         origin(client, timer);
         return;
     }
 
-    ScopedRenderSample renderSample(*previewTime, keyframe::CameraTimelineSource::Preview);
+    keyframe::ScopedCameraTimelineRenderContext renderContext(
+        *previewTime,
+        keyframe::CameraTimelineSource::Preview
+    );
     origin(client, timer);
 }
 
@@ -369,46 +369,11 @@ LL_TYPE_INSTANCE_HOOK(
     origin();
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    ReplayCameraSetupHook,
-    ll::memory::HookPriority::Lowest,
-    LevelRendererPlayer,
-    &LevelRendererPlayer::setupCamera,
-    void,
-    mce::Camera& camera,
-    float        partialTick
-) {
-    if (auto const active = currentRenderSample()) {
-        if (auto const sample = keyframe::sampleCameraTimeline(active->source, active->time)) {
-            applyCameraSample(camera, *sample);
-            origin(camera, partialTick);
-            applyCameraSample(camera, *sample);
-            return;
-        }
-    }
-    origin(camera, partialTick);
-}
-
-LL_TYPE_STATIC_HOOK(
-    ReplayEntityRenderPositionHook,
-    ll::memory::HookPriority::Lowest,
-    UpdateRenderPosSystem,
-    &UpdateRenderPosSystem::_doUpdateRenderPosSystem,
-    void,
-    StrictEntityContext const&  context,
-    StateVectorComponent const& stateVector,
-    RenderPositionComponent&    renderPosition
-) {
-    origin(context, stateVector, renderPosition);
-    functions::render::reapplyReplayEntityPosition(renderPosition);
-}
-
 } // namespace
 
 bool hookOfflineRenderClock(bool enable) {
     struct HookState {
         bool clock{};
-        bool camera{};
         bool entity{};
         bool gameFrame{};
         bool bgfxSwap{};
@@ -417,11 +382,10 @@ bool hookOfflineRenderClock(bool enable) {
 
     if (enable) {
         if (!state.clock) state.clock = OfflineRenderClockUpdateGraphicsHook::hook() == 0;
-        if (!state.camera) state.camera = ReplayCameraSetupHook::hook() == 0;
-        if (!state.entity) state.entity = ReplayEntityRenderPositionHook::hook() == 0;
+        if (!state.entity) state.entity = functions::render::hookReplayEntityRender(true);
         if (!state.gameFrame) state.gameFrame = OfflineRenderGameFrameHook::hook() == 0;
         if (!state.bgfxSwap) state.bgfxSwap = OfflineRenderBgfxSwapHook::hook() == 0;
-        bool const ready = state.clock && state.camera && state.entity && state.gameFrame && state.bgfxSwap;
+        bool const ready = state.clock && state.entity && state.gameFrame && state.bgfxSwap;
         gHookInstalled.store(ready, std::memory_order_release);
         return ready;
     }
@@ -430,10 +394,9 @@ bool hookOfflineRenderClock(bool enable) {
     resetOfflineRenderClock();
     if (state.bgfxSwap && OfflineRenderBgfxSwapHook::unhook()) state.bgfxSwap = false;
     if (state.gameFrame && OfflineRenderGameFrameHook::unhook()) state.gameFrame = false;
-    if (state.entity && ReplayEntityRenderPositionHook::unhook()) state.entity = false;
-    if (state.camera && ReplayCameraSetupHook::unhook()) state.camera = false;
+    if (state.entity && functions::render::hookReplayEntityRender(false)) state.entity = false;
     if (state.clock && OfflineRenderClockUpdateGraphicsHook::unhook()) state.clock = false;
-    return !state.clock && !state.camera && !state.entity && !state.gameFrame && !state.bgfxSwap;
+    return !state.clock && !state.entity && !state.gameFrame && !state.bgfxSwap;
 }
 
 bool isOfflineRenderClockInstalled() { return gHookInstalled.load(std::memory_order_acquire); }
@@ -453,7 +416,21 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
 
     token.id = gNextTokenId++;
     if (gNextTokenId == 0) ++gNextTokenId;
+
+    // Evaluate keyframes at the exact fractional export sample.
+    // Do that before entering Bedrock so the render hook cannot accidentally
+    // fall back to the native camera after the frame has been published.
+    auto const cameraRequired = keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Export);
+    auto const cameraSample =
+        keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample.replayTime);
+    if (cameraRequired && !cameraSample) {
+        token = {};
+        return OfflineRenderClockPublishResult::InvalidSample;
+    }
+
     gActiveSample = ActiveClockSample{token, sample};
+    gActiveSample->cameraSample   = cameraSample;
+    gActiveSample->cameraRequired = cameraRequired;
     return OfflineRenderClockPublishResult::Published;
 }
 

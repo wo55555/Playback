@@ -21,6 +21,7 @@
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
+#include "mc/entity/components/MovementInterpolatorComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
@@ -145,6 +146,21 @@ render::EntityRenderPose replayRenderPose(Actor const& actor) {
     }
 
     return {replayRenderPosition(actor.getPosition()), rotation.x, rotation.y, headYaw, bodyYaw};
+}
+
+// Bedrock's movement interpolator is useful during continuous playback, but a
+// seek/snapshot is a discontinuity. Cancel only the pending native transition
+// for that actor at the discontinuity boundary.
+void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 const& rotation, float headYaw) {
+    auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
+    if (!interpolator) return;
+
+    *interpolator->mPos          = position;
+    *interpolator->mRot          = rotation;
+    interpolator->mHeadYaw       = headYaw;
+    interpolator->mPositionSteps = 0;
+    interpolator->mRotationSteps = 0;
+    interpolator->mHeadYawSteps  = 0;
 }
 
 std::string createReplayLevelId() {
@@ -443,6 +459,23 @@ bool ReplaySession::setPaused(bool paused) {
     mIsPaused = paused;
     getLogger().debug("Replay {} at tick {}", paused ? "paused" : "playing", mCurrentTick);
     return true;
+}
+
+std::optional<render::ReplaySampleTime> ReplaySession::getRenderSampleTime(float partialTick) const noexcept {
+    if (!mActive || !mReplayWorldJoined) return std::nullopt;
+
+    auto const appliedTick = std::max(0, mCurrentTick);
+    if (mIsPaused) return render::ReplaySampleTime::fromRational(appliedTick, 1);
+
+    // Entity pose history is committed as [tick - 1, tick].  Sampling from
+    // the same interval keeps the camera and native entity interpolation in
+    // phase while still exposing Bedrock's current Timer::mAlpha.
+    return render::ReplaySampleTime::fromPreview(std::max(0, appliedTick - 1), partialTick);
+}
+
+std::optional<long double> ReplaySession::getFractionalReplayTick(float partialTick) const noexcept {
+    auto const sample = getRenderSampleTime(partialTick);
+    return sample ? std::optional<long double>{sample->value()} : std::nullopt;
 }
 
 bool ReplaySession::beginExportTimeline(int startTick) {
@@ -2333,6 +2366,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 } else {
                     entityContext.removeComponent<OnGroundFlagComponent>();
                 }
+                if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
                 continue;
             }
 
@@ -2376,6 +2410,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                     if (snapMovement) bodyRotation->mYBodyRotO = bodyYaw;
                 }
             }
+            if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
         }
         return;
     }

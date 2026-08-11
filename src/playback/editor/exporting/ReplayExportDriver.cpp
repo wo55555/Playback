@@ -5,6 +5,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/editing/models/EditorStateExt.h"
+#include "playback/editor/renderer/CameraRenderHooks.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/screen/IdleDetectionHooks.h"
 
@@ -287,7 +288,8 @@ void ReplayExportDriver::reset() {
 }
 
 bool ReplayExportDriver::isAvailable() const {
-    return mRenderBoundary != nullptr && screen::isIdleDetectionGuardInstalled() && isOfflineRenderClockInstalled();
+    return mRenderBoundary != nullptr && screen::isIdleDetectionGuardInstalled() && isOfflineRenderClockInstalled()
+        && playback::editor::renderer::isCameraRenderInstalled();
 }
 
 bool ReplayExportDriver::isActive() const {

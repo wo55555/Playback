@@ -15,12 +15,30 @@ struct Binding {
 
 std::atomic<std::shared_ptr<Binding const>> gPreview;
 std::atomic<std::shared_ptr<Binding const>> gExport;
+thread_local std::optional<CameraTimelineRenderContext> gRenderContext;
 
 std::atomic<std::shared_ptr<Binding const>>& bindingFor(CameraTimelineSource source) {
     return source == CameraTimelineSource::Export ? gExport : gPreview;
 }
 
 } // namespace
+
+ScopedCameraTimelineRenderContext::ScopedCameraTimelineRenderContext(
+    functions::render::ReplaySampleTime time,
+    CameraTimelineSource                source,
+    std::optional<CameraTimelineSample> sample,
+    CameraTimelineAppliedCallback       appliedCallback,
+    void*                               appliedContext
+) noexcept
+: mPrevious(gRenderContext),
+  mHadPrevious(gRenderContext.has_value()) {
+    gRenderContext = CameraTimelineRenderContext{time, source, std::move(sample), appliedCallback, appliedContext};
+}
+
+ScopedCameraTimelineRenderContext::~ScopedCameraTimelineRenderContext() {
+    if (mHadPrevious) gRenderContext = mPrevious;
+    else gRenderContext.reset();
+}
 
 void publishCameraTimeline(
     CameraTimelineSource source,
@@ -58,5 +76,12 @@ sampleCameraTimeline(CameraTimelineSource source, functions::render::ReplaySampl
         return std::nullopt;
     }
 }
+
+bool hasCameraTimeline(CameraTimelineSource source) noexcept {
+    auto const current = bindingFor(source).load(std::memory_order_acquire);
+    return current && current->timeline;
+}
+
+std::optional<CameraTimelineRenderContext> currentCameraTimelineRenderContext() noexcept { return gRenderContext; }
 
 } // namespace playback::editor::keyframe

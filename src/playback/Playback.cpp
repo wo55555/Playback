@@ -4,6 +4,7 @@
 #include "playback/Playback.h"
 #include "playback/command/Command.h"
 #include "playback/editor/ReplayUI.h"
+#include "playback/editor/renderer/CameraRenderHooks.h"
 #include "playback/editor/exporting/OfflineRenderClockHooks.h"
 #include "playback/functions/action/Action.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
@@ -85,9 +86,15 @@ bool Playback::hook() {
     if (!editor::exporting::hookOfflineRenderClock(true)) {
         getSelf().getLogger().warn("Unable to install the fractional render clock; video export is disabled");
     }
+    if (!editor::renderer::hookCameraRender(true)) {
+        getSelf().getLogger().warn("Unable to install the camera render hook; camera timelines are disabled");
+    }
     if (!functions::hookNetwork(true)) {
         if (!editor::exporting::hookOfflineRenderClock(false)) {
             getSelf().getLogger().error("Unable to roll back the fractional render clock after network hook failure");
+        }
+        if (!editor::renderer::hookCameraRender(false)) {
+            getSelf().getLogger().error("Unable to roll back the camera render hook after network hook failure");
         }
         (void)screen::hookIdleDetection(false);
         screen::hookMainMenu(false);
@@ -99,6 +106,9 @@ bool Playback::hook() {
         }
         if (!editor::exporting::hookOfflineRenderClock(false)) {
             getSelf().getLogger().error("Unable to roll back fractional render clock after client tick hook failure");
+        }
+        if (!editor::renderer::hookCameraRender(false)) {
+            getSelf().getLogger().error("Unable to roll back camera render hook after client tick hook failure");
         }
         (void)screen::hookIdleDetection(false);
         screen::hookMainMenu(false);
@@ -176,6 +186,21 @@ bool Playback::unhook() {
         getSelf().getLogger().error(
             "Unable to remove the fractional render clock (UI restoration={}, network restoration={}, "
             "client tick restoration={})",
+            uiRestored,
+            networkRestored,
+            tickRestored
+        );
+        return false;
+    }
+    if (!editor::renderer::hookCameraRender(false)) {
+        bool clockRestored   = editor::exporting::hookOfflineRenderClock(true);
+        bool uiRestored      = editor::hookReplayUI(true);
+        bool networkRestored = functions::hookNetwork(true);
+        bool tickRestored    = functions::hookClientTick(true);
+        getSelf().getLogger().error(
+            "Unable to remove camera render hooks (clock restoration={}, UI restoration={}, "
+            "network restoration={}, client tick restoration={})",
+            clockRestored,
             uiRestored,
             networkRestored,
             tickRestored

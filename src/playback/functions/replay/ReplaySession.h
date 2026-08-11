@@ -291,6 +291,11 @@ public:
     [[nodiscard]] int getAppliedReplayTick() const { return mCurrentTick; }
 
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
+    // Rendering advances between the last committed replay tick and the next
+    // one.  This is the single fractional-time contract shared by preview,
+    // camera evaluation, and entity interpolation.
+    [[nodiscard]] std::optional<render::ReplaySampleTime> getRenderSampleTime(float partialTick) const noexcept;
+    [[nodiscard]] std::optional<long double> getFractionalReplayTick(float partialTick) const noexcept;
 
     [[nodiscard]] int getTotalTicks() const;
 
