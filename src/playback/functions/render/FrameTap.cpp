@@ -145,7 +145,8 @@ void FrameTap::complete(FrameTapBackendCapture capture, CapturedFrame frame) {
         if (!matches(capture.session) || mActive->state != FrameTapState::Active || mActive->inFlightFrames == 0)
             return;
         --mActive->inFlightFrames;
-        frame.ticket = capture.ticket;
+        frame.ticket     = capture.ticket;
+        frame.submission = capture.submission;
         mActive->readyFrames.emplace_back(std::move(frame));
         if (mActive->config.oneShot) mActive->state = FrameTapState::Completed;
     }

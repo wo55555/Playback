@@ -64,6 +64,14 @@ normalizeFrame(functions::render::CapturedFrame& frame, uint32_t targetWidth, ui
     if (targetBytes > MaxFrameBytes || targetBytes > std::numeric_limits<size_t>::max()) return false;
     if (!validateFrame(frame)) return false;
 
+    // Keep the GPU readback intact when it already satisfies the output
+    // contract. This is the common 1x path and avoids a full CPU bilinear pass
+    // for every frame.
+    if (frame.width == targetWidth && frame.height == targetHeight && frame.rowPitch == targetRowPitch
+        && frame.pixelFormat == functions::render::FramePixelFormat::Rgba8) {
+        return true;
+    }
+
     auto const* source = reinterpret_cast<uint8_t const*>(frame.pixels.data());
     auto const  read   = [&](uint32_t x, uint32_t y, uint32_t channel) -> uint8_t {
         auto const* pixel = source + static_cast<size_t>(y) * frame.rowPitch + static_cast<size_t>(x) * 4;

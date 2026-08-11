@@ -50,8 +50,23 @@ struct FrameTicket {
     int64_t  ptsDenominator{1};
 };
 
+// Backend-owned GPU submission metadata. Handles are opaque diagnostics only;
+// consumers must never dereference them, and they may be stale after completion.
+struct FrameTapSubmission {
+    uint32_t         width{};
+    uint32_t         height{};
+    uint32_t         sampleCount{1};
+    FramePixelFormat pixelFormat{FramePixelFormat::Rgba8};
+    void*            exportResource{};
+    void*            commandQueue{};
+    void*            completionFence{};
+    uint64_t         completionFenceValue{};
+    uint32_t         sourceState{};
+};
+
 struct CapturedFrame {
     FrameTicket            ticket;
+    FrameTapSubmission     submission;
     uint32_t               width{};
     uint32_t               height{};
     uint32_t               rowPitch{};
@@ -70,9 +85,10 @@ struct FrameTapStatus {
 };
 
 struct FrameTapBackendCapture {
-    FrameTapSession session;
-    FrameTicket     ticket;
-    uint64_t        captureId{};
+    FrameTapSession    session;
+    FrameTicket        ticket;
+    uint64_t           captureId{};
+    FrameTapSubmission submission;
 };
 
 class FrameTap {

@@ -25,6 +25,7 @@ public:
 
     void setFrameTap(functions::render::FrameTap* frameTap);
     void reset();
+    void tickExportBeforeClientUpdate();
     void tick(bool hudVisible);
 
 private:
@@ -33,7 +34,7 @@ private:
     void ensureProject(int totalTicks, std::string_view replayPath);
     void applyEditorAction(EditorAction const& action);
     [[nodiscard]] std::optional<editing::model::CameraKeyframe> captureCameraKeyframe() const;
-    void refreshBrowser();
+    void                                                        refreshBrowser();
     void runBrowserOperation(ReplayBrowserOperation operation, bool hudVisible, auto&& callback) {
         mBrowserOperation = operation;
         publishState(hudVisible);
@@ -56,6 +57,7 @@ private:
     std::string                                    mActiveReplayPath;
     std::optional<std::string>                     mPreviewCameraId;
     int                                            mProjectTotalTicks{-1};
+    bool                                           mExportTickedBeforeClientUpdate{};
 };
 
 } // namespace playback::editor

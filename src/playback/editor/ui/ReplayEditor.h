@@ -51,12 +51,13 @@ public:
     bool                                                addKeyframeAtPlayhead();
     bool                                                splitAtPlayhead();
     CurveEditorPanel&                                   curveEditorPanel() { return mCurveEditorPanel; }
-    void                setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
-    void                setVideoAspectRatio(float aspectRatio);
-    [[nodiscard]] float videoAspectRatio() const { return mVideoAspectRatio; }
-    [[nodiscard]] Rect  viewportVideoRect() const { return mViewportPanel.videoRect(); }
-    void                toggleViewportMaximized() { mViewportMaximized = !mViewportMaximized; }
-    [[nodiscard]] bool  isViewportMaximized() const { return mViewportMaximized; }
+    void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
+    [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
+    void                      setVideoAspectRatio(float aspectRatio);
+    [[nodiscard]] float       videoAspectRatio() const { return mVideoAspectRatio; }
+    [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
+    void                      toggleViewportMaximized() { mViewportMaximized = !mViewportMaximized; }
+    [[nodiscard]] bool        isViewportMaximized() const { return mViewportMaximized; }
 
 private:
     ReplayEditor() = default;

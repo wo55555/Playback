@@ -7,6 +7,7 @@
 #include <string>
 
 struct ID3D12Device;
+struct ID3D12CommandQueue;
 struct ID3D12Fence;
 struct ID3D12GraphicsCommandList;
 struct ID3D12Resource;
@@ -21,7 +22,17 @@ public:
     D3D12FrameTapBackend(D3D12FrameTapBackend const&)            = delete;
     D3D12FrameTapBackend& operator=(D3D12FrameTapBackend const&) = delete;
 
-    bool capture(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, ID3D12Resource* source);
+    bool capture(
+        ID3D12Device*              device,
+        ID3D12CommandQueue*        queue,
+        ID3D12GraphicsCommandList* commandList,
+        ID3D12Resource*            source,
+        uint32_t                   sourceState
+    );
+    // Capture a completed scene resource with a separate copy/resolve list on
+    // the same Direct queue.
+    bool
+    captureSubmitted(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* source, uint32_t sourceState);
     void submitted(ID3D12Fence* fence, uint64_t fenceValue);
     void submissionFailed(functions::render::FrameTapError error, std::string message);
     void reset(functions::render::FrameTapError error, std::string message);

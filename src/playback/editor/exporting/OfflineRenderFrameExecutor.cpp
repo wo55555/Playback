@@ -2,15 +2,15 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/renderer/ImGuiRenderer.h"
+#include "playback/functions/replay/ReplaySession.h"
 
 #include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
-#include "mc/client/game/MinecraftGame.h"
 #include "mc/client/gui/GuiData.h"
+#include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/deps/renderer/ViewportInfo.h"
-#include "mc/util/Timer.h"
 
 #include <cmath>
 #include <limits>
@@ -19,9 +19,6 @@
 namespace playback::editor::exporting {
 
 namespace {
-
-constexpr float ReplayTicksPerSecond = 20.0f;
-thread_local bool gInvokingOfflineRender{};
 
 bool ticketsEqual(functions::render::FrameTicket const& left, functions::render::FrameTicket const& right) {
     return left.frameIndex == right.frameIndex && left.ptsNumerator == right.ptsNumerator
@@ -92,8 +89,9 @@ void OfflineRenderFrameExecutor::close() {
     mPendingTicket.reset();
     mRenderWidth         = 0;
     mRenderHeight        = 0;
+    mUiStable            = false;
     mOpen                = false;
-    mRenderInvoked       = false;
+    mSampleRenderInvoked = false;
     mWarmupRenderInvoked = false;
     mMessage.clear();
 }
@@ -105,27 +103,36 @@ bool OfflineRenderFrameExecutor::configureClientThrottling() {
         return false;
     }
 
-    mRestoreThrottleEnabled   = client->isClientUpdateAndRenderThrottlingEnabled();
-    mRestoreThrottleThreshold = client->getClientUpdateAndRenderThrottlingThreshold();
-    mRestoreThrottleScalar    = client->getClientUpdateAndRenderThrottlingScalar();
+    mRestoreThrottleEnabled           = client->isClientUpdateAndRenderThrottlingEnabled();
+    mRestoreThrottleThreshold         = client->getClientUpdateAndRenderThrottlingThreshold();
+    mRestoreThrottleScalar            = client->getClientUpdateAndRenderThrottlingScalar();
+    auto& renderer                    = client->getGameRenderer();
+    mRestoreLowFrequencyUiRender      = renderer.mUseLowFrequencyUIRender;
+    renderer.mUseLowFrequencyUIRender = false;
     client->setClientUpdateAndRenderThrottling(false, mRestoreThrottleThreshold, mRestoreThrottleScalar);
     mClientThrottlingConfigured = true;
+    getLogger().info(
+        "Offline client render scheduling configured: throttling=false, lowFrequencyUi=false (previous={})",
+        mRestoreLowFrequencyUiRender
+    );
     return true;
 }
 
 void OfflineRenderFrameExecutor::restoreClientThrottling() {
     if (!mClientThrottlingConfigured) return;
     if (auto client = ll::service::getClientInstance()) {
+        client->getGameRenderer().mUseLowFrequencyUIRender = mRestoreLowFrequencyUiRender;
         client->setClientUpdateAndRenderThrottling(
             mRestoreThrottleEnabled,
             mRestoreThrottleThreshold,
             mRestoreThrottleScalar
         );
     }
-    mClientThrottlingConfigured = false;
-    mRestoreThrottleEnabled     = false;
-    mRestoreThrottleThreshold   = 0;
-    mRestoreThrottleScalar      = 0.0f;
+    mClientThrottlingConfigured  = false;
+    mRestoreLowFrequencyUiRender = false;
+    mRestoreThrottleEnabled      = false;
+    mRestoreThrottleThreshold    = 0;
+    mRestoreThrottleScalar       = 0.0f;
 }
 
 bool OfflineRenderFrameExecutor::configureRenderSize(ExportSettings const& settings) {
@@ -253,38 +260,34 @@ OfflineRenderFrameExecutor::executeSample(ExportFramePlan const& frame, OfflineR
         return OfflineRenderFrameExecutionResult::Failed;
     }
     if (!mPendingTicket) {
-        mPendingTicket = frame.ticket;
-        mRenderInvoked = false;
+        mPendingTicket       = frame.ticket;
+        mSampleRenderInvoked = false;
     }
 
     pollCapture();
-
-    if (!mRenderInvoked) {
-        if (!invokeBedrockRender()) return OfflineRenderFrameExecutionResult::Failed;
-        mRenderInvoked = true;
-        if (!wasOfflineRenderClockSampleApplied(clockToken)) {
-            fail("The explicit Bedrock render returned without applying its fractional clock sample");
-            return OfflineRenderFrameExecutionResult::Failed;
-        }
+    if (!mSampleRenderInvoked) {
+        if (!prepareNativeRender()) return OfflineRenderFrameExecutionResult::Failed;
+        mSampleRenderInvoked = true;
     }
+    bool const applied   = wasOfflineRenderClockSampleApplied(clockToken);
+    bool const completed = wasOfflineRenderClockSampleCompleted(clockToken);
+    if (!applied || !completed) return OfflineRenderFrameExecutionResult::Waiting;
     return OfflineRenderFrameExecutionResult::Executed;
 }
 
-OfflineRenderFrameExecutionResult
-OfflineRenderFrameExecutor::executeWarmup(ExportFramePlan const& frame, OfflineRenderClockToken clockToken) {
+OfflineRenderFrameExecutionResult OfflineRenderFrameExecutor::executeWarmup(OfflineRenderClockToken clockToken) {
     if (!mOpen || !clockToken || mPendingTicket) {
         fail("The offline frame executor cannot render a warm-up frame in its current state");
         return OfflineRenderFrameExecutionResult::Failed;
     }
     if (!mWarmupRenderInvoked) {
-        (void)frame;
-        if (!invokeBedrockRender()) return OfflineRenderFrameExecutionResult::Failed;
+        if (!prepareNativeRender()) return OfflineRenderFrameExecutionResult::Failed;
         mWarmupRenderInvoked = true;
-        if (!wasOfflineRenderClockSampleApplied(clockToken)) {
-            fail("The warm-up Bedrock render returned without applying its fractional clock sample");
-            return OfflineRenderFrameExecutionResult::Failed;
-        }
     }
+    bool const applied   = wasOfflineRenderClockSampleApplied(clockToken);
+    bool const completed = wasOfflineRenderClockSampleCompleted(clockToken);
+    if (!applied || !completed) return OfflineRenderFrameExecutionResult::Waiting;
+    mUiStable = isUiStable();
     return OfflineRenderFrameExecutionResult::Executed;
 }
 
@@ -293,16 +296,12 @@ void OfflineRenderFrameExecutor::completeWarmup() { mWarmupRenderInvoked = false
 void OfflineRenderFrameExecutor::completeSample(functions::render::FrameTicket const& ticket) {
     if (!mPendingTicket || !ticketsEqual(*mPendingTicket, ticket)) return;
     mPendingTicket.reset();
-    mRenderInvoked = false;
+    mSampleRenderInvoked = false;
 }
 
 void OfflineRenderFrameExecutor::pollCapture() { renderer::gImGuiRenderer.pollFrameCapture(); }
 
-bool OfflineRenderFrameExecutor::invokeBedrockRender() {
-    if (gInvokingOfflineRender) {
-        fail("The offline Bedrock render call attempted to re-enter itself");
-        return false;
-    }
+bool OfflineRenderFrameExecutor::prepareNativeRender() {
     auto client = ll::service::getClientInstance();
     if (!client) {
         fail("The Bedrock client is unavailable for offline rendering");
@@ -318,21 +317,22 @@ bool OfflineRenderFrameExecutor::invokeBedrockRender() {
         client->setViewportInfo(viewport);
     }
 
-    Timer timer(ReplayTicksPerSecond, [] { return Timer::getMillisecondsSinceLaunch(); });
-
-    auto& game = static_cast<MinecraftGame&>(client->getMinecraftGame_DEPRECATED());
-    Bedrock::NotNullNonOwnerPtr<IClientInstance> clientPointer{static_cast<IClientInstance&>(*client)};
-    struct RenderInvocationGuard {
-        bool& active;
-        ~RenderInvocationGuard() { active = false; }
-    } guard{gInvokingOfflineRender};
-    gInvokingOfflineRender = true;
-    game.updateGraphics(clientPointer, timer);
+    // ReplayExportDriver runs immediately before ClientInstance::update. The
+    // published sample is consumed by that one native graphics pass, which
+    // preserves Bedrock's full scene preparation and render ordering.
     return true;
 }
 
 OfflineRenderFrameExecutorStatus OfflineRenderFrameExecutor::status() const {
-    return {mOpen, mRenderSizeChanged, mRenderWidth, mRenderHeight, mMessage};
+    return {mOpen, mRenderSizeChanged, mUiStable, mRenderWidth, mRenderHeight, mMessage};
+}
+
+bool OfflineRenderFrameExecutor::isUiStable() const {
+    auto  client = ll::service::getClientInstance();
+    auto& replay = functions::ReplaySession::getInstance();
+    return client && replay.isActive() && replay.hasJoinedReplayWorld() && !replay.isDimensionTransitionPending()
+        && client->isInWorldAndNotShowingAnyMenuScreens() && !client->isShowingLoadingScreen()
+        && !client->isShowingProgressScreen();
 }
 
 void OfflineRenderFrameExecutor::fail(std::string message) { mMessage = std::move(message); }

@@ -62,7 +62,8 @@ private:
     std::deque<functions::render::CapturedFrame> mReadyFrames;
     bool                                         mPreviousPaused{};
     bool                                         mRestorePaused{};
-    bool                                         mSourceFrameLogged{};
+    uint32_t                                     mClearFrameRetryCount{};
+    uint64_t                                     mRejectedClearFrameCount{};
     uint64_t                                     mNextFrameIndex{};
     Phase                                        mPhase{Phase::Idle};
 };

@@ -15,13 +15,14 @@ enum class OfflineRenderFrameExecutionResult : uint8_t { Waiting, Executed, Fail
 struct OfflineRenderFrameExecutorStatus {
     bool        open{};
     bool        renderSizeChanged{};
+    bool        uiStable{};
     uint32_t    renderWidth{};
     uint32_t    renderHeight{};
     std::string message;
 };
 
-// Owns one Bedrock render request. Replay preparation and FrameTap completion
-// stay in the surrounding offline-render boundary.
+// Tracks one sample across the native Bedrock graphics pass. Replay preparation
+// and download ownership stay in the surrounding offline-render boundary.
 class OfflineRenderFrameExecutor {
 public:
     OfflineRenderFrameExecutor() = default;
@@ -35,11 +36,10 @@ public:
 
     [[nodiscard]] OfflineRenderFrameExecutionResult
     executeSample(ExportFramePlan const& frame, OfflineRenderClockToken clockToken);
-    [[nodiscard]] OfflineRenderFrameExecutionResult
-         executeWarmup(ExportFramePlan const& frame, OfflineRenderClockToken clockToken);
-    void completeWarmup();
-    void completeSample(functions::render::FrameTicket const& ticket);
-    void pollCapture();
+    [[nodiscard]] OfflineRenderFrameExecutionResult executeWarmup(OfflineRenderClockToken clockToken);
+    void                                            completeWarmup();
+    void                                            completeSample(functions::render::FrameTicket const& ticket);
+    void                                            pollCapture();
 
     [[nodiscard]] OfflineRenderFrameExecutorStatus status() const;
 
@@ -48,7 +48,8 @@ private:
     void               restoreRenderSize();
     [[nodiscard]] bool configureClientThrottling();
     void               restoreClientThrottling();
-    [[nodiscard]] bool invokeBedrockRender();
+    [[nodiscard]] bool prepareNativeRender();
+    [[nodiscard]] bool isUiStable() const;
     void               fail(std::string message);
 
     ExportKeyframeApplier                         mKeyframes;
@@ -70,9 +71,11 @@ private:
     float                                         mRestoreThrottleScalar{};
     bool                                          mOpen{};
     bool                                          mRenderSizeChanged{};
+    bool                                          mUiStable{};
+    bool                                          mRestoreLowFrequencyUiRender{};
     bool                                          mRestoreThrottleEnabled{};
     bool                                          mClientThrottlingConfigured{};
-    bool                                          mRenderInvoked{};
+    bool                                          mSampleRenderInvoked{};
     bool                                          mWarmupRenderInvoked{};
     std::string                                   mMessage;
 };

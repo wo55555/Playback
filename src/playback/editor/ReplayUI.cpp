@@ -88,6 +88,8 @@ bool hookReplayUI(bool enable) {
 
 bool isReplayBrowserVisible() { return gContext.snapshot().browser.visible; }
 
+void tickReplayExportBeforeClientUpdate() { gController.tickExportBeforeClientUpdate(); }
+
 void tickReplayUI(bool hudVisible) { gController.tick(hudVisible); }
 
 void submitEditorAction(EditorAction action) { gContext.submit(std::move(action)); }

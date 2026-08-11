@@ -20,6 +20,9 @@ void               setGameInputCaptured(bool captured);
 // Returns true when MCBE should consume the event.
 [[nodiscard]] bool routeKeyEvent(uint32_t keyCode, bool down);
 
+// Releases locally tracked keys when the application loses focus.
+void releaseKeysForFocusLoss();
+
 // Clears all routing state when the input hook is fully removed.
 void resetInputState();
 

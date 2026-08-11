@@ -1,4 +1,5 @@
 #include "ReplayMouseHook.h"
+#include "playback/editor/exporting/ExportActivity.h"
 #include "playback/editor/input/EditorInput.h"
 
 #include "ll/api/event/EventBus.h"
@@ -122,8 +123,7 @@ bool isCurrentProcessForeground(HWND* window = nullptr) {
 
 bool isGameViewportPoint(float x, float y) {
     std::scoped_lock lock(gGameViewportMutex);
-    return x >= gGameViewport.left && x < gGameViewport.right && y >= gGameViewport.top
-        && y < gGameViewport.bottom;
+    return x >= gGameViewport.left && x < gGameViewport.right && y >= gGameViewport.top && y < gGameViewport.bottom;
 }
 
 void queueEvent(QueuedMouseEvent event) {
@@ -168,12 +168,13 @@ void saveCursorPosition() {
 
 void handleMouseInput(ll::event::MouseInputEvent& event) {
     ActiveMouseCallback activeCallback;
-    if (!replayUiOwnsMouse()) return;
+    bool const          exportActive = exporting::isExportActivityActive();
+    if (!replayUiOwnsMouse() && !exportActive) return;
 
     char const  action         = event.actionButtonId();
     float const x              = static_cast<float>(event.x()) * gInputScaleX.load(std::memory_order_relaxed);
     float const y              = static_cast<float>(event.y()) * gInputScaleY.load(std::memory_order_relaxed);
-    bool const  blockGameInput = gBlockGameMouseInput.load(std::memory_order_acquire);
+    bool const  blockGameInput = exportActive || gBlockGameMouseInput.load(std::memory_order_acquire);
     bool const  inGame         = !blockGameInput && isGameViewportPoint(x, y);
     bool const  popup          = gPopupOpen.load(std::memory_order_acquire);
     bool const  wantCapture    = gWantCaptureMouse.load(std::memory_order_acquire);
@@ -226,6 +227,18 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
 void handleKeyInput(ll::event::KeyInputEvent& event) {
     ActiveMouseCallback activeCallback;
     if (!gMouseHookActive.load(std::memory_order_acquire)) return;
+
+    bool const exportActive       = exporting::isExportActivityActive();
+    bool const topLayerBlocksGame = exportActive || gBlockGameMouseInput.load(std::memory_order_acquire)
+                                 || gPopupOpen.load(std::memory_order_acquire);
+    if ((input::isUiVisible() || exportActive) && topLayerBlocksGame) {
+        if (input::isGameInputCaptured() && event.keyCode() == Keyboard::Escape && event.isDown()) {
+            gReleaseRequested.store(true, std::memory_order_release);
+        }
+        (void)input::routeKeyEvent(event.keyCode(), event.isDown());
+        event.cancel();
+        return;
+    }
 
     if (input::isUiVisible() && event.keyCode() == Keyboard::Escape) {
         if (input::isGameInputCaptured() && event.isDown()) {
@@ -281,15 +294,14 @@ void applyMouseTransition(ClientInstance& client) {
         gCaptureRequested.store(false, std::memory_order_release);
         gLeftMouseDown.store(false, std::memory_order_release);
     }
-    bool const shouldCapture = owner == MouseOwner::UiReleased && focused
-                            && gLeftMouseDown.load(std::memory_order_acquire)
-                            && gCaptureRequested.exchange(false, std::memory_order_acq_rel)
-                            && !gBlockGameMouseInput.load(std::memory_order_acquire)
-                            && !gPopupOpen.load(std::memory_order_acquire)
-                            && isGameViewportPoint(
-                                gCaptureRequestX.load(std::memory_order_relaxed),
-                                gCaptureRequestY.load(std::memory_order_relaxed)
-                            );
+    bool const shouldCapture =
+        owner == MouseOwner::UiReleased && focused && gLeftMouseDown.load(std::memory_order_acquire)
+        && gCaptureRequested.exchange(false, std::memory_order_acq_rel)
+        && !gBlockGameMouseInput.load(std::memory_order_acquire) && !gPopupOpen.load(std::memory_order_acquire)
+        && isGameViewportPoint(
+            gCaptureRequestX.load(std::memory_order_relaxed),
+            gCaptureRequestY.load(std::memory_order_relaxed)
+        );
     if (shouldCapture) {
         gReleaseRequested.store(false, std::memory_order_release);
         gApplyingMouseTransition = true;
@@ -496,16 +508,17 @@ void setReplayUIActive(bool active) {
     if (!active) input::setUiVisible(false);
 }
 
-void beginReplayMouseFrame(
-    float displayWidth,
-    float displayHeight,
-    bool  blockGameMouseInput
-) {
+void beginReplayMouseFrame(float displayWidth, float displayHeight, bool blockGameMouseInput) {
     bool const inputWasActive = gReplayUiInputActive.load(std::memory_order_acquire);
     gBlockGameMouseInput.store(blockGameMouseInput, std::memory_order_release);
     // The editor publishes fresh video bounds after drawing; retain the previous frame until then.
     if (blockGameMouseInput || !inputWasActive) {
         setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    if (blockGameMouseInput) {
+        gCaptureRequested.store(false, std::memory_order_release);
+        gReleaseRequested.store(true, std::memory_order_release);
+        gLeftMouseDown.store(false, std::memory_order_release);
     }
     setReplayMouseInputActive(true);
     if (!gReplayUiInputActive.load(std::memory_order_acquire)) return;
@@ -517,6 +530,7 @@ void beginReplayMouseFrame(
     bool const focusKnown      = gImGuiFocusKnown.load(std::memory_order_acquire);
     bool const reportedFocused = gImGuiReportedWindowFocused.load(std::memory_order_acquire);
     if (!focusKnown || focused != reportedFocused) {
+        if (!focused) input::releaseKeysForFocusLoss();
         io.AddFocusEvent(focused);
         gImGuiReportedWindowFocused.store(focused, std::memory_order_release);
         gImGuiFocusKnown.store(true, std::memory_order_release);

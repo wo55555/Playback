@@ -191,6 +191,7 @@ struct ImGuiRenderer::Impl {
     UINT64                                            lastFenceValue{};
     size_t                                            frameCursor{};
     uint64_t                                          surfaceArea{};
+    std::optional<UINT>                               lastGameTextureIndex;
     bool                                              unfenced{};
     bool                                              initialized{};
     bool                                              backendInit{};
@@ -348,10 +349,10 @@ struct ImGuiRenderer::Impl {
     }
 
     bool renderD3D11(
-        IDXGISwapChain*               sc,
-        bool                          renderUi,
-        bool                          captureFrame,
-        EditorState const&            state,
+        IDXGISwapChain*              sc,
+        bool                         renderUi,
+        bool                         captureFrame,
+        EditorState const&           state,
         std::optional<std::uint32_t> backBufferIndex = std::nullopt
     ) {
         if (d3d11Initialized && sc != d3d11SwapChain) shutdownD3D11();
@@ -369,13 +370,14 @@ struct ImGuiRenderer::Impl {
             }
             source->GetDesc(&desc);
         }
-        d3d11Context->CopyResource(d3d11GameTexture.Get(), source.Get());
         if (captureFrame) {
-            (void)d3d11FrameTap.capture(d3d11Device.Get(), d3d11Context.Get(), d3d11GameTexture.Get());
+            (void)d3d11FrameTap.capture(d3d11Device.Get(), d3d11Context.Get(), source.Get());
+        }
+        if (!exporting::isExportActive(state.exportStatus.state)) {
+            d3d11Context->CopyResource(d3d11GameTexture.Get(), source.Get());
         }
 
-        // Capture-only pass: copy the frame and grab the thumbnail, but never render
-        // the ImGui overlay or clear the back buffer while the user is playing.
+        // Capture-only passes must not modify the swap-chain buffer.
         if (!renderUi) return true;
 
         ImGuiContextRestore restore;
@@ -392,7 +394,8 @@ struct ImGuiRenderer::Impl {
 
         ImGui_ImplDX11_NewFrame();
         input::syncFrame();
-        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
+        bool const blockGameInput = state.browser.visible || exporting::isExportActive(state.exportStatus.state);
+        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, blockGameInput);
         ImGui::NewFrame();
         auto submit = [this](EditorAction action) {
             if (editorContext) editorContext->submit(std::move(action));
@@ -404,15 +407,19 @@ struct ImGuiRenderer::Impl {
         } else if (state.editorVisible) {
             replayEditor.setGameTexture(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
             replayEditor.draw(state, submit);
-            auto viewport = replayEditor.viewportVideoRect();
-            setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+            if (exporting::isExportActive(state.exportStatus.state)) {
+                setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
+            } else {
+                auto viewport = replayEditor.viewportVideoRect();
+                setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+            }
         }
         endReplayMouseFrame();
         ImGui::Render();
 
         ID3D11RenderTargetView* rtv = d3d11Rtv.Get();
         d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
-        if (!state.browser.visible) {
+        if (!state.browser.visible && !exporting::isExportActive(state.exportStatus.state)) {
             float clearColor[]{0.055f, 0.055f, 0.065f, 1};
             d3d11Context->ClearRenderTargetView(rtv, clearColor);
         }
@@ -491,8 +498,7 @@ struct ImGuiRenderer::Impl {
             f.rtv = rtv;
             device->CreateRenderTargetView(f.backBuffer.Get(), nullptr, f.rtv);
             rtv.ptr += static_cast<SIZE_T>(rtvDescSize);
-            if (FAILED(
-                    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
+            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
                 )) {
                 initialized = true;
                 this->shutdown();
@@ -685,12 +691,13 @@ struct ImGuiRenderer::Impl {
         swapChain3.Reset();
         device.Reset();
         commandQueue.Reset();
-        swapChain         = nullptr;
-        rtvDescSize       = 0;
-        srvDescSize       = 0;
-        lastFenceValue    = 0;
-        frameCursor       = 0;
-        surfaceArea       = 0;
+        swapChain      = nullptr;
+        rtvDescSize    = 0;
+        srvDescSize    = 0;
+        lastFenceValue = 0;
+        frameCursor    = 0;
+        surfaceArea    = 0;
+        lastGameTextureIndex.reset();
         unfenced          = false;
         initialized       = false;
         renderingDisabled = false;
@@ -870,6 +877,16 @@ bool ImGuiRenderer::saveReplayThumbnail(std::filesystem::path const& output) {
 
 functions::render::FrameTap& ImGuiRenderer::frameTap() { return mImpl->frameTap; }
 
+bool ImGuiRenderer::captureSubmittedD3D12Frame(
+    ID3D12Device*       device,
+    ID3D12CommandQueue* queue,
+    ID3D12Resource*     source,
+    uint32_t            sourceState
+) {
+    std::scoped_lock lock(mImpl->mutex);
+    return mImpl->d3d12FrameTap.captureSubmitted(device, queue, source, sourceState);
+}
+
 void* ImGuiRenderer::acquireReplayThumbnailTexture(std::string_view key, std::string_view png) {
     auto& p      = *mImpl;
     auto  keyStr = std::string(key);
@@ -909,46 +926,27 @@ bool ImGuiRenderer::render(IDXGISwapChain* swapChain, bool allowFrameCapture) {
     return renderInternal(swapChain, true, allowFrameCapture);
 }
 
-bool ImGuiRenderer::captureOfflineFrame(
-    IDXGISwapChain*              swapChain,
-    std::optional<std::uint32_t> backBufferIndex
-) {
-    if (!swapChain || !mImpl->frameTap.hasArmedCapture()) return false;
-    bool const rendered = renderInternal(swapChain, false, true, backBufferIndex);
-    auto const tapState = mImpl->frameTap.status({});
-    bool const consumed = rendered && tapState.state == functions::render::FrameTapState::Active && !tapState.armed;
-    if (!consumed && !mImpl->frameTap.hasArmedCapture()) {
-        getLogger().error("Offline frame capture lost its armed FrameTap ticket");
-    }
-    return consumed;
-}
-
 void ImGuiRenderer::pollFrameCapture() {
     std::scoped_lock lock(mImpl->mutex);
     if (mImpl->d3d11Initialized) mImpl->d3d11FrameTap.poll(mImpl->d3d11Context.Get());
 }
 
-bool ImGuiRenderer::renderInternal(
-    IDXGISwapChain*              swapChain,
-    bool                         allowUi,
-    bool                         allowFrameCapture,
-    std::optional<std::uint32_t> backBufferIndex
-) {
+bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool allowFrameCapture) {
     auto&            p = *mImpl;
     std::scoped_lock lk(p.mutex);
 
     if (!isTimelineRenderingEnabled()) return false;
     if (!swapChain) return false;
-    bool const offlineBoundaryCapture = !allowUi && allowFrameCapture;
     if (allowUi && !p.editorContext) return false;
 
-    auto const state       = p.editorContext ? p.editorContext->snapshot() : EditorState{};
-    bool const browserOpen = allowUi && state.browser.visible;
+    auto const state         = p.editorContext ? p.editorContext->snapshot() : EditorState{};
+    bool const browserOpen   = allowUi && state.browser.visible;
+    bool const exportOverlay = allowUi && exporting::isExportActive(state.exportStatus.state);
     // Keep the editor overlay alive while Minecraft displays a native menu
     // (for example the pause screen). The game frame is drawn inside the
     // editor viewport, so the menu remains contained by the game window.
-    bool const editorOpen  = allowUi && state.editorVisible;
-    bool const uiActive    = browserOpen || editorOpen;
+    bool const editorOpen = allowUi && state.editorVisible;
+    bool const uiActive   = browserOpen || editorOpen;
     if (allowUi) input::setUiVisible(uiActive);
 
     auto const browserRevision = allowUi && state.browser.snapshot ? state.browser.snapshot->revision : 0;
@@ -958,6 +956,8 @@ bool ImGuiRenderer::renderInternal(
         p.browserSnapshotRevision = browserRevision;
     }
     if (p.d3d11Initialized) p.d3d11FrameTap.poll(p.d3d11Context.Get());
+    // Capture the armed export or thumbnail ticket from the game backbuffer in
+    // this command list before any ImGui draw commands are recorded.
     bool const captureActive = allowFrameCapture && p.frameTap.hasArmedCapture();
     if (!uiActive && !captureActive) {
         if (allowUi) {
@@ -981,9 +981,9 @@ bool ImGuiRenderer::renderInternal(
         if (p.initialized) p.shutdown();
         if (uiActive) {
             MouseInputAttempt inputAttempt;
-            if (!p.renderD3D11(swapChain, true, allowFrameCapture, state, backBufferIndex)) return false;
+            if (!p.renderD3D11(swapChain, true, captureActive, state)) return false;
             inputAttempt.commit();
-        } else if (!p.renderD3D11(swapChain, false, allowFrameCapture, state, backBufferIndex)) {
+        } else if (!p.renderD3D11(swapChain, false, captureActive, state)) {
             return false;
         }
         return true;
@@ -995,10 +995,11 @@ bool ImGuiRenderer::renderInternal(
 
     ComPtr<ID3D12CommandQueue> q;
     if (p.initialized && swapChain != p.swapChain) {
-        q         = getSwapChainQueue(swapChain);
-        auto area = getSwapChainArea(swapChain);
+        q                                  = getSwapChainQueue(swapChain);
+        auto       area                    = getSwapChainArea(swapChain);
         bool const replacementDelayElapsed = now - p.lastPresent >= SwapChainReplacementDelay;
-        if (!q || area == 0 || (!offlineBoundaryCapture && !replacementDelayElapsed && area <= p.surfaceArea))
+        if (!q || area == 0
+            || (!exporting::isOfflineRenderActivityActive() && !replacementDelayElapsed && area <= p.surfaceArea))
             return false;
         p.shutdown();
     }
@@ -1034,15 +1035,16 @@ bool ImGuiRenderer::renderInternal(
     }
 
     if (p.renderingDisabled || !p.swapChain3 || p.frames.empty()) return false;
-    UINT fi = backBufferIndex ? *backBufferIndex : p.swapChain3->GetCurrentBackBufferIndex();
+    UINT const fi = p.swapChain3->GetCurrentBackBufferIndex();
     if (fi >= static_cast<UINT>(p.frames.size())) return false;
-    auto& f = p.frames[fi];
+    auto&       f             = p.frames[fi];
+    auto* const captureSource = f.backBuffer.Get();
     if (!waitForFence(f.fenceValue, p.fence, p.fenceEvent)) return false;
     if (p.frameFences.empty()) return false;
     size_t slot = p.frameCursor % p.frameFences.size();
     if (!waitForFence(p.frameFences[slot], p.fence, p.fenceEvent)) return false;
 
-    auto bd = f.backBuffer->GetDesc();
+    auto const bd = f.backBuffer->GetDesc();
     if (bd.Width == 0 || bd.Height == 0) return false;
 
     ImGuiContextRestore cr;
@@ -1061,7 +1063,8 @@ bool ImGuiRenderer::renderInternal(
         ImGui_ImplDX12_NewFrame();
         // Forward MCBE key events to ImGui keyboard state
         input::syncFrame();
-        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, state.browser.visible);
+        bool const blockGameInput = state.browser.visible || exporting::isExportActive(state.exportStatus.state);
+        beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, blockGameInput);
         ImGui::NewFrame();
         auto submit = [&p](EditorAction action) {
             if (p.editorContext) p.editorContext->submit(std::move(action));
@@ -1071,10 +1074,18 @@ bool ImGuiRenderer::renderInternal(
         if (state.browser.visible) {
             replayBrowser.draw(state.browser, submit);
         } else if (state.editorVisible) {
-            replayEditor.setGameTexture(static_cast<ImTextureID>(f.gameSrvGpu.ptr));
+            UINT const gameTextureIndex =
+                exportOverlay && p.lastGameTextureIndex && *p.lastGameTextureIndex < static_cast<UINT>(p.frames.size())
+                    ? *p.lastGameTextureIndex
+                    : fi;
+            replayEditor.setGameTexture(static_cast<ImTextureID>(p.frames[gameTextureIndex].gameSrvGpu.ptr));
             replayEditor.draw(state, submit);
-            auto viewport = replayEditor.viewportVideoRect();
-            setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+            if (exporting::isExportActive(state.exportStatus.state)) {
+                setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
+            } else {
+                auto viewport = replayEditor.viewportVideoRect();
+                setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+            }
         }
         endReplayMouseFrame();
         ImGui::Render();
@@ -1083,45 +1094,76 @@ bool ImGuiRenderer::renderInternal(
     if (FAILED(f.commandAllocator->Reset())) return false;
     if (FAILED(f.commandList->Reset(f.commandAllocator.Get(), nullptr))) return false;
 
-    D3D12_RESOURCE_BARRIER toCopy[2]{};
-    toCopy[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    toCopy[0].Transition.pResource   = f.backBuffer.Get();
-    toCopy[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    toCopy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-    toCopy[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    toCopy[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    toCopy[1].Transition.pResource   = f.gameTexture.Get();
-    toCopy[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    toCopy[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    toCopy[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_DEST;
-    f.commandList->ResourceBarrier(2, toCopy);
-    f.commandList->CopyResource(f.gameTexture.Get(), f.backBuffer.Get());
+    std::array<D3D12_RESOURCE_BARRIER, 3> toCopy{};
+    UINT                                  copyBarrierCount{};
+    auto addCopyBarrier = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+        auto& barrier                  = toCopy[copyBarrierCount++];
+        barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource   = resource;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.StateBefore = before;
+        barrier.Transition.StateAfter  = after;
+    };
+    if (captureActive) addCopyBarrier(captureSource, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    if (!exportOverlay) {
+        if (!captureActive) {
+            addCopyBarrier(f.backBuffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        }
+        addCopyBarrier(f.gameTexture.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    }
+    if (copyBarrierCount != 0) f.commandList->ResourceBarrier(copyBarrierCount, toCopy.data());
+    // The copy is ordered after Bedrock's scene work and before ImGui in the
+    // same Direct queue submission.
+    bool const frameTapSubmitted = captureActive
+                                && p.d3d12FrameTap.capture(
+                                    p.device.Get(),
+                                    p.commandQueue.Get(),
+                                    f.commandList.Get(),
+                                    captureSource,
+                                    static_cast<uint32_t>(D3D12_RESOURCE_STATE_COPY_SOURCE)
+                                );
+    if (!exportOverlay) {
+        f.commandList->CopyResource(f.gameTexture.Get(), f.backBuffer.Get());
+        p.lastGameTextureIndex = fi;
+    }
 
-    D3D12_RESOURCE_BARRIER toRT[2]{};
-    toRT[0].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    toRT[0].Transition.pResource   = f.gameTexture.Get();
-    toRT[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    toRT[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    toRT[0].Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    toRT[1].Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    toRT[1].Transition.pResource   = f.backBuffer.Get();
-    toRT[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    toRT[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    toRT[1].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    f.commandList->ResourceBarrier(2, toRT);
-    bool const frameTapSubmitted =
-        allowFrameCapture && p.d3d12FrameTap.capture(p.device.Get(), f.commandList.Get(), f.gameTexture.Get());
-
-    D3D12_RESOURCE_BARRIER gameTextureToSrv{};
-    gameTextureToSrv.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    gameTextureToSrv.Transition.pResource   = f.gameTexture.Get();
-    gameTextureToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    gameTextureToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    gameTextureToSrv.Transition.StateAfter  = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    f.commandList->ResourceBarrier(1, &gameTextureToSrv);
+    std::array<D3D12_RESOURCE_BARRIER, 3> toRender{};
+    UINT                                  renderBarrierCount{};
+    auto addRenderBarrier = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+        auto& barrier                  = toRender[renderBarrierCount++];
+        barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource   = resource;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.StateBefore = before;
+        barrier.Transition.StateAfter  = after;
+    };
+    if (captureActive) {
+        addRenderBarrier(
+            captureSource,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            uiActive ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_PRESENT
+        );
+    }
+    if (!exportOverlay) {
+        if (!captureActive) {
+            addRenderBarrier(
+                f.backBuffer.Get(),
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                uiActive ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_PRESENT
+            );
+        }
+        addRenderBarrier(
+            f.gameTexture.Get(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+        );
+    } else if (uiActive && !captureActive) {
+        addRenderBarrier(f.backBuffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
+    if (renderBarrierCount != 0) f.commandList->ResourceBarrier(renderBarrierCount, toRender.data());
     if (uiActive) {
         f.commandList->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
-        if (!browserOpen) {
+        if (!browserOpen && !exportOverlay) {
             float cc[]{0.055f, 0.055f, 0.065f, 1};
             f.commandList->ClearRenderTargetView(f.rtv, cc, 0, nullptr);
         }
@@ -1131,13 +1173,15 @@ bool ImGuiRenderer::renderInternal(
     }
     ++p.frameCursor;
 
-    D3D12_RESOURCE_BARRIER toPresent{};
-    toPresent.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    toPresent.Transition.pResource   = f.backBuffer.Get();
-    toPresent.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    toPresent.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    toPresent.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-    f.commandList->ResourceBarrier(1, &toPresent);
+    if (uiActive) {
+        D3D12_RESOURCE_BARRIER toPresent{};
+        toPresent.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toPresent.Transition.pResource   = f.backBuffer.Get();
+        toPresent.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        toPresent.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        toPresent.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+        f.commandList->ResourceBarrier(1, &toPresent);
+    }
     if (FAILED(f.commandList->Close())) {
         if (frameTapSubmitted) {
             p.d3d12FrameTap.submissionFailed(

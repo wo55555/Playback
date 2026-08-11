@@ -80,12 +80,11 @@ std::optional<editing::model::CameraKeyframe> EditorController::captureCameraKey
     auto const  forward  = *camera.mForward;
     auto const  fov      = camera.mFov;
     if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
-        || !std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)
-        || !std::isfinite(fov)) {
+        || !std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z) || !std::isfinite(fov)) {
         return std::nullopt;
     }
 
-    constexpr float RadiansToDegrees = 57.2957795130823208768f;
+    constexpr float                RadiansToDegrees = 57.2957795130823208768f;
     editing::model::CameraKeyframe key;
     key.position = {position.x, position.y, position.z};
     key.yaw      = std::atan2(-forward.x, forward.z) * RadiansToDegrees;
@@ -106,7 +105,15 @@ void EditorController::reset() {
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
     mCommandStack.clear();
     mActiveReplayPath.clear();
-    mProjectTotalTicks = -1;
+    mProjectTotalTicks              = -1;
+    mExportTickedBeforeClientUpdate = false;
+}
+
+void EditorController::tickExportBeforeClientUpdate() {
+    mExportTickedBeforeClientUpdate = false;
+    if (!mExportDriver || !mExportDriver->isActive()) return;
+    mExportDriver->tick();
+    mExportTickedBeforeClientUpdate = true;
 }
 
 void EditorController::ensureProject(int totalTicks, std::string_view replayPath) {
@@ -324,7 +331,12 @@ void EditorController::tick(bool hudVisible) {
                 settings.startTick = 0;
                 settings.endTick   = std::max<int64_t>(0, session.getTotalTicks());
             }
-            if (mExportDriver) (void)mExportDriver->start(std::move(settings), mProject);
+            if (mExportDriver && mExportDriver->start(std::move(settings), mProject)) {
+                // The first warm-up render can run later in this controller tick.
+                // Publish RenderMode before that Present so the supersampled game
+                // surface is never shown directly in the visible window.
+                publishState(hudVisible);
+            }
             break;
         }
         case EditorActionType::CancelExport:
@@ -417,7 +429,8 @@ void EditorController::tick(bool hudVisible) {
         }
     }
 
-    if (mExportDriver) mExportDriver->tick();
+    if (mExportDriver && !mExportTickedBeforeClientUpdate) mExportDriver->tick();
+    mExportTickedBeforeClientUpdate = false;
     publishState(hudVisible);
 }
 

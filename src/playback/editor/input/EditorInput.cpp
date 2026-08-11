@@ -1,4 +1,5 @@
 #include "EditorInput.h"
+#include "playback/editor/exporting/ExportActivity.h"
 
 #include "imgui.h"
 #include "mc/deps/input/Keyboard.h"
@@ -258,6 +259,12 @@ void setGameInputCaptured(bool captured) {
 
 bool isGameInputCaptured() { return gGameInputCaptured.load(std::memory_order_acquire); }
 
+void releaseKeysForFocusLoss() {
+    std::scoped_lock lock(gKeyMutex);
+    releaseEditorKeysLocked();
+    gGamePressedKeys.clear();
+}
+
 void resetInputState() {
     std::scoped_lock lock(gKeyMutex);
     gUiVisible.store(false, std::memory_order_release);
@@ -269,6 +276,8 @@ void resetInputState() {
     gRoutedPressedKeys.clear();
 }
 
-bool shouldMCBEConsumeMouse() { return !isUiVisible() || isGameInputCaptured(); }
+bool shouldMCBEConsumeMouse() {
+    return !exporting::isExportActivityActive() && (!isUiVisible() || isGameInputCaptured());
+}
 
 } // namespace playback::editor::input

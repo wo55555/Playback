@@ -9,6 +9,9 @@
 #include <string_view>
 
 struct IDXGISwapChain;
+struct ID3D12Device;
+struct ID3D12CommandQueue;
+struct ID3D12Resource;
 
 namespace playback::editor {
 class EditorContext;
@@ -26,14 +29,18 @@ public:
     void                                       requestReplayThumbnailCapture() override;
     [[nodiscard]] bool                         saveReplayThumbnail(std::filesystem::path const& output) override;
     [[nodiscard]] functions::render::FrameTap& frameTap();
+    // Capture the scene resource after the renderer's own submission has
+    // completed. This path owns its copy/resolve command list and never reads
+    // the swap-chain image used by ImGui.
+    [[nodiscard]] bool captureSubmittedD3D12Frame(
+        ID3D12Device*       device,
+        ID3D12CommandQueue* queue,
+        ID3D12Resource*     source,
+        uint32_t            sourceState
+    );
     [[nodiscard]] void* acquireReplayThumbnailTexture(std::string_view key, std::string_view png);
 
     bool               render(IDXGISwapChain* swapChain, bool allowFrameCapture = true);
-    // The Present hook calls this while the matching BGFX flip boundary is active.
-    [[nodiscard]] bool captureOfflineFrame(
-        IDXGISwapChain*             swapChain,
-        std::optional<std::uint32_t> backBufferIndex = std::nullopt
-    );
     void               pollFrameCapture();
     [[nodiscard]] bool ownsSwapChain(IDXGISwapChain* swapChain) const;
     bool               beforeResize(IDXGISwapChain* swapChain);
@@ -41,12 +48,7 @@ public:
     bool               shutdown();
 
 private:
-    bool renderInternal(
-        IDXGISwapChain*             swapChain,
-        bool                        allowUi,
-        bool                        allowFrameCapture,
-        std::optional<std::uint32_t> backBufferIndex = std::nullopt
-    );
+    bool renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool allowFrameCapture);
 
     struct Impl;
     std::unique_ptr<Impl> mImpl;

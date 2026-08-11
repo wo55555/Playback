@@ -13,10 +13,11 @@ namespace playback::editor::ui {
 
 class ViewportPanel {
 public:
-    void               draw(bool maximized = false);
-    void               setGameTexture(ImTextureID texture);
-    void               setVideoAspectRatio(float aspectRatio);
-    [[nodiscard]] Rect videoRect() const { return mVideoRect; }
+    void                      draw(bool maximized = false);
+    void                      setGameTexture(ImTextureID texture);
+    void                      setVideoAspectRatio(float aspectRatio);
+    [[nodiscard]] Rect        videoRect() const { return mVideoRect; }
+    [[nodiscard]] ImTextureID gameTexture() const { return mGameTexture; }
 
 private:
     void handleCameraControl(bool hovered, bool active);

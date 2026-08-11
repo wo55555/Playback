@@ -91,6 +91,7 @@ LL_TYPE_INSTANCE_HOOK(
     bool,
     bool isInitFinished
 ) {
+    editor::tickReplayExportBeforeClientUpdate();
     auto  result = origin(isInitFinished);
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();

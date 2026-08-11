@@ -7,6 +7,7 @@
 
 #include "playback/functions/tick/ClientTickHooks.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -51,6 +52,7 @@ struct OfflineRenderBoundaryStatus {
     FrameDownloadQueueStatus         downloads;
     OfflineRenderFrameExecutorStatus executor;
     uint32_t                         warmupFramesRemaining{};
+    uint32_t                         warmupStableFrames{};
 };
 
 // Owns the boundary between replay-sample preparation and its rendered output.
@@ -71,6 +73,10 @@ public:
     [[nodiscard]] OfflineRenderStepResult advance(ExportFramePlan const& frame);
     [[nodiscard]] bool                    beginDrain();
     [[nodiscard]] bool                    isDrained();
+    // Reject a completed clear-only frame and render the exact same fractional
+    // sample again. The previous submitted sample remains the clock reference,
+    // so the retry has deltaTicks == 0.
+    [[nodiscard]] bool retryCompletedFrame(functions::render::FrameTicket const& ticket);
 
     [[nodiscard]] std::optional<functions::render::CapturedFrame> finishDownload();
 
@@ -80,10 +86,11 @@ private:
     [[nodiscard]] int                                     targetTick(ExportFramePlan const& frame) const;
     [[nodiscard]] std::optional<OfflineRenderClockSample> clockSample(ExportFramePlan const& frame) const;
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
-    [[nodiscard]] bool                                    recoverDownloadFailure(FrameDownloadQueueStatus const& status);
-    [[nodiscard]] bool                                    publishClockSample(ExportFramePlan const& frame);
-    void                                                  clearClockSample();
-    void                                                  fault(OfflineRenderBoundaryError error, std::string message);
+    [[nodiscard]] bool                                    warmupComplete() const;
+    [[nodiscard]] bool recoverDownloadFailure(FrameDownloadQueueStatus const& status);
+    [[nodiscard]] bool publishClockSample(ExportFramePlan const& frame);
+    void               clearClockSample();
+    void               fault(OfflineRenderBoundaryError error, std::string message);
 
     functions::ReplaySession&                        mReplay;
     SaveableFramebufferQueue                         mDownloads;
@@ -96,9 +103,15 @@ private:
     int64_t                                          mMaximumReplayTick{};
     uint32_t                                         mCaptureCapacity{};
     uint32_t                                         mCaptureRetryCount{};
+    uint32_t                                         mReplayTickRecoveryCount{};
     uint32_t                                         mWarmupFramesRemaining{};
-    uint32_t                                         mRenderWaitFrames{};
+    uint32_t                                         mWarmupStableFrames{};
+    uint64_t                                         mRenderWaitPolls{};
+    std::chrono::steady_clock::time_point            mRenderWaitStartedAt{};
+    std::chrono::steady_clock::time_point            mRenderWaitLastLoggedAt{};
+    std::chrono::steady_clock::time_point            mReplayTickRequestedAt{};
     bool                                             mTickGateOpen{};
+    bool                                             mTickGateSuspendedForDimension{};
     bool                                             mTimelineInitialized{};
     bool                                             mInitializationTickObserved{};
     OfflineRenderBoundaryState                       mState{OfflineRenderBoundaryState::Closed};

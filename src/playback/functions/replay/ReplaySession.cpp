@@ -25,6 +25,7 @@
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/NetworkIdentifier.h"
+#include "mc/network/PacketSender.h"
 #include "mc/network/packet/AddActorPacket.h"
 #include "mc/network/packet/AddItemActorPacket.h"
 #include "mc/network/packet/AddPaintingPacket.h"
@@ -127,12 +128,10 @@ std::optional<render::EntityRenderKey> replayEntityRenderKey(Level const& level,
     return render::EntityRenderKey{context.mRegistryId, entity.mRawId};
 }
 
-render::EntityRenderPosition replayRenderPosition(Vec3 const& position) {
-    return {position.x, position.y, position.z};
-}
+render::EntityRenderPosition replayRenderPosition(Vec3 const& position) { return {position.x, position.y, position.z}; }
 
 render::EntityRenderPose replayRenderPose(Actor const& actor) {
-    auto const& context = actor.getEntityContext();
+    auto const& context  = actor.getEntityContext();
     auto const  rotation = actor.getRotation();
 
     float headYaw = rotation.y;
@@ -269,29 +268,25 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             auto const height  = static_cast<int64_t>(maximum) - static_cast<int64_t>(minimum);
             if (minimum < std::numeric_limits<short>::min() || maximum > std::numeric_limits<short>::max()
                 || minimum % 16 != 0 || maximum <= minimum || height % 16 != 0) {
-                throw std::runtime_error(
-                    std::format(
-                        "Replay dimension {} has invalid recorded height range [{}, {})",
-                        snapshot.dimensionId,
-                        minimum,
-                        maximum
-                    )
-                );
+                throw std::runtime_error(std::format(
+                    "Replay dimension {} has invalid recorded height range [{}, {})",
+                    snapshot.dimensionId,
+                    minimum,
+                    maximum
+                ));
             }
 
             RecordedDimensionHeightRange const range{minimum, maximum};
             auto const [it, inserted] = dimensionProfile->heightRanges.emplace(snapshot.dimensionId, range);
             if (!inserted && it->second != range) {
-                throw std::runtime_error(
-                    std::format(
-                        "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
-                        snapshot.dimensionId,
-                        it->second.minimum,
-                        it->second.maximum,
-                        minimum,
-                        maximum
-                    )
-                );
+                throw std::runtime_error(std::format(
+                    "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
+                    snapshot.dimensionId,
+                    it->second.minimum,
+                    it->second.maximum,
+                    minimum,
+                    maximum
+                ));
             }
         }
         mReplayDimensionProfile.store(std::move(dimensionProfile), std::memory_order_release);
@@ -1173,6 +1168,13 @@ bool ReplaySession::ensureReplayDimension(
     mDimensionTransitionRequest        = request;
     mDimensionTransitionSettledUpdates = 0;
     mDimensionTransitionStartedAt      = std::chrono::steady_clock::now();
+    getLogger().info(
+        "Replay dimension transition generation {} started at tick {} from dimension {} to {}",
+        generation,
+        mCurrentTick,
+        sourceDimension.id,
+        target.id
+    );
     ll::thread::ServerThreadExecutor::getDefault().execute([request,
                                                             generation,
                                                             generationCounter,
@@ -1276,14 +1278,27 @@ void ReplaySession::processPendingDimensionTransition() {
                         : nullptr;
     bool const waitingForAcknowledgment =
         waitComponent && waitComponent->mWaitingForServerDimensionChangeAcknowledgment;
+    auto const client               = ll::service::getClientInstance();
+    bool const loadingScreenVisible = client
+                                   && (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
+                                       || client->isShowingWorldProgressScreen());
+    bool const readyToRender = client && client->isReadyToRender();
 
     if (elapsed >= DIMENSION_TRANSITION_TIMEOUT) {
         getLogger().error(
-            "Replay dimension transition generation {} to {} timed out after {} ms with request status {}",
+            "Replay dimension transition generation {} to {} timed out after {} ms with request status {}; "
+            "playerAvailable={}, currentDimension={}, dimensionMatches={}, waitingForAck={}, loadingScreen={}, "
+            "readyToRender={}",
             mDimensionTransitionRequest->generation,
             mPendingReplayDimension->id,
             std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
-            static_cast<int>(status)
+            static_cast<int>(status),
+            playerAvailable,
+            playerAvailable ? mReplayPlayer->getDimensionId().id : 0,
+            dimensionMatches,
+            waitingForAcknowledgment,
+            loadingScreenVisible,
+            readyToRender
         );
         mReplayFailed = true;
         throw std::runtime_error("Replay dimension transition timed out");
@@ -1296,55 +1311,56 @@ void ReplaySession::processPendingDimensionTransition() {
 
     if (status == DimensionTransitionStatus::Succeeded && dimensionMatches && waitingForAcknowledgment
         && elapsed >= DIMENSION_ACK_FALLBACK_DELAY) {
-        bool expected = false;
-        if (mDimensionTransitionRequest->acknowledgmentFallbackQueued
-                .compare_exchange_strong(expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            auto  request           = mDimensionTransitionRequest;
-            auto  playerUuid        = mReplayPlayer->getUuid();
-            auto  replayLevelId     = mReplayLevelId;
-            auto  target            = *mPendingReplayDimension;
-            auto* generationCounter = &mDimensionTransitionGeneration;
-            auto  generation        = request->generation;
-            ll::thread::ServerThreadExecutor::getDefault().execute(
-                [request, generation, generationCounter, playerUuid, replayLevelId = std::move(replayLevelId), target] {
-                    if (request->completed.load(std::memory_order_acquire)
-                        || request->status.load(std::memory_order_acquire) != DimensionTransitionStatus::Succeeded
-                        || generationCounter->load(std::memory_order_acquire) != generation) {
-                        return;
-                    }
-
-                    auto  level = ll::service::getLevel();
-                    auto* player =
-                        level && level->getLevelId() == replayLevelId ? level->getPlayer(playerUuid) : nullptr;
-                    if (!player || player->getDimensionId() != target) {
-                        getLogger().warn(
-                            "Unable to send replay dimension acknowledgment fallback for generation {}: the server "
-                            "player is unavailable or has not reached dimension {}",
-                            generation,
-                            target.id
-                        );
-                        return;
-                    }
-
-                    PlayerActionPacket acknowledgment{};
-                    acknowledgment.mAction    = PlayerActionType::ChangeDimensionAck;
-                    acknowledgment.mRuntimeId = player->getRuntimeID();
-                    player->sendNetworkPacket(acknowledgment);
-                }
-            );
+        if (client) {
+            bool expected = false;
+            if (mDimensionTransitionRequest->acknowledgmentFallbackQueued
+                    .compare_exchange_strong(expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                PlayerActionPacket acknowledgment{};
+                acknowledgment.mAction    = PlayerActionType::ChangeDimensionAck;
+                acknowledgment.mRuntimeId = mReplayPlayer->getRuntimeID();
+                client->getPacketSender().sendToServer(acknowledgment);
+                getLogger().debug(
+                    "Sent replay dimension acknowledgment fallback from the client for generation {}",
+                    mDimensionTransitionRequest->generation
+                );
+            }
         }
     }
 
-    if (status != DimensionTransitionStatus::Succeeded || !dimensionMatches || waitingForAcknowledgment) {
+    bool const acknowledgmentGraceComplete =
+        !waitingForAcknowledgment
+        || mDimensionTransitionRequest->acknowledgmentFallbackQueued.load(std::memory_order_acquire);
+    if (status != DimensionTransitionStatus::Succeeded || !dimensionMatches || !acknowledgmentGraceComplete) {
         mDimensionTransitionSettledUpdates = 0;
         return;
     }
 
-    auto client = ll::service::getClientInstance();
-    if (!client || client->isShowingLoadingScreen() || client->isShowingProgressScreen()
-        || client->isShowingWorldProgressScreen()) {
+    if (waitingForAcknowledgment && mDimensionTransitionSettledUpdates == 0) {
+        getLogger().warn(
+            "Replay dimension transition generation {} reached dimension {} but its client acknowledgment remains "
+            "pending; continuing after the fallback grace period",
+            mDimensionTransitionRequest->generation,
+            mPendingReplayDimension->id
+        );
+    }
+
+    if (!client) {
         mDimensionTransitionSettledUpdates = 0;
         return;
+    }
+
+    // The destination snapshot cannot be streamed until this transition is
+    // complete. Waiting for Bedrock's loading screen to disappear here is a
+    // cycle: that screen may require the first destination chunks that replay
+    // injection publishes immediately after completion.
+    if (loadingScreenVisible && mDimensionTransitionSettledUpdates == 0) {
+        getLogger().info(
+            "Replay dimension transition generation {} reached dimension {} while the loading screen remains "
+            "visible; resuming destination snapshot injection (readyToRender={})",
+            mDimensionTransitionRequest->generation,
+            mPendingReplayDimension->id,
+            readyToRender
+        );
     }
 
     if (++mDimensionTransitionSettledUpdates >= DIMENSION_TRANSITION_SETTLE_UPDATES) {
@@ -1355,7 +1371,16 @@ void ReplaySession::processPendingDimensionTransition() {
 void ReplaySession::completeReplayDimensionTransition() {
     if (!refreshReplayPlayer()) return;
     auto const completedGeneration = mDimensionTransitionRequest->generation;
-    mDimensionTransitionRequest->completed.store(true, std::memory_order_release);
+    auto const elapsed             = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - mDimensionTransitionStartedAt
+    );
+    getLogger().info(
+        "Replay dimension transition generation {} completed at tick {} in dimension {} after {} ms",
+        completedGeneration,
+        mCurrentTick,
+        mReplayPlayer->getDimensionId().id,
+        elapsed.count()
+    );
     mReplayDimension.store(&mReplayPlayer->getDimension(), std::memory_order_release);
     mPendingReplayDimension.reset();
     mDimensionTransitionRequest.reset();
@@ -1899,12 +1924,12 @@ void ReplaySession::updateCenterChunkReadiness() {
     mCenterChunksReady = true;
     auto const elapsed =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt);
-    size_t const queuedCenterColumns = static_cast<size_t>(
-        std::count_if(mCenterChunkPositions.begin(), mCenterChunkPositions.end(), [this](ChunkPos const& pos) {
-            return !mReusableSnapshotColumns.contains(pos);
-        })
-    );
-    size_t const queuedOuterColumns = mPendingLevelChunkIndices.size() - queuedCenterColumns;
+    size_t const queuedCenterColumns = static_cast<size_t>(std::count_if(
+        mCenterChunkPositions.begin(),
+        mCenterChunkPositions.end(),
+        [this](ChunkPos const& pos) { return !mReusableSnapshotColumns.contains(pos); }
+    ));
+    size_t const queuedOuterColumns  = mPendingLevelChunkIndices.size() - queuedCenterColumns;
     getLogger().debug(
         "Replay center ready with {} columns in {:.3f} ms after {} ticks; streaming {} outer columns",
         mCenterChunkPositions.size(),
@@ -2275,8 +2300,8 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
             if (!actor) continue;
 
-            auto const previousPose = replayRenderPose(*actor);
-            auto const renderKey    = replayEntityRenderKey(actor->getLevel(), id);
+            auto const previousPose  = replayRenderPose(*actor);
+            auto const renderKey     = replayEntityRenderKey(actor->getLevel(), id);
             auto&      entityContext = actor->getEntityContext();
             auto const currentPose   = render::EntityRenderPose{
                 replayRenderPosition(position),
@@ -2369,7 +2394,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         render::EntityRenderPose               previousPose{};
         render::EntityRenderPose               currentPose{};
         std::optional<render::EntityRenderKey> renderKey;
-        std::shared_ptr<Packet>                 packet;
+        std::shared_ptr<Packet>                packet;
         if (isPlayer) {
             auto const pitch    = data.getFloat().value();
             auto const yaw      = data.getFloat().value();

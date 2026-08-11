@@ -8,6 +8,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -39,86 +40,98 @@ std::string exportStateLabel(exporting::ExportState state) {
     return {};
 }
 
+void drawSpinner(float radius, float thickness) {
+    constexpr float Pi = 3.14159265358979323846f;
+
+    float const size      = radius * 2.0f;
+    float const available = ImGui::GetContentRegionAvail().x;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (available - size) * 0.5f));
+    ImVec2 const origin = ImGui::GetCursorScreenPos();
+    ImGui::Dummy({size, size});
+
+    float const  angle = std::fmod(static_cast<float>(ImGui::GetTime()) * 4.0f, Pi * 2.0f);
+    ImVec2 const center{origin.x + radius, origin.y + radius};
+    auto* const  drawList = ImGui::GetWindowDrawList();
+    drawList->PathArcTo(center, radius - thickness * 0.5f, angle, angle + Pi * 1.55f, 32);
+    drawList->PathStroke(ImGui::GetColorU32(ImGuiCol_CheckMark), ImDrawFlags_None, thickness);
+}
+
 } // namespace
 
 void RenderMode::draw() {
-    auto&       editor        = ReplayEditor::getInstance();
-    auto const& status        = editor.state().exportStatus;
-    auto const& style         = ImGui::GetStyle();
-    float const kMenuHeight   = ImGui::GetFrameHeight() + style.WindowBorderSize * 2.0f;
-    float const kStatusHeight = ImGui::GetFontSize() + style.WindowPadding.y * 2.0f;
+    auto&        editor      = ReplayEditor::getInstance();
+    auto const&  status      = editor.state().exportStatus;
+    ImVec2 const displaySize = ImGui::GetIO().DisplaySize;
 
-    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-    bool const popupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
-    ImGuiWindowFlags const inputBlock = popupOpen ? ImGuiWindowFlags_NoInputs : ImGuiWindowFlags_None;
+    auto* const background = ImGui::GetBackgroundDrawList();
+    background->AddRectFilled({0.0f, 0.0f}, displaySize, IM_COL32(0, 0, 0, 255));
+    if (auto const texture = editor.gameTexture()) {
+        float const aspect = std::clamp(editor.videoAspectRatio(), 0.25f, 4.0f);
+        ImVec2      imageSize{displaySize.x, displaySize.x / aspect};
+        if (imageSize.y > displaySize.y) imageSize = {displaySize.y * aspect, displaySize.y};
+        ImVec2 const imageMin{(displaySize.x - imageSize.x) * 0.5f, (displaySize.y - imageSize.y) * 0.5f};
+        ImVec2 const imageMax{imageMin.x + imageSize.x, imageMin.y + imageSize.y};
+        background->AddImage(ImTextureRef(texture), imageMin, imageMax);
+    }
 
-    auto drawMenuBar = [&] {
-        ImGui::SetNextWindowPos(ImVec2(0, 0));
-        ImGui::SetNextWindowSize(ImVec2(displaySize.x, kMenuHeight));
-        ImGui::Begin(
-            "##RenderMenuBar",
-            nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_MenuBar
+    ImGui::SetNextWindowPos({0.0f, 0.0f});
+    ImGui::SetNextWindowSize(displaySize);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.32f));
+    ImGui::Begin(
+        "##ExportModalShield",
+        nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+            | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav
+            | ImGuiWindowFlags_NoBringToFrontOnFocus
+    );
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    float modalWidth =
+        std::min(std::clamp(displaySize.x * 0.52f, 360.0f, 640.0f), std::max(1.0f, displaySize.x - 24.0f));
+    float modalHeight =
+        std::min(std::clamp(displaySize.y * 0.58f, 360.0f, 500.0f), std::max(1.0f, displaySize.y - 40.0f));
+    ImGui::SetNextWindowPos({displaySize.x * 0.5f, displaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowSize({modalWidth, modalHeight}, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+    bool const progressVisible = ImGui::Begin(
+        "##ExportProgress",
+        nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+            | ImGuiWindowFlags_NoSavedSettings
+    );
+    if (progressVisible) {
+        drawSpinner(18.0f, 3.0f);
+        ImGui::Spacing();
+
+        std::string const phase      = exportStateLabel(status.state);
+        float const       phaseWidth = ImGui::CalcTextSize(phase.c_str()).x;
+        ImGui::SetCursorPosX(
+            ImGui::GetCursorPosX() + std::max(0.0f, (ImGui::GetContentRegionAvail().x - phaseWidth) * 0.5f)
         );
-        editor.mMenuBar.draw();
-        ImGui::End();
-    };
-
-    {
-        float const workspaceHeight = std::max(1.0f, displaySize.y - kMenuHeight - kStatusHeight);
-        ImGui::SetNextWindowPos(ImVec2(0.0f, kMenuHeight));
-        ImGui::SetNextWindowSize(ImVec2(displaySize.x, workspaceHeight));
-        ImGui::Begin(
-            "##RenderWorkspace",
-            nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
-                | inputBlock
-        );
-
-        ImVec2 const available    = ImGui::GetContentRegionAvail();
-        float const contentWidth = std::min(620.0f, std::max(1.0f, available.x));
-        float const contentLeft  = ImGui::GetCursorPosX() + std::max(0.0f, (available.x - contentWidth) * 0.5f);
-        float const blockHeight  = 350.0f;
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::max(0.0f, (available.y - blockHeight) * 0.5f));
-        auto const centerItem = [contentLeft, contentWidth](float width) {
-            ImGui::SetCursorPosX(contentLeft + std::max(0.0f, (contentWidth - width) * 0.5f));
-        };
-
-        centerItem(ImGui::CalcTextSize(ICON_RENDER).x);
-        ImGui::Text("%s", ICON_RENDER);
-
-        std::string const phase = exportStateLabel(status.state);
-        centerItem(ImGui::CalcTextSize(phase.c_str()).x);
         ImGui::TextUnformatted(phase.c_str());
-
         ImGui::Spacing();
 
-        auto const capturedFrames = std::min(status.submittedFrames, status.totalFrames);
-        auto const writtenFrames  = std::min(status.writtenFrames, status.totalFrames);
-        auto const progressFrames = std::max(capturedFrames, writtenFrames);
-        float const progress      = status.totalFrames > 0
-                                      ? static_cast<float>(progressFrames) / static_cast<float>(status.totalFrames)
-                                      : 0.0f;
-        char        progressLabel[32];
+        auto const  capturedFrames = std::min(status.submittedFrames, status.totalFrames);
+        auto const  writtenFrames  = std::min(status.writtenFrames, status.totalFrames);
+        auto const  progressFrames = std::max(capturedFrames, writtenFrames);
+        float const progress =
+            status.totalFrames > 0 ? static_cast<float>(progressFrames) / static_cast<float>(status.totalFrames) : 0.0f;
+        char progressLabel[32];
         std::snprintf(progressLabel, sizeof(progressLabel), "%d%%", static_cast<int>(progress * 100.0f));
-
-        ImGui::SetCursorPosX(contentLeft);
-        ImGui::ProgressBar(progress, ImVec2(contentWidth, 24.0f), progressLabel);
+        ImGui::ProgressBar(progress, ImVec2(-1.0f, 24.0f), progressLabel);
         ImGui::Spacing();
 
-        std::string const format = status.format == exporting::ExportFormat::Mp4Video
-                                     ? "playback.refactorEditor.export.mp4"_tr()
-                                     : "playback.refactorEditor.export.pngSequence"_tr();
-        auto const  outputUtf8 = status.outputPath.generic_u8string();
-        std::string outputPath{reinterpret_cast<char const*>(outputUtf8.data()), outputUtf8.size()};
-        ImGui::SetCursorPosX(contentLeft);
+        std::string const format     = status.format == exporting::ExportFormat::Mp4Video
+                                         ? "playback.refactorEditor.export.mp4"_tr()
+                                         : "playback.refactorEditor.export.pngSequence"_tr();
+        auto const        outputUtf8 = status.outputPath.generic_u8string();
+        std::string       outputPath{reinterpret_cast<char const*>(outputUtf8.data()), outputUtf8.size()};
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {8.0f, 5.0f});
         if (ImGui::BeginTable(
                 "##export-progress-details",
                 2,
-                ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp,
-                {contentWidth, 0.0f}
+                ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp
             )) {
             ImGui::TableSetupColumn("##export-progress-label", ImGuiTableColumnFlags_WidthFixed, 140.0f);
             ImGui::TableSetupColumn("##export-progress-value", ImGuiTableColumnFlags_WidthStretch);
@@ -129,14 +142,10 @@ void RenderMode::draw() {
                 ImGui::TableSetColumnIndex(1);
                 ImGui::TextUnformatted(value.c_str());
             };
-            row(
-                "playback.refactorEditor.render.capturedLabel"_tr(),
-                "playback.refactorEditor.render.frameCount"_tr(capturedFrames, status.totalFrames)
-            );
-            row(
-                "playback.refactorEditor.render.writtenLabel"_tr(),
-                "playback.refactorEditor.render.frameCount"_tr(writtenFrames, status.totalFrames)
-            );
+            row("playback.refactorEditor.render.capturedLabel"_tr(),
+                "playback.refactorEditor.render.frameCount"_tr(capturedFrames, status.totalFrames));
+            row("playback.refactorEditor.render.writtenLabel"_tr(),
+                "playback.refactorEditor.render.frameCount"_tr(writtenFrames, status.totalFrames));
             row("playback.refactorEditor.render.formatLabel"_tr(), format);
             if (!outputPath.empty()) {
                 ImGui::TableNextRow();
@@ -157,44 +166,29 @@ void RenderMode::draw() {
         ImGui::PopStyleVar();
 
         if (!status.message.empty()) {
-            ImGui::SetCursorPosX(contentLeft);
-            ImGui::PushTextWrapPos(contentLeft + contentWidth);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
             ImGui::TextDisabled("%s", status.message.c_str());
             ImGui::PopTextWrapPos();
         }
 
         ImGui::Spacing();
-        float const buttonWidth  = std::min(180.0f, contentWidth);
+        float const buttonWidth  = std::min(180.0f, ImGui::GetContentRegionAvail().x);
         float const buttonHeight = 32.0f;
-        centerItem(buttonWidth);
+        ImGui::SetCursorPosX(
+            ImGui::GetCursorPosX() + std::max(0.0f, (ImGui::GetContentRegionAvail().x - buttonWidth) * 0.5f)
+        );
         bool const cancelling = status.state == exporting::ExportState::Cancelling;
         ImGui::BeginDisabled(cancelling);
-        std::string const cancelLabel = std::string(cancelling ? ICON_LOADER : ICON_CLOSE) + "  "
-                                      + (cancelling ? "playback.refactorEditor.render.cancelling"_tr()
-                                                    : "playback.refactorEditor.render.cancel"_tr());
+        std::string const cancelLabel =
+            cancelling ? "playback.refactorEditor.render.cancelling"_tr()
+                       : std::string(ICON_CLOSE) + "  " + "playback.refactorEditor.render.cancel"_tr();
         if (ImGui::Button(cancelLabel.c_str(), ImVec2(buttonWidth, buttonHeight))) {
             editor.submitAction({EditorActionType::CancelExport});
         }
         ImGui::EndDisabled();
-
-        ImGui::End();
     }
-
-    {
-        ImGui::SetNextWindowPos(ImVec2(0, displaySize.y - kStatusHeight));
-        ImGui::SetNextWindowSize(ImVec2(displaySize.x, kStatusHeight));
-        ImGui::Begin(
-            "##RenderStatus",
-            nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
-        );
-        editor.mStatusPanel.draw();
-        ImGui::End();
-    }
-
-    // Keep the menu and its modal export dialog above every workspace window.
-    drawMenuBar();
+    ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 } // namespace playback::editor::ui

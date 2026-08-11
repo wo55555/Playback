@@ -8,15 +8,67 @@
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/screen/IdleDetectionHooks.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <utility>
 
 namespace playback::editor::exporting {
 
 namespace {
 
-constexpr uint32_t ExportCaptureCapacity = 4;
+constexpr uint32_t ExportCaptureCapacity  = 4;
+constexpr uint32_t MaxClearFrameRerenders = 24;
+constexpr uint8_t  ExportClearRed         = 10;
+constexpr uint8_t  ExportClearGreen       = 12;
+constexpr uint8_t  ExportClearBlue        = 22;
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
+
+struct UniformFrameProbe {
+    uint8_t minimum[3]{255, 255, 255};
+    uint8_t maximum[3]{};
+};
+
+UniformFrameProbe probeUniformFrame(functions::render::CapturedFrame const& frame) {
+    UniformFrameProbe probe;
+    if (!detail::validateFrame(frame)) return probe;
+
+    auto const*    pixels = reinterpret_cast<uint8_t const*>(frame.pixels.data());
+    uint32_t const stepX  = std::max<uint32_t>(1, frame.width / 64);
+    uint32_t const stepY  = std::max<uint32_t>(1, frame.height / 36);
+    for (uint32_t y = 0; y < frame.height; y += stepY) {
+        auto const* row = pixels + static_cast<size_t>(y) * frame.rowPitch;
+        for (uint32_t x = 0; x < frame.width; x += stepX) {
+            auto const* pixel = row + static_cast<size_t>(x) * 4;
+            for (size_t channel = 0; channel < 3; ++channel) {
+                probe.minimum[channel] = std::min(probe.minimum[channel], pixel[channel]);
+                probe.maximum[channel] = std::max(probe.maximum[channel], pixel[channel]);
+            }
+        }
+    }
+    return probe;
+}
+
+bool isKnownExportClearFrame(functions::render::CapturedFrame const& frame, UniformFrameProbe const& probe) {
+    if (probe.minimum[0] != ExportClearRed || probe.maximum[0] != ExportClearRed || probe.minimum[1] != ExportClearGreen
+        || probe.maximum[1] != ExportClearGreen || probe.minimum[2] != ExportClearBlue
+        || probe.maximum[2] != ExportClearBlue) {
+        return false;
+    }
+
+    auto const* pixels = reinterpret_cast<uint8_t const*>(frame.pixels.data());
+    for (uint32_t y = 0; y < frame.height; ++y) {
+        auto const* row = pixels + static_cast<size_t>(y) * frame.rowPitch;
+        for (uint32_t x = 0; x < frame.width; ++x) {
+            auto const* pixel = row + static_cast<size_t>(x) * 4;
+            if (pixel[0] != ExportClearRed || pixel[1] != ExportClearGreen || pixel[2] != ExportClearBlue) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 } // namespace
 
@@ -89,8 +141,9 @@ bool ReplayExportDriver::start(ExportSettings settings, editing::model::EditorSt
         return false;
     }
     mReadyFrames.clear();
-    mSourceFrameLogged = false;
-    mNextFrameIndex    = 0;
+    mClearFrameRetryCount    = 0;
+    mRejectedClearFrameCount = 0;
+    mNextFrameIndex          = 0;
     setExportActivityActive(true);
     mPhase = Phase::Rendering;
     getLogger().info(
@@ -227,9 +280,10 @@ void ReplayExportDriver::reset() {
     setExportActivityActive(false);
     mPlan.reset();
     mReadyFrames.clear();
-    mSourceFrameLogged = false;
-    mNextFrameIndex    = 0;
-    mPhase             = Phase::Idle;
+    mClearFrameRetryCount    = 0;
+    mRejectedClearFrameCount = 0;
+    mNextFrameIndex          = 0;
+    mPhase                   = Phase::Idle;
 }
 
 bool ReplayExportDriver::isAvailable() const {
@@ -261,24 +315,40 @@ ReplayExportDriver::SubmissionResult ReplayExportDriver::collectDownloads() {
     while (mReadyFrames.size() < ExportCaptureCapacity) {
         auto frame = mRenderBoundary->finishDownload();
         if (!frame) break;
-        if (!mSourceFrameLogged && mPlan) {
-            auto const executor = mRenderBoundary->status().executor;
-            getLogger().info(
-                "First video export frame downloaded: source={}x{}, rowPitch={}, target={}x{}, offlineRender={}x{}",
-                frame->width,
-                frame->height,
-                frame->rowPitch,
-                mPlan->settings.resolutionX,
-                mPlan->settings.resolutionY,
-                executor.renderWidth,
-                executor.renderHeight
-            );
-            mSourceFrameLogged = true;
-        }
         if (!mPlan || !detail::normalizeFrame(*frame, mPlan->settings.resolutionX, mPlan->settings.resolutionY)) {
             fail(ExportError::InvalidFrame, "The captured frame could not be normalized to the export resolution");
             return SubmissionResult::Failed;
         }
+        auto const probe = probeUniformFrame(*frame);
+        if (isKnownExportClearFrame(*frame, probe)) {
+            ++mRejectedClearFrameCount;
+            if (mRejectedClearFrameCount <= 4 || frame->ticket.frameIndex % 120 == 0) {
+                getLogger().warn(
+                    "Rejected uniform engine clear export frame (frame={}, retry={}/{}, count={})",
+                    frame->ticket.frameIndex,
+                    mClearFrameRetryCount + 1,
+                    MaxClearFrameRerenders,
+                    mRejectedClearFrameCount
+                );
+            }
+            if (mClearFrameRetryCount >= MaxClearFrameRerenders) {
+                fail(
+                    ExportError::CaptureFailed,
+                    "The renderer produced only clear surfaces for the same export sample"
+                );
+                return SubmissionResult::Failed;
+            }
+            ++mClearFrameRetryCount;
+            if (!mRenderBoundary->retryCompletedFrame(frame->ticket)) {
+                fail(
+                    ExportError::CaptureFailed,
+                    "The clear export frame could not be scheduled for a same-sample retry"
+                );
+                return SubmissionResult::Failed;
+            }
+            continue;
+        }
+        mClearFrameRetryCount = 0;
         mReadyFrames.emplace_back(std::move(*frame));
     }
     return submitReadyFrames();
@@ -304,7 +374,11 @@ ExportError ReplayExportDriver::mapBoundaryError(OfflineRenderBoundaryError erro
 }
 
 void ReplayExportDriver::finish() {
-    getLogger().info("Captured {} video export frames; finalizing output", mNextFrameIndex);
+    getLogger().info(
+        "Captured {} video export frames; finalizing output (rejected clear surfaces={})",
+        mNextFrameIndex,
+        mRejectedClearFrameCount
+    );
     closeCapture(false);
     if (!mCoordinator.finish()) {
         auto const status = mCoordinator.status();

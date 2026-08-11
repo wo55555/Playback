@@ -10,6 +10,7 @@ namespace playback::editor {
 
 [[nodiscard]] bool isReplayBrowserVisible();
 
+void tickReplayExportBeforeClientUpdate();
 void tickReplayUI(bool hudVisible);
 
 void submitEditorAction(EditorAction action);
