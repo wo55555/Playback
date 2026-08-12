@@ -101,7 +101,6 @@ target("playback")
             modVersion = get_version(os),
         })
     end)
-
     after_build(function (target)
         import("utils.archive")
         import("core.project.project")
@@ -161,18 +160,3 @@ target("playback")
             cprint("${bright green}[Playback]: ${reset}Standalone UI resource pack generated to " .. mcpack)
         end
     end)
-
-target("camera-timeline-tests")
-    set_default(false)
-    set_kind("binary")
-    set_languages("c++20")
-    add_cxflags("/utf-8")
-    add_includedirs("src")
-    add_files(
-        "tests/camera/CameraTimelineEvaluatorTests.cpp",
-        "src/playback/editor/keyframe/CameraTimelineEvaluator.cpp",
-        "src/playback/editor/keyframe/CameraTimelineRegistry.cpp",
-        "src/playback/editor/editing/commands/CameraCommands.cpp",
-        "src/playback/editor/editing/CameraBindingOps.cpp",
-        "src/playback/editor/editing/SequenceOps.cpp"
-    )
