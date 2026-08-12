@@ -42,7 +42,9 @@ void TrackTreeModel::setCamerasExpanded(bool expanded) { mCamerasExpanded = expa
 void TrackTreeModel::rebuild(const EditorStateExt& state) {
     mRows.clear();
     mRows.reserve(state.sequence.empty() ? state.cameras.size() : state.cameras.size() + 1);
-    if (!state.sequence.empty()) mRows.push_back({TrackRowKind::Sequence, "sequence", "Sequence", -1, kSequenceRowHeight, false, false, true});
+    if (!state.sequence.empty()) {
+        mRows.push_back({TrackRowKind::Sequence, "sequence", "Sequence", -1, kSequenceRowHeight, false, true, true});
+    }
 
     if (mCamerasExpanded) {
         for (int index = 0; index < static_cast<int>(state.cameras.size()); ++index) {
@@ -54,9 +56,9 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
                  camera.name,
                  index,
                  kCameraRowHeight,
-                 camera.active,
                  camera.locked,
-                 true}
+                 camera.enabled,
+                 camera.pathVisible}
             );
         }
     }

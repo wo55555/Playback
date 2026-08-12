@@ -358,22 +358,39 @@ void DetailsPanel::draw() {
             return;
         }
         if (property::beginSection("Camera")) {
-        ImGui::BeginDisabled(camera->locked);
         property::textRow("Name", camera->name.c_str());
         std::string const keyframeCount = std::to_string(camera->keys.size());
         property::textRow("Keyframes", keyframeCount.c_str());
+        bool enabled = camera->enabled;
+        if (ImGui::Checkbox("Enabled", &enabled)) {
+            EditorAction action{EditorActionType::SetCameraEnabled};
+            action.id    = camera->id;
+            action.value = enabled;
+            submit(std::move(action));
+        }
+        bool pathVisible = camera->pathVisible;
+        if (ImGui::Checkbox("Show Camera Path", &pathVisible)) {
+            EditorAction action{EditorActionType::SetCameraPathVisible};
+            action.id    = camera->id;
+            action.value = pathVisible;
+            submit(std::move(action));
+        }
+        ImGui::BeginDisabled(camera->locked);
         std::string const selectedKindName = cameraKindName(camera->kind);
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::BeginCombo("playback.refactorEditor.details.kind"_tr().c_str(), selectedKindName.c_str())) {
             for (int index = 0; index < 4; ++index) {
                 auto const        kind     = static_cast<editing::model::CameraKind>(index);
                 std::string const kindName = cameraKindName(kind);
-                if (ImGui::Selectable(kindName.c_str(), kind == camera->kind)) {
+                bool const        available = kind == camera->kind || editing::model::hasCameraSource(*camera, kind);
+                ImGui::BeginDisabled(!available);
+                if (ImGui::Selectable(kindName.c_str(), kind == camera->kind) && available) {
                     EditorAction action{EditorActionType::SetCameraKind};
                     action.id   = camera->id;
                     action.kind = index;
                     submit(std::move(action));
                 }
+                ImGui::EndDisabled();
             }
             ImGui::EndCombo();
         }
@@ -477,7 +494,7 @@ void DetailsPanel::draw() {
             submit(std::move(action));
         }
         ImGui::Text("Position: (%.1f, %.1f, %.1f)", key->position.x, key->position.y, key->position.z);
-        ImGui::Text("Rotation: yaw %.1f  pitch %.1f", key->yaw, key->pitch);
+        ImGui::Text("Rotation: yaw %.1f  pitch %.1f  roll %.1f", key->yaw, key->pitch, key->roll);
         ImGui::Text("FOV: %.1f", key->fov);
         int easing = static_cast<int>(key->easingType);
         ImGui::SetNextItemWidth(-1.0f);

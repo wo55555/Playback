@@ -93,7 +93,7 @@ CameraRenderState stateFromKeyframe(editing::model::CameraKeyframe const& key) {
         key.position.z,
         key.yaw,
         key.pitch,
-        0.0f,
+        key.roll,
         std::clamp(key.fov, 1.0f, 179.0f),
     };
 }
@@ -119,6 +119,16 @@ Vec3 catmullRom(Vec3 const& p0, Vec3 const& p1, Vec3 const& p2, Vec3 const& p3, 
     auto const control1 = add(p1, scale(subtract(p2, p0), 1.0f / 6.0f));
     auto const control2 = subtract(p2, scale(subtract(p3, p1), 1.0f / 6.0f));
     return cubicBezier(p1, control1, control2, p2, amount);
+}
+
+Vec3 hermite(Vec3 const& p0, Vec3 const& tangent0, Vec3 const& p1, Vec3 const& tangent1, float amount) {
+    float const t2  = amount * amount;
+    float const t3  = t2 * amount;
+    float const h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
+    float const h10 = t3 - 2.0f * t2 + amount;
+    float const h01 = -2.0f * t3 + 3.0f * t2;
+    float const h11 = t3 - t2;
+    return add(add(scale(p0, h00), scale(tangent0, h10)), add(scale(p1, h01), scale(tangent1, h11)));
 }
 
 Vec3 samplePathPosition(editing::model::CameraPath const& path, long double tick) {
@@ -197,13 +207,16 @@ editing::model::CameraEntity const* CameraTimelineEvaluator::cameraForTick(int64
     auto findCamera = [&](std::string const& id) -> editing::model::CameraEntity const* {
         if (id.empty()) return nullptr;
         auto const match = std::ranges::find(mProject.cameras, id, &editing::model::CameraEntity::id);
-        return match == mProject.cameras.end() ? nullptr : &*match;
+        return match == mProject.cameras.end() || !editing::model::isCameraRenderable(*match) ? nullptr : &*match;
     };
 
-    if (mCameraOverride && !mCameraOverride->empty()) return findCamera(*mCameraOverride);
+    if (mCameraOverride && !mCameraOverride->empty()) {
+        if (auto const* camera = findCamera(*mCameraOverride)) return camera;
+    }
 
-    // Sequence bindings are authoritative when present. A dangling binding is
-    // treated as absent so export can still use its explicit fallback camera.
+    // Sequence bindings are authoritative when present. A dangling, disabled,
+    // or incomplete binding is treated as absent so export can still use its
+    // explicit fallback camera.
     for (auto const& segment : mProject.sequence) {
         if (tick < segment.startTick || tick >= segment.endTick || segment.cameraId.empty()) continue;
         if (auto const* camera = findCamera(segment.cameraId)) return camera;
@@ -213,19 +226,13 @@ editing::model::CameraEntity const* CameraTimelineEvaluator::cameraForTick(int64
     if (mCameraFallback) {
         if (auto const* camera = findCamera(*mCameraFallback)) return camera;
     }
-    if (mProject.activeCameraIndex >= 0 && static_cast<size_t>(mProject.activeCameraIndex) < mProject.cameras.size()) {
-        return &mProject.cameras[static_cast<size_t>(mProject.activeCameraIndex)];
-    }
-    if (auto const active = std::ranges::find(mProject.cameras, true, &editing::model::CameraEntity::active);
-        active != mProject.cameras.end()) {
-        return &*active;
-    }
-    return &mProject.cameras.front();
+    auto const firstRenderable = std::ranges::find_if(mProject.cameras, editing::model::isCameraRenderable);
+    return firstRenderable == mProject.cameras.end() ? nullptr : &*firstRenderable;
 }
 
 std::optional<CameraRenderState>
 CameraTimelineEvaluator::sampleCamera(editing::model::CameraEntity const& camera, long double tick) const {
-    if (!camera.keys.empty()) {
+    if (camera.kind == editing::model::CameraKind::Keyframe && !camera.keys.empty()) {
         if (tick <= camera.keys.front().tick) {
             auto state = stateFromKeyframe(camera.keys.front());
             applyLimiter(state, camera.limiter.value_or(editing::model::CameraLimiter{}));
@@ -270,6 +277,18 @@ CameraTimelineEvaluator::sampleCamera(editing::model::CameraEntity const& camera
             position = catmullRom(previous, prev.position, right->position, next, t);
             break;
         }
+        case editing::model::CameraPathType::Hermite:
+            // Motion controls are tangent vectors for Hermite segments. They
+            // are expressed in world units over the keyframe span, matching
+            // the relative Bezier controls used by the other path modes.
+            position = hermite(
+                prev.position,
+                prev.outgoingMotion.outControl,
+                right->position,
+                prev.outgoingMotion.inControl,
+                t
+            );
+            break;
         case editing::model::CameraPathType::Linear:
         default:
             position = lerp(prev.position, right->position, t);
@@ -281,15 +300,16 @@ CameraTimelineEvaluator::sampleCamera(editing::model::CameraEntity const& camera
             position.z,
             lerpAngle(prev.yaw, right->yaw, t),
             lerpAngle(prev.pitch, right->pitch, t),
-            std::sin(3.14159265358979323846f * t) * prev.outgoingMotion.fovPeakOffset,
-            std::clamp(prev.fov + (right->fov - prev.fov) * t, 1.0f, 179.0f),
+            lerpAngle(prev.roll, right->roll, t),
+            std::clamp(prev.fov + (right->fov - prev.fov) * t
+                    + std::sin(3.14159265358979323846f * t) * prev.outgoingMotion.fovPeakOffset, 1.0f, 179.0f),
         };
         applyLimiter(state, camera.limiter.value_or(editing::model::CameraLimiter{}));
         applyShake(state, camera.shake.value_or(editing::model::CameraShake{}), tick);
         return state;
     }
 
-    if (camera.path && !camera.path->points.empty()) {
+    if (camera.kind == editing::model::CameraKind::Path && camera.path && !camera.path->points.empty()) {
         auto const position = samplePathPosition(*camera.path, tick);
         CameraRenderState state{
             position.x,
@@ -304,7 +324,7 @@ CameraTimelineEvaluator::sampleCamera(editing::model::CameraEntity const& camera
         applyShake(state, camera.shake.value_or(editing::model::CameraShake{}), tick);
         return state;
     }
-    if (camera.rig) {
+    if (camera.kind == editing::model::CameraKind::Rig && camera.rig) {
         CameraRenderState state{
             camera.rig->basePosition.x,
             camera.rig->basePosition.y,
@@ -338,7 +358,7 @@ CameraTimelineEvaluator::sampleCamera(editing::model::CameraEntity const& camera
         applyShake(state, camera.shake.value_or(editing::model::CameraShake{}), tick);
         return state;
     }
-    if (camera.preset) {
+    if (camera.kind == editing::model::CameraKind::Preset && camera.preset) {
         CameraRenderState state{
             camera.preset->offset.x,
             camera.preset->offset.y,
@@ -369,6 +389,17 @@ CameraTimelineEvaluator::sample(functions::render::ReplaySampleTime const& time)
     if (!time.isValid()) return std::nullopt;
     auto const* camera = cameraForTick(time.floorTick());
     return camera ? sampleCamera(*camera, time.value()) : std::nullopt;
+}
+
+std::optional<CameraRenderState> CameraTimelineEvaluator::sampleCameraById(
+    std::string_view                           cameraId,
+    functions::render::ReplaySampleTime const& time
+) const {
+    if (cameraId.empty() || !time.isValid()) return std::nullopt;
+    auto const camera =
+        std::ranges::find_if(mProject.cameras, [&](auto const& candidate) { return candidate.id == cameraId; });
+    if (camera == mProject.cameras.end() || !editing::model::isCameraRenderable(*camera)) return std::nullopt;
+    return sampleCamera(*camera, time.value());
 }
 
 } // namespace playback::editor::keyframe

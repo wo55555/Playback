@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace playback::editor::keyframe {
 
@@ -27,6 +28,8 @@ public:
     );
 
     [[nodiscard]] std::optional<CameraRenderState> sample(functions::render::ReplaySampleTime const& time) const;
+    [[nodiscard]] std::optional<CameraRenderState>
+    sampleCameraById(std::string_view cameraId, functions::render::ReplaySampleTime const& time) const;
 
 private:
     [[nodiscard]] editing::model::CameraEntity const* cameraForTick(int64_t tick) const;

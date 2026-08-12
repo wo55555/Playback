@@ -129,6 +129,24 @@ private:
     bool                                 mChanged{};
 };
 
+class SetCameraTrackState final : public model::IEditCommand {
+public:
+    enum class Property : uint8_t { Enabled, PathVisible };
+
+    SetCameraTrackState(std::string cameraId, Property property, bool value);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mChanged; }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    Property                             mProperty;
+    bool                                 mValue;
+    std::optional<model::EditorStateExt> mBefore;
+    bool                                 mChanged{};
+};
+
 class SetCameraKind final : public model::IEditCommand {
 public:
     SetCameraKind(std::string cameraId, model::CameraKind kind);

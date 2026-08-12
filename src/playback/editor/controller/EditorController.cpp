@@ -1,24 +1,18 @@
 #include "EditorController.h"
 
+#include "playback/Playback.h"
 #include "playback/editor/editing/CameraBindingOps.h"
 #include "playback/editor/editing/commands/CameraCommands.h"
 #include "playback/editor/editing/commands/CommandFactory.h"
 #include "playback/editor/keyframe/CameraTimelineEvaluator.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
+#include "playback/editor/keyframe/ClientCameraCapture.h"
 #include "playback/functions/render/FrameTap.h"
 #include "playback/functions/replay/ReplaySession.h"
-#include "playback/Playback.h"
 #include "playback/screen/ReplayBrowser.h"
 
 #include "ll/api/i18n/I18n.h"
-#include "ll/api/service/TargetedBedrock.h"
-
-#include "mc/client/game/ClientInstance.h"
-#include "mc/client/player/LocalPlayer.h"
-#include "mc/deps/renderer/Camera.h"
-
 #include <algorithm>
-#include <cmath>
 #include <filesystem>
 #include <utility>
 
@@ -83,46 +77,18 @@ std::optional<editing::model::CameraKeyframe> EditorController::captureCameraKey
         key.position = {overrideState->x, overrideState->y, overrideState->z};
         key.yaw      = overrideState->yaw;
         key.pitch    = overrideState->pitch;
+        key.roll     = overrideState->roll;
         key.fov      = std::clamp(overrideState->fov, 1.0f, 179.0f);
         return key;
     }
-    auto client = ll::service::getClientInstance();
-    if (!client) return std::nullopt;
-
-    auto const& camera    = client->getCamera();
-    auto        position  = *camera.mPosition;
-    auto        forward   = *camera.mForward;
-    float       fov       = camera.mFov;
-    if (auto* player = client->getLocalPlayer()) {
-        // The client camera can still contain its construction-time values
-        // while the editor action is processed.  Use Bedrock's local player's head pose as the
-        // fallback when the client camera has not been updated yet.
-        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
-            || (std::abs(position.x) < 0.0001f && std::abs(position.y) < 0.0001f && std::abs(position.z) < 0.0001f)) {
-            auto const head = player->getHeadPos();
-            position = {head.x, head.y, head.z};
-        }
-        if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)
-            || (std::abs(forward.x) < 0.0001f && std::abs(forward.y) < 0.0001f && std::abs(forward.z) < 0.0001f)) {
-            auto const rotation = player->getRotation();
-            float const yaw      = rotation.y * 0.01745329251994329577f;
-            float const pitch    = rotation.x * 0.01745329251994329577f;
-            float const cosPitch = std::cos(pitch);
-            forward              = {-std::sin(yaw) * cosPitch, -std::sin(pitch), std::cos(yaw) * cosPitch};
-        }
-    }
-    if (!std::isfinite(fov) || fov <= 1.0f) fov = 90.0f;
-    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
-        || !std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z) || !std::isfinite(fov)) {
-        return std::nullopt;
-    }
-
-    constexpr float                RadiansToDegrees = 57.2957795130823208768f;
+    auto const captured = keyframe::captureClientCamera();
+    if (!captured) return std::nullopt;
     editing::model::CameraKeyframe key;
-    key.position = {position.x, position.y, position.z};
-    key.yaw      = std::atan2(-forward.x, forward.z) * RadiansToDegrees;
-    key.pitch    = std::atan2(-forward.y, std::hypot(forward.x, forward.z)) * RadiansToDegrees;
-    key.fov      = std::clamp(fov, 1.0f, 179.0f);
+    key.position = {captured->x, captured->y, captured->z};
+    key.yaw      = captured->yaw;
+    key.pitch    = captured->pitch;
+    key.roll     = captured->roll;
+    key.fov      = captured->fov;
     return key;
 }
 
@@ -250,6 +216,12 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mProject
         );
         break;
+    case EditorActionType::SetCameraEnabled:
+        mCommandStack.push(CommandFactory::createSetCameraEnabled(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetCameraPathVisible:
+        mCommandStack.push(CommandFactory::createSetCameraPathVisible(action.id, action.value), mProject);
+        break;
     case EditorActionType::DeleteCamera:
         mCommandStack.push(CommandFactory::createDeleteCamera(action.id), mProject);
         break;
@@ -269,11 +241,16 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(CommandFactory::createSetSubActorDetails(action.id, action.details), mProject);
         break;
     case EditorActionType::SetPreviewCamera:
-        if (std::ranges::any_of(mProject.cameras, [&](auto const& camera) { return camera.id == action.id; })) {
+        keyframe::clearPreviewCameraOverride();
+        mPreviewCameraId.reset();
+        if (std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
+                return camera.id == action.id && editing::model::isCameraRenderable(camera);
+            })) {
             mPreviewCameraId = action.id;
         }
         break;
     case EditorActionType::ClearPreviewCamera:
+        keyframe::clearPreviewCameraOverride();
         mPreviewCameraId.reset();
         break;
     default:
@@ -281,7 +258,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     }
 
     if (mPreviewCameraId
-        && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) { return camera.id == *mPreviewCameraId; })) {
+        && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) { return camera.id == *mPreviewCameraId && editing::model::isCameraRenderable(camera); })) {
         mPreviewCameraId.reset();
     }
     publishCameraTimeline();

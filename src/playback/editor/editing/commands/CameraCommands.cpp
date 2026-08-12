@@ -203,6 +203,36 @@ void SetKeyframeEasing::execute(model::EditorStateExt& state) {
 void        SetKeyframeEasing::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string SetKeyframeEasing::label() const { return "Set Keyframe Easing"; }
 
+SetCameraTrackState::SetCameraTrackState(std::string cameraId, Property property, bool value)
+: mCameraId(std::move(cameraId)),
+  mProperty(property),
+  mValue(value) {}
+
+void SetCameraTrackState::execute(model::EditorStateExt& state) {
+    mChanged     = false;
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera) {
+        mBefore.reset();
+        return;
+    }
+
+    bool* target = mProperty == Property::Enabled ? &camera->enabled : &camera->pathVisible;
+    if (*target == mValue) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore  = state;
+    *target  = mValue;
+    mChanged = true;
+}
+
+void SetCameraTrackState::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+
+std::string SetCameraTrackState::label() const {
+    return mProperty == Property::Enabled ? "Set Camera Track Enabled" : "Set Camera Path Visibility";
+}
+
 SetCameraKind::SetCameraKind(std::string cameraId, model::CameraKind kind)
 : mCameraId(std::move(cameraId)),
   mKind(kind) {}
@@ -210,7 +240,7 @@ SetCameraKind::SetCameraKind(std::string cameraId, model::CameraKind kind)
 void SetCameraKind::execute(model::EditorStateExt& state) {
     mChanged     = false;
     auto* camera = findCamera(state, mCameraId);
-    if (!camera || camera->locked || camera->kind == mKind) {
+    if (!camera || camera->locked || camera->kind == mKind || !model::hasCameraSource(*camera, mKind)) {
         mBefore.reset();
         return;
     }

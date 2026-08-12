@@ -39,7 +39,14 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetKeyframeEasing(
 ) {
     return std::make_unique<SetKeyframeEasing>(id, keyframeId, easing);
 }
-std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraKind(const std::string& id, model::CameraKind kind) { return std::make_unique<SetCameraKind>(id, kind); }
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraEnabled(const std::string& id, bool enabled) {
+    return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::Enabled, enabled);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraPathVisible(const std::string& id, bool visible) {
+    return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::PathVisible, visible);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetCameraKind(const std::string& id, model::CameraKind kind) { return std::make_unique<SetCameraKind>(id, kind); }
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetSubActorDetails(const std::string& id, model::AgentDetails details) { return std::make_unique<SetSubActorDetails>(id, std::move(details)); }
 
 std::unique_ptr<model::IEditCommand>

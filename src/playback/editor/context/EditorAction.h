@@ -46,6 +46,8 @@ enum class EditorActionType {
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
     SetKeyframeEasing,
+    SetCameraEnabled,
+    SetCameraPathVisible,
     DeleteCamera,
     UnbindCamera,
     SetCameraKind,
@@ -65,6 +67,7 @@ struct EditorAction {
     std::string                              secondaryId;
     float                                    speed{};
     int                                      kind{};
+    bool                                     value{};
     std::optional<exporting::ExportSettings> exportSettings;
     std::vector<std::string>                 replayIds;
     std::map<std::string, std::string>       details;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "CameraKeyframe.h"
+#include "MathTypes.h"
 
 #include <string>
 #include <vector>
@@ -55,40 +55,11 @@ struct Track {
     int               height{48}; // UI 像素高度
 };
 
-// ===== Camera track (Cn) =====
-struct CameraTrack {
-    std::string                 id;
-    std::string                 name;
-    bool                        active{};
-    bool                        locked{};
-    bool                        muted{};
-    bool                        visible{true};
-    std::vector<CameraKeyframe> keyframes;
-};
-
 // ===== Marker =====
 struct Marker {
     std::string id;
     std::string label;
     int         tick{};
-};
-
-// ===== TrackType (UI) =====
-enum class TrackType {
-    Video,  // V0
-    Camera, // Cn
-    Markers // M
-};
-
-// ===== TrackDescriptor (UI) =====
-struct TrackDescriptor {
-    TrackType   type{TrackType::Camera};
-    std::string id;
-    std::string name;
-    bool        active{};
-    bool        locked{};
-    bool        muted{};
-    bool        visible{true};
 };
 
 // ===== Inline implementations =====

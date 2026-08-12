@@ -44,6 +44,12 @@ private:
     bool mDraggingPlayhead{};
     int mDragStartTick{};
     int mDragEndTick{};
+    std::string                    mDraggingKeyframeCameraId;
+    std::string                    mDraggingKeyframeId;
+    float                          mDraggingKeyframeStartMouseX{};
+    int                            mDraggingKeyframeStartTick{};
+    int                            mDraggingKeyframeTick{};
+    bool                           mDraggingKeyframeMoved{};
 };
 
 } // namespace playback::editor::ui

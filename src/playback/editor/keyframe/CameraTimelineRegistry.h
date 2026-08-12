@@ -2,10 +2,11 @@
 
 #include "CameraTimelineEvaluator.h"
 
-#include <cstdint>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace playback::editor::keyframe {
@@ -62,7 +63,11 @@ void publishCameraTimeline(
 void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const& expected = {});
 
 [[nodiscard]] std::optional<CameraTimelineSample>
-sampleCameraTimeline(CameraTimelineSource source, functions::render::ReplaySampleTime const& time) noexcept;
+sampleCameraTimeline(
+    CameraTimelineSource                       source,
+    functions::render::ReplaySampleTime const& time,
+    std::string_view                           cameraId = {}
+) noexcept;
 
 // Samples one immutable evaluator handle across a bounded integer-tick range.
 // The viewport uses this to visualize exactly the same path as preview/export.
@@ -70,7 +75,8 @@ sampleCameraTimeline(CameraTimelineSource source, functions::render::ReplaySampl
     CameraTimelineSource source,
     int64_t              startTick,
     int64_t              endTick,
-    size_t               maxSamples
+    size_t               maxSamples,
+    std::string_view      cameraId = {}
 ) noexcept;
 
 [[nodiscard]] bool hasCameraTimeline(CameraTimelineSource source) noexcept;

@@ -20,9 +20,9 @@ struct TrackTreeRow {
     std::string  name;
     int          cameraIndex{-1};
     float        height{};
-    bool         active{};
     bool         locked{};
-    bool         visible{true};
+    bool         enabled{true};
+    bool         pathVisible{true};
 };
 
 class TrackTreeModel {

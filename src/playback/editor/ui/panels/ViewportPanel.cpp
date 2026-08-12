@@ -1,6 +1,7 @@
 #include "ViewportPanel.h"
 
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
+#include "playback/editor/keyframe/ClientCameraCapture.h"
 #include "playback/editor/ui/ReplayEditor.h"
 
 #include "imgui.h"
@@ -8,7 +9,6 @@
 #include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
-#include "mc/client/player/LocalPlayer.h"
 #include "mc/deps/renderer/Camera.h"
 
 #include <algorithm>
@@ -25,7 +25,6 @@ namespace {
 
 constexpr float Pi               = 3.14159265358979323846f;
 constexpr float RadiansPerDegree = Pi / 180.0f;
-constexpr float DegreesPerRadian = 180.0f / Pi;
 
 struct CameraBasis {
     ::glm::vec3 position;
@@ -41,6 +40,8 @@ struct CameraSpacePoint {
     float y{};
     float depth{};
 };
+
+void cameraVectors(float yaw, float pitch, ::glm::vec3& forward, ::glm::vec3& right, ::glm::vec3& up);
 
 float dot(::glm::vec3 const& left, ::glm::vec3 const& right) {
     return left.x * right.x + left.y * right.y + left.z * right.z;
@@ -88,47 +89,6 @@ std::optional<CameraBasis> currentCameraBasis(Rect const& viewport) {
         return std::nullopt;
     }
     return CameraBasis{position, right, up, forward, fov, aspect};
-}
-
-std::optional<keyframe::CameraRenderState> captureCurrentCamera() {
-    auto client = ll::service::getClientInstance();
-    if (!client) return std::nullopt;
-
-    auto const& camera = client->getCamera();
-    auto        position = *camera.mPosition;
-    auto        forward  = *camera.mForward;
-    float       fov      = camera.mFov;
-    if (auto* player = client->getLocalPlayer()) {
-        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
-            || (std::abs(position.x) < 0.0001f && std::abs(position.y) < 0.0001f && std::abs(position.z) < 0.0001f)) {
-            auto const head = player->getHeadPos();
-            position = {head.x, head.y, head.z};
-        }
-        if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)
-            || (std::abs(forward.x) < 0.0001f && std::abs(forward.y) < 0.0001f && std::abs(forward.z) < 0.0001f)) {
-            auto const rotation = player->getRotation();
-            float const yaw      = rotation.y * RadiansPerDegree;
-            float const pitch    = rotation.x * RadiansPerDegree;
-            float const cosPitch = std::cos(pitch);
-            forward              = {-std::sin(yaw) * cosPitch, -std::sin(pitch), std::cos(yaw) * cosPitch};
-        }
-    }
-    if (!std::isfinite(fov) || fov <= 1.0f) fov = 90.0f;
-    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
-        || !std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)
-        || !std::isfinite(fov)) {
-        return std::nullopt;
-    }
-
-    return keyframe::CameraRenderState{
-        position.x,
-        position.y,
-        position.z,
-        std::atan2(-forward.x, forward.z) * DegreesPerRadian,
-        std::atan2(-forward.y, std::hypot(forward.x, forward.z)) * DegreesPerRadian,
-        0.0f,
-        std::clamp(fov, 1.0f, 179.0f),
-    };
 }
 
 void cameraVectors(float yaw, float pitch, ::glm::vec3& forward, ::glm::vec3& right, ::glm::vec3& up) {
@@ -306,7 +266,7 @@ void ViewportPanel::handleCameraControl(bool hovered, bool active) {
     }
     if (!controlling) return;
 
-    if (!mViewportCamera) mViewportCamera = captureCurrentCamera();
+    if (!mViewportCamera) mViewportCamera = keyframe::captureClientCamera();
     if (!mViewportCamera) return;
     mViewportCameraTick = editorState.currentTick;
 
@@ -349,6 +309,22 @@ void ViewportPanel::drawCameraPathOverlay(ImDrawList& drawList) {
     auto const& state = ReplayEditor::getInstance().state();
     if (!state.project || state.totalTicks <= 0 || exporting::isExportActive(state.exportStatus.state)) return;
 
+    std::string_view selectedCameraId;
+    auto const&      selection = ReplayEditor::getInstance().selection();
+    if (auto const* selectedCamera = selection.getAs<editing::model::SelectedCamera>()) {
+        selectedCameraId = selectedCamera->cameraId;
+    } else if (auto const* selectedKeyframe = selection.getAs<editing::model::SelectedKeyframe>()) {
+        selectedCameraId = selectedKeyframe->trackId;
+    }
+    if (selectedCameraId.empty()) return;
+
+    auto const selectedCamera =
+        std::ranges::find(state.project->cameras, selectedCameraId, &editing::model::CameraEntity::id);
+    if (selectedCamera == state.project->cameras.end() || !editing::model::isCameraRenderable(*selectedCamera)
+        || !selectedCamera->pathVisible) {
+        return;
+    }
+
     auto const camera = currentCameraBasis(mVideoRect);
     if (!camera) return;
 
@@ -357,7 +333,8 @@ void ViewportPanel::drawCameraPathOverlay(ImDrawList& drawList) {
         keyframe::CameraTimelineSource::Preview,
         0,
         state.totalTicks,
-        MaxPathSamples
+        MaxPathSamples,
+        selectedCamera->id
     );
     if (path.empty()) return;
 
@@ -384,23 +361,15 @@ void ViewportPanel::drawCameraPathOverlay(ImDrawList& drawList) {
         drawList.AddLine(*start, *end, IM_COL32(246, 196, 48, 245), 2.0f);
     }
 
-    std::string_view selectedCameraId;
-    auto const&      selection = ReplayEditor::getInstance().selection();
-    if (auto const* selectedCamera = selection.getAs<editing::model::SelectedCamera>()) {
-        selectedCameraId = selectedCamera->cameraId;
-    } else if (auto const* selectedKeyframe = selection.getAs<editing::model::SelectedKeyframe>()) {
-        selectedCameraId = selectedKeyframe->trackId;
-    }
-    for (auto const& projectCamera : state.project->cameras) {
-        if (!selectedCameraId.empty() && projectCamera.id != selectedCameraId) continue;
-        for (auto const& key : projectCamera.keys) {
+    if (selectedCamera->kind == editing::model::CameraKind::Keyframe) {
+        for (auto const& key : selectedCamera->keys) {
             keyframe::CameraRenderState const keyState{
                 key.position.x,
                 key.position.y,
                 key.position.z,
                 key.yaw,
                 key.pitch,
-                0.0f,
+                key.roll,
                 key.fov,
             };
             auto const projected = projectToViewport(*camera, toCameraSpace(*camera, keyState), mVideoRect);
@@ -412,7 +381,11 @@ void ViewportPanel::drawCameraPathOverlay(ImDrawList& drawList) {
 
     auto const time = functions::render::ReplaySampleTime::fromRational(state.currentTick, 1);
     if (time) {
-        auto const current = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
+        auto const current = keyframe::sampleCameraTimeline(
+            keyframe::CameraTimelineSource::Preview,
+            *time,
+            selectedCamera->id
+        );
         if (current) {
             auto const projected = projectToViewport(*camera, toCameraSpace(*camera, current->state), mVideoRect);
             if (projected) {

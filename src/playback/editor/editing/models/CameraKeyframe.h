@@ -6,7 +6,7 @@
 
 namespace playback::editor::editing::model {
 
-enum class CameraPathType : uint8_t { Linear = 0, CubicBezier, AutoSmooth };
+enum class CameraPathType : uint8_t { Linear = 0, CubicBezier, AutoSmooth, Hermite };
 enum class CameraTransitionPreset : uint8_t { Custom = 0, LinearConstant, CinematicEase, ArcPushIn, ArcPullOut, OrbitPass, WhipPan, ZoomTransition };
 
 struct CameraMotionSegment {
@@ -25,6 +25,7 @@ struct CameraKeyframe {
     Vec3  position{0, 80, 0};
     float yaw{0.0f};
     float pitch{0.0f};
+    float roll{0.0f};
     float fov{90.0f};
     Color4 tint{1,1,1,1};
 

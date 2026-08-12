@@ -72,11 +72,16 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
 }
 
 std::optional<CameraTimelineSample>
-sampleCameraTimeline(CameraTimelineSource source, functions::render::ReplaySampleTime const& time) noexcept {
+sampleCameraTimeline(
+    CameraTimelineSource                       source,
+    functions::render::ReplaySampleTime const& time,
+    std::string_view                           cameraId
+) noexcept {
     try {
         auto const current = bindingFor(source).load(std::memory_order_acquire);
         if (!current || !current->timeline) return std::nullopt;
-        auto const state = current->timeline->sample(time);
+        auto const state =
+            cameraId.empty() ? current->timeline->sample(time) : current->timeline->sampleCameraById(cameraId, time);
         if (!state) return std::nullopt;
         return CameraTimelineSample{*state, current->aspectRatio};
     } catch (...) {
@@ -88,7 +93,8 @@ std::vector<CameraRenderState> sampleCameraTimelineRange(
     CameraTimelineSource source,
     int64_t              startTick,
     int64_t              endTick,
-    size_t               maxSamples
+    size_t               maxSamples,
+    std::string_view      cameraId
 ) noexcept {
     std::vector<CameraRenderState> result;
     if (startTick < 0 || endTick < startTick || maxSamples == 0) return result;
@@ -97,9 +103,15 @@ std::vector<CameraRenderState> sampleCameraTimelineRange(
         auto const current = bindingFor(source).load(std::memory_order_acquire);
         if (!current || !current->timeline) return result;
 
+        auto const sampleAt = [&](int64_t tick) {
+            functions::render::ReplaySampleTime const time{tick, 1};
+            return cameraId.empty() ? current->timeline->sample(time)
+                                    : current->timeline->sampleCameraById(cameraId, time);
+        };
+
         auto const span = endTick - startTick;
         if (span == 0 || maxSamples == 1) {
-            auto const state = current->timeline->sample({startTick, 1});
+            auto const state = sampleAt(startTick);
             if (state) result.push_back(*state);
             return result;
         }
@@ -108,13 +120,13 @@ std::vector<CameraRenderState> sampleCameraTimelineRange(
         auto const step        = std::max<int64_t>(1, (span + denominator - 1) / denominator);
         result.reserve(static_cast<size_t>(span / step) + 2);
         for (int64_t tick = startTick; tick <= endTick;) {
-            auto const state = current->timeline->sample({tick, 1});
+            auto const state = sampleAt(tick);
             if (state) result.push_back(*state);
             if (tick > endTick - step) break;
             tick += step;
         }
         if ((endTick - startTick) % step != 0) {
-            auto const state = current->timeline->sample({endTick, 1});
+            auto const state = sampleAt(endTick);
             if (state) result.push_back(*state);
         }
     } catch (...) {

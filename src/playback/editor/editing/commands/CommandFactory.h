@@ -1,9 +1,9 @@
 #pragma once
 
+#include "playback/editor/editing/models/CameraEntity.h"
 #include "playback/editor/editing/models/EditorStateExt.h"
 #include "playback/editor/editing/models/IEditCommand.h"
 #include "playback/editor/editing/models/Track.h"
-#include "playback/editor/editing/models/CameraEntity.h"
 
 #include <memory>
 #include <optional>
@@ -38,6 +38,8 @@ public:
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframe(const std::string& id, const std::string& keyframeId);
     static std::unique_ptr<model::IEditCommand>
     createSetKeyframeEasing(const std::string& id, const std::string& keyframeId, model::EasingType easing);
+    static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
+    static std::unique_ptr<model::IEditCommand> createSetCameraPathVisible(const std::string& id, bool visible);
     static std::unique_ptr<model::IEditCommand> createSetCameraKind(const std::string& id, model::CameraKind kind);
     static std::unique_ptr<model::IEditCommand> createSetSubActorDetails(const std::string& id, model::AgentDetails details);
 

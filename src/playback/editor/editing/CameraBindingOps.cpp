@@ -45,6 +45,9 @@ std::string createBindingCamera(model::EditorStateExt& state, std::string const&
     camera.id                = makeCameraId(state);
     camera.name              = name.empty() ? actor->name + " (bind)" : name;
     camera.kind              = model::CameraKind::Preset;
+    camera.preset.emplace();
+    camera.preset->offset    = actor->position;
+    camera.preset->rotation  = actor->rotation;
     camera.bindingEntityUuid = actor->id;
     actor->boundCameraIds.push_back(camera.id);
     state.cameras.push_back(camera);
