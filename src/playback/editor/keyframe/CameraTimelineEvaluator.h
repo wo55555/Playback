@@ -1,22 +1,22 @@
 #pragma once
 
+#include "CameraRenderState.h"
+#include "KeyframeTrack.h"
 #include "playback/editor/editing/models/EditorStateExt.h"
 #include "playback/functions/render/ReplaySampleTime.h"
 
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 
 namespace playback::editor::keyframe {
 
-struct CameraRenderState {
-    float x{};
-    float y{};
-    float z{};
-    float yaw{};
-    float pitch{};
-    float roll{};
-    float fov{90.0f};
+struct CameraPathSampleRange {
+    int startTick{};
+    int endTick{};
+    std::vector<CameraRenderState> samples;
 };
 
 class CameraTimelineEvaluator {
@@ -30,6 +30,11 @@ public:
     [[nodiscard]] std::optional<CameraRenderState> sample(functions::render::ReplaySampleTime const& time) const;
     [[nodiscard]] std::optional<CameraRenderState>
     sampleCameraById(std::string_view cameraId, functions::render::ReplaySampleTime const& time) const;
+    [[nodiscard]] std::optional<CameraPathSampleRange> sampleCameraPathAround(
+        std::string_view cameraId,
+        functions::render::ReplaySampleTime const& time,
+        size_t maxSamples
+    ) const;
 
 private:
     [[nodiscard]] editing::model::CameraEntity const* cameraForTick(int64_t tick) const;
@@ -39,6 +44,7 @@ private:
     editing::model::EditorStateExt mProject;
     std::optional<std::string>     mCameraOverride;
     std::optional<std::string>     mCameraFallback;
+    std::unordered_map<std::string, KeyframeTrack> mKeyframeTracks;
 };
 
 } // namespace playback::editor::keyframe

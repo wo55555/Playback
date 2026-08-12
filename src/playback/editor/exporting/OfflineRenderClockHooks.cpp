@@ -269,7 +269,8 @@ LL_TYPE_INSTANCE_HOOK(
                 sample->sample.replayTime,
                 keyframe::CameraTimelineSource::Export,
                 sample->cameraSample,
-                sample->cameraContext ? sample->cameraContext->appliedFlag : keyframe::CameraTimelineAppliedFlag{}
+                sample->cameraContext ? sample->cameraContext->appliedFlag : keyframe::CameraTimelineAppliedFlag{},
+                sample->token.id
             );
             auto pose =
                 functions::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
@@ -332,7 +333,7 @@ LL_TYPE_INSTANCE_HOOK(
         }
     }
     auto const previewContext = std::make_shared<keyframe::CameraTimelineRenderContext const>(
-        keyframe::CameraTimelineRenderContext{*previewTime, keyframe::CameraTimelineSource::Preview, previewSample, {}}
+        keyframe::CameraTimelineRenderContext{*previewTime, keyframe::CameraTimelineSource::Preview, 0, previewSample, {}}
     );
     keyframe::publishCameraTimelineRenderContext(previewContext);
     keyframe::ScopedCameraTimelineRenderContext renderContext(
@@ -474,6 +475,7 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
             keyframe::CameraTimelineRenderContext{
                 sample.replayTime,
                 keyframe::CameraTimelineSource::Export,
+                token.id,
                 cameraSample,
                 appliedFlag,
             }

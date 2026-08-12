@@ -27,6 +27,9 @@ using CameraTimelineAppliedFlag = std::shared_ptr<std::atomic_bool>;
 struct CameraTimelineRenderContext {
     functions::render::ReplaySampleTime time;
     CameraTimelineSource                source{CameraTimelineSource::Preview};
+    // Export assigns the offline clock token so an acknowledgement always
+    // belongs to the exact frame being rendered.
+    uint64_t                            renderToken{};
     // The producer computes this once before the native render pass so camera
     // and entity interpolation consume the same fractional replay sample.
     std::optional<CameraTimelineSample> sample;
@@ -43,7 +46,8 @@ public:
         functions::render::ReplaySampleTime time,
         CameraTimelineSource                source,
         std::optional<CameraTimelineSample> sample = std::nullopt,
-        CameraTimelineAppliedFlag           appliedFlag = {}
+        CameraTimelineAppliedFlag           appliedFlag = {},
+        uint64_t                            renderToken = 0
     ) noexcept;
     ~ScopedCameraTimelineRenderContext();
 
@@ -77,6 +81,13 @@ sampleCameraTimeline(
     int64_t              endTick,
     size_t               maxSamples,
     std::string_view      cameraId = {}
+) noexcept;
+
+[[nodiscard]] std::optional<CameraPathSampleRange> sampleCameraTimelinePathAround(
+    CameraTimelineSource                       source,
+    functions::render::ReplaySampleTime const& time,
+    size_t                                     maxSamples,
+    std::string_view                           cameraId
 ) noexcept;
 
 [[nodiscard]] bool hasCameraTimeline(CameraTimelineSource source) noexcept;

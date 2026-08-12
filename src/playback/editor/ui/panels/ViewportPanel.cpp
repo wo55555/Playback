@@ -61,15 +61,74 @@ std::optional<ImVec2> projectToViewport(CameraBasis const& camera, CameraSpacePo
 
     float const halfWidth  = (viewport.max.x - viewport.min.x) * 0.5f;
     float const halfHeight = (viewport.max.y - viewport.min.y) * 0.5f;
-    float const ndcX       = std::clamp(point.x / (point.depth * tangent * camera.aspectRatio), -16.0f, 16.0f);
-    float const ndcY       = std::clamp(point.y / (point.depth * tangent), -16.0f, 16.0f);
+    float const ndcX       = point.x / (point.depth * tangent * camera.aspectRatio);
+    float const ndcY       = point.y / (point.depth * tangent);
+    if (!std::isfinite(ndcX) || !std::isfinite(ndcY)) return std::nullopt;
     return ImVec2{
         viewport.min.x + halfWidth * (1.0f + ndcX),
         viewport.min.y + halfHeight * (1.0f - ndcY),
     };
 }
 
+bool clipLineToRect(ImVec2& start, ImVec2& end, Rect const& rect) {
+    float const dx = end.x - start.x;
+    float const dy = end.y - start.y;
+    float       t0 = 0.0f;
+    float       t1 = 1.0f;
+    auto clip = [&](float p, float q) {
+        if (std::abs(p) <= std::numeric_limits<float>::epsilon()) return q >= 0.0f;
+        float const amount = q / p;
+        if (p < 0.0f) {
+            if (amount > t1) return false;
+            t0 = std::max(t0, amount);
+        } else {
+            if (amount < t0) return false;
+            t1 = std::min(t1, amount);
+        }
+        return true;
+    };
+    if (!clip(-dx, start.x - rect.min.x) || !clip(dx, rect.max.x - start.x)
+        || !clip(-dy, start.y - rect.min.y) || !clip(dy, rect.max.y - start.y)) {
+        return false;
+    }
+    ImVec2 const original = start;
+    start = {original.x + dx * t0, original.y + dy * t0};
+    end   = {original.x + dx * t1, original.y + dy * t1};
+    return true;
+}
+
+bool contains(Rect const& rect, ImVec2 point) {
+    return point.x >= rect.min.x && point.x <= rect.max.x && point.y >= rect.min.y && point.y <= rect.max.y;
+}
+
+CameraBasis cameraBasisFromState(keyframe::CameraRenderState const& state, Rect const& viewport) {
+    ::glm::vec3 forward;
+    ::glm::vec3 right;
+    ::glm::vec3 up;
+    cameraVectors(state.yaw, state.pitch, forward, right, up);
+    float const roll = state.roll * RadiansPerDegree;
+    if (std::abs(roll) > std::numeric_limits<float>::epsilon()) {
+        float const       cosine      = std::cos(roll);
+        float const       sine        = std::sin(roll);
+        ::glm::vec3 const rolledRight = right * cosine + up * sine;
+        ::glm::vec3 const rolledUp    = up * cosine - right * sine;
+        right                         = rolledRight;
+        up                            = rolledUp;
+    }
+    float const width  = viewport.max.x - viewport.min.x;
+    float const height = viewport.max.y - viewport.min.y;
+    float const aspect = width > 0.0f && height > 0.0f ? width / height : 1.0f;
+    return {{state.x, state.y, state.z}, right, up, forward, state.fov, aspect};
+}
+
 std::optional<CameraBasis> currentCameraBasis(Rect const& viewport) {
+    if (auto const overrideState = keyframe::currentPreviewCameraOverride()) {
+        return cameraBasisFromState(*overrideState, viewport);
+    }
+    if (auto const context = keyframe::currentCameraTimelineRenderContext();
+        context && context->source == keyframe::CameraTimelineSource::Preview && context->sample) {
+        return cameraBasisFromState(context->sample->state, viewport);
+    }
     auto client = ll::service::getClientInstance();
     if (!client) return std::nullopt;
 
@@ -328,21 +387,23 @@ void ViewportPanel::drawCameraPathOverlay(ImDrawList& drawList) {
     auto const camera = currentCameraBasis(mVideoRect);
     if (!camera) return;
 
-    constexpr size_t MaxPathSamples = 600;
-    auto const path = keyframe::sampleCameraTimelineRange(
+    auto const time = functions::render::ReplaySampleTime::fromRational(state.currentTick, 1);
+    if (!time) return;
+
+    constexpr size_t MaxPathSamples = 1200;
+    auto const path = keyframe::sampleCameraTimelinePathAround(
         keyframe::CameraTimelineSource::Preview,
-        0,
-        state.totalTicks,
+        *time,
         MaxPathSamples,
         selectedCamera->id
     );
-    if (path.empty()) return;
+    if (!path || path->samples.empty()) return;
 
     constexpr float NearPlane = 0.025f;
     drawList.PushClipRect(mVideoRect.min, mVideoRect.max, true);
-    for (size_t index = 1; index < path.size(); ++index) {
-        auto previous = toCameraSpace(*camera, path[index - 1]);
-        auto current  = toCameraSpace(*camera, path[index]);
+    for (size_t index = 1; index < path->samples.size(); ++index) {
+        auto previous = toCameraSpace(*camera, path->samples[index - 1]);
+        auto current  = toCameraSpace(*camera, path->samples[index]);
         if (previous.depth <= NearPlane && current.depth <= NearPlane) continue;
         if (previous.depth <= NearPlane || current.depth <= NearPlane) {
             float const amount = (NearPlane - previous.depth) / (current.depth - previous.depth);
@@ -354,15 +415,17 @@ void ViewportPanel::drawCameraPathOverlay(ImDrawList& drawList) {
             if (previous.depth <= NearPlane) previous = clipped;
             else current = clipped;
         }
-        auto const start = projectToViewport(*camera, previous, mVideoRect);
-        auto const end   = projectToViewport(*camera, current, mVideoRect);
+        auto start = projectToViewport(*camera, previous, mVideoRect);
+        auto end   = projectToViewport(*camera, current, mVideoRect);
         if (!start || !end) continue;
+        if (!clipLineToRect(*start, *end, mVideoRect)) continue;
         drawList.AddLine(*start, *end, IM_COL32(12, 12, 14, 210), 4.0f);
         drawList.AddLine(*start, *end, IM_COL32(246, 196, 48, 245), 2.0f);
     }
 
     if (selectedCamera->kind == editing::model::CameraKind::Keyframe) {
         for (auto const& key : selectedCamera->keys) {
+            if (key.tick < path->startTick || key.tick > path->endTick) continue;
             keyframe::CameraRenderState const keyState{
                 key.position.x,
                 key.position.y,
@@ -373,14 +436,13 @@ void ViewportPanel::drawCameraPathOverlay(ImDrawList& drawList) {
                 key.fov,
             };
             auto const projected = projectToViewport(*camera, toCameraSpace(*camera, keyState), mVideoRect);
-            if (!projected) continue;
+            if (!projected || !contains(mVideoRect, *projected)) continue;
             drawList.AddCircleFilled(*projected, 4.5f, IM_COL32(18, 18, 20, 235), 12);
             drawList.AddCircleFilled(*projected, 2.75f, IM_COL32(255, 220, 98, 255), 12);
         }
     }
 
-    auto const time = functions::render::ReplaySampleTime::fromRational(state.currentTick, 1);
-    if (time) {
+    {
         auto const current = keyframe::sampleCameraTimeline(
             keyframe::CameraTimelineSource::Preview,
             *time,
@@ -388,7 +450,7 @@ void ViewportPanel::drawCameraPathOverlay(ImDrawList& drawList) {
         );
         if (current) {
             auto const projected = projectToViewport(*camera, toCameraSpace(*camera, current->state), mVideoRect);
-            if (projected) {
+            if (projected && contains(mVideoRect, *projected)) {
                 drawList.AddCircleFilled(*projected, 6.0f, IM_COL32(14, 18, 16, 235), 16);
                 drawList.AddCircleFilled(*projected, 3.5f, IM_COL32(74, 222, 128, 255), 16);
             }

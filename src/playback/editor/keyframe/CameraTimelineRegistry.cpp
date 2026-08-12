@@ -31,11 +31,12 @@ ScopedCameraTimelineRenderContext::ScopedCameraTimelineRenderContext(
     functions::render::ReplaySampleTime time,
     CameraTimelineSource                source,
     std::optional<CameraTimelineSample> sample,
-    CameraTimelineAppliedFlag           appliedFlag
+    CameraTimelineAppliedFlag           appliedFlag,
+    uint64_t                            renderToken
 ) noexcept
 : mPrevious(gRenderContext),
   mHadPrevious(gRenderContext.has_value()) {
-    gRenderContext = CameraTimelineRenderContext{time, source, std::move(sample), std::move(appliedFlag)};
+    gRenderContext = CameraTimelineRenderContext{time, source, renderToken, std::move(sample), std::move(appliedFlag)};
 }
 
 ScopedCameraTimelineRenderContext::~ScopedCameraTimelineRenderContext() {
@@ -133,6 +134,21 @@ std::vector<CameraRenderState> sampleCameraTimelineRange(
         result.clear();
     }
     return result;
+}
+
+std::optional<CameraPathSampleRange> sampleCameraTimelinePathAround(
+    CameraTimelineSource                       source,
+    functions::render::ReplaySampleTime const& time,
+    size_t                                     maxSamples,
+    std::string_view                           cameraId
+) noexcept {
+    try {
+        auto const current = bindingFor(source).load(std::memory_order_acquire);
+        if (!current || !current->timeline) return std::nullopt;
+        return current->timeline->sampleCameraPathAround(cameraId, time, maxSamples);
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 bool hasCameraTimeline(CameraTimelineSource source) noexcept {

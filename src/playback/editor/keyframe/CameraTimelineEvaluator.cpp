@@ -1,7 +1,9 @@
 #include "CameraTimelineEvaluator.h"
+#include "KeyframeTrack.h"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace playback::editor::keyframe {
@@ -22,16 +24,6 @@ Vec3 subtract(Vec3 const& left, Vec3 const& right) {
 }
 
 Vec3 scale(Vec3 const& value, float amount) { return {value.x * amount, value.y * amount, value.z * amount}; }
-
-float wrapDegrees(float value) {
-    while (value > 180.0f) value -= 360.0f;
-    while (value < -180.0f) value += 360.0f;
-    return value;
-}
-
-float lerpAngle(float left, float right, float amount) {
-    return wrapDegrees(left + wrapDegrees(right - left) * amount);
-}
 
 float cubicBezier(float p0, float p1, float p2, float p3, float t) {
     float const inverse = 1.0f - t;
@@ -73,28 +65,12 @@ float eased(float t, editing::model::EasingType type, Vec2 const& control1, Vec2
     }
 }
 
-float eased(float t, editing::model::CameraKeyframe const& key) {
-    return eased(t, key.easingType, key.bezierCtrl1, key.bezierCtrl2);
-}
-
 editing::model::Vec3
 lerp(editing::model::Vec3 const& left, editing::model::Vec3 const& right, float amount) {
     return {
         left.x + (right.x - left.x) * amount,
         left.y + (right.y - left.y) * amount,
         left.z + (right.z - left.z) * amount,
-    };
-}
-
-CameraRenderState stateFromKeyframe(editing::model::CameraKeyframe const& key) {
-    return {
-        key.position.x,
-        key.position.y,
-        key.position.z,
-        key.yaw,
-        key.pitch,
-        key.roll,
-        std::clamp(key.fov, 1.0f, 179.0f),
     };
 }
 
@@ -119,16 +95,6 @@ Vec3 catmullRom(Vec3 const& p0, Vec3 const& p1, Vec3 const& p2, Vec3 const& p3, 
     auto const control1 = add(p1, scale(subtract(p2, p0), 1.0f / 6.0f));
     auto const control2 = subtract(p2, scale(subtract(p3, p1), 1.0f / 6.0f));
     return cubicBezier(p1, control1, control2, p2, amount);
-}
-
-Vec3 hermite(Vec3 const& p0, Vec3 const& tangent0, Vec3 const& p1, Vec3 const& tangent1, float amount) {
-    float const t2  = amount * amount;
-    float const t3  = t2 * amount;
-    float const h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
-    float const h10 = t3 - 2.0f * t2 + amount;
-    float const h01 = -2.0f * t3 + 3.0f * t2;
-    float const h11 = t3 - t2;
-    return add(add(scale(p0, h00), scale(tangent0, h10)), add(scale(p1, h01), scale(tangent1, h11)));
 }
 
 Vec3 samplePathPosition(editing::model::CameraPath const& path, long double tick) {
@@ -198,6 +164,9 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
     for (auto& camera : mProject.cameras) {
         std::ranges::sort(camera.keys, {}, &editing::model::CameraKeyframe::tick);
         if (camera.path) std::ranges::sort(camera.path->points, {}, &editing::model::CameraPathPoint::tick);
+        if (camera.kind == editing::model::CameraKind::Keyframe && !camera.keys.empty()) {
+            mKeyframeTracks.emplace(camera.id, KeyframeTrack{camera.keys});
+        }
     }
 }
 
@@ -233,79 +202,12 @@ editing::model::CameraEntity const* CameraTimelineEvaluator::cameraForTick(int64
 std::optional<CameraRenderState>
 CameraTimelineEvaluator::sampleCamera(editing::model::CameraEntity const& camera, long double tick) const {
     if (camera.kind == editing::model::CameraKind::Keyframe && !camera.keys.empty()) {
-        if (tick <= camera.keys.front().tick) {
-            auto state = stateFromKeyframe(camera.keys.front());
-            applyLimiter(state, camera.limiter.value_or(editing::model::CameraLimiter{}));
-            applyShake(state, camera.shake.value_or(editing::model::CameraShake{}), tick);
-            return state;
-        }
-        if (tick >= camera.keys.back().tick) {
-            auto state = stateFromKeyframe(camera.keys.back());
-            applyLimiter(state, camera.limiter.value_or(editing::model::CameraLimiter{}));
-            applyShake(state, camera.shake.value_or(editing::model::CameraShake{}), tick);
-            return state;
-        }
-
-        auto const right = std::ranges::lower_bound(camera.keys, tick, {}, &editing::model::CameraKeyframe::tick);
-        if (right == camera.keys.end()) return std::nullopt;
-        if (tick == static_cast<long double>(right->tick)) {
-            auto state = stateFromKeyframe(*right);
-            applyLimiter(state, camera.limiter.value_or(editing::model::CameraLimiter{}));
-            applyShake(state, camera.shake.value_or(editing::model::CameraShake{}), tick);
-            return state;
-        }
-        if (right == camera.keys.begin()) return std::nullopt;
-
-        auto const& prev = *(right - 1);
-        auto const  span = static_cast<long double>(right->tick - prev.tick);
-        float const raw  = span <= 0.0L ? 0.0f : static_cast<float>((tick - prev.tick) / span);
-        float const t    = eased(raw, prev);
-        editing::model::Vec3 position;
-        switch (prev.outgoingMotion.pathType) {
-        case editing::model::CameraPathType::CubicBezier:
-            position = cubicBezier(
-                prev.position,
-                add(prev.position, prev.outgoingMotion.outControl),
-                add(right->position, prev.outgoingMotion.inControl),
-                right->position,
-                t
-            );
-            break;
-        case editing::model::CameraPathType::AutoSmooth: {
-            auto const previous = right - 1 == camera.keys.begin() ? prev.position : (right - 2)->position;
-            auto const next      = right + 1 == camera.keys.end() ? right->position : (right + 1)->position;
-            position = catmullRom(previous, prev.position, right->position, next, t);
-            break;
-        }
-        case editing::model::CameraPathType::Hermite:
-            // Motion controls are tangent vectors for Hermite segments. They
-            // are expressed in world units over the keyframe span, matching
-            // the relative Bezier controls used by the other path modes.
-            position = hermite(
-                prev.position,
-                prev.outgoingMotion.outControl,
-                right->position,
-                prev.outgoingMotion.inControl,
-                t
-            );
-            break;
-        case editing::model::CameraPathType::Linear:
-        default:
-            position = lerp(prev.position, right->position, t);
-            break;
-        }
-        CameraRenderState state{
-            position.x,
-            position.y,
-            position.z,
-            lerpAngle(prev.yaw, right->yaw, t),
-            lerpAngle(prev.pitch, right->pitch, t),
-            lerpAngle(prev.roll, right->roll, t),
-            std::clamp(prev.fov + (right->fov - prev.fov) * t
-                    + std::sin(3.14159265358979323846f * t) * prev.outgoingMotion.fovPeakOffset, 1.0f, 179.0f),
-        };
-        applyLimiter(state, camera.limiter.value_or(editing::model::CameraLimiter{}));
-        applyShake(state, camera.shake.value_or(editing::model::CameraShake{}), tick);
+        auto const track = mKeyframeTracks.find(camera.id);
+        if (track == mKeyframeTracks.end()) return std::nullopt;
+        auto state = track->second.sample(tick);
+        if (!state) return std::nullopt;
+        applyLimiter(*state, camera.limiter.value_or(editing::model::CameraLimiter{}));
+        applyShake(*state, camera.shake.value_or(editing::model::CameraShake{}), tick);
         return state;
     }
 
@@ -400,6 +302,69 @@ std::optional<CameraRenderState> CameraTimelineEvaluator::sampleCameraById(
         std::ranges::find_if(mProject.cameras, [&](auto const& candidate) { return candidate.id == cameraId; });
     if (camera == mProject.cameras.end() || !editing::model::isCameraRenderable(*camera)) return std::nullopt;
     return sampleCamera(*camera, time.value());
+}
+
+std::optional<CameraPathSampleRange> CameraTimelineEvaluator::sampleCameraPathAround(
+    std::string_view                           cameraId,
+    functions::render::ReplaySampleTime const& time,
+    size_t                                     maxSamples
+) const {
+    if (cameraId.empty() || !time.isValid() || maxSamples == 0) return std::nullopt;
+    auto const camera =
+        std::ranges::find_if(mProject.cameras, [&](auto const& candidate) { return candidate.id == cameraId; });
+    if (camera == mProject.cameras.end() || !editing::model::isCameraRenderable(*camera)) return std::nullopt;
+
+    int startTick{};
+    int endTick{};
+    if (camera->kind == editing::model::CameraKind::Keyframe) {
+        auto const track = mKeyframeTracks.find(camera->id);
+        if (track == mKeyframeTracks.end()) return std::nullopt;
+        auto const range = track->second.surroundingRange(time.value());
+        if (!range) return std::nullopt;
+        startTick   = range->startTick;
+        endTick     = range->endTick;
+        auto samples = track->second.sampleRange(startTick, endTick, maxSamples);
+        if (samples.empty()) return std::nullopt;
+        long double const span = static_cast<long double>(endTick) - startTick;
+        size_t const count      = samples.size();
+        for (size_t index = 0; index < count; ++index) {
+            long double const sampleTick = count <= 1
+                                             ? static_cast<long double>(startTick)
+                                             : static_cast<long double>(startTick)
+                                                     + span * static_cast<long double>(index)
+                                                           / static_cast<long double>(count - 1);
+            applyLimiter(samples[index], camera->limiter.value_or(editing::model::CameraLimiter{}));
+            applyShake(samples[index], camera->shake.value_or(editing::model::CameraShake{}), sampleTick);
+        }
+        return CameraPathSampleRange{startTick, endTick, std::move(samples)};
+    }
+
+    if (camera->kind == editing::model::CameraKind::Path && camera->path && !camera->path->points.empty()) {
+        auto const& points = camera->path->points;
+        auto right = std::ranges::upper_bound(points, time.value(), {}, &editing::model::CameraPathPoint::tick);
+        size_t rightIndex = right == points.end() ? points.size() - 1 : static_cast<size_t>(right - points.begin());
+        size_t leftIndex  = rightIndex == 0 ? 0 : rightIndex - 1;
+        startTick = points[leftIndex == 0 ? 0 : leftIndex - 1].tick;
+        endTick   = points[std::min(points.size() - 1, rightIndex + 1)].tick;
+    } else {
+        constexpr int LocalPreviewRadius = 100;
+        int64_t const center = time.floorTick();
+        startTick = static_cast<int>(std::max<int64_t>(0, center - LocalPreviewRadius));
+        endTick   = static_cast<int>(std::min<int64_t>(std::numeric_limits<int>::max(), center + LocalPreviewRadius));
+    }
+
+    size_t const count = std::max<size_t>(2, maxSamples);
+    std::vector<CameraRenderState> samples;
+    samples.reserve(count);
+    long double const span = static_cast<long double>(endTick) - startTick;
+    for (size_t index = 0; index < count; ++index) {
+        long double const amount = static_cast<long double>(index) / static_cast<long double>(count - 1);
+        if (auto state = sampleCamera(*camera, static_cast<long double>(startTick) + span * amount)) {
+            samples.push_back(*state);
+        }
+    }
+    if (samples.empty()) return std::nullopt;
+    return CameraPathSampleRange{startTick, endTick, std::move(samples)};
 }
 
 } // namespace playback::editor::keyframe

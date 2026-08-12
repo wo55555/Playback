@@ -8,6 +8,7 @@
 
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/renderer/game/GameRenderer.h"
+#include "mc/client/renderer/game/LevelRendererCamera.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/deps/renderer/Camera.h"
 
@@ -65,7 +66,12 @@ void applyCameraState(mce::Camera& camera, keyframe::CameraTimelineSample const&
     camera.updateViewMatrixDependencies();
 }
 
-bool applyCurrentCameraTimelineState(mce::Camera* setupCamera, char const* stage) noexcept {
+bool applyCurrentCameraTimelineState(
+    mce::Camera*              setupCamera,
+    LevelRendererCamera*     levelCamera,
+    char const*              stage,
+    bool                     acknowledge
+) noexcept {
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (!context) return false;
 
@@ -104,17 +110,25 @@ bool applyCurrentCameraTimelineState(mce::Camera* setupCamera, char const* stage
     if (auto client = ll::service::getClientInstance()) clientCamera = &client->getCamera();
 
     if (setupCamera) applyCameraState(*setupCamera, *sample);
+    if (levelCamera) {
+        auto& worldCamera = levelCamera->mWorldSpaceCamera.get();
+        if (&worldCamera != setupCamera) applyCameraState(worldCamera, *sample);
+        levelCamera->mCameraPos = Vec3{sample->state.x, sample->state.y, sample->state.z};
+    }
     if (clientCamera && clientCamera != setupCamera) applyCameraState(*clientCamera, *sample);
-    if (!setupCamera && !clientCamera) return false;
+    if (!setupCamera && !levelCamera && !clientCamera) return false;
 
-    if (context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
+    if (acknowledge && levelCamera && context->appliedFlag) {
+        context->appliedFlag->store(true, std::memory_order_release);
+    }
 
     if (!gAppliedInfoLogged[sourceIndex(context->source)].exchange(true, std::memory_order_acq_rel)) {
         auto const& state = sample->state;
         Playback::getInstance().getSelf().getLogger().info(
-            "Camera timeline first application (stage={}, source={}, tick={}/{}, position=({}, {}, {}), yaw={}, pitch={}, fov={}, override={})",
+            "Camera timeline first application (stage={}, source={}, token={}, tick={}/{}, position=({}, {}, {}), yaw={}, pitch={}, fov={}, override={})",
             stage,
             sourceName(context->source),
+            context->renderToken,
             context->time.numerator,
             context->time.denominator,
             state.x,
@@ -142,7 +156,12 @@ LL_TYPE_INSTANCE_HOOK(
 
     // Bedrock may pass a transient camera here, so update both this instance
     // and IClientInstance's final camera after native setup.
-    (void)applyCurrentCameraTimelineState(&camera, "setupCamera");
+    (void)applyCurrentCameraTimelineState(
+        &camera,
+        static_cast<LevelRendererCamera*>(static_cast<LevelRendererPlayer*>(this)),
+        "setupCamera.final",
+        true
+    );
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -157,9 +176,9 @@ LL_TYPE_INSTANCE_HOOK(
     // level renderer. Seed the sampled state before the native pass, then
     // apply it again after native setup so paths that rebuild the camera still
     // end with the timeline pose.
-    (void)applyCurrentCameraTimelineState(nullptr, "renderCurrentFrame.pre");
+    (void)applyCurrentCameraTimelineState(nullptr, nullptr, "renderCurrentFrame.pre", false);
     origin(partialTick);
-    (void)applyCurrentCameraTimelineState(nullptr, "renderCurrentFrame");
+    (void)applyCurrentCameraTimelineState(nullptr, nullptr, "renderCurrentFrame", false);
 }
 
 std::atomic_bool gInstalled{false};
