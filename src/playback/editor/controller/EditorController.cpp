@@ -223,6 +223,11 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             );
             mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)), mProject);
         } else {
+            Playback::getInstance().getSelf().getLogger().warn(
+                "Camera keyframe capture unavailable (camera={}, tick={}); using model defaults",
+                action.id,
+                action.tick
+            );
             mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick), mProject);
         }
         break;

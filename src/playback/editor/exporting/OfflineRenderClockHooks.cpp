@@ -65,6 +65,7 @@ struct ActiveRenderSample {
 
 std::atomic_bool                               gHookInstalled{false};
 std::atomic_bool                               gExportSampleInfoLogged{false};
+std::atomic_bool                               gPreviewSampleInfoLogged{false};
 std::mutex                                     gClockMutex;
 std::optional<ActiveClockSample>               gActiveSample;
 uint64_t                                       gNextTokenId{1};
@@ -292,6 +293,7 @@ LL_TYPE_INSTANCE_HOOK(
     auto& replay = functions::ReplaySession::getInstance();
     if (!replay.isActive() || !replay.hasJoinedReplayWorld()) {
         keyframe::clearCameraTimelineRenderContext();
+        gPreviewSampleInfoLogged.store(false, std::memory_order_release);
         origin(client, timer);
         return;
     }
@@ -305,6 +307,30 @@ LL_TYPE_INSTANCE_HOOK(
 
     auto const previewSample =
         keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *previewTime);
+    if (!gPreviewSampleInfoLogged.exchange(true, std::memory_order_acq_rel)) {
+        auto& logger = Playback::getInstance().getSelf().getLogger();
+        if (previewSample) {
+            auto const& state = previewSample->state;
+            logger.info(
+                "Preview render sample published (tick={}/{}, cameraSample=true, position=({}, {}, {}), "
+                "yaw={}, pitch={}, fov={})",
+                previewTime->numerator,
+                previewTime->denominator,
+                state.x,
+                state.y,
+                state.z,
+                state.yaw,
+                state.pitch,
+                state.fov
+            );
+        } else {
+            logger.warn(
+                "Preview render sample has no camera state (tick={}/{}); native camera remains active",
+                previewTime->numerator,
+                previewTime->denominator
+            );
+        }
+    }
     auto const previewContext = std::make_shared<keyframe::CameraTimelineRenderContext const>(
         keyframe::CameraTimelineRenderContext{*previewTime, keyframe::CameraTimelineSource::Preview, previewSample, {}}
     );
@@ -416,13 +442,30 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
     auto const cameraSample =
         keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample.replayTime);
     if (!gExportSampleInfoLogged.exchange(true, std::memory_order_acq_rel)) {
-        Playback::getInstance().getSelf().getLogger().info(
-            "Export render sample published (frame={}, tick={}/{}, cameraSample={})",
-            sample.frameIndex,
-            sample.replayTime.numerator,
-            sample.replayTime.denominator,
-            cameraSample.has_value()
-        );
+        auto& logger = Playback::getInstance().getSelf().getLogger();
+        if (cameraSample) {
+            auto const& state = cameraSample->state;
+            logger.info(
+                "Export render sample published (frame={}, tick={}/{}, cameraSample=true, position=({}, {}, {}), "
+                "yaw={}, pitch={}, fov={})",
+                sample.frameIndex,
+                sample.replayTime.numerator,
+                sample.replayTime.denominator,
+                state.x,
+                state.y,
+                state.z,
+                state.yaw,
+                state.pitch,
+                state.fov
+            );
+        } else {
+            logger.warn(
+                "Export render sample has no camera state (frame={}, tick={}/{}); native camera remains active",
+                sample.frameIndex,
+                sample.replayTime.numerator,
+                sample.replayTime.denominator
+            );
+        }
     }
     auto cameraContext = keyframe::CameraTimelineRenderContextHandle{};
     if (cameraSample) {
@@ -537,6 +580,7 @@ void resetOfflineRenderClock() {
     else keyframe::clearCameraTimelineRenderContext();
     gRenderSample.reset();
     gExportSampleInfoLogged.store(false, std::memory_order_release);
+    gPreviewSampleInfoLogged.store(false, std::memory_order_release);
 }
 
 } // namespace playback::editor::exporting

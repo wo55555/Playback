@@ -153,8 +153,12 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     float partialTick
 ) {
+    // Some Bedrock render paths consume the client camera before entering the
+    // level renderer. Seed the sampled state before the native pass, then
+    // apply it again after native setup so paths that rebuild the camera still
+    // end with the timeline pose.
+    (void)applyCurrentCameraTimelineState(nullptr, "renderCurrentFrame.pre");
     origin(partialTick);
-    // Fallback for render paths that do not enter setupCamera for every frame.
     (void)applyCurrentCameraTimelineState(nullptr, "renderCurrentFrame");
 }
 
@@ -170,6 +174,8 @@ bool hookCameraRender(bool enable) {
     static HookState state;
 
     if (enable) {
+        for (auto& flag : gMissingSampleLogged) flag.store(false, std::memory_order_release);
+        for (auto& flag : gAppliedInfoLogged) flag.store(false, std::memory_order_release);
         if (!state.setupCamera) state.setupCamera = ReplayCameraSetupHook::hook() == 0;
         if (!state.gameFrame) state.gameFrame = ReplayCameraFrameHook::hook() == 0;
         bool const installed = state.setupCamera && state.gameFrame;
