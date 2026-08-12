@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace playback::editor::exporting {
 
@@ -18,7 +19,11 @@ public:
     ExportKeyframeApplier(ExportKeyframeApplier const&)            = delete;
     ExportKeyframeApplier& operator=(ExportKeyframeApplier const&) = delete;
 
-    void configure(editing::model::EditorStateExt const& project, std::optional<float> aspectRatio = std::nullopt);
+    void configure(
+        editing::model::EditorStateExt const& project,
+        std::optional<float>                  aspectRatio = std::nullopt,
+        std::optional<std::string>            cameraFallback = std::nullopt
+    );
     void reset();
 
 private:

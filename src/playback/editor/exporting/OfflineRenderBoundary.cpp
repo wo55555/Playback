@@ -37,12 +37,13 @@ OfflineRenderBoundary::~OfflineRenderBoundary() { close(); }
 bool OfflineRenderBoundary::open(
     uint32_t                              capacity,
     ExportSettings const&                 settings,
-    editing::model::EditorStateExt const& project
+    editing::model::EditorStateExt const& project,
+    std::optional<std::string>            cameraFallback
 ) {
     close();
     setOfflineRenderActivityActive(false);
     if (!isOfflineRenderClockInstalled()) return false;
-    if (!mExecutor.open(settings, project)) return false;
+    if (!mExecutor.open(settings, project, std::move(cameraFallback))) return false;
     if (!mDownloads.open(capacity)) {
         mExecutor.close();
         return false;

@@ -7,12 +7,14 @@
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
 #include "playback/functions/render/FrameTap.h"
 #include "playback/functions/replay/ReplaySession.h"
+#include "playback/Playback.h"
 #include "playback/screen/ReplayBrowser.h"
 
 #include "ll/api/i18n/I18n.h"
 #include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/player/LocalPlayer.h"
 #include "mc/deps/renderer/Camera.h"
 
 #include <algorithm>
@@ -54,7 +56,10 @@ EditorController::EditorController(EditorContext& context)
       std::make_unique<exporting::ReplayExportDriver>(mExportCoordinator, functions::ReplaySession::getInstance())
   ) {}
 
-EditorController::~EditorController() { keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview); }
+EditorController::~EditorController() {
+    keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
+    keyframe::clearCameraTimelineRenderContext();
+}
 
 void EditorController::setFrameTap(functions::render::FrameTap* frameTap) {
     if (mExportDriver) mExportDriver->setFrameTap(frameTap);
@@ -63,6 +68,7 @@ void EditorController::setFrameTap(functions::render::FrameTap* frameTap) {
 void EditorController::publishCameraTimeline() {
     if (mProject.cameras.empty()) {
         keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
+        keyframe::clearCameraTimelineRenderContext();
         return;
     }
     keyframe::publishCameraTimeline(
@@ -72,13 +78,40 @@ void EditorController::publishCameraTimeline() {
 }
 
 std::optional<editing::model::CameraKeyframe> EditorController::captureCameraKeyframe() const {
+    if (auto const overrideState = keyframe::currentPreviewCameraOverride()) {
+        editing::model::CameraKeyframe key;
+        key.position = {overrideState->x, overrideState->y, overrideState->z};
+        key.yaw      = overrideState->yaw;
+        key.pitch    = overrideState->pitch;
+        key.fov      = std::clamp(overrideState->fov, 1.0f, 179.0f);
+        return key;
+    }
     auto client = ll::service::getClientInstance();
     if (!client) return std::nullopt;
 
-    auto const& camera   = client->getCamera();
-    auto const  position = *camera.mPosition;
-    auto const  forward  = *camera.mForward;
-    auto const  fov      = camera.mFov;
+    auto const& camera    = client->getCamera();
+    auto        position  = *camera.mPosition;
+    auto        forward   = *camera.mForward;
+    float       fov       = camera.mFov;
+    if (auto* player = client->getLocalPlayer()) {
+        // The client camera can still contain its construction-time values
+        // while the editor action is processed.  Use Bedrock's local player's head pose as the
+        // fallback when the client camera has not been updated yet.
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
+            || (std::abs(position.x) < 0.0001f && std::abs(position.y) < 0.0001f && std::abs(position.z) < 0.0001f)) {
+            auto const head = player->getHeadPos();
+            position = {head.x, head.y, head.z};
+        }
+        if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)
+            || (std::abs(forward.x) < 0.0001f && std::abs(forward.y) < 0.0001f && std::abs(forward.z) < 0.0001f)) {
+            auto const rotation = player->getRotation();
+            float const yaw      = rotation.y * 0.01745329251994329577f;
+            float const pitch    = rotation.x * 0.01745329251994329577f;
+            float const cosPitch = std::cos(pitch);
+            forward              = {-std::sin(yaw) * cosPitch, -std::sin(pitch), std::cos(yaw) * cosPitch};
+        }
+    }
+    if (!std::isfinite(fov) || fov <= 1.0f) fov = 90.0f;
     if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
         || !std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z) || !std::isfinite(fov)) {
         return std::nullopt;
@@ -103,6 +136,7 @@ void EditorController::reset() {
     mProject         = {};
     mPreviewCameraId.reset();
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
+    keyframe::clearCameraTimelineRenderContext();
     mCommandStack.clear();
     mActiveReplayPath.clear();
     mProjectTotalTicks              = -1;
@@ -175,10 +209,22 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(CommandFactory::createRippleDeleteWorldActorSegment(action.id), mProject);
         break;
     case EditorActionType::AddCameraKeyframe:
-        mCommandStack.push(
-            CommandFactory::createAddCameraKeyframe(action.id, action.tick, captureCameraKeyframe()),
-            mProject
-        );
+        if (auto captured = captureCameraKeyframe()) {
+            Playback::getInstance().getSelf().getLogger().info(
+                "Captured camera keyframe (camera={}, tick={}, position=({}, {}, {}), yaw={}, pitch={}, fov={})",
+                action.id,
+                action.tick,
+                captured->position.x,
+                captured->position.y,
+                captured->position.z,
+                captured->yaw,
+                captured->pitch,
+                captured->fov
+            );
+            mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)), mProject);
+        } else {
+            mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick), mProject);
+        }
         break;
     case EditorActionType::MoveCameraKeyframe:
         mCommandStack.push(
@@ -331,7 +377,7 @@ void EditorController::tick(bool hudVisible) {
                 settings.startTick = 0;
                 settings.endTick   = std::max<int64_t>(0, session.getTotalTicks());
             }
-            if (mExportDriver && mExportDriver->start(std::move(settings), mProject)) {
+            if (mExportDriver && mExportDriver->start(std::move(settings), mProject, mPreviewCameraId)) {
                 // The first warm-up render can run later in this controller tick.
                 // Publish RenderMode before that Present so the supersampled game
                 // surface is never shown directly in the visible window.

@@ -85,7 +85,11 @@ void ReplayExportDriver::setFrameTap(functions::render::FrameTap* frameTap) {
     if (frameTap) mRenderBoundary = std::make_unique<OfflineRenderBoundary>(mReplay, *frameTap);
 }
 
-bool ReplayExportDriver::start(ExportSettings settings, editing::model::EditorStateExt const& project) {
+bool ReplayExportDriver::start(
+    ExportSettings settings,
+    editing::model::EditorStateExt const& project,
+    std::optional<std::string> cameraFallback
+) {
     if (isActive()) return false;
     if (!screen::isIdleDetectionGuardInstalled()) {
         mCoordinator.fail(
@@ -132,7 +136,7 @@ bool ReplayExportDriver::start(ExportSettings settings, editing::model::EditorSt
     }
     mRestorePaused = true;
 
-    if (!mRenderBoundary->open(ExportCaptureCapacity, mPlan->settings, project)) {
+    if (!mRenderBoundary->open(ExportCaptureCapacity, mPlan->settings, project, std::move(cameraFallback))) {
         auto const boundaryStatus = mRenderBoundary->status();
         fail(
             ExportError::CaptureUnavailable,

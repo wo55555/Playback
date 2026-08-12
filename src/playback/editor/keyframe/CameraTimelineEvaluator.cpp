@@ -179,10 +179,12 @@ void applyShake(CameraRenderState& state, editing::model::CameraShake const& sha
 
 CameraTimelineEvaluator::CameraTimelineEvaluator(
     editing::model::EditorStateExt project,
-    std::optional<std::string>     cameraOverride
+    std::optional<std::string>     cameraOverride,
+    std::optional<std::string>     cameraFallback
 )
 : mProject(std::move(project)),
-  mCameraOverride(std::move(cameraOverride)) {
+  mCameraOverride(std::move(cameraOverride)),
+  mCameraFallback(std::move(cameraFallback)) {
     for (auto& camera : mProject.cameras) {
         std::ranges::sort(camera.keys, {}, &editing::model::CameraKeyframe::tick);
         if (camera.path) std::ranges::sort(camera.path->points, {}, &editing::model::CameraPathPoint::tick);
@@ -192,28 +194,33 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
 editing::model::CameraEntity const* CameraTimelineEvaluator::cameraForTick(int64_t tick) const {
     if (mProject.cameras.empty()) return nullptr;
 
-    std::string cameraId;
-    if (mCameraOverride) cameraId = *mCameraOverride;
-    if (cameraId.empty()) {
-        for (auto const& segment : mProject.sequence) {
-            if (tick >= segment.startTick && tick < segment.endTick && !segment.cameraId.empty()) {
-                cameraId = segment.cameraId;
-                break;
-            }
-        }
-    }
-    if (cameraId.empty() && mProject.activeCameraIndex >= 0
-        && static_cast<size_t>(mProject.activeCameraIndex) < mProject.cameras.size()) {
-        cameraId = mProject.cameras[static_cast<size_t>(mProject.activeCameraIndex)].id;
-    }
-    if (cameraId.empty()) {
-        auto const active = std::ranges::find(mProject.cameras, true, &editing::model::CameraEntity::active);
-        if (active != mProject.cameras.end()) cameraId = active->id;
+    auto findCamera = [&](std::string const& id) -> editing::model::CameraEntity const* {
+        if (id.empty()) return nullptr;
+        auto const match = std::ranges::find(mProject.cameras, id, &editing::model::CameraEntity::id);
+        return match == mProject.cameras.end() ? nullptr : &*match;
+    };
+
+    if (mCameraOverride && !mCameraOverride->empty()) return findCamera(*mCameraOverride);
+
+    // Sequence bindings are authoritative when present. A dangling binding is
+    // treated as absent so export can still use its explicit fallback camera.
+    for (auto const& segment : mProject.sequence) {
+        if (tick < segment.startTick || tick >= segment.endTick || segment.cameraId.empty()) continue;
+        if (auto const* camera = findCamera(segment.cameraId)) return camera;
+        break;
     }
 
-    auto const match = std::ranges::find(mProject.cameras, cameraId, &editing::model::CameraEntity::id);
-    if (match != mProject.cameras.end()) return &*match;
-    return mCameraOverride ? nullptr : &mProject.cameras.front();
+    if (mCameraFallback) {
+        if (auto const* camera = findCamera(*mCameraFallback)) return camera;
+    }
+    if (mProject.activeCameraIndex >= 0 && static_cast<size_t>(mProject.activeCameraIndex) < mProject.cameras.size()) {
+        return &mProject.cameras[static_cast<size_t>(mProject.activeCameraIndex)];
+    }
+    if (auto const active = std::ranges::find(mProject.cameras, true, &editing::model::CameraEntity::active);
+        active != mProject.cameras.end()) {
+        return &*active;
+    }
+    return &mProject.cameras.front();
 }
 
 std::optional<CameraRenderState>

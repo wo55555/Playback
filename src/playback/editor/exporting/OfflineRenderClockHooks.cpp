@@ -1,6 +1,7 @@
 #include "OfflineRenderClockHooks.h"
 
 #include "ExportActivity.h"
+#include "playback/Playback.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
 #include "playback/functions/render/ReplayEntityRenderHooks.h"
 #include "playback/functions/replay/ReplaySession.h"
@@ -31,6 +32,7 @@ struct ActiveClockSample {
     OfflineRenderClockToken  token;
     OfflineRenderClockSample sample;
     std::optional<keyframe::CameraTimelineSample> cameraSample;
+    keyframe::CameraTimelineRenderContextHandle cameraContext;
     uint64_t                 renderSerial{};
     void const*              expectedBgfxFrame{};
     void const*              submittedBgfxFrame{};
@@ -40,8 +42,7 @@ struct ActiveClockSample {
     bool                     renderReady{};
     bool                     boundaryClaimed{};
     bool                     cameraRequired{};
-    bool                     cameraApplied{};
-    bool                     applied{};
+    bool                     entityApplied{};
     bool                     completed{};
 };
 
@@ -49,6 +50,7 @@ struct AcquiredClockSample {
     OfflineRenderClockToken  token;
     OfflineRenderClockSample sample;
     std::optional<keyframe::CameraTimelineSample> cameraSample;
+    keyframe::CameraTimelineRenderContextHandle cameraContext;
     bool                     cameraRequired{};
     uint64_t                 renderSerial{};
 };
@@ -61,12 +63,8 @@ struct ActiveRenderSample {
     uint32_t                            gameRenderCalls{};
 };
 
-struct CameraRenderAcknowledgement {
-    OfflineRenderClockToken token;
-    uint64_t                renderSerial{};
-};
-
 std::atomic_bool                               gHookInstalled{false};
+std::atomic_bool                               gExportSampleInfoLogged{false};
 std::mutex                                     gClockMutex;
 std::optional<ActiveClockSample>               gActiveSample;
 uint64_t                                       gNextTokenId{1};
@@ -186,35 +184,23 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     gActiveSample->gameRenderOrdinal       = 0;
     gActiveSample->renderReady             = false;
     gActiveSample->boundaryClaimed         = false;
-    gActiveSample->cameraApplied           = false;
-    gActiveSample->applied                 = false;
+    gActiveSample->entityApplied           = false;
     gActiveSample->completed               = false;
     if (gNextRenderSerial == 0) ++gNextRenderSerial;
     return AcquiredClockSample{
         gActiveSample->token,
         gActiveSample->sample,
         gActiveSample->cameraSample,
+        gActiveSample->cameraContext,
         gActiveSample->cameraRequired,
         gActiveSample->renderSerial
     };
 }
 
-void markClockSampleCameraApplied(OfflineRenderClockToken token, uint64_t renderSerial) {
-    std::scoped_lock lock(gClockMutex);
-    if (!gActiveSample || gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial) return;
-    gActiveSample->cameraApplied = true;
-}
-
-void acknowledgeCameraRender(void* opaque) noexcept {
-    auto* const acknowledgement = static_cast<CameraRenderAcknowledgement*>(opaque);
-    if (!acknowledgement) return;
-    markClockSampleCameraApplied(acknowledgement->token, acknowledgement->renderSerial);
-}
-
 void completeClockSample(OfflineRenderClockToken token, uint64_t renderSerial, bool entityApplied) {
     std::scoped_lock lock(gClockMutex);
     if (!gActiveSample || gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial) return;
-    gActiveSample->applied = entityApplied && (!gActiveSample->cameraRequired || gActiveSample->cameraApplied);
+    gActiveSample->entityApplied = entityApplied;
 }
 
 void markClockSampleRenderReady(OfflineRenderClockToken token, uint64_t renderSerial, bool ready) {
@@ -270,7 +256,6 @@ LL_TYPE_INSTANCE_HOOK(
     auto const sample = acquireClockSampleForRender();
     if (sample) {
         bool poseApplied = false;
-        CameraRenderAcknowledgement cameraAcknowledgement{sample->token, sample->renderSerial};
         {
             ScopedTimerOverride timerOverride(timer, sample->sample);
             ScopedRenderSample  renderSample(
@@ -283,8 +268,7 @@ LL_TYPE_INSTANCE_HOOK(
                 sample->sample.replayTime,
                 keyframe::CameraTimelineSource::Export,
                 sample->cameraSample,
-                acknowledgeCameraRender,
-                &cameraAcknowledgement
+                sample->cameraContext ? sample->cameraContext->appliedFlag : keyframe::CameraTimelineAppliedFlag{}
             );
             auto pose =
                 functions::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
@@ -292,7 +276,7 @@ LL_TYPE_INSTANCE_HOOK(
             markClockSampleRenderReady(
                 sample->token,
                 sample->renderSerial,
-                poseApplied && (!sample->cameraRequired || sample->cameraSample.has_value())
+                poseApplied && (!sample->cameraRequired || sample->cameraContext != nullptr)
             );
             origin(client, timer);
         }
@@ -307,19 +291,28 @@ LL_TYPE_INSTANCE_HOOK(
 
     auto& replay = functions::ReplaySession::getInstance();
     if (!replay.isActive() || !replay.hasJoinedReplayWorld()) {
+        keyframe::clearCameraTimelineRenderContext();
         origin(client, timer);
         return;
     }
 
     auto const previewTime = replay.getRenderSampleTime(static_cast<float>(timer.mAlpha));
     if (!previewTime) {
+        keyframe::clearCameraTimelineRenderContext();
         origin(client, timer);
         return;
     }
 
+    auto const previewSample =
+        keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *previewTime);
+    auto const previewContext = std::make_shared<keyframe::CameraTimelineRenderContext const>(
+        keyframe::CameraTimelineRenderContext{*previewTime, keyframe::CameraTimelineSource::Preview, previewSample, {}}
+    );
+    keyframe::publishCameraTimelineRenderContext(previewContext);
     keyframe::ScopedCameraTimelineRenderContext renderContext(
         *previewTime,
-        keyframe::CameraTimelineSource::Preview
+        keyframe::CameraTimelineSource::Preview,
+        previewSample
     );
     origin(client, timer);
 }
@@ -420,24 +413,46 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
     // Evaluate keyframes at the exact fractional export sample.
     // Do that before entering Bedrock so the render hook cannot accidentally
     // fall back to the native camera after the frame has been published.
-    auto const cameraRequired = keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Export);
     auto const cameraSample =
         keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample.replayTime);
-    if (cameraRequired && !cameraSample) {
-        token = {};
-        return OfflineRenderClockPublishResult::InvalidSample;
+    if (!gExportSampleInfoLogged.exchange(true, std::memory_order_acq_rel)) {
+        Playback::getInstance().getSelf().getLogger().info(
+            "Export render sample published (frame={}, tick={}/{}, cameraSample={})",
+            sample.frameIndex,
+            sample.replayTime.numerator,
+            sample.replayTime.denominator,
+            cameraSample.has_value()
+        );
+    }
+    auto cameraContext = keyframe::CameraTimelineRenderContextHandle{};
+    if (cameraSample) {
+        auto const appliedFlag = std::make_shared<std::atomic_bool>(false);
+        cameraContext = std::make_shared<keyframe::CameraTimelineRenderContext>(
+            keyframe::CameraTimelineRenderContext{
+                sample.replayTime,
+                keyframe::CameraTimelineSource::Export,
+                cameraSample,
+                appliedFlag,
+            }
+        );
+        keyframe::publishCameraTimelineRenderContext(cameraContext);
     }
 
-    gActiveSample = ActiveClockSample{token, sample};
-    gActiveSample->cameraSample   = cameraSample;
-    gActiveSample->cameraRequired = cameraRequired;
+    gActiveSample                   = ActiveClockSample{token, sample};
+    gActiveSample->cameraSample     = cameraSample;
+    gActiveSample->cameraContext    = std::move(cameraContext);
+    gActiveSample->cameraRequired   = cameraSample.has_value();
     return OfflineRenderClockPublishResult::Published;
 }
 
 bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token) {
     if (!token) return false;
     std::scoped_lock lock(gClockMutex);
-    return gActiveSample && gActiveSample->token.id == token.id && gActiveSample->applied;
+    if (!gActiveSample || gActiveSample->token.id != token.id || !gActiveSample->entityApplied) return false;
+    return !gActiveSample->cameraRequired || (gActiveSample->cameraContext && gActiveSample->cameraContext->appliedFlag
+                                              && gActiveSample->cameraContext->appliedFlag->load(
+                                                  std::memory_order_acquire
+                                              ));
 }
 
 bool wasOfflineRenderClockSampleCompleted(OfflineRenderClockToken token) {
@@ -501,14 +516,27 @@ void markOfflineRenderBoundaryCompleted(OfflineRenderBoundaryTicket const& ticke
 
 void clearOfflineRenderClockSample(OfflineRenderClockToken token) {
     if (!token) return;
-    std::scoped_lock lock(gClockMutex);
-    if (gActiveSample && gActiveSample->token.id == token.id) gActiveSample.reset();
+    keyframe::CameraTimelineRenderContextHandle context;
+    {
+        std::scoped_lock lock(gClockMutex);
+        if (!gActiveSample || gActiveSample->token.id != token.id) return;
+        context = std::move(gActiveSample->cameraContext);
+        gActiveSample.reset();
+    }
+    if (context) keyframe::clearCameraTimelineRenderContext(context);
 }
 
 void resetOfflineRenderClock() {
-    std::scoped_lock lock(gClockMutex);
-    gActiveSample.reset();
+    keyframe::CameraTimelineRenderContextHandle context;
+    {
+        std::scoped_lock lock(gClockMutex);
+        if (gActiveSample) context = std::move(gActiveSample->cameraContext);
+        gActiveSample.reset();
+    }
+    if (context) keyframe::clearCameraTimelineRenderContext(context);
+    else keyframe::clearCameraTimelineRenderContext();
     gRenderSample.reset();
+    gExportSampleInfoLogged.store(false, std::memory_order_release);
 }
 
 } // namespace playback::editor::exporting
