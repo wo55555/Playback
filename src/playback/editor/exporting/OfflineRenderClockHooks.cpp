@@ -1,6 +1,7 @@
 #include "OfflineRenderClockHooks.h"
 
 #include "ExportActivity.h"
+#include "playback/Playback.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
 #include "playback/functions/render/ReplayEntityRenderHooks.h"
 #include "playback/functions/replay/ReplaySession.h"
@@ -63,6 +64,7 @@ struct ActiveRenderSample {
 };
 
 std::atomic_bool                               gHookInstalled{false};
+std::atomic_bool                               gExportSampleInfoLogged{false};
 std::mutex                                     gClockMutex;
 std::optional<ActiveClockSample>               gActiveSample;
 uint64_t                                       gNextTokenId{1};
@@ -289,18 +291,24 @@ LL_TYPE_INSTANCE_HOOK(
 
     auto& replay = functions::ReplaySession::getInstance();
     if (!replay.isActive() || !replay.hasJoinedReplayWorld()) {
+        keyframe::clearCameraTimelineRenderContext();
         origin(client, timer);
         return;
     }
 
     auto const previewTime = replay.getRenderSampleTime(static_cast<float>(timer.mAlpha));
     if (!previewTime) {
+        keyframe::clearCameraTimelineRenderContext();
         origin(client, timer);
         return;
     }
 
     auto const previewSample =
         keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *previewTime);
+    auto const previewContext = std::make_shared<keyframe::CameraTimelineRenderContext const>(
+        keyframe::CameraTimelineRenderContext{*previewTime, keyframe::CameraTimelineSource::Preview, previewSample, {}}
+    );
+    keyframe::publishCameraTimelineRenderContext(previewContext);
     keyframe::ScopedCameraTimelineRenderContext renderContext(
         *previewTime,
         keyframe::CameraTimelineSource::Preview,
@@ -407,6 +415,15 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
     // fall back to the native camera after the frame has been published.
     auto const cameraSample =
         keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample.replayTime);
+    if (!gExportSampleInfoLogged.exchange(true, std::memory_order_acq_rel)) {
+        Playback::getInstance().getSelf().getLogger().info(
+            "Export render sample published (frame={}, tick={}/{}, cameraSample={})",
+            sample.frameIndex,
+            sample.replayTime.numerator,
+            sample.replayTime.denominator,
+            cameraSample.has_value()
+        );
+    }
     auto cameraContext = keyframe::CameraTimelineRenderContextHandle{};
     if (cameraSample) {
         auto const appliedFlag = std::make_shared<std::atomic_bool>(false);
@@ -519,6 +536,7 @@ void resetOfflineRenderClock() {
     if (context) keyframe::clearCameraTimelineRenderContext(context);
     else keyframe::clearCameraTimelineRenderContext();
     gRenderSample.reset();
+    gExportSampleInfoLogged.store(false, std::memory_order_release);
 }
 
 } // namespace playback::editor::exporting

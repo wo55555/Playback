@@ -7,6 +7,7 @@
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
 #include "playback/functions/render/FrameTap.h"
 #include "playback/functions/replay/ReplaySession.h"
+#include "playback/Playback.h"
 #include "playback/screen/ReplayBrowser.h"
 
 #include "ll/api/i18n/I18n.h"
@@ -54,7 +55,10 @@ EditorController::EditorController(EditorContext& context)
       std::make_unique<exporting::ReplayExportDriver>(mExportCoordinator, functions::ReplaySession::getInstance())
   ) {}
 
-EditorController::~EditorController() { keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview); }
+EditorController::~EditorController() {
+    keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
+    keyframe::clearCameraTimelineRenderContext();
+}
 
 void EditorController::setFrameTap(functions::render::FrameTap* frameTap) {
     if (mExportDriver) mExportDriver->setFrameTap(frameTap);
@@ -63,8 +67,17 @@ void EditorController::setFrameTap(functions::render::FrameTap* frameTap) {
 void EditorController::publishCameraTimeline() {
     if (mProject.cameras.empty()) {
         keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
+        keyframe::clearCameraTimelineRenderContext();
         return;
     }
+    size_t keyframeCount = 0;
+    for (auto const& camera : mProject.cameras) keyframeCount += camera.keys.size();
+    Playback::getInstance().getSelf().getLogger().info(
+        "Published preview camera timeline (cameras={}, keyframes={}, selected={})",
+        mProject.cameras.size(),
+        keyframeCount,
+        mPreviewCameraId ? *mPreviewCameraId : "auto"
+    );
     keyframe::publishCameraTimeline(
         keyframe::CameraTimelineSource::Preview,
         std::make_shared<keyframe::CameraTimelineEvaluator>(mProject, mPreviewCameraId)
@@ -72,6 +85,14 @@ void EditorController::publishCameraTimeline() {
 }
 
 std::optional<editing::model::CameraKeyframe> EditorController::captureCameraKeyframe() const {
+    if (auto const overrideState = keyframe::currentPreviewCameraOverride()) {
+        editing::model::CameraKeyframe key;
+        key.position = {overrideState->x, overrideState->y, overrideState->z};
+        key.yaw      = overrideState->yaw;
+        key.pitch    = overrideState->pitch;
+        key.fov      = std::clamp(overrideState->fov, 1.0f, 179.0f);
+        return key;
+    }
     auto client = ll::service::getClientInstance();
     if (!client) return std::nullopt;
 
@@ -103,6 +124,7 @@ void EditorController::reset() {
     mProject         = {};
     mPreviewCameraId.reset();
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
+    keyframe::clearCameraTimelineRenderContext();
     mCommandStack.clear();
     mActiveReplayPath.clear();
     mProjectTotalTicks              = -1;

@@ -17,6 +17,7 @@ struct Binding {
 std::atomic<std::shared_ptr<Binding const>> gPreview;
 std::atomic<std::shared_ptr<Binding const>> gExport;
 std::atomic<std::shared_ptr<CameraRenderState const>> gPreviewOverride;
+std::atomic<CameraTimelineRenderContextHandle> gPreviewRenderContext;
 std::atomic<CameraTimelineRenderContextHandle> gExportRenderContext;
 thread_local std::optional<CameraTimelineRenderContext> gRenderContext;
 
@@ -147,25 +148,37 @@ std::optional<CameraRenderState> currentPreviewCameraOverride() noexcept {
 
 std::optional<CameraTimelineRenderContext> currentCameraTimelineRenderContext() noexcept {
     if (gRenderContext) return gRenderContext;
-    auto const global = gExportRenderContext.load(std::memory_order_acquire);
-    return global ? std::optional<CameraTimelineRenderContext>{*global} : std::nullopt;
+    auto const exportContext = gExportRenderContext.load(std::memory_order_acquire);
+    if (exportContext) return std::optional<CameraTimelineRenderContext>{*exportContext};
+    auto const previewContext = gPreviewRenderContext.load(std::memory_order_acquire);
+    return previewContext ? std::optional<CameraTimelineRenderContext>{*previewContext} : std::nullopt;
 }
 
 void publishCameraTimelineRenderContext(CameraTimelineRenderContextHandle context) {
-    gExportRenderContext.store(std::move(context), std::memory_order_release);
+    if (!context) return;
+    auto& target = context->source == CameraTimelineSource::Export ? gExportRenderContext : gPreviewRenderContext;
+    target.store(std::move(context), std::memory_order_release);
 }
 
 void clearCameraTimelineRenderContext(CameraTimelineRenderContextHandle const& expected) {
-    auto current = gExportRenderContext.load(std::memory_order_acquire);
-    while (current && (!expected || current == expected)) {
-        if (gExportRenderContext.compare_exchange_weak(
-                current,
-                {},
-                std::memory_order_acq_rel,
-                std::memory_order_acquire
-            )) {
-            return;
+    auto clear = [&](std::atomic<CameraTimelineRenderContextHandle>& target) {
+        auto current = target.load(std::memory_order_acquire);
+        while (current && (!expected || current == expected)) {
+            if (target.compare_exchange_weak(
+                    current,
+                    {},
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire
+                )) {
+                return;
+            }
         }
+    };
+    if (expected) {
+        clear(expected->source == CameraTimelineSource::Export ? gExportRenderContext : gPreviewRenderContext);
+    } else {
+        clear(gExportRenderContext);
+        clear(gPreviewRenderContext);
     }
 }
 
