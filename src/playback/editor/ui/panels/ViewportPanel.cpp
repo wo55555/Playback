@@ -122,13 +122,6 @@ CameraBasis cameraBasisFromState(keyframe::CameraRenderState const& state, Rect 
 }
 
 std::optional<CameraBasis> currentCameraBasis(Rect const& viewport) {
-    if (auto const overrideState = keyframe::currentPreviewCameraOverride()) {
-        return cameraBasisFromState(*overrideState, viewport);
-    }
-    if (auto const context = keyframe::currentCameraTimelineRenderContext();
-        context && context->source == keyframe::CameraTimelineSource::Preview && context->sample) {
-        return cameraBasisFromState(context->sample->state, viewport);
-    }
     auto client = ll::service::getClientInstance();
     if (!client) return std::nullopt;
 

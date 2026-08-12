@@ -12,6 +12,7 @@
 #include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/client/renderer/game/LevelRendererCamera.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
+#include "mc/deps/minecraft_renderer/objects/ViewRenderObject.h"
 #include "mc/deps/renderer/Camera.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
@@ -34,10 +35,11 @@ namespace {
 
 constexpr float RadiansPerDegree = 3.14159265358979323846f / 180.0f;
 
-enum class CameraApplicationStage : size_t { FramePre, SetupFinal, FramePost, Count };
+enum class CameraApplicationStage : size_t { FramePre, SetupFinal, ViewRenderObject, FramePost, Count };
 constexpr size_t CameraApplicationStageCount = static_cast<size_t>(CameraApplicationStage::Count);
 std::array<std::atomic_bool, 2> gMissingSampleLogged{};
 std::array<std::array<std::atomic_bool, CameraApplicationStageCount>, 2> gAppliedInfoLogged{};
+std::atomic_bool gCameraBasisLogged{false};
 
 size_t sourceIndex(keyframe::CameraTimelineSource source) noexcept {
     return source == keyframe::CameraTimelineSource::Export ? 1U : 0U;
@@ -45,6 +47,10 @@ size_t sourceIndex(keyframe::CameraTimelineSource source) noexcept {
 
 char const* sourceName(keyframe::CameraTimelineSource source) noexcept {
     return source == keyframe::CameraTimelineSource::Export ? "export" : "preview";
+}
+
+float dot(::glm::vec3 const& left, ::glm::vec3 const& right) noexcept {
+    return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
 std::optional<keyframe::CameraTimelineSample> resolveSample(
@@ -74,13 +80,37 @@ void applyCameraState(mce::Camera& camera, keyframe::CameraTimelineSample const&
         up                            = rolledUp;
     }
 
-    camera.mPosition = ::glm::vec3{state.x, state.y, state.z};
-    camera.mForward  = forward;
-    camera.mRight    = right;
-    camera.mUp       = up;
-    camera.mFov      = std::clamp(state.fov, 1.0f, 179.0f);
+    auto const position   = ::glm::vec3{state.x, state.y, state.z};
+    float const targetFov = std::clamp(state.fov, 1.0f, 179.0f);
+    camera.mPosition      = position;
+    camera.mForward       = forward;
+    camera.mRight         = right;
+    camera.mUp             = up;
+    camera.mFov            = targetFov;
     if (sample.aspectRatio) camera.mAspectRatio = *sample.aspectRatio;
     camera.updateViewMatrixDependencies();
+
+    // updateViewMatrixDependencies() owns the native matrix rebuild and may
+    // replace the stack top. Write the absolute replay matrix after it runs.
+    auto& view = camera.viewMatrixStack->getTop()._m.get();
+    view       = ::glm::mat4x4{1.0f};
+    view[0]    = {right.x, right.y, right.z, 0.0f};
+    view[1]    = {up.x, up.y, up.z, 0.0f};
+    view[2]    = {forward.x, forward.y, forward.z, 0.0f};
+    view[3]    = {-dot(right, position), -dot(up, position), -dot(forward, position), 1.0f};
+    if (!gCameraBasisLogged.exchange(true, std::memory_order_acq_rel)) {
+        auto const& actualPosition = camera.mPosition.get();
+        auto const& actualForward = camera.mForward.get();
+        auto const& actualRight = camera.mRight.get();
+        auto const& actualUp = camera.mUp.get();
+        Playback::getInstance().getSelf().getLogger().info(
+            "Camera matrix basis after dependency update (position=({}, {}, {}), forward=({}, {}, {}), right=({}, {}, {}), up=({}, {}, {}))",
+            actualPosition.x, actualPosition.y, actualPosition.z,
+            actualForward.x, actualForward.y, actualForward.z,
+            actualRight.x, actualRight.y, actualRight.z,
+            actualUp.x, actualUp.y, actualUp.z
+        );
+    }
 }
 
 bool applyCurrentCameraTimelineState(
@@ -118,6 +148,12 @@ bool applyCurrentCameraTimelineState(
         auto& worldCamera = levelCamera->mWorldSpaceCamera.get();
         if (&worldCamera != setupCamera) applyCameraState(worldCamera, *sample);
         levelCamera->mCameraPos = Vec3{sample->state.x, sample->state.y, sample->state.z};
+        auto const& forward = worldCamera.mForward.get();
+        levelCamera->mCameraTargetPos = Vec3{
+            sample->state.x + forward.x,
+            sample->state.y + forward.y,
+            sample->state.z + forward.z,
+        };
     }
     if (clientCamera && clientCamera != setupCamera) applyCameraState(*clientCamera, *sample);
     if (!setupCamera && !levelCamera && !clientCamera) return false;
@@ -319,6 +355,52 @@ LL_TYPE_INSTANCE_HOOK(
     );
 }
 
+LL_TYPE_INSTANCE_HOOK(
+    ReplayCameraViewRenderObjectHook,
+    ll::memory::HookPriority::Lowest,
+    LevelRendererPlayer,
+    &LevelRendererPlayer::createViewRenderObject,
+    ::ViewRenderObject,
+    ::ScreenContext& screenContext,
+    ::SubClientId    clientSubId
+) {
+    auto renderObject = origin(screenContext, clientSubId);
+    auto const context = keyframe::currentCameraTimelineRenderContext();
+    if (!context) return renderObject;
+
+    bool operatorOverride = false;
+    auto sample = resolveSample(*context, operatorOverride);
+    if (!sample) return renderObject;
+
+    auto const& camera  = this->mWorldSpaceCamera.get();
+    auto const& forward = camera.mForward.get();
+    auto&       view    = renderObject.mViewData.get();
+    view.mCameraPos = ::glm::vec3{sample->state.x, sample->state.y, sample->state.z};
+    view.mCameraTargetPos = ::glm::vec3{
+        sample->state.x + forward.x,
+        sample->state.y + forward.y,
+        sample->state.z + forward.z,
+    };
+
+    if (context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
+    auto& logged = gAppliedInfoLogged[sourceIndex(context->source)]
+                                     [static_cast<size_t>(CameraApplicationStage::ViewRenderObject)];
+    if (!logged.exchange(true, std::memory_order_acq_rel)) {
+        Playback::getInstance().getSelf().getLogger().info(
+            "Camera timeline reached final ViewRenderObject (source={}, token={}, position=({}, {}, {}), target=({}, {}, {}))",
+            sourceName(context->source),
+            context->renderToken,
+            view.mCameraPos->x,
+            view.mCameraPos->y,
+            view.mCameraPos->z,
+            view.mCameraTargetPos->x,
+            view.mCameraTargetPos->y,
+            view.mCameraTargetPos->z
+        );
+    }
+    return renderObject;
+}
+
 std::atomic_bool gInstalled{false};
 
 } // namespace
@@ -341,6 +423,7 @@ ScopedNativeCameraPose& ScopedNativeCameraPose::operator=(ScopedNativeCameraPose
 bool hookCameraRender(bool enable) {
     struct HookState {
         bool setupCamera{};
+        bool viewRenderObject{};
         bool gameFrame{};
     };
     static HookState state;
@@ -351,13 +434,15 @@ bool hookCameraRender(bool enable) {
             for (auto& flag : sourceFlags) flag.store(false, std::memory_order_release);
         }
         if (!state.setupCamera) state.setupCamera = ReplayCameraSetupHook::hook() == 0;
+        if (!state.viewRenderObject) state.viewRenderObject = ReplayCameraViewRenderObjectHook::hook() == 0;
         if (!state.gameFrame) state.gameFrame = ReplayCameraFrameHook::hook() == 0;
-        bool const installed = state.setupCamera && state.gameFrame;
+        bool const installed = state.setupCamera && state.viewRenderObject && state.gameFrame;
         gInstalled.store(installed, std::memory_order_release);
         if (installed) {
             Playback::getInstance().getSelf().getLogger().info(
-                "Camera render hooks installed (setupCamera={}, renderCurrentFrame={})",
+                "Camera render hooks installed (setupCamera={}, createViewRenderObject={}, renderCurrentFrame={})",
                 state.setupCamera,
+                state.viewRenderObject,
                 state.gameFrame
             );
         }
@@ -369,8 +454,9 @@ bool hookCameraRender(bool enable) {
         for (auto& flag : sourceFlags) flag.store(false, std::memory_order_release);
     }
     if (state.gameFrame && ReplayCameraFrameHook::unhook()) state.gameFrame = false;
+    if (state.viewRenderObject && ReplayCameraViewRenderObjectHook::unhook()) state.viewRenderObject = false;
     if (state.setupCamera && ReplayCameraSetupHook::unhook()) state.setupCamera = false;
-    return !state.setupCamera && !state.gameFrame;
+    return !state.setupCamera && !state.viewRenderObject && !state.gameFrame;
 }
 
 bool isCameraRenderInstalled() { return gInstalled.load(std::memory_order_acquire); }
