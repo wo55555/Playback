@@ -23,7 +23,6 @@ namespace {
 
 constexpr float RadiansPerDegree = 3.14159265358979323846f / 180.0f;
 
-std::array<std::atomic_uint64_t, 2> gApplyCounts{};
 std::array<std::atomic_bool, 2>     gMissingSampleLogged{};
 std::array<std::atomic_bool, 2>     gAppliedInfoLogged{};
 
@@ -110,7 +109,6 @@ bool applyCurrentCameraTimelineState(mce::Camera* setupCamera, char const* stage
 
     if (context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
 
-    auto const count = gApplyCounts[sourceIndex(context->source)].fetch_add(1, std::memory_order_relaxed) + 1;
     if (!gAppliedInfoLogged[sourceIndex(context->source)].exchange(true, std::memory_order_acq_rel)) {
         auto const& state = sample->state;
         Playback::getInstance().getSelf().getLogger().info(
@@ -126,26 +124,6 @@ bool applyCurrentCameraTimelineState(mce::Camera* setupCamera, char const* stage
             state.pitch,
             state.fov,
             operatorOverride
-        );
-    } else if (count <= 4 || count % 600 == 0) {
-        auto const& state = sample->state;
-        Playback::getInstance().getSelf().getLogger().debug(
-            "Camera timeline applied at {} boundary (source={}, tick={}/{}, position=({}, {}, {}), yaw={}, "
-            "pitch={}, fov={}, override={}, setupCamera={}, clientCamera={}, sameCamera={})",
-            stage,
-            sourceName(context->source),
-            context->time.numerator,
-            context->time.denominator,
-            state.x,
-            state.y,
-            state.z,
-            state.yaw,
-            state.pitch,
-            state.fov,
-            operatorOverride,
-            static_cast<void*>(setupCamera),
-            static_cast<void*>(clientCamera),
-            setupCamera && setupCamera == clientCamera
         );
     }
     return true;
@@ -175,18 +153,8 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     float partialTick
 ) {
-    // Keep a pre-pass write for Bedrock paths that consume the client camera
-    // without entering setupCamera.  The post-pass write is the authoritative
-    // one for paths where native rendering rebuilds the camera in origin().
-    (void)applyCurrentCameraTimelineState(nullptr, "renderCurrentFrame.pre");
-    // Let Bedrock finish its native camera setup first.  Applying before
-    // origin() is ineffective because renderCurrentFrame rebuilds the client
-    // camera during the native pass.  The final write runs at the render
-    // boundary so the sampled state is committed immediately before
-    // consumers submit the frame.
     origin(partialTick);
-    // Some render paths consume IClientInstance::getCamera() without calling
-    // LevelRendererPlayer::setupCamera for every captured frame.
+    // Fallback for render paths that do not enter setupCamera for every frame.
     (void)applyCurrentCameraTimelineState(nullptr, "renderCurrentFrame");
 }
 

@@ -8,6 +8,7 @@
 #include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/player/LocalPlayer.h"
 #include "mc/deps/renderer/Camera.h"
 
 #include <algorithm>
@@ -93,10 +94,26 @@ std::optional<keyframe::CameraRenderState> captureCurrentCamera() {
     auto client = ll::service::getClientInstance();
     if (!client) return std::nullopt;
 
-    auto const& camera   = client->getCamera();
-    auto const  position = *camera.mPosition;
-    auto const  forward  = *camera.mForward;
-    float const fov      = camera.mFov;
+    auto const& camera = client->getCamera();
+    auto        position = *camera.mPosition;
+    auto        forward  = *camera.mForward;
+    float       fov      = camera.mFov;
+    if (auto* player = client->getLocalPlayer()) {
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
+            || (std::abs(position.x) < 0.0001f && std::abs(position.y) < 0.0001f && std::abs(position.z) < 0.0001f)) {
+            auto const head = player->getHeadPos();
+            position = {head.x, head.y, head.z};
+        }
+        if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)
+            || (std::abs(forward.x) < 0.0001f && std::abs(forward.y) < 0.0001f && std::abs(forward.z) < 0.0001f)) {
+            auto const rotation = player->getRotation();
+            float const yaw      = rotation.y * RadiansPerDegree;
+            float const pitch    = rotation.x * RadiansPerDegree;
+            float const cosPitch = std::cos(pitch);
+            forward              = {-std::sin(yaw) * cosPitch, -std::sin(pitch), std::cos(yaw) * cosPitch};
+        }
+    }
+    if (!std::isfinite(fov) || fov <= 1.0f) fov = 90.0f;
     if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
         || !std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)
         || !std::isfinite(fov)) {

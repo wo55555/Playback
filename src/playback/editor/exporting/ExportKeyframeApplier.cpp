@@ -28,10 +28,8 @@ void ExportKeyframeApplier::configure(
     );
     keyframe::publishCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline, aspectRatio);
     Playback::getInstance().getSelf().getLogger().info(
-        "Published export camera timeline (cameras={}, keyframes={}, aspectRatio={})",
-        project.cameras.size(),
-        keyframeCount,
-        aspectRatio ? *aspectRatio : 0.0f
+        "Export camera timeline ready (cameras={}, keyframes={}, aspectRatio={})",
+        project.cameras.size(), keyframeCount, aspectRatio ? *aspectRatio : 0.0f
     );
 }
 
