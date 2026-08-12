@@ -206,12 +206,12 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::DeleteCameraKeyframe:
         mCommandStack.push(CommandFactory::createDeleteCameraKeyframe(action.id, action.secondaryId), mProject);
         break;
-    case EditorActionType::SetKeyframeEasing:
+    case EditorActionType::SetKeyframeInterpolation:
         mCommandStack.push(
-            CommandFactory::createSetKeyframeEasing(
+            CommandFactory::createSetKeyframeInterpolation(
                 action.id,
                 action.secondaryId,
-                static_cast<editing::model::EasingType>(action.kind)
+                static_cast<editing::model::CameraInterpolationType>(action.kind)
             ),
             mProject
         );

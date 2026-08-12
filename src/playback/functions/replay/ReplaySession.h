@@ -281,6 +281,11 @@ public:
 
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
 
+    // The replay world owns the player used by the native Bedrock camera
+    // pipeline. Render hooks use this as a fallback while export temporarily
+    // detaches ClientInstance::getLocalPlayer().
+    [[nodiscard]] Player* getReplayPlayer() const noexcept { return mReplayPlayer; }
+
     [[nodiscard]] int getCurrentTick() const {
         int const requestedTick = mRequestedSeekTick.load(std::memory_order_acquire);
         if (requestedTick >= 0) return requestedTick;

@@ -32,12 +32,12 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createAddCameraKeyframe(
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createMoveCameraKeyframe(const std::string& id, const std::string& keyframeId, int tick) { return std::make_unique<MoveKeyframe>(id, keyframeId, tick); }
 std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteCameraKeyframe(const std::string& id, const std::string& keyframeId) { return std::make_unique<DeleteKeyframe>(id, keyframeId); }
-std::unique_ptr<model::IEditCommand> CommandFactory::createSetKeyframeEasing(
-    const std::string& id,
-    const std::string& keyframeId,
-    model::EasingType  easing
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetKeyframeInterpolation(
+    const std::string&             id,
+    const std::string&             keyframeId,
+    model::CameraInterpolationType interpolation
 ) {
-    return std::make_unique<SetKeyframeEasing>(id, keyframeId, easing);
+    return std::make_unique<SetKeyframeInterpolation>(id, keyframeId, interpolation);
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraEnabled(const std::string& id, bool enabled) {
     return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::Enabled, enabled);

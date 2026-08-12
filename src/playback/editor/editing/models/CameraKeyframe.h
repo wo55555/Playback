@@ -6,6 +6,17 @@
 
 namespace playback::editor::editing::model {
 
+enum class CameraSidedInterpolationType : uint8_t { Smooth, Linear, Ease, Hold, Hermite, CubicBezier };
+enum class CameraInterpolationType : uint8_t {
+    Smooth = 0,
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    Hold,
+    Hermite,
+    CubicBezier,
+};
 enum class CameraPathType : uint8_t { Linear = 0, CubicBezier, AutoSmooth, Hermite };
 enum class CameraTransitionPreset : uint8_t { Custom = 0, LinearConstant, CinematicEase, ArcPushIn, ArcPullOut, OrbitPass, WhipPan, ZoomTransition };
 
@@ -29,7 +40,7 @@ struct CameraKeyframe {
     float fov{90.0f};
     Color4 tint{1,1,1,1};
 
-    EasingType easingType{EasingType::Linear};
+    CameraInterpolationType interpolationType{CameraInterpolationType::Smooth};
     Vec2 bezierCtrl1{0.42f, 0.0f};
     Vec2 bezierCtrl2{0.58f, 1.0f};
     CameraMotionSegment outgoingMotion{};

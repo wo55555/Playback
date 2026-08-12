@@ -45,7 +45,7 @@ enum class EditorActionType {
     AddCameraKeyframe,
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
-    SetKeyframeEasing,
+    SetKeyframeInterpolation,
     SetCameraEnabled,
     SetCameraPathVisible,
     DeleteCamera,

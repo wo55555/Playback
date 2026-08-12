@@ -113,9 +113,13 @@ private:
     bool                                 mChanged{};
 };
 
-class SetKeyframeEasing final : public model::IEditCommand {
+class SetKeyframeInterpolation final : public model::IEditCommand {
 public:
-    SetKeyframeEasing(std::string cameraId, std::string keyframeId, model::EasingType easing);
+    SetKeyframeInterpolation(
+        std::string                    cameraId,
+        std::string                    keyframeId,
+        model::CameraInterpolationType interpolation
+    );
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mChanged; }
@@ -124,7 +128,7 @@ public:
 private:
     std::string                          mCameraId;
     std::string                          mKeyframeId;
-    model::EasingType                    mEasing;
+    model::CameraInterpolationType       mInterpolation;
     std::optional<model::EditorStateExt> mBefore;
     bool                                 mChanged{};
 };

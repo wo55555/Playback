@@ -1,4 +1,5 @@
 #include "CameraTimelineEvaluator.h"
+#include "CameraKeyframeHandler.h"
 #include "KeyframeTrack.h"
 
 #include <algorithm>
@@ -204,7 +205,11 @@ CameraTimelineEvaluator::sampleCamera(editing::model::CameraEntity const& camera
     if (camera.kind == editing::model::CameraKind::Keyframe && !camera.keys.empty()) {
         auto const track = mKeyframeTracks.find(camera.id);
         if (track == mKeyframeTracks.end()) return std::nullopt;
-        auto state = track->second.sample(tick);
+        auto const change = track->second.createChange(tick);
+        if (!change) return std::nullopt;
+        CameraRenderStateHandler handler;
+        change->apply(handler);
+        auto state = handler.state();
         if (!state) return std::nullopt;
         applyLimiter(*state, camera.limiter.value_or(editing::model::CameraLimiter{}));
         applyShake(*state, camera.shake.value_or(editing::model::CameraShake{}), tick);
@@ -323,19 +328,19 @@ std::optional<CameraPathSampleRange> CameraTimelineEvaluator::sampleCameraPathAr
         if (!range) return std::nullopt;
         startTick   = range->startTick;
         endTick     = range->endTick;
-        auto samples = track->second.sampleRange(startTick, endTick, maxSamples);
-        if (samples.empty()) return std::nullopt;
+        size_t const count = startTick == endTick ? 1 : std::max<size_t>(2, maxSamples);
+        std::vector<CameraRenderState> samples;
+        samples.reserve(count);
         long double const span = static_cast<long double>(endTick) - startTick;
-        size_t const count      = samples.size();
         for (size_t index = 0; index < count; ++index) {
             long double const sampleTick = count <= 1
                                              ? static_cast<long double>(startTick)
                                              : static_cast<long double>(startTick)
                                                      + span * static_cast<long double>(index)
                                                            / static_cast<long double>(count - 1);
-            applyLimiter(samples[index], camera->limiter.value_or(editing::model::CameraLimiter{}));
-            applyShake(samples[index], camera->shake.value_or(editing::model::CameraShake{}), sampleTick);
+            if (auto state = sampleCamera(*camera, sampleTick)) samples.push_back(*state);
         }
+        if (samples.empty()) return std::nullopt;
         return CameraPathSampleRange{startTick, endTick, std::move(samples)};
     }
 

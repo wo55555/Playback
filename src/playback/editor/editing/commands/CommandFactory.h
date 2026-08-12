@@ -37,7 +37,11 @@ public:
     static std::unique_ptr<model::IEditCommand> createMoveCameraKeyframe(const std::string& id, const std::string& keyframeId, int tick);
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframe(const std::string& id, const std::string& keyframeId);
     static std::unique_ptr<model::IEditCommand>
-    createSetKeyframeEasing(const std::string& id, const std::string& keyframeId, model::EasingType easing);
+    createSetKeyframeInterpolation(
+        const std::string&             id,
+        const std::string&             keyframeId,
+        model::CameraInterpolationType interpolation
+    );
     static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
     static std::unique_ptr<model::IEditCommand> createSetCameraPathVisible(const std::string& id, bool visible);
     static std::unique_ptr<model::IEditCommand> createSetCameraKind(const std::string& id, model::CameraKind kind);

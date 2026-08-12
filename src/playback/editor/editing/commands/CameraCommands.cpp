@@ -174,12 +174,16 @@ void DeleteKeyframe::execute(model::EditorStateExt& state) {
 void        DeleteKeyframe::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string DeleteKeyframe::label() const { return "Delete Keyframe"; }
 
-SetKeyframeEasing::SetKeyframeEasing(std::string cameraId, std::string keyframeId, model::EasingType easing)
+SetKeyframeInterpolation::SetKeyframeInterpolation(
+    std::string                    cameraId,
+    std::string                    keyframeId,
+    model::CameraInterpolationType interpolation
+)
 : mCameraId(std::move(cameraId)),
   mKeyframeId(std::move(keyframeId)),
-  mEasing(easing) {}
+  mInterpolation(interpolation) {}
 
-void SetKeyframeEasing::execute(model::EditorStateExt& state) {
+void SetKeyframeInterpolation::execute(model::EditorStateExt& state) {
     mChanged     = false;
     auto* camera = findCamera(state, mCameraId);
     if (!camera || camera->locked) {
@@ -190,18 +194,18 @@ void SetKeyframeEasing::execute(model::EditorStateExt& state) {
     auto key = std::find_if(camera->keys.begin(), camera->keys.end(), [&](auto const& value) {
         return value.id == mKeyframeId;
     });
-    if (key == camera->keys.end() || key->easingType == mEasing) {
+    if (key == camera->keys.end() || key->interpolationType == mInterpolation) {
         mBefore.reset();
         return;
     }
 
-    mBefore           = state;
-    key->easingType   = mEasing;
-    mChanged          = true;
+    mBefore                = state;
+    key->interpolationType = mInterpolation;
+    mChanged               = true;
 }
 
-void        SetKeyframeEasing::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetKeyframeEasing::label() const { return "Set Keyframe Easing"; }
+void        SetKeyframeInterpolation::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframeInterpolation::label() const { return "Set Keyframe Interpolation"; }
 
 SetCameraTrackState::SetCameraTrackState(std::string cameraId, Property property, bool value)
 : mCameraId(std::move(cameraId)),

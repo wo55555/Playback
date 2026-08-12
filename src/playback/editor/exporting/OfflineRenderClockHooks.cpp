@@ -5,6 +5,7 @@
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
 #include "playback/functions/render/ReplayEntityRenderHooks.h"
 #include "playback/functions/replay/ReplaySession.h"
+#include "playback/editor/renderer/CameraRenderHooks.h"
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/TargetedBedrock.h"
@@ -66,6 +67,8 @@ struct ActiveRenderSample {
 std::atomic_bool                               gHookInstalled{false};
 std::atomic_bool                               gExportSampleInfoLogged{false};
 std::atomic_bool                               gPreviewSampleInfoLogged{false};
+std::atomic_bool                               gExportNativeCameraPoseLogged{false};
+std::atomic_bool                               gPreviewNativeCameraPoseLogged{false};
 std::mutex                                     gClockMutex;
 std::optional<ActiveClockSample>               gActiveSample;
 uint64_t                                       gNextTokenId{1};
@@ -272,13 +275,35 @@ LL_TYPE_INSTANCE_HOOK(
                 sample->cameraContext ? sample->cameraContext->appliedFlag : keyframe::CameraTimelineAppliedFlag{},
                 sample->token.id
             );
+            std::optional<renderer::ScopedNativeCameraPose> nativeCameraPose;
+            if (sample->cameraSample) {
+                nativeCameraPose.emplace(*sample->cameraSample);
+                if (nativeCameraPose->applied()
+                    && !gExportNativeCameraPoseLogged.exchange(true, std::memory_order_acq_rel)) {
+                    Playback::getInstance().getSelf().getLogger().info(
+                        "Export camera pose scoped across MinecraftGame::updateGraphics (token={}, renderSerial={})",
+                        sample->token.id,
+                        sample->renderSerial
+                    );
+                }
+                if (!nativeCameraPose->applied()) {
+                    Playback::getInstance().getSelf().getLogger().error(
+                        "Export camera pose could not be applied before MinecraftGame::updateGraphics "
+                        "(token={}, renderSerial={})",
+                        sample->token.id,
+                        sample->renderSerial
+                    );
+                }
+            }
             auto pose =
                 functions::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
             poseApplied = pose != nullptr;
             markClockSampleRenderReady(
                 sample->token,
                 sample->renderSerial,
-                poseApplied && (!sample->cameraRequired || sample->cameraContext != nullptr)
+                poseApplied
+                    && (!sample->cameraRequired
+                        || (sample->cameraContext != nullptr && nativeCameraPose && nativeCameraPose->applied()))
             );
             origin(client, timer);
         }
@@ -341,6 +366,21 @@ LL_TYPE_INSTANCE_HOOK(
         keyframe::CameraTimelineSource::Preview,
         previewSample
     );
+    std::optional<renderer::ScopedNativeCameraPose> nativeCameraPose;
+    if (previewSample) {
+        nativeCameraPose.emplace(*previewSample);
+        if (nativeCameraPose->applied()
+            && !gPreviewNativeCameraPoseLogged.exchange(true, std::memory_order_acq_rel)) {
+            Playback::getInstance().getSelf().getLogger().info(
+                "Preview camera pose scoped across MinecraftGame::updateGraphics"
+            );
+        }
+        if (!nativeCameraPose->applied()) {
+            Playback::getInstance().getSelf().getLogger().warn(
+                "Preview camera pose could not be applied before MinecraftGame::updateGraphics"
+            );
+        }
+    }
     origin(client, timer);
 }
 
@@ -406,6 +446,8 @@ bool hookOfflineRenderClock(bool enable) {
         if (!state.gameFrame) state.gameFrame = OfflineRenderGameFrameHook::hook() == 0;
         if (!state.bgfxSwap) state.bgfxSwap = OfflineRenderBgfxSwapHook::hook() == 0;
         bool const ready = state.clock && state.entity && state.gameFrame && state.bgfxSwap;
+        gExportNativeCameraPoseLogged.store(false, std::memory_order_release);
+        gPreviewNativeCameraPoseLogged.store(false, std::memory_order_release);
         gHookInstalled.store(ready, std::memory_order_release);
         return ready;
     }

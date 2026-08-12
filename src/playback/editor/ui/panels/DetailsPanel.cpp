@@ -35,9 +35,11 @@ char const* cameraKindName(editing::model::CameraKind kind) {
     return names[std::clamp(static_cast<int>(kind), 0, static_cast<int>(names.size()) - 1)];
 }
 
-char const* easingName(editing::model::EasingType easing) {
-    static constexpr std::array names{"Linear", "Ease In", "Ease Out", "Ease InOut", "Cubic Bezier", "Hold"};
-    return names[std::clamp(static_cast<int>(easing), 0, static_cast<int>(names.size()) - 1)];
+char const* interpolationName(editing::model::CameraInterpolationType interpolation) {
+    static constexpr std::array names{
+        "Smooth", "Linear", "Ease In", "Ease Out", "Ease InOut", "Hold", "Hermite", "Cubic Bezier"
+    };
+    return names[std::clamp(static_cast<int>(interpolation), 0, static_cast<int>(names.size()) - 1)];
 }
 
 char const* categoryName(editing::model::SubActorCategory category) {
@@ -496,13 +498,13 @@ void DetailsPanel::draw() {
         ImGui::Text("Position: (%.1f, %.1f, %.1f)", key->position.x, key->position.y, key->position.z);
         ImGui::Text("Rotation: yaw %.1f  pitch %.1f  roll %.1f", key->yaw, key->pitch, key->roll);
         ImGui::Text("FOV: %.1f", key->fov);
-        int easing = static_cast<int>(key->easingType);
+        int interpolation = static_cast<int>(key->interpolationType);
         ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::BeginCombo("Easing", easingName(key->easingType))) {
-            for (int index = 0; index < 6; ++index) {
-                auto value = static_cast<editing::model::EasingType>(index);
-                if (ImGui::Selectable(easingName(value), index == easing)) {
-                    EditorAction action{EditorActionType::SetKeyframeEasing};
+        if (ImGui::BeginCombo("Interpolation", interpolationName(key->interpolationType))) {
+            for (int index = 0; index < 8; ++index) {
+                auto const value = static_cast<editing::model::CameraInterpolationType>(index);
+                if (ImGui::Selectable(interpolationName(value), index == interpolation)) {
+                    EditorAction action{EditorActionType::SetKeyframeInterpolation};
                     action.id = camera->id;
                     action.secondaryId = key->id;
                     action.kind = index;
