@@ -6,9 +6,8 @@ struct CameraTimelineSample;
 
 namespace playback::editor::renderer {
 
-// Installs the final render-stage camera override at both GameRenderer's
-// frame boundary and LevelRendererPlayer's native camera setup boundary.
-// Preview and export therefore consume the same immutable timeline sample.
+// Applies the immutable preview/export sample at LevelRendererPlayer's native
+// camera setup boundary and validates the resulting ViewRenderObject.
 [[nodiscard]] bool hookCameraRender(bool enable);
 [[nodiscard]] bool isCameraRenderInstalled();
 
