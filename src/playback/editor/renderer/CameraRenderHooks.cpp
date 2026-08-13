@@ -7,6 +7,7 @@
 #include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/client/renderer/game/LevelRendererCamera.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
@@ -29,8 +30,7 @@ constexpr float RadiansPerDegree = 3.14159265358979323846f / 180.0f;
 enum class CameraApplicationStage : size_t { FramePre, SetupFinal, ViewRenderObject, FramePost, Count };
 constexpr size_t CameraApplicationStageCount = static_cast<size_t>(CameraApplicationStage::Count);
 std::array<std::atomic_bool, 2> gMissingSampleLogged{};
-std::array<std::array<std::atomic_bool, CameraApplicationStageCount>, 2> gAppliedInfoLogged{};
-std::atomic_bool gCameraBasisLogged{false};
+std::array<std::array<std::atomic_bool, CameraApplicationStageCount>, 2> gDiagnosticLogged{};
 
 size_t sourceIndex(keyframe::CameraTimelineSource source) noexcept {
     return source == keyframe::CameraTimelineSource::Export ? 1U : 0U;
@@ -89,19 +89,6 @@ void applyCameraState(mce::Camera& camera, keyframe::CameraTimelineSample const&
     view[1]    = {up.x, up.y, up.z, 0.0f};
     view[2]    = {forward.x, forward.y, forward.z, 0.0f};
     view[3]    = {-dot(right, position), -dot(up, position), -dot(forward, position), 1.0f};
-    if (!gCameraBasisLogged.exchange(true, std::memory_order_acq_rel)) {
-        auto const& actualPosition = camera.mPosition.get();
-        auto const& actualForward = camera.mForward.get();
-        auto const& actualRight = camera.mRight.get();
-        auto const& actualUp = camera.mUp.get();
-        Playback::getInstance().getSelf().getLogger().info(
-            "Camera matrix basis after dependency update (position=({}, {}, {}), forward=({}, {}, {}), right=({}, {}, {}), up=({}, {}, {}))",
-            actualPosition.x, actualPosition.y, actualPosition.z,
-            actualForward.x, actualForward.y, actualForward.z,
-            actualRight.x, actualRight.y, actualRight.z,
-            actualUp.x, actualUp.y, actualUp.z
-        );
-    }
 }
 
 bool applyCurrentCameraTimelineState(
@@ -153,11 +140,18 @@ bool applyCurrentCameraTimelineState(
         context->appliedFlag->store(true, std::memory_order_release);
     }
 
-    auto& stageLogged = gAppliedInfoLogged[sourceIndex(context->source)][static_cast<size_t>(applicationStage)];
-    if (!stageLogged.exchange(true, std::memory_order_acq_rel)) {
+    mce::Camera* diagnosticCamera = clientCamera ? clientCamera : setupCamera;
+    if (!diagnosticCamera && levelCamera) diagnosticCamera = &levelCamera->mWorldSpaceCamera.get();
+    auto& diagnosticLogged = gDiagnosticLogged[sourceIndex(context->source)][static_cast<size_t>(applicationStage)];
+    if (diagnosticCamera && !diagnosticLogged.exchange(true, std::memory_order_acq_rel)) {
         auto const& state = sample->state;
+        auto const& view = diagnosticCamera->viewMatrixStack->getTop()._m.get();
+        auto const client = ll::service::getClientInstance();
+        auto const player = client ? client->getLocalPlayer() : nullptr;
+        auto const playerPosition = player ? player->getPosition() : Vec3{};
+        auto const levelPosition = levelCamera ? levelCamera->mCameraPos.get() : Vec3{};
         Playback::getInstance().getSelf().getLogger().info(
-            "Camera timeline first application (stage={}, source={}, token={}, tick={}/{}, position=({}, {}, {}), yaw={}, pitch={}, fov={}, override={})",
+            "Camera timeline diagnostic (stage={}, source={}, token={}, tick={}/{}, sample=({}, {}, {}, yaw={}, pitch={}, fov={}), camera=({}, {}, {}), forward=({}, {}, {}), matrixT=({}, {}, {}), player=({}, {}, {}), level=({}, {}, {}))",
             stage,
             sourceName(context->source),
             context->renderToken,
@@ -169,7 +163,21 @@ bool applyCurrentCameraTimelineState(
             state.yaw,
             state.pitch,
             state.fov,
-            operatorOverride
+            diagnosticCamera->mPosition->x,
+            diagnosticCamera->mPosition->y,
+            diagnosticCamera->mPosition->z,
+            diagnosticCamera->mForward->x,
+            diagnosticCamera->mForward->y,
+            diagnosticCamera->mForward->z,
+            view[3].x,
+            view[3].y,
+            view[3].z,
+            playerPosition.x,
+            playerPosition.y,
+            playerPosition.z,
+            levelPosition.x,
+            levelPosition.y,
+            levelPosition.z
         );
     }
     return true;
@@ -267,11 +275,11 @@ LL_TYPE_INSTANCE_HOOK(
     };
 
     if (context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
-    auto& logged = gAppliedInfoLogged[sourceIndex(context->source)]
+    auto& logged = gDiagnosticLogged[sourceIndex(context->source)]
                                      [static_cast<size_t>(CameraApplicationStage::ViewRenderObject)];
     if (!logged.exchange(true, std::memory_order_acq_rel)) {
         Playback::getInstance().getSelf().getLogger().info(
-            "Camera timeline reached final ViewRenderObject (source={}, token={}, position=({}, {}, {}), target=({}, {}, {}))",
+            "Camera timeline ViewRenderObject diagnostic (source={}, token={}, position=({}, {}, {}), target=({}, {}, {}))",
             sourceName(context->source),
             context->renderToken,
             view.mCameraPos->x,
@@ -299,7 +307,7 @@ bool hookCameraRender(bool enable) {
 
     if (enable) {
         for (auto& flag : gMissingSampleLogged) flag.store(false, std::memory_order_release);
-        for (auto& sourceFlags : gAppliedInfoLogged) {
+        for (auto& sourceFlags : gDiagnosticLogged) {
             for (auto& flag : sourceFlags) flag.store(false, std::memory_order_release);
         }
         if (!state.setupCamera) state.setupCamera = ReplayCameraSetupHook::hook() == 0;
@@ -319,7 +327,7 @@ bool hookCameraRender(bool enable) {
     }
 
     gInstalled.store(false, std::memory_order_release);
-    for (auto& sourceFlags : gAppliedInfoLogged) {
+    for (auto& sourceFlags : gDiagnosticLogged) {
         for (auto& flag : sourceFlags) flag.store(false, std::memory_order_release);
     }
     if (state.gameFrame && ReplayCameraFrameHook::unhook()) state.gameFrame = false;
