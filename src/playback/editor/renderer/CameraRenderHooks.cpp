@@ -89,6 +89,16 @@ void applyCameraState(mce::Camera& camera, keyframe::CameraTimelineSample const&
     view[1]    = {up.x, up.y, up.z, 0.0f};
     view[2]    = {forward.x, forward.y, forward.z, 0.0f};
     view[3]    = {-dot(right, position), -dot(up, position), -dot(forward, position), 1.0f};
+
+    // The dependency update can rebuild the native camera fields from a
+    // transient render camera and leave mPosition at the origin. Restore the
+    // absolute replay pose after the matrix write so culling and camera
+    // consumers observe the same state as the rendered view.
+    camera.mPosition = position;
+    camera.mForward  = forward;
+    camera.mRight    = right;
+    camera.mUp       = up;
+    camera.mFov      = targetFov;
 }
 
 bool applyCurrentCameraTimelineState(
