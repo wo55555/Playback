@@ -2,25 +2,16 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
-#include "playback/functions/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
-#include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/client/renderer/game/LevelRendererCamera.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/deps/minecraft_renderer/objects/ViewRenderObject.h"
 #include "mc/deps/renderer/Camera.h"
-#include "mc/deps/vanilla_components/StateVectorComponent.h"
-#include "mc/entity/components/ActorHeadRotationComponent.h"
-#include "mc/entity/components/ActorRotationComponent.h"
-#include "mc/entity/components/MobBodyRotationComponent.h"
-#include "mc/entity/components/RenderPositionComponent.h"
-#include "mc/entity/components/RenderRotationComponent.h"
-#include "mc/world/actor/BuiltInActorComponents.h"
 
 #include <algorithm>
 #include <array>
@@ -223,113 +214,6 @@ std::optional<keyframe::CameraTimelineSample> resolveSample(
     return context.sample ? context.sample : keyframe::sampleCameraTimeline(context.source, context.time);
 }
 
-class NativeCameraPoseState {
-public:
-    explicit NativeCameraPoseState(keyframe::CameraTimelineSample const& sample) noexcept {
-        auto client = ll::service::getClientInstance();
-        auto* replayPlayer = functions::ReplaySession::getInstance().getReplayPlayer();
-        mPlayer            = replayPlayer ? static_cast<LocalPlayer*>(replayPlayer) : nullptr;
-        if (!mPlayer) mPlayer = client ? client->getLocalPlayer() : nullptr;
-        if (!mPlayer) return;
-        mStateVector   = mPlayer->mBuiltInComponents->mStateVectorComponent.get();
-        mActorRotation = mPlayer->mBuiltInComponents->mActorRotationComponent.get();
-        if (!mStateVector || !mActorRotation) return;
-
-        auto& context = mPlayer->getEntityContext();
-        mRenderPosition = context.tryGetComponent<RenderPositionComponent>().as_ptr();
-        mRenderRotation = context.tryGetComponent<RenderRotationComponent>().as_ptr();
-        mHeadRotation   = context.tryGetComponent<ActorHeadRotationComponent>().as_ptr();
-        mBodyRotation   = context.tryGetComponent<MobBodyRotationComponent>().as_ptr();
-
-        mPosition         = mStateVector->mPos.get();
-        mPreviousPosition = mStateVector->mPosPrev.get();
-        mPositionDelta    = mStateVector->mPosDelta.get();
-        mRotation         = mActorRotation->mRot.get();
-        mPreviousRotation = mActorRotation->mRotPrev.get();
-        if (mRenderPosition) mRenderedPosition = mRenderPosition->mValue.get();
-        if (mRenderRotation) mRenderedRotation = mRenderRotation->mRot.get();
-        if (mHeadRotation) {
-            mHeadYaw         = mHeadRotation->mYHeadRot;
-            mPreviousHeadYaw = mHeadRotation->mYHeadRotO;
-        }
-        if (mBodyRotation) {
-            mBodyYaw         = mBodyRotation->mYBodyRot;
-            mPreviousBodyYaw = mBodyRotation->mYBodyRotO;
-        }
-
-        auto const headPosition = mPlayer->getHeadPos();
-        mEyeOffset              = headPosition - mPosition;
-        mAppliedPosition        = Vec3{sample.state.x, sample.state.y, sample.state.z} - mEyeOffset;
-        Vec2 const rotation     = {sample.state.pitch, sample.state.yaw};
-        mStateVector->mPos      = mAppliedPosition;
-        mStateVector->mPosPrev  = mAppliedPosition;
-        mStateVector->mPosDelta = Vec3{};
-        mActorRotation->mRot     = rotation;
-        mActorRotation->mRotPrev = rotation;
-        if (mRenderPosition) mRenderPosition->mValue = mAppliedPosition;
-        if (mRenderRotation) mRenderRotation->mRot = rotation;
-        if (mHeadRotation) {
-            mHeadRotation->mYHeadRot  = sample.state.yaw;
-            mHeadRotation->mYHeadRotO = sample.state.yaw;
-        }
-        if (mBodyRotation) {
-            mBodyRotation->mYBodyRot  = sample.state.yaw;
-            mBodyRotation->mYBodyRotO = sample.state.yaw;
-        }
-        mApplied = true;
-    }
-
-    ~NativeCameraPoseState() {
-        if (!mApplied) return;
-        mStateVector->mPos      = mPosition;
-        mStateVector->mPosPrev  = mPreviousPosition;
-        mStateVector->mPosDelta = mPositionDelta;
-        mActorRotation->mRot     = mRotation;
-        mActorRotation->mRotPrev = mPreviousRotation;
-        if (mRenderPosition) mRenderPosition->mValue = mRenderedPosition;
-        if (mRenderRotation) mRenderRotation->mRot = mRenderedRotation;
-        if (mHeadRotation) {
-            mHeadRotation->mYHeadRot  = mHeadYaw;
-            mHeadRotation->mYHeadRotO = mPreviousHeadYaw;
-        }
-        if (mBodyRotation) {
-            mBodyRotation->mYBodyRot  = mBodyYaw;
-            mBodyRotation->mYBodyRotO = mPreviousBodyYaw;
-        }
-    }
-
-    NativeCameraPoseState(NativeCameraPoseState const&)            = delete;
-    NativeCameraPoseState& operator=(NativeCameraPoseState const&) = delete;
-    [[nodiscard]] bool applied() const noexcept { return mApplied; }
-    [[nodiscard]] Vec3 const& eyeOffset() const noexcept { return mEyeOffset; }
-    [[nodiscard]] Vec3 const& appliedPosition() const noexcept { return mAppliedPosition; }
-
-private:
-    LocalPlayer* mPlayer{};
-    StateVectorComponent* mStateVector{};
-    ActorRotationComponent* mActorRotation{};
-    RenderPositionComponent* mRenderPosition{};
-    RenderRotationComponent* mRenderRotation{};
-    ActorHeadRotationComponent* mHeadRotation{};
-    MobBodyRotationComponent* mBodyRotation{};
-    Vec3 mPosition{}, mPreviousPosition{}, mPositionDelta{}, mAppliedPosition{}, mEyeOffset{};
-    Vec2 mRotation{}, mPreviousRotation{}, mRenderedRotation{};
-    Vec3 mRenderedPosition{};
-    float mHeadYaw{}, mPreviousHeadYaw{}, mBodyYaw{}, mPreviousBodyYaw{};
-    bool mApplied{};
-};
-
-void* beginNativeCameraPoseImpl(keyframe::CameraTimelineSample const& sample) {
-    auto* pose = new NativeCameraPoseState(sample);
-    if (!pose->applied()) {
-        delete pose;
-        return nullptr;
-    }
-    return pose;
-}
-
-void endNativeCameraPoseImpl(void* token) noexcept { delete static_cast<NativeCameraPoseState*>(token); }
-
 LL_TYPE_INSTANCE_HOOK(
     ReplayCameraFrameHook,
     ll::memory::HookPriority::Highest,
@@ -404,21 +288,6 @@ LL_TYPE_INSTANCE_HOOK(
 std::atomic_bool gInstalled{false};
 
 } // namespace
-
-ScopedNativeCameraPose::ScopedNativeCameraPose(keyframe::CameraTimelineSample const& sample)
-: mState(beginNativeCameraPoseImpl(sample)) {}
-
-ScopedNativeCameraPose::~ScopedNativeCameraPose() { endNativeCameraPoseImpl(mState); }
-
-ScopedNativeCameraPose::ScopedNativeCameraPose(ScopedNativeCameraPose&& other) noexcept
-: mState(std::exchange(other.mState, nullptr)) {}
-
-ScopedNativeCameraPose& ScopedNativeCameraPose::operator=(ScopedNativeCameraPose&& other) noexcept {
-    if (this == &other) return *this;
-    endNativeCameraPoseImpl(mState);
-    mState = std::exchange(other.mState, nullptr);
-    return *this;
-}
 
 bool hookCameraRender(bool enable) {
     struct HookState {
