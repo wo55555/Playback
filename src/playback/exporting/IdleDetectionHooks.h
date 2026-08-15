@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
-namespace playback::screen {
+namespace playback::exporting {
 
 [[nodiscard]] bool hookIdleDetection(bool enable);
 [[nodiscard]] bool isIdleDetectionGuardInstalled() noexcept;
 
-} // namespace playback::screen
+} // namespace playback::exporting

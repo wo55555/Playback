@@ -1,4 +1,4 @@
-﻿#include "EditorController.h"
+#include "EditorController.h"
 
 #include "playback/Playback.h"
 #include "playback/state/editing/CameraBindingOps.h"
@@ -9,7 +9,7 @@
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/visuals/FrameTap.h"
 #include "playback/replay/ReplaySession.h"
-#include "playback/screen/ReplayBrowser.h"
+#include "playback/io/ReplayLibrary.h"
 
 #include "ll/api/i18n/I18n.h"
 #include <algorithm>
@@ -20,7 +20,7 @@ namespace playback::state {
 
 namespace {
 
-ReplayBrowserEntry makeBrowserEntry(screen::ReplaySummary summary) {
+ReplayBrowserEntry makeBrowserEntry(io::ReplaySummary summary) {
     ReplayBrowserEntry entry;
     entry.path          = std::move(summary.path);
     entry.replayId      = std::move(summary.replayId);
@@ -314,7 +314,7 @@ void EditorController::publishState(bool hudVisible) {
 void EditorController::refreshBrowser() {
     auto snapshot      = std::make_shared<ReplayBrowserSnapshot>();
     snapshot->revision = ++mBrowserRevision;
-    auto replays       = screen::ReplayBrowser::loadReplays();
+    auto replays       = io::ReplayLibrary::loadReplays();
     snapshot->replays.reserve(replays.size());
     for (auto& replay : replays) snapshot->replays.emplace_back(makeBrowserEntry(std::move(replay)));
     mBrowserSnapshot = std::move(snapshot);
@@ -400,8 +400,8 @@ void EditorController::tick(bool hudVisible) {
             break;
         case EditorActionType::OpenReplay:
             runBrowserOperation(ReplayBrowserOperation::OpeningReplay, hudVisible, [&] {
-                auto replay = action.path.empty() ? screen::ReplayBrowser::findReplay(action.replayId)
-                                                  : screen::ReplayBrowser::findReplay(action.path.string());
+                auto replay = action.path.empty() ? io::ReplayLibrary::findReplay(action.replayId)
+                                                  : io::ReplayLibrary::findReplay(action.path.string());
                 if (!replay) {
                     mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                 } else if (!replay->canOpen) {
@@ -418,7 +418,7 @@ void EditorController::tick(bool hudVisible) {
             break;
         case EditorActionType::ImportReplay:
             runBrowserOperation(ReplayBrowserOperation::ImportingReplay, hudVisible, [&] {
-                if (screen::ReplayBrowser::importReplay(action.path, mBrowserError)) refreshBrowser();
+                if (io::ReplayLibrary::importReplay(action.path, mBrowserError)) refreshBrowser();
             });
             break;
         case EditorActionType::DeleteReplays:
@@ -431,8 +431,8 @@ void EditorController::tick(bool hudVisible) {
                         mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
                         break;
                     }
-                    auto replay = screen::ReplayBrowser::findReplay(entry->path.string());
-                    if (!replay || !screen::ReplayBrowser::deleteReplay(*replay, mBrowserError)) break;
+                    auto replay = io::ReplayLibrary::findReplay(entry->path.string());
+                    if (!replay || !io::ReplayLibrary::deleteReplay(*replay, mBrowserError)) break;
                     changed = true;
                 }
                 if (changed) refreshBrowser();
@@ -441,10 +441,10 @@ void EditorController::tick(bool hudVisible) {
         case EditorActionType::RenameReplay:
             runBrowserOperation(ReplayBrowserOperation::RenamingReplay, hudVisible, [&] {
                 auto const* entry  = findBrowserEntry(action.replayId);
-                auto        replay = entry ? screen::ReplayBrowser::findReplay(entry->path.string()) : std::nullopt;
+                auto        replay = entry ? io::ReplayLibrary::findReplay(entry->path.string()) : std::nullopt;
                 if (!replay) {
                     mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
-                } else if (screen::ReplayBrowser::renameReplay(*replay, action.name, mBrowserError)) {
+                } else if (io::ReplayLibrary::renameReplay(*replay, action.name, mBrowserError)) {
                     refreshBrowser();
                 }
             });
@@ -452,10 +452,10 @@ void EditorController::tick(bool hudVisible) {
         case EditorActionType::ShowReplayInFolder:
             runBrowserOperation(ReplayBrowserOperation::ShowingInFolder, hudVisible, [&] {
                 auto const* entry  = findBrowserEntry(action.replayId);
-                auto        replay = entry ? screen::ReplayBrowser::findReplay(entry->path.string()) : std::nullopt;
+                auto        replay = entry ? io::ReplayLibrary::findReplay(entry->path.string()) : std::nullopt;
                 if (!replay) {
                     mBrowserError = "playback.replayBrowser.error.fileNotFound"_tr();
-                } else if (!screen::ReplayBrowser::showInFolder(*replay)) {
+                } else if (!io::ReplayLibrary::showInFolder(*replay)) {
                     mBrowserError = "playback.replayBrowser.error.showInFolderFailed"_tr();
                 } else {
                     mBrowserError.clear();

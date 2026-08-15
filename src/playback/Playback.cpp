@@ -1,8 +1,8 @@
 ﻿#include "Playback.h"
 
-#include "playback/Config.h"
+#include "playback/configuration/Config.h"
 #include "playback/Playback.h"
-#include "playback/command/Command.h"
+#include "playback/runtime/command/Command.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
 #include "playback/editor/host/CameraRenderHooks.h"
@@ -11,7 +11,7 @@
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
-#include "playback/screen/IdleDetectionHooks.h"
+#include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/screen/MainMenuHooks.h"
 
 #include "ll/api/event/EventBus.h"
@@ -37,7 +37,7 @@
 namespace playback {
 
 struct Playback::Impl {
-    config::Config                   mConfig;
+    configuration::Config                   mConfig;
     std::set<ll::event::ListenerPtr> mEventListeners;
     std::atomic<PlaybackMode>        mMode{PlaybackMode::Unknown};
     std::string                      mLevelId;
@@ -53,15 +53,15 @@ Playback& Playback::getInstance() {
     return instance;
 }
 
-config::Config& Playback::getConfig() { return impl->mConfig; }
+configuration::Config& Playback::getConfig() { return impl->mConfig; }
 
 std::set<ll::event::ListenerPtr>& Playback::getEventListeners() { return impl->mEventListeners; }
 
 void Playback::setupCommands() {
     auto& commandConfig = this->getConfig().command;
 
-    command::registerPlaybackCommand();
-    command::registerRecordCommand(commandConfig.record);
+    runtime::command::registerPlaybackCommand();
+    runtime::command::registerRecordCommand(commandConfig.record);
 }
 
 void Playback::registerActions() {
@@ -81,12 +81,12 @@ bool Playback::hook() {
     if (impl->mRuntimeInstalled) return true;
 
     screen::hookMainMenu(true);
-    if (!screen::hookIdleDetection(true)) {
+    if (!exporting::hookIdleDetection(true)) {
         getSelf().getLogger().warn("Unable to install the idle detection guard; video export is disabled");
     }
     getSelf().getLogger().debug("Offline render hooks deferred until video export starts");
     if (!record::hookNetwork(true)) {
-        (void)screen::hookIdleDetection(false);
+        (void)exporting::hookIdleDetection(false);
         screen::hookMainMenu(false);
         return false;
     }
@@ -94,7 +94,7 @@ bool Playback::hook() {
         if (!record::hookNetwork(false)) {
             getSelf().getLogger().error("Unable to roll back replay network hooks after client tick hook failure");
         }
-        (void)screen::hookIdleDetection(false);
+        (void)exporting::hookIdleDetection(false);
         screen::hookMainMenu(false);
         return false;
     }
@@ -181,7 +181,7 @@ bool Playback::unhook() {
         getSelf().getLogger().error("Unable to remove export-scoped offline render hooks during shutdown");
         return false;
     }
-    if (!screen::hookIdleDetection(false)) {
+    if (!exporting::hookIdleDetection(false)) {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = record::hookNetwork(true);
         bool tickRestored    = runtime::hookClientTick(true);

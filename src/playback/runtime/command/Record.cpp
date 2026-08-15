@@ -1,6 +1,6 @@
 ﻿#include "Command.h"
 
-#include "playback/Config.h"
+#include "playback/configuration/Config.h"
 #include "playback/record/Recorder.h"
 
 #include "ll/api/command/CommandHandle.h"
@@ -10,9 +10,9 @@
 #include "mc/server/commands/CommandOrigin.h"
 #include "mc/server/commands/CommandOutput.h"
 
-namespace playback::command {
+namespace playback::runtime::command {
 
-void registerRecordCommand(config::CommandConfigStruct& config) {
+void registerRecordCommand(configuration::CommandConfigStruct& config) {
     using namespace ll::i18n_literals;
 
     if (!config.enabled) {
@@ -46,4 +46,4 @@ void registerRecordCommand(config::CommandConfigStruct& config) {
     });
 }
 
-} // namespace playback::command
+} // namespace playback::runtime::command

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <filesystem>
@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-namespace playback::screen {
+namespace playback::io {
 
 enum class ReplaySort {
     LastModified,
@@ -34,7 +34,7 @@ struct ReplaySummary {
     [[nodiscard]] bool        matches(std::string_view filter) const;
 };
 
-class ReplayBrowser {
+class ReplayLibrary {
 public:
     [[nodiscard]] static std::vector<ReplaySummary> loadReplays();
     [[nodiscard]] static std::vector<ReplaySummary> loadReplays(std::filesystem::path const& replayDir);
@@ -54,8 +54,8 @@ public:
     [[nodiscard]] static bool deleteReplay(ReplaySummary const& replay, std::string& error);
     [[nodiscard]] static bool showInFolder(ReplaySummary const& replay);
 
-    // 同时修改回放元数据名称与文件本身名称；新名会自动去掉非法字符并补全 .playback 扩展名。
+    // 鍚屾椂淇敼鍥炴斁鍏冩暟鎹悕绉颁笌鏂囦欢鏈韩鍚嶇О锛涙柊鍚嶄細鑷姩鍘绘帀闈炴硶瀛楃骞惰ˉ鍏?.playback 鎵╁睍鍚嶃€?
     [[nodiscard]] static bool renameReplay(ReplaySummary const& replay, std::string_view newName, std::string& error);
 };
 
-} // namespace playback::screen
+} // namespace playback::io

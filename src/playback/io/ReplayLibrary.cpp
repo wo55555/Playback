@@ -1,4 +1,4 @@
-﻿#include "ReplayBrowser.h"
+﻿#include "ReplayLibrary.h"
 
 #include "playback/Playback.h"
 #include "playback/record/Recorder.h"
@@ -23,7 +23,7 @@
 
 #include <shellapi.h>
 
-namespace playback::screen {
+namespace playback::io {
 
 using namespace ll::i18n_literals;
 
@@ -256,9 +256,9 @@ bool ReplaySummary::matches(std::string_view filter) const {
         || lowerCopy(worldName).find(needle) != std::string::npos;
 }
 
-std::vector<ReplaySummary> ReplayBrowser::loadReplays() { return loadReplays(utils::PathUtils::getReplaysDir()); }
+std::vector<ReplaySummary> ReplayLibrary::loadReplays() { return loadReplays(utils::PathUtils::getReplaysDir()); }
 
-std::vector<ReplaySummary> ReplayBrowser::loadReplays(std::filesystem::path const& replayDir) {
+std::vector<ReplaySummary> ReplayLibrary::loadReplays(std::filesystem::path const& replayDir) {
     std::vector<ReplaySummary> replays;
 
     std::error_code ec;
@@ -284,7 +284,7 @@ std::vector<ReplaySummary> ReplayBrowser::loadReplays(std::filesystem::path cons
     return replays;
 }
 
-void ReplayBrowser::sortReplays(std::vector<ReplaySummary>& replays, ReplaySort sort, bool descending) {
+void ReplayLibrary::sortReplays(std::vector<ReplaySummary>& replays, ReplaySort sort, bool descending) {
     switch (sort) {
     case ReplaySort::ReplayName:
         sortWithDirection(
@@ -345,7 +345,7 @@ void ReplayBrowser::sortReplays(std::vector<ReplaySummary>& replays, ReplaySort 
 }
 
 std::vector<ReplaySummary>
-ReplayBrowser::filterReplays(std::vector<ReplaySummary> const& replays, std::string_view filter) {
+ReplayLibrary::filterReplays(std::vector<ReplaySummary> const& replays, std::string_view filter) {
     std::vector<ReplaySummary> filtered;
     std::copy_if(replays.begin(), replays.end(), std::back_inserter(filtered), [filter](ReplaySummary const& replay) {
         return replay.matches(filter);
@@ -353,7 +353,7 @@ ReplayBrowser::filterReplays(std::vector<ReplaySummary> const& replays, std::str
     return filtered;
 }
 
-std::optional<ReplaySummary> ReplayBrowser::findReplay(std::string_view replayIdOrPath) {
+std::optional<ReplaySummary> ReplayLibrary::findReplay(std::string_view replayIdOrPath) {
     std::filesystem::path requestedPath{std::string(replayIdOrPath)};
 
     std::error_code ec;
@@ -381,7 +381,7 @@ std::optional<ReplaySummary> ReplayBrowser::findReplay(std::string_view replayId
     return std::nullopt;
 }
 
-bool ReplayBrowser::importReplay(std::filesystem::path const& source, std::string& error) {
+bool ReplayLibrary::importReplay(std::filesystem::path const& source, std::string& error) {
     error.clear();
     std::error_code ec;
     if (!hasReplayExtension(source) || !std::filesystem::is_regular_file(source, ec)) {
@@ -418,7 +418,7 @@ bool ReplayBrowser::importReplay(std::filesystem::path const& source, std::strin
     return true;
 }
 
-bool ReplayBrowser::deleteReplay(ReplaySummary const& replay, std::string& error) {
+bool ReplayLibrary::deleteReplay(ReplaySummary const& replay, std::string& error) {
     error.clear();
     std::error_code ec;
     if (!std::filesystem::remove(replay.path, ec)) {
@@ -428,7 +428,7 @@ bool ReplayBrowser::deleteReplay(ReplaySummary const& replay, std::string& error
     return true;
 }
 
-bool ReplayBrowser::showInFolder(ReplaySummary const& replay) {
+bool ReplayLibrary::showInFolder(ReplaySummary const& replay) {
     // 浣跨敤缁濆璺緞锛岄伩鍏嶇浉瀵硅矾寰勪笅璧勬簮绠＄悊鍣ㄦ棤娉曞畾浣嶆枃浠躲€?
     std::error_code ec;
     auto const      path = std::filesystem::absolute(replay.path, ec);
@@ -456,7 +456,7 @@ bool ReplayBrowser::showInFolder(ReplaySummary const& replay) {
     return true;
 }
 
-bool ReplayBrowser::renameReplay(ReplaySummary const& replay, std::string_view newName, std::string& error) {
+bool ReplayLibrary::renameReplay(ReplaySummary const& replay, std::string_view newName, std::string& error) {
     error.clear();
 
     auto const name = sanitizeReplayName(newName);
@@ -504,4 +504,4 @@ bool ReplayBrowser::renameReplay(ReplaySummary const& replay, std::string_view n
     return true;
 }
 
-} // namespace playback::screen
+} // namespace playback::io

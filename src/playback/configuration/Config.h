@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <string>
 
-namespace playback::config {
+namespace playback::configuration {
 
 struct CommandConfigStruct {
     bool        enabled;
@@ -20,4 +20,4 @@ struct Config {
     CommandStruct command;
 };
 
-} // namespace playback::config
+} // namespace playback::configuration

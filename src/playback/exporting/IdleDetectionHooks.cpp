@@ -13,7 +13,7 @@
 #include <functional>
 #include <utility>
 
-namespace playback::screen {
+namespace playback::exporting {
 
 namespace {
 
@@ -110,4 +110,4 @@ bool hookIdleDetection(bool enable) {
 
 bool isIdleDetectionGuardInstalled() noexcept { return gIdleDetectionGuardInstalled.load(std::memory_order_acquire); }
 
-} // namespace playback::screen
+} // namespace playback::exporting

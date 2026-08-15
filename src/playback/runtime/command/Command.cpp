@@ -1,4 +1,4 @@
-#include "Command.h"
+﻿#include "Command.h"
 
 #include "playback/Playback.h"
 
@@ -8,7 +8,7 @@
 #include "mc/server/commands/CommandOrigin.h"
 #include "mc/server/commands/CommandOutput.h"
 
-namespace playback::command {
+namespace playback::runtime::command {
 
 void registerPlaybackCommand() {
     using namespace ll::i18n_literals;
@@ -28,4 +28,4 @@ void registerPlaybackCommand() {
     });
 }
 
-} // namespace playback::command
+} // namespace playback::runtime::command

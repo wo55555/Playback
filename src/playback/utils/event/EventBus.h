@@ -4,7 +4,7 @@
 #include <list>
 #include <mutex>
 
-namespace playback::state::editing {
+namespace playback::utils::event {
 
 struct StateChangedEvent {
     int   currentTick{};

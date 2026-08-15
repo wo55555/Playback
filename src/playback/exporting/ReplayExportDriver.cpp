@@ -1,4 +1,4 @@
-﻿#include "ReplayExportDriver.h"
+#include "ReplayExportDriver.h"
 
 #include "ExportActivity.h"
 #include "FrameWriterUtils.h"
@@ -6,7 +6,7 @@
 #include "playback/Playback.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 #include "playback/replay/ReplaySession.h"
-#include "playback/screen/IdleDetectionHooks.h"
+#include "playback/exporting/IdleDetectionHooks.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -90,7 +90,7 @@ bool ReplayExportDriver::start(
     std::optional<std::string>            cameraFallback
 ) {
     if (isActive()) return false;
-    if (!screen::isIdleDetectionGuardInstalled()) {
+    if (!exporting::isIdleDetectionGuardInstalled()) {
         mCoordinator.fail(
             ExportError::CaptureUnavailable,
             "Minecraft's idle detection guard is unavailable; export was blocked to prevent invalid frames"
@@ -297,7 +297,7 @@ void ReplayExportDriver::reset() {
 }
 
 bool ReplayExportDriver::isAvailable() const {
-    return mRenderBoundary != nullptr && screen::isIdleDetectionGuardInstalled();
+    return mRenderBoundary != nullptr && exporting::isIdleDetectionGuardInstalled();
 }
 
 bool ReplayExportDriver::isActive() const {
