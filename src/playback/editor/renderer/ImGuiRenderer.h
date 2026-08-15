@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/functions/render/ReplayThumbnail.h"
+#include "playback/visuals/ReplayThumbnail.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -20,7 +20,7 @@ class EditorContext;
 
 namespace playback::editor::renderer {
 
-class ImGuiRenderer final : public functions::render::ReplayThumbnailCaptureProvider {
+class ImGuiRenderer final : public visuals::ReplayThumbnailCaptureProvider {
 public:
     ImGuiRenderer();
     ~ImGuiRenderer();
@@ -28,7 +28,7 @@ public:
     void                                       setContext(EditorContext* context);
     void                                       requestReplayThumbnailCapture() override;
     [[nodiscard]] bool                         saveReplayThumbnail(std::filesystem::path const& output) override;
-    [[nodiscard]] functions::render::FrameTap& frameTap();
+    [[nodiscard]] visuals::FrameTap& frameTap();
     [[nodiscard]] bool                         captureSubmittedD3D12Frame(
         ID3D12Device*       device,
         ID3D12CommandQueue* queue,

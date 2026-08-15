@@ -1,7 +1,7 @@
-#include "PngSequenceWriter.h"
+﻿#include "PngSequenceWriter.h"
 
 #include "FrameWriterUtils.h"
-#include "playback/functions/render/ReplayThumbnail.h"
+#include "playback/visuals/ReplayThumbnail.h"
 
 #include <algorithm>
 #include <condition_variable>
@@ -53,7 +53,7 @@ struct PngSequenceWriter::Impl {
     }
 
     struct QueuedFrame {
-        functions::render::CapturedFrame frame;
+        visuals::CapturedFrame frame;
         uint64_t                         index{};
     };
 
@@ -123,7 +123,7 @@ struct PngSequenceWriter::Impl {
             detail::copyPackedRgba(item.frame, rgba);
             auto const output  = framePath(directory, item.index);
             auto const partial = temporaryFramePath(directory, item.index);
-            bool const encoded = functions::render::writeRgbaPng(
+            bool const encoded = visuals::writeRgbaPng(
                 partial,
                 item.frame.width,
                 item.frame.height,
@@ -241,7 +241,7 @@ bool PngSequenceWriter::open(CompiledExportPlan const& plan) {
     return true;
 }
 
-FrameWriterSubmitResult PngSequenceWriter::trySubmit(functions::render::CapturedFrame& frame) {
+FrameWriterSubmitResult PngSequenceWriter::trySubmit(visuals::CapturedFrame& frame) {
     std::scoped_lock lock(mImpl->mutex);
     if (mImpl->error != ExportError::None) return FrameWriterSubmitResult::Failed;
     if (mImpl->state != FrameWriterState::Running) return FrameWriterSubmitResult::Closed;

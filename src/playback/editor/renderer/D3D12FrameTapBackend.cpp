@@ -1,4 +1,4 @@
-#include "D3D12FrameTapBackend.h"
+﻿#include "D3D12FrameTapBackend.h"
 
 #include "playback/editor/renderer/D3D12Compat.h"
 
@@ -23,10 +23,10 @@
 
 namespace playback::editor::renderer {
 
-using functions::render::CapturedFrame;
-using functions::render::FramePixelFormat;
-using functions::render::FrameTapBackendCapture;
-using functions::render::FrameTapError;
+using visuals::CapturedFrame;
+using visuals::FramePixelFormat;
+using visuals::FrameTapBackendCapture;
+using visuals::FrameTapError;
 using Microsoft::WRL::ComPtr;
 
 namespace {
@@ -66,11 +66,11 @@ struct D3D12FrameTapBackend::Impl {
         std::optional<FrameTapBackendCapture> capture;
     };
 
-    explicit Impl(functions::render::FrameTap& tap) : frameTap(tap) {}
+    explicit Impl(visuals::FrameTap& tap) : frameTap(tap) {}
 
     ~Impl() { reset(FrameTapError::Cancelled, "D3D12 frame capture stopped"); }
 
-    functions::render::FrameTap& frameTap;
+    visuals::FrameTap& frameTap;
     std::mutex                   mutex;
     std::condition_variable      changed;
     std::vector<Slot>            slots;
@@ -460,7 +460,7 @@ struct D3D12FrameTapBackend::Impl {
     }
 };
 
-D3D12FrameTapBackend::D3D12FrameTapBackend(functions::render::FrameTap& frameTap)
+D3D12FrameTapBackend::D3D12FrameTapBackend(visuals::FrameTap& frameTap)
 : mImpl(std::make_unique<Impl>(frameTap)) {}
 
 D3D12FrameTapBackend::~D3D12FrameTapBackend() = default;

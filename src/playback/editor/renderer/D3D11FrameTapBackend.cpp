@@ -1,4 +1,4 @@
-#include "D3D11FrameTapBackend.h"
+﻿#include "D3D11FrameTapBackend.h"
 
 #include "playback/Playback.h"
 
@@ -14,10 +14,10 @@
 
 namespace playback::editor::renderer {
 
-using functions::render::CapturedFrame;
-using functions::render::FramePixelFormat;
-using functions::render::FrameTapBackendCapture;
-using functions::render::FrameTapError;
+using visuals::CapturedFrame;
+using visuals::FramePixelFormat;
+using visuals::FrameTapBackendCapture;
+using visuals::FrameTapError;
 using Microsoft::WRL::ComPtr;
 
 namespace {
@@ -43,9 +43,9 @@ struct D3D11FrameTapBackend::Impl {
         std::optional<FrameTapBackendCapture> capture;
     };
 
-    explicit Impl(functions::render::FrameTap& tap) : frameTap(tap) {}
+    explicit Impl(visuals::FrameTap& tap) : frameTap(tap) {}
 
-    functions::render::FrameTap& frameTap;
+    visuals::FrameTap& frameTap;
     std::vector<Slot>            slots;
 
     bool prepareSlot(Slot& slot, ID3D11Device* device, D3D11_TEXTURE2D_DESC const& sourceDesc) {
@@ -75,7 +75,7 @@ struct D3D11FrameTapBackend::Impl {
     }
 };
 
-D3D11FrameTapBackend::D3D11FrameTapBackend(functions::render::FrameTap& frameTap)
+D3D11FrameTapBackend::D3D11FrameTapBackend(visuals::FrameTap& frameTap)
 : mImpl(std::make_unique<Impl>(frameTap)) {}
 
 D3D11FrameTapBackend::~D3D11FrameTapBackend() = default;

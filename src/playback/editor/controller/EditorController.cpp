@@ -1,4 +1,4 @@
-#include "EditorController.h"
+﻿#include "EditorController.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/editing/CameraBindingOps.h"
@@ -7,8 +7,8 @@
 #include "playback/editor/keyframe/CameraTimelineEvaluator.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
 #include "playback/editor/keyframe/ClientCameraCapture.h"
-#include "playback/functions/render/FrameTap.h"
-#include "playback/functions/replay/ReplaySession.h"
+#include "playback/visuals/FrameTap.h"
+#include "playback/replay/ReplaySession.h"
 #include "playback/screen/ReplayBrowser.h"
 
 #include "ll/api/i18n/I18n.h"
@@ -47,12 +47,12 @@ EditorController::EditorController(EditorContext& context)
 : mContext(context),
   mBrowserSnapshot(std::make_shared<ReplayBrowserSnapshot>()),
   mExportDriver(
-      std::make_unique<exporting::ReplayExportDriver>(mExportCoordinator, functions::ReplaySession::getInstance())
+      std::make_unique<exporting::ReplayExportDriver>(mExportCoordinator, replay::ReplaySession::getInstance())
   ) {}
 
 EditorController::~EditorController() { keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview); }
 
-void EditorController::setFrameTap(functions::render::FrameTap* frameTap) {
+void EditorController::setFrameTap(visuals::FrameTap* frameTap) {
     if (mExportDriver) mExportDriver->setFrameTap(frameTap);
 }
 
@@ -279,7 +279,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
 }
 
 void EditorController::publishState(bool hudVisible) {
-    auto& session = functions::ReplaySession::getInstance();
+    auto& session = replay::ReplaySession::getInstance();
 
     EditorState state;
     state.replayVisible = session.isActive() && session.hasJoinedReplayWorld();
@@ -333,7 +333,7 @@ ReplayBrowserEntry const* EditorController::findBrowserEntry(std::string_view re
 void EditorController::tick(bool hudVisible) {
     using namespace ll::i18n_literals;
 
-    auto& session = functions::ReplaySession::getInstance();
+    auto& session = replay::ReplaySession::getInstance();
 
     for (auto const& action : mContext.takeActions()) {
         if (mExportDriver && mExportDriver->isActive() && action.type != EditorActionType::CancelExport

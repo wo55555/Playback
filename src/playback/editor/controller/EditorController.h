@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "playback/editor/context/EditorContext.h"
 #include "playback/editor/editing/commands/CommandStack.h"
@@ -12,7 +12,7 @@
 #include <string>
 #include <string_view>
 
-namespace playback::functions::render {
+namespace playback::visuals {
 class FrameTap;
 }
 
@@ -23,7 +23,7 @@ public:
     explicit EditorController(EditorContext& context);
     ~EditorController();
 
-    void setFrameTap(functions::render::FrameTap* frameTap);
+    void setFrameTap(visuals::FrameTap* frameTap);
     void reset();
     void tickExportBeforeClientUpdate();
     void tick(bool hudVisible);

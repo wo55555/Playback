@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "ExportKeyframeApplier.h"
 #include "ExportTypes.h"
@@ -40,7 +40,7 @@ public:
     executeSample(ExportFramePlan const& frame, OfflineRenderClockToken clockToken);
     [[nodiscard]] OfflineRenderFrameExecutionResult executeWarmup(OfflineRenderClockToken clockToken);
     void                                            completeWarmup();
-    void                                            completeSample(functions::render::FrameTicket const& ticket);
+    void                                            completeSample(visuals::FrameTicket const& ticket);
     void                                            pollCapture();
 
     [[nodiscard]] OfflineRenderFrameExecutorStatus status() const;
@@ -55,7 +55,7 @@ private:
     void               fail(std::string message);
 
     ExportKeyframeApplier                         mKeyframes;
-    std::optional<functions::render::FrameTicket> mPendingTicket;
+    std::optional<visuals::FrameTicket> mPendingTicket;
     uint32_t                                      mRestoreRenderWidth{};
     uint32_t                                      mRestoreRenderHeight{};
     uint32_t                                      mRestoreUiWidth{};

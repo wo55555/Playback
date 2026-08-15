@@ -1,7 +1,7 @@
-#include "MainMenuHooks.h"
+﻿#include "MainMenuHooks.h"
 
 #include "playback/editor/ReplayUI.h"
-#include "playback/functions/replay/ReplaySession.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
 
@@ -66,7 +66,7 @@ LL_TYPE_INSTANCE_HOOK(
     &StartMenuScreenController::$tick,
     ::ui::DirtyFlag
 ) {
-    functions::ReplaySession::getInstance().setMinecraftScreenModel(mMinecraftScreenModel);
+    replay::ReplaySession::getInstance().setMinecraftScreenModel(mMinecraftScreenModel);
     setSuspendInput(editor::isReplayBrowserVisible());
     return origin();
 }

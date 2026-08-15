@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/functions/render/FrameTap.h"
+#include "playback/visuals/FrameTap.h"
 
 #include <cstdint>
 #include <memory>
@@ -16,7 +16,7 @@ namespace playback::editor::renderer {
 
 class D3D12FrameTapBackend {
 public:
-    explicit D3D12FrameTapBackend(functions::render::FrameTap& frameTap);
+    explicit D3D12FrameTapBackend(visuals::FrameTap& frameTap);
     ~D3D12FrameTapBackend();
 
     D3D12FrameTapBackend(D3D12FrameTapBackend const&)            = delete;
@@ -32,8 +32,8 @@ public:
     bool
     captureSubmitted(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* source, uint32_t sourceState);
     void submitted(ID3D12Fence* fence, uint64_t fenceValue);
-    void submissionFailed(functions::render::FrameTapError error, std::string message);
-    void reset(functions::render::FrameTapError error, std::string message);
+    void submissionFailed(visuals::FrameTapError error, std::string message);
+    void reset(visuals::FrameTapError error, std::string message);
 
 private:
     struct Impl;

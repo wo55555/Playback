@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "IFrameWriter.h"
 
@@ -16,7 +16,7 @@ public:
 
     [[nodiscard]] static bool             isAvailable();
     [[nodiscard]] bool                    open(CompiledExportPlan const& plan) override;
-    [[nodiscard]] FrameWriterSubmitResult trySubmit(functions::render::CapturedFrame& frame) override;
+    [[nodiscard]] FrameWriterSubmitResult trySubmit(visuals::CapturedFrame& frame) override;
     [[nodiscard]] bool                    requestFinish() override;
     void                                  requestCancel() override;
     void                                  wait() override;

@@ -1,4 +1,4 @@
-#include "D3D12Hooks.h"
+﻿#include "D3D12Hooks.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/exporting/ExportActivity.h"
@@ -646,7 +646,7 @@ LL_TYPE_INSTANCE_HOOK(
         exporting::markOfflineRenderBoundaryCompleted(*ticket);
     } else {
         gImGuiRenderer.frameTap().failActive(
-            functions::render::FrameTapError::BackendUnavailable,
+            visuals::FrameTapError::BackendUnavailable,
             source ? "The BGFX scene submission could not start D3D12 capture"
                    : "BGFX did not expose a usable scene target"
         );
@@ -671,7 +671,7 @@ bool renderPresentFrame(IDXGISwapChain* swapChain) {
         exporting::markOfflineRenderBoundaryCompleted(*ticket);
     } else {
         gImGuiRenderer.frameTap().failActive(
-            functions::render::FrameTapError::BackendUnavailable,
+            visuals::FrameTapError::BackendUnavailable,
             "The matching Present could not start backbuffer capture before ImGui"
         );
     }
@@ -722,7 +722,7 @@ bool getDirectCommandQueue(IUnknown* object, ComPtr<ID3D12CommandQueue>& queue) 
     return false;
 }
 
-// ── Swap chain queue fallback map (used when private data is lost) ──
+// 鈹€鈹€ Swap chain queue fallback map (used when private data is lost) 鈹€鈹€
 std::mutex                           gSwapChainQueueFallbackMutex;
 std::unordered_map<void*, IUnknown*> gSwapChainQueueFallback;
 

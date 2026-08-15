@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/functions/render/ReplaySampleTime.h"
+#include "playback/visuals/ReplaySampleTime.h"
 
 #include <cstdint>
 #include <optional>
@@ -8,7 +8,7 @@
 namespace playback::editor::exporting {
 
 struct OfflineRenderClockSample {
-    functions::render::ReplaySampleTime replayTime;
+    visuals::ReplaySampleTime replayTime;
     float                               deltaTicks{};
     int                                 wholeTicks{};
     uint64_t                            frameIndex{};

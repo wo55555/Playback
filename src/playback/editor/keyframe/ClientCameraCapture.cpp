@@ -1,6 +1,6 @@
-#include "ClientCameraCapture.h"
+﻿#include "ClientCameraCapture.h"
 
-#include "playback/functions/replay/ReplaySession.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "ll/api/service/TargetedBedrock.h"
 
@@ -122,7 +122,7 @@ std::optional<ClientCameraCapture> captureClientCamera() noexcept {
     if (!client) return std::nullopt;
 
     Actor* const  cameraActor = client->getCameraActor();
-    Player* const replayPlayer = functions::ReplaySession::getInstance().getReplayPlayer();
+    Player* const replayPlayer = replay::ReplaySession::getInstance().getReplayPlayer();
     Actor*        actor        = cameraActor;
     if (!actor) actor = replayPlayer;
     if (!actor) actor = client->getLocalPlayer();

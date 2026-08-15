@@ -1,4 +1,4 @@
-#include "CameraTimelineEvaluator.h"
+﻿#include "CameraTimelineEvaluator.h"
 
 #include "CameraKeyframeHandler.h"
 #include "KeyframeTrack.h"
@@ -95,7 +95,7 @@ CameraTimelineEvaluator::sampleCamera(editing::model::CameraEntity const& camera
 }
 
 std::optional<CameraTimelineEvaluation>
-CameraTimelineEvaluator::sample(functions::render::ReplaySampleTime const& time) const {
+CameraTimelineEvaluator::sample(visuals::ReplaySampleTime const& time) const {
     if (!time.isValid()) return std::nullopt;
     auto const* camera = cameraForTick(time.floorTick());
     if (!camera) return std::nullopt;
@@ -105,7 +105,7 @@ CameraTimelineEvaluator::sample(functions::render::ReplaySampleTime const& time)
 
 std::optional<CameraTimelineEvaluation> CameraTimelineEvaluator::sampleCameraById(
     std::string_view                           cameraId,
-    functions::render::ReplaySampleTime const& time
+    visuals::ReplaySampleTime const& time
 ) const {
     if (cameraId.empty() || !time.isValid()) return std::nullopt;
     auto const camera =

@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/functions/render/FrameTap.h"
+#include "playback/visuals/FrameTap.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,7 +15,7 @@ namespace playback::editor::exporting::detail {
 inline constexpr uint32_t MaxFrameDimension = 16384;
 inline constexpr uint64_t MaxFrameBytes     = 512ull * 1024 * 1024;
 
-[[nodiscard]] inline bool validateFrame(functions::render::CapturedFrame const& frame) {
+[[nodiscard]] inline bool validateFrame(visuals::CapturedFrame const& frame) {
     if (frame.width == 0 || frame.height == 0 || frame.width > MaxFrameDimension || frame.height > MaxFrameDimension) {
         return false;
     }
@@ -23,19 +23,19 @@ inline constexpr uint64_t MaxFrameBytes     = 512ull * 1024 * 1024;
     uint64_t const requiredBytes   = static_cast<uint64_t>(frame.rowPitch) * frame.height;
     return frame.rowPitch >= minimumRowPitch && requiredBytes <= frame.pixels.size() && requiredBytes <= MaxFrameBytes
         && frame.ticket.ptsDenominator > 0
-        && (frame.pixelFormat == functions::render::FramePixelFormat::Rgba8
-            || frame.pixelFormat == functions::render::FramePixelFormat::Bgra8)
-        && frame.colorSpace == functions::render::FrameColorSpace::SdrSrgb;
+        && (frame.pixelFormat == visuals::FramePixelFormat::Rgba8
+            || frame.pixelFormat == visuals::FramePixelFormat::Bgra8)
+        && frame.colorSpace == visuals::FrameColorSpace::SdrSrgb;
 }
 
-inline void copyPackedRgba(functions::render::CapturedFrame const& frame, std::vector<uint8_t>& rgba) {
+inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint8_t>& rgba) {
     size_t const targetRowPitch = static_cast<size_t>(frame.width) * 4;
     rgba.resize(targetRowPitch * frame.height);
     auto const* sourcePixels = reinterpret_cast<uint8_t const*>(frame.pixels.data());
     for (uint32_t y = 0; y < frame.height; ++y) {
         auto const* sourceRow = sourcePixels + static_cast<size_t>(y) * frame.rowPitch;
         auto*       targetRow = rgba.data() + static_cast<size_t>(y) * targetRowPitch;
-        if (frame.pixelFormat == functions::render::FramePixelFormat::Rgba8) {
+        if (frame.pixelFormat == visuals::FramePixelFormat::Rgba8) {
             std::memcpy(targetRow, sourceRow, targetRowPitch);
             continue;
         }
@@ -51,7 +51,7 @@ inline void copyPackedRgba(functions::render::CapturedFrame const& frame, std::v
 }
 
 [[nodiscard]] inline bool
-normalizeFrame(functions::render::CapturedFrame& frame, uint32_t targetWidth, uint32_t targetHeight) {
+normalizeFrame(visuals::CapturedFrame& frame, uint32_t targetWidth, uint32_t targetHeight) {
     if (targetWidth == 0 && targetHeight == 0) return validateFrame(frame);
     if (targetWidth == 0 || targetHeight == 0 || targetWidth > MaxFrameDimension || targetHeight > MaxFrameDimension) {
         return false;
@@ -62,14 +62,14 @@ normalizeFrame(functions::render::CapturedFrame& frame, uint32_t targetWidth, ui
     if (!validateFrame(frame)) return false;
 
     if (frame.width == targetWidth && frame.height == targetHeight && frame.rowPitch == targetRowPitch
-        && frame.pixelFormat == functions::render::FramePixelFormat::Rgba8) {
+        && frame.pixelFormat == visuals::FramePixelFormat::Rgba8) {
         return true;
     }
 
     auto const* source = reinterpret_cast<uint8_t const*>(frame.pixels.data());
     auto const  read   = [&](uint32_t x, uint32_t y, uint32_t channel) -> uint8_t {
         auto const* pixel = source + static_cast<size_t>(y) * frame.rowPitch + static_cast<size_t>(x) * 4;
-        if (frame.pixelFormat == functions::render::FramePixelFormat::Bgra8) {
+        if (frame.pixelFormat == visuals::FramePixelFormat::Bgra8) {
             static constexpr uint32_t channelMap[] = {2, 1, 0, 3};
             return pixel[channelMap[channel]];
         }
@@ -129,7 +129,7 @@ normalizeFrame(functions::render::CapturedFrame& frame, uint32_t targetWidth, ui
     frame.width       = targetWidth;
     frame.height      = targetHeight;
     frame.rowPitch    = static_cast<uint32_t>(targetRowPitch);
-    frame.pixelFormat = functions::render::FramePixelFormat::Rgba8;
+    frame.pixelFormat = visuals::FramePixelFormat::Rgba8;
     frame.pixels      = std::move(output);
     return true;
 }

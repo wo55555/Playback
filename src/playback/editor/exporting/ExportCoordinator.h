@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "IFrameWriter.h"
 
@@ -21,7 +21,7 @@ public:
     ExportCoordinator& operator=(ExportCoordinator const&) = delete;
 
     [[nodiscard]] bool                    start(ExportSettings settings, editing::model::EditorStateExt const& project);
-    [[nodiscard]] FrameWriterSubmitResult trySubmit(functions::render::CapturedFrame& frame);
+    [[nodiscard]] FrameWriterSubmitResult trySubmit(visuals::CapturedFrame& frame);
     [[nodiscard]] bool                    finish(); // Requests asynchronous finalization.
     void                                  fail(ExportError error, std::string message);
     void                                  cancel();

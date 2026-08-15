@@ -1,7 +1,7 @@
-#include "Command.h"
+﻿#include "Command.h"
 
 #include "playback/Config.h"
-#include "playback/functions/record/Recorder.h"
+#include "playback/record/Recorder.h"
 
 #include "ll/api/command/CommandHandle.h"
 #include "ll/api/command/CommandRegistrar.h"
@@ -25,21 +25,21 @@ void registerRecordCommand(config::CommandConfigStruct& config) {
     );
 
     recordCommand.overload().text("start").execute([](CommandOrigin const&, CommandOutput& output) {
-        auto& recorder = functions::Recorder::getInstance();
+        auto& recorder = record::Recorder::getInstance();
         recorder.start();
 
         output.success("playback.command.record.started"_tr());
     });
 
     recordCommand.overload().text("pause").execute([](CommandOrigin const&, CommandOutput& output) {
-        auto& recorder = functions::Recorder::getInstance();
+        auto& recorder = record::Recorder::getInstance();
         recorder.pause();
 
         output.success("playback.command.record.paused"_tr());
     });
 
     recordCommand.overload().text("stop").execute([](CommandOrigin const&, CommandOutput& output) {
-        auto& recorder = functions::Recorder::getInstance();
+        auto& recorder = record::Recorder::getInstance();
         recorder.stop();
 
         output.success("playback.command.record.stopped"_tr());

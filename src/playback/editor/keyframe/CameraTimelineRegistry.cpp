@@ -1,4 +1,4 @@
-#include "CameraTimelineRegistry.h"
+﻿#include "CameraTimelineRegistry.h"
 
 #include <algorithm>
 #include <atomic>
@@ -68,7 +68,7 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
 
 std::optional<CameraTimelineSample> sampleCameraTimeline(
     CameraTimelineSource                       source,
-    functions::render::ReplaySampleTime const& time,
+    visuals::ReplaySampleTime const& time,
     std::string_view                           cameraId
 ) noexcept {
     try {

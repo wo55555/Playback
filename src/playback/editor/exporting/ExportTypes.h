@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/functions/render/FrameTap.h"
+#include "playback/visuals/FrameTap.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -83,7 +83,7 @@ struct ExportStatus {
 struct ExportFramePlan {
     int64_t                        replayTickNumerator{};
     int64_t                        replayTickDenominator{1};
-    functions::render::FrameTicket ticket;
+    visuals::FrameTicket ticket;
 };
 
 struct CompiledExportPlan {

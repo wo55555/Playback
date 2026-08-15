@@ -1,4 +1,4 @@
-#include "ImGuiRenderer.h"
+﻿#include "ImGuiRenderer.h"
 
 #include "playback/editor/renderer/D3D11FrameTapBackend.h"
 #include "playback/editor/renderer/D3D12Compat.h"
@@ -12,7 +12,7 @@
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/renderer/ReplayUILayout.h"
 #include "playback/editor/ui/ReplayEditor.h"
-#include "playback/functions/render/ReplayThumbnail.h"
+#include "playback/visuals/ReplayThumbnail.h"
 #include "playback/screen/select_replay/SelectReplayScreen.h"
 
 
@@ -164,11 +164,11 @@ void freeSrv(
 
 struct ImGuiRenderer::Impl {
     std::mutex                                        mutex;
-    functions::render::FrameTap                       frameTap;
+    visuals::FrameTap                       frameTap;
     D3D11FrameTapBackend                              d3d11FrameTap{frameTap};
     D3D12FrameTapBackend                              d3d12FrameTap{frameTap};
     std::mutex                                        thumbnailMutex;
-    std::optional<functions::render::FrameTapSession> thumbnailSession;
+    std::optional<visuals::FrameTapSession> thumbnailSession;
     EditorContext*                                    editorContext{};
     IDXGISwapChain*                                   swapChain{};
     ComPtr<IDXGISwapChain3>                           swapChain3;
@@ -317,7 +317,7 @@ struct ImGuiRenderer::Impl {
     }
 
     void shutdownD3D11(
-        functions::render::FrameTapError frameTapError   = functions::render::FrameTapError::BackendUnavailable,
+        visuals::FrameTapError frameTapError   = visuals::FrameTapError::BackendUnavailable,
         std::string                      frameTapMessage = "D3D11 frame capture backend was released"
     ) {
         if (d3d11Initialized) {
@@ -655,7 +655,7 @@ struct ImGuiRenderer::Impl {
     }
 
     void shutdown(
-        functions::render::FrameTapError frameTapError   = functions::render::FrameTapError::BackendUnavailable,
+        visuals::FrameTapError frameTapError   = visuals::FrameTapError::BackendUnavailable,
         std::string                      frameTapMessage = "D3D12 frame capture backend was released"
     ) {
         setReplayMouseInputActive(false);
@@ -704,7 +704,7 @@ struct ImGuiRenderer::Impl {
         d3d12ThumbnailTextures.clear();
     }
 
-    void* acquireD3D12ThumbnailTexture(std::string const& key, functions::render::ReplayThumbnailPixels const& pixels) {
+    void* acquireD3D12ThumbnailTexture(std::string const& key, visuals::ReplayThumbnailPixels const& pixels) {
         if (!device || !commandQueue || !srvHeap || srvDescSize == 0 || pixels.width == 0 || pixels.height == 0) {
             return nullptr;
         }
@@ -843,11 +843,11 @@ void ImGuiRenderer::requestReplayThumbnailCapture() {
         mImpl->frameTap.close(*mImpl->thumbnailSession);
         mImpl->thumbnailSession.reset();
     }
-    functions::render::FrameTapSession session;
+    visuals::FrameTapSession session;
     auto const                         opened = mImpl->frameTap.open({1, true}, session);
-    if (opened != functions::render::FrameTapOpenResult::Opened) return;
-    functions::render::FrameTicket const ticket{0, 0, 1};
-    if (mImpl->frameTap.tryArm(session, ticket) != functions::render::FrameTapArmResult::Armed) {
+    if (opened != visuals::FrameTapOpenResult::Opened) return;
+    visuals::FrameTicket const ticket{0, 0, 1};
+    if (mImpl->frameTap.tryArm(session, ticket) != visuals::FrameTapArmResult::Armed) {
         mImpl->frameTap.close(session);
         return;
     }
@@ -855,14 +855,14 @@ void ImGuiRenderer::requestReplayThumbnailCapture() {
 }
 
 bool ImGuiRenderer::saveReplayThumbnail(std::filesystem::path const& output) {
-    std::optional<functions::render::FrameTapSession> session;
+    std::optional<visuals::FrameTapSession> session;
     {
         std::scoped_lock lock(mImpl->thumbnailMutex);
         session = mImpl->thumbnailSession;
     }
     if (!session) return false;
     auto       frame = mImpl->frameTap.waitPop(*session, std::chrono::milliseconds(GpuWaitTimeoutMs));
-    bool const saved = frame && functions::render::writeReplayThumbnailPng(output, *frame, 640, 360);
+    bool const saved = frame && visuals::writeReplayThumbnailPng(output, *frame, 640, 360);
     mImpl->frameTap.close(*session);
     {
         std::scoped_lock lock(mImpl->thumbnailMutex);
@@ -871,7 +871,7 @@ bool ImGuiRenderer::saveReplayThumbnail(std::filesystem::path const& output) {
     return saved;
 }
 
-functions::render::FrameTap& ImGuiRenderer::frameTap() { return mImpl->frameTap; }
+visuals::FrameTap& ImGuiRenderer::frameTap() { return mImpl->frameTap; }
 
 bool ImGuiRenderer::captureSubmittedD3D12Frame(
     ID3D12Device*       device,
@@ -891,8 +891,8 @@ void* ImGuiRenderer::acquireReplayThumbnailTexture(std::string_view key, std::st
     auto found12 = p.d3d12ThumbnailTextures.find(keyStr);
     if (found12 != p.d3d12ThumbnailTextures.end()) return reinterpret_cast<void*>(found12->second.srvGpu.ptr);
     if (png.empty()) return nullptr;
-    functions::render::ReplayThumbnailPixels pixels;
-    if (!functions::render::decodeReplayThumbnailPng(png, pixels) || pixels.width == 0 || pixels.height == 0)
+    visuals::ReplayThumbnailPixels pixels;
+    if (!visuals::decodeReplayThumbnailPng(png, pixels) || pixels.width == 0 || pixels.height == 0)
         return nullptr;
     if (p.d3d11Device) {
         D3D11_TEXTURE2D_DESC desc{};
@@ -1172,7 +1172,7 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
     if (FAILED(f.commandList->Close())) {
         if (frameTapSubmitted) {
             p.d3d12FrameTap.submissionFailed(
-                functions::render::FrameTapError::BackendUnavailable,
+                visuals::FrameTapError::BackendUnavailable,
                 "Unable to close the D3D12 frame capture command list"
             );
         }
@@ -1185,7 +1185,7 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
     if (FAILED(p.commandQueue->Signal(p.fence.Get(), fv))) {
         if (frameTapSubmitted) {
             p.d3d12FrameTap.submissionFailed(
-                functions::render::FrameTapError::FenceFailed,
+                visuals::FrameTapError::FenceFailed,
                 "Unable to signal the D3D12 frame capture fence"
             );
         }
@@ -1210,7 +1210,7 @@ bool ImGuiRenderer::ownsSwapChain(IDXGISwapChain* swapChain) const {
 bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
-        mImpl->shutdown(functions::render::FrameTapError::Resize, "Swap chain resized during frame capture");
+        mImpl->shutdown(visuals::FrameTapError::Resize, "Swap chain resized during frame capture");
         mImpl->initFailed      = false;
         mImpl->lastInitAttempt = {};
     }
@@ -1221,7 +1221,7 @@ void ImGuiRenderer::afterPresent(IDXGISwapChain* sc, long result) {
     if (result != DXGI_ERROR_DEVICE_REMOVED && result != DXGI_ERROR_DEVICE_RESET) return;
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
-        mImpl->shutdown(functions::render::FrameTapError::DeviceLost, "Graphics device was lost during frame capture");
+        mImpl->shutdown(visuals::FrameTapError::DeviceLost, "Graphics device was lost during frame capture");
     }
     unbindSwapChainQueue(sc);
 }

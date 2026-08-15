@@ -1,8 +1,8 @@
-#include "OfflineRenderFrameExecutor.h"
+﻿#include "OfflineRenderFrameExecutor.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/renderer/ImGuiRenderer.h"
-#include "playback/functions/replay/ReplaySession.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "ll/api/service/TargetedBedrock.h"
 
@@ -20,7 +20,7 @@ namespace playback::editor::exporting {
 
 namespace {
 
-bool ticketsEqual(functions::render::FrameTicket const& left, functions::render::FrameTicket const& right) {
+bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
     return left.frameIndex == right.frameIndex && left.ptsNumerator == right.ptsNumerator
         && left.ptsDenominator == right.ptsDenominator;
 }
@@ -290,7 +290,7 @@ OfflineRenderFrameExecutionResult OfflineRenderFrameExecutor::executeWarmup(Offl
 
 void OfflineRenderFrameExecutor::completeWarmup() { mWarmupRenderInvoked = false; }
 
-void OfflineRenderFrameExecutor::completeSample(functions::render::FrameTicket const& ticket) {
+void OfflineRenderFrameExecutor::completeSample(visuals::FrameTicket const& ticket) {
     if (!mPendingTicket || !ticketsEqual(*mPendingTicket, ticket)) return;
     mPendingTicket.reset();
     mSampleRenderInvoked = false;
@@ -323,7 +323,7 @@ OfflineRenderFrameExecutorStatus OfflineRenderFrameExecutor::status() const {
 
 bool OfflineRenderFrameExecutor::isUiStable() const {
     auto  client = ll::service::getClientInstance();
-    auto& replay = functions::ReplaySession::getInstance();
+    auto& replay = replay::ReplaySession::getInstance();
     return client && replay.isActive() && replay.hasJoinedReplayWorld() && !replay.isDimensionTransitionPending()
         && client->isInWorldAndNotShowingAnyMenuScreens() && !client->isShowingLoadingScreen()
         && !client->isShowingProgressScreen();

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "ExportCoordinator.h"
 #include "OfflineRenderBoundary.h"
@@ -9,7 +9,7 @@
 #include <optional>
 #include <string>
 
-namespace playback::functions {
+namespace playback::replay {
 class ReplaySession;
 }
 
@@ -17,13 +17,13 @@ namespace playback::editor::exporting {
 
 class ReplayExportDriver {
 public:
-    ReplayExportDriver(ExportCoordinator& coordinator, functions::ReplaySession& replay);
+    ReplayExportDriver(ExportCoordinator& coordinator, replay::ReplaySession& replay);
     ~ReplayExportDriver();
 
     ReplayExportDriver(ReplayExportDriver const&)            = delete;
     ReplayExportDriver& operator=(ReplayExportDriver const&) = delete;
 
-    void setFrameTap(functions::render::FrameTap* frameTap);
+    void setFrameTap(visuals::FrameTap* frameTap);
 
     [[nodiscard]] bool start(
         ExportSettings settings,
@@ -60,10 +60,10 @@ private:
     void                           closeCapture(bool cancelled);
 
     ExportCoordinator&                           mCoordinator;
-    functions::ReplaySession&                    mReplay;
+    replay::ReplaySession&                    mReplay;
     std::unique_ptr<OfflineRenderBoundary>       mRenderBoundary;
     std::optional<CompiledExportPlan>            mPlan;
-    std::deque<functions::render::CapturedFrame> mReadyFrames;
+    std::deque<visuals::CapturedFrame> mReadyFrames;
     bool                                         mPreviousPaused{};
     bool                                         mRestorePaused{};
     uint32_t                                     mClearFrameRetryCount{};

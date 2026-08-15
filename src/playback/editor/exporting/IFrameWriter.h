@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "ExportTypes.h"
 
@@ -25,7 +25,7 @@ public:
     virtual ~IFrameWriter() = default;
 
     [[nodiscard]] virtual bool                    open(CompiledExportPlan const& plan)               = 0;
-    [[nodiscard]] virtual FrameWriterSubmitResult trySubmit(functions::render::CapturedFrame& frame) = 0;
+    [[nodiscard]] virtual FrameWriterSubmitResult trySubmit(visuals::CapturedFrame& frame) = 0;
     [[nodiscard]] virtual bool                    requestFinish()                                    = 0;
     virtual void                                  requestCancel()                                    = 0;
     virtual void                                  wait()                                             = 0;

@@ -1,10 +1,10 @@
-#include "OfflineRenderClockHooks.h"
+﻿#include "OfflineRenderClockHooks.h"
 
 #include "ExportActivity.h"
 #include "playback/Playback.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
 #include "playback/editor/renderer/CameraRenderHooks.h"
-#include "playback/functions/replay/ReplaySession.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/TargetedBedrock.h"
@@ -56,7 +56,7 @@ struct AcquiredClockSample {
 };
 
 struct ActiveRenderSample {
-    functions::render::ReplaySampleTime time;
+    visuals::ReplaySampleTime time;
     OfflineRenderClockToken             token;
     uint64_t                            renderSerial{};
     uint32_t                            gameRenderCalls{};
@@ -75,7 +75,7 @@ thread_local std::optional<ActiveRenderSample> gRenderSample;
 class ScopedRenderSample {
 public:
     ScopedRenderSample(
-        functions::render::ReplaySampleTime time,
+        visuals::ReplaySampleTime time,
         OfflineRenderClockToken             token        = {},
         uint64_t                            renderSerial = 0
     )
@@ -259,7 +259,7 @@ LL_TYPE_INSTANCE_HOOK(
             ScopedRenderSample  renderSample(sample->sample.replayTime, sample->token, sample->renderSerial);
             keyframe::ScopedCameraTimelineRenderContext cameraContext(sample->cameraContext);
             auto                                        pose =
-                functions::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
+                replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
             poseApplied = pose != nullptr;
 
             markClockSampleRenderReady(sample->token, sample->renderSerial, true);
@@ -382,15 +382,15 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
     if (!gHookInstalled.load(std::memory_order_acquire)) return OfflineRenderClockPublishResult::Unavailable;
 
     auto const cameraSample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample.replayTime);
-    std::optional<functions::ReplayCameraViewpoint> cameraViewpoint;
+    std::optional<replay::ReplayCameraViewpoint> cameraViewpoint;
     if (cameraSample) {
-        cameraViewpoint = functions::ReplayCameraViewpoint{
+        cameraViewpoint = replay::ReplayCameraViewpoint{
             cameraSample->state.x,
             cameraSample->state.y,
             cameraSample->state.z,
         };
     }
-    functions::ReplaySession::getInstance().setExportCameraViewpoint(cameraViewpoint);
+    replay::ReplaySession::getInstance().setExportCameraViewpoint(cameraViewpoint);
     if (cameraSample && !renderer::isCameraRenderInstalled()) return OfflineRenderClockPublishResult::Unavailable;
     auto const cameraAppliedFlag =
         cameraSample ? std::make_shared<std::atomic_bool>(false) : keyframe::CameraTimelineAppliedFlag{};

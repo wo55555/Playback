@@ -1,8 +1,8 @@
-#include "CameraRenderHooks.h"
+﻿#include "CameraRenderHooks.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
-#include "playback/functions/replay/ReplaySession.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/TargetedBedrock.h"
@@ -442,7 +442,7 @@ bool applyTimelineCamera(
 }
 
 keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext(float partialTick) noexcept {
-    auto& replay = functions::ReplaySession::getInstance();
+    auto& replay = replay::ReplaySession::getInstance();
     if (replay.isPaused()) return {};
     if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return {};
 

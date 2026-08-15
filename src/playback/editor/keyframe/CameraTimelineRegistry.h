@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CameraTimelineEvaluator.h"
 
@@ -23,7 +23,7 @@ struct CameraTimelineSample {
 using CameraTimelineAppliedFlag = std::shared_ptr<std::atomic_bool>;
 
 struct CameraTimelineRenderContext {
-    functions::render::ReplaySampleTime time;
+    visuals::ReplaySampleTime time;
     CameraTimelineSource                source{CameraTimelineSource::Preview};
     uint64_t                            renderToken{};
     std::optional<CameraTimelineSample> sample;
@@ -50,7 +50,7 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
 
 [[nodiscard]] std::optional<CameraTimelineSample> sampleCameraTimeline(
     CameraTimelineSource                       source,
-    functions::render::ReplaySampleTime const& time,
+    visuals::ReplaySampleTime const& time,
     std::string_view                           cameraId = {}
 ) noexcept;
 

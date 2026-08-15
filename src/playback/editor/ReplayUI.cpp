@@ -1,4 +1,4 @@
-#include "ReplayUI.h"
+﻿#include "ReplayUI.h"
 
 #include "playback/editor/renderer/D3D12Hooks.h"
 #include "playback/editor/renderer/ImGuiRenderer.h"
@@ -8,7 +8,7 @@
 #include "playback/editor/context/EditorContext.h"
 #include "playback/editor/controller/EditorController.h"
 #include "playback/editor/ui/ReplayEditor.h"
-#include "playback/functions/record/Recorder.h"
+#include "playback/record/Recorder.h"
 
 #include <utility>
 
@@ -27,7 +27,7 @@ bool hookReplayUI(bool enable) {
         gContext.reset();
         renderer::gImGuiRenderer.setContext(&gContext);
         gController.setFrameTap(&renderer::gImGuiRenderer.frameTap());
-        functions::Recorder::getInstance().setThumbnailCaptureProvider(&renderer::gImGuiRenderer);
+        record::Recorder::getInstance().setThumbnailCaptureProvider(&renderer::gImGuiRenderer);
         renderer::setReplayUIActive(true);
 
         ui::ReplayEditor::getInstance().initialize();
@@ -35,7 +35,7 @@ bool hookReplayUI(bool enable) {
         // Install early because the renderer-init callback is not guaranteed during enable().
         if (!hookReplayUIRendererInit(true)) {
             renderer::setReplayUIActive(false);
-            functions::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
+            record::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
             gController.setFrameTap(nullptr);
             renderer::gImGuiRenderer.setContext(nullptr);
             ui::ReplayEditor::getInstance().shutdown();
@@ -60,7 +60,7 @@ bool hookReplayUI(bool enable) {
 
     renderer::setReplayUIActive(false);
     renderer::setReplayMouseInputActive(false);
-    functions::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
+    record::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
     gController.setFrameTap(nullptr);
 
     bool ok = true;

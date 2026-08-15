@@ -1,4 +1,4 @@
-#include "ExportCoordinator.h"
+﻿#include "ExportCoordinator.h"
 
 #include "ExportPlanCompiler.h"
 #include "FfmpegVideoWriter.h"
@@ -152,7 +152,7 @@ bool ExportCoordinator::start(ExportSettings settings, editing::model::EditorSta
     return true;
 }
 
-FrameWriterSubmitResult ExportCoordinator::trySubmit(functions::render::CapturedFrame& frame) {
+FrameWriterSubmitResult ExportCoordinator::trySubmit(visuals::CapturedFrame& frame) {
     std::scoped_lock operationLock(mImpl->operationMutex);
     IFrameWriter*    writer = nullptr;
     bool             invalidTicket{};

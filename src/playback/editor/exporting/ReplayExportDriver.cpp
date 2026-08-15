@@ -1,11 +1,11 @@
-#include "ReplayExportDriver.h"
+﻿#include "ReplayExportDriver.h"
 
 #include "ExportActivity.h"
 #include "FrameWriterUtils.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/editing/models/EditorStateExt.h"
-#include "playback/functions/replay/ReplaySession.h"
+#include "playback/replay/ReplaySession.h"
 #include "playback/screen/IdleDetectionHooks.h"
 
 #include <algorithm>
@@ -30,7 +30,7 @@ struct UniformFrameProbe {
     uint8_t maximum[3]{};
 };
 
-UniformFrameProbe probeUniformFrame(functions::render::CapturedFrame const& frame) {
+UniformFrameProbe probeUniformFrame(visuals::CapturedFrame const& frame) {
     UniformFrameProbe probe;
     if (!detail::validateFrame(frame)) return probe;
 
@@ -50,7 +50,7 @@ UniformFrameProbe probeUniformFrame(functions::render::CapturedFrame const& fram
     return probe;
 }
 
-bool isKnownExportClearFrame(functions::render::CapturedFrame const& frame, UniformFrameProbe const& probe) {
+bool isKnownExportClearFrame(visuals::CapturedFrame const& frame, UniformFrameProbe const& probe) {
     if (probe.minimum[0] != ExportClearRed || probe.maximum[0] != ExportClearRed || probe.minimum[1] != ExportClearGreen
         || probe.maximum[1] != ExportClearGreen || probe.minimum[2] != ExportClearBlue
         || probe.maximum[2] != ExportClearBlue) {
@@ -72,13 +72,13 @@ bool isKnownExportClearFrame(functions::render::CapturedFrame const& frame, Unif
 
 } // namespace
 
-ReplayExportDriver::ReplayExportDriver(ExportCoordinator& coordinator, functions::ReplaySession& replay)
+ReplayExportDriver::ReplayExportDriver(ExportCoordinator& coordinator, replay::ReplaySession& replay)
 : mCoordinator(coordinator),
   mReplay(replay) {}
 
 ReplayExportDriver::~ReplayExportDriver() { reset(); }
 
-void ReplayExportDriver::setFrameTap(functions::render::FrameTap* frameTap) {
+void ReplayExportDriver::setFrameTap(visuals::FrameTap* frameTap) {
     if (mRenderBoundary && isActive()) cancel();
     mRenderBoundary.reset();
     if (frameTap) mRenderBoundary = std::make_unique<OfflineRenderBoundary>(mReplay, *frameTap);

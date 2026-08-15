@@ -1,10 +1,10 @@
-#include "OfflineRenderBoundary.h"
+﻿#include "OfflineRenderBoundary.h"
 
 #include "ExportActivity.h"
 #include "playback/Playback.h"
 #include "playback/editor/keyframe/CameraTimelineRegistry.h"
-#include "playback/functions/render/ReplaySampleTime.h"
-#include "playback/functions/replay/ReplaySession.h"
+#include "playback/visuals/ReplaySampleTime.h"
+#include "playback/replay/ReplaySession.h"
 
 #include <algorithm>
 #include <cmath>
@@ -23,14 +23,14 @@ constexpr auto     RenderWaitLogInterval   = std::chrono::seconds{2};
 constexpr auto     WarmupSceneTimeout      = std::chrono::seconds{30};
 constexpr uint32_t StableWarmupFrames      = 3;
 
-bool ticketsEqual(functions::render::FrameTicket const& left, functions::render::FrameTicket const& right) {
+bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
     return left.frameIndex == right.frameIndex && left.ptsNumerator == right.ptsNumerator
         && left.ptsDenominator == right.ptsDenominator;
 }
 
 } // namespace
 
-OfflineRenderBoundary::OfflineRenderBoundary(functions::ReplaySession& replay, functions::render::FrameTap& frameTap)
+OfflineRenderBoundary::OfflineRenderBoundary(replay::ReplaySession& replay, visuals::FrameTap& frameTap)
 : mReplay(replay),
   mDownloads(frameTap) {}
 
@@ -55,11 +55,11 @@ bool OfflineRenderBoundary::open(
     mMaximumReplayTick        = std::max<int64_t>(0, settings.endTick);
     auto const maximumIntTick = std::min<int64_t>(mMaximumReplayTick, std::numeric_limits<int>::max());
     auto const startTick      = std::clamp<int64_t>(settings.startTick, 0, maximumIntTick);
-    functions::render::ReplaySampleTime const startTime{startTick, 1};
+    visuals::ReplaySampleTime const startTime{startTick, 1};
     auto const cameraSample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, startTime);
-    std::optional<functions::ReplayCameraViewpoint> cameraViewpoint;
+    std::optional<replay::ReplayCameraViewpoint> cameraViewpoint;
     if (cameraSample) {
-        cameraViewpoint = functions::ReplayCameraViewpoint{
+        cameraViewpoint = replay::ReplayCameraViewpoint{
             cameraSample->state.x,
             cameraSample->state.y,
             cameraSample->state.z,
@@ -95,7 +95,7 @@ void OfflineRenderBoundary::close() {
     clearClockSample();
     mReplayTickToken.reset();
     if (mTickGateOpen) {
-        functions::endOfflineReplayTickGate();
+        runtime::endOfflineReplayTickGate();
         mTickGateOpen = false;
     }
     mReplay.endExportTimeline();
@@ -129,7 +129,7 @@ void OfflineRenderBoundary::cancel() {
     clearClockSample();
     mReplayTickToken.reset();
     if (mTickGateOpen) {
-        functions::endOfflineReplayTickGate();
+        runtime::endOfflineReplayTickGate();
         mTickGateOpen = false;
     }
     mReplay.endExportTimeline();
@@ -199,7 +199,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         mReplayTickToken.reset();
         mReplayTickRecoveryCount = 0;
         mReplayTickRequestedAt   = {};
-        functions::endOfflineReplayTickGate();
+        runtime::endOfflineReplayTickGate();
         mTickGateOpen                  = false;
         mTickGateSuspendedForDimension = true;
         setOfflineRenderActivityActive(false);
@@ -214,21 +214,21 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         && (mState == OfflineRenderBoundaryState::InitializingReplay
             || mState == OfflineRenderBoundaryState::PreparingReplay)) {
         switch (mReplay.prepareExportTick(targetTick(*mPendingFrame))) {
-        case functions::ReplayExportTickState::Unavailable:
+        case replay::ReplayExportTickState::Unavailable:
             fault(OfflineRenderBoundaryError::ReplayUnavailable, "The replay became unavailable during export");
             return OfflineRenderStepResult::Failed;
-        case functions::ReplayExportTickState::Invalid:
+        case replay::ReplayExportTickState::Invalid:
             fault(
                 OfflineRenderBoundaryError::InvalidFrame,
                 "The export frame moved backwards or changed its initialization tick"
             );
             return OfflineRenderStepResult::Failed;
-        case functions::ReplayExportTickState::Failed:
+        case replay::ReplayExportTickState::Failed:
             fault(OfflineRenderBoundaryError::ReplayFailed, "The replay failed while preparing an export frame");
             return OfflineRenderStepResult::Failed;
-        case functions::ReplayExportTickState::Waiting:
+        case replay::ReplayExportTickState::Waiting:
             return OfflineRenderStepResult::Waiting;
-        case functions::ReplayExportTickState::Ready:
+        case replay::ReplayExportTickState::Ready:
             break;
         }
 
@@ -244,7 +244,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
             mInitializationTickObserved = false;
         }
 
-        if (!functions::beginOfflineReplayTickGate()) {
+        if (!runtime::beginOfflineReplayTickGate()) {
             fault(OfflineRenderBoundaryError::TickUnavailable, "The offline replay tick gate is unavailable");
             return OfflineRenderStepResult::Failed;
         }
@@ -263,7 +263,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
     if (mState == OfflineRenderBoundaryState::InitializingReplay
         || mState == OfflineRenderBoundaryState::PreparingReplay) {
         if (mReplayTickToken) {
-            if (!functions::wasOfflineReplayTickCompleted(*mReplayTickToken)) {
+            if (!runtime::wasOfflineReplayTickCompleted(*mReplayTickToken)) {
                 auto const now = std::chrono::steady_clock::now();
                 if (mReplayTickRequestedAt == std::chrono::steady_clock::time_point{}) {
                     mReplayTickRequestedAt = now;
@@ -290,9 +290,9 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
                 );
                 mReplayTickToken.reset();
                 mReplayTickRequestedAt = {};
-                functions::endOfflineReplayTickGate();
+                runtime::endOfflineReplayTickGate();
                 mTickGateOpen = false;
-                if (!functions::beginOfflineReplayTickGate()) {
+                if (!runtime::beginOfflineReplayTickGate()) {
                     fault(
                         OfflineRenderBoundaryError::TickUnavailable,
                         "Unable to recover the offline replay tick gate"
@@ -303,7 +303,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
                 return OfflineRenderStepResult::Waiting;
             }
 
-            auto const completion = functions::getOfflineReplayTickCompletion(*mReplayTickToken);
+            auto const completion = runtime::getOfflineReplayTickCompletion(*mReplayTickToken);
             if (!completion || !completion->clientTickExecuted) {
                 fault(
                     OfflineRenderBoundaryError::TickUnavailable,
@@ -326,16 +326,16 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         }
 
         auto requestReplayTick = [&]() -> OfflineRenderStepResult {
-            functions::OfflineReplayTickToken token;
-            switch (functions::requestOfflineReplayTick(token)) {
-            case functions::OfflineReplayTickRequestResult::Requested:
+            runtime::OfflineReplayTickToken token;
+            switch (runtime::requestOfflineReplayTick(token)) {
+            case runtime::OfflineReplayTickRequestResult::Requested:
                 mReplayTickToken       = token;
                 mReplayTickRequestedAt = std::chrono::steady_clock::now();
                 return OfflineRenderStepResult::Waiting;
-            case functions::OfflineReplayTickRequestResult::Unavailable:
+            case runtime::OfflineReplayTickRequestResult::Unavailable:
                 fault(OfflineRenderBoundaryError::TickUnavailable, "The offline replay tick gate is unavailable");
                 return OfflineRenderStepResult::Failed;
-            case functions::OfflineReplayTickRequestResult::Busy:
+            case runtime::OfflineReplayTickRequestResult::Busy:
                 fault(OfflineRenderBoundaryError::TickUnavailable, "The offline replay tick gate is already in use");
                 return OfflineRenderStepResult::Failed;
             }
@@ -343,21 +343,21 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         };
 
         switch (mReplay.prepareExportTick(targetTick(*mPendingFrame))) {
-        case functions::ReplayExportTickState::Unavailable:
+        case replay::ReplayExportTickState::Unavailable:
             fault(OfflineRenderBoundaryError::ReplayUnavailable, "The replay became unavailable during export");
             return OfflineRenderStepResult::Failed;
-        case functions::ReplayExportTickState::Invalid:
+        case replay::ReplayExportTickState::Invalid:
             fault(
                 OfflineRenderBoundaryError::InvalidFrame,
                 "The export frame moved backwards or changed its initialization tick"
             );
             return OfflineRenderStepResult::Failed;
-        case functions::ReplayExportTickState::Failed:
+        case replay::ReplayExportTickState::Failed:
             fault(OfflineRenderBoundaryError::ReplayFailed, "The replay failed while preparing an export frame");
             return OfflineRenderStepResult::Failed;
-        case functions::ReplayExportTickState::Waiting:
+        case replay::ReplayExportTickState::Waiting:
             return requestReplayTick();
-        case functions::ReplayExportTickState::Ready:
+        case replay::ReplayExportTickState::Ready:
             break;
         }
 
@@ -509,7 +509,7 @@ bool OfflineRenderBoundary::isDrained() {
     return mDownloads.isEmpty();
 }
 
-bool OfflineRenderBoundary::retryCompletedFrame(functions::render::FrameTicket const& ticket) {
+bool OfflineRenderBoundary::retryCompletedFrame(visuals::FrameTicket const& ticket) {
     if (mState != OfflineRenderBoundaryState::Ready || mPendingFrame || !mCompletedFrameTicket || !mLastSubmittedFrame
         || !ticketsEqual(*mCompletedFrameTicket, ticket) || !ticketsEqual(mLastSubmittedFrame->ticket, ticket)
         || !mDownloads.isEmpty()) {
@@ -520,7 +520,7 @@ bool OfflineRenderBoundary::retryCompletedFrame(functions::render::FrameTicket c
     return true;
 }
 
-std::optional<functions::render::CapturedFrame> OfflineRenderBoundary::finishDownload() {
+std::optional<visuals::CapturedFrame> OfflineRenderBoundary::finishDownload() {
     mExecutor.pollCapture();
     auto frame = mDownloads.finishDownload();
     if (!frame) return std::nullopt;
@@ -594,7 +594,7 @@ OfflineRenderBoundaryStatus OfflineRenderBoundary::status() {
 
 int OfflineRenderBoundary::targetTick(ExportFramePlan const& frame) const {
     auto const sample =
-        functions::render::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
+        visuals::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
     if (!sample) return 0;
     auto const clamped = std::clamp<int64_t>(sample->requiredAppliedTick(), 0, mMaximumReplayTick);
     return clamped > std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : static_cast<int>(clamped);
@@ -602,7 +602,7 @@ int OfflineRenderBoundary::targetTick(ExportFramePlan const& frame) const {
 
 std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(ExportFramePlan const& frame) const {
     auto const replayTime =
-        functions::render::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
+        visuals::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
     if (!replayTime) return std::nullopt;
 
     long double const current = replayTime->value();
@@ -695,7 +695,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advanceWarmup(ExportFramePlan con
     mExecutor.completeWarmup();
     auto const executor    = mExecutor.status();
     bool       sceneReady  = true;
-    std::optional<functions::ReplaySceneReadiness> scene;
+    std::optional<replay::ReplaySceneReadiness> scene;
     scene      = mReplay.getSceneReadiness();
     sceneReady = scene->ready();
     clearClockSample();
@@ -769,7 +769,7 @@ bool OfflineRenderBoundary::warmupComplete() const {
 }
 
 bool OfflineRenderBoundary::recoverDownloadFailure(FrameDownloadQueueStatus const& status) {
-    if (status.state != FrameDownloadQueueState::Faulted || status.error != functions::render::FrameTapError::MapFailed
+    if (status.state != FrameDownloadQueueState::Faulted || status.error != visuals::FrameTapError::MapFailed
         || !mPendingFrame || mCaptureCapacity == 0 || mCaptureRetryCount >= MaxCaptureRetries) {
         return false;
     }
@@ -830,7 +830,7 @@ void OfflineRenderBoundary::fault(OfflineRenderBoundaryError error, std::string 
     clearClockSample();
     mReplayTickToken.reset();
     if (mTickGateOpen) {
-        functions::endOfflineReplayTickGate();
+        runtime::endOfflineReplayTickGate();
         mTickGateOpen = false;
     }
     mReplay.endExportTimeline();

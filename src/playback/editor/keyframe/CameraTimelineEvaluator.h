@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include "CameraRenderState.h"
 #include "KeyframeTrack.h"
 #include "playback/editor/editing/models/EditorStateExt.h"
-#include "playback/functions/render/ReplaySampleTime.h"
+#include "playback/visuals/ReplaySampleTime.h"
 
 #include <optional>
 #include <string>
@@ -42,10 +42,10 @@ public:
 
     [[nodiscard]] std::optional<CameraTimelineEvaluation>
 
-    sample(functions::render::ReplaySampleTime const& time) const;
+    sample(visuals::ReplaySampleTime const& time) const;
 
     [[nodiscard]] std::optional<CameraTimelineEvaluation>
 
-    sampleCameraById(std::string_view cameraId, functions::render::ReplaySampleTime const& time) const;
+    sampleCameraById(std::string_view cameraId, visuals::ReplaySampleTime const& time) const;
 };
 } // namespace playback::editor::keyframe

@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "ExportTypes.h"
 #include "OfflineRenderClockHooks.h"
 #include "OfflineRenderFrameExecutor.h"
 #include "SaveableFramebufferQueue.h"
 
-#include "playback/functions/tick/ClientTickHooks.h"
+#include "playback/runtime/ClientTickHooks.h"
 
 #include <chrono>
 #include <cstddef>
@@ -13,7 +13,7 @@
 #include <optional>
 #include <string>
 
-namespace playback::functions {
+namespace playback::replay {
 class ReplaySession;
 }
 
@@ -57,7 +57,7 @@ struct OfflineRenderBoundaryStatus {
 
 class OfflineRenderBoundary {
 public:
-    OfflineRenderBoundary(functions::ReplaySession& replay, functions::render::FrameTap& frameTap);
+    OfflineRenderBoundary(replay::ReplaySession& replay, visuals::FrameTap& frameTap);
     ~OfflineRenderBoundary();
 
     OfflineRenderBoundary(OfflineRenderBoundary const&)            = delete;
@@ -76,9 +76,9 @@ public:
     [[nodiscard]] OfflineRenderStepResult advance(ExportFramePlan const& frame);
     [[nodiscard]] bool                    beginDrain();
     [[nodiscard]] bool                    isDrained();
-    [[nodiscard]] bool retryCompletedFrame(functions::render::FrameTicket const& ticket);
+    [[nodiscard]] bool retryCompletedFrame(visuals::FrameTicket const& ticket);
 
-    [[nodiscard]] std::optional<functions::render::CapturedFrame> finishDownload();
+    [[nodiscard]] std::optional<visuals::CapturedFrame> finishDownload();
 
     [[nodiscard]] OfflineRenderBoundaryStatus status();
 
@@ -92,13 +92,13 @@ private:
     void               clearClockSample();
     void               fault(OfflineRenderBoundaryError error, std::string message);
 
-    functions::ReplaySession&                        mReplay;
+    replay::ReplaySession&                        mReplay;
     SaveableFramebufferQueue                         mDownloads;
     OfflineRenderFrameExecutor                       mExecutor;
     std::optional<ExportFramePlan>                   mPendingFrame;
     std::optional<ExportFramePlan>                   mLastSubmittedFrame;
-    std::optional<functions::render::FrameTicket>    mCompletedFrameTicket;
-    std::optional<functions::OfflineReplayTickToken> mReplayTickToken;
+    std::optional<visuals::FrameTicket>    mCompletedFrameTicket;
+    std::optional<runtime::OfflineReplayTickToken> mReplayTickToken;
     std::optional<OfflineRenderClockToken>           mClockToken;
     int64_t                                          mMaximumReplayTick{};
     uint32_t                                         mCaptureCapacity{};

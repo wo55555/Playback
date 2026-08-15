@@ -1,4 +1,4 @@
-#include "SaveableFramebufferQueue.h"
+﻿#include "SaveableFramebufferQueue.h"
 
 #include "playback/Playback.h"
 
@@ -9,7 +9,7 @@ namespace playback::editor::exporting {
 
 namespace {
 
-bool ticketsEqual(functions::render::FrameTicket const& left, functions::render::FrameTicket const& right) {
+bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
     return left.frameIndex == right.frameIndex && left.ptsNumerator == right.ptsNumerator
         && left.ptsDenominator == right.ptsDenominator;
 }
@@ -22,12 +22,12 @@ SaveableFramebufferQueue::~SaveableFramebufferQueue() { close(); }
 
 bool SaveableFramebufferQueue::open(uint32_t capacity) {
     close();
-    functions::render::FrameTapSession session;
-    if (mFrameTap.open({capacity, false}, session) != functions::render::FrameTapOpenResult::Opened) return false;
+    visuals::FrameTapSession session;
+    if (mFrameTap.open({capacity, false}, session) != visuals::FrameTapOpenResult::Opened) return false;
 
     mSession = session;
     mState   = FrameDownloadQueueState::Open;
-    mError   = functions::render::FrameTapError::None;
+    mError   = visuals::FrameTapError::None;
     mMessage.clear();
     mCapacity = capacity;
     return true;
@@ -38,7 +38,7 @@ void SaveableFramebufferQueue::close() {
     mSession.reset();
     mPending.clear();
     mState = FrameDownloadQueueState::Closed;
-    mError = functions::render::FrameTapError::None;
+    mError = visuals::FrameTapError::None;
     mMessage.clear();
     mCapacity = 0;
 }
@@ -51,12 +51,12 @@ void SaveableFramebufferQueue::cancel() {
     mSession.reset();
     mPending.clear();
     mState    = FrameDownloadQueueState::Cancelled;
-    mError    = functions::render::FrameTapError::Cancelled;
+    mError    = visuals::FrameTapError::Cancelled;
     mMessage  = "Framebuffer downloads were cancelled";
     mCapacity = 0;
 }
 
-FrameDownloadRequestResult SaveableFramebufferQueue::requestDownload(functions::render::FrameTicket ticket) {
+FrameDownloadRequestResult SaveableFramebufferQueue::requestDownload(visuals::FrameTicket ticket) {
     refresh();
     if (mState == FrameDownloadQueueState::Faulted) return FrameDownloadRequestResult::Failed;
     if (mState != FrameDownloadQueueState::Open || !mSession) return FrameDownloadRequestResult::Closed;
@@ -69,23 +69,23 @@ FrameDownloadRequestResult SaveableFramebufferQueue::requestDownload(functions::
     }
 
     switch (mFrameTap.tryArm(*mSession, ticket)) {
-    case functions::render::FrameTapArmResult::Armed:
+    case visuals::FrameTapArmResult::Armed:
         mPending.push_back(PendingDownload{ticket});
         return FrameDownloadRequestResult::Requested;
-    case functions::render::FrameTapArmResult::Busy:
+    case visuals::FrameTapArmResult::Busy:
         return FrameDownloadRequestResult::Busy;
-    case functions::render::FrameTapArmResult::Backpressured:
+    case visuals::FrameTapArmResult::Backpressured:
         return FrameDownloadRequestResult::Backpressured;
-    case functions::render::FrameTapArmResult::InvalidTicket:
+    case visuals::FrameTapArmResult::InvalidTicket:
         return FrameDownloadRequestResult::InvalidTicket;
-    case functions::render::FrameTapArmResult::Inactive:
-        fault(functions::render::FrameTapError::BackendUnavailable, "The frame capture session became inactive");
+    case visuals::FrameTapArmResult::Inactive:
+        fault(visuals::FrameTapError::BackendUnavailable, "The frame capture session became inactive");
         return FrameDownloadRequestResult::Failed;
     }
     return FrameDownloadRequestResult::Failed;
 }
 
-bool SaveableFramebufferQueue::hasDownloadStarted(functions::render::FrameTicket const& ticket) {
+bool SaveableFramebufferQueue::hasDownloadStarted(visuals::FrameTicket const& ticket) {
     refresh();
     auto pending = std::ranges::find_if(mPending, [&ticket](PendingDownload const& candidate) {
         return ticketsEqual(candidate.ticket, ticket);
@@ -96,7 +96,7 @@ bool SaveableFramebufferQueue::hasDownloadStarted(functions::render::FrameTicket
     return true;
 }
 
-std::optional<functions::render::CapturedFrame> SaveableFramebufferQueue::finishDownload() {
+std::optional<visuals::CapturedFrame> SaveableFramebufferQueue::finishDownload() {
     refresh();
     if (mPending.empty() || !mPending.front().canFinish()) return std::nullopt;
     auto frame = std::move(*mPending.front().downloaded);
@@ -150,7 +150,7 @@ void SaveableFramebufferQueue::refresh() {
             return candidate.state == DownloadState::Requested;
         });
         if (pending == mPending.end() || !ticketsEqual(pending->ticket, started->ticket)) {
-            fault(functions::render::FrameTapError::BackendUnavailable, "The renderer started an unexpected frame");
+            fault(visuals::FrameTapError::BackendUnavailable, "The renderer started an unexpected frame");
             return;
         }
         pending->state = DownloadState::Downloading;
@@ -161,27 +161,27 @@ void SaveableFramebufferQueue::refresh() {
             return candidate.state == DownloadState::Downloading && !candidate.downloaded;
         });
         if (pending == mPending.end() || !ticketsEqual(pending->ticket, frame->ticket)) {
-            fault(functions::render::FrameTapError::BackendUnavailable, "The renderer completed frames out of order");
+            fault(visuals::FrameTapError::BackendUnavailable, "The renderer completed frames out of order");
             return;
         }
         pending->downloaded = std::move(*frame);
     }
 
     auto const tapStatus = mFrameTap.status(*mSession);
-    if (tapStatus.state == functions::render::FrameTapState::Faulted) {
+    if (tapStatus.state == visuals::FrameTapState::Faulted) {
         fault(tapStatus.error, tapStatus.message.empty() ? "The renderer frame download failed" : tapStatus.message);
-    } else if (tapStatus.state == functions::render::FrameTapState::Cancelled) {
+    } else if (tapStatus.state == visuals::FrameTapState::Cancelled) {
         mFrameTap.close(*mSession);
         mSession.reset();
         mPending.clear();
         mState    = FrameDownloadQueueState::Cancelled;
-        mError    = functions::render::FrameTapError::Cancelled;
+        mError    = visuals::FrameTapError::Cancelled;
         mMessage  = tapStatus.message.empty() ? "Framebuffer downloads were cancelled" : tapStatus.message;
         mCapacity = 0;
     }
 }
 
-void SaveableFramebufferQueue::fault(functions::render::FrameTapError error, std::string message) {
+void SaveableFramebufferQueue::fault(visuals::FrameTapError error, std::string message) {
     getLogger().error(
         "Framebuffer download queue failed (error {}, {} pending): {}",
         static_cast<int>(error),

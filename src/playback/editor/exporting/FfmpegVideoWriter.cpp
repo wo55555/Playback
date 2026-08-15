@@ -1,4 +1,4 @@
-#include "FfmpegVideoWriter.h"
+﻿#include "FfmpegVideoWriter.h"
 
 #include "FrameWriterUtils.h"
 #include "playback/Playback.h"
@@ -142,7 +142,7 @@ struct FfmpegVideoWriter::Impl {
     uint32_t                                     capacity;
     mutable std::mutex                           mutex;
     std::condition_variable                      changed;
-    std::deque<functions::render::CapturedFrame> queue;
+    std::deque<visuals::CapturedFrame> queue;
     std::filesystem::path                        output;
     std::filesystem::path                        temporary;
     std::filesystem::path                        log;
@@ -366,7 +366,7 @@ struct FfmpegVideoWriter::Impl {
         std::vector<uint8_t> rgba;
         bool                 processStarted = false;
         while (true) {
-            functions::render::CapturedFrame item;
+            visuals::CapturedFrame item;
             {
                 std::unique_lock lock(mutex);
                 changed.wait(lock, [this] {
@@ -544,7 +544,7 @@ bool FfmpegVideoWriter::open(CompiledExportPlan const& plan) {
     return true;
 }
 
-FrameWriterSubmitResult FfmpegVideoWriter::trySubmit(functions::render::CapturedFrame& frame) {
+FrameWriterSubmitResult FfmpegVideoWriter::trySubmit(visuals::CapturedFrame& frame) {
     std::scoped_lock lock(mImpl->mutex);
     if (mImpl->error != ExportError::None) return FrameWriterSubmitResult::Failed;
     if (mImpl->state != FrameWriterState::Running) return FrameWriterSubmitResult::Closed;
