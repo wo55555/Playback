@@ -84,7 +84,7 @@ private:
 
 class MoveKeyframe final : public model::IEditCommand {
 public:
-    MoveKeyframe(std::string cameraId, std::string keyframeId, int tick);
+    MoveKeyframe(std::string cameraId, int fromTick, int toTick);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mChanged; }
@@ -92,15 +92,15 @@ public:
 
 private:
     std::string                          mCameraId;
-    std::string                          mKeyframeId;
-    int                                  mTick;
+    int                                  mFromTick;
+    int                                  mToTick;
     std::optional<model::EditorStateExt> mBefore;
     bool                                 mChanged{};
 };
 
 class DeleteKeyframe final : public model::IEditCommand {
 public:
-    DeleteKeyframe(std::string cameraId, std::string keyframeId);
+    DeleteKeyframe(std::string cameraId, int tick);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mChanged; }
@@ -108,18 +108,14 @@ public:
 
 private:
     std::string                          mCameraId;
-    std::string                          mKeyframeId;
+    int                                  mTick;
     std::optional<model::EditorStateExt> mBefore;
     bool                                 mChanged{};
 };
 
 class SetKeyframeInterpolation final : public model::IEditCommand {
 public:
-    SetKeyframeInterpolation(
-        std::string                    cameraId,
-        std::string                    keyframeId,
-        model::CameraInterpolationType interpolation
-    );
+    SetKeyframeInterpolation(std::string cameraId, int tick, model::CameraInterpolationType interpolation);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mChanged; }
@@ -127,7 +123,7 @@ public:
 
 private:
     std::string                          mCameraId;
-    std::string                          mKeyframeId;
+    int                                  mTick;
     model::CameraInterpolationType       mInterpolation;
     std::optional<model::EditorStateExt> mBefore;
     bool                                 mChanged{};
@@ -135,7 +131,7 @@ private:
 
 class SetCameraTrackState final : public model::IEditCommand {
 public:
-    enum class Property : uint8_t { Enabled, PathVisible };
+    enum class Property : uint8_t { Enabled };
 
     SetCameraTrackState(std::string cameraId, Property property, bool value);
     void                      execute(model::EditorStateExt& state) override;
@@ -147,21 +143,6 @@ private:
     std::string                          mCameraId;
     Property                             mProperty;
     bool                                 mValue;
-    std::optional<model::EditorStateExt> mBefore;
-    bool                                 mChanged{};
-};
-
-class SetCameraKind final : public model::IEditCommand {
-public:
-    SetCameraKind(std::string cameraId, model::CameraKind kind);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mChanged; }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mCameraId;
-    model::CameraKind                    mKind;
     std::optional<model::EditorStateExt> mBefore;
     bool                                 mChanged{};
 };

@@ -6,9 +6,29 @@
 
 namespace playback::editor::keyframe {
 
-// Captures Bedrock's final client camera into the editor's pure render model.
-// The local player's head pose is used only when the camera has not yet been
-// initialized for the current replay frame.
-[[nodiscard]] std::optional<CameraRenderState> captureClientCamera() noexcept;
+struct CameraCaptureVector {
+    float x{};
+    float y{};
+    float z{};
+};
+
+struct ClientCameraCapture {
+    CameraRenderState   state;
+    CameraCaptureVector nativeCameraPosition;
+    CameraCaptureVector nativeCameraForward;
+    CameraCaptureVector nativeCameraRight;
+    CameraCaptureVector nativeCameraUp;
+    CameraCaptureVector actorRotation;
+    CameraCaptureVector actorForward;
+    bool                usedNativeRotation{};
+    bool                usedMatrixRotation{};
+    bool                usedActorRotation{};
+    bool                usedWorldCamera{};
+    bool                usedWorldPosition{};
+    bool                usedCameraActor{};
+    bool                usedReplayPlayer{};
+};
+
+[[nodiscard]] std::optional<ClientCameraCapture> captureClientCamera() noexcept;
 
 } // namespace playback::editor::keyframe

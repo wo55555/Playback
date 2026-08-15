@@ -47,10 +47,8 @@ enum class EditorActionType {
     DeleteCameraKeyframe,
     SetKeyframeInterpolation,
     SetCameraEnabled,
-    SetCameraPathVisible,
     DeleteCamera,
     UnbindCamera,
-    SetCameraKind,
     CreateBindingCamera,
     SetSubActorDetails,
     SetPreviewCamera,
@@ -60,6 +58,7 @@ enum class EditorActionType {
 struct EditorAction {
     EditorActionType                         type{};
     int                                      tick{};
+    int                                      secondaryTick{};
     std::filesystem::path                    path;
     std::string                              replayId;
     std::string                              name;

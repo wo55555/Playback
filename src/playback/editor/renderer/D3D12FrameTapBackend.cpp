@@ -204,8 +204,6 @@ struct D3D12FrameTapBackend::Impl {
             }
         }
         if (slot.commandList && !slot.commandListClosed) {
-            // A newly-created D3D12 command list starts open. It is closed so
-            // the next capture can reset it just like a normal frame list.
             HRESULT const closeResult = slot.commandList->Close();
             if (FAILED(closeResult)) {
                 getLogger().error(
@@ -231,13 +229,11 @@ struct D3D12FrameTapBackend::Impl {
             heap.VisibleNodeMask      = 1;
 
             D3D12_RESOURCE_DESC resolvedDesc = sourceDesc;
-            // The export texture is always single-sample. It is the stable
-            // hand-off between the scene source and the readback buffer.
-            resolvedDesc.Alignment          = 0;
-            resolvedDesc.SampleDesc.Count   = 1;
-            resolvedDesc.SampleDesc.Quality = 0;
-            resolvedDesc.Flags              = D3D12_RESOURCE_FLAG_NONE;
-            HRESULT const createResult      = device->CreateCommittedResource(
+            resolvedDesc.Alignment           = 0;
+            resolvedDesc.SampleDesc.Count    = 1;
+            resolvedDesc.SampleDesc.Quality  = 0;
+            resolvedDesc.Flags               = D3D12_RESOURCE_FLAG_NONE;
+            HRESULT const createResult       = device->CreateCommittedResource(
                 &heap,
                 D3D12_HEAP_FLAG_NONE,
                 &resolvedDesc,
@@ -361,7 +357,7 @@ struct D3D12FrameTapBackend::Impl {
                 if (validLayout) {
                     lastByte    += static_cast<uint64_t>(height - 1) * footprint.Footprint.RowPitch;
                     validLayout  = packedRowBytes <= std::numeric_limits<uint64_t>::max() - lastByte
-                               && lastByte + packedRowBytes <= byteCount;
+                                && lastByte + packedRowBytes <= byteCount;
                 }
                 if (!validLayout) {
                     frameTap.fail(capture, FrameTapError::MapFailed, "D3D12 readback footprint is invalid");
@@ -415,7 +411,7 @@ struct D3D12FrameTapBackend::Impl {
                         for (uint32_t y = 0; y < height; ++y) {
                             auto const* source = static_cast<std::byte const*>(mapped) + footprint.Offset
                                                + static_cast<size_t>(y) * footprint.Footprint.RowPitch;
-                            auto* target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
+                            auto*       target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
                             std::memcpy(target, source, frame.rowPitch);
                         }
                         frameTap.complete(capture, std::move(frame));
@@ -515,9 +511,6 @@ bool D3D12FrameTapBackend::capture(
         return value.state == Impl::SlotState::Free;
     });
     if (slot == mImpl->slots.end()) {
-        // A failed GPU readback is retired so it cannot be reused with an
-        // unknown resource state. Reclaim those slots only after their capture
-        // record is gone; prepareSlot will allocate fresh resources below.
         for (auto& candidate : mImpl->slots) {
             if (candidate.state != Impl::SlotState::Retired || candidate.capture) continue;
             candidate.device.Reset();

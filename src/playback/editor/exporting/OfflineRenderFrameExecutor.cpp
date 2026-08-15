@@ -67,16 +67,12 @@ std::optional<std::pair<uint32_t, uint32_t>> currentUiSize(ClientInstance& clien
 OfflineRenderFrameExecutor::~OfflineRenderFrameExecutor() { close(); }
 
 bool OfflineRenderFrameExecutor::open(
-    ExportSettings const& settings,
+    ExportSettings const&                 settings,
     editing::model::EditorStateExt const& project,
-    std::optional<std::string> cameraFallback
+    std::optional<std::string>            cameraFallback
 ) {
     close();
-    std::optional<float> aspectRatio;
-    if (settings.resolutionX != 0 && settings.resolutionY != 0) {
-        aspectRatio = static_cast<float>(settings.resolutionX) / static_cast<float>(settings.resolutionY);
-    }
-    mKeyframes.configure(project, aspectRatio, std::move(cameraFallback));
+    mKeyframes.configure(project, std::move(cameraFallback));
     if (!configureClientThrottling() || !configureRenderSize(settings)) {
         restoreClientThrottling();
         mKeyframes.reset();
@@ -195,9 +191,6 @@ bool OfflineRenderFrameExecutor::configureRenderSize(ExportSettings const& setti
     game.setRenderingSize(static_cast<int>(mRenderWidth), static_cast<int>(mRenderHeight));
     game.setUISizeAndScale(static_cast<int>(mRenderWidth), static_cast<int>(mRenderHeight), 0.0f);
 
-    // setRenderingSize changes the swap-chain target, but the client viewport
-    // can still describe the old window-sized region. Make the active render
-    // area explicit so SSAA fills the whole captured surface.
     auto exportViewport      = viewport;
     exportViewport.size->x   = static_cast<float>(mRenderWidth);
     exportViewport.size->y   = static_cast<float>(mRenderHeight);
@@ -321,9 +314,6 @@ bool OfflineRenderFrameExecutor::prepareNativeRender() {
         client->setViewportInfo(viewport);
     }
 
-    // ReplayExportDriver runs immediately before ClientInstance::update. The
-    // published sample is consumed by that one native graphics pass, which
-    // preserves Bedrock's full scene preparation and render ordering.
     return true;
 }
 

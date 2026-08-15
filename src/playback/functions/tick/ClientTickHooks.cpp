@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/ReplayUI.h"
+#include "playback/editor/renderer/ReplayMouseHook.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/functions/record/Recorder.h"
 #include "playback/functions/replay/ReplaySession.h"
@@ -92,7 +93,8 @@ LL_TYPE_INSTANCE_HOOK(
     bool isInitFinished
 ) {
     editor::tickReplayExportBeforeClientUpdate();
-    auto  result = origin(isInitFinished);
+    auto result = origin(isInitFinished);
+    editor::renderer::updateReplayMouseOwnership(*this);
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
     bool hudVisible = false;

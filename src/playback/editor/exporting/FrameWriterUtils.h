@@ -50,9 +50,6 @@ inline void copyPackedRgba(functions::render::CapturedFrame const& frame, std::v
     }
 }
 
-// Convert a captured frame to a stable output size. The renderer may expose
-// the window size even after Bedrock has been asked to render at a supersampled
-// size, so the export boundary owns this final, deterministic size contract.
 [[nodiscard]] inline bool
 normalizeFrame(functions::render::CapturedFrame& frame, uint32_t targetWidth, uint32_t targetHeight) {
     if (targetWidth == 0 && targetHeight == 0) return validateFrame(frame);
@@ -64,9 +61,6 @@ normalizeFrame(functions::render::CapturedFrame& frame, uint32_t targetWidth, ui
     if (targetBytes > MaxFrameBytes || targetBytes > std::numeric_limits<size_t>::max()) return false;
     if (!validateFrame(frame)) return false;
 
-    // Keep the GPU readback intact when it already satisfies the output
-    // contract. This is the common 1x path and avoids a full CPU bilinear pass
-    // for every frame.
     if (frame.width == targetWidth && frame.height == targetHeight && frame.rowPitch == targetRowPitch
         && frame.pixelFormat == functions::render::FramePixelFormat::Rgba8) {
         return true;

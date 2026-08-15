@@ -1,19 +1,16 @@
-// Lucide icon font codepoints used by the native ImGui UI.
-// Source font: assets/fonts/lucide.ttf (Lucide v1.17+ from unpkg.com/lucide-static)
-// License: ISC (Lucide) - https://lucide.dev/
-
+// Lucide icon font codepoints (assets/fonts/lucide.ttf, ISC license).
 #pragma once
 
 namespace Playback::ReplayEditor::Icons {
 
 // Time icons
-#define ICON_PLAY          "\ue13c"  // play
-#define ICON_PAUSE         "\ue12e"  // pause
-#define ICON_STOP          "\ue167"  // square
-#define ICON_RECORD        "\ue13c"  // fallback: play (record not in editor)
-#define ICON_SKIP_BACK     "\ue15f"  // skip-back
-#define ICON_SKIP_FORWARD  "\ue160"  // skip-forward
-#define ICON_CHEVRONS_LEFT "\ue072"  // chevrons-left
+#define ICON_PLAY           "\ue13c" // play
+#define ICON_PAUSE          "\ue12e" // pause
+#define ICON_STOP           "\ue167" // square
+#define ICON_RECORD         "\ue13c" // fallback: play (record not in editor)
+#define ICON_SKIP_BACK      "\ue15f" // skip-back
+#define ICON_SKIP_FORWARD   "\ue160" // skip-forward
+#define ICON_CHEVRONS_LEFT  "\ue072" // chevrons-left
 #define ICON_CHEVRONS_RIGHT "\ue073" // chevrons-right
 
 // Marker / keyframe

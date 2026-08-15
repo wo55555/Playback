@@ -50,8 +50,6 @@ struct FrameTicket {
     int64_t  ptsDenominator{1};
 };
 
-// Backend-owned GPU submission metadata. Handles are opaque diagnostics only;
-// consumers must never dereference them, and they may be stale after completion.
 struct FrameTapSubmission {
     uint32_t         width{};
     uint32_t         height{};

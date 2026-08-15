@@ -6,9 +6,6 @@ namespace playback::editor::exporting {
 
 namespace detail {
 
-// The renderer and UI run on the client thread while the frame writer may run
-// on a worker thread. Keep the export lifecycle visible to small client-side
-// hooks without coupling those hooks to ReplayExportDriver's instance.
 inline std::atomic_bool gExportActivityActive{false};
 inline std::atomic_bool gOfflineRenderActivityActive{false};
 

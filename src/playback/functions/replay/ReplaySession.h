@@ -38,6 +38,36 @@ enum class ReplayExportTickState : uint8_t { Unavailable, Waiting, Ready, Invali
 
 enum class ReplayExportTimelinePhase : uint8_t { Inactive, Initializing, Continuous };
 
+struct ReplaySceneReadiness {
+    int      chunkX{};
+    int      chunkZ{};
+    int      chunkLoadState{-1};
+    uint32_t requiredChunkCount{};
+    uint32_t recordedChunkCount{};
+    uint32_t presentChunkCount{};
+    uint32_t readyChunkCount{};
+    uint32_t emptyChunkCount{};
+    bool     replayReady{};
+    bool     dimensionTransitionPending{};
+    bool     snapshotPending{};
+    bool     chunkInjectionPending{};
+    bool     chunkPresent{};
+    bool     chunkEmpty{};
+    bool     chunkLoaded{};
+
+    [[nodiscard]] bool ready() const noexcept {
+        return replayReady && !dimensionTransitionPending && !snapshotPending && !chunkInjectionPending && chunkPresent
+            && !chunkEmpty && chunkLoaded && requiredChunkCount != 0 && recordedChunkCount == requiredChunkCount
+            && readyChunkCount == requiredChunkCount;
+    }
+};
+
+struct ReplayCameraViewpoint {
+    float x{};
+    float y{};
+    float z{};
+};
+
 class ReplaySession {
 private:
     static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT          = 64;
@@ -129,6 +159,7 @@ private:
     bool                                        mSnapMovementDuringSeek{};
     ReplayExportTimelinePhase                   mExportTimelinePhase{ReplayExportTimelinePhase::Inactive};
     int                                         mExportTargetTick{-1};
+    std::optional<ReplayCameraViewpoint>        mExportCameraViewpoint;
     float                                       mPlaybackSpeed{1.0f};
     float                                       mPlaybackTickAccumulator{};
     std::optional<int>                          mReplayTime;
@@ -281,9 +312,6 @@ public:
 
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
 
-    // The replay world owns the player used by the native Bedrock camera
-    // pipeline. Render hooks use this as a fallback while export temporarily
-    // detaches ClientInstance::getLocalPlayer().
     [[nodiscard]] Player* getReplayPlayer() const noexcept { return mReplayPlayer; }
 
     [[nodiscard]] int getCurrentTick() const {
@@ -296,11 +324,9 @@ public:
     [[nodiscard]] int getAppliedReplayTick() const { return mCurrentTick; }
 
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
-    // Rendering advances between the last committed replay tick and the next
-    // one.  This is the single fractional-time contract shared by preview,
-    // camera evaluation, and entity interpolation.
     [[nodiscard]] std::optional<render::ReplaySampleTime> getRenderSampleTime(float partialTick) const noexcept;
-    [[nodiscard]] std::optional<long double> getFractionalReplayTick(float partialTick) const noexcept;
+    [[nodiscard]] std::optional<render::ReplaySampleTime> getCameraRenderSampleTime(float partialTick) const noexcept;
+    [[nodiscard]] std::optional<long double>              getFractionalReplayTick(float partialTick) const noexcept;
 
     [[nodiscard]] int getTotalTicks() const;
 
@@ -312,12 +338,13 @@ public:
 
     [[nodiscard]] bool beginExportTimeline(int startTick);
 
+    void setExportCameraViewpoint(std::optional<ReplayCameraViewpoint> viewpoint) noexcept;
+
+    [[nodiscard]] ReplaySceneReadiness getSceneReadiness() const;
+
     [[nodiscard]] std::unique_ptr<render::ScopedReplayEntityPose>
     createReplayEntityRenderScope(render::ReplaySampleTime const& sample);
 
-    // Prepare one deterministic integer replay sample for the export driver. The
-    // initialization phase may use snapshots and fast-forwarding; the continuous
-    // phase only reports whether one native client tick is still required.
     [[nodiscard]] ReplayExportTickState prepareExportTick(int targetTick);
 
     [[nodiscard]] bool finishExportTimelineInitialization();

@@ -9,8 +9,6 @@
 
 namespace playback::editor::exporting {
 
-// Owns the immutable export camera timeline used by the render hooks.
-// The hooks sample it only while an explicit replay sample is active.
 class ExportKeyframeApplier {
 public:
     ExportKeyframeApplier() = default;
@@ -21,7 +19,6 @@ public:
 
     void configure(
         editing::model::EditorStateExt const& project,
-        std::optional<float>                  aspectRatio = std::nullopt,
         std::optional<std::string>            cameraFallback = std::nullopt
     );
     void reset();

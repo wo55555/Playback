@@ -5,7 +5,6 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/editing/models/EditorStateExt.h"
-#include "playback/editor/renderer/CameraRenderHooks.h"
 #include "playback/functions/replay/ReplaySession.h"
 #include "playback/screen/IdleDetectionHooks.h"
 
@@ -86,9 +85,9 @@ void ReplayExportDriver::setFrameTap(functions::render::FrameTap* frameTap) {
 }
 
 bool ReplayExportDriver::start(
-    ExportSettings settings,
+    ExportSettings                        settings,
     editing::model::EditorStateExt const& project,
-    std::optional<std::string> cameraFallback
+    std::optional<std::string>            cameraFallback
 ) {
     if (isActive()) return false;
     if (!screen::isIdleDetectionGuardInstalled()) {
@@ -99,44 +98,50 @@ bool ReplayExportDriver::start(
         mPhase = Phase::Faulted;
         return false;
     }
-    if (!isOfflineRenderClockInstalled()) {
+    if (!isOfflineRenderClockInstalled() && !hookOfflineRenderClock(true)) {
         mCoordinator.fail(
             ExportError::CaptureUnavailable,
-            "The fractional render clock is unavailable; export was blocked to prevent integer-only frames"
+            "The offline render clock could not be installed for this export"
         );
         mPhase = Phase::Faulted;
         return false;
     }
     if (!mRenderBoundary) {
+        (void)hookOfflineRenderClock(false);
         mCoordinator.fail(ExportError::CaptureUnavailable, "The offline renderer boundary is unavailable");
         mPhase = Phase::Faulted;
         return false;
     }
     if (!mReplay.isActive()) {
+        (void)hookOfflineRenderClock(false);
         mCoordinator.fail(ExportError::ReplayUnavailable, "A replay must be active before video export can start");
         mPhase = Phase::Faulted;
         return false;
     }
 
     if (!mCoordinator.start(std::move(settings), project)) {
+        (void)hookOfflineRenderClock(false);
         mPhase = Phase::Faulted;
         return false;
     }
 
     mPlan = mCoordinator.plan();
     if (!mPlan) {
+        (void)hookOfflineRenderClock(false);
         fail(ExportError::InvalidSettings, "The export plan was not retained by the coordinator");
         return false;
     }
 
     mPreviousPaused = mReplay.isPaused();
     if (!mReplay.setPaused(true)) {
+        (void)hookOfflineRenderClock(false);
         fail(ExportError::ReplayUnavailable, "Unable to pause the replay for export");
         return false;
     }
     mRestorePaused = true;
 
     if (!mRenderBoundary->open(ExportCaptureCapacity, mPlan->settings, project, std::move(cameraFallback))) {
+        (void)hookOfflineRenderClock(false);
         auto const boundaryStatus = mRenderBoundary->status();
         fail(
             ExportError::CaptureUnavailable,
@@ -292,8 +297,7 @@ void ReplayExportDriver::reset() {
 }
 
 bool ReplayExportDriver::isAvailable() const {
-    return mRenderBoundary != nullptr && screen::isIdleDetectionGuardInstalled() && isOfflineRenderClockInstalled()
-        && playback::editor::renderer::isCameraRenderInstalled();
+    return mRenderBoundary != nullptr && screen::isIdleDetectionGuardInstalled();
 }
 
 bool ReplayExportDriver::isActive() const {
@@ -427,6 +431,9 @@ void ReplayExportDriver::closeCapture(bool cancelled) {
     if (mRenderBoundary) {
         if (cancelled) mRenderBoundary->cancel();
         else mRenderBoundary->close();
+    }
+    if (isOfflineRenderClockInstalled() && !hookOfflineRenderClock(false)) {
+        getLogger().error("Unable to remove export-scoped offline render hooks after capture close");
     }
     mReadyFrames.clear();
 }

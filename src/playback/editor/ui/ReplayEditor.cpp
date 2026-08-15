@@ -39,7 +39,6 @@ void ReplayEditor::initialize() {
 
 void ReplayEditor::shutdown() {
     saveLayoutPreferences();
-    mViewportPanel.resetCameraControl();
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
     mViewportMaximized = false;
@@ -82,8 +81,6 @@ void ReplayEditor::loadLayoutPreferences() {
                 for (auto const& [replayPath, view] : views->items()) {
                     if (replayPath.empty() || !view.is_object()) continue;
                     auto const zoomScale = view.find("zoomScale");
-                    // Absolute pixelsPerTick preferences from older builds cannot be
-                    // converted without the replay canvas dimensions. Start them fitted.
                     mTimelineViewPreferences.insert_or_assign(
                         replayPath,
                         TimelineViewPreferences{
@@ -230,8 +227,7 @@ void ReplayEditor::handleKeyboardShortcuts() {
     using input::EditorKeybind;
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantTextInput || ImGui::IsAnyItemActive()
-        || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+    if (io.WantTextInput || ImGui::IsAnyItemActive() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
         return;
     }
 
@@ -268,10 +264,6 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
 
-    if (input::KeyMap::pressed(EditorKeybind::PlayPause)) {
-        submitAction({playback::editor::EditorActionType::TogglePause});
-        return;
-    }
     if (input::KeyMap::pressed(EditorKeybind::JumpStart)) {
         seekTo(0);
         return;

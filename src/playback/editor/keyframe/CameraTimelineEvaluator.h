@@ -9,42 +9,43 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <vector>
 
 namespace playback::editor::keyframe {
 
-struct CameraPathSampleRange {
-    int startTick{};
-    int endTick{};
-    std::vector<CameraRenderState> samples;
+struct CameraTimelineEvaluation {
+    CameraRenderState state;
+    std::string       cameraId;
 };
 
 class CameraTimelineEvaluator {
-public:
-    explicit CameraTimelineEvaluator(
-        editing::model::EditorStateExt project,
-        std::optional<std::string>     cameraOverride = std::nullopt,
-        std::optional<std::string>     cameraFallback = std::nullopt
-    );
-
-    [[nodiscard]] std::optional<CameraRenderState> sample(functions::render::ReplaySampleTime const& time) const;
-    [[nodiscard]] std::optional<CameraRenderState>
-    sampleCameraById(std::string_view cameraId, functions::render::ReplaySampleTime const& time) const;
-    [[nodiscard]] std::optional<CameraPathSampleRange> sampleCameraPathAround(
-        std::string_view cameraId,
-        functions::render::ReplaySampleTime const& time,
-        size_t maxSamples
-    ) const;
+private:
+    editing::model::EditorStateExt                 mProject;
+    std::optional<std::string>                     mCameraOverride;
+    std::optional<std::string>                     mCameraFallback;
+    bool                                           mHoldLastKeyframe{};
+    std::unordered_map<std::string, KeyframeTrack> mKeyframeTracks;
 
 private:
     [[nodiscard]] editing::model::CameraEntity const* cameraForTick(int64_t tick) const;
+
     [[nodiscard]] std::optional<CameraRenderState>
+
     sampleCamera(editing::model::CameraEntity const& camera, long double tick) const;
 
-    editing::model::EditorStateExt mProject;
-    std::optional<std::string>     mCameraOverride;
-    std::optional<std::string>     mCameraFallback;
-    std::unordered_map<std::string, KeyframeTrack> mKeyframeTracks;
-};
+public:
+    explicit CameraTimelineEvaluator(
+        editing::model::EditorStateExt project,
+        std::optional<std::string>     cameraOverride   = std::nullopt,
+        std::optional<std::string>     cameraFallback   = std::nullopt,
+        bool                           holdLastKeyframe = false
+    );
 
+    [[nodiscard]] std::optional<CameraTimelineEvaluation>
+
+    sample(functions::render::ReplaySampleTime const& time) const;
+
+    [[nodiscard]] std::optional<CameraTimelineEvaluation>
+
+    sampleCameraById(std::string_view cameraId, functions::render::ReplaySampleTime const& time) const;
+};
 } // namespace playback::editor::keyframe

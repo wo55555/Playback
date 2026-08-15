@@ -6,10 +6,6 @@
 
 namespace playback::editor::editing {
 
-// Simple type-safe event bus
-// Usage: EventBus::on<SomeEvent>([](SomeEvent const& e) { ... });
-//        EventBus::emit(SomeEvent{...});
-
 struct StateChangedEvent {
     int   currentTick{};
     int   totalTicks{};

@@ -12,10 +12,9 @@
 
 namespace playback::editor::editing::model {
 
-// What can be selected in the editor
 struct SelectedKeyframe {
     std::string trackId;
-    std::string keyframeId;
+    int         tick{};
 };
 
 struct SelectedClip {

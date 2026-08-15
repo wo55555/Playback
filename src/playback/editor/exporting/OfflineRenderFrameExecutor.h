@@ -21,8 +21,6 @@ struct OfflineRenderFrameExecutorStatus {
     std::string message;
 };
 
-// Tracks one sample across the native Bedrock graphics pass. Replay preparation
-// and download ownership stay in the surrounding offline-render boundary.
 class OfflineRenderFrameExecutor {
 public:
     OfflineRenderFrameExecutor() = default;
@@ -32,11 +30,11 @@ public:
     OfflineRenderFrameExecutor& operator=(OfflineRenderFrameExecutor const&) = delete;
 
     [[nodiscard]] bool open(
-        ExportSettings const& settings,
+        ExportSettings const&                 settings,
         editing::model::EditorStateExt const& project,
-        std::optional<std::string> cameraFallback = std::nullopt
+        std::optional<std::string>            cameraFallback = std::nullopt
     );
-    void               close();
+    void close();
 
     [[nodiscard]] OfflineRenderFrameExecutionResult
     executeSample(ExportFramePlan const& frame, OfflineRenderClockToken clockToken);

@@ -21,8 +21,8 @@
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
-#include "mc/entity/components/MovementInterpolatorComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
+#include "mc/entity/components/MovementInterpolatorComponent.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/NetworkIdentifier.h"
@@ -70,6 +70,7 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
+
 
 #include "snappy.h"
 #include "uuid.h"
@@ -148,9 +149,6 @@ render::EntityRenderPose replayRenderPose(Actor const& actor) {
     return {replayRenderPosition(actor.getPosition()), rotation.x, rotation.y, headYaw, bodyYaw};
 }
 
-// Bedrock's movement interpolator is useful during continuous playback, but a
-// seek/snapshot is a discontinuity. Cancel only the pending native transition
-// for that actor at the discontinuity boundary.
 void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 const& rotation, float headYaw) {
     auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
     if (!interpolator) return;
@@ -284,25 +282,29 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             auto const height  = static_cast<int64_t>(maximum) - static_cast<int64_t>(minimum);
             if (minimum < std::numeric_limits<short>::min() || maximum > std::numeric_limits<short>::max()
                 || minimum % 16 != 0 || maximum <= minimum || height % 16 != 0) {
-                throw std::runtime_error(std::format(
-                    "Replay dimension {} has invalid recorded height range [{}, {})",
-                    snapshot.dimensionId,
-                    minimum,
-                    maximum
-                ));
+                throw std::runtime_error(
+                    std::format(
+                        "Replay dimension {} has invalid recorded height range [{}, {})",
+                        snapshot.dimensionId,
+                        minimum,
+                        maximum
+                    )
+                );
             }
 
             RecordedDimensionHeightRange const range{minimum, maximum};
             auto const [it, inserted] = dimensionProfile->heightRanges.emplace(snapshot.dimensionId, range);
             if (!inserted && it->second != range) {
-                throw std::runtime_error(std::format(
-                    "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
-                    snapshot.dimensionId,
-                    it->second.minimum,
-                    it->second.maximum,
-                    minimum,
-                    maximum
-                ));
+                throw std::runtime_error(
+                    std::format(
+                        "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
+                        snapshot.dimensionId,
+                        it->second.minimum,
+                        it->second.maximum,
+                        minimum,
+                        maximum
+                    )
+                );
             }
         }
         mReplayDimensionProfile.store(std::move(dimensionProfile), std::memory_order_release);
@@ -341,6 +343,7 @@ void ReplaySession::clearReplayData() {
     mSnapMovementDuringSeek  = false;
     mExportTimelinePhase     = ReplayExportTimelinePhase::Inactive;
     mExportTargetTick        = -1;
+    mExportCameraViewpoint.reset();
     mPlaybackSpeed           = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
     mReplayTime.reset();
@@ -467,10 +470,15 @@ std::optional<render::ReplaySampleTime> ReplaySession::getRenderSampleTime(float
     auto const appliedTick = std::max(0, mCurrentTick);
     if (mIsPaused) return render::ReplaySampleTime::fromRational(appliedTick, 1);
 
-    // Entity pose history is committed as [tick - 1, tick].  Sampling from
-    // the same interval keeps the camera and native entity interpolation in
-    // phase while still exposing Bedrock's current Timer::mAlpha.
     return render::ReplaySampleTime::fromPreview(std::max(0, appliedTick - 1), partialTick);
+}
+
+std::optional<render::ReplaySampleTime> ReplaySession::getCameraRenderSampleTime(float partialTick) const noexcept {
+    if (!mActive || !mReplayWorldJoined) return std::nullopt;
+
+    auto const appliedTick = std::max(0, mCurrentTick);
+    if (mIsPaused) return render::ReplaySampleTime::fromRational(appliedTick, 1);
+    return render::ReplaySampleTime::fromPreview(appliedTick, partialTick);
 }
 
 std::optional<long double> ReplaySession::getFractionalReplayTick(float partialTick) const noexcept {
@@ -485,16 +493,71 @@ bool ReplaySession::beginExportTimeline(int startTick) {
     mIsPaused                = true;
     mPlaybackTickAccumulator = 0.0f;
 
-    // A pending editor seek may have left the session halfway through a normal seek. The
-    // export initializer will select the appropriate snapshot again, so discard only the
-    // pending seek request and leave world/packet handshakes intact.
-    mRequestedSeekTick.store(-1, std::memory_order_release);
+    mRequestedSeekTick.store(startTick, std::memory_order_release);
     mSeekTargetTick         = -1;
-    mExportSeekRequested    = false;
+    mExportSeekRequested    = true;
     mSnapMovementDuringSeek = false;
     mExportTargetTick       = startTick;
     mExportTimelinePhase    = ReplayExportTimelinePhase::Initializing;
+    getLogger().info("Export timeline initialization queued (startTick={}, currentTick={})", startTick, mCurrentTick);
     return true;
+}
+
+void ReplaySession::setExportCameraViewpoint(std::optional<ReplayCameraViewpoint> viewpoint) noexcept {
+    if (viewpoint && (!std::isfinite(viewpoint->x) || !std::isfinite(viewpoint->y) || !std::isfinite(viewpoint->z))) {
+        viewpoint.reset();
+    }
+    mExportCameraViewpoint = std::move(viewpoint);
+}
+
+ReplaySceneReadiness ReplaySession::getSceneReadiness() const {
+    ReplaySceneReadiness result;
+    auto const*          player = mReplayPlayer;
+    if (!player) return result;
+
+    auto const&           playerPosition = player->getPosition();
+    ReplayCameraViewpoint position{playerPosition.x, playerPosition.y, playerPosition.z};
+    if (mExportCameraViewpoint) position = *mExportCameraViewpoint;
+    if (!std::isfinite(position.x) || !std::isfinite(position.z)) return result;
+
+    ChunkPos const chunkPos{position.x, position.z};
+    result.chunkX                     = chunkPos.x;
+    result.chunkZ                     = chunkPos.z;
+    result.dimensionTransitionPending = mPendingReplayDimension.has_value();
+    result.snapshotPending            = mPendingSnapshotApply.has_value() || mApplyingChunkSnapshot;
+    result.chunkInjectionPending      = mChunkInjectionPending;
+
+    auto const* dimension = mReplayDimension.load(std::memory_order_acquire);
+    result.replayReady    = mActive && mReplayWorldJoined && mWorldReady && !mReplayFailed && dimension;
+    if (!result.replayReady) return result;
+
+    constexpr int CameraChunkRadius = 2;
+    auto&         chunkSource       = dimension->getChunkSource();
+    for (int dz = -CameraChunkRadius; dz <= CameraChunkRadius; ++dz) {
+        for (int dx = -CameraChunkRadius; dx <= CameraChunkRadius; ++dx) {
+            ChunkPos const candidate{chunkPos.x + dx, chunkPos.z + dz};
+            ++result.requiredChunkCount;
+            bool const recorded = mSnapshotChunks.contains(candidate) || mApplyingSnapshotChunks.contains(candidate);
+            if (recorded) ++result.recordedChunkCount;
+
+            auto const chunk     = chunkSource.getExistingChunk(candidate);
+            bool const present   = static_cast<bool>(chunk);
+            auto const loadState = chunk ? chunk->mLoadState->load(std::memory_order_acquire) : ChunkState::Unloaded;
+            bool const empty     = chunk && chunk->mIsEmptyClientChunk;
+            bool const loaded    = chunk && loadState == ChunkState::Loaded;
+            if (present) ++result.presentChunkCount;
+            if (empty) ++result.emptyChunkCount;
+            if (recorded && present && !empty && loaded) ++result.readyChunkCount;
+
+            if (dx == 0 && dz == 0) {
+                result.chunkPresent   = present;
+                result.chunkEmpty     = empty;
+                result.chunkLoadState = static_cast<int>(loadState);
+                result.chunkLoaded    = loaded;
+            }
+        }
+    }
+    return result;
 }
 
 std::unique_ptr<render::ScopedReplayEntityPose>
@@ -524,8 +587,6 @@ ReplayExportTickState ReplaySession::prepareExportTick(int targetTick) {
         if (targetTick < mExportTargetTick || targetTick < mCurrentTick) return ReplayExportTickState::Invalid;
         mExportTargetTick = targetTick;
 
-        // Continuous export never owns a seek. A user seek arriving here would make the
-        // integer replay state diverge from the frame plan, so fail deterministically.
         if (mRequestedSeekTick.load(std::memory_order_acquire) >= 0 || mSeekTargetTick >= 0) {
             getLogger().error("A normal replay seek was requested while continuous export was active");
             return ReplayExportTickState::Failed;
@@ -579,6 +640,7 @@ void ReplaySession::endExportTimeline() {
     mSnapMovementDuringSeek = false;
     mExportTargetTick       = -1;
     mExportTimelinePhase    = ReplayExportTimelinePhase::Inactive;
+    mExportCameraViewpoint.reset();
 }
 
 int ReplaySession::getTotalTicks() const { return std::max(0, mMeta.totalTicks); }
@@ -652,9 +714,8 @@ void ReplaySession::beginSeek(int targetTick) {
         }
     }
     bool const followRecordedPlayer = changesDimension || crossesForcedSnapshot;
-    if (targetTick >= mCurrentTick && !followRecordedPlayer) {
-        // Export samples advance monotonically. Keep native movement processing for this
-        // fast-forward path so the actor walk animation can accumulate between frames.
+    bool const forceExportSnapshot  = exportSeek && mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
+    if (targetTick >= mCurrentTick && !followRecordedPlayer && !forceExportSnapshot) {
         if (exportSeek) mSnapMovementDuringSeek = mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
         getLogger().debug(
             "Fast-forwarding replay from tick {} to tick {} without reloading snapshots",
@@ -662,6 +723,14 @@ void ReplaySession::beginSeek(int targetTick) {
             targetTick
         );
         return;
+    }
+
+    if (forceExportSnapshot) {
+        getLogger().debug(
+            "Rebuilding replay snapshot for export initialization at tick {} (snapshotTick={})",
+            targetTick,
+            selectedStart
+        );
     }
 
     mReaderIndex = selectedReader;
@@ -691,8 +760,6 @@ void ReplaySession::tick() {
             return;
         }
 
-        // A recorded tick can queue source-dimension chunks before its ChangeDimension packet. The transition
-        // deliberately clears mReplayDimension, so wait for the native teleport before touching that stale plan.
         if (mPendingReplayDimension) return;
 
         if (!mWorldReady) {
@@ -772,8 +839,6 @@ void ReplaySession::updateControlPlane() {
         auto request = mDimensionTransitionRequest;
         if (!request) throw std::runtime_error("Replay dimension transition lost its server request");
 
-        // A seek can supersede a teleport only before the server executor claims it. Once dispatch starts, let the
-        // native client finish that handshake and apply the queued seek afterwards.
         if (mRequestedSeekTick.load(std::memory_order_acquire) >= 0) {
             auto expected = DimensionTransitionStatus::Pending;
             if (request->status.compare_exchange_strong(
@@ -1118,6 +1183,10 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
     if (followRecordedPlayer) {
         view = snapshotView;
         replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
+    } else if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive && mExportCameraViewpoint) {
+        auto const& position = *mExportCameraViewpoint;
+        auto const& rotation = replayPlayer->getRotation();
+        view                 = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
     } else {
         auto const& position = replayPlayer->getPosition();
         auto const& rotation = replayPlayer->getRotation();
@@ -1132,13 +1201,15 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
     mChunkPlanPreparationMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt).count();
     getLogger().debug(
-        "Prepared replay snapshot {} around ({:.3f}, {:.3f}, {:.3f}) before chunk injection (follow recorded "
-        "player={})",
+        "Prepared replay snapshot {} around ({:.3f}, {:.3f}, {:.3f}) before chunk injection (centerSource={})",
         mReaderIndex,
         view.x,
         view.y,
         view.z,
-        followRecordedPlayer
+        followRecordedPlayer ? "recorded-player"
+                             : (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive && mExportCameraViewpoint
+                                    ? "export-camera"
+                                    : "operator-player")
     );
 
     mChunkInjectionPending = true;
@@ -1315,7 +1386,7 @@ void ReplaySession::processPendingDimensionTransition() {
     bool const loadingScreenVisible = client
                                    && (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
                                        || client->isShowingWorldProgressScreen());
-    bool const readyToRender = client && client->isReadyToRender();
+    bool const readyToRender        = client && client->isReadyToRender();
 
     if (elapsed >= DIMENSION_TRANSITION_TIMEOUT) {
         getLogger().error(
@@ -1382,10 +1453,6 @@ void ReplaySession::processPendingDimensionTransition() {
         return;
     }
 
-    // The destination snapshot cannot be streamed until this transition is
-    // complete. Waiting for Bedrock's loading screen to disappear here is a
-    // cycle: that screen may require the first destination chunks that replay
-    // injection publishes immediately after completion.
     if (loadingScreenVisible && mDimensionTransitionSettledUpdates == 0) {
         getLogger().info(
             "Replay dimension transition generation {} reached dimension {} while the loading screen remains "
@@ -1777,9 +1844,12 @@ bool ReplaySession::tryFinishChunkInjection() {
             mReplayFailed = true;
             return false;
         }
-        auto const&        position = player->getPosition();
-        auto const&        rotation = player->getRotation();
-        PlaybackView const view{position.x, position.y, position.z, rotation.y, rotation.x};
+        auto const&  rotation       = player->getRotation();
+        auto const&  playerPosition = player->getPosition();
+        auto const   position = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive && mExportCameraViewpoint
+                                  ? *mExportCameraViewpoint
+                                  : ReplayCameraViewpoint{playerPosition.x, playerPosition.y, playerPosition.z};
+        PlaybackView view{position.x, position.y, position.z, rotation.y, rotation.x};
         mChunkInjectionStartedAt = std::chrono::steady_clock::now();
         if (!prepareChunkInjectionPlan(view)) {
             mReplayFailed = true;
@@ -1957,12 +2027,12 @@ void ReplaySession::updateCenterChunkReadiness() {
     mCenterChunksReady = true;
     auto const elapsed =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt);
-    size_t const queuedCenterColumns = static_cast<size_t>(std::count_if(
-        mCenterChunkPositions.begin(),
-        mCenterChunkPositions.end(),
-        [this](ChunkPos const& pos) { return !mReusableSnapshotColumns.contains(pos); }
-    ));
-    size_t const queuedOuterColumns  = mPendingLevelChunkIndices.size() - queuedCenterColumns;
+    size_t const queuedCenterColumns = static_cast<size_t>(
+        std::count_if(mCenterChunkPositions.begin(), mCenterChunkPositions.end(), [this](ChunkPos const& pos) {
+            return !mReusableSnapshotColumns.contains(pos);
+        })
+    );
+    size_t const queuedOuterColumns = mPendingLevelChunkIndices.size() - queuedCenterColumns;
     getLogger().debug(
         "Replay center ready with {} columns in {:.3f} ms after {} ticks; streaming {} outer columns",
         mCenterChunkPositions.size(),
@@ -2261,8 +2331,6 @@ void ReplaySession::handleConfigurationPacket(PlaybackBuffer& data) {
         return;
     }
 
-    // Pre-world packets are substituted by their network hooks while the replay world joins. Dispatching them
-    // again from a snapshot would restart the handshake.
     if (semantics.lifecycle == PacketLifecycle::PreWorldHandshake) {
         mAppliedConfigurationPackets.insert_or_assign(packetIdValue, std::move(payload));
         return;

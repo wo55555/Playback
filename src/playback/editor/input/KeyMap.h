@@ -12,7 +12,6 @@ enum class EditorKeybind : uint8_t {
     Undo,
     Redo,
     DeleteSelection,
-    PlayPause,
     JumpStart,
     JumpEnd,
     SeekSecondLeft,
@@ -29,16 +28,15 @@ enum class EditorKeybind : uint8_t {
     ZoomOutTimeline,
     ResetTimelineZoom,
     ToggleViewportMaximized,
-    // Named-only entries retained for older hook/menu callers. They are not
-    // dispatched by ReplayEditor until a matching editor action exists.
     NamedOnly,
 };
 
 class KeyMap {
 public:
     // Retained for hook-side callers that still route Windows virtual keys.
-    static bool matches(const std::string& actionName, WPARAM wParam);
-    static bool matches(EditorKeybind binding, WPARAM wParam);
+    static bool               matches(const std::string& actionName, WPARAM wParam);
+    static bool               matches(EditorKeybind binding, WPARAM wParam);
+    [[nodiscard]] static bool isEditorShortcut(uint32_t keyCode, bool ctrl, bool shift, bool alt);
 
     static void initialize();
 

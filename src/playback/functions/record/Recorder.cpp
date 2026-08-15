@@ -171,7 +171,7 @@ bool remapRecordedPlayerReferences(
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
         bool  changed   = addPlayer.mEntityId->rawID == sourceUniqueId.rawID
-                    || addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
+                       || addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
         for (auto& link : *addPlayer.mLinks) {
             changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
             changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
@@ -573,8 +573,6 @@ void Recorder::endTick(bool close) {
     if (mRecordingDimension) {
         if (!localPlayer) {
             if (!close && mDimensionTransitionPending.load(std::memory_order_acquire)) {
-                // A dimension transition can temporarily detach the local player. The packets still belong to this
-                // client tick and must not be collapsed into a later snapshot boundary.
                 if (!flushGamePackets() || !writeTickBoundary()) return;
                 return;
             }
@@ -772,160 +770,168 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
         if (start >= numColumns) break;
         size_t end = std::min(start + batchSize, numColumns);
 
-        futures.push_back(std::async(
-            std::launch::async,
-            [&columns, start, end, dimension, air, dimensionMinHeight]() -> std::vector<ColumnResult> {
-                std::vector<ColumnResult> results;
-                results.reserve(end - start);
+        futures.push_back(
+            std::async(
+                std::launch::async,
+                [&columns, start, end, dimension, air, dimensionMinHeight]() -> std::vector<ColumnResult> {
+                    std::vector<ColumnResult> results;
+                    results.reserve(end - start);
 
-                auto saveContext = SaveContextFactory::createNetworkSaveContext();
-                if (!saveContext) {
-                    results.push_back({{}, {}, "Unable to create a network SaveContext for block actors"});
-                    return results;
-                }
-
-                for (size_t ci = start; ci < end; ++ci) {
-                    ColumnResult result;
-                    auto const&  pos   = columns[ci].pos;
-                    auto&        chunk = *columns[ci].chunk;
-
-                    if (chunk.mIsEmptyClientChunk
-                        || chunk.mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
-                        result.error =
-                            snapshotFailure(pos, std::nullopt, "starting column serialization", "chunk unloaded");
-                        results.push_back(std::move(result));
+                    auto saveContext = SaveContextFactory::createNetworkSaveContext();
+                    if (!saveContext) {
+                        results.push_back({{}, {}, "Unable to create a network SaveContext for block actors"});
                         return results;
                     }
 
-                    auto const& subChunks = *chunk.mSubChunks;
-                    if (subChunks.empty()) {
-                        result.error = snapshotFailure(pos, std::nullopt, "validating slots", "no subchunk slots");
-                        results.push_back(std::move(result));
-                        return results;
-                    }
-                    std::string stage = "creating LevelChunkPacket";
-                    try {
-                        auto levelBase = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
-                        if (!levelBase || levelBase->getId() != MinecraftPacketIds::FullChunkData) {
+                    for (size_t ci = start; ci < end; ++ci) {
+                        ColumnResult result;
+                        auto const&  pos   = columns[ci].pos;
+                        auto&        chunk = *columns[ci].chunk;
+
+                        if (chunk.mIsEmptyClientChunk
+                            || chunk.mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
                             result.error =
-                                snapshotFailure(pos, std::nullopt, stage, "native packet factory returned wrong type");
+                                snapshotFailure(pos, std::nullopt, "starting column serialization", "chunk unloaded");
                             results.push_back(std::move(result));
                             return results;
                         }
-                        auto level = std::static_pointer_cast<LevelChunkPacket>(std::move(levelBase));
 
-                        level->mPos                           = pos;
-                        level->mDimensionId                   = dimension;
-                        level->mCacheEnabled                  = false;
-                        level->mSubChunksCount                = 0;
-                        level->mClientNeedsToRequestSubchunks = true;
-                        level->mClientRequestSubChunkLimit    = -1;
-                        level->mCacheMetadata->clear();
-
-                        stage = "serializing biome and border data";
-                        BinaryStream     levelPayload;
-                        VarIntDataOutput levelOutput(levelPayload);
-                        chunk.serializeBiomes(levelOutput);
-                        chunk.serializeBorderBlocks(levelOutput);
-                        level->mSerializedChunk = std::move(levelPayload.mBuffer);
-
-                        stage             = "creating SubChunkPacket";
-                        auto subChunkBase = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
-                        if (!subChunkBase || subChunkBase->getId() != MinecraftPacketIds::SubChunkPacket) {
-                            result.error =
-                                snapshotFailure(pos, std::nullopt, stage, "native packet factory returned wrong type");
+                        auto const& subChunks = *chunk.mSubChunks;
+                        if (subChunks.empty()) {
+                            result.error = snapshotFailure(pos, std::nullopt, "validating slots", "no subchunk slots");
                             results.push_back(std::move(result));
                             return results;
                         }
-                        auto      subChunkPacket   = std::static_pointer_cast<SubChunkPacket>(std::move(subChunkBase));
-                        int const minimumSubChunkY = dimensionMinHeight / 16;
-
-                        subChunkPacket->mCacheEnabled  = false;
-                        subChunkPacket->mDimensionType = dimension;
-                        subChunkPacket->mCenterPos     = SubChunkPos{pos.x, minimumSubChunkY, pos.z};
-                        subChunkPacket->mSubChunkData->clear();
-                        subChunkPacket->mSubChunkData->reserve(subChunks.size());
-
-                        for (size_t index = 0; index < subChunks.size(); ++index) {
-                            auto const& subChunk        = subChunks[index];
-                            int const   actualAbsoluteY = static_cast<int>(static_cast<schar>(subChunk.mAbsoluteIndex));
-                            stage                       = "validating subchunk slot";
-
-                            // Request-mode columns contain placeholders for sections the client has not received.
-                            // They are not air and are recorded later if the server sends a successful response.
-                            if (subChunk.isPlaceHolderSubChunk()) continue;
-                            if (subChunk.mSubChunkState != SubChunk::SubChunkState::Normal
-                                && subChunk.mSubChunkState != SubChunk::SubChunkState::RequestFinished) {
-                                continue;
-                            }
-
-                            int const relativeY = actualAbsoluteY - minimumSubChunkY;
-                            if (relativeY < std::numeric_limits<schar>::min()
-                                || relativeY > std::numeric_limits<schar>::max()) {
+                        std::string stage = "creating LevelChunkPacket";
+                        try {
+                            auto levelBase = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
+                            if (!levelBase || levelBase->getId() != MinecraftPacketIds::FullChunkData) {
                                 result.error = snapshotFailure(
                                     pos,
-                                    actualAbsoluteY,
+                                    std::nullopt,
                                     stage,
-                                    "subchunk offset is outside the packet range"
+                                    "native packet factory returned wrong type"
                                 );
                                 results.push_back(std::move(result));
                                 return results;
                             }
+                            auto level = std::static_pointer_cast<LevelChunkPacket>(std::move(levelBase));
 
-                            BinaryStream serializedSubChunk;
-                            bool const   allAir = subChunk.isUniform(*air);
-                            if (!allAir) {
-                                stage = "serializing subchunk";
-                                VarIntDataOutput subChunkOutput(serializedSubChunk);
-                                // Persistent block-state palettes are independent of the source world's runtime
-                                // network IDs, which can differ for servers with custom blocks such as Hive.
-                                subChunk.serialize(subChunkOutput, false);
-                            }
+                            level->mPos                           = pos;
+                            level->mDimensionId                   = dimension;
+                            level->mCacheEnabled                  = false;
+                            level->mSubChunksCount                = 0;
+                            level->mClientNeedsToRequestSubchunks = true;
+                            level->mClientRequestSubChunkLimit    = -1;
+                            level->mCacheMetadata->clear();
 
-                            stage = "serializing block actors";
-                            {
-                                VarIntDataOutput blockActorOutput(serializedSubChunk);
-                                chunk.serializeBlockEntitiesForSubChunk(
-                                    blockActorOutput,
-                                    SubChunkPos{pos.x, actualAbsoluteY, pos.z},
-                                    *saveContext
+                            stage = "serializing biome and border data";
+                            BinaryStream     levelPayload;
+                            VarIntDataOutput levelOutput(levelPayload);
+                            chunk.serializeBiomes(levelOutput);
+                            chunk.serializeBorderBlocks(levelOutput);
+                            level->mSerializedChunk = std::move(levelPayload.mBuffer);
+
+                            stage             = "creating SubChunkPacket";
+                            auto subChunkBase = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
+                            if (!subChunkBase || subChunkBase->getId() != MinecraftPacketIds::SubChunkPacket) {
+                                result.error = snapshotFailure(
+                                    pos,
+                                    std::nullopt,
+                                    stage,
+                                    "native packet factory returned wrong type"
                                 );
+                                results.push_back(std::move(result));
+                                return results;
+                            }
+                            auto subChunkPacket = std::static_pointer_cast<SubChunkPacket>(std::move(subChunkBase));
+                            int const minimumSubChunkY = dimensionMinHeight / 16;
+
+                            subChunkPacket->mCacheEnabled  = false;
+                            subChunkPacket->mDimensionType = dimension;
+                            subChunkPacket->mCenterPos     = SubChunkPos{pos.x, minimumSubChunkY, pos.z};
+                            subChunkPacket->mSubChunkData->clear();
+                            subChunkPacket->mSubChunkData->reserve(subChunks.size());
+
+                            for (size_t index = 0; index < subChunks.size(); ++index) {
+                                auto const& subChunk = subChunks[index];
+                                int const   actualAbsoluteY =
+                                    static_cast<int>(static_cast<schar>(subChunk.mAbsoluteIndex));
+                                stage = "validating subchunk slot";
+
+                                if (subChunk.isPlaceHolderSubChunk()) continue;
+                                if (subChunk.mSubChunkState != SubChunk::SubChunkState::Normal
+                                    && subChunk.mSubChunkState != SubChunk::SubChunkState::RequestFinished) {
+                                    continue;
+                                }
+
+                                int const relativeY = actualAbsoluteY - minimumSubChunkY;
+                                if (relativeY < std::numeric_limits<schar>::min()
+                                    || relativeY > std::numeric_limits<schar>::max()) {
+                                    result.error = snapshotFailure(
+                                        pos,
+                                        actualAbsoluteY,
+                                        stage,
+                                        "subchunk offset is outside the packet range"
+                                    );
+                                    results.push_back(std::move(result));
+                                    return results;
+                                }
+
+                                BinaryStream serializedSubChunk;
+                                bool const   allAir = subChunk.isUniform(*air);
+                                if (!allAir) {
+                                    stage = "serializing subchunk";
+                                    VarIntDataOutput subChunkOutput(serializedSubChunk);
+                                    subChunk.serialize(subChunkOutput, false);
+                                }
+
+                                stage = "serializing block actors";
+                                {
+                                    VarIntDataOutput blockActorOutput(serializedSubChunk);
+                                    chunk.serializeBlockEntitiesForSubChunk(
+                                        blockActorOutput,
+                                        SubChunkPos{pos.x, actualAbsoluteY, pos.z},
+                                        *saveContext
+                                    );
+                                }
+
+                                SubChunkPacket::SubChunkPosOffset offset{};
+                                offset.mX             = 0;
+                                offset.mY             = static_cast<schar>(relativeY);
+                                offset.mZ             = 0;
+                                auto const resultFlag = allAir ? SubChunkPacket::SubChunkRequestResult::SuccessAllAir
+                                                               : SubChunkPacket::SubChunkRequestResult::Success;
+                                subChunkPacket->mSubChunkData->emplace_back(offset, resultFlag);
+                                auto& data               = subChunkPacket->mSubChunkData->back();
+                                data.mSerializedSubChunk = std::move(serializedSubChunk.mBuffer);
+                                data.mBlobId             = 0;
+
+                                stage = "populating heightmaps";
+                                chunk.populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
                             }
 
-                            SubChunkPacket::SubChunkPosOffset offset{};
-                            offset.mX             = 0;
-                            offset.mY             = static_cast<schar>(relativeY);
-                            offset.mZ             = 0;
-                            auto const resultFlag = allAir ? SubChunkPacket::SubChunkRequestResult::SuccessAllAir
-                                                           : SubChunkPacket::SubChunkRequestResult::Success;
-                            subChunkPacket->mSubChunkData->emplace_back(offset, resultFlag);
-                            auto& data               = subChunkPacket->mSubChunkData->back();
-                            data.mSerializedSubChunk = std::move(serializedSubChunk.mBuffer);
-                            data.mBlobId             = 0;
-
-                            stage = "populating heightmaps";
-                            chunk.populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
+                            result.levelChunk = std::move(level);
+                            if (!subChunkPacket->mSubChunkData->empty()) {
+                                result.subChunk = std::move(subChunkPacket);
+                            }
+                        } catch (std::exception const& exception) {
+                            result.error = snapshotFailure(pos, std::nullopt, stage, exception.what());
+                            results.push_back(std::move(result));
+                            return results;
+                        } catch (...) {
+                            result.error =
+                                snapshotFailure(pos, std::nullopt, stage, "unknown engine serialization error");
+                            results.push_back(std::move(result));
+                            return results;
                         }
 
-                        result.levelChunk = std::move(level);
-                        if (!subChunkPacket->mSubChunkData->empty()) {
-                            result.subChunk = std::move(subChunkPacket);
-                        }
-                    } catch (std::exception const& exception) {
-                        result.error = snapshotFailure(pos, std::nullopt, stage, exception.what());
                         results.push_back(std::move(result));
-                        return results;
-                    } catch (...) {
-                        result.error = snapshotFailure(pos, std::nullopt, stage, "unknown engine serialization error");
-                        results.push_back(std::move(result));
-                        return results;
                     }
-
-                    results.push_back(std::move(result));
+                    return results;
                 }
-                return results;
-            }
-        ));
+            )
+        );
     }
 
     // Collect results from all batches
@@ -1064,7 +1070,8 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
             }
 
             if (actor.isPlayer() || actor.hasCategory(ActorCategory::Mob)) {
-                auto const selectedSlot = actor.isPlayer() ? static_cast<Player const&>(actor).getSelectedItemSlot() : 0;
+                auto const selectedSlot =
+                    actor.isPlayer() ? static_cast<Player const&>(actor).getSelectedItemSlot() : 0;
                 PlaybackSetEquipmentPacket equipment(actor, runtimeId, selectedSlot);
                 for (auto const& packet : equipment.createPackets()) {
                     appendEntityPacket(*packet);
@@ -1452,13 +1459,9 @@ bool Recorder::writeLocalPlayerState() {
     SetActorDataPacket actorData(localPlayer->getRuntimeID(), *localPlayer->mEntityData, properties, 0, true);
     recordChanged(actorData, mLastLocalPlayerDataPacket);
 
-    PlaybackSetEquipmentPacket equipment(
-        *localPlayer,
-        localPlayer->getRuntimeID(),
-        localPlayer->getSelectedItemSlot()
-    );
-    auto const* previousEquipment = mLastLocalPlayerEquipmentPacket ? &*mLastLocalPlayerEquipmentPacket : nullptr;
-    auto        equipmentPackets = equipment.createPackets(previousEquipment);
+    PlaybackSetEquipmentPacket equipment(*localPlayer, localPlayer->getRuntimeID(), localPlayer->getSelectedItemSlot());
+    auto const* previousEquipment   = mLastLocalPlayerEquipmentPacket ? &*mLastLocalPlayerEquipmentPacket : nullptr;
+    auto        equipmentPackets    = equipment.createPackets(previousEquipment);
     mLastLocalPlayerEquipmentPacket = std::move(equipment);
     for (auto const& packet : equipmentPackets) {
         recordGamePacket(*packet);
@@ -1537,7 +1540,7 @@ void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSe
         PlaybackBuffer stream;
         packet.write(stream);
 
-        auto const packetId = static_cast<int32_t>(packetType);
+        auto const       packetId = static_cast<int32_t>(packetType);
         std::scoped_lock lock(mPendingGamePacketsMutex);
 
         if (semantics.startsConfigurationEpoch) {
@@ -1551,9 +1554,7 @@ void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSe
                 std::remove_if(
                     mConfigurationPackets.begin(),
                     mConfigurationPackets.end(),
-                    [supersededPacketId](auto const& cached) {
-                        return cached.mPacketId == supersededPacketId;
-                    }
+                    [supersededPacketId](auto const& cached) { return cached.mPacketId == supersededPacketId; }
                 ),
                 mConfigurationPackets.end()
             );
@@ -1563,7 +1564,7 @@ void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSe
             }
         }
 
-        auto const       existing = mConfigurationPacketIndices.find(packetId);
+        auto const existing = mConfigurationPacketIndices.find(packetId);
         if (existing != mConfigurationPacketIndices.end()) {
             auto& cached = mConfigurationPackets[existing->second];
             if (cached.mPayload == stream.mBuffer) return;
@@ -1625,7 +1626,8 @@ void Recorder::recordGamePacket(Packet const& packet) {
             std::vector<SubChunkPacket::SubChunkPacketData> successfulEntries;
             successfulEntries.reserve(filteredPacket.mSubChunkData->size());
             for (auto const& entry : *filteredPacket.mSubChunkData) {
-                if (isSuccessfulSubChunkResult(static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
+                if (isSuccessfulSubChunkResult(
+                        static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
                     )) {
                     successfulEntries.emplace_back(entry);
                 }

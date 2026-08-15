@@ -9,15 +9,16 @@ class CameraKeyframeHandler;
 
 struct CameraKeyframeChange {
     editing::model::Vec3 position{};
-    float                yaw{};
-    float                pitch{};
-    float                roll{};
-    float                fov{90.0f};
+    float yaw{};
+    float pitch{};
+    float roll{};
 
     void apply(CameraKeyframeHandler& handler) const;
 
     [[nodiscard]] CameraRenderState toRenderState() const noexcept;
+
     [[nodiscard]] static CameraKeyframeChange
+
     interpolate(CameraKeyframeChange const& left, CameraKeyframeChange const& right, float amount);
 };
 

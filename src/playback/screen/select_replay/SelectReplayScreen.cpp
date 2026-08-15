@@ -984,8 +984,6 @@ void SelectReplayScreen::drawCard(
     ImGui::SetCursorPos({kCardLayout.previewInset, kCardLayout.previewInset});
     drawPreview(replay, {previewWidth, previewHeight});
 
-    // InvisibleButton activates on release, but ImGui reports a double-click on the second press.
-    // Detect it on that press while the card is hovered.
     ImGui::SetCursorPos({0.0f, 0.0f});
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##select-card", {width, height});
@@ -1523,8 +1521,8 @@ void SelectReplayScreen::drawDetails() {
             + kDetailsLayout.metadataWrapReserve;
         float const contentLimitedPreviewHeight = ImGui::GetWindowHeight() - kDetailsLayout.previewToMetadataGap
                                                 - estimatedMetadataHeight - kDetailsLayout.detailContentBottomGap;
-        float const ratioLimitedPreviewHeight = ImGui::GetWindowHeight() * kDetailsLayout.detailPreviewMaxHeightRatio;
-        float const maxPreviewHeight          = std::max(
+        float const ratioLimitedPreviewHeight   = ImGui::GetWindowHeight() * kDetailsLayout.detailPreviewMaxHeightRatio;
+        float const maxPreviewHeight            = std::max(
             kDetailsLayout.detailPreviewMinHeight,
             std::min(contentLimitedPreviewHeight, ratioLimitedPreviewHeight)
         );

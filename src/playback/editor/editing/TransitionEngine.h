@@ -17,9 +17,6 @@ struct RenderPlan {
 
 class TransitionEngine {
 public:
-    // Called per frame during render
-    // Input: current timeline tick + full editor state
-    // Output: which clips to render and how to blend
     static RenderPlan planAt(int timelineTick, const model::EditorStateExt& editor);
 
 private:

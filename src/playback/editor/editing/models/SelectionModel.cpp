@@ -20,7 +20,7 @@ std::vector<std::string> SelectionModel::selectedIds() const {
         [](const auto& sel) -> std::vector<std::string> {
             using T = std::decay_t<decltype(sel)>;
             if constexpr (std::is_same_v<T, SelectedKeyframe>) {
-                return {sel.trackId, sel.keyframeId};
+                return {sel.trackId, std::to_string(sel.tick)};
             } else if constexpr (std::is_same_v<T, SelectedClip>) {
                 return {sel.trackId, sel.clipId};
             } else if constexpr (std::is_same_v<T, SelectedMarker>) {
@@ -31,8 +31,9 @@ std::vector<std::string> SelectionModel::selectedIds() const {
                 return {sel.transitionId};
             } else if constexpr (std::is_same_v<T, SelectedSequence>) {
                 return {"sequence"};
-            } else if constexpr (std::is_same_v<T, SelectedSequenceSegment>
-                                 || std::is_same_v<T, SelectedWorldActorSegment>) {
+            } else if constexpr (
+                std::is_same_v<T, SelectedSequenceSegment> || std::is_same_v<T, SelectedWorldActorSegment>
+            ) {
                 return {sel.segmentId};
             } else if constexpr (std::is_same_v<T, SelectedWorldActor>) {
                 return {"worldActor"};

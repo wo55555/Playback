@@ -29,10 +29,7 @@ public:
     void                                       requestReplayThumbnailCapture() override;
     [[nodiscard]] bool                         saveReplayThumbnail(std::filesystem::path const& output) override;
     [[nodiscard]] functions::render::FrameTap& frameTap();
-    // Capture the scene resource after the renderer's own submission has
-    // completed. This path owns its copy/resolve command list and never reads
-    // the swap-chain image used by ImGui.
-    [[nodiscard]] bool captureSubmittedD3D12Frame(
+    [[nodiscard]] bool                         captureSubmittedD3D12Frame(
         ID3D12Device*       device,
         ID3D12CommandQueue* queue,
         ID3D12Resource*     source,

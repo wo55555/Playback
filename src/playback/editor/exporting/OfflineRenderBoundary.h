@@ -55,8 +55,6 @@ struct OfflineRenderBoundaryStatus {
     uint32_t                         warmupStableFrames{};
 };
 
-// Owns the boundary between replay-sample preparation and its rendered output.
-// A sample cannot advance until the matching GPU download has completed.
 class OfflineRenderBoundary {
 public:
     OfflineRenderBoundary(functions::ReplaySession& replay, functions::render::FrameTap& frameTap);
@@ -78,9 +76,6 @@ public:
     [[nodiscard]] OfflineRenderStepResult advance(ExportFramePlan const& frame);
     [[nodiscard]] bool                    beginDrain();
     [[nodiscard]] bool                    isDrained();
-    // Reject a completed clear-only frame and render the exact same fractional
-    // sample again. The previous submitted sample remains the clock reference,
-    // so the retry has deltaTicks == 0.
     [[nodiscard]] bool retryCompletedFrame(functions::render::FrameTicket const& ticket);
 
     [[nodiscard]] std::optional<functions::render::CapturedFrame> finishDownload();
@@ -115,6 +110,8 @@ private:
     std::chrono::steady_clock::time_point            mRenderWaitStartedAt{};
     std::chrono::steady_clock::time_point            mRenderWaitLastLoggedAt{};
     std::chrono::steady_clock::time_point            mReplayTickRequestedAt{};
+    std::chrono::steady_clock::time_point            mWarmupStartedAt{};
+    std::chrono::steady_clock::time_point            mWarmupLastLoggedAt{};
     bool                                             mTickGateOpen{};
     bool                                             mTickGateSuspendedForDimension{};
     bool                                             mTimelineInitialized{};

@@ -16,9 +16,10 @@ void               setUiVisible(bool visible);
 void               setGameInputCaptured(bool captured);
 [[nodiscard]] bool isGameInputCaptured();
 
-// Routes a key event to MCBE or queues it for the next ImGui frame.
-// Returns true when MCBE should consume the event.
-[[nodiscard]] bool routeKeyEvent(uint32_t keyCode, bool down);
+void               setUiKeyboardCaptured(bool captured);
+[[nodiscard]] bool isUiKeyboardCaptured();
+
+[[nodiscard]] bool routeKeyEvent(uint32_t keyCode, bool down, bool forceUi = false);
 
 // Releases locally tracked keys when the application loses focus.
 void releaseKeysForFocusLoss();

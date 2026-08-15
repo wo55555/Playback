@@ -204,10 +204,6 @@ void EditorMenuBar::draw() {
             ImGui::TableSetupColumn("##playback-key", ImGuiTableColumnFlags_WidthFixed, 190.0f);
             ImGui::TableSetupColumn("##playback-command", ImGuiTableColumnFlags_WidthStretch);
             shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::PlayPause),
-                "playback.refactorEditor.shortcuts.playPause"_tr()
-            );
-            shortcutRow(
                 shortcutPair(input::EditorKeybind::JumpStart, input::EditorKeybind::JumpEnd),
                 "playback.refactorEditor.shortcuts.jumpEdges"_tr()
             );

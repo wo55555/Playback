@@ -36,7 +36,6 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::NamedOnly,                "playback.editor.copy",            'C',         true,  false, false},
     {EditorKeybind::NamedOnly,                "playback.editor.paste",           'V',         true,  false, false},
     // Playback
-    {EditorKeybind::PlayPause,                "playback.editor.playPause",       VK_SPACE,    false, false, false},
     {EditorKeybind::JumpStart,                "playback.editor.jumpStart",       VK_HOME,     false, false, false},
     {EditorKeybind::JumpEnd,                  "playback.editor.jumpEnd",         VK_END,      false, false, false},
     {EditorKeybind::SeekSecondLeft,           "playback.editor.stepSecondLeft",  VK_LEFT,     false, false, false},
@@ -198,6 +197,13 @@ bool KeyMap::matches(EditorKeybind bindingId, WPARAM wParam) {
     bool const alt   = currentWindowsModifier(VK_MENU);
     return anyBinding([&](KeyBinding const& binding) {
         return binding.id == bindingId && binding.vkey == static_cast<UINT>(wParam)
+            && modifiersMatch(binding, ctrl, shift, alt);
+    });
+}
+
+bool KeyMap::isEditorShortcut(uint32_t keyCode, bool ctrl, bool shift, bool alt) {
+    return anyBinding([&](KeyBinding const& binding) {
+        return binding.id != EditorKeybind::NamedOnly && binding.vkey == keyCode
             && modifiersMatch(binding, ctrl, shift, alt);
     });
 }

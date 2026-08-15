@@ -34,12 +34,30 @@ using ResizeBuffers1Fn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, UINT const*, IUnknown* const*);
 using CreateSwapChainFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
-using CreateSwapChainForHwndFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, DXGI_SWAP_CHAIN_DESC1 const*, DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*, IDXGIOutput*, IDXGISwapChain1**);
-using CreateSwapChainForCoreWindowFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
-using CreateSwapChainForCompositionFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
+using CreateSwapChainForHwndFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    HWND,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
+using CreateSwapChainForCoreWindowFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    IUnknown*,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
+using CreateSwapChainForCompositionFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
 using CreateCommandQueueFn =
     HRESULT(STDMETHODCALLTYPE*)(ID3D12Device*, D3D12_COMMAND_QUEUE_DESC const*, REFIID, void**);
 
@@ -587,9 +605,6 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::ClearQuad&           clearQuad,
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
-    // BGFX's submit is the first point at which the complete scene command
-    // stream has been emitted. The independent FrameTap submission is queued
-    // after this call and therefore cannot include ImGui or Present contents.
     auto const frameNumber = render ? static_cast<uint32_t>(render->m_frameNum) : 0;
     auto const ticket =
         !gRendererInitHookStopping.load(std::memory_order_acquire) && exporting::isOfflineRenderActivityActive()
@@ -604,11 +619,7 @@ LL_TYPE_INSTANCE_HOOK(
     auto        queue     = getSwapChainQueue(swapChain);
     if (!queue) queue = getDeviceQueue(device);
 
-    ID3D12Resource* source{};
-    // BGFX leaves its submitted scene resources in the post-submit states:
-    // RESOLVE_SOURCE for the MSAA scene target and COMMON for a resolved color
-    // buffer. These are the states used by the historically successful export
-    // path and are intentionally different from Present's swap-chain state.
+    ID3D12Resource*       source{};
     D3D12_RESOURCE_STATES sourceState = D3D12_RESOURCE_STATE_COMMON;
     uint32_t const        colorIndex  = static_cast<uint32_t>(this->m_backBufferColorIdx);
     auto* const           msaa        = this->m_msaaRenderTarget;
@@ -650,12 +661,9 @@ bool renderPresentFrame(IDXGISwapChain* swapChain) {
 
     ComPtr<ID3D12Device> d3d12Device;
     bool const           explicitSubmitCapture = SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d12Device)));
-    // D3D12 Present only composites the editor/export overlay. The exact BGFX
-    // submit recorded by Context::swap is the sole video source, including
-    // while an older swap-chain image is being presented concurrently.
-    auto       ticket           = explicitSubmitCapture ? std::nullopt : exporting::claimOfflineRenderPresentFallback();
-    bool const captureRequested = ticket && gImGuiRenderer.frameTap().hasArmedCapture();
-    bool const rendered         = gImGuiRenderer.render(swapChain, !explicitSubmitCapture);
+    auto                 ticket = explicitSubmitCapture ? std::nullopt : exporting::claimOfflineRenderPresentFallback();
+    bool const           captureRequested = ticket && gImGuiRenderer.frameTap().hasArmedCapture();
+    bool const           rendered         = gImGuiRenderer.render(swapChain, !explicitSubmitCapture);
     if (!ticket) return rendered;
 
     bool const captureStarted = captureRequested && rendered && !gImGuiRenderer.frameTap().hasArmedCapture();
@@ -982,8 +990,10 @@ bool hookD3D12(bool enable) {
         }
         bool const captureOk = installCaptureHooks(state);
         if (!captureOk) {
-            getLogger().warn("One or more replay queue capture hooks are unavailable; existing swap chains require a "
-                             "unique captured Direct queue");
+            getLogger().warn(
+                "One or more replay queue capture hooks are unavailable; existing swap chains require a "
+                "unique captured Direct queue"
+            );
         }
         if (installCoreHooks(state)) {
             gTimelineHooksStopping.store(false, std::memory_order_release);

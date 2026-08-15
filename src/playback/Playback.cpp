@@ -4,8 +4,8 @@
 #include "playback/Playback.h"
 #include "playback/command/Command.h"
 #include "playback/editor/ReplayUI.h"
-#include "playback/editor/renderer/CameraRenderHooks.h"
 #include "playback/editor/exporting/OfflineRenderClockHooks.h"
+#include "playback/editor/renderer/CameraRenderHooks.h"
 #include "playback/functions/action/Action.h"
 #include "playback/functions/record/ChunkMutationBarrier.h"
 #include "playback/functions/record/Recorder.h"
@@ -41,6 +41,7 @@ struct Playback::Impl {
     std::set<ll::event::ListenerPtr> mEventListeners;
     std::atomic<PlaybackMode>        mMode{PlaybackMode::Unknown};
     std::string                      mLevelId;
+    bool                             mCameraRenderInstalled{};
     bool                             mRuntimeInstalled{};
 };
 
@@ -83,19 +84,8 @@ bool Playback::hook() {
     if (!screen::hookIdleDetection(true)) {
         getSelf().getLogger().warn("Unable to install the idle detection guard; video export is disabled");
     }
-    if (!editor::exporting::hookOfflineRenderClock(true)) {
-        getSelf().getLogger().warn("Unable to install the fractional render clock; video export is disabled");
-    }
-    if (!editor::renderer::hookCameraRender(true)) {
-        getSelf().getLogger().warn("Unable to install the camera render hook; camera timelines are disabled");
-    }
+    getSelf().getLogger().debug("Offline render hooks deferred until video export starts");
     if (!functions::hookNetwork(true)) {
-        if (!editor::exporting::hookOfflineRenderClock(false)) {
-            getSelf().getLogger().error("Unable to roll back the fractional render clock after network hook failure");
-        }
-        if (!editor::renderer::hookCameraRender(false)) {
-            getSelf().getLogger().error("Unable to roll back the camera render hook after network hook failure");
-        }
         (void)screen::hookIdleDetection(false);
         screen::hookMainMenu(false);
         return false;
@@ -104,15 +94,13 @@ bool Playback::hook() {
         if (!functions::hookNetwork(false)) {
             getSelf().getLogger().error("Unable to roll back replay network hooks after client tick hook failure");
         }
-        if (!editor::exporting::hookOfflineRenderClock(false)) {
-            getSelf().getLogger().error("Unable to roll back fractional render clock after client tick hook failure");
-        }
-        if (!editor::renderer::hookCameraRender(false)) {
-            getSelf().getLogger().error("Unable to roll back camera render hook after client tick hook failure");
-        }
         (void)screen::hookIdleDetection(false);
         screen::hookMainMenu(false);
         return false;
+    }
+    impl->mCameraRenderInstalled = editor::renderer::hookCameraRender(true);
+    if (!impl->mCameraRenderInstalled) {
+        getSelf().getLogger().warn("Unable to install camera render hooks; camera timelines are disabled");
     }
 
     getEventListeners().emplace(
@@ -133,13 +121,15 @@ bool Playback::hook() {
             functions::ReplaySession::getInstance().onLevelJoinCancelled();
         })
     );
-    getEventListeners().emplace(ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
-        [this](ll::event::ClientJoinLevelEvent& event) {
-            functions::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asMultiPlayerLevel());
-            functions::ReplaySession::getInstance().onLevelJoined(event.player());
-            refreshMode(event.player().getLevel());
-        }
-    ));
+    getEventListeners().emplace(
+        ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
+            [this](ll::event::ClientJoinLevelEvent& event) {
+                functions::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asMultiPlayerLevel());
+                functions::ReplaySession::getInstance().onLevelJoined(event.player());
+                refreshMode(event.player().getLevel());
+            }
+        )
+    );
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientExitLevelEvent>([this](auto&&) {
             auto& replaySession = functions::ReplaySession::getInstance();
@@ -157,12 +147,18 @@ bool Playback::hook() {
 
 bool Playback::unhook() {
     if (!impl->mRuntimeInstalled) return true;
-    if (!functions::hookClientTick(false)) return false;
+    if (impl->mCameraRenderInstalled && !editor::renderer::hookCameraRender(false)) return false;
+    if (!functions::hookClientTick(false)) {
+        if (impl->mCameraRenderInstalled) (void)editor::renderer::hookCameraRender(true);
+        return false;
+    }
     if (!functions::hookNetwork(false)) {
-        bool tickRestored = functions::hookClientTick(true);
+        bool tickRestored   = functions::hookClientTick(true);
+        bool cameraRestored = !impl->mCameraRenderInstalled || editor::renderer::hookCameraRender(true);
         getSelf().getLogger().error(
-            "Unable to remove replay network hooks; client tick hook restoration={}",
-            tickRestored
+            "Unable to remove replay network hooks; client tick hook restoration={}, camera hook restoration={}",
+            tickRestored,
+            cameraRestored
         );
         return false;
     }
@@ -170,55 +166,33 @@ bool Playback::unhook() {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = functions::hookNetwork(true);
         bool tickRestored    = functions::hookClientTick(true);
+        bool cameraRestored  = !impl->mCameraRenderInstalled || editor::renderer::hookCameraRender(true);
         getSelf().getLogger().error(
             "Unable to remove replay UI hooks (ui restoration={}, network restoration={}, "
-            "client tick restoration={})",
+            "client tick restoration={}, camera hook restoration={})",
             uiRestored,
             networkRestored,
-            tickRestored
+            tickRestored,
+            cameraRestored
         );
         return false;
     }
     if (!editor::exporting::hookOfflineRenderClock(false)) {
-        bool uiRestored      = editor::hookReplayUI(true);
-        bool networkRestored = functions::hookNetwork(true);
-        bool tickRestored    = functions::hookClientTick(true);
-        getSelf().getLogger().error(
-            "Unable to remove the fractional render clock (UI restoration={}, network restoration={}, "
-            "client tick restoration={})",
-            uiRestored,
-            networkRestored,
-            tickRestored
-        );
-        return false;
-    }
-    if (!editor::renderer::hookCameraRender(false)) {
-        bool clockRestored   = editor::exporting::hookOfflineRenderClock(true);
-        bool uiRestored      = editor::hookReplayUI(true);
-        bool networkRestored = functions::hookNetwork(true);
-        bool tickRestored    = functions::hookClientTick(true);
-        getSelf().getLogger().error(
-            "Unable to remove camera render hooks (clock restoration={}, UI restoration={}, "
-            "network restoration={}, client tick restoration={})",
-            clockRestored,
-            uiRestored,
-            networkRestored,
-            tickRestored
-        );
+        getSelf().getLogger().error("Unable to remove export-scoped offline render hooks during shutdown");
         return false;
     }
     if (!screen::hookIdleDetection(false)) {
-        bool clockRestored   = editor::exporting::hookOfflineRenderClock(true);
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = functions::hookNetwork(true);
         bool tickRestored    = functions::hookClientTick(true);
+        bool cameraRestored  = !impl->mCameraRenderInstalled || editor::renderer::hookCameraRender(true);
         getSelf().getLogger().error(
-            "Unable to remove the idle detection guard (clock restoration={}, UI restoration={}, "
-            "network restoration={}, client tick restoration={})",
-            clockRestored,
+            "Unable to remove the idle detection guard (UI restoration={}, network restoration={}, client tick "
+            "restoration={}, camera hook restoration={})",
             uiRestored,
             networkRestored,
-            tickRestored
+            tickRestored,
+            cameraRestored
         );
         return false;
     }
@@ -227,7 +201,8 @@ bool Playback::unhook() {
     getEventListeners().clear();
     impl->mLevelId.clear();
     impl->mMode.store(PlaybackMode::Unknown);
-    impl->mRuntimeInstalled = false;
+    impl->mCameraRenderInstalled = false;
+    impl->mRuntimeInstalled      = false;
     return true;
 }
 

@@ -64,9 +64,6 @@ struct ImGuiSurfaceMetrics {
     ImVec2 framebufferScale;
 };
 
-// Keep ImGui coordinates in window-client pixels while allowing Bedrock to use
-// a larger offline backbuffer. The DX backends map those logical coordinates
-// through FramebufferScale when they emit draw commands.
 ImGuiSurfaceMetrics getImGuiSurfaceMetrics(IDXGISwapChain* swapChain, uint32_t width, uint32_t height) {
     ImGuiSurfaceMetrics metrics{
         ImVec2(static_cast<float>(width), static_cast<float>(height)),
@@ -280,11 +277,11 @@ struct ImGuiRenderer::Impl {
         auto const fontPathString = fontPath.string();
         ImFont*    font           = fontPathString.empty() ? nullptr
                                                            : io.Fonts->AddFontFromFileTTF(
-                                                    fontPathString.c_str(),
-                                                    14.0f,
-                                                    nullptr,
-                                                    io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-                                                );
+                                                                 fontPathString.c_str(),
+                                                                 14.0f,
+                                                                 nullptr,
+                                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                                                             );
         if (font) io.FontDefault = font;
         else io.Fonts->AddFontDefault();
         ImFontConfig cfg;
@@ -498,7 +495,8 @@ struct ImGuiRenderer::Impl {
             f.rtv = rtv;
             device->CreateRenderTargetView(f.backBuffer.Get(), nullptr, f.rtv);
             rtv.ptr += static_cast<SIZE_T>(rtvDescSize);
-            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
+            if (FAILED(
+                    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
                 )) {
                 initialized = true;
                 this->shutdown();
@@ -706,8 +704,6 @@ struct ImGuiRenderer::Impl {
         d3d12ThumbnailTextures.clear();
     }
 
-    // Uploads a decoded RGBA8 thumbnail into a D3D12 SRV on the game's command queue and waits
-    // for the upload to finish so the returned GPU descriptor is immediately usable by ImGui.
     void* acquireD3D12ThumbnailTexture(std::string const& key, functions::render::ReplayThumbnailPixels const& pixels) {
         if (!device || !commandQueue || !srvHeap || srvDescSize == 0 || pixels.width == 0 || pixels.height == 0) {
             return nullptr;
@@ -942,11 +938,8 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
     auto const state         = p.editorContext ? p.editorContext->snapshot() : EditorState{};
     bool const browserOpen   = allowUi && state.browser.visible;
     bool const exportOverlay = allowUi && exporting::isExportActive(state.exportStatus.state);
-    // Keep the editor overlay alive while Minecraft displays a native menu
-    // (for example the pause screen). The game frame is drawn inside the
-    // editor viewport, so the menu remains contained by the game window.
-    bool const editorOpen = allowUi && state.editorVisible;
-    bool const uiActive   = browserOpen || editorOpen;
+    bool const editorOpen    = allowUi && state.editorVisible;
+    bool const uiActive      = browserOpen || editorOpen;
     if (allowUi) input::setUiVisible(uiActive);
 
     auto const browserRevision = allowUi && state.browser.snapshot ? state.browser.snapshot->revision : 0;
@@ -956,8 +949,6 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
         p.browserSnapshotRevision = browserRevision;
     }
     if (p.d3d11Initialized) p.d3d11FrameTap.poll(p.d3d11Context.Get());
-    // Capture the armed export or thumbnail ticket from the game backbuffer in
-    // this command list before any ImGui draw commands are recorded.
     bool const captureActive = allowFrameCapture && p.frameTap.hasArmedCapture();
     if (!uiActive && !captureActive) {
         if (allowUi) {
@@ -1007,8 +998,6 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
     MouseInputAttempt ia;
     if (!p.initialized) {
         if (!q) q = getSwapChainQueue(swapChain);
-        // Safe fallback for an already-created swap chain: use the queue only if the
-        // capture hook observed exactly one Direct queue for this device.
         if (!q) {
             ComPtr<ID3D12Device> device;
             if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&device)))) q = getDeviceQueue(device.Get());
@@ -1112,8 +1101,6 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
         addCopyBarrier(f.gameTexture.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
     }
     if (copyBarrierCount != 0) f.commandList->ResourceBarrier(copyBarrierCount, toCopy.data());
-    // The copy is ordered after Bedrock's scene work and before ImGui in the
-    // same Direct queue submission.
     bool const frameTapSubmitted = captureActive
                                 && p.d3d12FrameTap.capture(
                                     p.device.Get(),

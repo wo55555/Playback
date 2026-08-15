@@ -35,16 +35,11 @@ struct OfflineRenderBoundaryTicket {
 [[nodiscard]] bool isOfflineRenderClockInstalled();
 
 [[nodiscard]] OfflineRenderClockPublishResult
-                   publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
+publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
 [[nodiscard]] bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token);
 [[nodiscard]] bool wasOfflineRenderClockSampleCompleted(OfflineRenderClockToken token);
-// Context::swap records the exact API frame belonging to the active sample.
-// The renderer thread may claim only the matching submit; unrelated BGFX
-// submissions must not consume the export ticket.
 [[nodiscard]] std::optional<OfflineRenderBoundaryTicket>
 claimOfflineRenderBoundary(void const* frame, uint32_t frameNumber);
-// Present remains a compatibility fallback for renderers without the explicit
-// D3D12 BGFX submission path.
 [[nodiscard]] std::optional<OfflineRenderBoundaryTicket> claimOfflineRenderPresentFallback();
 void markOfflineRenderBoundaryCompleted(OfflineRenderBoundaryTicket const& ticket);
 void clearOfflineRenderClockSample(OfflineRenderClockToken token);

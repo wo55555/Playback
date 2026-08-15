@@ -22,7 +22,6 @@ struct TrackTreeRow {
     float        height{};
     bool         locked{};
     bool         enabled{true};
-    bool         pathVisible{true};
 };
 
 class TrackTreeModel {

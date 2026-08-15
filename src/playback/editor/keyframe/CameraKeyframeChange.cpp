@@ -23,7 +23,7 @@ float interpolateAngle(float left, float right, float amount) {
 void CameraKeyframeChange::apply(CameraKeyframeHandler& handler) const { handler.applyCamera(*this); }
 
 CameraRenderState CameraKeyframeChange::toRenderState() const noexcept {
-    return {position.x, position.y, position.z, yaw, pitch, roll, std::clamp(fov, 1.0f, 179.0f)};
+    return {position.x, position.y, position.z, yaw, pitch, roll};
 }
 
 CameraKeyframeChange CameraKeyframeChange::interpolate(
@@ -41,7 +41,6 @@ CameraKeyframeChange CameraKeyframeChange::interpolate(
         interpolateAngle(left.yaw, right.yaw, amount),
         interpolateAngle(left.pitch, right.pitch, amount),
         interpolateAngle(left.roll, right.roll, amount),
-        left.fov + (right.fov - left.fov) * amount,
     };
 }
 

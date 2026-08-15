@@ -11,7 +11,6 @@ ExportKeyframeApplier::~ExportKeyframeApplier() { reset(); }
 
 void ExportKeyframeApplier::configure(
     editing::model::EditorStateExt const& project,
-    std::optional<float>                  aspectRatio,
     std::optional<std::string>            cameraFallback
 ) {
     reset();
@@ -20,42 +19,34 @@ void ExportKeyframeApplier::configure(
         return;
     }
     size_t keyframeCount = 0;
-    for (auto const& camera : project.cameras) keyframeCount += camera.keys.size();
-    mTimeline = std::make_shared<keyframe::CameraTimelineEvaluator>(
-        project,
-        std::nullopt,
-        std::move(cameraFallback)
-    );
-    keyframe::publishCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline, aspectRatio);
+    for (auto const& camera : project.cameras) keyframeCount += camera.keysByTick.size();
+    mTimeline =
+        std::make_shared<keyframe::CameraTimelineEvaluator>(project, std::nullopt, std::move(cameraFallback), true);
+    keyframe::publishCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline);
     auto& logger = Playback::getInstance().getSelf().getLogger();
-    logger.info(
-        "Export camera timeline ready (cameras={}, keyframes={}, aspectRatio={})",
-        project.cameras.size(),
-        keyframeCount,
-        aspectRatio ? *aspectRatio : 0.0f
-    );
+    logger.info("Export camera pose timeline ready (cameras={}, keyframes={})", project.cameras.size(), keyframeCount);
     for (auto const& camera : project.cameras) {
-        if (camera.keys.empty()) continue;
-        auto const& first = camera.keys.front();
-        auto const& last  = camera.keys.back();
+        if (camera.keysByTick.empty()) continue;
+        auto const& first = *camera.keysByTick.begin();
+        auto const& last  = *camera.keysByTick.rbegin();
         logger.info(
-            "Export camera keyframe range (camera={}, firstTick={}, first=({}, {}, {}, yaw={}, pitch={}, fov={}), "
-            "lastTick={}, last=({}, {}, {}, yaw={}, pitch={}, fov={})",
+            "Export camera pose range (camera={}, firstTick={}, first=({}, {}, {}, yaw={}, pitch={}, roll={}), "
+            "lastTick={}, last=({}, {}, {}, yaw={}, pitch={}, roll={}))",
             camera.id,
-            first.tick,
-            first.position.x,
-            first.position.y,
-            first.position.z,
-            first.yaw,
-            first.pitch,
-            first.fov,
-            last.tick,
-            last.position.x,
-            last.position.y,
-            last.position.z,
-            last.yaw,
-            last.pitch,
-            last.fov
+            first.first,
+            first.second.position.x,
+            first.second.position.y,
+            first.second.position.z,
+            first.second.yaw,
+            first.second.pitch,
+            first.second.roll,
+            last.first,
+            last.second.position.x,
+            last.second.position.y,
+            last.second.position.z,
+            last.second.yaw,
+            last.second.pitch,
+            last.second.roll
         );
     }
 }

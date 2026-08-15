@@ -29,8 +29,6 @@ public:
         ID3D12Resource*            source,
         uint32_t                   sourceState
     );
-    // Capture a completed scene resource with a separate copy/resolve list on
-    // the same Direct queue.
     bool
     captureSubmitted(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Resource* source, uint32_t sourceState);
     void submitted(ID3D12Fence* fence, uint64_t fenceValue);

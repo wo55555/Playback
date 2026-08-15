@@ -1,4 +1,5 @@
 #include "EditorInput.h"
+#include "KeyMap.h"
 #include "playback/editor/exporting/ExportActivity.h"
 
 #include "imgui.h"
@@ -26,11 +27,13 @@ std::deque<KeyEvent> gKeyQueue;
 std::mutex           gKeyMutex;
 std::atomic<bool>    gUiVisible{};
 std::atomic<bool>    gGameInputCaptured{};
+std::atomic<bool>    gUiKeyboardCaptured{};
 
 std::unordered_set<uint32_t> gImGuiPressedKeys;
 std::unordered_set<uint32_t> gPendingImGuiReleases;
 std::unordered_set<uint32_t> gGamePressedKeys;
 std::unordered_set<uint32_t> gRoutedPressedKeys;
+std::unordered_set<uint32_t> gPhysicalPressedKeys;
 
 unsigned textCharacter(uint32_t keyCode, bool shift, bool capsLock) {
     if (keyCode >= Keyboard::Key0 && keyCode <= Keyboard::Key9) {
@@ -190,6 +193,22 @@ void releaseEditorKeysLocked() {
     gRoutedPressedKeys.clear();
 }
 
+bool isModifier(uint32_t keyCode) {
+    return keyCode == Keyboard::Lshift || keyCode == Keyboard::Control || keyCode == Keyboard::Menu;
+}
+
+void queueUiEventLocked(uint32_t keyCode, bool down) {
+    if (gKeyQueue.size() >= MaxQueuedKeyEvents) releaseEditorKeysLocked();
+    bool const     shift = gPhysicalPressedKeys.contains(Keyboard::Lshift);
+    bool const     ctrl  = gPhysicalPressedKeys.contains(Keyboard::Control);
+    bool const     alt   = gPhysicalPressedKeys.contains(Keyboard::Menu);
+    unsigned const character =
+        down && !ctrl && !alt ? textCharacter(keyCode, shift, (GetKeyState(VK_CAPITAL) & 1) != 0) : 0;
+    gKeyQueue.push_back({keyCode, down, character});
+    if (down) gRoutedPressedKeys.insert(keyCode);
+    else gRoutedPressedKeys.erase(keyCode);
+}
+
 } // namespace
 
 void syncFrame() {
@@ -218,35 +237,67 @@ void syncFrame() {
     }
 }
 
-bool routeKeyEvent(uint32_t keyCode, bool down) {
+bool routeKeyEvent(uint32_t keyCode, bool down, bool forceUi) {
     std::scoped_lock lock(gKeyMutex);
 
-    bool const gameOwnsKey = !gUiVisible.load(std::memory_order_acquire)
-                          || gGameInputCaptured.load(std::memory_order_acquire) || gGamePressedKeys.contains(keyCode);
-    if (gameOwnsKey) {
+    bool const gameOwned = gGamePressedKeys.contains(keyCode);
+    bool const uiOwned   = gRoutedPressedKeys.contains(keyCode);
+    if (down) gPhysicalPressedKeys.insert(keyCode);
+    else gPhysicalPressedKeys.erase(keyCode);
+
+    if (!down) {
+        if (uiOwned) queueUiEventLocked(keyCode, false);
+        if (gameOwned) {
+            gGamePressedKeys.erase(keyCode);
+            return true;
+        }
+        if (uiOwned) return false;
+    }
+
+    if (gameOwned) return true;
+    if (uiOwned) {
+        queueUiEventLocked(keyCode, true);
+        return false;
+    }
+
+    bool const uiExclusive = forceUi || gUiKeyboardCaptured.load(std::memory_order_acquire);
+    if (uiExclusive) {
+        queueUiEventLocked(keyCode, down);
+        return false;
+    }
+
+    bool const gameOwnsInput =
+        !gUiVisible.load(std::memory_order_acquire) || gGameInputCaptured.load(std::memory_order_acquire);
+    if (gameOwnsInput) {
         if (down) gGamePressedKeys.insert(keyCode);
-        else gGamePressedKeys.erase(keyCode);
         return true;
     }
 
-    if (gKeyQueue.size() >= MaxQueuedKeyEvents) releaseEditorKeysLocked();
-    bool const shift = gRoutedPressedKeys.contains(Keyboard::Lshift) || keyCode == Keyboard::Lshift;
-    bool const ctrl  = gRoutedPressedKeys.contains(Keyboard::Control) || keyCode == Keyboard::Control;
-    bool const alt   = gRoutedPressedKeys.contains(Keyboard::Menu) || keyCode == Keyboard::Menu;
-    unsigned   character{};
-    if (down && !ctrl && !alt) {
-        character = textCharacter(keyCode, shift, (GetKeyState(VK_CAPITAL) & 1) != 0);
+    if (isModifier(keyCode)) {
+        queueUiEventLocked(keyCode, down);
+        if (down) gGamePressedKeys.insert(keyCode);
+        return true;
     }
-    gKeyQueue.push_back({keyCode, down, character});
-    if (down) gRoutedPressedKeys.insert(keyCode);
-    else gRoutedPressedKeys.erase(keyCode);
-    return false;
+
+    bool const ctrl  = gPhysicalPressedKeys.contains(Keyboard::Control);
+    bool const shift = gPhysicalPressedKeys.contains(Keyboard::Lshift);
+    bool const alt   = gPhysicalPressedKeys.contains(Keyboard::Menu);
+    if (KeyMap::isEditorShortcut(keyCode, ctrl, shift, alt)) {
+        queueUiEventLocked(keyCode, down);
+        return false;
+    }
+
+    if (down) gGamePressedKeys.insert(keyCode);
+    return true;
 }
 
 void setUiVisible(bool visible) {
     std::scoped_lock lock(gKeyMutex);
     gUiVisible.store(visible, std::memory_order_release);
-    if (!visible) releaseEditorKeysLocked();
+    if (!visible) {
+        gUiKeyboardCaptured.store(false, std::memory_order_release);
+        releaseEditorKeysLocked();
+    }
 }
 
 bool isUiVisible() { return gUiVisible.load(std::memory_order_acquire); }
@@ -259,21 +310,28 @@ void setGameInputCaptured(bool captured) {
 
 bool isGameInputCaptured() { return gGameInputCaptured.load(std::memory_order_acquire); }
 
+void setUiKeyboardCaptured(bool captured) { gUiKeyboardCaptured.store(captured, std::memory_order_release); }
+
+bool isUiKeyboardCaptured() { return gUiKeyboardCaptured.load(std::memory_order_acquire); }
+
 void releaseKeysForFocusLoss() {
     std::scoped_lock lock(gKeyMutex);
     releaseEditorKeysLocked();
     gGamePressedKeys.clear();
+    gPhysicalPressedKeys.clear();
 }
 
 void resetInputState() {
     std::scoped_lock lock(gKeyMutex);
     gUiVisible.store(false, std::memory_order_release);
     gGameInputCaptured.store(false, std::memory_order_release);
+    gUiKeyboardCaptured.store(false, std::memory_order_release);
     gKeyQueue.clear();
     gImGuiPressedKeys.clear();
     gPendingImGuiReleases.clear();
     gGamePressedKeys.clear();
     gRoutedPressedKeys.clear();
+    gPhysicalPressedKeys.clear();
 }
 
 bool shouldMCBEConsumeMouse() {

@@ -50,10 +50,7 @@ EditorController::EditorController(EditorContext& context)
       std::make_unique<exporting::ReplayExportDriver>(mExportCoordinator, functions::ReplaySession::getInstance())
   ) {}
 
-EditorController::~EditorController() {
-    keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
-    keyframe::clearCameraTimelineRenderContext();
-}
+EditorController::~EditorController() { keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview); }
 
 void EditorController::setFrameTap(functions::render::FrameTap* frameTap) {
     if (mExportDriver) mExportDriver->setFrameTap(frameTap);
@@ -62,33 +59,58 @@ void EditorController::setFrameTap(functions::render::FrameTap* frameTap) {
 void EditorController::publishCameraTimeline() {
     if (mProject.cameras.empty()) {
         keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
-        keyframe::clearCameraTimelineRenderContext();
         return;
     }
     keyframe::publishCameraTimeline(
         keyframe::CameraTimelineSource::Preview,
-        std::make_shared<keyframe::CameraTimelineEvaluator>(mProject, mPreviewCameraId)
+        std::make_shared<keyframe::CameraTimelineEvaluator>(mProject, mPreviewCameraId, std::nullopt, false)
     );
 }
 
 std::optional<editing::model::CameraKeyframe> EditorController::captureCameraKeyframe() const {
-    if (auto const overrideState = keyframe::currentPreviewCameraOverride()) {
-        editing::model::CameraKeyframe key;
-        key.position = {overrideState->x, overrideState->y, overrideState->z};
-        key.yaw      = overrideState->yaw;
-        key.pitch    = overrideState->pitch;
-        key.roll     = overrideState->roll;
-        key.fov      = std::clamp(overrideState->fov, 1.0f, 179.0f);
-        return key;
-    }
     auto const captured = keyframe::captureClientCamera();
     if (!captured) return std::nullopt;
+    auto const& state = captured->state;
+    Playback::getInstance().getSelf().getLogger().info(
+        "Bedrock camera capture (cameraSource={}, eyeSource={}, actorSource={}, rotationSource={}, "
+        "basePosition=({}, {}, {}), nativeEye=({}, {}, {}), eyeOffsetY={}, "
+        "rotation=(yaw={}, pitch={}, roll={}), nativeForward=({}, {}, {}), nativeRight=({}, {}, {}), "
+        "nativeUp=({}, {}, {}), actorRotation=(pitch={}, yaw={}, headYaw={}), actorForward=({}, {}, {}))",
+        captured->usedWorldCamera ? "world" : "client",
+        captured->usedWorldPosition ? "world" : "client-or-actor",
+        captured->usedCameraActor ? "camera" : (captured->usedReplayPlayer ? "replay" : "local"),
+        captured->usedActorRotation ? "actor" : (captured->usedMatrixRotation ? "matrix" : "camera"),
+        state.x,
+        state.y,
+        state.z,
+        captured->nativeCameraPosition.x,
+        captured->nativeCameraPosition.y,
+        captured->nativeCameraPosition.z,
+        captured->nativeCameraPosition.y - state.y,
+        state.yaw,
+        state.pitch,
+        state.roll,
+        captured->nativeCameraForward.x,
+        captured->nativeCameraForward.y,
+        captured->nativeCameraForward.z,
+        captured->nativeCameraRight.x,
+        captured->nativeCameraRight.y,
+        captured->nativeCameraRight.z,
+        captured->nativeCameraUp.x,
+        captured->nativeCameraUp.y,
+        captured->nativeCameraUp.z,
+        captured->actorRotation.x,
+        captured->actorRotation.y,
+        captured->actorRotation.z,
+        captured->actorForward.x,
+        captured->actorForward.y,
+        captured->actorForward.z
+    );
     editing::model::CameraKeyframe key;
-    key.position = {captured->x, captured->y, captured->z};
-    key.yaw      = captured->yaw;
-    key.pitch    = captured->pitch;
-    key.roll     = captured->roll;
-    key.fov      = captured->fov;
+    key.position = {state.x, state.y, state.z};
+    key.yaw      = state.yaw;
+    key.pitch    = state.pitch;
+    key.roll     = state.roll;
     return key;
 }
 
@@ -102,7 +124,6 @@ void EditorController::reset() {
     mProject         = {};
     mPreviewCameraId.reset();
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
-    keyframe::clearCameraTimelineRenderContext();
     mCommandStack.clear();
     mActiveReplayPath.clear();
     mProjectTotalTicks              = -1;
@@ -177,7 +198,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::AddCameraKeyframe:
         if (auto captured = captureCameraKeyframe()) {
             Playback::getInstance().getSelf().getLogger().info(
-                "Captured camera keyframe (camera={}, tick={}, position=({}, {}, {}), yaw={}, pitch={}, fov={})",
+                "Captured camera keyframe (camera={}, tick={}, base=({}, {}, {}), yaw={}, pitch={}, roll={})",
                 action.id,
                 action.tick,
                 captured->position.x,
@@ -185,9 +206,12 @@ void EditorController::applyEditorAction(EditorAction const& action) {
                 captured->position.z,
                 captured->yaw,
                 captured->pitch,
-                captured->fov
+                captured->roll
             );
-            mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)), mProject);
+            mCommandStack.push(
+                CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)),
+                mProject
+            );
         } else {
             Playback::getInstance().getSelf().getLogger().warn(
                 "Camera keyframe capture unavailable (camera={}, tick={}); using model defaults",
@@ -199,18 +223,18 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::MoveCameraKeyframe:
         mCommandStack.push(
-            CommandFactory::createMoveCameraKeyframe(action.id, action.secondaryId, action.tick),
+            CommandFactory::createMoveCameraKeyframe(action.id, action.tick, action.secondaryTick),
             mProject
         );
         break;
     case EditorActionType::DeleteCameraKeyframe:
-        mCommandStack.push(CommandFactory::createDeleteCameraKeyframe(action.id, action.secondaryId), mProject);
+        mCommandStack.push(CommandFactory::createDeleteCameraKeyframe(action.id, action.tick), mProject);
         break;
     case EditorActionType::SetKeyframeInterpolation:
         mCommandStack.push(
             CommandFactory::createSetKeyframeInterpolation(
                 action.id,
-                action.secondaryId,
+                action.tick,
                 static_cast<editing::model::CameraInterpolationType>(action.kind)
             ),
             mProject
@@ -219,20 +243,11 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SetCameraEnabled:
         mCommandStack.push(CommandFactory::createSetCameraEnabled(action.id, action.value), mProject);
         break;
-    case EditorActionType::SetCameraPathVisible:
-        mCommandStack.push(CommandFactory::createSetCameraPathVisible(action.id, action.value), mProject);
-        break;
     case EditorActionType::DeleteCamera:
         mCommandStack.push(CommandFactory::createDeleteCamera(action.id), mProject);
         break;
     case EditorActionType::UnbindCamera:
         mCommandStack.push(CommandFactory::createUnbindCamera(action.id), mProject);
-        break;
-    case EditorActionType::SetCameraKind:
-        mCommandStack.push(
-            CommandFactory::createSetCameraKind(action.id, static_cast<editing::model::CameraKind>(action.kind)),
-            mProject
-        );
         break;
     case EditorActionType::CreateBindingCamera:
         mCommandStack.push(CommandFactory::createCreateBindingCamera(action.id, action.name), mProject);
@@ -241,7 +256,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(CommandFactory::createSetSubActorDetails(action.id, action.details), mProject);
         break;
     case EditorActionType::SetPreviewCamera:
-        keyframe::clearPreviewCameraOverride();
         mPreviewCameraId.reset();
         if (std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
                 return camera.id == action.id && editing::model::isCameraRenderable(camera);
@@ -250,15 +264,15 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         }
         break;
     case EditorActionType::ClearPreviewCamera:
-        keyframe::clearPreviewCameraOverride();
         mPreviewCameraId.reset();
         break;
     default:
         break;
     }
 
-    if (mPreviewCameraId
-        && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) { return camera.id == *mPreviewCameraId && editing::model::isCameraRenderable(camera); })) {
+    if (mPreviewCameraId && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
+            return camera.id == *mPreviewCameraId && editing::model::isCameraRenderable(camera);
+        })) {
         mPreviewCameraId.reset();
     }
     publishCameraTimeline();
@@ -360,9 +374,6 @@ void EditorController::tick(bool hudVisible) {
                 settings.endTick   = std::max<int64_t>(0, session.getTotalTicks());
             }
             if (mExportDriver && mExportDriver->start(std::move(settings), mProject, mPreviewCameraId)) {
-                // The first warm-up render can run later in this controller tick.
-                // Publish RenderMode before that Present so the supersampled game
-                // surface is never shown directly in the visible window.
                 publishState(hudVisible);
             }
             break;
