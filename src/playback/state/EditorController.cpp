@@ -1,15 +1,15 @@
 #include "EditorController.h"
 
 #include "playback/Playback.h"
-#include "playback/state/editing/CameraBindingOps.h"
-#include "playback/state/editing/commands/CameraCommands.h"
-#include "playback/state/editing/commands/CommandFactory.h"
+#include "playback/io/ReplayLibrary.h"
 #include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/ClientCameraCapture.h"
-#include "playback/visuals/FrameTap.h"
 #include "playback/replay/ReplaySession.h"
-#include "playback/io/ReplayLibrary.h"
+#include "playback/state/editing/CameraBindingOps.h"
+#include "playback/state/editing/commands/CameraCommands.h"
+#include "playback/state/editing/commands/CommandFactory.h"
+#include "playback/visuals/FrameTap.h"
 
 #include "ll/api/i18n/I18n.h"
 #include <algorithm>
@@ -70,47 +70,13 @@ void EditorController::publishCameraTimeline() {
 std::optional<state::editing::model::CameraKeyframe> EditorController::captureCameraKeyframe() const {
     auto const captured = keyframe::captureClientCamera();
     if (!captured) return std::nullopt;
-    auto const& state = captured->state;
-    Playback::getInstance().getSelf().getLogger().info(
-        "Bedrock camera capture (cameraSource={}, eyeSource={}, actorSource={}, rotationSource={}, "
-        "basePosition=({}, {}, {}), nativeEye=({}, {}, {}), eyeOffsetY={}, "
-        "rotation=(yaw={}, pitch={}, roll={}), nativeForward=({}, {}, {}), nativeRight=({}, {}, {}), "
-        "nativeUp=({}, {}, {}), actorRotation=(pitch={}, yaw={}, headYaw={}), actorForward=({}, {}, {}))",
-        captured->usedWorldCamera ? "world" : "client",
-        captured->usedWorldPosition ? "world" : "client-or-actor",
-        captured->usedCameraActor ? "camera" : (captured->usedReplayPlayer ? "replay" : "local"),
-        captured->usedActorRotation ? "actor" : (captured->usedMatrixRotation ? "matrix" : "camera"),
-        state.x,
-        state.y,
-        state.z,
-        captured->nativeCameraPosition.x,
-        captured->nativeCameraPosition.y,
-        captured->nativeCameraPosition.z,
-        captured->nativeCameraPosition.y - state.y,
-        state.yaw,
-        state.pitch,
-        state.roll,
-        captured->nativeCameraForward.x,
-        captured->nativeCameraForward.y,
-        captured->nativeCameraForward.z,
-        captured->nativeCameraRight.x,
-        captured->nativeCameraRight.y,
-        captured->nativeCameraRight.z,
-        captured->nativeCameraUp.x,
-        captured->nativeCameraUp.y,
-        captured->nativeCameraUp.z,
-        captured->actorRotation.x,
-        captured->actorRotation.y,
-        captured->actorRotation.z,
-        captured->actorForward.x,
-        captured->actorForward.y,
-        captured->actorForward.z
-    );
+    auto const&                           state = *captured;
     state::editing::model::CameraKeyframe key;
     key.position = {state.x, state.y, state.z};
     key.yaw      = state.yaw;
     key.pitch    = state.pitch;
     key.roll     = state.roll;
+    key.fov      = state.fov;
     return key;
 }
 
@@ -198,7 +164,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::AddCameraKeyframe:
         if (auto captured = captureCameraKeyframe()) {
             Playback::getInstance().getSelf().getLogger().info(
-                "Captured camera keyframe (camera={}, tick={}, base=({}, {}, {}), yaw={}, pitch={}, roll={})",
+                "Captured camera keyframe (camera={}, tick={}, position=({}, {}, {}), yaw={}, pitch={}, roll={}, "
+                "fov={})",
                 action.id,
                 action.tick,
                 captured->position.x,
@@ -206,7 +173,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
                 captured->position.z,
                 captured->yaw,
                 captured->pitch,
-                captured->roll
+                captured->roll,
+                captured->fov
             );
             mCommandStack.push(
                 CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)),

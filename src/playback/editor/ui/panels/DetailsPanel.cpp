@@ -452,6 +452,7 @@ void DetailsPanel::draw() {
                 key->second.pitch,
                 key->second.roll
             );
+            ImGui::Text("FOV: %.1f", key->second.fov);
             int interpolation = static_cast<int>(key->second.interpolationType);
             ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::BeginCombo("Interpolation", interpolationName(key->second.interpolationType))) {

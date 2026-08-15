@@ -1,4 +1,4 @@
-﻿#include "ClientCameraCapture.h"
+#include "ClientCameraCapture.h"
 
 #include "playback/replay/ReplaySession.h"
 
@@ -7,10 +7,16 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/LevelRenderer.h"
+#include "mc/client/renderer/game/LevelRendererCamera.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
+#include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
+#include "mc/deps/minecraft_camera/CameraRegistry.h"
+#include "mc/deps/minecraft_camera/components/CameraComponent.h"
+#include "mc/deps/core/math/Matrix.h"
 #include "mc/deps/renderer/Camera.h"
-#include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/world/actor/Actor.h"
+
+#include <glm/gtc/quaternion.hpp>
 
 #include <cmath>
 
@@ -26,11 +32,6 @@ bool finite(::glm::vec3 const& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
-bool nearZero(::glm::vec3 const& value) {
-    constexpr float Epsilon = 0.0001f;
-    return std::abs(value.x) < Epsilon && std::abs(value.y) < Epsilon && std::abs(value.z) < Epsilon;
-}
-
 float dot(::glm::vec3 const& left, ::glm::vec3 const& right) {
     return left.x * right.x + left.y * right.y + left.z * right.z;
 }
@@ -41,20 +42,100 @@ float dot(::glm::vec3 const& left, ::glm::vec3 const& right) {
     return value / length;
 }
 
-bool validDirection(::glm::vec3 const& value) {
-    float const length = std::sqrt(dot(value, value));
-    return finite(value) && std::isfinite(length) && length > 0.0001f;
-}
+bool validDirection(::glm::vec3 const& value) { return finite(value) && dot(value, value) > 0.0001f; }
 
 bool validBasis(::glm::vec3 const& right, ::glm::vec3 const& up, ::glm::vec3 const& forward) {
     if (!validDirection(right) || !validDirection(up) || !validDirection(forward)) return false;
-    auto const normalizedRight   = normalized(right);
-    auto const normalizedUp      = normalized(up);
-    auto const normalizedForward = normalized(forward);
-    constexpr float BasisTolerance = 0.08f;
-    return std::abs(dot(normalizedRight, normalizedUp)) < BasisTolerance
-        && std::abs(dot(normalizedRight, normalizedForward)) < BasisTolerance
-        && std::abs(dot(normalizedUp, normalizedForward)) < BasisTolerance;
+    auto const      normalizedRight   = normalized(right);
+    auto const      normalizedUp      = normalized(up);
+    auto const      normalizedForward = normalized(forward);
+    constexpr float Tolerance         = 0.08f;
+    return std::abs(dot(normalizedRight, normalizedUp)) < Tolerance
+        && std::abs(dot(normalizedRight, normalizedForward)) < Tolerance
+        && std::abs(dot(normalizedUp, normalizedForward)) < Tolerance;
+}
+
+struct CameraBasis {
+    ::glm::vec3 right{};
+    ::glm::vec3 up{};
+    ::glm::vec3 forward{};
+};
+
+std::optional<CameraBasis> basisFromModelView(::glm::mat4x4 const& modelView) {
+    auto const viewRotation = ::glm::mat3{modelView};
+    auto const cameraToWorld = ::glm::transpose(viewRotation);
+    CameraBasis basis{
+        cameraToWorld[0],
+        cameraToWorld[1],
+        -cameraToWorld[2],
+    };
+    if (!validBasis(basis.right, basis.up, basis.forward)) return std::nullopt;
+    basis.right   = normalized(basis.right);
+    basis.up      = normalized(basis.up);
+    basis.forward = normalized(basis.forward);
+    return basis;
+}
+
+std::optional<CameraBasis> basisFromOrientation(::glm::qua<float> orientation) {
+    float const length = std::sqrt(
+        orientation.w * orientation.w + orientation.x * orientation.x + orientation.y * orientation.y
+        + orientation.z * orientation.z
+    );
+    if (!std::isfinite(length) || length <= 0.0001f) return std::nullopt;
+
+    auto const cameraToWorld = ::glm::mat3_cast(orientation / length);
+    CameraBasis basis{
+        cameraToWorld[0],
+        cameraToWorld[1],
+        -cameraToWorld[2],
+    };
+    if (!validBasis(basis.right, basis.up, basis.forward)) return std::nullopt;
+    basis.right   = normalized(basis.right);
+    basis.up      = normalized(basis.up);
+    basis.forward = normalized(basis.forward);
+    return basis;
+}
+
+std::optional<CameraBasis> basisFromCamera(::mce::Camera const& camera) {
+    if (validBasis(camera.mRight.get(), camera.mUp.get(), camera.mForward.get())) {
+        return CameraBasis{
+            normalized(camera.mRight.get()),
+            normalized(camera.mUp.get()),
+            normalized(camera.mForward.get()),
+        };
+    }
+
+    auto const viewRotation = ::glm::mat3{camera.mInverseViewMatrix.get()};
+    auto const cameraToWorld = viewRotation;
+    CameraBasis basis{
+        cameraToWorld[0],
+        cameraToWorld[1],
+        -cameraToWorld[2],
+    };
+    if (!validBasis(basis.right, basis.up, basis.forward)) return std::nullopt;
+    basis.right   = normalized(basis.right);
+    basis.up      = normalized(basis.up);
+    basis.forward = normalized(basis.forward);
+    return basis;
+}
+
+Actor* resolveCameraActor(ClientInstance& client) {
+    if (auto* actor = client.getCameraActor()) return actor;
+    if (auto* actor = replay::ReplaySession::getInstance().getReplayPlayer()) return actor;
+    return client.getLocalPlayer();
+}
+
+MinecraftCamera::CameraComponent* resolveGameCamera(ClientInstance& client) {
+    auto registry = client.getCameraRegistry();
+    if (!registry) return nullptr;
+    auto& gameCamera = registry->mGameCamera.get();
+    if (!gameCamera) return nullptr;
+    return gameCamera->tryGetComponent<MinecraftCamera::CameraComponent>().as_ptr();
+}
+
+float cameraFovDegrees(float fov) {
+    if (!std::isfinite(fov) || fov <= 0.0f) return 70.0f;
+    return fov <= Pi ? fov * DegreesPerRadian : fov;
 }
 
 void cameraVectors(float yaw, float pitch, ::glm::vec3& right, ::glm::vec3& up) {
@@ -68,177 +149,63 @@ void cameraVectors(float yaw, float pitch, ::glm::vec3& right, ::glm::vec3& up) 
     up                       = {-sinYaw * sinPitch, cosPitch, cosYaw * sinPitch};
 }
 
-::glm::vec3 directionFromRotation(float yaw, float pitch) {
-    float const yawRadians   = yaw * RadiansPerDegree;
-    float const pitchRadians = pitch * RadiansPerDegree;
-    float const cosPitch     = std::cos(pitchRadians);
-    return {
-        -std::sin(yawRadians) * cosPitch,
-        -std::sin(pitchRadians),
-        std::cos(yawRadians) * cosPitch,
-    };
-}
+void anglesFromBasis(CameraBasis const& basis, float& yaw, float& pitch, float& roll) {
+    yaw   = std::atan2(-basis.forward.x, basis.forward.z) * DegreesPerRadian;
+    pitch = std::atan2(-basis.forward.y, std::hypot(basis.forward.x, basis.forward.z)) * DegreesPerRadian;
 
-bool actorViewBasis(
-    Actor const& actor,
-    ::glm::vec3& forward,
-    float&        yaw,
-    float&        pitch,
-    float&        headYaw
-) {
-    auto const rotation = actor.getRotation();
-    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y)) return false;
-
-    pitch   = rotation.x;
-    yaw     = rotation.y;
-    headYaw = yaw;
-    auto& context = actor.getEntityContext();
-    if (auto const head = context.tryGetComponent<ActorHeadRotationComponent>().as_ptr()) {
-        if (std::isfinite(head->mYHeadRot)) headYaw = head->mYHeadRot;
-    }
-
-    auto const actorView = actor.getViewVector(1.0f);
-    forward               = {actorView.x, actorView.y, actorView.z};
-    if (!validDirection(forward)) forward = directionFromRotation(yaw, pitch);
-    return validDirection(forward);
-}
-
-::glm::vec3 inverseViewForward(::glm::mat4x4 const& inverseView) {
-    return {-inverseView[2].x, -inverseView[2].y, -inverseView[2].z};
-}
-
-::glm::vec3 inverseViewRight(::glm::mat4x4 const& inverseView) {
-    return {inverseView[0].x, inverseView[0].y, inverseView[0].z};
-}
-
-::glm::vec3 inverseViewUp(::glm::mat4x4 const& inverseView) {
-    return {inverseView[1].x, inverseView[1].y, inverseView[1].z};
+    ::glm::vec3 noRollRight;
+    ::glm::vec3 noRollUp;
+    cameraVectors(yaw, pitch, noRollRight, noRollUp);
+    roll = std::atan2(dot(basis.right, noRollUp), dot(basis.right, noRollRight)) * DegreesPerRadian;
 }
 
 } // namespace
 
-std::optional<ClientCameraCapture> captureClientCamera() noexcept {
+std::optional<CameraRenderState> captureClientCamera() noexcept {
     auto client = ll::service::getClientInstance();
     if (!client) return std::nullopt;
 
-    Actor* const  cameraActor = client->getCameraActor();
-    Player* const replayPlayer = replay::ReplaySession::getInstance().getReplayPlayer();
-    Actor*        actor        = cameraActor;
-    if (!actor) actor = replayPlayer;
-    if (!actor) actor = client->getLocalPlayer();
+    auto* actor = resolveCameraActor(*client);
 
-    auto const* camera          = &client->getCamera();
-    bool        usedWorldCamera = false;
-    if (!validBasis(camera->mRight.get(), camera->mUp.get(), camera->mForward.get())) {
-        if (auto* levelRenderer = client->getLevelRenderer()) {
-            auto const& levelRendererPlayer = levelRenderer->mLevelRendererPlayer.get();
-            if (levelRendererPlayer) {
-                auto const& worldCamera = levelRendererPlayer->mWorldSpaceCamera.get();
-                if (validBasis(worldCamera.mRight.get(), worldCamera.mUp.get(), worldCamera.mForward.get())) {
-                    camera          = &worldCamera;
-                    usedWorldCamera = true;
-                }
-            }
-        }
+    auto const* camera = static_cast<mce::Camera const*>(nullptr);
+    if (auto* renderer = client->getLevelRenderer()) {
+        auto const& playerRenderer = renderer->mLevelRendererPlayer.get();
+        if (playerRenderer) camera = &playerRenderer->mWorldSpaceCamera.get();
+    }
+    if (!camera || !validBasis(camera->mRight.get(), camera->mUp.get(), camera->mForward.get())) {
+        camera = &client->getCamera();
     }
 
-    auto const nativeForward = camera->mForward.get();
-    auto const nativeRight   = camera->mRight.get();
-    auto const nativeUp      = camera->mUp.get();
+    auto const* gameCamera = resolveGameCamera(*client);
+    auto const  position =
+        gameCamera && finite(gameCamera->mPosition.get()) ? gameCamera->mPosition.get() : camera->mPosition.get();
+    if (!finite(position)) return std::nullopt;
 
-    ::glm::vec3 cameraPosition{};
-    bool        usedWorldPosition = false;
-    if (auto* levelRenderer = client->getLevelRenderer()) {
-        auto const& levelRendererPlayer = levelRenderer->mLevelRendererPlayer.get();
-        if (levelRendererPlayer) {
-            auto const worldPosition = levelRendererPlayer->mWorldSpaceCamera.get().mPosition.get();
-            if (finite(worldPosition) && !nearZero(worldPosition)) {
-                cameraPosition     = worldPosition;
-                usedWorldPosition   = true;
-            }
-        }
+    float const fov = gameCamera && std::isfinite(gameCamera->mFieldOfView) && gameCamera->mFieldOfView > 0.0f
+                        ? gameCamera->mFieldOfView
+                        : cameraFovDegrees(camera->mFov);
+
+    std::optional<CameraBasis> basis;
+    if (gameCamera) {
+        basis = basisFromOrientation(gameCamera->mOrientation.get());
+        if (!basis) basis = basisFromModelView(gameCamera->mSavedModelView->_m.get());
     }
-    if (!usedWorldPosition) {
-        auto const clientPosition = client->getCamera().mPosition.get();
-        if (finite(clientPosition) && !nearZero(clientPosition)) cameraPosition = clientPosition;
-    }
-    if (nearZero(cameraPosition) && actor) {
-        auto const head = actor->getHeadPos();
-        cameraPosition  = {head.x, head.y, head.z};
-    }
-    if (!actor) return std::nullopt;
-    auto const& actorPosition = actor->getPosition();
-    ::glm::vec3 basePosition{actorPosition.x, actorPosition.y, actorPosition.z};
-    if (!finite(basePosition) || !finite(cameraPosition)) return std::nullopt;
+    if (!basis) basis = basisFromCamera(*camera);
 
-    auto       forward       = nativeForward;
-    auto       right         = nativeRight;
-    auto       up            = nativeUp;
-
-    float       actorYaw     = 0.0f;
-    float       actorPitch   = 0.0f;
-    float       actorHeadYaw = 0.0f;
-    ::glm::vec3 actorForward{};
-    bool const  hasActorBasis =
-        actor && actorViewBasis(*actor, actorForward, actorYaw, actorPitch, actorHeadYaw);
-
-    bool usedNativeRotation = validBasis(right, up, forward);
-    bool usedMatrixRotation = false;
-    bool usedActorRotation  = false;
-
-    if (!usedNativeRotation) {
-        auto const& inverseView   = camera->mInverseViewMatrix.get();
-        auto        matrixForward = inverseViewForward(inverseView);
-        auto const  matrixRight   = inverseViewRight(inverseView);
-        auto const  matrixUp      = inverseViewUp(inverseView);
-        if (hasActorBasis && dot(matrixForward, actorForward) < 0.0f) matrixForward = -matrixForward;
-        if (validBasis(matrixRight, matrixUp, matrixForward)) {
-            forward            = matrixForward;
-            right              = matrixRight;
-            up                 = matrixUp;
-            usedNativeRotation = true;
-            usedMatrixRotation = true;
-        }
+    float yaw{};
+    float pitch{};
+    float roll{};
+    if (basis) {
+        anglesFromBasis(*basis, yaw, pitch, roll);
+    } else {
+        if (!actor) return std::nullopt;
+        auto const rotation = actor->getRotation();
+        if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y)) return std::nullopt;
+        yaw   = rotation.y;
+        pitch = rotation.x;
     }
 
-    if (!usedNativeRotation && hasActorBasis) {
-        forward           = actorForward;
-        cameraVectors(actorYaw, actorPitch, right, up);
-        usedActorRotation = true;
-    }
-    if (!validDirection(forward)) return std::nullopt;
-
-    forward    = normalized(forward);
-    float yaw  = std::atan2(-forward.x, forward.z) * DegreesPerRadian;
-    float pitch = std::atan2(-forward.y, std::hypot(forward.x, forward.z)) * DegreesPerRadian;
-    float roll  = 0.0f;
-    if (usedActorRotation) {
-        yaw   = actorYaw;
-        pitch = actorPitch;
-    } else if (validDirection(right)) {
-        right = normalized(right);
-        ::glm::vec3 noRollRight;
-        ::glm::vec3 noRollUp;
-        cameraVectors(yaw, pitch, noRollRight, noRollUp);
-        roll = std::atan2(dot(right, noRollUp), dot(right, noRollRight)) * DegreesPerRadian;
-    }
-
-    return ClientCameraCapture{
-        {basePosition.x, basePosition.y, basePosition.z, yaw, pitch, roll},
-        {cameraPosition.x, cameraPosition.y, cameraPosition.z},
-        {nativeForward.x, nativeForward.y, nativeForward.z},
-        {nativeRight.x, nativeRight.y, nativeRight.z},
-        {nativeUp.x, nativeUp.y, nativeUp.z},
-        {actorPitch, actorYaw, actorHeadYaw},
-        {actorForward.x, actorForward.y, actorForward.z},
-        usedNativeRotation,
-        usedMatrixRotation,
-        usedActorRotation,
-        usedWorldCamera,
-        usedWorldPosition,
-        actor && actor == cameraActor,
-        actor && actor == replayPlayer,
-    };
+    return CameraRenderState{position.x, position.y, position.z, yaw, pitch, roll, fov};
 }
 
 } // namespace playback::keyframe

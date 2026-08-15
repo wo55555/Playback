@@ -30,8 +30,8 @@ void ExportKeyframeApplier::configure(
         auto const& first = *camera.keysByTick.begin();
         auto const& last  = *camera.keysByTick.rbegin();
         logger.info(
-            "Export camera pose range (camera={}, firstTick={}, first=({}, {}, {}, yaw={}, pitch={}, roll={}), "
-            "lastTick={}, last=({}, {}, {}, yaw={}, pitch={}, roll={}))",
+            "Export camera pose range (camera={}, firstTick={}, first=({}, {}, {}, yaw={}, pitch={}, roll={}, fov={}), "
+            "lastTick={}, last=({}, {}, {}, yaw={}, pitch={}, roll={}, fov={}))",
             camera.id,
             first.first,
             first.second.position.x,
@@ -40,13 +40,15 @@ void ExportKeyframeApplier::configure(
             first.second.yaw,
             first.second.pitch,
             first.second.roll,
+            first.second.fov,
             last.first,
             last.second.position.x,
             last.second.position.y,
             last.second.position.z,
             last.second.yaw,
             last.second.pitch,
-            last.second.roll
+            last.second.roll,
+            last.second.fov
         );
     }
 }

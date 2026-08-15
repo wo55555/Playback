@@ -9,6 +9,7 @@ struct CameraRenderState {
     float yaw{};
     float pitch{};
     float roll{};
+    float fov{70.0f};
 };
 
 } // namespace playback::keyframe

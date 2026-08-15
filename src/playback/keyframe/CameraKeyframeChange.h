@@ -12,6 +12,7 @@ struct CameraKeyframeChange {
     float yaw{};
     float pitch{};
     float roll{};
+    float fov{70.0f};
 
     void apply(CameraKeyframeHandler& handler) const;
 

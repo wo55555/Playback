@@ -21,6 +21,7 @@ struct CameraKeyframe {
     float  yaw{0.0f};
     float  pitch{0.0f};
     float  roll{0.0f};
+    float  fov{70.0f};
     Color4 tint{1, 1, 1, 1};
 
     CameraInterpolationType interpolationType{CameraInterpolationType::Smooth};

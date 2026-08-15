@@ -436,7 +436,7 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
             auto const& state = cameraSample->state;
             logger.info(
                 "Export camera pose sample (frame={}, token={}, tick={}/{}, cameraId={}, "
-                "base=({}, {}, {}), yaw={}, pitch={}, roll={})",
+                "base=({}, {}, {}), yaw={}, pitch={}, roll={}, fov={})",
                 sample.frameIndex,
                 token.id,
                 sample.replayTime.numerator,
@@ -447,7 +447,8 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
                 state.z,
                 state.yaw,
                 state.pitch,
-                state.roll
+                state.roll,
+                state.fov
             );
         } else {
             logger.warn(
