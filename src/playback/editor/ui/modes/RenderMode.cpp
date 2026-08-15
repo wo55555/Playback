@@ -13,6 +13,7 @@
 #include <string>
 
 namespace playback::editor::ui {
+using namespace playback::state;
 
 using namespace ll::i18n_literals;
 

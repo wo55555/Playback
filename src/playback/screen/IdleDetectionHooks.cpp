@@ -1,6 +1,6 @@
-#include "IdleDetectionHooks.h"
+﻿#include "IdleDetectionHooks.h"
 
-#include "playback/editor/exporting/ExportActivity.h"
+#include "playback/exporting/ExportActivity.h"
 
 #include "ll/api/memory/Hook.h"
 
@@ -27,7 +27,7 @@ LL_TYPE_INSTANCE_HOOK(
     bool,
     std::function<void()> onConfirm
 ) {
-    if (editor::exporting::isExportActivityActive()) return false;
+    if (exporting::isExportActivityActive()) return false;
     return origin(std::move(onConfirm));
 }
 
@@ -38,7 +38,7 @@ LL_TYPE_INSTANCE_HOOK(
     &MinecraftGame::_canRender,
     bool
 ) {
-    if (editor::exporting::isExportActivityActive()) return true;
+    if (exporting::isExportActivityActive()) return true;
     return origin();
 }
 
@@ -49,7 +49,7 @@ LL_TYPE_INSTANCE_HOOK(
     &AppPlatform::$getFocusState,
     AppFocusState
 ) {
-    if (editor::exporting::isExportActivityActive()) return AppFocusState::Focused;
+    if (exporting::isExportActivityActive()) return AppFocusState::Focused;
     return origin();
 }
 

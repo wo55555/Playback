@@ -1,6 +1,6 @@
 #include "SelectReplayScreen.h"
 
-#include "playback/editor/renderer/ImGuiRenderer.h"
+#include "playback/editor/host/ImGuiRenderer.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/utils/PathUtils.h"
@@ -181,7 +181,7 @@ std::string formatSize(std::uintmax_t bytes) {
     return stream.str();
 }
 
-std::string formatDuration(playback::editor::ReplayBrowserEntry const& replay) {
+std::string formatDuration(playback::state::ReplayBrowserEntry const& replay) {
     int seconds = (replay.totalTicks > 0 ? replay.totalTicks : replay.durationTicks) / 20;
     return "playback.replayBrowser.duration"_tr(seconds / 60, seconds % 60);
 }
@@ -578,12 +578,12 @@ SelectReplayScreen& SelectReplayScreen::getInstance() {
     return instance;
 }
 
-std::vector<playback::editor::ReplayBrowserEntry> const& SelectReplayScreen::replays() const {
-    static std::vector<playback::editor::ReplayBrowserEntry> const empty;
+std::vector<playback::state::ReplayBrowserEntry> const& SelectReplayScreen::replays() const {
+    static std::vector<playback::state::ReplayBrowserEntry> const empty;
     return mState && mState->snapshot ? mState->snapshot->replays : empty;
 }
 
-void SelectReplayScreen::submit(playback::editor::EditorAction action) const {
+void SelectReplayScreen::submit(playback::state::EditorAction action) const {
     if (mSubmit) (*mSubmit)(std::move(action));
 }
 
@@ -654,19 +654,19 @@ void SelectReplayScreen::select(std::string_view replayId, std::size_t visibleIn
     }
 }
 
-std::optional<playback::editor::ReplayBrowserEntry const*> SelectReplayScreen::selectedReplay() const {
+std::optional<playback::state::ReplayBrowserEntry const*> SelectReplayScreen::selectedReplay() const {
     if (mSelectedIds.size() != 1) return std::nullopt;
     auto const& items = replays();
     auto        it    = std::find_if(items.begin(), items.end(), [&](auto const& replay) {
         return mSelectedIds.contains(replay.replayId);
     });
-    return it == items.end() ? std::nullopt : std::optional<playback::editor::ReplayBrowserEntry const*>{&*it};
+    return it == items.end() ? std::nullopt : std::optional<playback::state::ReplayBrowserEntry const*>{&*it};
 }
 
 void SelectReplayScreen::openSelected() {
     auto replay = selectedReplay();
     if (!replay || !(*replay)->canOpen) return;
-    playback::editor::EditorAction action{playback::editor::EditorActionType::OpenReplay};
+    playback::state::EditorAction action{playback::state::EditorActionType::OpenReplay};
     action.path     = (*replay)->path;
     action.replayId = (*replay)->replayId;
     submit(std::move(action));
@@ -688,12 +688,12 @@ void SelectReplayScreen::importReplay() {
     dialog.nMaxFile    = static_cast<DWORD>(file.size());
     dialog.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (!GetOpenFileNameW(&dialog)) return;
-    playback::editor::EditorAction action{playback::editor::EditorActionType::ImportReplay};
+    playback::state::EditorAction action{playback::state::EditorActionType::ImportReplay};
     action.path = file.data();
     submit(std::move(action));
 }
 
-void SelectReplayScreen::draw(playback::editor::ReplayBrowserState const& state, SubmitAction const& submitAction) {
+void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, SubmitAction const& submitAction) {
     if (!state.visible) return;
     mState  = &state;
     mSubmit = &submitAction;
@@ -740,7 +740,7 @@ void SelectReplayScreen::draw(playback::editor::ReplayBrowserState const& state,
 
     ImGui::SetWindowFontScale(kFontScaleBody);
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        submit({playback::editor::EditorActionType::CloseReplayBrowser});
+        submit({playback::state::EditorActionType::CloseReplayBrowser});
     }
 
     ImGui::BeginDisabled(state.busy());
@@ -811,7 +811,7 @@ void SelectReplayScreen::drawNavigation() {
 
     ImGui::SetWindowFontScale(kFontScaleNavBackIcon);
     ImGui::SetCursorPos({margin, y});
-    if (backButton("##back", ICON_BACK, iconW)) submit({playback::editor::EditorActionType::CloseReplayBrowser});
+    if (backButton("##back", ICON_BACK, iconW)) submit({playback::state::EditorActionType::CloseReplayBrowser});
     ImGui::SetWindowFontScale(kFontScaleNavControl);
     tooltip("playback.replayBrowser.navigation.back"_tr().c_str());
 
@@ -894,7 +894,7 @@ void SelectReplayScreen::drawNavigation() {
         ImGui::SetWindowFontScale(kFontScaleNavControl);
         std::string const refreshLabel = "playback.replayBrowser.navigation.refresh"_tr();
         if (popupIconMenuItem("##refresh-replay-list", ICON_REFRESH, refreshLabel)) {
-            submit({playback::editor::EditorActionType::RefreshReplayBrowser});
+            submit({playback::state::EditorActionType::RefreshReplayBrowser});
         }
         ImGui::EndPopup();
     }
@@ -918,12 +918,12 @@ void SelectReplayScreen::drawNavigation() {
     ImGui::EndChild();
 }
 
-void SelectReplayScreen::drawPreview(playback::editor::ReplayBrowserEntry const& replay, ImVec2 size) {
+void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& replay, ImVec2 size) {
     auto start = ImGui::GetCursorScreenPos();
     auto end   = ImVec2(start.x + size.x, start.y + size.y);
     ImGui::GetWindowDrawList()->AddRectFilled(start, end, kColorPreviewBg, 0.0f);
 
-    auto texture = playback::editor::renderer::gImGuiRenderer.acquireReplayThumbnailTexture(
+    auto texture = playback::editor::host::gImGuiRenderer.acquireReplayThumbnailTexture(
         replay.path.string(),
         replay.thumbnailPng
     );
@@ -954,7 +954,7 @@ void SelectReplayScreen::drawPreview(playback::editor::ReplayBrowserEntry const&
 }
 
 void SelectReplayScreen::drawCard(
-    playback::editor::ReplayBrowserEntry const& replay,
+    playback::state::ReplayBrowserEntry const& replay,
     std::size_t                                 visibleIndex,
     float                                       width
 ) {
@@ -1230,7 +1230,7 @@ void SelectReplayScreen::drawGrid() {
 }
 
 void SelectReplayScreen::drawDetailsListItem(
-    playback::editor::ReplayBrowserEntry const& replay,
+    playback::state::ReplayBrowserEntry const& replay,
     std::size_t                                 visibleIndex,
     float                                       width
 ) {
@@ -1290,7 +1290,7 @@ void SelectReplayScreen::drawDetailsListItem(
             ImGui::SetClipboardText(replay.path.string().c_str());
         }
         if (ImGui::MenuItem("playback.replayBrowser.action.showInFolder"_tr().c_str())) {
-            playback::editor::EditorAction action{playback::editor::EditorActionType::ShowReplayInFolder};
+            playback::state::EditorAction action{playback::state::EditorActionType::ShowReplayInFolder};
             action.replayId = replay.replayId;
             submit(std::move(action));
         }
@@ -1654,7 +1654,7 @@ void SelectReplayScreen::drawActionBar() {
         if (mSelectedIds.contains(item.replayId)) selectedBytes += item.fileSize;
     }
     std::string const summary =
-        "playback.replayBrowser.selectedCount"_tr(mSelectedIds.size()) + "  ·  " + formatSize(selectedBytes);
+        "playback.replayBrowser.selectedCount"_tr(mSelectedIds.size()) + "  路  " + formatSize(selectedBytes);
 
     float const buttonWidth    = 140.0f;
     float const buttonGap      = 10.0f;
@@ -1715,7 +1715,7 @@ void SelectReplayScreen::drawDeleteDialog() {
         std::string const confirmDelete =
             std::string(ICON_DELETE) + "  " + "playback.replayBrowser.dialog.delete.confirmButton"_tr();
         if (ImGui::Button(confirmDelete.c_str(), {156.0f, kControlHeight})) {
-            playback::editor::EditorAction action{playback::editor::EditorActionType::DeleteReplays};
+            playback::state::EditorAction action{playback::state::EditorActionType::DeleteReplays};
             action.replayIds.assign(mSelectedIds.begin(), mSelectedIds.end());
             submit(std::move(action));
             mShowDeleteDialog = false;
@@ -1738,7 +1738,7 @@ void SelectReplayScreen::drawDeleteDialog() {
             ImGui::TextWrapped("%s", mState->error.c_str());
             std::string const ok = std::string(ICON_CHECK) + "  " + "playback.replayBrowser.dialog.ok"_tr();
             if (ImGui::Button(ok.c_str(), {120.0f, kControlHeight})) {
-                submit({playback::editor::EditorActionType::ClearReplayBrowserError});
+                submit({playback::state::EditorActionType::ClearReplayBrowserError});
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -1795,7 +1795,7 @@ void SelectReplayScreen::drawRenameDialog() {
     popButtonStyle();
 
     if (saved && replay) {
-        playback::editor::EditorAction action{playback::editor::EditorActionType::RenameReplay};
+        playback::state::EditorAction action{playback::state::EditorActionType::RenameReplay};
         action.replayId = (*replay)->replayId;
         action.name     = mRenameBuffer;
         submit(std::move(action));

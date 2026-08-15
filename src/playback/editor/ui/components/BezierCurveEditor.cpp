@@ -1,4 +1,4 @@
-#include "BezierCurveEditor.h"
+﻿#include "BezierCurveEditor.h"
 
 #include "imgui.h"
 
@@ -9,7 +9,7 @@
 
 namespace playback::editor::ui {
 
-using editing::model::Vec2;
+using state::editing::model::Vec2;
 
 float BezierCurve::sample(float t) const {
     if (points.size() < 2) return t;

@@ -1,4 +1,4 @@
-#include "DetailsPanel.h"
+﻿#include "DetailsPanel.h"
 
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/components/PropertyControls.h"
@@ -12,6 +12,7 @@
 #include <cstdio>
 
 namespace playback::editor::ui {
+using namespace playback::state;
 
 using namespace ll::i18n_literals;
 
@@ -30,13 +31,13 @@ std::string formatTick(int tick) {
     return value;
 }
 
-char const* interpolationName(editing::model::CameraInterpolationType interpolation) {
+char const* interpolationName(state::editing::model::CameraInterpolationType interpolation) {
     static constexpr std::array
         names{"Smooth", "Linear", "Ease In", "Ease Out", "Ease InOut", "Hold", "Hermite", "Cubic Bezier"};
     return names[std::clamp(static_cast<int>(interpolation), 0, static_cast<int>(names.size()) - 1)];
 }
 
-char const* categoryName(editing::model::SubActorCategory category) {
+char const* categoryName(state::editing::model::SubActorCategory category) {
     static constexpr std::array names{"Default", "Players", "Creatures", "Entities"};
     return names[std::clamp(static_cast<int>(category), 0, static_cast<int>(names.size()) - 1)];
 }
@@ -60,7 +61,7 @@ void DetailsPanel::draw() {
     property::searchBar("##details-search", "Search properties", search, sizeof(search));
 
     // ===== Camera Sequence (overview) =====
-    if (selection.getAs<editing::model::SelectedSequence>()) {
+    if (selection.getAs<state::editing::model::SelectedSequence>()) {
         if (property::beginSection("Camera Sequence")) {
             ImGui::Text("Duration: %s", formatTick(project->totalTicks).c_str());
             ImGui::Text("Segments: %zu", project->sequence.size());
@@ -89,7 +90,7 @@ void DetailsPanel::draw() {
                 if (ImGui::Selectable(
                         (formatTick(segment.startTick) + " - " + formatTick(segment.endTick) + "  " + label).c_str()
                     )) {
-                    editor.selection().select(editing::model::SelectedSequenceSegment{segment.id});
+                    editor.selection().select(state::editing::model::SelectedSequenceSegment{segment.id});
                 }
             }
             ImGui::Spacing();
@@ -104,7 +105,7 @@ void DetailsPanel::draw() {
     }
 
     // ===== Sequence Segment =====
-    if (auto const* selected = selection.getAs<editing::model::SelectedSequenceSegment>()) {
+    if (auto const* selected = selection.getAs<state::editing::model::SelectedSequenceSegment>()) {
         auto const* segment = findById(project->sequence, selected->segmentId);
         if (!segment) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.sequenceSegmentMissing"_tr().c_str());
@@ -173,7 +174,7 @@ void DetailsPanel::draw() {
     }
 
     // ===== World Actor (overview + sub actor tree) =====
-    if (selection.getAs<editing::model::SelectedWorldActor>()) {
+    if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         if (property::beginSection("World Actor")) {
             ImGui::Text("Name: %s", project->worldActor.name.empty() ? "(untitled)" : project->worldActor.name.c_str());
             ImGui::Text("Total: %s", formatTick(project->worldActor.totalTicks).c_str());
@@ -182,16 +183,16 @@ void DetailsPanel::draw() {
                 if (ImGui::Selectable((formatTick(segment.startTick) + " - " + formatTick(segment.endTick) + "  "
                                        + std::to_string(segment.speed) + "x")
                                           .c_str())) {
-                    editor.selection().select(editing::model::SelectedWorldActorSegment{segment.id});
+                    editor.selection().select(state::editing::model::SelectedWorldActorSegment{segment.id});
                 }
             }
             property::separator();
             if (property::beginSection("Sub Actors")) {
-                static constexpr std::array<editing::model::SubActorCategory, 4> categories{
-                    editing::model::SubActorCategory::Default,
-                    editing::model::SubActorCategory::Players,
-                    editing::model::SubActorCategory::Creatures,
-                    editing::model::SubActorCategory::Entities,
+                static constexpr std::array<state::editing::model::SubActorCategory, 4> categories{
+                    state::editing::model::SubActorCategory::Default,
+                    state::editing::model::SubActorCategory::Players,
+                    state::editing::model::SubActorCategory::Creatures,
+                    state::editing::model::SubActorCategory::Entities,
                 };
                 for (auto category : categories) {
                     auto const&  actors = project->worldActor.subActors;
@@ -211,7 +212,7 @@ void DetailsPanel::draw() {
                             }
                             ++shown;
                             if (ImGui::Selectable(actor.name.empty() ? actor.id.c_str() : actor.name.c_str())) {
-                                editor.selection().select(editing::model::SelectedSubActor{actor.id});
+                                editor.selection().select(state::editing::model::SelectedSubActor{actor.id});
                             }
                         }
                     }
@@ -224,7 +225,7 @@ void DetailsPanel::draw() {
     }
 
     // ===== World Actor Segment =====
-    if (auto const* selected = selection.getAs<editing::model::SelectedWorldActorSegment>()) {
+    if (auto const* selected = selection.getAs<state::editing::model::SelectedWorldActorSegment>()) {
         auto const* segment = findById(project->worldActor.segments, selected->segmentId);
         if (!segment) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.worldActorSegmentMissing"_tr().c_str());
@@ -282,7 +283,7 @@ void DetailsPanel::draw() {
     }
 
     // ===== Sub Actor =====
-    if (auto const* selected = selection.getAs<editing::model::SelectedSubActor>()) {
+    if (auto const* selected = selection.getAs<state::editing::model::SelectedSubActor>()) {
         auto const* actor = findById(project->worldActor.subActors, selected->subActorId);
         if (!actor) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.subActorMissing"_tr().c_str());
@@ -348,7 +349,7 @@ void DetailsPanel::draw() {
     }
 
     // ===== Camera =====
-    if (auto const* selectedCamera = selection.getAs<editing::model::SelectedCamera>()) {
+    if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
         auto const* camera = findById(project->cameras, selectedCamera->cameraId);
         if (!camera) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.cameraMissing"_tr().c_str());
@@ -391,13 +392,13 @@ void DetailsPanel::draw() {
                 submit(std::move(action));
             }
             for (auto const& [keyTick, _] : camera->keysByTick) {
-                auto const* selectedKey = editor.selection().getAs<editing::model::SelectedKeyframe>();
+                auto const* selectedKey = editor.selection().getAs<state::editing::model::SelectedKeyframe>();
                 bool const selected = selectedKey && selectedKey->trackId == camera->id && selectedKey->tick == keyTick;
                 ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(176, 128, 18, 255));
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(205, 157, 32, 255));
                 ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(232, 184, 45, 255));
                 if (ImGui::Selectable(("Tick " + std::to_string(keyTick)).c_str(), selected)) {
-                    editor.selection().select(editing::model::SelectedKeyframe{camera->id, keyTick});
+                    editor.selection().select(state::editing::model::SelectedKeyframe{camera->id, keyTick});
                     EditorAction previewAction{EditorActionType::SetPreviewCamera};
                     previewAction.id = camera->id;
                     submit(std::move(previewAction));
@@ -419,7 +420,7 @@ void DetailsPanel::draw() {
     }
 
     // ===== Camera Keyframe =====
-    if (auto const* selected = selection.getAs<editing::model::SelectedKeyframe>()) {
+    if (auto const* selected = selection.getAs<state::editing::model::SelectedKeyframe>()) {
         auto const* camera = findById(project->cameras, selected->trackId);
         auto const  key    = camera ? camera->keysByTick.find(selected->tick) : camera->keysByTick.end();
         if (!camera || key == camera->keysByTick.end()) {
@@ -455,7 +456,7 @@ void DetailsPanel::draw() {
             ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::BeginCombo("Interpolation", interpolationName(key->second.interpolationType))) {
                 for (int index = 0; index < 8; ++index) {
-                    auto const value = static_cast<editing::model::CameraInterpolationType>(index);
+                    auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
                     if (ImGui::Selectable(interpolationName(value), index == interpolation)) {
                         EditorAction action{EditorActionType::SetKeyframeInterpolation};
                         action.id   = camera->id;
@@ -480,7 +481,7 @@ void DetailsPanel::draw() {
     }
 
     // ===== Marker =====
-    if (auto const* selected = selection.getAs<editing::model::SelectedMarker>()) {
+    if (auto const* selected = selection.getAs<state::editing::model::SelectedMarker>()) {
         auto const* marker = findById(project->markers, selected->markerId);
         if (!marker) {
             ImGui::TextDisabled("Marker no longer exists.");

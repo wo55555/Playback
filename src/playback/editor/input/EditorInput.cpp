@@ -1,6 +1,6 @@
-#include "EditorInput.h"
+﻿#include "EditorInput.h"
 #include "KeyMap.h"
-#include "playback/editor/exporting/ExportActivity.h"
+#include "playback/exporting/ExportActivity.h"
 
 #include "imgui.h"
 #include "mc/deps/input/Keyboard.h"
@@ -89,7 +89,7 @@ unsigned textCharacter(uint32_t keyCode, bool shift, bool capsLock) {
     }
 }
 
-// Map Windows VK code → ImGuiKey
+// Map Windows VK code 鈫?ImGuiKey
 ImGuiKey vkToImGuiKey(uint32_t vk) {
     if (vk >= 'A' && vk <= 'Z') {
         return static_cast<ImGuiKey>(static_cast<int>(ImGuiKey_A) + (vk - 'A'));

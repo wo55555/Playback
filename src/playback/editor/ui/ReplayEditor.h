@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/editor/context/EditorAction.h"
-#include "playback/editor/context/EditorState.h"
-#include "playback/editor/editing/models/SelectionModel.h"
+#include "playback/state/EditorAction.h"
+#include "playback/state/EditorState.h"
+#include "playback/state/editing/models/SelectionModel.h"
 
 #include "EditorTheme.h"
 #include "HintBar.h"
@@ -27,7 +27,7 @@ namespace playback::editor::ui {
 
 class ReplayEditor {
 public:
-    using SubmitAction = std::function<void(playback::editor::EditorAction)>;
+    using SubmitAction = std::function<void(playback::state::EditorAction)>;
 
     static ReplayEditor& getInstance();
 
@@ -35,15 +35,15 @@ public:
     void initialize();
     void shutdown();
 
-    void draw(playback::editor::EditorState const& state, SubmitAction const& submit);
+    void draw(playback::state::EditorState const& state, SubmitAction const& submit);
 
     // Keyboard shortcut processing
     void handleKeyboardShortcuts();
 
-    [[nodiscard]] playback::editor::EditorState const&  state() const;
-    [[nodiscard]] editing::model::SelectionModel const& selection() const { return mSelection; }
-    editing::model::SelectionModel&                     selection() { return mSelection; }
-    void                                                submitAction(playback::editor::EditorAction action) const;
+    [[nodiscard]] playback::state::EditorState const&  state() const;
+    [[nodiscard]] state::editing::model::SelectionModel const& selection() const { return mSelection; }
+    state::editing::model::SelectionModel&                     selection() { return mSelection; }
+    void                                                submitAction(playback::state::EditorAction action) const;
     void                                                openExportDialog();
     void                                                seekTo(int tick);
     void                                                seekRelative(int tickDelta);
@@ -82,9 +82,9 @@ private:
     EditMode   mEditMode;
     RenderMode mRenderMode;
 
-    playback::editor::EditorState const* mFrameState{};
+    playback::state::EditorState const* mFrameState{};
     SubmitAction const*                  mSubmit{};
-    editing::model::SelectionModel       mSelection;
+    state::editing::model::SelectionModel       mSelection;
     exporting::ExportState               mLastExportState{exporting::ExportState::Idle};
 
     // Layout

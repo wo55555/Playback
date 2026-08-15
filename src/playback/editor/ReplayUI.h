@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/editor/context/EditorAction.h"
+#include "playback/state/EditorAction.h"
 
 namespace playback::editor {
 
@@ -13,6 +13,6 @@ namespace playback::editor {
 void tickReplayExportBeforeClientUpdate();
 void tickReplayUI(bool hudVisible);
 
-void submitEditorAction(EditorAction action);
+void submitEditorAction(state::EditorAction action);
 
 } // namespace playback::editor

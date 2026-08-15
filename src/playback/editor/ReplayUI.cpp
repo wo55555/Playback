@@ -1,43 +1,44 @@
 ﻿#include "ReplayUI.h"
 
-#include "playback/editor/renderer/D3D12Hooks.h"
-#include "playback/editor/renderer/ImGuiRenderer.h"
-#include "playback/editor/renderer/ReplayMouseHook.h"
+#include "playback/editor/host/D3D12Hooks.h"
+#include "playback/editor/host/ImGuiRenderer.h"
+#include "playback/editor/host/ReplayMouseHook.h"
 
 #include "playback/Playback.h"
-#include "playback/editor/context/EditorContext.h"
-#include "playback/editor/controller/EditorController.h"
+#include "playback/state/EditorContext.h"
+#include "playback/state/EditorController.h"
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/record/Recorder.h"
 
 #include <utility>
 
 namespace playback::editor {
+using namespace playback::state;
 
 namespace {
 EditorContext    gContext;
 EditorController gController{gContext};
 } // namespace
 
-bool hookReplayUIRendererInit(bool enable) { return renderer::hookRendererInit(enable); }
+bool hookReplayUIRendererInit(bool enable) { return editor::host::hookRendererInit(enable); }
 
 bool hookReplayUI(bool enable) {
     if (enable) {
         gController.reset();
         gContext.reset();
-        renderer::gImGuiRenderer.setContext(&gContext);
-        gController.setFrameTap(&renderer::gImGuiRenderer.frameTap());
-        record::Recorder::getInstance().setThumbnailCaptureProvider(&renderer::gImGuiRenderer);
-        renderer::setReplayUIActive(true);
+        editor::host::gImGuiRenderer.setContext(&gContext);
+        gController.setFrameTap(&editor::host::gImGuiRenderer.frameTap());
+        record::Recorder::getInstance().setThumbnailCaptureProvider(&editor::host::gImGuiRenderer);
+        editor::host::setReplayUIActive(true);
 
         ui::ReplayEditor::getInstance().initialize();
 
         // Install early because the renderer-init callback is not guaranteed during enable().
         if (!hookReplayUIRendererInit(true)) {
-            renderer::setReplayUIActive(false);
+            editor::host::setReplayUIActive(false);
             record::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
             gController.setFrameTap(nullptr);
-            renderer::gImGuiRenderer.setContext(nullptr);
+            editor::host::gImGuiRenderer.setContext(nullptr);
             ui::ReplayEditor::getInstance().shutdown();
             gContext.reset();
             Playback::getInstance().getSelf().getLogger().error(
@@ -45,12 +46,12 @@ bool hookReplayUI(bool enable) {
             );
             return false;
         }
-        if (!renderer::hookD3D12(true)) {
+        if (!editor::host::hookD3D12(true)) {
             Playback::getInstance().getSelf().getLogger().warn(
                 "Replay ImGui timeline is unavailable; replay support will continue without it"
             );
         }
-        if (!renderer::hookReplayMouse(true)) {
+        if (!editor::host::hookReplayMouse(true)) {
             Playback::getInstance().getSelf().getLogger().warn(
                 "Replay mouse hook unavailable; timeline may not be interactive"
             );
@@ -58,8 +59,8 @@ bool hookReplayUI(bool enable) {
         return true;
     }
 
-    renderer::setReplayUIActive(false);
-    renderer::setReplayMouseInputActive(false);
+    editor::host::setReplayUIActive(false);
+    editor::host::setReplayMouseInputActive(false);
     record::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
     gController.setFrameTap(nullptr);
 
@@ -68,11 +69,11 @@ bool hookReplayUI(bool enable) {
         Playback::getInstance().getSelf().getLogger().error("Unable to remove the early D3D12 renderer hook");
         ok = false;
     }
-    if (!renderer::hookD3D12(false)) {
+    if (!editor::host::hookD3D12(false)) {
         Playback::getInstance().getSelf().getLogger().error("Unable to remove replay ImGui timeline hooks");
         ok = false;
     }
-    if (!renderer::hookReplayMouse(false)) {
+    if (!editor::host::hookReplayMouse(false)) {
         Playback::getInstance().getSelf().getLogger().error("Unable to remove replay mouse hook");
         ok = false;
     }
@@ -80,7 +81,7 @@ bool hookReplayUI(bool enable) {
     if (!ok) return false;
 
     ui::ReplayEditor::getInstance().shutdown();
-    renderer::gImGuiRenderer.setContext(nullptr);
+    editor::host::gImGuiRenderer.setContext(nullptr);
     gController.reset();
     gContext.reset();
     return ok;

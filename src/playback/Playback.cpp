@@ -4,8 +4,8 @@
 #include "playback/Playback.h"
 #include "playback/command/Command.h"
 #include "playback/editor/ReplayUI.h"
-#include "playback/editor/exporting/OfflineRenderClockHooks.h"
-#include "playback/editor/renderer/CameraRenderHooks.h"
+#include "playback/exporting/OfflineRenderClockHooks.h"
+#include "playback/editor/host/CameraRenderHooks.h"
 #include "playback/action/Action.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
@@ -98,7 +98,7 @@ bool Playback::hook() {
         screen::hookMainMenu(false);
         return false;
     }
-    impl->mCameraRenderInstalled = editor::renderer::hookCameraRender(true);
+    impl->mCameraRenderInstalled = editor::host::hookCameraRender(true);
     if (!impl->mCameraRenderInstalled) {
         getSelf().getLogger().warn("Unable to install camera render hooks; camera timelines are disabled");
     }
@@ -147,14 +147,14 @@ bool Playback::hook() {
 
 bool Playback::unhook() {
     if (!impl->mRuntimeInstalled) return true;
-    if (impl->mCameraRenderInstalled && !editor::renderer::hookCameraRender(false)) return false;
+    if (impl->mCameraRenderInstalled && !editor::host::hookCameraRender(false)) return false;
     if (!runtime::hookClientTick(false)) {
-        if (impl->mCameraRenderInstalled) (void)editor::renderer::hookCameraRender(true);
+        if (impl->mCameraRenderInstalled) (void)editor::host::hookCameraRender(true);
         return false;
     }
     if (!record::hookNetwork(false)) {
         bool tickRestored   = runtime::hookClientTick(true);
-        bool cameraRestored = !impl->mCameraRenderInstalled || editor::renderer::hookCameraRender(true);
+        bool cameraRestored = !impl->mCameraRenderInstalled || editor::host::hookCameraRender(true);
         getSelf().getLogger().error(
             "Unable to remove replay network hooks; client tick hook restoration={}, camera hook restoration={}",
             tickRestored,
@@ -166,7 +166,7 @@ bool Playback::unhook() {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = record::hookNetwork(true);
         bool tickRestored    = runtime::hookClientTick(true);
-        bool cameraRestored  = !impl->mCameraRenderInstalled || editor::renderer::hookCameraRender(true);
+        bool cameraRestored  = !impl->mCameraRenderInstalled || editor::host::hookCameraRender(true);
         getSelf().getLogger().error(
             "Unable to remove replay UI hooks (ui restoration={}, network restoration={}, "
             "client tick restoration={}, camera hook restoration={})",
@@ -177,7 +177,7 @@ bool Playback::unhook() {
         );
         return false;
     }
-    if (!editor::exporting::hookOfflineRenderClock(false)) {
+    if (!exporting::hookOfflineRenderClock(false)) {
         getSelf().getLogger().error("Unable to remove export-scoped offline render hooks during shutdown");
         return false;
     }
@@ -185,7 +185,7 @@ bool Playback::unhook() {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = record::hookNetwork(true);
         bool tickRestored    = runtime::hookClientTick(true);
-        bool cameraRestored  = !impl->mCameraRenderInstalled || editor::renderer::hookCameraRender(true);
+        bool cameraRestored  = !impl->mCameraRenderInstalled || editor::host::hookCameraRender(true);
         getSelf().getLogger().error(
             "Unable to remove the idle detection guard (UI restoration={}, network restoration={}, client tick "
             "restoration={}, camera hook restoration={})",

@@ -30,7 +30,7 @@ constexpr auto             kConsumeAndRefreshFocus = static_cast<::ui::ViewReque
 void ensureEvents(MinecraftScreenController& ctrl) {
     if (!gEventControllers.insert(&ctrl).second) return;
     ctrl.registerButtonPressedHandler(ctrl._getNameId(std::string(kButtonOpenReplays)), [](UIPropertyBag*) {
-        editor::submitEditorAction({editor::EditorActionType::OpenReplayBrowser});
+        editor::submitEditorAction({state::EditorActionType::OpenReplayBrowser});
         return kConsumeAndRefreshFocus;
     });
 }

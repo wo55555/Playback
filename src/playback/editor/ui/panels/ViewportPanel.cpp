@@ -1,4 +1,4 @@
-#include "ViewportPanel.h"
+﻿#include "ViewportPanel.h"
 
 #include "playback/editor/ui/ReplayEditor.h"
 
@@ -114,7 +114,7 @@ void ViewportPanel::drawTransportControls() {
                 dl->AddRectFilled({c.x + 2, c.y - 8}, {c.x + 7, c.y + 8}, color);
             } else dl->AddTriangleFilled({c.x - 6, c.y - 9}, {c.x - 6, c.y + 9}, {c.x + 9, c.y}, color);
         })) {
-        editor.submitAction({playback::editor::EditorActionType::TogglePause});
+        editor.submitAction({playback::state::EditorActionType::TogglePause});
     }
     if (button("##viewport-forward", startX + (buttonSize + gap) * 3, [](ImDrawList* dl, ImVec2 c, ImU32 color) {
             dl->AddTriangleFilled({c.x - 10, c.y - 8}, {c.x - 10, c.y + 8}, {c.x + 2, c.y}, color);

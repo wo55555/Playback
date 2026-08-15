@@ -1,6 +1,6 @@
-#include "EditorMenuBar.h"
+﻿#include "EditorMenuBar.h"
 
-#include "playback/editor/exporting/ExportPlanCompiler.h"
+#include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/iconfont.h"
 
@@ -14,6 +14,7 @@
 #include <utility>
 
 namespace playback::editor::ui {
+using namespace playback::state;
 
 using namespace ll::i18n_literals;
 
@@ -111,7 +112,7 @@ void EditorMenuBar::draw() {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("playback.refactorEditor.menu.exit"_tr().c_str(), "Esc (hold)")) {
-                editor.submitAction({playback::editor::EditorActionType::StopReplay});
+                editor.submitAction({playback::state::EditorActionType::StopReplay});
             }
             ImGui::EndMenu();
         }
@@ -148,7 +149,7 @@ void EditorMenuBar::draw() {
 
         if (ImGui::BeginMenu("playback.refactorEditor.menu.camera"_tr().c_str(), capabilities.cameraEditing)) {
             auto const keyframeShortcut = input::KeyMap::displayString(input::EditorKeybind::AddKeyframe);
-            bool const canAddKeyframe = editor.selection().getAs<editing::model::SelectedCamera>() != nullptr;
+            bool const canAddKeyframe = editor.selection().getAs<state::editing::model::SelectedCamera>() != nullptr;
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.addKeyframe"_tr().c_str(),
                     keyframeShortcut.c_str(),

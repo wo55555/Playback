@@ -1,4 +1,4 @@
-#include "playback/editor/ui/ReplayEditor.h"
+﻿#include "playback/editor/ui/ReplayEditor.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/ui/ErrorDialog.h"
@@ -150,12 +150,12 @@ void ReplayEditor::syncTimelineViewPreferences(std::string_view replayPath) {
     }
 }
 
-playback::editor::EditorState const& ReplayEditor::state() const {
-    static playback::editor::EditorState const empty;
+playback::state::EditorState const& ReplayEditor::state() const {
+    static playback::state::EditorState const empty;
     return mFrameState ? *mFrameState : empty;
 }
 
-void ReplayEditor::submitAction(playback::editor::EditorAction action) const {
+void ReplayEditor::submitAction(playback::state::EditorAction action) const {
     if (mSubmit) (*mSubmit)(std::move(action));
 }
 
@@ -178,7 +178,7 @@ bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAt
 
 bool ReplayEditor::splitAtPlayhead() { return mTimelinePanel.splitAtPlayhead(); }
 
-void ReplayEditor::draw(playback::editor::EditorState const& state, SubmitAction const& submit) {
+void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     if (!state.editorVisible) {
         if (!mActiveReplayPath.empty()) {
             mTimelineViewPreferences.insert_or_assign(
@@ -236,11 +236,11 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::Undo)) {
-        submitAction({playback::editor::EditorActionType::UndoEditorEdit});
+        submitAction({playback::state::EditorActionType::UndoEditorEdit});
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::Redo)) {
-        submitAction({playback::editor::EditorActionType::RedoEditorEdit});
+        submitAction({playback::state::EditorActionType::RedoEditorEdit});
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::ToggleViewportMaximized)) {
@@ -309,11 +309,11 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::DecreaseSpeed, true)) {
-        submitAction({playback::editor::EditorActionType::DecreaseSpeed});
+        submitAction({playback::state::EditorActionType::DecreaseSpeed});
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::IncreaseSpeed, true)) {
-        submitAction({playback::editor::EditorActionType::IncreaseSpeed});
+        submitAction({playback::state::EditorActionType::IncreaseSpeed});
     }
 }
 

@@ -1,7 +1,7 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/editor/context/EditorAction.h"
-#include "playback/editor/editing/models/TrackTreeModel.h"
+#include "playback/state/EditorAction.h"
+#include "playback/state/editing/models/TrackTreeModel.h"
 
 #include <string>
 
@@ -28,9 +28,9 @@ public:
 
 private:
     void submitSeek(int tick);
-    void submitEdit(playback::editor::EditorAction action);
+    void submitEdit(playback::state::EditorAction action);
 
-    editing::model::TrackTreeModel mTrackTree;
+    state::editing::model::TrackTreeModel mTrackTree;
     float                          mZoomScale{1.0f};
     float                          mScrollX{};
     float                          mTrackListWidthRatio{0.30f};
