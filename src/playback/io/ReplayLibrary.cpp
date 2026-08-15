@@ -161,7 +161,8 @@ void sortWithDirection(std::vector<ReplaySummary>& replays, Compare compare, boo
     });
 }
 
-// 鐢ㄦ柊鍐呭鏇挎崲 zip 褰掓。涓殑鎸囧畾鏉＄洰锛堝氨鍦颁慨鏀癸紝涓嶅奖鍝嶅叾浠栨潯鐩級銆?
+// 鐢ㄦ柊鍐呭鏇挎崲 zip
+// 褰掓。涓殑鎸囧畾鏉＄洰锛堝氨鍦颁慨鏀癸紝涓嶅奖鍝嶅叾浠栨潯鐩級銆?
 bool updateZipEntry(
     std::filesystem::path const& archivePath,
     std::string const&           entryName,

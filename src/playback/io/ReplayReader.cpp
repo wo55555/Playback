@@ -119,21 +119,19 @@ std::vector<PlaybackSerializedGamePacket> ReplayReader::readConfigurationPackets
 
             auto const dataSize = mStream.getUnsignedInt().value();
             if (mStream.mReadPointer > mActionsOffset || dataSize > mActionsOffset - mStream.mReadPointer) {
-                throw std::runtime_error(std::format(
-                    "Action {} extends beyond the replay snapshot",
-                    actionIt->second->name
-                ));
+                throw std::runtime_error(
+                    std::format("Action {} extends beyond the replay snapshot", actionIt->second->name)
+                );
             }
 
             if (actionIt->second->name == ActionConfigurationPacket::getInstance().name) {
                 std::string    data(mStream.mView.data() + mStream.mReadPointer, dataSize);
                 PlaybackBuffer configuration(data);
-                auto const     packetId = configuration.getVarInt().value();
+                auto const     packetId  = configuration.getVarInt().value();
                 auto const     remaining = configuration.getWritePointer() - configuration.mReadPointer;
-                packets.push_back({
-                    packetId,
-                    std::string(configuration.mView.data() + configuration.mReadPointer, remaining)
-                });
+                packets.push_back(
+                    {packetId, std::string(configuration.mView.data() + configuration.mReadPointer, remaining)}
+                );
             }
             mStream.mReadPointer += dataSize;
         }
@@ -168,12 +166,14 @@ void ReplayReader::handleSnapshot(ReplaySession& session) {
         action->handle(session, stream);
 
         if (stream.mReadPointer != stream.getWritePointer()) {
-            throw std::runtime_error(std::format(
-                "Action {} failed to fully read. Had {} bytes available, only read {}",
-                mLastActionName,
-                stream.getWritePointer(),
-                stream.mReadPointer
-            ));
+            throw std::runtime_error(
+                std::format(
+                    "Action {} failed to fully read. Had {} bytes available, only read {}",
+                    mLastActionName,
+                    stream.getWritePointer(),
+                    stream.mReadPointer
+                )
+            );
         }
         mStream.mReadPointer += dataSize;
     }
@@ -205,12 +205,14 @@ bool ReplayReader::handleNextAction(ReplaySession& session) {
     action->handle(session, stream);
 
     if (stream.mReadPointer != stream.getWritePointer()) {
-        throw std::runtime_error(std::format(
-            "Action {} failed to fully read. Had {} bytes available, only read {}",
-            mLastActionName,
-            stream.getWritePointer(),
-            stream.mReadPointer
-        ));
+        throw std::runtime_error(
+            std::format(
+                "Action {} failed to fully read. Had {} bytes available, only read {}",
+                mLastActionName,
+                stream.getWritePointer(),
+                stream.mReadPointer
+            )
+        );
     }
 
     mStream.mReadPointer += dataSize;

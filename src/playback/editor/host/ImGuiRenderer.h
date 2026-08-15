@@ -25,11 +25,11 @@ public:
     ImGuiRenderer();
     ~ImGuiRenderer();
 
-    void                                       setContext(state::EditorContext* context);
-    void                                       requestReplayThumbnailCapture() override;
-    [[nodiscard]] bool                         saveReplayThumbnail(std::filesystem::path const& output) override;
+    void                             setContext(state::EditorContext* context);
+    void                             requestReplayThumbnailCapture() override;
+    [[nodiscard]] bool               saveReplayThumbnail(std::filesystem::path const& output) override;
     [[nodiscard]] visuals::FrameTap& frameTap();
-    [[nodiscard]] bool                         captureSubmittedD3D12Frame(
+    [[nodiscard]] bool               captureSubmittedD3D12Frame(
         ID3D12Device*       device,
         ID3D12CommandQueue* queue,
         ID3D12Resource*     source,

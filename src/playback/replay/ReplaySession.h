@@ -39,9 +39,9 @@ using playback::io::PlaybackSerializedGamePacket;
 using playback::io::PlaybackSnapshotContext;
 using playback::io::ReplayReader;
 using playback::io::ReplayWriter;
+using playback::record::PlaybackChunkMeta;
 using playback::record::PlaybackMeta;
 using playback::record::PlaybackView;
-using playback::record::PlaybackChunkMeta;
 
 enum class ReplayExportTickState : uint8_t { Unavailable, Waiting, Ready, Invalid, Failed };
 
@@ -194,34 +194,34 @@ private:
 
     PlaybackMeta mMeta;
 
-    std::vector<std::unique_ptr<ReplayReader>>                 mReaders;
-    std::vector<PlaybackSnapshotContext>                       mSnapshotContexts;
-    std::vector<std::string>                                   mChunkPackets;
-    std::unordered_map<size_t, std::vector<int>>               mInlineLevelChunkPacketIndices;
-    std::unordered_map<size_t, std::vector<int>>               mInlineSubChunkPacketIndices;
-    std::mutex                                                 mPendingLevelChunksMutex;
-    std::unordered_multiset<ChunkPos>                          mPendingLevelChunks;
-    std::unordered_set<ChunkPos>                               mCompletedLevelChunkPositions;
-    std::vector<int>                                           mPendingLevelChunkIndices;
-    std::unordered_set<ChunkPos>                               mSnapshotChunks;
-    std::unordered_set<ChunkPos>                               mApplyingSnapshotChunks;
-    std::optional<DimensionType>                               mChunkIsolationDimension;
-    std::unordered_map<ChunkPos, SnapshotColumnIdentity>       mAppliedSnapshotColumns;
-    std::unordered_map<ChunkPos, SnapshotColumnIdentity>       mPendingSnapshotColumns;
-    std::unordered_set<ChunkPos>                               mDirtySnapshotColumns;
-    std::unordered_set<ChunkPos>                               mReusableSnapshotColumns;
-    std::unordered_set<ChunkPos>                               mDirectSnapshotColumns;
-    std::unordered_set<int>                                    mDirectLevelChunkIndices;
-    std::vector<int>                                           mPendingSubChunkIndices;
-    std::vector<PendingSubChunkPacket>                         mPendingSubChunkPackets;
-    std::optional<std::string>                                 mPendingSnapshotLocalPlayer;
-    std::vector<std::pair<MinecraftPacketIds, std::string>>    mPendingSnapshotGamePackets;
-    std::unordered_map<int32_t, std::string>                   mAppliedConfigurationPackets;
-    std::unordered_set<ActorUniqueID>                          mRecordedEntityIds;
+    std::vector<std::unique_ptr<ReplayReader>>                  mReaders;
+    std::vector<PlaybackSnapshotContext>                        mSnapshotContexts;
+    std::vector<std::string>                                    mChunkPackets;
+    std::unordered_map<size_t, std::vector<int>>                mInlineLevelChunkPacketIndices;
+    std::unordered_map<size_t, std::vector<int>>                mInlineSubChunkPacketIndices;
+    std::mutex                                                  mPendingLevelChunksMutex;
+    std::unordered_multiset<ChunkPos>                           mPendingLevelChunks;
+    std::unordered_set<ChunkPos>                                mCompletedLevelChunkPositions;
+    std::vector<int>                                            mPendingLevelChunkIndices;
+    std::unordered_set<ChunkPos>                                mSnapshotChunks;
+    std::unordered_set<ChunkPos>                                mApplyingSnapshotChunks;
+    std::optional<DimensionType>                                mChunkIsolationDimension;
+    std::unordered_map<ChunkPos, SnapshotColumnIdentity>        mAppliedSnapshotColumns;
+    std::unordered_map<ChunkPos, SnapshotColumnIdentity>        mPendingSnapshotColumns;
+    std::unordered_set<ChunkPos>                                mDirtySnapshotColumns;
+    std::unordered_set<ChunkPos>                                mReusableSnapshotColumns;
+    std::unordered_set<ChunkPos>                                mDirectSnapshotColumns;
+    std::unordered_set<int>                                     mDirectLevelChunkIndices;
+    std::vector<int>                                            mPendingSubChunkIndices;
+    std::vector<PendingSubChunkPacket>                          mPendingSubChunkPackets;
+    std::optional<std::string>                                  mPendingSnapshotLocalPlayer;
+    std::vector<std::pair<MinecraftPacketIds, std::string>>     mPendingSnapshotGamePackets;
+    std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
+    std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
-    std::unordered_set<std::string>                            mReplayObjectiveNames;
-    std::unordered_set<ChunkPos>                               mCenterChunkPositions;
-    std::unordered_map<ChunkPos, size_t>                       mRemainingSubChunkPacketsByColumn;
+    std::unordered_set<std::string>                             mReplayObjectiveNames;
+    std::unordered_set<ChunkPos>                                mCenterChunkPositions;
+    std::unordered_map<ChunkPos, size_t>                        mRemainingSubChunkPacketsByColumn;
 
     std::unordered_map<ChunkPos, std::shared_ptr<LevelChunk>> mRetainedReplayChunks;
 
@@ -335,7 +335,7 @@ public:
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
     [[nodiscard]] std::optional<visuals::ReplaySampleTime> getRenderSampleTime(float partialTick) const noexcept;
     [[nodiscard]] std::optional<visuals::ReplaySampleTime> getCameraRenderSampleTime(float partialTick) const noexcept;
-    [[nodiscard]] std::optional<long double>              getFractionalReplayTick(float partialTick) const noexcept;
+    [[nodiscard]] std::optional<long double>               getFractionalReplayTick(float partialTick) const noexcept;
 
     [[nodiscard]] int getTotalTicks() const;
 

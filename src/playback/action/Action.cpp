@@ -29,9 +29,7 @@ void ActionConfigurationPacket::handle(replay::ReplaySession& session, PlaybackB
     session.handleConfigurationPacket(data);
 }
 
-void ActionGamePacket::handle(replay::ReplaySession& session, PlaybackBuffer& data) {
-    session.handleGamePacket(data);
-}
+void ActionGamePacket::handle(replay::ReplaySession& session, PlaybackBuffer& data) { session.handleGamePacket(data); }
 
 void ActionMoveEntities::handle(replay::ReplaySession& session, PlaybackBuffer& data) {
     session.handleMoveEntities(data);

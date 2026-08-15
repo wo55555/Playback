@@ -5,10 +5,11 @@
 #include "playback/editor/host/ReplayMouseHook.h"
 
 #include "playback/Playback.h"
-#include "playback/state/EditorContext.h"
-#include "playback/state/EditorController.h"
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/record/Recorder.h"
+#include "playback/state/EditorContext.h"
+#include "playback/state/EditorController.h"
+
 
 #include <utility>
 

@@ -133,7 +133,9 @@ std::optional<visuals::EntityRenderKey> replayEntityRenderKey(Level const& level
     return visuals::EntityRenderKey{context.mRegistryId, entity.mRawId};
 }
 
-visuals::EntityRenderPosition replayRenderPosition(Vec3 const& position) { return {position.x, position.y, position.z}; }
+visuals::EntityRenderPosition replayRenderPosition(Vec3 const& position) {
+    return {position.x, position.y, position.z};
+}
 
 visuals::EntityRenderPose replayRenderPose(Actor const& actor) {
     auto const& context  = actor.getEntityContext();
@@ -2496,11 +2498,11 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         auto const          y        = data.getFloat().value();
         auto const          z        = data.getFloat().value();
 
-        Vec3 const                             targetPosition{x, y, z};
+        Vec3 const                              targetPosition{x, y, z};
         visuals::EntityRenderPose               previousPose{};
         visuals::EntityRenderPose               currentPose{};
         std::optional<visuals::EntityRenderKey> renderKey;
-        std::shared_ptr<Packet>                packet;
+        std::shared_ptr<Packet>                 packet;
         if (isPlayer) {
             auto const pitch    = data.getFloat().value();
             auto const yaw      = data.getFloat().value();

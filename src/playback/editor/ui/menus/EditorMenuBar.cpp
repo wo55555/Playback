@@ -1,8 +1,9 @@
 ﻿#include "EditorMenuBar.h"
 
-#include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/iconfont.h"
+#include "playback/exporting/ExportPlanCompiler.h"
+
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -78,28 +79,18 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
 }
 
 void EditorMenuBar::draw() {
-    auto&       editor       = ReplayEditor::getInstance();
-    auto const& state        = editor.state();
-    auto const& capabilities = state.capabilities;
-    auto const  exportActive = exporting::isExportActive(state.exportStatus.state);
+    auto&       editor         = ReplayEditor::getInstance();
+    auto const& state          = editor.state();
+    auto const& capabilities   = state.capabilities;
+    auto const  exportActive   = exporting::isExportActive(state.exportStatus.state);
     auto const  exportShortcut = input::KeyMap::displayString(input::EditorKeybind::OpenExport);
-    auto const  undoShortcut = input::KeyMap::displayString(input::EditorKeybind::Undo);
-    auto const  redoShortcut = input::KeyMap::displayString(input::EditorKeybind::Redo);
+    auto const  undoShortcut   = input::KeyMap::displayString(input::EditorKeybind::Undo);
+    auto const  redoShortcut   = input::KeyMap::displayString(input::EditorKeybind::Redo);
     auto const  deleteShortcut = input::KeyMap::displayString(input::EditorKeybind::DeleteSelection);
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
-            ImGui::MenuItem(
-                "playback.refactorEditor.menu.openReplay"_tr().c_str(),
-                nullptr,
-                false,
-                false
-            );
-            ImGui::MenuItem(
-                "playback.refactorEditor.menu.saveProject"_tr().c_str(),
-                nullptr,
-                false,
-                false
-            );
+            ImGui::MenuItem("playback.refactorEditor.menu.openReplay"_tr().c_str(), nullptr, false, false);
+            ImGui::MenuItem("playback.refactorEditor.menu.saveProject"_tr().c_str(), nullptr, false, false);
             ImGui::MenuItem("playback.refactorEditor.menu.recent"_tr().c_str(), nullptr, false, false);
             ImGui::Separator();
             if (ImGui::MenuItem(
@@ -149,7 +140,7 @@ void EditorMenuBar::draw() {
 
         if (ImGui::BeginMenu("playback.refactorEditor.menu.camera"_tr().c_str(), capabilities.cameraEditing)) {
             auto const keyframeShortcut = input::KeyMap::displayString(input::EditorKeybind::AddKeyframe);
-            bool const canAddKeyframe = editor.selection().getAs<state::editing::model::SelectedCamera>() != nullptr;
+            bool const canAddKeyframe   = editor.selection().getAs<state::editing::model::SelectedCamera>() != nullptr;
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.addKeyframe"_tr().c_str(),
                     keyframeShortcut.c_str(),
@@ -266,7 +257,12 @@ void EditorMenuBar::draw() {
         }
         ImGui::Spacing();
         float const closeWidth = 110.0f;
-        ImGui::SetCursorPosX(std::max(ImGui::GetStyle().WindowPadding.x, ImGui::GetWindowWidth() - closeWidth - ImGui::GetStyle().WindowPadding.x));
+        ImGui::SetCursorPosX(
+            std::max(
+                ImGui::GetStyle().WindowPadding.x,
+                ImGui::GetWindowWidth() - closeWidth - ImGui::GetStyle().WindowPadding.x
+            )
+        );
         if (ImGui::Button("playback.refactorEditor.shortcuts.close"_tr().c_str(), {closeWidth, 32.0f})) {
             mShortcutDialogOpen = false;
             ImGui::CloseCurrentPopup();
@@ -345,7 +341,8 @@ void EditorMenuBar::draw() {
         ImGui::Spacing();
         ImGui::TextDisabled("%s", "playback.refactorEditor.export.timeline"_tr().c_str());
         ImGui::SameLine();
-        std::string const fullRangeLabel = std::string(ICON_RESET) + " " + "playback.refactorEditor.export.fullRange"_tr();
+        std::string const fullRangeLabel =
+            std::string(ICON_RESET) + " " + "playback.refactorEditor.export.fullRange"_tr();
         if (ImGui::SmallButton((fullRangeLabel + "##export-full-range").c_str())) {
             mExportStartTick = 0;
             mExportEndTick   = maximumReplayTick;
@@ -433,19 +430,18 @@ void EditorMenuBar::draw() {
         int const      safeSsaaIndex = std::clamp(mExportSsaa, 0, 3);
         uint32_t const ssaaValue     = 1u << safeSsaaIndex;
         bool const     validOutput   = mExportName.front() != '\0' && mExportDirectory.front() != '\0';
-        bool const     validTimeline = mExportStartTick >= 0 && mExportEndTick > mExportStartTick
-                                && mExportEndTick <= maximumReplayTick;
+        bool const     validTimeline =
+            mExportStartTick >= 0 && mExportEndTick > mExportStartTick && mExportEndTick <= maximumReplayTick;
         bool const validFps = mFps >= 1 && mFps <= 240;
-        bool const validResolution = mExportWidth >= 16 && mExportHeight >= 16 && mExportWidth <= 16384
-                                  && mExportHeight <= 16384
-                                  && static_cast<uint64_t>(mExportWidth) * ssaaValue <= 16384
-                                  && static_cast<uint64_t>(mExportHeight) * ssaaValue <= 16384
-                                  && static_cast<uint64_t>(mExportWidth) * mExportHeight <= 134217728ull
-                                  && static_cast<uint64_t>(mExportWidth) * mExportHeight * ssaaValue * ssaaValue
-                                         <= 134217728ull;
-        bool const validCapture = mExportSsaa >= 0 && mExportSsaa <= 3 && mExportWarmupFrames >= 0
-                               && mExportWarmupFrames <= 3600;
-        bool const formatAvailable = mExportFormat != 0 || capabilities.ffmpegVideoExport;
+        bool const validResolution =
+            mExportWidth >= 16 && mExportHeight >= 16 && mExportWidth <= 16384 && mExportHeight <= 16384
+            && static_cast<uint64_t>(mExportWidth) * ssaaValue <= 16384
+            && static_cast<uint64_t>(mExportHeight) * ssaaValue <= 16384
+            && static_cast<uint64_t>(mExportWidth) * mExportHeight <= 134217728ull
+            && static_cast<uint64_t>(mExportWidth) * mExportHeight * ssaaValue * ssaaValue <= 134217728ull;
+        bool const validCapture =
+            mExportSsaa >= 0 && mExportSsaa <= 3 && mExportWarmupFrames >= 0 && mExportWarmupFrames <= 3600;
+        bool const formatAvailable  = mExportFormat != 0 || capabilities.ffmpegVideoExport;
         bool const rawSettingsValid = validOutput && validTimeline && validFps && validResolution && validCapture
                                    && formatAvailable && state.project != nullptr;
 
@@ -465,11 +461,10 @@ void EditorMenuBar::draw() {
         exporting::ExportPlanCompileResult compiled;
         if (rawSettingsValid) compiled = exporting::ExportPlanCompiler::compile(previewSettings, *state.project);
         bool const validSettings = rawSettingsValid && static_cast<bool>(compiled);
-        auto outputPath = utf8String(
-            compiled.plan ? compiled.plan->outputPath : exporting::buildExportOutputPath(previewSettings)
-        );
-        double const durationSeconds = validTimeline ? (mExportEndTick - mExportStartTick) / 20.0 : 0.0;
-        uint64_t const frameCount = compiled.plan ? compiled.plan->frameCount : 0;
+        auto       outputPath =
+            utf8String(compiled.plan ? compiled.plan->outputPath : exporting::buildExportOutputPath(previewSettings));
+        double const   durationSeconds = validTimeline ? (mExportEndTick - mExportStartTick) / 20.0 : 0.0;
+        uint64_t const frameCount      = compiled.plan ? compiled.plan->frameCount : 0;
 
         ImGui::Spacing();
         ImGui::TextDisabled("%s", "playback.refactorEditor.export.summary"_tr().c_str());
@@ -519,8 +514,7 @@ void EditorMenuBar::draw() {
             else if (!validFps) validationMessage = "playback.refactorEditor.export.invalidFps"_tr();
             else if (!validResolution || !validCapture)
                 validationMessage = "playback.refactorEditor.export.invalidCapture"_tr();
-            else if (!formatAvailable)
-                validationMessage = "playback.refactorEditor.export.ffmpegUnavailable"_tr();
+            else if (!formatAvailable) validationMessage = "playback.refactorEditor.export.ffmpegUnavailable"_tr();
             else validationMessage = "playback.refactorEditor.export.invalidSettings"_tr();
             ImGui::TextColored(ImVec4(0.96f, 0.65f, 0.20f, 1.0f), "%s  %s", ICON_WARNING, validationMessage.c_str());
             if (!compiled.message.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", compiled.message.c_str());
@@ -534,7 +528,9 @@ void EditorMenuBar::draw() {
         float const       cancelWidth = 120.0f;
         float const       startWidth  = 170.0f;
         float const       footerWidth = cancelWidth + ImGui::GetStyle().ItemSpacing.x + startWidth;
-        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - footerWidth - ImGui::GetStyle().WindowPadding.x));
+        ImGui::SetCursorPosX(
+            std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - footerWidth - ImGui::GetStyle().WindowPadding.x)
+        );
         if (ImGui::Button(cancelLabel.c_str(), {cancelWidth, 32.0f})) {
             mExportDialogOpen = false;
             ImGui::CloseCurrentPopup();

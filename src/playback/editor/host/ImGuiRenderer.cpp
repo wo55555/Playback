@@ -7,13 +7,14 @@
 #include "playback/editor/host/ReplayMouseHook.h"
 
 #include "playback/Playback.h"
-#include "playback/state/EditorContext.h"
-#include "playback/exporting/ExportActivity.h"
-#include "playback/editor/input/EditorInput.h"
 #include "playback/editor/host/ReplayUILayout.h"
+#include "playback/editor/input/EditorInput.h"
 #include "playback/editor/ui/ReplayEditor.h"
-#include "playback/visuals/ReplayThumbnail.h"
+#include "playback/exporting/ExportActivity.h"
 #include "playback/screen/select_replay/SelectReplayScreen.h"
+#include "playback/state/EditorContext.h"
+#include "playback/visuals/ReplayThumbnail.h"
+
 
 
 #include "imgui.h"
@@ -164,41 +165,41 @@ void freeSrv(
 } // namespace
 
 struct ImGuiRenderer::Impl {
-    std::mutex                                        mutex;
+    std::mutex                              mutex;
     visuals::FrameTap                       frameTap;
-    D3D11FrameTapBackend                              d3d11FrameTap{frameTap};
-    D3D12FrameTapBackend                              d3d12FrameTap{frameTap};
-    std::mutex                                        thumbnailMutex;
+    D3D11FrameTapBackend                    d3d11FrameTap{frameTap};
+    D3D12FrameTapBackend                    d3d12FrameTap{frameTap};
+    std::mutex                              thumbnailMutex;
     std::optional<visuals::FrameTapSession> thumbnailSession;
-    EditorContext*                                    editorContext{};
-    IDXGISwapChain*                                   swapChain{};
-    ComPtr<IDXGISwapChain3>                           swapChain3;
-    ComPtr<ID3D12Device>                              device;
-    ComPtr<ID3D12CommandQueue>                        commandQueue;
-    ComPtr<ID3D12DescriptorHeap>                      rtvHeap;
-    ComPtr<ID3D12DescriptorHeap>                      srvHeap;
-    ComPtr<ID3D12Fence>                               fence;
-    std::vector<FrameResources>                       frames;
-    std::vector<UINT64>                               frameFences;
-    std::array<bool, SrvDescriptorCount>              srvUsed{};
-    HANDLE                                            fenceEvent{};
-    ImGuiContext*                                     imguiCtx{};
-    DXGI_FORMAT                                       rtvFormat{};
-    UINT                                              rtvDescSize{};
-    UINT                                              srvDescSize{};
-    UINT64                                            lastFenceValue{};
-    size_t                                            frameCursor{};
-    uint64_t                                          surfaceArea{};
-    std::optional<UINT>                               lastGameTextureIndex;
-    bool                                              unfenced{};
-    bool                                              initialized{};
-    bool                                              backendInit{};
-    bool                                              renderingDisabled{};
-    bool                                              initFailed{};
-    bool                                              missingQueue{};
-    std::chrono::steady_clock::time_point             lastInitAttempt{};
-    std::chrono::steady_clock::time_point             lastFrameTime{};
-    std::chrono::steady_clock::time_point             lastPresent{};
+    EditorContext*                          editorContext{};
+    IDXGISwapChain*                         swapChain{};
+    ComPtr<IDXGISwapChain3>                 swapChain3;
+    ComPtr<ID3D12Device>                    device;
+    ComPtr<ID3D12CommandQueue>              commandQueue;
+    ComPtr<ID3D12DescriptorHeap>            rtvHeap;
+    ComPtr<ID3D12DescriptorHeap>            srvHeap;
+    ComPtr<ID3D12Fence>                     fence;
+    std::vector<FrameResources>             frames;
+    std::vector<UINT64>                     frameFences;
+    std::array<bool, SrvDescriptorCount>    srvUsed{};
+    HANDLE                                  fenceEvent{};
+    ImGuiContext*                           imguiCtx{};
+    DXGI_FORMAT                             rtvFormat{};
+    UINT                                    rtvDescSize{};
+    UINT                                    srvDescSize{};
+    UINT64                                  lastFenceValue{};
+    size_t                                  frameCursor{};
+    uint64_t                                surfaceArea{};
+    std::optional<UINT>                     lastGameTextureIndex;
+    bool                                    unfenced{};
+    bool                                    initialized{};
+    bool                                    backendInit{};
+    bool                                    renderingDisabled{};
+    bool                                    initFailed{};
+    bool                                    missingQueue{};
+    std::chrono::steady_clock::time_point   lastInitAttempt{};
+    std::chrono::steady_clock::time_point   lastFrameTime{};
+    std::chrono::steady_clock::time_point   lastPresent{};
 
     ComPtr<ID3D11Device>             d3d11Device;
     ComPtr<ID3D11DeviceContext>      d3d11Context;
@@ -319,7 +320,7 @@ struct ImGuiRenderer::Impl {
 
     void shutdownD3D11(
         visuals::FrameTapError frameTapError   = visuals::FrameTapError::BackendUnavailable,
-        std::string                      frameTapMessage = "D3D11 frame capture backend was released"
+        std::string            frameTapMessage = "D3D11 frame capture backend was released"
     ) {
         if (d3d11Initialized) {
             d3d11FrameTap.reset(frameTapError, std::move(frameTapMessage));
@@ -657,7 +658,7 @@ struct ImGuiRenderer::Impl {
 
     void shutdown(
         visuals::FrameTapError frameTapError   = visuals::FrameTapError::BackendUnavailable,
-        std::string                      frameTapMessage = "D3D12 frame capture backend was released"
+        std::string            frameTapMessage = "D3D12 frame capture backend was released"
     ) {
         setReplayMouseInputActive(false);
         shutdownD3D11(frameTapError, frameTapMessage);
@@ -845,7 +846,7 @@ void ImGuiRenderer::requestReplayThumbnailCapture() {
         mImpl->thumbnailSession.reset();
     }
     visuals::FrameTapSession session;
-    auto const                         opened = mImpl->frameTap.open({1, true}, session);
+    auto const               opened = mImpl->frameTap.open({1, true}, session);
     if (opened != visuals::FrameTapOpenResult::Opened) return;
     visuals::FrameTicket const ticket{0, 0, 1};
     if (mImpl->frameTap.tryArm(session, ticket) != visuals::FrameTapArmResult::Armed) {
@@ -893,8 +894,7 @@ void* ImGuiRenderer::acquireReplayThumbnailTexture(std::string_view key, std::st
     if (found12 != p.d3d12ThumbnailTextures.end()) return reinterpret_cast<void*>(found12->second.srvGpu.ptr);
     if (png.empty()) return nullptr;
     visuals::ReplayThumbnailPixels pixels;
-    if (!visuals::decodeReplayThumbnailPng(png, pixels) || pixels.width == 0 || pixels.height == 0)
-        return nullptr;
+    if (!visuals::decodeReplayThumbnailPng(png, pixels) || pixels.width == 0 || pixels.height == 0) return nullptr;
     if (p.d3d11Device) {
         D3D11_TEXTURE2D_DESC desc{};
         desc.Width            = pixels.width;

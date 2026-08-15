@@ -426,7 +426,7 @@ void TimelinePanel::draw(bool allowInput) {
         }
         if (row.locked) {
             float const lockX = row.kind == state::editing::model::TrackRowKind::Camera ? fullMin.x + listWidth - 48.0f
-                                                                                 : fullMin.x + listWidth - 48.0f;
+                                                                                        : fullMin.x + listWidth - 48.0f;
             drawList->AddText({lockX, textY}, IM_COL32(140, 140, 140, 255), "LOCK");
         }
         listY = rowBottom + 2.0f;
@@ -528,9 +528,9 @@ void TimelinePanel::draw(bool allowInput) {
             for (auto const& segment : project->sequence) {
                 ImVec2 minimum{canvasLeft + segment.startTick * pixelsPerTick - mScrollX, y + 4.0f};
                 ImVec2 maximum{canvasLeft + segment.endTick * pixelsPerTick - mScrollX, rowBottom - 4.0f};
-                bool   selected =
-                    editor.selection().getAs<state::editing::model::SelectedSequenceSegment>()
-                    && editor.selection().getAs<state::editing::model::SelectedSequenceSegment>()->segmentId == segment.id;
+                bool   selected = editor.selection().getAs<state::editing::model::SelectedSequenceSegment>()
+                               && editor.selection().getAs<state::editing::model::SelectedSequenceSegment>()->segmentId
+                                      == segment.id;
                 drawList->AddRectFilled(minimum, maximum, kSequenceColor);
                 drawList
                     ->AddRect(minimum, maximum, selected ? IM_COL32(220, 220, 220, 255) : IM_COL32(178, 178, 178, 255));

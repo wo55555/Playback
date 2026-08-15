@@ -2,8 +2,9 @@
 
 #include "playback/io/AsyncReplaySaver.h"
 #include "playback/packet/PlaybackSetEquipmentPacket.h"
-#include "playback/visuals/ReplayThumbnail.h"
 #include "playback/utils/container/LinkedHashMap.h"
+#include "playback/visuals/ReplayThumbnail.h"
+
 
 #include "mc/deps/core/utility/AutomaticID.h"
 #include "mc/legacy/ActorRuntimeID.h"
@@ -33,12 +34,12 @@ struct PacketLifecycleSemantics;
 
 namespace playback::record {
 
-using playback::packet::PacketLifecycleSemantics;
-using playback::packet::PlaybackSetEquipmentPacket;
 using playback::io::AsyncReplaySaver;
 using playback::io::PlaybackBuffer;
 using playback::io::PlaybackSerializedGamePacket;
 using playback::io::PlaybackSnapshotContext;
+using playback::packet::PacketLifecycleSemantics;
+using playback::packet::PlaybackSetEquipmentPacket;
 
 struct PlaybackView {
     float x     = 0.0f;
@@ -81,7 +82,7 @@ private:
     std::vector<PlaybackSerializedGamePacket>      mSnapshotEntityPackets;
     std::optional<std::string>                     mSnapshotLocalPlayerPayload;
     std::vector<PlaybackSerializedGamePacket>      mConfigurationPackets;
-    std::unordered_map<int32_t, size_t>             mConfigurationPacketIndices;
+    std::unordered_map<int32_t, size_t>            mConfigurationPacketIndices;
     std::vector<PlaybackSerializedGamePacket>      mPendingGamePackets;
     mutable std::mutex                             mPendingGamePacketsMutex;
     std::unordered_map<int32_t, uint64_t>          mRecordedGamePacketCounts;
@@ -101,11 +102,11 @@ private:
 
     PlaybackMeta mMetadata = PlaybackMeta();
 
-    std::atomic<State>                                   mState{State::Idle};
+    std::atomic<State>                                    mState{State::Idle};
     std::atomic<visuals::ReplayThumbnailCaptureProvider*> mThumbnailCaptureProvider{};
-    std::atomic_bool                                     mNeedsInitialSnapshot       = true;
-    std::atomic_bool                                     mDimensionTransitionPending = false;
-    std::atomic<int>                                     mDimensionTransitionTargetId{0};
+    std::atomic_bool                                      mNeedsInitialSnapshot       = true;
+    std::atomic_bool                                      mDimensionTransitionPending = false;
+    std::atomic<int>                                      mDimensionTransitionTargetId{0};
 
     int mChunkIndex          = 0;
     int mTicksInCurrentChunk = 0;

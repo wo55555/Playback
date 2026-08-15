@@ -20,8 +20,8 @@
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
-#include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
+#include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/TakeItemActorPacket.h"
@@ -31,6 +31,7 @@
 #include "mc/world/level/Level.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
+
 
 #include <utility>
 #include <variant>
@@ -72,13 +73,9 @@ struct NetworkHookState {
             && !updateSubChunkBlocks;
     }
 
-    [[nodiscard]] bool resourceHandlersInstalled() const {
-        return resourcePacksInfo && resourcePackStack;
-    }
+    [[nodiscard]] bool resourceHandlersInstalled() const { return resourcePacksInfo && resourcePackStack; }
 
-    [[nodiscard]] bool resourceHandlersRemoved() const {
-        return !resourcePacksInfo && !resourcePackStack;
-    }
+    [[nodiscard]] bool resourceHandlersRemoved() const { return !resourcePacksInfo && !resourcePackStack; }
 };
 
 NetworkHookState& networkHookState() {
@@ -132,7 +129,7 @@ LL_TYPE_INSTANCE_HOOK(
     ClientNetworkHandler,
     &ClientNetworkHandler::$handle,
     void,
-    NetworkIdentifier const&      source,
+    NetworkIdentifier const&       source,
     ResourcePacksInfoPacket const& packet
 ) {
     auto& replaySession = ReplaySession::getInstance();
@@ -339,7 +336,7 @@ LL_TYPE_INSTANCE_HOOK(
     ClientNetworkHandler,
     &ClientNetworkHandler::$handle,
     void,
-    NetworkIdentifier const&        source,
+    NetworkIdentifier const&       source,
     ResourcePackStackPacket const& packet
 ) {
     auto& replaySession = ReplaySession::getInstance();
@@ -386,8 +383,7 @@ bool hookNetwork(bool enable) {
     auto allInstalled = [&] {
         return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
             && state.resourceHandlersInstalled() && state.completion && state.packetObserver && state.packetSender
-            && state.addActor && state.addItemActor
-            && state.fastPathHandlersInstalled();
+            && state.addActor && state.addItemActor && state.fastPathHandlersInstalled();
     };
     auto noneInstalled = [&] {
         return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime

@@ -12,8 +12,8 @@ class PlaybackBuffer;
 }
 
 namespace playback::action {
-using playback::replay::ReplaySession;
 using playback::io::PlaybackBuffer;
+using playback::replay::ReplaySession;
 
 struct Action {
     std::string name;

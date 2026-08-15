@@ -106,7 +106,7 @@ LL_TYPE_INSTANCE_HOOK(
         bool const replayReady  = replay.hasJoinedReplayWorld();
         bool const sceneVisible = (topScene & hudScene) != 0 || replayReady;
         hudVisible              = sceneVisible && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
-                  && !isShowingProgressScreen();
+                               && !isShowingProgressScreen();
     }
     editor::tickReplayUI(hudVisible);
     replay.tryFinalizeWorldCleanup();
