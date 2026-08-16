@@ -422,8 +422,12 @@ void DetailsPanel::draw() {
     // ===== Camera Keyframe =====
     if (auto const* selected = selection.getAs<state::editing::model::SelectedKeyframe>()) {
         auto const* camera = findById(project->cameras, selected->trackId);
-        auto const  key    = camera ? camera->keysByTick.find(selected->tick) : camera->keysByTick.end();
-        if (!camera || key == camera->keysByTick.end()) {
+        if (!camera) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
+            return;
+        }
+        auto const key = camera->keysByTick.find(selected->tick);
+        if (key == camera->keysByTick.end()) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
             return;
         }
@@ -440,19 +444,30 @@ void DetailsPanel::draw() {
                 action.secondaryTick = tick;
                 submit(std::move(action));
             }
-            ImGui::Text(
-                "Position: x %.2f  y %.2f  z %.2f",
-                key->second.position.x,
-                key->second.position.y,
-                key->second.position.z
-            );
+            float position[3] = {key->second.position.x, key->second.position.y, key->second.position.z};
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::DragFloat3("Position", position, 0.5f) && ImGui::IsItemDeactivatedAfterEdit()) {
+                EditorAction action{EditorActionType::SetKeyframePosition};
+                action.id       = camera->id;
+                action.tick     = originalTick;
+                action.position = {position[0], position[1], position[2]};
+                submit(std::move(action));
+            }
             ImGui::Text(
                 "Rotation: yaw %.1f  pitch %.1f  roll %.1f",
                 key->second.yaw,
                 key->second.pitch,
                 key->second.roll
             );
-            ImGui::Text("FOV: %.1f", key->second.fov);
+            float fov = key->second.fov;
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::SliderFloat("FOV", &fov, 1.0f, 110.0f, "%.1f") && ImGui::IsItemDeactivatedAfterEdit()) {
+                EditorAction action{EditorActionType::SetKeyframeFov};
+                action.id    = camera->id;
+                action.tick  = originalTick;
+                action.speed = fov;
+                submit(std::move(action));
+            }
             int interpolation = static_cast<int>(key->second.interpolationType);
             ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::BeginCombo("Interpolation", interpolationName(key->second.interpolationType))) {

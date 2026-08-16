@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
+#include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
@@ -13,6 +14,7 @@
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
+#include "mc/client/options/IOptions.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
@@ -155,6 +157,13 @@ visuals::EntityRenderPose replayRenderPose(Actor const& actor) {
 }
 
 void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 const& rotation, float headYaw) {
+    // Pin the pose directly so the vanilla movement system cannot re-apply the previous one.
+    actor.mBuiltInComponents->mStateVectorComponent->mPos       = position;
+    actor.mBuiltInComponents->mStateVectorComponent->mPosPrev   = position;
+    actor.mBuiltInComponents->mStateVectorComponent->mPosDelta  = Vec3{};
+    actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
+    actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+
     auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
     if (!interpolator) return;
 
@@ -229,6 +238,16 @@ struct InjectionReset {
 
 float decodeRotationByte(uchar value) { return static_cast<schar>(value) * (360.0f / 256.0f); }
 
+void forceFirstPersonCamera() {
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    auto& options = client->getOptions();
+    if (options.getPlayerViewPerspective() != 0) options.setPlayerViewPerspective(0);
+}
+
+// Server teleport lands one eye height above the request; compensate so the feet agree.
+constexpr float kServerEyeHeight = 1.62f;
+
 } // namespace
 
 ReplaySession::ReplaySession()  = default;
@@ -256,6 +275,8 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         getLogger().error("Unable to start replay because the main menu is not ready");
         return false;
     }
+
+    forceFirstPersonCamera();
 
     try {
         if (!init(std::move(filePath))) {
@@ -464,9 +485,126 @@ bool ReplaySession::setPaused(bool paused) {
     if (!mActive) return false;
     if (mIsPaused == paused) return true;
 
-    mIsPaused = paused;
+    bool const wasPreviewing = keyframe::wasPreviewCameraApplied();
+    mIsPaused                = paused;
     getLogger().debug("Replay {} at tick {}", paused ? "paused" : "playing", mCurrentTick);
+    if (paused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive && wasPreviewing) {
+        parkReplayCameraAtPreview();
+    } else if (paused && mReplayPlayer && mReplayWorldJoined) {
+        syncObserverServerPosition(mReplayPlayer->getPosition(), mReplayPlayer->getRotation());
+    }
     return true;
+}
+
+void ReplaySession::parkReplayCameraAtPreview() {
+    keyframe::setPreviewCameraApplied(false);
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
+
+    // Only park when the paused tick is still inside the keyframe range.
+    auto const sampleTime = getCameraRenderSampleTime(0.0f);
+    if (!sampleTime) return;
+    auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *sampleTime);
+    if (!sample) return;
+
+    // Park at the last-rendered preview pose; fall back to the paused-tick sample.
+    auto const lastPose = keyframe::takeLastPreviewPose();
+    auto const pose     = lastPose.value_or(sample->state);
+
+    // The first-person spectator's camera sits at its feet, so the pose is the feet position.
+    forceFirstPersonCamera();
+    Vec3 const feetPosition = Vec3{pose.x, pose.y, pose.z};
+    teleportReplayPlayer(feetPosition, Vec2{pose.pitch, pose.yaw});
+    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, Vec2{pose.pitch, pose.yaw}, pose.yaw);
+    syncObserverServerPosition(feetPosition, Vec2{pose.pitch, pose.yaw});
+}
+
+void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& rotation) {
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
+    if (!packet || !packet->mHandler) return;
+    auto& move          = static_cast<MovePlayerPacket&>(*packet);
+    move.mPlayerID      = mReplayPlayer->getRuntimeID();
+    move.mPos           = feetPosition;
+    move.mRot           = rotation;
+    move.mYHeadRot      = rotation.y;
+    move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
+    move.mOnGround      = true;
+    mInjectingPacket.store(packet.get(), std::memory_order_release);
+    InjectionReset reset{mInjectingPacket};
+    packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+}
+
+void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 const& rotation) {
+    if (!mReplayPlayer || !mReplayWorldJoined) return;
+    auto const playerUuid    = mReplayPlayer->getUuid();
+    auto const replayLevelId = mReplayLevelId;
+    auto const dimension     = mReplayPlayer->getDimensionId();
+    Vec3 const serverPosition{feetPosition.x, feetPosition.y - kServerEyeHeight, feetPosition.z};
+    ll::thread::ServerThreadExecutor::getDefault().execute(
+        [playerUuid, replayLevelId, serverPosition, rotation, dimension] {
+            auto level = ll::service::getLevel();
+            if (!level || level->getLevelId() != replayLevelId) return;
+            auto* player = level->getPlayer(playerUuid);
+            if (!player) return;
+            player->teleport(serverPosition, dimension, rotation);
+        }
+    );
+}
+
+void ReplaySession::setObserverPreviewPartialTick(float partialTick) {
+    mObserverPreviewPartialTick.store(partialTick, std::memory_order_release);
+}
+
+bool ReplaySession::getObserverCameraPose(keyframe::CameraRenderState& out) const noexcept {
+    if (!mReplayPlayer) return false;
+    // First-person spectator: camera sits at the feet, so the pose is the feet position.
+    Vec3 const pos = mReplayPlayer->getPosition();
+    auto const rot = mReplayPlayer->getRotation();
+    out            = {
+        pos.x,
+        pos.y,
+        pos.z,
+        rot.y,
+        rot.x,
+        0.0f,
+        70.0f,
+    };
+    return true;
+}
+
+void ReplaySession::updateObserverPreview() {
+    if (!mReplayPlayer || !mReplayWorldJoined) return;
+    if (mIsPaused) return;
+    if (!mNetworkHandler) return;
+    if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return;
+    auto const time = getCameraRenderSampleTime(mObserverPreviewPartialTick.load(std::memory_order_acquire));
+    if (!time) return;
+    auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
+    if (!sample) {
+        // Leaving the range: pin the observer and server to the last in-range pose.
+        if (mObserverPreviewInRange) {
+            mObserverPreviewInRange = false;
+            teleportReplayPlayer(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
+            cancelNativeMovementInterpolation(
+                *mReplayPlayer,
+                mLastObserverPreviewFeet,
+                mLastObserverPreviewRotation,
+                mLastObserverPreviewRotation.y
+            );
+            syncObserverServerPosition(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
+        }
+        return;
+    }
+    mObserverPreviewInRange = true;
+
+    // First-person spectator: camera sits at the feet, so the pose is the feet position.
+    Vec3 const feetPosition{sample->state.x, sample->state.y, sample->state.z};
+    Vec2 const rotation{sample->state.pitch, sample->state.yaw};
+    mLastObserverPreviewFeet     = feetPosition;
+    mLastObserverPreviewRotation = rotation;
+
+    teleportReplayPlayer(feetPosition, rotation);
+    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
 }
 
 std::optional<visuals::ReplaySampleTime> ReplaySession::getRenderSampleTime(float partialTick) const noexcept {
@@ -749,6 +887,9 @@ void ReplaySession::tick() {
     if (!mActive) return;
     try {
         if (!mReplayWorldJoined || !mNetworkHandler || !refreshReplayPlayer()) return;
+        // The observer is the camera; keep it first-person so its camera offset stays a stable
+        // vertical eye height instead of a direction-based third-person offset.
+        forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
 
         if (mPendingSnapshotApply) {
@@ -2385,6 +2526,8 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         return true;
     };
 
+    bool const observerIsFree = !mIsPaused;
+
     auto const markerOrCount = data.getVarInt().value();
     if (markerOrCount == 0) {
         auto const version = data.getVarInt().value();
@@ -2405,6 +2548,10 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
             auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
             if (!actor) continue;
+            // The observer is the free camera; skip its recorded movement.
+            if (observerIsFree && actor == mReplayPlayer) {
+                continue;
+            }
 
             auto const previousPose  = replayRenderPose(*actor);
             auto const renderKey     = replayEntityRenderKey(actor->getLevel(), id);
@@ -2512,6 +2659,10 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
             auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
             if (!actor || !actor->isPlayer()) continue;
+            // The observer is the free camera; skip its recorded movement.
+            if (observerIsFree && actor == mReplayPlayer) {
+                continue;
+            }
 
             previousPose = replayRenderPose(*actor);
             renderKey    = replayEntityRenderKey(actor->getLevel(), id);

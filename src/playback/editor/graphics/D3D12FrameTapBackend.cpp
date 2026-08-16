@@ -1,6 +1,6 @@
 ﻿#include "D3D12FrameTapBackend.h"
 
-#include "playback/editor/host/D3D12Compat.h"
+#include "playback/editor/graphics/D3D12Compat.h"
 
 #include "playback/Playback.h"
 
@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 using visuals::CapturedFrame;
 using visuals::FramePixelFormat;
@@ -810,4 +810,4 @@ void D3D12FrameTapBackend::submissionFailed(FrameTapError error, std::string mes
 
 void D3D12FrameTapBackend::reset(FrameTapError error, std::string message) { mImpl->reset(error, std::move(message)); }
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

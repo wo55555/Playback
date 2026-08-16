@@ -12,7 +12,7 @@ struct ID3D12Fence;
 struct ID3D12GraphicsCommandList;
 struct ID3D12Resource;
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 class D3D12FrameTapBackend {
 public:
@@ -40,4 +40,4 @@ private:
     std::unique_ptr<Impl> mImpl;
 };
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

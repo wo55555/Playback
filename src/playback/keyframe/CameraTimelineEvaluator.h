@@ -19,7 +19,7 @@ struct CameraTimelineEvaluation {
 
 class CameraTimelineEvaluator {
 private:
-    state::editing::model::EditorStateExt                 mProject;
+    state::editing::model::EditorStateExt          mProject;
     std::optional<std::string>                     mCameraOverride;
     std::optional<std::string>                     mCameraFallback;
     bool                                           mHoldLastKeyframe{};
@@ -35,9 +35,9 @@ private:
 public:
     explicit CameraTimelineEvaluator(
         state::editing::model::EditorStateExt project,
-        std::optional<std::string>     cameraOverride   = std::nullopt,
-        std::optional<std::string>     cameraFallback   = std::nullopt,
-        bool                           holdLastKeyframe = false
+        std::optional<std::string>            cameraOverride   = std::nullopt,
+        std::optional<std::string>            cameraFallback   = std::nullopt,
+        bool                                  holdLastKeyframe = false
     );
 
     [[nodiscard]] std::optional<CameraTimelineEvaluation>

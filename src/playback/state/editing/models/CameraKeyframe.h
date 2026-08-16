@@ -17,12 +17,11 @@ enum class CameraInterpolationType : uint8_t {
 };
 
 struct CameraKeyframe {
-    Vec3   position{0, 80, 0};
-    float  yaw{0.0f};
-    float  pitch{0.0f};
-    float  roll{0.0f};
-    float  fov{70.0f};
-    Color4 tint{1, 1, 1, 1};
+    Vec3  position{0, 80, 0};
+    float yaw{0.0f};
+    float pitch{0.0f};
+    float roll{0.0f};
+    float fov{70.0f};
 
     CameraInterpolationType interpolationType{CameraInterpolationType::Smooth};
     Vec2                    bezierCtrl1{0.42f, 0.0f};

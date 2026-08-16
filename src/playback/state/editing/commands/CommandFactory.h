@@ -37,6 +37,9 @@ public:
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframe(const std::string& id, int tick);
     static std::unique_ptr<model::IEditCommand>
     createSetKeyframeInterpolation(const std::string& id, int tick, model::CameraInterpolationType interpolation);
+    static std::unique_ptr<model::IEditCommand>
+    createSetCameraKeyframePosition(const std::string& id, int tick, model::Vec3 position);
+    static std::unique_ptr<model::IEditCommand> createSetCameraKeyframeFov(const std::string& id, int tick, float fov);
     static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
     static std::unique_ptr<model::IEditCommand>
     createSetSubActorDetails(const std::string& id, model::AgentDetails details);

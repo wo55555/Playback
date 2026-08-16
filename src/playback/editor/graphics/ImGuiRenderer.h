@@ -18,7 +18,7 @@ class EditorContext;
 
 } // namespace playback::state
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 class ImGuiRenderer final : public visuals::ReplayThumbnailCaptureProvider {
 public:
@@ -53,4 +53,4 @@ private:
 
 extern ImGuiRenderer gImGuiRenderer;
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

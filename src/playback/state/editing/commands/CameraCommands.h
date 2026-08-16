@@ -147,4 +147,36 @@ private:
     bool                                 mChanged{};
 };
 
+class SetCameraKeyframePosition final : public model::IEditCommand {
+public:
+    SetCameraKeyframePosition(std::string cameraId, int tick, model::Vec3 position);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mChanged; }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    model::Vec3                          mPosition;
+    std::optional<model::EditorStateExt> mBefore;
+    bool                                 mChanged{};
+};
+
+class SetCameraKeyframeFov final : public model::IEditCommand {
+public:
+    SetCameraKeyframeFov(std::string cameraId, int tick, float fov);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mChanged; }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    float                                mFov;
+    std::optional<model::EditorStateExt> mBefore;
+    bool                                 mChanged{};
+};
+
 } // namespace playback::state::editing::command

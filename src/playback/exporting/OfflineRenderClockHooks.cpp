@@ -3,7 +3,7 @@
 #include "ExportActivity.h"
 #include "playback/Playback.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
-#include "playback/editor/host/CameraRenderHooks.h"
+#include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
@@ -391,7 +391,7 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
         };
     }
     replay::ReplaySession::getInstance().setExportCameraViewpoint(cameraViewpoint);
-    if (cameraSample && !editor::host::isCameraRenderInstalled()) return OfflineRenderClockPublishResult::Unavailable;
+    if (cameraSample && !editor::graphics::isCameraRenderInstalled()) return OfflineRenderClockPublishResult::Unavailable;
     auto const cameraAppliedFlag =
         cameraSample ? std::make_shared<std::atomic_bool>(false) : keyframe::CameraTimelineAppliedFlag{};
     {

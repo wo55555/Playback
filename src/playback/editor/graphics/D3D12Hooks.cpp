@@ -3,8 +3,8 @@
 #include "playback/Playback.h"
 #include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
-#include "playback/editor/host/D3D12Compat.h"
-#include "playback/editor/host/ImGuiRenderer.h"
+#include "playback/editor/graphics/D3D12Compat.h"
+#include "playback/editor/graphics/ImGuiRenderer.h"
 
 
 #include "ll/api/memory/Hook.h"
@@ -23,7 +23,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 namespace {
 
@@ -1040,4 +1040,4 @@ bool hookD3D12(bool enable) {
     return true;
 }
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

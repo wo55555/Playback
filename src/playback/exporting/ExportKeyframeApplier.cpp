@@ -11,7 +11,7 @@ ExportKeyframeApplier::~ExportKeyframeApplier() { reset(); }
 
 void ExportKeyframeApplier::configure(
     state::editing::model::EditorStateExt const& project,
-    std::optional<std::string>            cameraFallback
+    std::optional<std::string>                   cameraFallback
 ) {
     reset();
     if (project.cameras.empty()) {

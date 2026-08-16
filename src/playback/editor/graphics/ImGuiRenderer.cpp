@@ -1,13 +1,13 @@
 ﻿#include "ImGuiRenderer.h"
 
-#include "playback/editor/host/D3D11FrameTapBackend.h"
-#include "playback/editor/host/D3D12Compat.h"
-#include "playback/editor/host/D3D12FrameTapBackend.h"
-#include "playback/editor/host/D3D12Hooks.h"
-#include "playback/editor/host/ReplayMouseHook.h"
+#include "playback/editor/graphics/D3D11FrameTapBackend.h"
+#include "playback/editor/graphics/D3D12Compat.h"
+#include "playback/editor/graphics/D3D12FrameTapBackend.h"
+#include "playback/editor/graphics/D3D12Hooks.h"
+#include "playback/editor/graphics/ReplayMouseHook.h"
 
 #include "playback/Playback.h"
-#include "playback/editor/host/ReplayUILayout.h"
+#include "playback/editor/graphics/ReplayUILayout.h"
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/exporting/ExportActivity.h"
@@ -36,7 +36,7 @@
 #include <utility>
 #include <vector>
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 using namespace playback::state;
 
 namespace {
@@ -1235,4 +1235,4 @@ bool ImGuiRenderer::shutdown() {
     return true;
 }
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 using visuals::CapturedFrame;
 using visuals::FramePixelFormat;
@@ -209,4 +209,4 @@ void D3D11FrameTapBackend::reset(FrameTapError error, std::string message) {
     mImpl->slots.clear();
 }
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

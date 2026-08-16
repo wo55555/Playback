@@ -2,7 +2,7 @@
 
 class ClientInstance;
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 [[nodiscard]] bool hookReplayMouse(bool enable);
 
@@ -17,4 +17,4 @@ void endReplayMouseFrame();
 // Runs on the client update thread after ClientInstance::$update.
 void updateReplayMouseOwnership(ClientInstance& client);
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

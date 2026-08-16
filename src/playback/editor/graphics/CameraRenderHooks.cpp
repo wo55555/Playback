@@ -27,17 +27,18 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numbers>
 #include <utility>
 #include <vector>
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 namespace {
 
-constexpr float RadiansPerDegree   = 3.14159265358979323846f / 180.0f;
 constexpr float PositionTolerance  = 0.02f;
 constexpr float DirectionTolerance = 0.002f;
 constexpr auto  UnloggedFrame      = std::numeric_limits<uint64_t>::max();
+constexpr float RadiansPerDegree   = std::numbers::pi_v<float> / 180.0f;
 
 std::atomic_bool                     gInstalled{};
 std::atomic<uint64_t>                gPreviewFrameSerial{};
@@ -273,10 +274,6 @@ void logMissingSample(keyframe::CameraTimelineRenderContext const& context) noex
     return ::glm::normalize(::glm::quat_cast(cameraToWorld));
 }
 
-bool finite(::glm::qua<float> const& value) noexcept {
-    return std::isfinite(value.w) && std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
-}
-
 bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexcept {
     if (!context.sample || !finite(context.sample->state)) return false;
 
@@ -454,17 +451,52 @@ bool applyTimelineCamera(
     return verified;
 }
 
+// Write the camera exactly from the observer pose, bypassing the follow camera's smoothing.
+void applyObserverCamera(
+    LevelRendererPlayer&               level,
+    mce::Camera&                       setupCamera,
+    keyframe::CameraRenderState const& state
+) noexcept {
+    if (!finite(state)) return;
+    auto const position = ::glm::vec3{state.x, state.y, state.z};
+    auto const basis    = basisFromState(state);
+    if (!finite(position) || !finite(basis.right) || !finite(basis.up) || !finite(basis.forward)) return;
+
+    auto  client       = ll::service::getClientInstance();
+    auto* clientCamera = client ? &client->getCamera() : nullptr;
+    auto* worldCamera  = &level.mWorldSpaceCamera.get();
+    writeCameraSpaces({&setupCamera, clientCamera}, *worldCamera, position, basis);
+    writeLevelCameraPose(level, position, basis);
+}
+
 keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext(float partialTick) noexcept {
     auto& replay = replay::ReplaySession::getInstance();
-    if (replay.isPaused()) return {};
-    if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return {};
+
+    auto const clear = [] { keyframe::setPreviewCameraApplied(false); };
+
+    if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+        clear();
+        return {};
+    }
+    if (replay.isPaused()) {
+        clear();
+        return {};
+    }
 
     auto const time = replay.getCameraRenderSampleTime(partialTick);
-    if (!time) return {};
+    if (!time) {
+        clear();
+        return {};
+    }
     auto sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
-    if (!sample) return {};
+    if (!sample) {
+        clear();
+        return {};
+    }
 
     auto const serial = gPreviewFrameSerial.fetch_add(1, std::memory_order_relaxed) + 1;
+    keyframe::setPreviewCameraApplied(true);
+    keyframe::setLastPreviewPose(sample->state);
     return keyframe::publishCameraTimelineRenderContext(
         keyframe::CameraTimelineRenderContext{
             *time,
@@ -485,6 +517,8 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     float partialTick
 ) {
+    replay::ReplaySession::getInstance().setObserverPreviewPartialTick(partialTick);
+
     auto const existing = keyframe::currentCameraTimelineRenderContext();
     if (existing && existing->source == keyframe::CameraTimelineSource::Export) {
         (void)applyCameraEcs(*existing);
@@ -501,7 +535,6 @@ LL_TYPE_INSTANCE_HOOK(
 
     {
         keyframe::ScopedCameraTimelineRenderContext scope(context);
-        (void)applyCameraEcs(*context);
         origin(partialTick);
     }
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview, context);
@@ -545,9 +578,21 @@ LL_TYPE_INSTANCE_HOOK(
     origin(camera, partialTick);
 
     auto const context = keyframe::currentCameraTimelineRenderContext();
-    if (!context) return;
-    (void)applyCameraEcs(*context);
-    (void)applyTimelineCamera(*static_cast<LevelRendererPlayer*>(this), camera, *context);
+    if (context) {
+        // Preview/export render the camera exactly from the timeline pose (smooth; no per-frame
+        // observer teleport round-trip).
+        if (context->source == keyframe::CameraTimelineSource::Export) {
+            (void)applyCameraEcs(*context);
+        }
+        (void)applyTimelineCamera(*static_cast<LevelRendererPlayer*>(this), camera, *context);
+        return;
+    }
+
+    // Free camera: write the camera exactly from the observer entity's pose.
+    keyframe::CameraRenderState observerState;
+    if (replay::ReplaySession::getInstance().getObserverCameraPose(observerState)) {
+        applyObserverCamera(*static_cast<LevelRendererPlayer*>(this), camera, observerState);
+    }
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -560,7 +605,7 @@ LL_TYPE_INSTANCE_HOOK(
     ::SubClientId    clientSubId
 ) {
     auto const context = keyframe::currentCameraTimelineRenderContext();
-    if (!context) return origin(screenContext, clientSubId);
+    if (!context || context->source != keyframe::CameraTimelineSource::Export) return origin(screenContext, clientSubId);
     if (!context->sample) {
         logMissingSample(*context);
         return origin(screenContext, clientSubId);
@@ -706,6 +751,7 @@ bool hookCameraRender(bool enable) {
     for (auto& frame : gLastFinalViewFrame) frame.store(UnloggedFrame, std::memory_order_release);
     for (auto& frame : gLastCameraEcsFrame) frame.store(UnloggedFrame, std::memory_order_release);
     gPreviewFrameSerial.store(0, std::memory_order_release);
+    keyframe::setPreviewCameraApplied(false);
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
 
     if (!state.frameScope) state.frameScope = ReplayCameraFrameScopeHook::hook() == 0;
@@ -747,4 +793,4 @@ bool hookCameraRender(bool enable) {
 
 bool isCameraRenderInstalled() { return gInstalled.load(std::memory_order_acquire); }
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

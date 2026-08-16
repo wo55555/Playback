@@ -21,7 +21,7 @@
 #include <mutex>
 #include <vector>
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 namespace {
 
@@ -487,4 +487,4 @@ void updateReplayMouseOwnership(ClientInstance& client) {
     if (focused) restoreUiCursorPosition();
 }
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

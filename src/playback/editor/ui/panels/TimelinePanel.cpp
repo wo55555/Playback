@@ -561,12 +561,12 @@ void TimelinePanel::draw(bool allowInput) {
             auto const& camera      = project->cameras[row.cameraIndex];
             ImU32 const cameraColor = camera.enabled ? kCameraColor : IM_COL32(56, 52, 58, 180);
             drawList->AddRectFilled({canvasLeft, y + 5.0f}, {fullMax.x, rowBottom - 5.0f}, cameraColor);
+            float const centerY = (y + rowBottom) * 0.5f;
             for (auto const& [keyTick, _] : camera.keysByTick) {
-                bool const  dragging  = mDraggingKeyframeCameraId == camera.id && mDraggingKeyframeStartTick == keyTick;
-                int const   drawnTick = dragging ? mDraggingKeyframeTick : keyTick;
-                float       x         = canvasLeft + drawnTick * pixelsPerTick - mScrollX;
-                float const centerY   = (y + rowBottom) * 0.5f;
-                bool const  selected =
+                bool const dragging  = mDraggingKeyframeCameraId == camera.id && mDraggingKeyframeStartTick == keyTick;
+                int const  drawnTick = dragging ? mDraggingKeyframeTick : keyTick;
+                float      x         = canvasLeft + drawnTick * pixelsPerTick - mScrollX;
+                bool const selected =
                     selectedKeyframe && selectedKeyframe->trackId == camera.id && selectedKeyframe->tick == keyTick;
                 ImVec2 const top{x, centerY - 5.0f};
                 ImVec2 const right{x + 5.0f, centerY};

@@ -1,10 +1,11 @@
 ﻿#pragma once
 
+#include "playback/exporting/ExportCoordinator.h"
+#include "playback/exporting/ReplayExportDriver.h"
 #include "playback/state/EditorContext.h"
 #include "playback/state/editing/commands/CommandStack.h"
 #include "playback/state/editing/models/SelectionModel.h"
-#include "playback/exporting/ExportCoordinator.h"
-#include "playback/exporting/ReplayExportDriver.h"
+
 
 #include <cstdint>
 #include <memory>
@@ -34,7 +35,7 @@ private:
     void ensureProject(int totalTicks, std::string_view replayPath);
     void applyEditorAction(EditorAction const& action);
     [[nodiscard]] std::optional<state::editing::model::CameraKeyframe> captureCameraKeyframe() const;
-    void                                                        refreshBrowser();
+    void                                                               refreshBrowser();
     void runBrowserOperation(ReplayBrowserOperation operation, bool hudVisible, auto&& callback) {
         mBrowserOperation = operation;
         publishState(hudVisible);
@@ -50,8 +51,8 @@ private:
     ReplayBrowserOperation                         mBrowserOperation{ReplayBrowserOperation::None};
     std::string                                    mBrowserError;
     std::shared_ptr<ReplayBrowserSnapshot const>   mBrowserSnapshot;
-    state::editing::model::EditorStateExt                 mProject;
-    state::editing::command::CommandStack                 mCommandStack;
+    state::editing::model::EditorStateExt          mProject;
+    state::editing::command::CommandStack          mCommandStack;
     exporting::ExportCoordinator                   mExportCoordinator;
     std::unique_ptr<exporting::ReplayExportDriver> mExportDriver;
     std::string                                    mActiveReplayPath;

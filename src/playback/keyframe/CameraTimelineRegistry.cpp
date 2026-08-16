@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <mutex>
+#include <optional>
 #include <utility>
 
 namespace playback::keyframe {
@@ -12,11 +14,15 @@ struct Binding {
     CameraTimelineHandle timeline;
 };
 
-std::atomic<std::shared_ptr<Binding const>>             gPreview;
-std::atomic<std::shared_ptr<Binding const>>             gExport;
-std::atomic<CameraTimelineRenderContextHandle>          gPreviewRenderContext;
-std::atomic<CameraTimelineRenderContextHandle>          gExportRenderContext;
-thread_local CameraTimelineRenderContextHandle          gRenderContext;
+std::atomic<std::shared_ptr<Binding const>>    gPreview;
+std::atomic<std::shared_ptr<Binding const>>    gExport;
+std::atomic<CameraTimelineRenderContextHandle> gPreviewRenderContext;
+std::atomic<CameraTimelineRenderContextHandle> gExportRenderContext;
+thread_local CameraTimelineRenderContextHandle gRenderContext;
+std::atomic_bool                               gPreviewWasApplied{};
+
+std::mutex                                     gPreviewPoseMutex;
+std::optional<CameraRenderState>               gLastPreviewPose;
 
 std::atomic<std::shared_ptr<Binding const>>& bindingFor(CameraTimelineSource source) {
     return source == CameraTimelineSource::Export ? gExport : gPreview;
@@ -28,26 +34,22 @@ std::atomic<CameraTimelineRenderContextHandle>& renderContextFor(CameraTimelineS
 
 } // namespace
 
-ScopedCameraTimelineRenderContext::ScopedCameraTimelineRenderContext(
-    CameraTimelineRenderContextHandle context
-) noexcept
+ScopedCameraTimelineRenderContext::ScopedCameraTimelineRenderContext(CameraTimelineRenderContextHandle context) noexcept
 : mPrevious(std::move(gRenderContext)) {
     gRenderContext = std::move(context);
 }
 
-ScopedCameraTimelineRenderContext::~ScopedCameraTimelineRenderContext() {
-    gRenderContext = std::move(mPrevious);
-}
+ScopedCameraTimelineRenderContext::~ScopedCameraTimelineRenderContext() { gRenderContext = std::move(mPrevious); }
 
 void publishCameraTimeline(CameraTimelineSource source, CameraTimelineHandle timeline) {
     if (!timeline) {
         clearCameraTimeline(source);
         return;
     }
-    bindingFor(source).store(
-        std::make_shared<Binding const>(Binding{std::move(timeline)}),
-        std::memory_order_release
-    );
+    if (source == CameraTimelineSource::Preview) {
+        gPreviewWasApplied.store(false, std::memory_order_release);
+    }
+    bindingFor(source).store(std::make_shared<Binding const>(Binding{std::move(timeline)}), std::memory_order_release);
 }
 
 void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const& expected) {
@@ -56,20 +58,22 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
     while (current && (!expected || current->timeline == expected)) {
         if (target.compare_exchange_weak(current, {}, std::memory_order_acq_rel, std::memory_order_acquire)) {
             if (source == CameraTimelineSource::Preview) {
+                gPreviewWasApplied.store(false, std::memory_order_release);
                 clearCameraTimelineRenderContext(CameraTimelineSource::Preview);
             }
             return;
         }
     }
     if (!current && source == CameraTimelineSource::Preview && !expected) {
+        gPreviewWasApplied.store(false, std::memory_order_release);
         clearCameraTimelineRenderContext(CameraTimelineSource::Preview);
     }
 }
 
 std::optional<CameraTimelineSample> sampleCameraTimeline(
-    CameraTimelineSource                       source,
+    CameraTimelineSource             source,
     visuals::ReplaySampleTime const& time,
-    std::string_view                           cameraId
+    std::string_view                 cameraId
 ) noexcept {
     try {
         auto const current = bindingFor(source).load(std::memory_order_acquire);
@@ -86,6 +90,22 @@ std::optional<CameraTimelineSample> sampleCameraTimeline(
 bool hasCameraTimeline(CameraTimelineSource source) noexcept {
     auto const current = bindingFor(source).load(std::memory_order_acquire);
     return current && current->timeline;
+}
+
+bool wasPreviewCameraApplied() noexcept { return gPreviewWasApplied.load(std::memory_order_acquire); }
+
+void setPreviewCameraApplied(bool applied) noexcept { gPreviewWasApplied.store(applied, std::memory_order_release); }
+
+void setLastPreviewPose(CameraRenderState const& pose) noexcept {
+    std::lock_guard lock(gPreviewPoseMutex);
+    gLastPreviewPose = pose;
+}
+
+std::optional<CameraRenderState> takeLastPreviewPose() noexcept {
+    std::lock_guard lock(gPreviewPoseMutex);
+    auto            result = std::move(gLastPreviewPose);
+    gLastPreviewPose.reset();
+    return result;
 }
 
 CameraTimelineRenderContextHandle publishCameraTimelineRenderContext(CameraTimelineRenderContext context) {

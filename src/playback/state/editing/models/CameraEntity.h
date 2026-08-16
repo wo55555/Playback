@@ -22,8 +22,8 @@ struct CameraLimiter {
 };
 
 struct CameraEntity {
-    std::string id;
-    std::string name;
+    std::string                   id;
+    std::string                   name;
     bool                          enabled{true};
     std::map<int, CameraKeyframe> keysByTick;
     std::optional<CameraShake>    shake;

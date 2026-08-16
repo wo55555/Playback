@@ -1,5 +1,6 @@
 ﻿#include "CameraCommands.h"
 
+#include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/state/editing/CameraBindingOps.h"
 
 #include <algorithm>
@@ -86,6 +87,7 @@ void AddKeyframe::execute(model::EditorStateExt& state) {
     model::CameraKeyframe key;
     if (mCaptured) key = *mCaptured;
     else if (!camera->keysByTick.empty()) key = camera->keysByTick.rbegin()->second;
+    else if (auto captured = keyframe::captureClientCamera()) key.fov = captured->fov;
     camera->keysByTick.emplace(tick, std::move(key));
     mChanged = true;
 }
@@ -206,5 +208,62 @@ void SetCameraTrackState::execute(model::EditorStateExt& state) {
 void SetCameraTrackState::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 
 std::string SetCameraTrackState::label() const { return "Set Camera Track Enabled"; }
+
+SetCameraKeyframePosition::SetCameraKeyframePosition(std::string cameraId, int tick, model::Vec3 position)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mPosition(position) {}
+
+void SetCameraKeyframePosition::execute(model::EditorStateExt& state) {
+    mChanged     = false;
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end()
+        || key->second.position.x == mPosition.x && key->second.position.y == mPosition.y
+               && key->second.position.z == mPosition.z) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore              = state;
+    key->second.position = mPosition;
+    mChanged             = true;
+}
+
+void SetCameraKeyframePosition::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+
+std::string SetCameraKeyframePosition::label() const { return "Set Keyframe Position"; }
+
+SetCameraKeyframeFov::SetCameraKeyframeFov(std::string cameraId, int tick, float fov)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mFov(fov) {}
+
+void SetCameraKeyframeFov::execute(model::EditorStateExt& state) {
+    mChanged     = false;
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end() || key->second.fov == mFov) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore         = state;
+    key->second.fov = mFov;
+    mChanged        = true;
+}
+
+void        SetCameraKeyframeFov::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraKeyframeFov::label() const { return "Set Keyframe FOV"; }
 
 } // namespace playback::state::editing::command

@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "playback/editor/host/D3D12Compat.h"
+#include "playback/editor/graphics/D3D12Compat.h"
 
 #include <Windows.h>
 #include <dxgi1_4.h>
@@ -10,7 +10,7 @@
 
 struct ID3D12CommandQueue;
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 using Microsoft::WRL::ComPtr;
 
@@ -56,4 +56,4 @@ ComPtr<ID3D12CommandQueue> getDeviceQueue(ID3D12Device* device);
     void*& outCreateCommandQueue
 );
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

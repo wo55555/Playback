@@ -76,6 +76,14 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetKeyframeInterpolat
 ) {
     return std::make_unique<SetKeyframeInterpolation>(id, tick, interpolation);
 }
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetCameraKeyframePosition(const std::string& id, int tick, model::Vec3 position) {
+    return std::make_unique<SetCameraKeyframePosition>(id, tick, position);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetCameraKeyframeFov(const std::string& id, int tick, float fov) {
+    return std::make_unique<SetCameraKeyframeFov>(id, tick, fov);
+}
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraEnabled(const std::string& id, bool enabled) {
     return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::Enabled, enabled);
 }

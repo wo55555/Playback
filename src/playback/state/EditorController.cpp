@@ -208,6 +208,15 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mProject
         );
         break;
+    case EditorActionType::SetKeyframePosition:
+        mCommandStack.push(
+            CommandFactory::createSetCameraKeyframePosition(action.id, action.tick, action.position),
+            mProject
+        );
+        break;
+    case EditorActionType::SetKeyframeFov:
+        mCommandStack.push(CommandFactory::createSetCameraKeyframeFov(action.id, action.tick, action.speed), mProject);
+        break;
     case EditorActionType::SetCameraEnabled:
         mCommandStack.push(CommandFactory::createSetCameraEnabled(action.id, action.value), mProject);
         break;

@@ -9,7 +9,7 @@ struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct ID3D11Texture2D;
 
-namespace playback::editor::host {
+namespace playback::editor::graphics {
 
 class D3D11FrameTapBackend {
 public:
@@ -28,4 +28,4 @@ private:
     std::unique_ptr<Impl> mImpl;
 };
 
-} // namespace playback::editor::host
+} // namespace playback::editor::graphics

@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "playback/exporting/ExportTypes.h"
+#include "playback/state/editing/models/MathTypes.h"
 
 #include <filesystem>
 #include <map>
@@ -46,6 +47,8 @@ enum class EditorActionType {
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
     SetKeyframeInterpolation,
+    SetKeyframePosition,
+    SetKeyframeFov,
     SetCameraEnabled,
     DeleteCamera,
     UnbindCamera,
@@ -67,6 +70,7 @@ struct EditorAction {
     float                                    speed{};
     int                                      kind{};
     bool                                     value{};
+    state::editing::model::Vec3              position{};
     std::optional<exporting::ExportSettings> exportSettings;
     std::vector<std::string>                 replayIds;
     std::map<std::string, std::string>       details;

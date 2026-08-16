@@ -26,18 +26,15 @@ CameraRenderState CameraKeyframeChange::toRenderState() const noexcept {
     return {position.x, position.y, position.z, yaw, pitch, roll, fov};
 }
 
-CameraKeyframeChange CameraKeyframeChange::interpolate(
-    CameraKeyframeChange const& left,
-    CameraKeyframeChange const& right,
-    float                       amount
-) {
+CameraKeyframeChange
+CameraKeyframeChange::interpolate(CameraKeyframeChange const& left, CameraKeyframeChange const& right, float amount) {
     amount = std::clamp(amount, 0.0f, 1.0f);
     return {
         {
-            left.position.x + (right.position.x - left.position.x) * amount,
-            left.position.y + (right.position.y - left.position.y) * amount,
-            left.position.z + (right.position.z - left.position.z) * amount,
-        },
+         left.position.x + (right.position.x - left.position.x) * amount,
+         left.position.y + (right.position.y - left.position.y) * amount,
+         left.position.z + (right.position.z - left.position.z) * amount,
+         },
         interpolateAngle(left.yaw, right.yaw, amount),
         interpolateAngle(left.pitch, right.pitch, amount),
         interpolateAngle(left.roll, right.roll, amount),

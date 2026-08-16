@@ -1,7 +1,7 @@
 ﻿#include "OfflineRenderFrameExecutor.h"
 
 #include "playback/Playback.h"
-#include "playback/editor/host/ImGuiRenderer.h"
+#include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/replay/ReplaySession.h"
 
 #include "ll/api/service/TargetedBedrock.h"
@@ -296,7 +296,7 @@ void OfflineRenderFrameExecutor::completeSample(visuals::FrameTicket const& tick
     mSampleRenderInvoked = false;
 }
 
-void OfflineRenderFrameExecutor::pollCapture() { editor::host::gImGuiRenderer.pollFrameCapture(); }
+void OfflineRenderFrameExecutor::pollCapture() { editor::graphics::gImGuiRenderer.pollFrameCapture(); }
 
 bool OfflineRenderFrameExecutor::prepareNativeRender() {
     auto client = ll::service::getClientInstance();

@@ -1,10 +1,14 @@
 ﻿#pragma once
 
+#include "playback/keyframe/CameraRenderState.h"
 #include "playback/record/Recorder.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
+#include "mc/deps/core/math/Vec2.h"
+#include "mc/deps/core/math/Vec3.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/world/level/ChunkPos.h"
+
 
 #include <atomic>
 #include <chrono>
@@ -171,6 +175,10 @@ private:
     std::optional<ReplayCameraViewpoint>        mExportCameraViewpoint;
     float                                       mPlaybackSpeed{1.0f};
     float                                       mPlaybackTickAccumulator{};
+    std::atomic<float>                          mObserverPreviewPartialTick{0.0f};
+    bool                                        mObserverPreviewInRange{false};
+    ::Vec3                                      mLastObserverPreviewFeet{};
+    ::Vec2                                      mLastObserverPreviewRotation{};
     std::optional<int>                          mReplayTime;
     std::optional<DimensionType>                mPendingReplayDimension;
     std::optional<PendingSnapshotApply>         mPendingSnapshotApply;
@@ -293,6 +301,11 @@ private:
 
     [[nodiscard]] bool refreshReplayPlayer();
 
+    void parkReplayCameraAtPreview();
+
+    // Align the server authority with the client so a paused replay isn't pulled back.
+    void syncObserverServerPosition(::Vec3 const& feetPosition, ::Vec2 const& rotation);
+
     [[nodiscard]] bool clearReplayObjectives();
 
     void clearReplayData();
@@ -322,6 +335,15 @@ public:
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
 
     [[nodiscard]] Player* getReplayPlayer() const noexcept { return mReplayPlayer; }
+
+    void teleportReplayPlayer(::Vec3 const& feetPosition, ::Vec2 const& rotation);
+
+    // Preview drives the observer (the camera) per frame at the render partial tick.
+    void setObserverPreviewPartialTick(float partialTick);
+    void updateObserverPreview();
+
+    // The observer entity's camera pose (eye position + yaw/pitch) for exact rendering.
+    [[nodiscard]] bool getObserverCameraPose(keyframe::CameraRenderState& out) const noexcept;
 
     [[nodiscard]] int getCurrentTick() const {
         int const requestedTick = mRequestedSeekTick.load(std::memory_order_acquire);

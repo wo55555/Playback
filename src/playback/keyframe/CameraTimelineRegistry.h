@@ -23,7 +23,7 @@ struct CameraTimelineSample {
 using CameraTimelineAppliedFlag = std::shared_ptr<std::atomic_bool>;
 
 struct CameraTimelineRenderContext {
-    visuals::ReplaySampleTime time;
+    visuals::ReplaySampleTime           time;
     CameraTimelineSource                source{CameraTimelineSource::Preview};
     uint64_t                            renderToken{};
     std::optional<CameraTimelineSample> sample;
@@ -49,17 +49,24 @@ void publishCameraTimeline(CameraTimelineSource source, CameraTimelineHandle tim
 void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const& expected = {});
 
 [[nodiscard]] std::optional<CameraTimelineSample> sampleCameraTimeline(
-    CameraTimelineSource                       source,
+    CameraTimelineSource             source,
     visuals::ReplaySampleTime const& time,
-    std::string_view                           cameraId = {}
+    std::string_view                 cameraId = {}
 ) noexcept;
 
 [[nodiscard]] bool hasCameraTimeline(CameraTimelineSource source) noexcept;
 
-[[nodiscard]] CameraTimelineRenderContextHandle
-publishCameraTimelineRenderContext(CameraTimelineRenderContext context);
-void clearCameraTimelineRenderContext(
-    CameraTimelineSource                    source,
+// Tracks whether the preview camera was applied in the most recently rendered frame.
+[[nodiscard]] bool wasPreviewCameraApplied() noexcept;
+void               setPreviewCameraApplied(bool applied) noexcept;
+
+// Remembers the most recently applied preview pose so the free camera can be parked there on pause.
+void                                setLastPreviewPose(CameraRenderState const& pose) noexcept;
+[[nodiscard]] std::optional<CameraRenderState> takeLastPreviewPose() noexcept;
+
+[[nodiscard]] CameraTimelineRenderContextHandle publishCameraTimelineRenderContext(CameraTimelineRenderContext context);
+void                                            clearCameraTimelineRenderContext(
+    CameraTimelineSource                     source,
     CameraTimelineRenderContextHandle const& expected = {}
 ) noexcept;
 

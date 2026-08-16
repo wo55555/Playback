@@ -31,24 +31,24 @@ private:
     void submitEdit(playback::state::EditorAction action);
 
     state::editing::model::TrackTreeModel mTrackTree;
-    float                          mZoomScale{1.0f};
-    float                          mScrollX{};
-    float                          mTrackListWidthRatio{0.30f};
-    int                            mPendingSeekTick{-1};
-    int                            mRulerDragTick{-1};
-    std::string                    mTrackSearch;
-    bool                           mSnapEnabled{true};
-    bool                           mCamerasExpanded{true};
-    std::string                    mDraggingSegmentId;
-    bool                           mDraggingStart{};
-    bool                           mDraggingPlayhead{};
-    int                            mDragStartTick{};
-    int                            mDragEndTick{};
-    std::string                    mDraggingKeyframeCameraId;
-    float                          mDraggingKeyframeStartMouseX{};
-    int                            mDraggingKeyframeStartTick{};
-    int                            mDraggingKeyframeTick{};
-    bool                           mDraggingKeyframeMoved{};
+    float                                 mZoomScale{1.0f};
+    float                                 mScrollX{};
+    float                                 mTrackListWidthRatio{0.30f};
+    int                                   mPendingSeekTick{-1};
+    int                                   mRulerDragTick{-1};
+    std::string                           mTrackSearch;
+    bool                                  mSnapEnabled{true};
+    bool                                  mCamerasExpanded{true};
+    std::string                           mDraggingSegmentId;
+    bool                                  mDraggingStart{};
+    bool                                  mDraggingPlayhead{};
+    int                                   mDragStartTick{};
+    int                                   mDragEndTick{};
+    std::string                           mDraggingKeyframeCameraId;
+    float                                 mDraggingKeyframeStartMouseX{};
+    int                                   mDraggingKeyframeStartTick{};
+    int                                   mDraggingKeyframeTick{};
+    bool                                  mDraggingKeyframeMoved{};
 };
 
 } // namespace playback::editor::ui

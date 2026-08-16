@@ -1,6 +1,6 @@
 #include "SelectReplayScreen.h"
 
-#include "playback/editor/host/ImGuiRenderer.h"
+#include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/utils/PathUtils.h"
@@ -923,7 +923,7 @@ void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& 
     auto end   = ImVec2(start.x + size.x, start.y + size.y);
     ImGui::GetWindowDrawList()->AddRectFilled(start, end, kColorPreviewBg, 0.0f);
 
-    auto texture = playback::editor::host::gImGuiRenderer.acquireReplayThumbnailTexture(
+    auto texture = playback::editor::graphics::gImGuiRenderer.acquireReplayThumbnailTexture(
         replay.path.string(),
         replay.thumbnailPng
     );
