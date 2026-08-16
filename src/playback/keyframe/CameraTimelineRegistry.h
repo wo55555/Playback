@@ -61,14 +61,14 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
 void               setPreviewCameraApplied(bool applied) noexcept;
 
 // Remembers the most recently applied preview pose so the free camera can be parked there on pause.
-void                                setLastPreviewPose(CameraRenderState const& pose) noexcept;
+void                                           setLastPreviewPose(CameraRenderState const& pose) noexcept;
 [[nodiscard]] std::optional<CameraRenderState> takeLastPreviewPose() noexcept;
 
 [[nodiscard]] CameraTimelineRenderContextHandle publishCameraTimelineRenderContext(CameraTimelineRenderContext context);
 void                                            clearCameraTimelineRenderContext(
-    CameraTimelineSource                     source,
-    CameraTimelineRenderContextHandle const& expected = {}
-) noexcept;
+                                               CameraTimelineSource                     source,
+                                               CameraTimelineRenderContextHandle const& expected = {}
+                                           ) noexcept;
 
 [[nodiscard]] CameraTimelineRenderContextHandle currentCameraTimelineRenderContext() noexcept;
 

@@ -16,7 +16,6 @@
 #include "playback/visuals/ReplayThumbnail.h"
 
 
-
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_dx12.h"
@@ -279,11 +278,11 @@ struct ImGuiRenderer::Impl {
         auto const fontPathString = fontPath.string();
         ImFont*    font           = fontPathString.empty() ? nullptr
                                                            : io.Fonts->AddFontFromFileTTF(
-                                                                 fontPathString.c_str(),
-                                                                 14.0f,
-                                                                 nullptr,
-                                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-                                                             );
+                                                    fontPathString.c_str(),
+                                                    14.0f,
+                                                    nullptr,
+                                                    io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                                                );
         if (font) io.FontDefault = font;
         else io.Fonts->AddFontDefault();
         ImFontConfig cfg;

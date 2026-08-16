@@ -16,18 +16,16 @@ constexpr ImU32 kSectionAccentColor   = IM_COL32(58, 140, 240, 255);
 constexpr ImU32 kFineDividerColor     = IM_COL32(66, 66, 66, 210);
 constexpr float kFineDividerThickness = 0.75f;
 
-float uiScale() {
-    return std::max(1.0f, ImGui::GetIO().FontGlobalScale);
-}
+float uiScale() { return std::max(1.0f, ImGui::GetIO().FontGlobalScale); }
 
 } // namespace
 
 void beginInspector(std::string_view title, std::string_view objectName) {
-    float const scale = uiScale();
-    float const height = ImGui::GetFontSize() * 2.0f + 14.0f * scale;
-    ImVec2 const origin = ImGui::GetCursorScreenPos();
-    float const width = ImGui::GetContentRegionAvail().x;
-    auto* drawList = ImGui::GetWindowDrawList();
+    float const  scale    = uiScale();
+    float const  height   = ImGui::GetFontSize() * 2.0f + 14.0f * scale;
+    ImVec2 const origin   = ImGui::GetCursorScreenPos();
+    float const  width    = ImGui::GetContentRegionAvail().x;
+    auto*        drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, kInspectorHeaderColor);
     drawList->AddRectFilled(origin, {origin.x + 3.0f * scale, origin.y + height}, kSectionAccentColor);
     drawList->AddLine(
@@ -68,15 +66,11 @@ bool beginSection(char const* label, bool defaultOpen) {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.0f * scale, 5.0f * scale});
     ImGui::PushStyleColor(ImGuiCol_Header, kSectionColor);
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kSectionHoverColor);
-    bool const open = ImGui::TreeNodeEx(label, flags);
+    bool const   open    = ImGui::TreeNodeEx(label, flags);
     ImVec2 const minimum = ImGui::GetItemRectMin();
     ImVec2 const maximum = ImGui::GetItemRectMax();
-    ImGui::GetWindowDrawList()->AddRectFilled(
-        minimum,
-        {minimum.x + 3.0f * scale, maximum.y},
-        kSectionAccentColor,
-        1.5f * scale
-    );
+    ImGui::GetWindowDrawList()
+        ->AddRectFilled(minimum, {minimum.x + 3.0f * scale, maximum.y}, kSectionAccentColor, 1.5f * scale);
     ImGui::PopStyleColor(2);
     ImGui::PopStyleVar(2);
     return open;
@@ -88,7 +82,7 @@ void endSection() {
 }
 
 void textRow(char const* label, char const* value) {
-    float const width = ImGui::GetContentRegionAvail().x;
+    float const width      = ImGui::GetContentRegionAvail().x;
     float const labelWidth = std::clamp(width * 0.42f, 110.0f, 180.0f);
     ImGui::TextDisabled("%s", label);
     ImGui::SameLine(labelWidth);
@@ -98,7 +92,7 @@ void textRow(char const* label, char const* value) {
 
 void separator() {
     ImVec2 const origin = ImGui::GetCursorScreenPos();
-    float const width = ImGui::GetContentRegionAvail().x;
+    float const  width  = ImGui::GetContentRegionAvail().x;
     ImGui::GetWindowDrawList()->AddLine(origin, {origin.x + width, origin.y}, kFineDividerColor, kFineDividerThickness);
     ImGui::Dummy({0.0f, 7.0f * uiScale()});
 }
@@ -119,4 +113,4 @@ bool actionButton(char const* label, bool enabled) {
     return clicked;
 }
 
-}
+} // namespace playback::editor::ui::property

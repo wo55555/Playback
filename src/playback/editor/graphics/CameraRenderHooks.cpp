@@ -605,7 +605,8 @@ LL_TYPE_INSTANCE_HOOK(
     ::SubClientId    clientSubId
 ) {
     auto const context = keyframe::currentCameraTimelineRenderContext();
-    if (!context || context->source != keyframe::CameraTimelineSource::Export) return origin(screenContext, clientSubId);
+    if (!context || context->source != keyframe::CameraTimelineSource::Export)
+        return origin(screenContext, clientSubId);
     if (!context->sample) {
         logMissingSample(*context);
         return origin(screenContext, clientSubId);

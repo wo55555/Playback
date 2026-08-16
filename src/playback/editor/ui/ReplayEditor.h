@@ -40,17 +40,17 @@ public:
     // Keyboard shortcut processing
     void handleKeyboardShortcuts();
 
-    [[nodiscard]] playback::state::EditorState const&  state() const;
+    [[nodiscard]] playback::state::EditorState const&          state() const;
     [[nodiscard]] state::editing::model::SelectionModel const& selection() const { return mSelection; }
     state::editing::model::SelectionModel&                     selection() { return mSelection; }
-    void                                                submitAction(playback::state::EditorAction action) const;
-    void                                                openExportDialog();
-    void                                                seekTo(int tick);
-    void                                                seekRelative(int tickDelta);
-    bool                                                deleteSelection();
-    bool                                                addKeyframeAtPlayhead();
-    bool                                                splitAtPlayhead();
-    CurveEditorPanel&                                   curveEditorPanel() { return mCurveEditorPanel; }
+    void                                                       submitAction(playback::state::EditorAction action) const;
+    void                                                       openExportDialog();
+    void                                                       seekTo(int tick);
+    void                                                       seekRelative(int tickDelta);
+    bool                                                       deleteSelection();
+    bool                                                       addKeyframeAtPlayhead();
+    bool                                                       splitAtPlayhead();
+    CurveEditorPanel&                                          curveEditorPanel() { return mCurveEditorPanel; }
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     void                      setVideoAspectRatio(float aspectRatio);
@@ -82,10 +82,10 @@ private:
     EditMode   mEditMode;
     RenderMode mRenderMode;
 
-    playback::state::EditorState const* mFrameState{};
-    SubmitAction const*                  mSubmit{};
-    state::editing::model::SelectionModel       mSelection;
-    exporting::ExportState               mLastExportState{exporting::ExportState::Idle};
+    playback::state::EditorState const*   mFrameState{};
+    SubmitAction const*                   mSubmit{};
+    state::editing::model::SelectionModel mSelection;
+    exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
     // Layout
     float mDetailsWidthRatio{0.28f};

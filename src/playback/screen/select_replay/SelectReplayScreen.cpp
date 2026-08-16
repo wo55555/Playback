@@ -955,8 +955,8 @@ void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& 
 
 void SelectReplayScreen::drawCard(
     playback::state::ReplayBrowserEntry const& replay,
-    std::size_t                                 visibleIndex,
-    float                                       width
+    std::size_t                                visibleIndex,
+    float                                      width
 ) {
     bool const  selected      = mSelectedIds.contains(replay.replayId);
     float const previewWidth  = width - kCardLayout.previewInset * 2.0f;
@@ -1231,8 +1231,8 @@ void SelectReplayScreen::drawGrid() {
 
 void SelectReplayScreen::drawDetailsListItem(
     playback::state::ReplayBrowserEntry const& replay,
-    std::size_t                                 visibleIndex,
-    float                                       width
+    std::size_t                                visibleIndex,
+    float                                      width
 ) {
     bool const  selected       = mSelectedIds.contains(replay.replayId);
     float const itemHeight     = kDetailsLayout.listItemHeight;
@@ -1521,8 +1521,8 @@ void SelectReplayScreen::drawDetails() {
             + kDetailsLayout.metadataWrapReserve;
         float const contentLimitedPreviewHeight = ImGui::GetWindowHeight() - kDetailsLayout.previewToMetadataGap
                                                 - estimatedMetadataHeight - kDetailsLayout.detailContentBottomGap;
-        float const ratioLimitedPreviewHeight   = ImGui::GetWindowHeight() * kDetailsLayout.detailPreviewMaxHeightRatio;
-        float const maxPreviewHeight            = std::max(
+        float const ratioLimitedPreviewHeight = ImGui::GetWindowHeight() * kDetailsLayout.detailPreviewMaxHeightRatio;
+        float const maxPreviewHeight          = std::max(
             kDetailsLayout.detailPreviewMinHeight,
             std::min(contentLimitedPreviewHeight, ratioLimitedPreviewHeight)
         );

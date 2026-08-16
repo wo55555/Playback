@@ -25,9 +25,7 @@ struct ReplaySampleTime {
     [[nodiscard]] float partialTick() const noexcept {
         if (!isValid()) return 0.0f;
         auto const remainder = numerator % denominator;
-        auto       result    = static_cast<float>(
-            static_cast<long double>(remainder) / static_cast<long double>(denominator)
-        );
+        auto result = static_cast<float>(static_cast<long double>(remainder) / static_cast<long double>(denominator));
         if (remainder != 0 && result >= 1.0f) result = std::nextafter(1.0f, 0.0f);
         return result;
     }

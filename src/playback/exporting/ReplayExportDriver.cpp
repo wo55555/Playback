@@ -4,9 +4,9 @@
 #include "FrameWriterUtils.h"
 
 #include "playback/Playback.h"
-#include "playback/state/editing/models/EditorStateExt.h"
-#include "playback/replay/ReplaySession.h"
 #include "playback/exporting/IdleDetectionHooks.h"
+#include "playback/replay/ReplaySession.h"
+#include "playback/state/editing/models/EditorStateExt.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -85,9 +85,9 @@ void ReplayExportDriver::setFrameTap(visuals::FrameTap* frameTap) {
 }
 
 bool ReplayExportDriver::start(
-    ExportSettings                        settings,
+    ExportSettings                               settings,
     state::editing::model::EditorStateExt const& project,
-    std::optional<std::string>            cameraFallback
+    std::optional<std::string>                   cameraFallback
 ) {
     if (isActive()) return false;
     if (!exporting::isIdleDetectionGuardInstalled()) {

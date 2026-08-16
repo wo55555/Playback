@@ -50,8 +50,7 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
     }
 }
 
-[[nodiscard]] inline bool
-normalizeFrame(visuals::CapturedFrame& frame, uint32_t targetWidth, uint32_t targetHeight) {
+[[nodiscard]] inline bool normalizeFrame(visuals::CapturedFrame& frame, uint32_t targetWidth, uint32_t targetHeight) {
     if (targetWidth == 0 && targetHeight == 0) return validateFrame(frame);
     if (targetWidth == 0 || targetHeight == 0 || targetWidth > MaxFrameDimension || targetHeight > MaxFrameDimension) {
         return false;

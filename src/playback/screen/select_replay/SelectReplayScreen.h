@@ -48,19 +48,19 @@ private:
     void submit(playback::state::EditorAction action) const;
 
     playback::state::ReplayBrowserState const* mState{};
-    SubmitAction const*                         mSubmit{};
-    std::uint64_t                               mSnapshotRevision{};
-    std::vector<std::size_t>                    mVisible;
-    std::unordered_set<std::string>             mSelectedIds;
-    std::optional<std::size_t>                  mSelectionAnchor;
-    std::string                                 mSearch;
-    BrowserSort                                 mSort       = BrowserSort::LastModified;
-    bool                                        mDescending = true;
-    ReplayFilter                                mFilter     = ReplayFilter::All;
-    ViewMode                                    mViewMode   = ViewMode::Grid;
-    bool                                        mShowDeleteDialog{};
-    bool                                        mRenameDialogOpen{};
-    std::string                                 mRenameBuffer;
+    SubmitAction const*                        mSubmit{};
+    std::uint64_t                              mSnapshotRevision{};
+    std::vector<std::size_t>                   mVisible;
+    std::unordered_set<std::string>            mSelectedIds;
+    std::optional<std::size_t>                 mSelectionAnchor;
+    std::string                                mSearch;
+    BrowserSort                                mSort       = BrowserSort::LastModified;
+    bool                                       mDescending = true;
+    ReplayFilter                               mFilter     = ReplayFilter::All;
+    ViewMode                                   mViewMode   = ViewMode::Grid;
+    bool                                       mShowDeleteDialog{};
+    bool                                       mRenameDialogOpen{};
+    std::string                                mRenameBuffer;
 };
 
 } // namespace playback::screen::select_replay

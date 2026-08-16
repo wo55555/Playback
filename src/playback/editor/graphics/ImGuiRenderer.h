@@ -30,11 +30,11 @@ public:
     [[nodiscard]] bool               saveReplayThumbnail(std::filesystem::path const& output) override;
     [[nodiscard]] visuals::FrameTap& frameTap();
     [[nodiscard]] bool               captureSubmittedD3D12Frame(
-        ID3D12Device*       device,
-        ID3D12CommandQueue* queue,
-        ID3D12Resource*     source,
-        uint32_t            sourceState
-    );
+                      ID3D12Device*       device,
+                      ID3D12CommandQueue* queue,
+                      ID3D12Resource*     source,
+                      uint32_t            sourceState
+                  );
     [[nodiscard]] void* acquireReplayThumbnailTexture(std::string_view key, std::string_view png);
 
     bool               render(IDXGISwapChain* swapChain, bool allowFrameCapture = true);

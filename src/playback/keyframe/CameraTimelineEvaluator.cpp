@@ -34,9 +34,9 @@ void applyRotationShake(CameraRenderState& state, state::editing::model::CameraS
 
 CameraTimelineEvaluator::CameraTimelineEvaluator(
     state::editing::model::EditorStateExt project,
-    std::optional<std::string>     cameraOverride,
-    std::optional<std::string>     cameraFallback,
-    bool                           holdLastKeyframe
+    std::optional<std::string>            cameraOverride,
+    std::optional<std::string>            cameraFallback,
+    bool                                  holdLastKeyframe
 )
 : mProject(std::move(project)),
   mCameraOverride(std::move(cameraOverride)),
@@ -94,8 +94,7 @@ CameraTimelineEvaluator::sampleCamera(state::editing::model::CameraEntity const&
     return state;
 }
 
-std::optional<CameraTimelineEvaluation>
-CameraTimelineEvaluator::sample(visuals::ReplaySampleTime const& time) const {
+std::optional<CameraTimelineEvaluation> CameraTimelineEvaluator::sample(visuals::ReplaySampleTime const& time) const {
     if (!time.isValid()) return std::nullopt;
     auto const* camera = cameraForTick(time.floorTick());
     if (!camera) return std::nullopt;
@@ -103,10 +102,8 @@ CameraTimelineEvaluator::sample(visuals::ReplaySampleTime const& time) const {
     return state ? std::optional<CameraTimelineEvaluation>{{*state, camera->id}} : std::nullopt;
 }
 
-std::optional<CameraTimelineEvaluation> CameraTimelineEvaluator::sampleCameraById(
-    std::string_view                           cameraId,
-    visuals::ReplaySampleTime const& time
-) const {
+std::optional<CameraTimelineEvaluation>
+CameraTimelineEvaluator::sampleCameraById(std::string_view cameraId, visuals::ReplaySampleTime const& time) const {
     if (cameraId.empty() || !time.isValid()) return std::nullopt;
     auto const camera =
         std::ranges::find_if(mProject.cameras, [&](auto const& candidate) { return candidate.id == cameraId; });

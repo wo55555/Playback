@@ -112,16 +112,8 @@ inline float adjustedInterval(float distance, float tickSpan, float relation) {
     return distance * relation / factor;
 }
 
-inline float centripetalCatmullRom(
-    float p0,
-    float p1,
-    float p2,
-    float p3,
-    float time1,
-    float time2,
-    float time3,
-    float amount
-) {
+inline float
+centripetalCatmullRom(float p0, float p1, float p2, float p3, float time1, float time2, float time3, float amount) {
     auto const  distanceParameter = [](float left, float right) { return std::sqrt(std::abs(right - left)); };
     float const d1                = distanceParameter(p0, p1);
     float const d2                = distanceParameter(p1, p2);

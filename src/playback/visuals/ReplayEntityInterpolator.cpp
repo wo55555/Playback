@@ -27,8 +27,8 @@ struct EntityRenderKeyHash {
 };
 
 struct EntityPoseHistory {
-    int64_t         previousTick{};
-    int64_t         currentTick{};
+    int64_t          previousTick{};
+    int64_t          currentTick{};
     EntityRenderPose previous{};
     EntityRenderPose current{};
 };
@@ -40,8 +40,8 @@ struct PendingEntityPose {
 
 using EntityPoseMap = std::unordered_map<EntityRenderKey, EntityPoseHistory, EntityRenderKeyHash>;
 
-std::atomic<std::shared_ptr<EntityPoseMap const>> gEntityPoses;
-std::mutex                                         gPendingMutex;
+std::atomic<std::shared_ptr<EntityPoseMap const>>                           gEntityPoses;
+std::mutex                                                                  gPendingMutex;
 std::unordered_map<EntityRenderKey, PendingEntityPose, EntityRenderKeyHash> gPending;
 
 bool finite(EntityRenderPosition const& value) noexcept {
@@ -70,10 +70,10 @@ EntityRenderPose samplePose(EntityPoseHistory const& history, ReplaySampleTime c
     );
     return EntityRenderPose{
         {
-            std::lerp(history.previous.position.x, history.current.position.x, amount),
-            std::lerp(history.previous.position.y, history.current.position.y, amount),
-            std::lerp(history.previous.position.z, history.current.position.z, amount),
-        },
+         std::lerp(history.previous.position.x, history.current.position.x, amount),
+         std::lerp(history.previous.position.y, history.current.position.y, amount),
+         std::lerp(history.previous.position.z, history.current.position.z, amount),
+         },
         interpolateAngle(history.previous.pitch, history.current.pitch, amount),
         interpolateAngle(history.previous.yaw, history.current.yaw, amount),
         interpolateAngle(history.previous.headYaw, history.current.headYaw, amount),
@@ -156,24 +156,26 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             if (!renderPosition || !actorRotation) return {};
 
             auto const sampled = samplePose(history->second, sample);
-            state->actors.emplace_back(ScopedReplayEntityPose::State::ActorState{
-                renderPosition,
-                renderPosition->mValue.get(),
-                Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
-                renderRotation,
-                renderRotation ? renderRotation->mRot.get() : Vec2{},
-                actorRotation,
-                actorRotation->mRot.get(),
-                actorRotation->mRotPrev.get(),
-                headRotation,
-                headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
-                headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
-                bodyRotation,
-                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
-                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
-            });
+            state->actors.emplace_back(
+                ScopedReplayEntityPose::State::ActorState{
+                    renderPosition,
+                    renderPosition->mValue.get(),
+                    Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
+                    renderRotation,
+                    renderRotation ? renderRotation->mRot.get() : Vec2{},
+                    actorRotation,
+                    actorRotation->mRot.get(),
+                    actorRotation->mRotPrev.get(),
+                    headRotation,
+                    headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
+                    headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
+                    bodyRotation,
+                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
+                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
+            }
+            );
 
-            auto& applied = state->actors.back();
+            auto& applied                  = state->actors.back();
             applied.renderPosition->mValue = applied.exportPosition;
             if (applied.renderRotation) {
                 applied.renderRotation->mRot = Vec2{sampled.pitch, sampled.yaw};
@@ -190,11 +192,9 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             }
         }
 
-        state->previous                         = ScopedReplayEntityPose::State::gActiveState;
+        state->previous                             = ScopedReplayEntityPose::State::gActiveState;
         ScopedReplayEntityPose::State::gActiveState = state.get();
-        return std::unique_ptr<ScopedReplayEntityPose>(
-            new ScopedReplayEntityPose(std::move(state))
-        );
+        return std::unique_ptr<ScopedReplayEntityPose>(new ScopedReplayEntityPose(std::move(state)));
     } catch (...) {
         return {};
     }

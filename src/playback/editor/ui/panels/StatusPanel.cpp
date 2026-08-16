@@ -60,23 +60,21 @@ std::string pathText(std::filesystem::path const& path) {
 } // namespace
 
 void StatusPanel::draw() {
-    auto const& state = ReplayEditor::getInstance().state();
+    auto const& state        = ReplayEditor::getInstance().state();
     auto const& exportStatus = state.exportStatus;
     std::string statusText;
     ImVec4      color;
     if (exportStatus.state == exporting::ExportState::Idle) {
         statusText = state.capabilities.videoExport ? "playback.refactorEditor.status.ready"_tr()
                                                     : "playback.refactorEditor.status.exportUnavailable"_tr();
-        color = {0.62f, 0.62f, 0.62f, 1.0f};
+        color      = {0.62f, 0.62f, 0.62f, 1.0f};
     } else {
         statusText = exportStateLabel(exportStatus.state);
         if (exporting::isExportActive(exportStatus.state) && exportStatus.totalFrames > 0) {
-            auto const completed = std::min(
-                exportStatus.totalFrames,
-                std::max(exportStatus.submittedFrames, exportStatus.writtenFrames)
-            );
-            int const percent = static_cast<int>(completed * 100 / exportStatus.totalFrames);
-            statusText += "  " + std::to_string(percent) + "%";
+            auto const completed =
+                std::min(exportStatus.totalFrames, std::max(exportStatus.submittedFrames, exportStatus.writtenFrames));
+            int const percent  = static_cast<int>(completed * 100 / exportStatus.totalFrames);
+            statusText        += "  " + std::to_string(percent) + "%";
         }
         color = exportStateColor(exportStatus.state);
     }
@@ -86,11 +84,11 @@ void StatusPanel::draw() {
     char              speedText[32]{};
     std::snprintf(speedText, sizeof(speedText), "%.2fx", state.playbackSpeed);
 
-    auto const& style        = ImGui::GetStyle();
-    float const contentStart = ImGui::GetWindowContentRegionMin().x;
-    float const rightEdge    = ImGui::GetWindowContentRegionMax().x;
-    float const contentWidth = std::max(0.0f, rightEdge - contentStart);
-    float const statusWidth  = ImGui::CalcTextSize(statusText.c_str()).x;
+    auto const& style         = ImGui::GetStyle();
+    float const contentStart  = ImGui::GetWindowContentRegionMin().x;
+    float const rightEdge     = ImGui::GetWindowContentRegionMax().x;
+    float const contentWidth  = std::max(0.0f, rightEdge - contentStart);
+    float const statusWidth   = ImGui::CalcTextSize(statusText.c_str()).x;
     float const playbackWidth = ImGui::CalcTextSize(replayText.c_str()).x + ImGui::CalcTextSize(tickText.c_str()).x
                               + ImGui::CalcTextSize(speedText).x + style.ItemSpacing.x * 2.0f;
     bool const showPlaybackSummary = playbackWidth + statusWidth + 12.0f <= contentWidth;

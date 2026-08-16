@@ -10,12 +10,13 @@ namespace playback::state::editing::command {
 class SetSubActorDetails final : public model::IEditCommand {
 public:
     SetSubActorDetails(std::string subActorId, model::AgentDetails details);
-    void execute(model::EditorStateExt& state) override;
-    void undo(model::EditorStateExt& state) override;
+    void        execute(model::EditorStateExt& state) override;
+    void        undo(model::EditorStateExt& state) override;
     std::string label() const override;
+
 private:
-    std::string mSubActorId;
-    model::AgentDetails mDetails;
+    std::string                          mSubActorId;
+    model::AgentDetails                  mDetails;
     std::optional<model::EditorStateExt> mBefore;
 };
-}
+} // namespace playback::state::editing::command

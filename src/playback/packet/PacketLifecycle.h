@@ -7,13 +7,7 @@ enum class MinecraftPacketIds : int;
 
 namespace playback::packet {
 
-enum class PacketLifecycle {
-    Ignore,
-    PreWorldHandshake,
-    SnapshotLatest,
-    SnapshotSequence,
-    Timeline
-};
+enum class PacketLifecycle { Ignore, PreWorldHandshake, SnapshotLatest, SnapshotSequence, Timeline };
 
 [[nodiscard]] constexpr std::string_view packetLifecycleName(PacketLifecycle lifecycle) noexcept {
     switch (lifecycle) {

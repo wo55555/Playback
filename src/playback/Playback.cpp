@@ -1,17 +1,17 @@
 ﻿#include "Playback.h"
 
-#include "playback/configuration/Config.h"
 #include "playback/Playback.h"
-#include "playback/runtime/command/Command.h"
-#include "playback/editor/ReplayUI.h"
-#include "playback/exporting/OfflineRenderClockHooks.h"
-#include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/action/Action.h"
+#include "playback/configuration/Config.h"
+#include "playback/editor/ReplayUI.h"
+#include "playback/editor/graphics/CameraRenderHooks.h"
+#include "playback/exporting/IdleDetectionHooks.h"
+#include "playback/exporting/OfflineRenderClockHooks.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
-#include "playback/exporting/IdleDetectionHooks.h"
+#include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
 
 #include "ll/api/event/EventBus.h"
@@ -37,7 +37,7 @@
 namespace playback {
 
 struct Playback::Impl {
-    configuration::Config                   mConfig;
+    configuration::Config            mConfig;
     std::set<ll::event::ListenerPtr> mEventListeners;
     std::atomic<PlaybackMode>        mMode{PlaybackMode::Unknown};
     std::string                      mLevelId;

@@ -30,9 +30,9 @@ public:
     OfflineRenderFrameExecutor& operator=(OfflineRenderFrameExecutor const&) = delete;
 
     [[nodiscard]] bool open(
-        ExportSettings const&                 settings,
+        ExportSettings const&                        settings,
         state::editing::model::EditorStateExt const& project,
-        std::optional<std::string>            cameraFallback = std::nullopt
+        std::optional<std::string>                   cameraFallback = std::nullopt
     );
     void close();
 
@@ -54,32 +54,32 @@ private:
     [[nodiscard]] bool isUiStable() const;
     void               fail(std::string message);
 
-    ExportKeyframeApplier                         mKeyframes;
+    ExportKeyframeApplier               mKeyframes;
     std::optional<visuals::FrameTicket> mPendingTicket;
-    uint32_t                                      mRestoreRenderWidth{};
-    uint32_t                                      mRestoreRenderHeight{};
-    uint32_t                                      mRestoreUiWidth{};
-    uint32_t                                      mRestoreUiHeight{};
-    uint32_t                                      mRenderWidth{};
-    uint32_t                                      mRenderHeight{};
-    float                                         mRestoreGuiScale{};
-    float                                         mRestoreViewportWidth{};
-    float                                         mRestoreViewportHeight{};
-    float                                         mRestoreViewportOffsetX{};
-    float                                         mRestoreViewportOffsetY{};
-    float                                         mRestoreViewportMinDepth{};
-    float                                         mRestoreViewportMaxDepth{};
-    int                                           mRestoreThrottleThreshold{};
-    float                                         mRestoreThrottleScalar{};
-    bool                                          mOpen{};
-    bool                                          mRenderSizeChanged{};
-    bool                                          mUiStable{};
-    bool                                          mRestoreLowFrequencyUiRender{};
-    bool                                          mRestoreThrottleEnabled{};
-    bool                                          mClientThrottlingConfigured{};
-    bool                                          mSampleRenderInvoked{};
-    bool                                          mWarmupRenderInvoked{};
-    std::string                                   mMessage;
+    uint32_t                            mRestoreRenderWidth{};
+    uint32_t                            mRestoreRenderHeight{};
+    uint32_t                            mRestoreUiWidth{};
+    uint32_t                            mRestoreUiHeight{};
+    uint32_t                            mRenderWidth{};
+    uint32_t                            mRenderHeight{};
+    float                               mRestoreGuiScale{};
+    float                               mRestoreViewportWidth{};
+    float                               mRestoreViewportHeight{};
+    float                               mRestoreViewportOffsetX{};
+    float                               mRestoreViewportOffsetY{};
+    float                               mRestoreViewportMinDepth{};
+    float                               mRestoreViewportMaxDepth{};
+    int                                 mRestoreThrottleThreshold{};
+    float                               mRestoreThrottleScalar{};
+    bool                                mOpen{};
+    bool                                mRenderSizeChanged{};
+    bool                                mUiStable{};
+    bool                                mRestoreLowFrequencyUiRender{};
+    bool                                mRestoreThrottleEnabled{};
+    bool                                mClientThrottlingConfigured{};
+    bool                                mSampleRenderInvoked{};
+    bool                                mWarmupRenderInvoked{};
+    std::string                         mMessage;
 };
 
 } // namespace playback::exporting

@@ -8,7 +8,7 @@ namespace playback::keyframe {
 
 class CameraKeyframeHandler {
 public:
-    virtual ~CameraKeyframeHandler() = default;
+    virtual ~CameraKeyframeHandler()                             = default;
     virtual void applyCamera(CameraKeyframeChange const& change) = 0;
 };
 

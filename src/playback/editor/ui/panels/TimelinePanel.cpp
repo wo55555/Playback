@@ -39,7 +39,7 @@ bool iconButton(char const* id, char const* icon, char const* tooltip, bool enab
     ImVec2 const cursor     = ImGui::GetCursorScreenPos();
     ImVec2 const mouse      = ImGui::GetMousePos();
     bool const   hovered    = enabled && mouse.x >= cursor.x && mouse.x <= cursor.x + buttonSize && mouse.y >= cursor.y
-                           && mouse.y <= cursor.y + buttonSize;
+                      && mouse.y <= cursor.y + buttonSize;
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(0, 0, 0, 0));
@@ -177,10 +177,8 @@ bool TimelinePanel::deleteSelection() {
     if (auto const* selectedSegment = editor.selection().getAs<state::editing::model::SelectedSequenceSegment>()) {
         action.type = EditorActionType::DeleteSequenceSegment;
         action.id   = selectedSegment->segmentId;
-    } else if (
-        auto const* selectedCamera = editor.selection().getAs<state::editing::model::SelectedCamera>();
-        selectedCamera && project->cameras.size() > 1
-    ) {
+    } else if (auto const* selectedCamera = editor.selection().getAs<state::editing::model::SelectedCamera>();
+               selectedCamera && project->cameras.size() > 1) {
         action.type = EditorActionType::DeleteCamera;
         action.id   = selectedCamera->cameraId;
     } else if (auto const* selectedKeyframe = editor.selection().getAs<state::editing::model::SelectedKeyframe>()) {
@@ -253,8 +251,8 @@ void TimelinePanel::draw(bool allowInput) {
     sameIcon();
     auto const& selection = editor.selection();
     bool const  canSplit  = !project->sequence.empty()
-                         && (selection.getAs<state::editing::model::SelectedSequence>()
-                             || selection.getAs<state::editing::model::SelectedSequenceSegment>());
+                       && (selection.getAs<state::editing::model::SelectedSequence>()
+                           || selection.getAs<state::editing::model::SelectedSequenceSegment>());
     if (iconButton("split", ICON_SPLIT, "Split at playhead", canSplit)) (void)splitAtPlayhead();
     sameIcon();
     bool const canDelete = selection.getAs<state::editing::model::SelectedSequenceSegment>()
@@ -529,8 +527,8 @@ void TimelinePanel::draw(bool allowInput) {
                 ImVec2 minimum{canvasLeft + segment.startTick * pixelsPerTick - mScrollX, y + 4.0f};
                 ImVec2 maximum{canvasLeft + segment.endTick * pixelsPerTick - mScrollX, rowBottom - 4.0f};
                 bool   selected = editor.selection().getAs<state::editing::model::SelectedSequenceSegment>()
-                               && editor.selection().getAs<state::editing::model::SelectedSequenceSegment>()->segmentId
-                                      == segment.id;
+                             && editor.selection().getAs<state::editing::model::SelectedSequenceSegment>()->segmentId
+                                    == segment.id;
                 drawList->AddRectFilled(minimum, maximum, kSequenceColor);
                 drawList
                     ->AddRect(minimum, maximum, selected ? IM_COL32(220, 220, 220, 255) : IM_COL32(178, 178, 178, 255));
@@ -554,10 +552,8 @@ void TimelinePanel::draw(bool allowInput) {
                     }
                 }
             }
-        } else if (
-            row.kind == state::editing::model::TrackRowKind::Camera && row.cameraIndex >= 0
-            && row.cameraIndex < static_cast<int>(project->cameras.size())
-        ) {
+        } else if (row.kind == state::editing::model::TrackRowKind::Camera && row.cameraIndex >= 0
+                   && row.cameraIndex < static_cast<int>(project->cameras.size())) {
             auto const& camera      = project->cameras[row.cameraIndex];
             ImU32 const cameraColor = camera.enabled ? kCameraColor : IM_COL32(56, 52, 58, 180);
             drawList->AddRectFilled({canvasLeft, y + 5.0f}, {fullMax.x, rowBottom - 5.0f}, cameraColor);

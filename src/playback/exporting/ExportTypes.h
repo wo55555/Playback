@@ -81,8 +81,8 @@ struct ExportStatus {
 };
 
 struct ExportFramePlan {
-    int64_t                        replayTickNumerator{};
-    int64_t                        replayTickDenominator{1};
+    int64_t              replayTickNumerator{};
+    int64_t              replayTickDenominator{1};
     visuals::FrameTicket ticket;
 };
 

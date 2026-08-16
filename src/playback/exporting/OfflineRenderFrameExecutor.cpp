@@ -67,9 +67,9 @@ std::optional<std::pair<uint32_t, uint32_t>> currentUiSize(ClientInstance& clien
 OfflineRenderFrameExecutor::~OfflineRenderFrameExecutor() { close(); }
 
 bool OfflineRenderFrameExecutor::open(
-    ExportSettings const&                 settings,
+    ExportSettings const&                        settings,
     state::editing::model::EditorStateExt const& project,
-    std::optional<std::string>            cameraFallback
+    std::optional<std::string>                   cameraFallback
 ) {
     close();
     mKeyframes.configure(project, std::move(cameraFallback));

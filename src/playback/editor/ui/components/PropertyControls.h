@@ -13,4 +13,4 @@ void textRow(char const* label, char const* value);
 void separator();
 bool actionButton(char const* label, bool enabled = true);
 
-}
+} // namespace playback::editor::ui::property

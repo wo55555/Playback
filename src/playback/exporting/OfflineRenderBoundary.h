@@ -63,12 +63,11 @@ public:
     OfflineRenderBoundary(OfflineRenderBoundary const&)            = delete;
     OfflineRenderBoundary& operator=(OfflineRenderBoundary const&) = delete;
 
-    [[nodiscard]] bool
-    open(
-        uint32_t                              capacity,
-        ExportSettings const&                 settings,
+    [[nodiscard]] bool open(
+        uint32_t                                     capacity,
+        ExportSettings const&                        settings,
         state::editing::model::EditorStateExt const& project,
-        std::optional<std::string>            cameraFallback = std::nullopt
+        std::optional<std::string>                   cameraFallback = std::nullopt
     );
     void close();
     void cancel();
@@ -76,7 +75,7 @@ public:
     [[nodiscard]] OfflineRenderStepResult advance(ExportFramePlan const& frame);
     [[nodiscard]] bool                    beginDrain();
     [[nodiscard]] bool                    isDrained();
-    [[nodiscard]] bool retryCompletedFrame(visuals::FrameTicket const& ticket);
+    [[nodiscard]] bool                    retryCompletedFrame(visuals::FrameTicket const& ticket);
 
     [[nodiscard]] std::optional<visuals::CapturedFrame> finishDownload();
 
@@ -92,33 +91,33 @@ private:
     void               clearClockSample();
     void               fault(OfflineRenderBoundaryError error, std::string message);
 
-    replay::ReplaySession&                        mReplay;
-    SaveableFramebufferQueue                         mDownloads;
-    OfflineRenderFrameExecutor                       mExecutor;
-    std::optional<ExportFramePlan>                   mPendingFrame;
-    std::optional<ExportFramePlan>                   mLastSubmittedFrame;
-    std::optional<visuals::FrameTicket>    mCompletedFrameTicket;
+    replay::ReplaySession&                         mReplay;
+    SaveableFramebufferQueue                       mDownloads;
+    OfflineRenderFrameExecutor                     mExecutor;
+    std::optional<ExportFramePlan>                 mPendingFrame;
+    std::optional<ExportFramePlan>                 mLastSubmittedFrame;
+    std::optional<visuals::FrameTicket>            mCompletedFrameTicket;
     std::optional<runtime::OfflineReplayTickToken> mReplayTickToken;
-    std::optional<OfflineRenderClockToken>           mClockToken;
-    int64_t                                          mMaximumReplayTick{};
-    uint32_t                                         mCaptureCapacity{};
-    uint32_t                                         mCaptureRetryCount{};
-    uint32_t                                         mReplayTickRecoveryCount{};
-    uint32_t                                         mWarmupFramesRemaining{};
-    uint32_t                                         mWarmupStableFrames{};
-    uint64_t                                         mRenderWaitPolls{};
-    std::chrono::steady_clock::time_point            mRenderWaitStartedAt{};
-    std::chrono::steady_clock::time_point            mRenderWaitLastLoggedAt{};
-    std::chrono::steady_clock::time_point            mReplayTickRequestedAt{};
-    std::chrono::steady_clock::time_point            mWarmupStartedAt{};
-    std::chrono::steady_clock::time_point            mWarmupLastLoggedAt{};
-    bool                                             mTickGateOpen{};
-    bool                                             mTickGateSuspendedForDimension{};
-    bool                                             mTimelineInitialized{};
-    bool                                             mInitializationTickObserved{};
-    OfflineRenderBoundaryState                       mState{OfflineRenderBoundaryState::Closed};
-    OfflineRenderBoundaryError                       mError{OfflineRenderBoundaryError::None};
-    std::string                                      mMessage;
+    std::optional<OfflineRenderClockToken>         mClockToken;
+    int64_t                                        mMaximumReplayTick{};
+    uint32_t                                       mCaptureCapacity{};
+    uint32_t                                       mCaptureRetryCount{};
+    uint32_t                                       mReplayTickRecoveryCount{};
+    uint32_t                                       mWarmupFramesRemaining{};
+    uint32_t                                       mWarmupStableFrames{};
+    uint64_t                                       mRenderWaitPolls{};
+    std::chrono::steady_clock::time_point          mRenderWaitStartedAt{};
+    std::chrono::steady_clock::time_point          mRenderWaitLastLoggedAt{};
+    std::chrono::steady_clock::time_point          mReplayTickRequestedAt{};
+    std::chrono::steady_clock::time_point          mWarmupStartedAt{};
+    std::chrono::steady_clock::time_point          mWarmupLastLoggedAt{};
+    bool                                           mTickGateOpen{};
+    bool                                           mTickGateSuspendedForDimension{};
+    bool                                           mTimelineInitialized{};
+    bool                                           mInitializationTickObserved{};
+    OfflineRenderBoundaryState                     mState{OfflineRenderBoundaryState::Closed};
+    OfflineRenderBoundaryError                     mError{OfflineRenderBoundaryError::None};
+    std::string                                    mMessage;
 };
 
 } // namespace playback::exporting

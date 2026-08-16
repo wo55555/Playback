@@ -9,10 +9,10 @@
 #include "mc/client/renderer/game/LevelRenderer.h"
 #include "mc/client/renderer/game/LevelRendererCamera.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
+#include "mc/deps/core/math/Matrix.h"
 #include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
 #include "mc/deps/minecraft_camera/CameraRegistry.h"
 #include "mc/deps/minecraft_camera/components/CameraComponent.h"
-#include "mc/deps/core/math/Matrix.h"
 #include "mc/deps/renderer/Camera.h"
 #include "mc/world/actor/Actor.h"
 
@@ -62,8 +62,8 @@ struct CameraBasis {
 };
 
 std::optional<CameraBasis> basisFromModelView(::glm::mat4x4 const& modelView) {
-    auto const viewRotation = ::glm::mat3{modelView};
-    auto const cameraToWorld = ::glm::transpose(viewRotation);
+    auto const  viewRotation  = ::glm::mat3{modelView};
+    auto const  cameraToWorld = ::glm::transpose(viewRotation);
     CameraBasis basis{
         cameraToWorld[0],
         cameraToWorld[1],
@@ -83,7 +83,7 @@ std::optional<CameraBasis> basisFromOrientation(::glm::qua<float> orientation) {
     );
     if (!std::isfinite(length) || length <= 0.0001f) return std::nullopt;
 
-    auto const cameraToWorld = ::glm::mat3_cast(orientation / length);
+    auto const  cameraToWorld = ::glm::mat3_cast(orientation / length);
     CameraBasis basis{
         cameraToWorld[0],
         cameraToWorld[1],
@@ -105,8 +105,8 @@ std::optional<CameraBasis> basisFromCamera(::mce::Camera const& camera) {
         };
     }
 
-    auto const viewRotation = ::glm::mat3{camera.mInverseViewMatrix.get()};
-    auto const cameraToWorld = viewRotation;
+    auto const  viewRotation  = ::glm::mat3{camera.mInverseViewMatrix.get()};
+    auto const  cameraToWorld = viewRotation;
     CameraBasis basis{
         cameraToWorld[0],
         cameraToWorld[1],

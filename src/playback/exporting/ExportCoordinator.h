@@ -20,7 +20,7 @@ public:
     ExportCoordinator(ExportCoordinator const&)            = delete;
     ExportCoordinator& operator=(ExportCoordinator const&) = delete;
 
-    [[nodiscard]] bool                    start(ExportSettings settings, state::editing::model::EditorStateExt const& project);
+    [[nodiscard]] bool start(ExportSettings settings, state::editing::model::EditorStateExt const& project);
     [[nodiscard]] FrameWriterSubmitResult trySubmit(visuals::CapturedFrame& frame);
     [[nodiscard]] bool                    finish(); // Requests asynchronous finalization.
     void                                  fail(ExportError error, std::string message);

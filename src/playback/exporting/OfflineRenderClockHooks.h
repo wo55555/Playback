@@ -9,9 +9,9 @@ namespace playback::exporting {
 
 struct OfflineRenderClockSample {
     visuals::ReplaySampleTime replayTime;
-    float                               deltaTicks{};
-    int                                 wholeTicks{};
-    uint64_t                            frameIndex{};
+    float                     deltaTicks{};
+    int                       wholeTicks{};
+    uint64_t                  frameIndex{};
 };
 
 struct OfflineRenderClockToken {
@@ -35,7 +35,7 @@ struct OfflineRenderBoundaryTicket {
 [[nodiscard]] bool isOfflineRenderClockInstalled();
 
 [[nodiscard]] OfflineRenderClockPublishResult
-publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
+                   publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
 [[nodiscard]] bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token);
 [[nodiscard]] bool wasOfflineRenderClockSampleCompleted(OfflineRenderClockToken token);
 [[nodiscard]] std::optional<OfflineRenderBoundaryTicket>

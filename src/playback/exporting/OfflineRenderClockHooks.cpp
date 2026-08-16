@@ -2,8 +2,8 @@
 
 #include "ExportActivity.h"
 #include "playback/Playback.h"
-#include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
+#include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
@@ -57,9 +57,9 @@ struct AcquiredClockSample {
 
 struct ActiveRenderSample {
     visuals::ReplaySampleTime time;
-    OfflineRenderClockToken             token;
-    uint64_t                            renderSerial{};
-    uint32_t                            gameRenderCalls{};
+    OfflineRenderClockToken   token;
+    uint64_t                  renderSerial{};
+    uint32_t                  gameRenderCalls{};
 };
 
 std::atomic_bool                               gHookInstalled{false};
@@ -74,11 +74,7 @@ thread_local std::optional<ActiveRenderSample> gRenderSample;
 
 class ScopedRenderSample {
 public:
-    ScopedRenderSample(
-        visuals::ReplaySampleTime time,
-        OfflineRenderClockToken             token        = {},
-        uint64_t                            renderSerial = 0
-    )
+    ScopedRenderSample(visuals::ReplaySampleTime time, OfflineRenderClockToken token = {}, uint64_t renderSerial = 0)
     : mPrevious(gRenderSample),
       mHadPrevious(gRenderSample.has_value()) {
         gRenderSample = ActiveRenderSample{time, token, renderSerial};
@@ -258,8 +254,7 @@ LL_TYPE_INSTANCE_HOOK(
             ScopedTimerOverride timerOverride(timer, sample->sample);
             ScopedRenderSample  renderSample(sample->sample.replayTime, sample->token, sample->renderSerial);
             keyframe::ScopedCameraTimelineRenderContext cameraContext(sample->cameraContext);
-            auto                                        pose =
-                replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
+            auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
             poseApplied = pose != nullptr;
 
             markClockSampleRenderReady(sample->token, sample->renderSerial, true);
@@ -391,7 +386,8 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
         };
     }
     replay::ReplaySession::getInstance().setExportCameraViewpoint(cameraViewpoint);
-    if (cameraSample && !editor::graphics::isCameraRenderInstalled()) return OfflineRenderClockPublishResult::Unavailable;
+    if (cameraSample && !editor::graphics::isCameraRenderInstalled())
+        return OfflineRenderClockPublishResult::Unavailable;
     auto const cameraAppliedFlag =
         cameraSample ? std::make_shared<std::atomic_bool>(false) : keyframe::CameraTimelineAppliedFlag{};
     {

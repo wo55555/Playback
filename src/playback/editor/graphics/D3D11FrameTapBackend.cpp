@@ -14,11 +14,11 @@
 
 namespace playback::editor::graphics {
 
+using Microsoft::WRL::ComPtr;
 using visuals::CapturedFrame;
 using visuals::FramePixelFormat;
 using visuals::FrameTapBackendCapture;
 using visuals::FrameTapError;
-using Microsoft::WRL::ComPtr;
 
 namespace {
 
@@ -46,12 +46,12 @@ struct D3D11FrameTapBackend::Impl {
     explicit Impl(visuals::FrameTap& tap) : frameTap(tap) {}
 
     visuals::FrameTap& frameTap;
-    std::vector<Slot>            slots;
+    std::vector<Slot>  slots;
 
     bool prepareSlot(Slot& slot, ID3D11Device* device, D3D11_TEXTURE2D_DESC const& sourceDesc) {
         bool const reusable = slot.device.Get() == device && slot.staging && slot.completionQuery
-                           && slot.sourceDesc.Width == sourceDesc.Width
-                           && slot.sourceDesc.Height == sourceDesc.Height && slot.sourceDesc.Format == sourceDesc.Format;
+                           && slot.sourceDesc.Width == sourceDesc.Width && slot.sourceDesc.Height == sourceDesc.Height
+                           && slot.sourceDesc.Format == sourceDesc.Format;
         if (reusable) return true;
 
         slot.device.Reset();
@@ -75,8 +75,7 @@ struct D3D11FrameTapBackend::Impl {
     }
 };
 
-D3D11FrameTapBackend::D3D11FrameTapBackend(visuals::FrameTap& frameTap)
-: mImpl(std::make_unique<Impl>(frameTap)) {}
+D3D11FrameTapBackend::D3D11FrameTapBackend(visuals::FrameTap& frameTap) : mImpl(std::make_unique<Impl>(frameTap)) {}
 
 D3D11FrameTapBackend::~D3D11FrameTapBackend() = default;
 
@@ -94,7 +93,7 @@ void D3D11FrameTapBackend::poll(ID3D11DeviceContext* context) {
         if (ready == S_FALSE) return;
         if (FAILED(ready)) {
             HRESULT const deviceReason = slot->device ? slot->device->GetDeviceRemovedReason() : E_POINTER;
-            auto const    error = FAILED(deviceReason) ? FrameTapError::DeviceLost : FrameTapError::MapFailed;
+            auto const    error        = FAILED(deviceReason) ? FrameTapError::DeviceLost : FrameTapError::MapFailed;
             getLogger().error(
                 "D3D11 frame completion query failed (capture={}, frame={}, query=0x{:08X}, device=0x{:08X})",
                 slot->capture->captureId,
@@ -116,7 +115,7 @@ void D3D11FrameTapBackend::poll(ID3D11DeviceContext* context) {
         if (mappedResult == DXGI_ERROR_WAS_STILL_DRAWING) return;
         if (FAILED(mappedResult)) {
             HRESULT const deviceReason = slot->device ? slot->device->GetDeviceRemovedReason() : E_POINTER;
-            auto const    error = FAILED(deviceReason) ? FrameTapError::DeviceLost : FrameTapError::MapFailed;
+            auto const    error        = FAILED(deviceReason) ? FrameTapError::DeviceLost : FrameTapError::MapFailed;
             getLogger().error(
                 "D3D11 readback Map failed (capture={}, frame={}, map=0x{:08X}, device=0x{:08X}, size={}x{})",
                 slot->capture->captureId,

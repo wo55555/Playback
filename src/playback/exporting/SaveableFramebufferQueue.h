@@ -22,14 +22,14 @@ enum class FrameDownloadRequestResult : uint8_t {
 };
 
 struct FrameDownloadQueueStatus {
-    FrameDownloadQueueState           state{FrameDownloadQueueState::Closed};
+    FrameDownloadQueueState state{FrameDownloadQueueState::Closed};
     visuals::FrameTapError  error{visuals::FrameTapError::None};
-    std::string                       message;
+    std::string             message;
     visuals::FrameTapStatus tap;
-    uint32_t                          pendingDownloads{};
-    uint32_t                          inFlightDownloads{};
-    uint32_t                          readyDownloads{};
-    bool                              renderRequested{};
+    uint32_t                pendingDownloads{};
+    uint32_t                inFlightDownloads{};
+    uint32_t                readyDownloads{};
+    bool                    renderRequested{};
 };
 
 class SaveableFramebufferQueue {
@@ -59,9 +59,9 @@ private:
 
     struct PendingDownload {
         visuals::FrameTicket                  ticket;
-        DownloadState                                   state{DownloadState::Requested};
+        DownloadState                         state{DownloadState::Requested};
         std::optional<visuals::CapturedFrame> downloaded;
-        bool                                            startAcknowledged{};
+        bool                                  startAcknowledged{};
 
         [[nodiscard]] bool acknowledgeStarted() {
             if (state != DownloadState::Downloading) return false;
@@ -77,11 +77,11 @@ private:
 
     visuals::FrameTap&                      mFrameTap;
     std::optional<visuals::FrameTapSession> mSession;
-    std::deque<PendingDownload>                       mPending;
-    FrameDownloadQueueState                           mState{FrameDownloadQueueState::Closed};
+    std::deque<PendingDownload>             mPending;
+    FrameDownloadQueueState                 mState{FrameDownloadQueueState::Closed};
     visuals::FrameTapError                  mError{visuals::FrameTapError::None};
-    std::string                                       mMessage;
-    uint32_t                                          mCapacity{};
+    std::string                             mMessage;
+    uint32_t                                mCapacity{};
 };
 
 } // namespace playback::exporting

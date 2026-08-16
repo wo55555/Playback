@@ -8,22 +8,17 @@
 
 namespace playback::state::editing::model {
 
-enum class SubActorCategory : uint8_t {
-    Default = 0,
-    Players,
-    Creatures,
-    Entities
-};
+enum class SubActorCategory : uint8_t { Default = 0, Players, Creatures, Entities };
 
 using AgentDetails = std::map<std::string, std::string>;
 
 struct SubActor {
-    std::string id;
-    std::string name;
-    SubActorCategory category{SubActorCategory::Default};
-    Vec3 position{};
-    Vec2 rotation{};
-    AgentDetails agentDetails;
+    std::string              id;
+    std::string              name;
+    SubActorCategory         category{SubActorCategory::Default};
+    Vec3                     position{};
+    Vec2                     rotation{};
+    AgentDetails             agentDetails;
     std::vector<std::string> boundCameraIds;
 };
 

@@ -21,13 +21,12 @@ public:
 
     PlaybackSetEquipmentPacket(Actor const& actor, ActorRuntimeID runtimeId, int selectedSlot = 0);
 
-    [[nodiscard]] std::vector<std::shared_ptr<Packet>> createPackets(
-        PlaybackSetEquipmentPacket const* previous = nullptr
-    ) const;
+    [[nodiscard]] std::vector<std::shared_ptr<Packet>>
+    createPackets(PlaybackSetEquipmentPacket const* previous = nullptr) const;
 
 private:
-    ActorRuntimeID                    mRuntimeId;
-    int                               mSelectedSlot{};
+    ActorRuntimeID                            mRuntimeId;
+    int                                       mSelectedSlot{};
     std::array<ItemStack, EquipmentSlotCount> mItems;
 
     [[nodiscard]] ItemStack const& item(SharedTypes::Legacy::EquipmentSlot slot) const;

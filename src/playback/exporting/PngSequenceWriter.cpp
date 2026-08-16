@@ -54,7 +54,7 @@ struct PngSequenceWriter::Impl {
 
     struct QueuedFrame {
         visuals::CapturedFrame frame;
-        uint64_t                         index{};
+        uint64_t               index{};
     };
 
     uint32_t                capacity;
@@ -123,13 +123,8 @@ struct PngSequenceWriter::Impl {
             detail::copyPackedRgba(item.frame, rgba);
             auto const output  = framePath(directory, item.index);
             auto const partial = temporaryFramePath(directory, item.index);
-            bool const encoded = visuals::writeRgbaPng(
-                partial,
-                item.frame.width,
-                item.frame.height,
-                rgba.data(),
-                item.frame.width * 4
-            );
+            bool const encoded =
+                visuals::writeRgbaPng(partial, item.frame.width, item.frame.height, rgba.data(), item.frame.width * 4);
 
             bool committed = false;
             {

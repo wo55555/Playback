@@ -20,9 +20,10 @@ std::string makeCameraId(model::EditorStateExt const& state) {
 }
 
 model::SubActor* findSubActor(model::EditorStateExt& state, std::string const& id) {
-    auto it = std::find_if(state.worldActor.subActors.begin(), state.worldActor.subActors.end(), [&](auto const& actor) {
-        return actor.id == id;
-    });
+    auto it =
+        std::find_if(state.worldActor.subActors.begin(), state.worldActor.subActors.end(), [&](auto const& actor) {
+            return actor.id == id;
+        });
     return it == state.worldActor.subActors.end() ? nullptr : &*it;
 }
 } // namespace

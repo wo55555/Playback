@@ -139,25 +139,25 @@ struct FfmpegVideoWriter::Impl {
         wait();
     }
 
-    uint32_t                                     capacity;
-    mutable std::mutex                           mutex;
-    std::condition_variable                      changed;
+    uint32_t                           capacity;
+    mutable std::mutex                 mutex;
+    std::condition_variable            changed;
     std::deque<visuals::CapturedFrame> queue;
-    std::filesystem::path                        output;
-    std::filesystem::path                        temporary;
-    std::filesystem::path                        log;
-    std::filesystem::path                        executable;
-    FrameWriterState                             state{FrameWriterState::Idle};
-    uint64_t                                     submitted{};
-    uint64_t                                     written{};
-    uint64_t                                     nextFrameIndex{};
-    uint32_t                                     frameWidth{};
-    uint32_t                                     frameHeight{};
-    ExportError                                  error{ExportError::None};
-    std::string                                  message;
-    HANDLE                                       process{};
-    HANDLE                                       stdinWrite{};
-    std::thread                                  worker;
+    std::filesystem::path              output;
+    std::filesystem::path              temporary;
+    std::filesystem::path              log;
+    std::filesystem::path              executable;
+    FrameWriterState                   state{FrameWriterState::Idle};
+    uint64_t                           submitted{};
+    uint64_t                           written{};
+    uint64_t                           nextFrameIndex{};
+    uint32_t                           frameWidth{};
+    uint32_t                           frameHeight{};
+    ExportError                        error{ExportError::None};
+    std::string                        message;
+    HANDLE                             process{};
+    HANDLE                             stdinWrite{};
+    std::thread                        worker;
 
     void setFailureLocked(ExportError failure, std::string text) {
         if (error == ExportError::None) {

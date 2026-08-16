@@ -26,13 +26,13 @@ public:
     void setFrameTap(visuals::FrameTap* frameTap);
 
     [[nodiscard]] bool start(
-        ExportSettings settings,
+        ExportSettings                               settings,
         state::editing::model::EditorStateExt const& project,
-        std::optional<std::string> cameraFallback = std::nullopt
+        std::optional<std::string>                   cameraFallback = std::nullopt
     );
-    void               tick();
-    void               cancel();
-    void               reset();
+    void tick();
+    void cancel();
+    void reset();
 
     [[nodiscard]] bool isAvailable() const;
     [[nodiscard]] bool isActive() const;
@@ -59,17 +59,17 @@ private:
     void                           restoreReplayState();
     void                           closeCapture(bool cancelled);
 
-    ExportCoordinator&                           mCoordinator;
-    replay::ReplaySession&                    mReplay;
-    std::unique_ptr<OfflineRenderBoundary>       mRenderBoundary;
-    std::optional<CompiledExportPlan>            mPlan;
-    std::deque<visuals::CapturedFrame> mReadyFrames;
-    bool                                         mPreviousPaused{};
-    bool                                         mRestorePaused{};
-    uint32_t                                     mClearFrameRetryCount{};
-    uint64_t                                     mRejectedClearFrameCount{};
-    uint64_t                                     mNextFrameIndex{};
-    Phase                                        mPhase{Phase::Idle};
+    ExportCoordinator&                     mCoordinator;
+    replay::ReplaySession&                 mReplay;
+    std::unique_ptr<OfflineRenderBoundary> mRenderBoundary;
+    std::optional<CompiledExportPlan>      mPlan;
+    std::deque<visuals::CapturedFrame>     mReadyFrames;
+    bool                                   mPreviousPaused{};
+    bool                                   mRestorePaused{};
+    uint32_t                               mClearFrameRetryCount{};
+    uint64_t                               mRejectedClearFrameCount{};
+    uint64_t                               mNextFrameIndex{};
+    Phase                                  mPhase{Phase::Idle};
 };
 
 } // namespace playback::exporting

@@ -21,10 +21,10 @@ public:
 private:
     void drawTransportControls();
 
-    ImTextureID          mGameTexture{};
-    float                mVideoAspectRatio{16.0f / 9.0f};
-    Rect                 mVideoRect{};
-    ViewportMenu         mContextMenu;
+    ImTextureID  mGameTexture{};
+    float        mVideoAspectRatio{16.0f / 9.0f};
+    Rect         mVideoRect{};
+    ViewportMenu mContextMenu;
 };
 
 } // namespace playback::editor::ui

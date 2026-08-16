@@ -21,8 +21,8 @@ std::atomic<CameraTimelineRenderContextHandle> gExportRenderContext;
 thread_local CameraTimelineRenderContextHandle gRenderContext;
 std::atomic_bool                               gPreviewWasApplied{};
 
-std::mutex                                     gPreviewPoseMutex;
-std::optional<CameraRenderState>               gLastPreviewPose;
+std::mutex                       gPreviewPoseMutex;
+std::optional<CameraRenderState> gLastPreviewPose;
 
 std::atomic<std::shared_ptr<Binding const>>& bindingFor(CameraTimelineSource source) {
     return source == CameraTimelineSource::Export ? gExport : gPreview;

@@ -61,7 +61,6 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
             );
         }
     }
-
 }
 
 const std::vector<TrackTreeRow>& TrackTreeModel::rows() const { return mRows; }

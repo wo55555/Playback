@@ -3,8 +3,8 @@
 #include "ExportActivity.h"
 #include "playback/Playback.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
-#include "playback/visuals/ReplaySampleTime.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/visuals/ReplaySampleTime.h"
 
 #include <algorithm>
 #include <cmath>
@@ -37,10 +37,10 @@ OfflineRenderBoundary::OfflineRenderBoundary(replay::ReplaySession& replay, visu
 OfflineRenderBoundary::~OfflineRenderBoundary() { close(); }
 
 bool OfflineRenderBoundary::open(
-    uint32_t                              capacity,
-    ExportSettings const&                 settings,
+    uint32_t                                     capacity,
+    ExportSettings const&                        settings,
     state::editing::model::EditorStateExt const& project,
-    std::optional<std::string>            cameraFallback
+    std::optional<std::string>                   cameraFallback
 ) {
     close();
     setOfflineRenderActivityActive(false);
@@ -593,8 +593,7 @@ OfflineRenderBoundaryStatus OfflineRenderBoundary::status() {
 }
 
 int OfflineRenderBoundary::targetTick(ExportFramePlan const& frame) const {
-    auto const sample =
-        visuals::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
+    auto const sample = visuals::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
     if (!sample) return 0;
     auto const clamped = std::clamp<int64_t>(sample->requiredAppliedTick(), 0, mMaximumReplayTick);
     return clamped > std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : static_cast<int>(clamped);
@@ -693,8 +692,8 @@ OfflineRenderStepResult OfflineRenderBoundary::advanceWarmup(ExportFramePlan con
     mRenderWaitStartedAt    = {};
     mRenderWaitLastLoggedAt = {};
     mExecutor.completeWarmup();
-    auto const executor    = mExecutor.status();
-    bool       sceneReady  = true;
+    auto const                                  executor   = mExecutor.status();
+    bool                                        sceneReady = true;
     std::optional<replay::ReplaySceneReadiness> scene;
     scene      = mReplay.getSceneReadiness();
     sceneReady = scene->ready();
