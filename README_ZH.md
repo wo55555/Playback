@@ -15,6 +15,8 @@
     ·
     <a href="CONTRIBUTING.md">参与贡献</a>
     ·
+    <a href="#行为准则">行为准则</a>
+    ·
     <a href="README.md">English</a>
   </p>
 
@@ -138,7 +140,13 @@ Playback 目前提供英文（`en_US`）和简体中文（`zh_CN`）翻译，翻
 
 构建说明见[源码构建指南](docs/building.zh-CN.md)，格式化和 Pull Request 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+请阅读并遵守 [行为准则](CODE_OF_CONDUCT.md)。参与本项目即表示你同意遵守其中条款。
+
 安全问题请按照 [SECURITY.md](SECURITY.md) 私下报告，不要为安全漏洞创建公开 Issue。
+
+## 行为准则
+
+Playback 采用 Contributor Covenant 行为准则。请在参与 Issue、Pull Request、Discussion 或社区空间之前阅读 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 
 ## 致谢
 
