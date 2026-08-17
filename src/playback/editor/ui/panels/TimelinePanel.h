@@ -15,7 +15,6 @@ public:
     void seekRelative(int tickDelta);
     void seekAdjacentEditPoint(bool forward);
     bool addKeyframeAtPlayhead();
-    bool splitAtPlayhead();
     bool deleteSelection();
     void zoomIn();
     void zoomOut();
@@ -39,11 +38,7 @@ private:
     std::string                           mTrackSearch;
     bool                                  mSnapEnabled{true};
     bool                                  mCamerasExpanded{true};
-    std::string                           mDraggingSegmentId;
-    bool                                  mDraggingStart{};
     bool                                  mDraggingPlayhead{};
-    int                                   mDragStartTick{};
-    int                                   mDragEndTick{};
     std::string                           mDraggingKeyframeCameraId;
     float                                 mDraggingKeyframeStartMouseX{};
     int                                   mDraggingKeyframeStartTick{};

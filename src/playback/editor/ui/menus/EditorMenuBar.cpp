@@ -138,37 +138,6 @@ void EditorMenuBar::draw() {
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("playback.refactorEditor.menu.camera"_tr().c_str(), capabilities.cameraEditing)) {
-            auto const keyframeShortcut = input::KeyMap::displayString(input::EditorKeybind::AddKeyframe);
-            bool const canAddKeyframe   = editor.selection().getAs<state::editing::model::SelectedCamera>() != nullptr;
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.menu.addKeyframe"_tr().c_str(),
-                    keyframeShortcut.c_str(),
-                    false,
-                    canAddKeyframe
-                )) {
-                (void)editor.addKeyframeAtPlayhead();
-            }
-            ImGui::EndMenu();
-        }
-
-        ImGui::MenuItem("playback.refactorEditor.menu.markers"_tr().c_str(), nullptr, false, capabilities.videoEditing);
-
-        if (ImGui::BeginMenu("playback.refactorEditor.menu.window"_tr().c_str())) {
-            ImGui::MenuItem("playback.refactorEditor.menu.hintBar"_tr().c_str(), "F1", false, false);
-            ImGui::Separator();
-            bool const curveOpen = editor.curveEditorPanel().isOpen();
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.menu.curveEditor"_tr().c_str(),
-                    nullptr,
-                    curveOpen,
-                    capabilities.cameraEditing
-                )) {
-                editor.curveEditorPanel().setOpen(!curveOpen);
-            }
-            ImGui::EndMenu();
-        }
-
         if (ImGui::BeginMenu("playback.refactorEditor.menu.help"_tr().c_str())) {
             if (ImGui::MenuItem("playback.refactorEditor.menu.shortcuts"_tr().c_str())) mShortcutDialogOpen = true;
             ImGui::MenuItem("playback.refactorEditor.menu.documentation"_tr().c_str(), nullptr, false, false);
@@ -225,10 +194,6 @@ void EditorMenuBar::draw() {
             shortcutRow(
                 input::KeyMap::displayString(input::EditorKeybind::AddKeyframe),
                 "playback.refactorEditor.shortcuts.keyframe"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::SplitAtPlayhead),
-                "playback.refactorEditor.shortcuts.split"_tr()
             );
             shortcutRow(
                 input::KeyMap::displayString(input::EditorKeybind::DeleteSelection),

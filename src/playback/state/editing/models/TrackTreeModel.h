@@ -8,7 +8,7 @@ namespace playback::state::editing::model {
 
 struct EditorStateExt;
 
-enum class TrackRowKind { Sequence, Camera, Marker };
+enum class TrackRowKind { Camera, Marker };
 
 struct TrackTreeRow {
     TrackRowKind kind;
@@ -22,9 +22,8 @@ struct TrackTreeRow {
 
 class TrackTreeModel {
 public:
-    static constexpr float kSequenceRowHeight = 52.0f;
-    static constexpr float kCameraRowHeight   = 36.0f;
-    static constexpr float kMarkerRowHeight   = 32.0f;
+    static constexpr float kCameraRowHeight = 36.0f;
+    static constexpr float kMarkerRowHeight = 32.0f;
 
     void                                           setSearch(std::string_view query);
     void                                           setCamerasExpanded(bool expanded);

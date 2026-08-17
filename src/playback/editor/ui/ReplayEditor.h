@@ -49,7 +49,6 @@ public:
     void                                                       seekRelative(int tickDelta);
     bool                                                       deleteSelection();
     bool                                                       addKeyframeAtPlayhead();
-    bool                                                       splitAtPlayhead();
     CurveEditorPanel&                                          curveEditorPanel() { return mCurveEditorPanel; }
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }

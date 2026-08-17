@@ -23,7 +23,6 @@ enum class EditorKeybind : uint8_t {
     DecreaseSpeed,
     IncreaseSpeed,
     AddKeyframe,
-    SplitAtPlayhead,
     ZoomInTimeline,
     ZoomOutTimeline,
     ResetTimelineZoom,

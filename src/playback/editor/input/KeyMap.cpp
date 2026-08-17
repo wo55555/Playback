@@ -48,7 +48,6 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::IncreaseSpeed,           "playback.editor.increaseSpeed",    VK_OEM_PLUS,  false, false, false},
     // Timeline editing
     {EditorKeybind::AddKeyframe,             "playback.editor.addKeyframe",      'K',          false, false, false},
-    {EditorKeybind::SplitAtPlayhead,         "playback.editor.splitClip",        'K',          true,  false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.addCameraTrack",   'N',          true,  true,  false},
     {EditorKeybind::NamedOnly,               "playback.editor.camera1",          '1',          false, false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.camera2",          '2',          false, false, false},

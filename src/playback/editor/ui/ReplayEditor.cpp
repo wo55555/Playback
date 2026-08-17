@@ -176,8 +176,6 @@ bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(); 
 
 bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(); }
 
-bool ReplayEditor::splitAtPlayhead() { return mTimelinePanel.splitAtPlayhead(); }
-
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     if (!state.editorVisible) {
         if (!mActiveReplayPath.empty()) {
@@ -259,11 +257,6 @@ void ReplayEditor::handleKeyboardShortcuts() {
         (void)addKeyframeAtPlayhead();
         return;
     }
-    if (input::KeyMap::pressed(EditorKeybind::SplitAtPlayhead)) {
-        (void)splitAtPlayhead();
-        return;
-    }
-
     if (input::KeyMap::pressed(EditorKeybind::JumpStart)) {
         seekTo(0);
         return;

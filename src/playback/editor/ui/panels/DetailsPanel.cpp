@@ -60,119 +60,6 @@ void DetailsPanel::draw() {
     property::beginInspector("Details", "Property Inspector");
     property::searchBar("##details-search", "Search properties", search, sizeof(search));
 
-    // ===== Camera Sequence (overview) =====
-    if (selection.getAs<state::editing::model::SelectedSequence>()) {
-        if (property::beginSection("Camera Sequence")) {
-            ImGui::Text("Duration: %s", formatTick(project->totalTicks).c_str());
-            ImGui::Text("Segments: %zu", project->sequence.size());
-            int unbound = 0;
-            for (auto const& segment : project->sequence) {
-                if (segment.cameraId.empty() || !findById(project->cameras, segment.cameraId)) ++unbound;
-            }
-            if (project->cameras.empty()) {
-                ImGui::TextColored(ImVec4(0.94f, 0.75f, 0.13f, 1.0f), "No cameras exist - add one to bind segments.");
-            } else if (unbound > 0) {
-                ImGui::TextColored(
-                    ImVec4(0.94f, 0.75f, 0.13f, 1.0f),
-                    "%d segment(s) fall back to the first camera.",
-                    unbound
-                );
-            } else {
-                ImGui::TextColored(ImVec4(0.47f, 0.78f, 0.51f, 1.0f), "All segments bound.");
-            }
-            property::separator();
-            for (auto const& segment : project->sequence) {
-                auto const* camera = findById(project->cameras, segment.cameraId);
-                char const* label =
-                    camera ? camera->name.c_str()
-                           : (segment.cameraId.empty() ? (project->cameras.empty() ? "(no camera)" : "(auto)")
-                                                       : "(missing)");
-                if (ImGui::Selectable(
-                        (formatTick(segment.startTick) + " - " + formatTick(segment.endTick) + "  " + label).c_str()
-                    )) {
-                    editor.selection().select(state::editing::model::SelectedSequenceSegment{segment.id});
-                }
-            }
-            ImGui::Spacing();
-            if (property::actionButton("Split at Playhead")) {
-                EditorAction action{EditorActionType::SplitSequence};
-                action.tick = state.currentTick;
-                submit(std::move(action));
-            }
-            property::endSection();
-        }
-        return;
-    }
-
-    // ===== Sequence Segment =====
-    if (auto const* selected = selection.getAs<state::editing::model::SelectedSequenceSegment>()) {
-        auto const* segment = findById(project->sequence, selected->segmentId);
-        if (!segment) {
-            ImGui::TextDisabled("%s", "playback.refactorEditor.details.sequenceSegmentMissing"_tr().c_str());
-            return;
-        }
-        bool const isFirst = &project->sequence.front() == segment;
-        bool const isLast  = &project->sequence.back() == segment;
-        if (property::beginSection("Sequence Segment")) {
-            ImGui::Text("Range: %s - %s", formatTick(segment->startTick).c_str(), formatTick(segment->endTick).c_str());
-            ImGui::Text("Duration: %d ticks", segment->endTick - segment->startTick);
-            ImGui::BeginDisabled(segment->locked);
-            int startTick = segment->startTick;
-            int endTick   = segment->endTick;
-            ImGui::BeginDisabled(isFirst);
-            if (ImGui::InputInt("Start", &startTick) && ImGui::IsItemDeactivatedAfterEdit()) {
-                EditorAction action{EditorActionType::TrimSequence};
-                action.id   = segment->id;
-                action.tick = std::clamp(startTick, 1, endTick - 1);
-                action.kind = endTick;
-                submit(std::move(action));
-            }
-            ImGui::EndDisabled();
-            ImGui::BeginDisabled(isLast);
-            if (ImGui::InputInt("End", &endTick) && ImGui::IsItemDeactivatedAfterEdit()) {
-                EditorAction action{EditorActionType::TrimSequence};
-                action.id   = segment->id;
-                action.tick = startTick;
-                action.kind = std::clamp(endTick, startTick + 1, project->totalTicks);
-                submit(std::move(action));
-            }
-            ImGui::EndDisabled();
-            char const* preview = "Automatic: first camera";
-            if (auto const* camera = findById(project->cameras, segment->cameraId)) preview = camera->name.c_str();
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::BeginCombo("Camera", preview)) {
-                if (ImGui::Selectable("Automatic: first camera", segment->cameraId.empty())) {
-                    EditorAction action{EditorActionType::BindSequenceCamera};
-                    action.id = segment->id;
-                    submit(std::move(action));
-                }
-                for (auto const& camera : project->cameras) {
-                    if (ImGui::Selectable(camera.name.c_str(), camera.id == segment->cameraId)) {
-                        EditorAction action{EditorActionType::BindSequenceCamera};
-                        action.id          = segment->id;
-                        action.secondaryId = camera.id;
-                        submit(std::move(action));
-                    }
-                }
-                ImGui::EndCombo();
-            }
-            if (property::actionButton("Split at Playhead")) {
-                EditorAction action{EditorActionType::SplitSequence};
-                action.tick = state.currentTick;
-                submit(std::move(action));
-            }
-            if (property::actionButton("Delete Segment")) {
-                EditorAction action{EditorActionType::DeleteSequenceSegment};
-                action.id = segment->id;
-                submit(std::move(action));
-            }
-            ImGui::EndDisabled();
-            if (segment->locked) ImGui::TextDisabled("Segment is locked.");
-            property::endSection();
-        }
-        return;
-    }
-
     // ===== World Actor (overview + sub actor tree) =====
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         if (property::beginSection("World Actor")) {
@@ -517,12 +404,11 @@ void DetailsPanel::draw() {
 
     // ===== Empty state =====
     if (property::beginSection("Replay Overview")) {
-        ImGui::TextDisabled("Select a sequence segment, world actor, camera, keyframe or marker.");
+        ImGui::TextDisabled("Select a world actor, camera, keyframe or marker.");
         ImGui::Spacing();
         ImGui::Text("Replay: %s", project->worldActor.name.empty() ? "(untitled)" : project->worldActor.name.c_str());
         ImGui::Text("Duration: %s", formatTick(project->totalTicks).c_str());
         ImGui::Text("Cameras: %zu", project->cameras.size());
-        ImGui::Text("Sequence segments: %zu", project->sequence.size());
         ImGui::Text("World actor segments: %zu", project->worldActor.segments.size());
         ImGui::Spacing();
         if (property::actionButton("Add Free Camera")) {

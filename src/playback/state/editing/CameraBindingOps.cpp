@@ -34,7 +34,6 @@ std::string addFreeCamera(model::EditorStateExt& state, std::string const& name)
     camera.id   = makeCameraId(state);
     camera.name = name.empty() ? "Camera " + std::to_string(state.cameras.size() + 1) : name;
     state.cameras.push_back(camera);
-    if (state.cameras.size() > 1 && state.sequence.empty()) state.sequence.push_back({"sequence", 0, state.totalTicks});
     return camera.id;
 }
 
@@ -48,7 +47,6 @@ std::string createBindingCamera(model::EditorStateExt& state, std::string const&
     camera.bindingEntityUuid = actor->id;
     actor->boundCameraIds.push_back(camera.id);
     state.cameras.push_back(camera);
-    if (state.cameras.size() > 1 && state.sequence.empty()) state.sequence.push_back({"sequence", 0, state.totalTicks});
     return camera.id;
 }
 
