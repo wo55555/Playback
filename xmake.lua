@@ -62,18 +62,7 @@ if not has_config("vs_runtime") then
     set_runtimes("MD")
 end
 
-local get_version = function(os)
-    local tag = os.iorun("git describe --tags --abbrev=0 --always")
-    local major, minor, patch, suffix = tag:match("v(%d+)%.(%d+)%.(%d+)(.*)")
-    if not major then
-        print("Failed to parse version tag, using 0.0.0")
-        major, minor, patch = 0, 0, 0
-    end
-    if suffix and suffix ~= "" then
-        return major .. "." .. minor .. "." .. patch .. string.gsub(suffix, "%s+$", "")
-    end
-    return major .. "." .. minor .. "." .. patch
-end
+local mod_version = "0.2.0-mc26.10"
 
 target("playback")
     add_rules("@levibuildscript/linkrule")
@@ -98,7 +87,7 @@ target("playback")
     set_symbols("debug")
     on_load(function (target)
         target:add("rules", "@levibuildscript/modpacker", {
-            modVersion = get_version(os),
+            modVersion = mod_version,
         })
     end)
     after_build(function (target)

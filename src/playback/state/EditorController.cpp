@@ -61,9 +61,16 @@ void EditorController::publishCameraTimeline() {
         keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
         return;
     }
+    auto dimensionTransitionTicks = replay::ReplaySession::getInstance().getDimensionTransitionTicks();
     keyframe::publishCameraTimeline(
         keyframe::CameraTimelineSource::Preview,
-        std::make_shared<keyframe::CameraTimelineEvaluator>(mProject, mPreviewCameraId, std::nullopt, false)
+        std::make_shared<keyframe::CameraTimelineEvaluator>(
+            mProject,
+            mPreviewCameraId,
+            std::nullopt,
+            false,
+            std::move(dimensionTransitionTicks)
+        )
     );
 }
 

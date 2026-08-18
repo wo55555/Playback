@@ -97,7 +97,7 @@ body:
     attributes:
       label: Playback Version
       description: Specify the Playback version.
-      placeholder: 0.1.0-alpha.1
+      placeholder: 0.2.0-mc26.10
     validations:
       required: true
 

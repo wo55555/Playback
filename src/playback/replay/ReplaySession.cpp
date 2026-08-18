@@ -28,7 +28,6 @@
 #include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
-#include "mc/network/NetworkIdentifier.h"
 #include "mc/network/PacketSender.h"
 #include "mc/network/packet/AddActorPacket.h"
 #include "mc/network/packet/AddItemActorPacket.h"
@@ -273,7 +272,7 @@ struct InjectionReset {
     ~InjectionReset() { injecting.store(nullptr, std::memory_order_release); }
 };
 
-float decodeRotationByte(uchar value) { return static_cast<schar>(value) * (360.0f / 256.0f); }
+float decodeRotationByte(uchar value) { return static_cast<float>(static_cast<schar>(value)) * (360.0f / 256.0f); }
 
 void forceFirstPersonCamera() {
     auto client = ll::service::getClientInstance();
@@ -407,9 +406,12 @@ void ReplaySession::clearReplayData() {
     mExportTimelinePhase     = ReplayExportTimelinePhase::Inactive;
     mExportTargetTick        = -1;
     mExportCameraViewpoint.reset();
-    mPlaybackSpeed           = 1.0f;
-    mPlaybackTickAccumulator = 0.0f;
+    mPlaybackSpeed               = 1.0f;
+    mPlaybackTickAccumulator     = 0.0f;
+    mObserverPreviewInRange      = false;
+    mObserverServerPositionDirty = false;
     mLastObserverServerSyncChunk.reset();
+    mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
     mReplayTime.reset();
     mPendingReplayDimension.reset();
     mPendingSnapshotApply.reset();
@@ -441,6 +443,7 @@ void ReplaySession::clearReplayData() {
     mMeta = PlaybackMeta{};
     mReaders.clear();
     mSnapshotContexts.clear();
+    mDimensionTransitionTicks.clear();
     mChunkPackets.clear();
     mInlineLevelChunkPacketIndices.clear();
     mInlineSubChunkPacketIndices.clear();
@@ -525,7 +528,11 @@ bool ReplaySession::setPaused(bool paused) {
 
     bool const wasPreviewing = keyframe::wasPreviewCameraApplied();
     mIsPaused                = paused;
-    if (!paused) mLastObserverServerSyncChunk.reset();
+    if (!paused) {
+        mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
+        mObserverServerPositionDirty = false;
+        mLastObserverServerSyncChunk.reset();
+    }
     getLogger().debug("Replay {} at tick {}", paused ? "paused" : "playing", mCurrentTick);
     if (paused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive && wasPreviewing) {
         parkReplayCameraAtPreview();
@@ -533,7 +540,7 @@ bool ReplaySession::setPaused(bool paused) {
         auto const position = mReplayPlayer->getPosition();
         auto const rotation = mReplayPlayer->getRotation();
         cancelNativeMovementInterpolation(*mReplayPlayer, position, rotation, rotation.y);
-        syncObserverServerPosition(position, rotation);
+        if (mObserverServerPositionDirty) syncObserverServerPosition(position, rotation);
     }
     return true;
 }
@@ -541,6 +548,7 @@ bool ReplaySession::setPaused(bool paused) {
 void ReplaySession::parkReplayCameraAtPreview() {
     keyframe::setPreviewCameraApplied(false);
     if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
+    if (mPendingReplayDimension) return;
 
     auto const sampleTime = getCameraRenderSampleTime(0.0f);
     if (!sampleTime) return;
@@ -550,9 +558,9 @@ void ReplaySession::parkReplayCameraAtPreview() {
     auto const lastPose = keyframe::takeLastPreviewPose();
     auto const pose     = lastPose.value_or(sample->state);
 
-    forceFirstPersonCamera();
     Vec3 const feetPosition{pose.x, pose.y, pose.z};
     Vec2 const rotation{pose.pitch, pose.yaw};
+    forceFirstPersonCamera();
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     syncObserverServerPosition(feetPosition, rotation);
@@ -572,24 +580,44 @@ void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& r
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+    mObserverServerPositionDirty = true;
 }
 
 void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 const& rotation) {
-    if (!mReplayPlayer || !mReplayWorldJoined) return;
-    mLastObserverServerSyncChunk = ChunkPos{feetPosition.x, feetPosition.z};
-    auto const playerUuid        = mReplayPlayer->getUuid();
-    auto const replayLevelId     = mReplayLevelId;
-    auto const dimension         = mReplayPlayer->getDimensionId();
+    if (!mReplayPlayer || !mReplayWorldJoined || mPendingReplayDimension) return;
+    mLastObserverServerSyncChunk   = ChunkPos{feetPosition.x, feetPosition.z};
+    auto const playerUuid          = mReplayPlayer->getUuid();
+    auto const replayLevelId       = mReplayLevelId;
+    auto const dimension           = mReplayPlayer->getDimensionId();
+    auto const syncEpoch           = mObserverServerSyncEpoch.load(std::memory_order_acquire);
+    auto*      syncEpochCounter    = &mObserverServerSyncEpoch;
+    auto const syncSequence        = mObserverServerSyncSequence.fetch_add(1, std::memory_order_acq_rel) + 1;
+    auto*      syncSequenceCounter = &mObserverServerSyncSequence;
     Vec3 const serverPosition{feetPosition.x, feetPosition.y - kServerEyeHeight, feetPosition.z};
-    ll::thread::ServerThreadExecutor::getDefault().execute(
-        [playerUuid, replayLevelId, serverPosition, rotation, dimension] {
-            auto level = ll::service::getLevel();
-            if (!level || level->getLevelId() != replayLevelId) return;
-            auto* player = level->getPlayer(playerUuid);
-            if (!player) return;
-            player->teleport(serverPosition, dimension, rotation);
+    mObserverServerPositionDirty = false;
+    ll::thread::ServerThreadExecutor::getDefault().execute([playerUuid,
+                                                            replayLevelId,
+                                                            serverPosition,
+                                                            rotation,
+                                                            dimension,
+                                                            syncEpoch,
+                                                            syncEpochCounter,
+                                                            syncSequence,
+                                                            syncSequenceCounter] {
+        if (syncEpochCounter->load(std::memory_order_acquire) != syncEpoch
+            || syncSequenceCounter->load(std::memory_order_acquire) != syncSequence) {
+            return;
         }
-    );
+        auto level = ll::service::getLevel();
+        if (!level || level->getLevelId() != replayLevelId) return;
+        auto* player = level->getPlayer(playerUuid);
+        if (!player) return;
+        if (syncEpochCounter->load(std::memory_order_acquire) != syncEpoch
+            || syncSequenceCounter->load(std::memory_order_acquire) != syncSequence) {
+            return;
+        }
+        player->teleport(serverPosition, dimension, rotation);
+    });
 }
 
 void ReplaySession::setObserverPreviewPartialTick(float partialTick) {
@@ -599,6 +627,7 @@ void ReplaySession::setObserverPreviewPartialTick(float partialTick) {
 void ReplaySession::updateObserverPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
     if (mIsPaused) return;
+    if (mPendingReplayDimension) return;
     if (!mNetworkHandler) return;
     if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return;
     auto const time = getCameraRenderSampleTime(mObserverPreviewPartialTick.load(std::memory_order_acquire));
@@ -670,15 +699,38 @@ bool ReplaySession::beginExportTimeline(int startTick) {
     mSnapMovementDuringSeek = false;
     mExportTargetTick       = startTick;
     mExportTimelinePhase    = ReplayExportTimelinePhase::Initializing;
+    mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
+    mObserverServerPositionDirty = false;
+    mLastObserverServerSyncChunk.reset();
     getLogger().info("Export timeline initialization queued (startTick={}, currentTick={})", startTick, mCurrentTick);
     return true;
 }
 
 void ReplaySession::setExportCameraViewpoint(std::optional<ReplayCameraViewpoint> viewpoint) noexcept {
-    if (viewpoint && (!std::isfinite(viewpoint->x) || !std::isfinite(viewpoint->y) || !std::isfinite(viewpoint->z))) {
+    if (viewpoint
+        && (!std::isfinite(viewpoint->x) || !std::isfinite(viewpoint->y) || !std::isfinite(viewpoint->z)
+            || !std::isfinite(viewpoint->pitch) || !std::isfinite(viewpoint->yaw))) {
         viewpoint.reset();
     }
-    mExportCameraViewpoint = std::move(viewpoint);
+    mExportCameraViewpoint = viewpoint;
+}
+
+void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint) {
+    if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive || !mReplayPlayer || !mReplayWorldJoined
+        || !mNetworkHandler || mPendingReplayDimension || !std::isfinite(viewpoint.x) || !std::isfinite(viewpoint.y)
+        || !std::isfinite(viewpoint.z) || !std::isfinite(viewpoint.pitch) || !std::isfinite(viewpoint.yaw)) {
+        return;
+    }
+
+    forceFirstPersonCamera();
+    Vec3 const     feetPosition{viewpoint.x, viewpoint.y, viewpoint.z};
+    Vec2 const     rotation{viewpoint.pitch, viewpoint.yaw};
+    ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
+    bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
+                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
+    teleportReplayPlayer(feetPosition, rotation);
+    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
+    if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
 }
 
 ReplaySceneReadiness ReplaySession::getSceneReadiness() const {
@@ -780,6 +832,7 @@ ReplayExportTickState ReplaySession::prepareExportTick(int targetTick) {
         return ReplayExportTickState::Waiting;
     }
 
+    if (hasPendingReplayReaderBoundary()) return ReplayExportTickState::Waiting;
     if (mCurrentTick == targetTick) return ReplayExportTickState::Ready;
     if (mReaderIndex >= mReaders.size() && mCurrentTick < targetTick) return ReplayExportTickState::Failed;
 
@@ -794,7 +847,7 @@ bool ReplaySession::finishExportTimelineInitialization() {
     if (mExportTimelinePhase != ReplayExportTimelinePhase::Initializing || !mActive || mReplayFailed) return false;
     if (mCurrentTick != mExportTargetTick || mSeekTargetTick >= 0
         || mRequestedSeekTick.load(std::memory_order_acquire) >= 0 || mPendingReplayDimension || mPendingSnapshotApply
-        || mChunkInjectionPending) {
+        || mChunkInjectionPending || hasPendingReplayReaderBoundary()) {
         return false;
     }
 
@@ -805,6 +858,7 @@ bool ReplaySession::finishExportTimelineInitialization() {
 }
 
 void ReplaySession::endExportTimeline() {
+    bool const wasActive = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
     mRequestedSeekTick.store(-1, std::memory_order_release);
     mSeekTargetTick         = -1;
     mExportSeekRequested    = false;
@@ -812,6 +866,16 @@ void ReplaySession::endExportTimeline() {
     mExportTargetTick       = -1;
     mExportTimelinePhase    = ReplayExportTimelinePhase::Inactive;
     mExportCameraViewpoint.reset();
+    if (wasActive) {
+        mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
+        mObserverServerPositionDirty = false;
+        mLastObserverServerSyncChunk.reset();
+        if (mReplayPlayer && mReplayWorldJoined) {
+            auto const position = mReplayPlayer->getPosition();
+            auto const rotation = mReplayPlayer->getRotation();
+            syncObserverServerPosition(position, rotation);
+        }
+    }
 }
 
 int ReplaySession::getTotalTicks() const { return std::max(0, mMeta.totalTicks); }
@@ -915,8 +979,7 @@ void ReplaySession::tick() {
     if (!mActive) return;
     try {
         if (!mReplayWorldJoined || !mNetworkHandler || !refreshReplayPlayer()) return;
-        // The observer is the camera; keep it first-person so its camera offset stays a stable
-        // vertical eye height instead of a direction-based third-person offset.
+        // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
 
@@ -946,6 +1009,13 @@ void ReplaySession::tick() {
                 return;
             }
             if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
+        }
+
+        auto const pendingRequestedSeek = mRequestedSeekTick.load(std::memory_order_acquire);
+        if (hasPendingReplayReaderBoundary() && pendingRequestedSeek < 0) {
+            bool const stopAtEnd = mExportTimelinePhase == ReplayExportTimelinePhase::Inactive && mSeekTargetTick < 0;
+            (void)advanceReplayReader(stopAtEnd);
+            if (mChunkInjectionPending || mPendingSnapshotApply || mPendingReplayDimension) return;
         }
 
         int const requestedSeek = mRequestedSeekTick.exchange(-1, std::memory_order_acq_rel);
@@ -1070,11 +1140,13 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     }
     mReaders.clear();
     mSnapshotContexts.clear();
+    mDimensionTransitionTicks.clear();
     mChunkPackets.clear();
     mInlineLevelChunkPacketIndices.clear();
     mInlineSubChunkPacketIndices.clear();
 
-    for (auto const& [chunkName, _] : mMeta.chunks) {
+    int64_t chunkStartTick = 0;
+    for (auto const& [chunkName, chunkMeta] : mMeta.chunks) {
         auto chunk = readArchiveEntry(archive.get(), chunkName);
         if (!chunk) {
             getLogger().error("Replay archive does not contain {}", chunkName);
@@ -1082,9 +1154,22 @@ bool ReplaySession::init(std::filesystem::path filePath) {
         }
         auto reader  = std::make_unique<ReplayReader>(*chunk);
         auto context = reader->readSnapshotContext();
+        for (int offset : reader->readDimensionTransitionTickOffsets()) {
+            int64_t const transitionTick = chunkStartTick + static_cast<int64_t>(offset);
+            if (transitionTick >= 0 && transitionTick <= std::max(0, mMeta.totalTicks)
+                && transitionTick <= std::numeric_limits<int>::max()) {
+                mDimensionTransitionTicks.emplace_back(static_cast<int>(transitionTick));
+            }
+        }
         mReaders.emplace_back(std::move(reader));
         mSnapshotContexts.emplace_back(context);
+        chunkStartTick += std::max(0, chunkMeta.duration);
     }
+    std::sort(mDimensionTransitionTicks.begin(), mDimensionTransitionTicks.end());
+    mDimensionTransitionTicks.erase(
+        std::unique(mDimensionTransitionTicks.begin(), mDimensionTransitionTicks.end()),
+        mDimensionTransitionTicks.end()
+    );
     for (int cacheIndex = 0;; ++cacheIndex) {
         auto entryName = "level_chunk_caches/" + std::to_string(cacheIndex) + ".bin";
         if (zip_name_locate(archive.get(), entryName.c_str(), 0) < 0) break;
@@ -1419,6 +1504,9 @@ bool ReplaySession::ensureReplayDimension(
         }
         return false;
     }
+    if (changesDimension && mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) {
+        mExportCameraViewpoint.reset();
+    }
 
     auto       request         = std::make_shared<DimensionTransitionRequest>();
     auto       playerUuid      = mReplayPlayer->getUuid();
@@ -1429,6 +1517,10 @@ bool ReplaySession::ensureReplayDimension(
     auto const generation      = mDimensionTransitionGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
     request->generation        = generation;
     auto* generationCounter    = &mDimensionTransitionGeneration;
+    mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
+    mObserverServerPositionDirty = false;
+    mLastObserverServerSyncChunk.reset();
+    mObserverPreviewInRange = false;
 
     if (!clearRecordedEntities()) {
         getLogger().error("Unable to clear recorded entities before leaving replay dimension {}", sourceDimension.id);
@@ -2383,6 +2475,32 @@ bool ReplaySession::sendRecordedTickPacket() {
     return advanceReplayTick(true);
 }
 
+bool ReplaySession::hasPendingReplayReaderBoundary() const {
+    return mReaderIndex < mReaders.size() && !mReaders[mReaderIndex]->hasRemainingActions();
+}
+
+bool ReplaySession::advanceReplayReader(bool stopAtEnd) {
+    ++mReaderIndex;
+    if (mReaderIndex >= mReaders.size()) {
+        if (stopAtEnd) {
+            mIsPaused                = true;
+            mPlaybackTickAccumulator = 0.0f;
+            getLogger().info("Replay finished and paused at tick {}", mCurrentTick);
+        }
+        return false;
+    }
+
+    auto chunkMeta = mMeta.chunks.begin();
+    std::advance(chunkMeta, static_cast<std::ptrdiff_t>(mReaderIndex));
+    if (chunkMeta->second.forcePlaySnapshot) {
+        applySnapshot(*mReaders[mReaderIndex], false);
+    } else {
+        mReaders[mReaderIndex]->resetToStart();
+    }
+    if (mReplayFailed) throw std::runtime_error("Unable to apply a replay action");
+    return true;
+}
+
 bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
     if (!mActive || !mWorldReady) return false;
 
@@ -2399,25 +2517,7 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
 
         auto& reader = mReaders[mReaderIndex];
         if (!reader->handleNextAction(*this)) {
-            ++mReaderIndex;
-            if (mReaderIndex >= mReaders.size()) {
-                if (stopAtEnd) {
-                    mIsPaused                = true;
-                    mPlaybackTickAccumulator = 0.0f;
-                    getLogger().info("Replay finished and paused at tick {}", mCurrentTick);
-                }
-                return false;
-            }
-
-            auto chunkMeta = mMeta.chunks.begin();
-            std::advance(chunkMeta, static_cast<std::ptrdiff_t>(mReaderIndex));
-            if (chunkMeta->second.forcePlaySnapshot) {
-                applySnapshot(*mReaders[mReaderIndex], false);
-            } else {
-                mReaders[mReaderIndex]->resetToStart();
-            }
-            if (mReplayFailed) throw std::runtime_error("Unable to apply a replay action");
-            return true;
+            return advanceReplayReader(stopAtEnd);
         }
 
         if (mPendingReplayDimension) return true;
@@ -2558,9 +2658,6 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
 
     auto const markerOrCount = data.getVarInt().value();
     if (markerOrCount == 0) {
-        auto const version = data.getVarInt().value();
-        if (version != 1) throw std::runtime_error("Unsupported precise entity movement version");
-
         auto const count = data.getVarInt().value();
         if (count < 0) throw std::runtime_error("Entity movement count cannot be negative");
 
@@ -3164,7 +3261,7 @@ bool ReplaySession::clearReplayObjectives() {
     for (auto& objectiveName : objectiveNames) {
         auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::RemoveObjective);
         if (!packet || !packet->mHandler) return false;
-        static_cast<RemoveObjectivePacket&>(*packet).mObjectiveName = std::move(objectiveName);
+        static_cast<RemoveObjectivePacket&>(*packet).mObjectiveName = objectiveName;
 
         mInjectingPacket.store(packet.get(), std::memory_order_release);
         InjectionReset reset{mInjectingPacket};

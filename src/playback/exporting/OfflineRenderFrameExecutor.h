@@ -44,6 +44,7 @@ public:
     void                                            pollCapture();
 
     [[nodiscard]] OfflineRenderFrameExecutorStatus status() const;
+    [[nodiscard]] bool                             isUiStable() const;
 
 private:
     [[nodiscard]] bool configureRenderSize(ExportSettings const& settings);
@@ -51,7 +52,6 @@ private:
     [[nodiscard]] bool configureClientThrottling();
     void               restoreClientThrottling();
     [[nodiscard]] bool prepareNativeRender();
-    [[nodiscard]] bool isUiStable() const;
     void               fail(std::string message);
 
     ExportKeyframeApplier               mKeyframes;

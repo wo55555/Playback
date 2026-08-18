@@ -1,7 +1,5 @@
 ﻿#pragma once
 
-#include "playback/utils/PathUtils.h"
-
 #include "mc/deps/core/utility/BinaryStream.h"
 
 #include <atomic>
@@ -141,9 +139,13 @@ public:
 
     void resetToStart() { mStream.mReadPointer = mActionsOffset; };
 
+    [[nodiscard]] bool hasRemainingActions() const noexcept { return mStream.mReadPointer < mStream.getWritePointer(); }
+
     [[nodiscard]] PlaybackSnapshotContext readSnapshotContext();
 
     [[nodiscard]] std::vector<PlaybackSerializedGamePacket> readConfigurationPackets();
+
+    [[nodiscard]] std::vector<int> readDimensionTransitionTickOffsets();
 
     void handleSnapshot(ReplaySession& replaySession);
 

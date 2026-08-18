@@ -2,6 +2,7 @@
 
 #include "playback/action/Action.h"
 #include "playback/io/cache/CachedChunkPacket.h"
+#include "playback/utils/PathUtils.h"
 
 #include "mc/network/MinecraftPacketIds.h"
 #include "mc/network/Packet.h"

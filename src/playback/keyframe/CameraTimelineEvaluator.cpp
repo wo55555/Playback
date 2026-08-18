@@ -36,16 +36,60 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
     state::editing::model::EditorStateExt project,
     std::optional<std::string>            cameraOverride,
     std::optional<std::string>            cameraFallback,
-    bool                                  holdLastKeyframe
+    bool                                  holdLastKeyframe,
+    std::vector<int>                      dimensionTransitionTicks
 )
 : mProject(std::move(project)),
   mCameraOverride(std::move(cameraOverride)),
   mCameraFallback(std::move(cameraFallback)),
-  mHoldLastKeyframe(holdLastKeyframe) {
+  mHoldLastKeyframe(holdLastKeyframe),
+  mDimensionTransitionTicks(std::move(dimensionTransitionTicks)) {
+    std::erase_if(mDimensionTransitionTicks, [this](int tick) { return tick < 0 || tick > mProject.totalTicks; });
+    std::sort(mDimensionTransitionTicks.begin(), mDimensionTransitionTicks.end());
+    mDimensionTransitionTicks.erase(
+        std::unique(mDimensionTransitionTicks.begin(), mDimensionTransitionTicks.end()),
+        mDimensionTransitionTicks.end()
+    );
+
     for (auto& camera : mProject.cameras) {
-        // keysByTick is already ordered by tick, so no sort is required.
-        if (!camera.keysByTick.empty()) mKeyframeTracks.emplace(camera.id, KeyframeTrack{camera.keysByTick});
+        if (camera.keysByTick.empty()) continue;
+
+        std::vector<CameraTrackSegment> segments;
+        KeyframeTrack::KeyMap           segmentKeys;
+        size_t                          segmentIndex  = dimensionSegmentForTick(camera.keysByTick.begin()->first);
+        auto                            appendSegment = [&] {
+            if (segmentKeys.empty()) return;
+            segments.emplace_back(
+                CameraTrackSegment{
+                    segmentIndex,
+                    segmentKeys.rbegin()->first,
+                    KeyframeTrack{segmentKeys},
+                }
+            );
+            segmentKeys.clear();
+        };
+
+        for (auto const& [tick, keyframe] : camera.keysByTick) {
+            auto const keySegment = dimensionSegmentForTick(tick);
+            if (keySegment != segmentIndex) {
+                appendSegment();
+                segmentIndex = keySegment;
+            }
+            segmentKeys.emplace(tick, keyframe);
+        }
+        appendSegment();
+        mKeyframeTracks.emplace(camera.id, std::move(segments));
     }
+}
+
+size_t CameraTimelineEvaluator::dimensionSegmentForTick(long double tick) const noexcept {
+    auto const boundary = std::lower_bound(
+        mDimensionTransitionTicks.begin(),
+        mDimensionTransitionTicks.end(),
+        tick,
+        [](int transitionTick, long double value) { return static_cast<long double>(transitionTick) < value; }
+    );
+    return static_cast<size_t>(std::distance(mDimensionTransitionTicks.begin(), boundary));
 }
 
 state::editing::model::CameraEntity const* CameraTimelineEvaluator::cameraForTick(int64_t tick) const {
@@ -78,11 +122,15 @@ std::optional<CameraRenderState>
 CameraTimelineEvaluator::sampleCamera(state::editing::model::CameraEntity const& camera, long double tick) const {
     if (camera.keysByTick.empty()) return std::nullopt;
 
-    auto const track = mKeyframeTracks.find(camera.id);
-    if (track == mKeyframeTracks.end()) return std::nullopt;
-    auto change = track->second.createChange(tick);
-    if (!change && mHoldLastKeyframe && tick > static_cast<long double>(camera.keysByTick.rbegin()->first)) {
-        change = track->second.createChange(camera.keysByTick.rbegin()->first);
+    auto const tracks = mKeyframeTracks.find(camera.id);
+    if (tracks == mKeyframeTracks.end()) return std::nullopt;
+    auto const segmentIndex = dimensionSegmentForTick(tick);
+    auto const segment      = std::ranges::find(tracks->second, segmentIndex, &CameraTrackSegment::dimensionSegment);
+    if (segment == tracks->second.end()) return std::nullopt;
+
+    auto change = segment->track.createChange(tick);
+    if (!change && mHoldLastKeyframe && tick > static_cast<long double>(segment->lastTick)) {
+        change = segment->track.createChange(segment->lastTick);
     }
     if (!change) return std::nullopt;
 

@@ -54,8 +54,6 @@ public:
     [[nodiscard]] static bool deleteReplay(ReplaySummary const& replay, std::string& error);
     [[nodiscard]] static bool showInFolder(ReplaySummary const& replay);
 
-    // 鍚屾椂淇敼鍥炴斁鍏冩暟鎹悕绉颁笌鏂囦欢鏈韩鍚嶇О锛涙柊鍚嶄細鑷姩鍘绘帀闈炴硶瀛楃骞惰ˉ鍏?.playback
-    // 鎵╁睍鍚嶃€?
     [[nodiscard]] static bool renameReplay(ReplaySummary const& replay, std::string_view newName, std::string& error);
 };
 

@@ -6,20 +6,20 @@
 
 Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必须选择与实例中的 Minecraft 和 LeviLamina 版本匹配的发行版本。
 
-| Minecraft / LeviLamina | Playback 版本 |
-| --- | --- |
-| `26.10.*` | [`v0.1.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.2-mc26.10) |
-| `26.20.*` | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) |
+| Minecraft / LeviLamina | Playback 版本                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------- |
+| `26.10.*`              | [`v0.2.0-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.2.0-mc26.10) |
+| `26.20.*`              | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) |
 
 > [!IMPORTANT]
 > 建议尽量使用未安装其他第三方模组的独立 LeviLamina 实例。目前暂不保证与其他模组广泛兼容。
 
 > [!CAUTION]
-> `v0.1.2-mc26.10` 修改了回放快照格式，使用 `v0.1.1` 或更早版本创建的回放必须重新录制。回放浏览器现已改为原生界面，但主菜单按钮仍需要模组内置的轻量资源包。如果此前安装的是缺少该资源包的早期 `v0.1.2-mc26.10` 资产，请重新下载修正版并安装。
+> `v0.2.0-mc26.10` 仍是测试版本。旧版 Playback 创建的回放不兼容，必须重新录制。配置版本和录制文件的快照上下文版本均保持为 `1`，不提供迁移。
 
 ## 使用 LeviLauncher 和 Lip 安装
 
-以下截图以 `26.10` 实例为例。使用 `26.20` 时，请选择相互匹配的 Minecraft、LeviLamina 和 `v0.1.1-mc26.20` 发行版本。
+以下截图以 `26.10` 实例为例，仅作安装流程示意。使用 `26.20` 时，请选择相互匹配的 Minecraft、LeviLamina 和旧版 Playback 发行线。
 
 1. 在左侧边栏选择 **Download（下载）**，找到需要的 Minecraft 版本，通过安装菜单创建使用 **LeviLamina** 加载器的实例。
 
@@ -59,7 +59,7 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 ```powershell
 # Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.1.2-mc26.10#client
+lip install github.com/wo55555/Playback@0.2.0-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
 lip install github.com/wo55555/Playback@0.1.1-mc26.20#client
@@ -90,5 +90,34 @@ record stop
 2. 在回放浏览器中选择 `.playback` 或兼容的 `.zip` 回放文件。
 3. 等待隔离回放世界和初始区块加载完成。
 4. 使用时间线播放、暂停、跳转、调整倍速或跳至两端；使用 **File > Exit Replay** 退出回放。
+
+## 相机编辑
+
+1. 在时间线编辑器中添加或选择相机。
+2. 将播放头移动到目标 tick，使用**在播放头添加关键帧**。
+3. 在属性检查器中编辑位置、偏航、俯仰、滚转、FOV、插值模式和三次贝塞尔控制点。
+4. 添加更多关键帧并播放回放以预览相机插值；暂停时会恢复为可自由移动的观察者相机。
+
+每次已录制的维度变化都会自动切断相机插值。不同维度片段中的关键帧不会相互连接，即使中间维度没有相机关键帧也一样。
+
+## 实验性视频导出
+
+在回放编辑器中打开**文件 > 导出…**，可配置：
+
+- 输出目录和文件名。
+- MP4 视频或 PNG 图像序列。
+- 开始和结束 tick。
+- 帧率与输出分辨率。
+- SSAA 与预热帧。
+
+实验性导出器根据回放时间逐帧渲染，而不是实时录屏。MP4 使用模组内置的 FFmpeg/libx264；如果 FFmpeg 无法启动，仍可使用 PNG 序列。默认输出目录为 `mods/playback/exports`。
+
+| 渲染后端 | 格式                | 稳定 SSAA |
+| -------- | ------------------- | --------- |
+| D3D12    | H.264 MP4、PNG 序列 | 1x、2x    |
+| D3D11    | H.264 MP4、PNG 序列 | 1x        |
+
+> [!IMPORTANT]
+> 视频导出仍为实验性功能，当前不包含音频。相机区域必须真实存在于已录制的回放数据中，Playback 无法重建从未录制的区块。跨维度加载、UI 稳定和相机场景准备均有超时保护；缺少必要数据时会在日志中给出明确错误。
 
 开发说明见[源码构建](building.zh-CN.md)，发行历史见[更新日志](../CHANGELOG.md)。

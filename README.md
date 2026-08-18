@@ -2,7 +2,14 @@
   <img src="assets/pack_icon.png" alt="Playback icon" width="160">
   <h1>Playback</h1>
   <p><strong>Record, revisit, and replay Minecraft Bedrock.</strong></p>
-  <p>A native LeviLamina client mod for recording, exporting, and replaying your sessions.</p>
+  <p>An open-source Minecraft Bedrock replay recorder and cinematic camera editor for LeviLamina on Windows, with experimental video export.</p>
+
+  <p>
+    <img src="https://img.shields.io/badge/release-v0.2.0-4c8bf5?style=flat-square" alt="Playback v0.2.0">
+    <img src="https://img.shields.io/badge/Minecraft%20Bedrock-Windows%20x64-62b47a?style=flat-square" alt="Minecraft Bedrock for Windows x64">
+    <img src="https://img.shields.io/badge/LeviLamina-26.10.*-7b68ee?style=flat-square" alt="LeviLamina 26.10">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 license"></a>
+  </p>
 
   <p>
     <a href="docs/getting-started.md">Get started</a>
@@ -29,6 +36,8 @@
 > [!WARNING]
 > Playback is still in an early stage of development. All currently published releases are test builds. Keep backups of important worlds and recordings; replay compatibility is not guaranteed across Minecraft, LeviLamina, or Playback version changes.
 
+Playback records client-visible Minecraft Bedrock sessions into portable replay archives, opens them in an isolated local replay world, and provides timeline-based cinematic camera keyframes. Experimental MP4 and PNG-sequence export is available for testing.
+
 ## Quick Start
 
 > [!IMPORTANT]
@@ -53,6 +62,11 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 </p>
 
 <p align="center">
+  <strong>Replay preview and file details</strong><br>
+  <img src="docs/images/showcase/en/replay-details.webp" alt="Playback replay preview, metadata, and file actions" width="900">
+</p>
+
+<p align="center">
   <strong>In-game timeline editor</strong><br>
   <img src="docs/images/showcase/en/timeline-editor.webp" alt="Playback in-game timeline editor" width="900">
 </p>
@@ -60,7 +74,7 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 > [!NOTE]
 > The UI is still under active development, and the current interface does not represent the final design.
 
-## Features
+## Minecraft Bedrock Replay and Camera Features
 
 - **Session capture** — Records loaded chunks, block actors, entity movement, player state, time, and selected client-safe game packets.
 - **Low-impact recording** — Writes replay snapshots and timeline data asynchronously to reduce recording stalls.
@@ -70,14 +84,18 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 - **Replay thumbnails** — Captures a preview image during recording when the game is in a menu-free state.
 - **Timeline controls** — Supports play, pause, seek, speed control, and quick navigation during replay.
 - **Timeline editor** — Provides zoomable tracks, resizable panels, camera/sequence/entity-segment editing, and undo/redo for the active in-memory project.
+- **Cinematic camera keyframes** — Captures position, yaw, pitch, roll, and FOV with Smooth, Linear, Ease, Hold, Hermite, and Cubic Bezier interpolation.
+- **Dimension-aware camera paths** — Splits camera tracks at every dimension change so preview and export never interpolate through unrelated worlds.
+- **Experimental video export** — Renders a selected tick range to H.264 MP4 or PNG sequences with configurable frame rate, resolution, SSAA, and warm-up frames.
+- **D3D11 and D3D12 capture** — Supports the native renderer on both backends; D3D12 supports stable 1x/2x SSAA and D3D11 uses 1x.
 - **Bilingual UI** — Localizes commands, the native replay UI, and the resource-pack main-menu button in English and Simplified Chinese.
 
 ## Latest Changes
 
-`v0.1.2` expands the native replay browser, adds replay thumbnails, rebuilds the in-game timeline editor, unifies user-facing i18n, and reduces the legacy UI resource pack to the main-menu button.
+`v0.2.0` adds cinematic camera keyframes, dimension-aware preview, experimental MP4/PNG export, D3D11/D3D12 capture, camera-region chunk tracking, and a large replay/editor architecture cleanup.
 
 > [!CAUTION]
-> This release changes the replay snapshot format. Replays created by `v0.1.1` or earlier must be recorded again. The internal `Config` version remains at its initial value (`1`), third-party dependency versions remain unchanged, and no migration is provided.
+> Playback releases are still test builds and may make destructive format or configuration changes. Replay archives from earlier releases are incompatible with `v0.2.0-mc26.10` and must be recorded again. The configuration version and recording-file snapshot context version remain `1`; no migration layer is provided.
 
 > [!IMPORTANT]
 > The **Playback** main-menu button still uses a lightweight UI resource pack. Complete Lip and release-ZIP installations include it under `mods/playback/resource_packs/playback-ui/`; the Release also provides `playback-ui.mcpack` for standalone manual import.
@@ -86,12 +104,12 @@ See the full [changelog](CHANGELOG.md) for release history and detailed changes.
 
 ## Compatibility
 
-Playback maintains release lines for different Minecraft and LeviLamina versions. This release targets `26.10.*`; use the listed `26.20.*` release until a compatible `v0.1.2` build is published for that runtime.
+Playback maintains separate release lines for Minecraft and LeviLamina versions. Product version `0.2.0` is published for this branch as `v0.2.0-mc26.10`; use the listed MC 26.20 release for that runtime.
 
-| Minecraft / LeviLamina | Playback release | Status |
-| --- | --- | --- |
-| `26.10.*` | [`v0.1.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.1.2-mc26.10) | Maintained |
-| `26.20.*` | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) | Maintained |
+| Minecraft / LeviLamina | Playback release                                                                    | Status               |
+| ---------------------- | ----------------------------------------------------------------------------------- | -------------------- |
+| `26.10.*`              | [`v0.2.0-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.2.0-mc26.10) | Current test release |
+| `26.20.*`              | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) | Maintained           |
 
 Both release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
 
@@ -104,32 +122,57 @@ Playback builds on Windows x64 with Visual Studio 2022, xmake, and Git. See the 
 
 ## Commands
 
-| Command | Description |
-| --- | --- |
-| `playback version` | Show the loaded Playback version. |
-| `record start` | Start or resume recording the current world. |
-| `record pause` | Pause the active recording. |
-| `record stop` | Stop recording and export the replay. |
+| Command            | Description                                  |
+| ------------------ | -------------------------------------------- |
+| `playback version` | Show the loaded Playback version.            |
+| `record start`     | Start or resume recording the current world. |
+| `record pause`     | Pause the active recording.                  |
+| `record stop`      | Stop recording and export the replay.        |
 
 ## Languages
 
 Playback currently includes English (`en_US`) and Simplified Chinese (`zh_CN`) translations stored in `src/lang/`.
 
+## Frequently Asked Questions
+
+### What is Playback?
+
+Playback is a native Minecraft Bedrock replay recorder and camera editor for the Windows x64 LeviLamina client. It stores client-visible session data and reconstructs it in a separate local replay world.
+
+### Can Playback record multiplayer servers?
+
+Yes. Playback is client-only and can record the chunks, entities, and selected packets visible to the client in local worlds or multiplayer sessions.
+
+### Can Playback export a replay to video?
+
+Experimental H.264 MP4 and PNG-sequence export is available in `v0.2.0-mc26.10`. It currently has known limitations and does not include audio.
+
+### Do camera keyframes interpolate across dimensions?
+
+No. Every recorded dimension change splits the camera timeline, including transitions through dimensions that contain no camera keyframes.
+
+### Which Playback build should I install?
+
+Use `v0.2.0-mc26.10` for LeviLamina `26.10.*`. Minecraft/LeviLamina `26.20.*` uses its separately maintained release line.
+
 ## Development Status and Roadmap
 
-- The recording, export, and replay GUIs are under active development and optimization.
+- The recording, replay, camera, and export workflows remain under active development and optimization.
 - Multiplayer server recording and replay will receive further debugging; testing and feedback are welcome.
-- Planned features include video rendering and video export.
+- Planned work includes persistent editor projects, audio export, broader renderer compatibility, and additional camera tooling.
 
 > [!TIP]
-> **Coming next:** The next release will bring a major UI update and optimization pass, along with the first camera features.
+> **Testing focus:** Please report reproducible camera, cross-dimension, chunk-loading, and export issues with the replay file, logs, GPU, renderer backend, and export settings.
 
 ## Known Limitations
 
 - The replay format is still under development and may change during Alpha releases.
 - Playback reconstructs recorded client-visible state; it is not a deterministic copy of the original server simulation.
 - Pending scheduled ticks and server-owned systems such as villages, raids, and POI state are not currently persisted as authoritative simulation state.
-- Editor changes currently live in memory; project persistence and video export are not available yet.
+- Editor changes currently live in memory and are not persisted between replay sessions.
+- Experimental video export currently produces silent H.264 MP4 or PNG sequences; audio export is not implemented and additional runtime issues may remain.
+- SSAA is limited to 2x on D3D12 and 1x on D3D11.
+- A camera can only render chunks present in the replay data; unrecorded terrain cannot be reconstructed.
 - Compatibility must be checked again after updating Minecraft or LeviLamina.
 
 Please report reproducible problems with logs, versions, and a minimal replay where possible.

@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0-mc26.10] - 2026-08-18
+
+### Highlights
+
+- Added an in-game cinematic camera workflow with position, yaw, pitch, roll, FOV, multiple interpolation modes, live preview, and dimension-aware track segmentation.
+- Added experimental frame-by-frame export to H.264 MP4 through bundled FFmpeg or to PNG image sequences, with configurable tick range, frame rate, resolution, SSAA, and warm-up frames.
+- Reworked replay rendering so preview and export share the same camera timeline, entity-pose sampling, observer synchronization, and cross-dimension state machine.
+
+### Breaking Changes
+
+- Removed compatibility branches for older action payload layouts. Replay archives created by previous Playback releases are incompatible and must be recorded again.
+- Kept the configuration version in `Config.h` and the recording-file snapshot context version at `1`; no configuration or replay migration layer is provided.
+
+### Added
+
+- Added camera creation, capture-at-playhead, keyframe movement and editing, sequence binding, selection, property inspection, and undo/redo.
+- Added Smooth, Linear, Ease In, Ease Out, Ease In/Out, Hold, Hermite, and Cubic Bezier camera interpolation.
+- Added MP4 and PNG-sequence export progress, cancellation, finalization, output-path validation, and clear-frame retry handling.
+- Added D3D11 and D3D12 framebuffer capture paths. D3D12 supports SSAA 1x/2x; D3D11 uses the stable 1x path.
+- Added export-time scene readiness checks, camera-driven observer/chunk tracking, and stable-frame warm-up after fast movement or dimension changes.
+
+### Changed
+
+- Flattened the source tree into recording, replay, editor, state, keyframe, exporting, visuals, runtime, packet, and I/O domains.
+- Made every recorded dimension change an interpolation boundary. Camera curves never connect across a dimension transition, including when an intermediate dimension has no keyframes.
+- Made paused replay use the freely movable observer camera, while active keyframe preview/export uses the sampled timeline camera.
+- Unified entity rendering around one sampled pose per frame and temporarily suppresses native movement interpolation during export rendering.
+- Set the product version to `0.2.0` and the MC 26.10 release identifier to `v0.2.0-mc26.10`.
+
+### Fixed
+
+- Fixed preview and export stalls when entering, revisiting, or leaving dimensions.
+- Fixed forced-snapshot reader boundaries being considered export-ready before the next replay chunk was applied.
+- Fixed camera paths loading or capturing the wrong chunk region during fast movement and cross-dimension export.
+- Fixed high-speed player ghosting caused by native and replay render paths observing different interpolated positions.
+- Fixed free-camera translation stutter, pause rebound, third-person offsets, mouse grab/release loops, and unnecessary pause-time server teleports.
+- Fixed raw camera FOV units, D3D11 supersampling fallback, D3D12 clear-frame recovery, and SSAA values above the stable 2x limit.
+
+### Known Limitations
+
+- Video export does not include audio.
+- Editor projects are currently in-memory only and are not persisted between replay sessions.
+- Camera regions must exist in recorded replay data; Playback cannot reconstruct chunks that were never recorded.
+- Old replays whose forced dimension snapshots contain no chunks use a compatibility path until their timeline chunk packets arrive.
+
 ## [0.1.2-mc26.10] - 2026-08-03
 
 ### Breaking Changes
@@ -64,6 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
+[0.2.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.1.2-mc26.10...v0.2.0-mc26.10
 [0.1.2-mc26.10]: https://github.com/wo55555/Playback/compare/v0.1.1-mc26.10...v0.1.2-mc26.10
 [0.1.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.1.0-alpha.2...v0.1.1-mc26.10
 [0.1.0-alpha.2]: https://github.com/wo55555/Playback/compare/v0.1.0-alpha.1...v0.1.0-alpha.2

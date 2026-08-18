@@ -98,7 +98,7 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
     summary.path     = entry.path();
     summary.replayId = entry.path().filename().string();
 
-    // 鍚嶇О闄嶇骇绛栫暐锛氳鍙栦笉鍒板厓鏁版嵁鍚嶇О锛堢己鏂囦欢銆佸悕涓虹┖鎴栭粯璁ゅ崰浣嶇锛夋椂锛屼娇鐢ㄦ枃浠跺悕锛堜笉鍚墿灞曞悕锛変綔涓哄悕绉般€?
+    // Falls back to the filename when replay metadata has no usable name.
     std::string const fileStem = entry.path().stem().string();
 
     std::error_code ec;
@@ -161,8 +161,6 @@ void sortWithDirection(std::vector<ReplaySummary>& replays, Compare compare, boo
     });
 }
 
-// 鐢ㄦ柊鍐呭鏇挎崲 zip
-// 褰掓。涓殑鎸囧畾鏉＄洰锛堝氨鍦颁慨鏀癸紝涓嶅奖鍝嶅叾浠栨潯鐩級銆?
 bool updateZipEntry(
     std::filesystem::path const& archivePath,
     std::string const&           entryName,
@@ -209,7 +207,6 @@ bool updateZipEntry(
     return true;
 }
 
-// 鍘绘帀寮€澶?缁撳熬绌虹櫧锛屽苟杩囨护鏂囦欢鍚嶉潪娉曞瓧绗︺€?
 std::string sanitizeReplayName(std::string_view input) {
     std::string const cleanedRaw(input);
     auto const        first = cleanedRaw.find_first_not_of(" \t\r\n");
@@ -430,7 +427,6 @@ bool ReplayLibrary::deleteReplay(ReplaySummary const& replay, std::string& error
 }
 
 bool ReplayLibrary::showInFolder(ReplaySummary const& replay) {
-    // 浣跨敤缁濆璺緞锛岄伩鍏嶇浉瀵硅矾寰勪笅璧勬簮绠＄悊鍣ㄦ棤娉曞畾浣嶆枃浠躲€?
     std::error_code ec;
     auto const      path = std::filesystem::absolute(replay.path, ec);
     if (ec) return false;
@@ -447,7 +443,6 @@ bool ReplayLibrary::showInFolder(ReplaySummary const& replay) {
         SW_SHOWNORMAL
     ));
 
-    // 鏂囦欢瀹氫綅澶辫触鏃讹紝鍥為€€涓虹洿鎺ユ墦寮€鐖剁洰褰曘€?
     if (result <= 32) {
         return reinterpret_cast<intptr_t>(
                    ShellExecuteW(nullptr, L"open", wparent.c_str(), nullptr, nullptr, SW_SHOWNORMAL)
@@ -466,7 +461,6 @@ bool ReplayLibrary::renameReplay(ReplaySummary const& replay, std::string_view n
         return false;
     }
 
-    // 1. 璇诲彇褰掓。鍐呭厓鏁版嵁骞舵洿鏂板悕绉板瓧娈碉紱澶辫触鍒欎腑姝€?
     auto const metadata = readZipEntry(replay.path, "metadata.json", MaxReplayMetadataBytes);
     if (!metadata.has_value()) {
         error = "playback.replayBrowser.error.renameMissingMetadata"_tr();
@@ -487,7 +481,6 @@ bool ReplayLibrary::renameReplay(ReplaySummary const& replay, std::string_view n
         return false;
     }
 
-    // 2. 閲嶅懡鍚嶇墿鐞嗘枃浠讹紱澶辫触鏃跺洖婊氬厓鏁版嵁鍐欏叆銆?
     auto const newPath = replay.path.parent_path() / (name + ".playback");
     if (newPath != replay.path) {
         std::error_code ec;

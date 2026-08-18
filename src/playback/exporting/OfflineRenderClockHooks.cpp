@@ -7,7 +7,6 @@
 #include "playback/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
-#include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/IClientInstance.h"
 #include "mc/client/game/MinecraftGame.h"
@@ -17,7 +16,6 @@
 #include "mc/platform/threading/Mutex.h"
 #include "mc/util/Timer.h"
 
-#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -74,7 +72,11 @@ thread_local std::optional<ActiveRenderSample> gRenderSample;
 
 class ScopedRenderSample {
 public:
-    ScopedRenderSample(visuals::ReplaySampleTime time, OfflineRenderClockToken token = {}, uint64_t renderSerial = 0)
+    explicit ScopedRenderSample(
+        visuals::ReplaySampleTime time,
+        OfflineRenderClockToken   token        = {},
+        uint64_t                  renderSerial = 0
+    )
     : mPrevious(gRenderSample),
       mHadPrevious(gRenderSample.has_value()) {
         gRenderSample = ActiveRenderSample{time, token, renderSerial};
@@ -377,15 +379,6 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
     if (!gHookInstalled.load(std::memory_order_acquire)) return OfflineRenderClockPublishResult::Unavailable;
 
     auto const cameraSample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample.replayTime);
-    std::optional<replay::ReplayCameraViewpoint> cameraViewpoint;
-    if (cameraSample) {
-        cameraViewpoint = replay::ReplayCameraViewpoint{
-            cameraSample->state.x,
-            cameraSample->state.y,
-            cameraSample->state.z,
-        };
-    }
-    replay::ReplaySession::getInstance().setExportCameraViewpoint(cameraViewpoint);
     if (cameraSample && !editor::graphics::isCameraRenderInstalled())
         return OfflineRenderClockPublishResult::Unavailable;
     auto const cameraAppliedFlag =
@@ -408,11 +401,13 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
                 sample.frameIndex,
             }
         );
-        gActiveSample                 = ActiveClockSample{token, sample};
-        gActiveSample->cameraContext  = cameraContext;
-        gActiveSample->cameraRequired = cameraSample.has_value();
+        ActiveClockSample active{};
+        active.token          = token;
+        active.sample         = sample;
+        active.cameraContext  = cameraContext;
+        active.cameraRequired = cameraSample.has_value();
+        gActiveSample         = std::move(active);
     }
-
     bool logSample = sample.frameIndex == 0 || sample.frameIndex % 60 == 0;
     if (logSample) {
         auto previous = gLastCameraSampleLoggedFrame.load(std::memory_order_acquire);

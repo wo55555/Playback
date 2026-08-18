@@ -3,6 +3,8 @@
 #include "playback/action/Action.h"
 #include "playback/replay/ReplaySession.h"
 
+#include "mc/network/MinecraftPacketIds.h"
+
 #include <cstdint>
 #include <format>
 #include <stdexcept>
@@ -137,6 +139,45 @@ std::vector<PlaybackSerializedGamePacket> ReplayReader::readConfigurationPackets
         }
         mStream.mReadPointer = savedReadPointer;
         return packets;
+    } catch (...) {
+        mStream.mReadPointer = savedReadPointer;
+        throw;
+    }
+}
+
+std::vector<int> ReplayReader::readDimensionTransitionTickOffsets() {
+    auto const savedReadPointer = mStream.mReadPointer;
+    mStream.mReadPointer        = mActionsOffset;
+
+    std::vector<int> transitionTicks;
+    int              currentTick = 0;
+    try {
+        while (mStream.mReadPointer < mStream.getWritePointer()) {
+            auto const actionId = mStream.getVarInt().value();
+            auto const actionIt = mActionMap.find(actionId);
+            if (actionIt == mActionMap.end()) {
+                throw std::runtime_error(std::format("Unknown replay action id: {}", actionId));
+            }
+
+            auto const dataSize = mStream.getUnsignedInt().value();
+            if (dataSize > mStream.getWritePointer() - mStream.mReadPointer) {
+                throw std::runtime_error(
+                    std::format("Action {} extends beyond the replay chunk", actionIt->second->name)
+                );
+            }
+
+            if (actionIt->second->name == ActionNextTick::getInstance().name) {
+                ++currentTick;
+            } else if (actionIt->second->name == ActionGamePacket::getInstance().name) {
+                std::string    data(mStream.mView.data() + mStream.mReadPointer, dataSize);
+                PlaybackBuffer packetData(data);
+                auto const     packetId = static_cast<MinecraftPacketIds>(packetData.getVarInt().value());
+                if (packetId == MinecraftPacketIds::ChangeDimension) transitionTicks.emplace_back(currentTick);
+            }
+            mStream.mReadPointer += dataSize;
+        }
+        mStream.mReadPointer = savedReadPointer;
+        return transitionTicks;
     } catch (...) {
         mStream.mReadPointer = savedReadPointer;
         throw;

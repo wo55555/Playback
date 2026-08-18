@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace playback::keyframe {
 
@@ -19,13 +20,22 @@ struct CameraTimelineEvaluation {
 
 class CameraTimelineEvaluator {
 private:
-    state::editing::model::EditorStateExt          mProject;
-    std::optional<std::string>                     mCameraOverride;
-    std::optional<std::string>                     mCameraFallback;
-    bool                                           mHoldLastKeyframe{};
-    std::unordered_map<std::string, KeyframeTrack> mKeyframeTracks;
+    struct CameraTrackSegment {
+        size_t        dimensionSegment{};
+        int           lastTick{};
+        KeyframeTrack track;
+    };
+
+    state::editing::model::EditorStateExt                            mProject;
+    std::optional<std::string>                                       mCameraOverride;
+    std::optional<std::string>                                       mCameraFallback;
+    bool                                                             mHoldLastKeyframe{};
+    std::vector<int>                                                 mDimensionTransitionTicks;
+    std::unordered_map<std::string, std::vector<CameraTrackSegment>> mKeyframeTracks;
 
 private:
+    [[nodiscard]] size_t dimensionSegmentForTick(long double tick) const noexcept;
+
     [[nodiscard]] state::editing::model::CameraEntity const* cameraForTick(int64_t tick) const;
 
     [[nodiscard]] std::optional<CameraRenderState>
@@ -35,9 +45,10 @@ private:
 public:
     explicit CameraTimelineEvaluator(
         state::editing::model::EditorStateExt project,
-        std::optional<std::string>            cameraOverride   = std::nullopt,
-        std::optional<std::string>            cameraFallback   = std::nullopt,
-        bool                                  holdLastKeyframe = false
+        std::optional<std::string>            cameraOverride           = std::nullopt,
+        std::optional<std::string>            cameraFallback           = std::nullopt,
+        bool                                  holdLastKeyframe         = false,
+        std::vector<int>                      dimensionTransitionTicks = {}
     );
 
     [[nodiscard]] std::optional<CameraTimelineEvaluation>

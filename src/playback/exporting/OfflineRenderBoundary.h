@@ -8,7 +8,6 @@
 #include "playback/runtime/ClientTickHooks.h"
 
 #include <chrono>
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -84,6 +83,7 @@ public:
 private:
     [[nodiscard]] int                                     targetTick(ExportFramePlan const& frame) const;
     [[nodiscard]] std::optional<OfflineRenderClockSample> clockSample(ExportFramePlan const& frame) const;
+    void                                                  updateExportCamera(ExportFramePlan const& frame);
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
     [[nodiscard]] bool                                    warmupComplete() const;
     [[nodiscard]] bool recoverDownloadFailure(FrameDownloadQueueStatus const& status);
@@ -113,6 +113,7 @@ private:
     std::chrono::steady_clock::time_point          mWarmupLastLoggedAt{};
     bool                                           mTickGateOpen{};
     bool                                           mTickGateSuspendedForDimension{};
+    bool                                           mCameraSampleActive{};
     bool                                           mTimelineInitialized{};
     bool                                           mInitializationTickObserved{};
     OfflineRenderBoundaryState                     mState{OfflineRenderBoundaryState::Closed};

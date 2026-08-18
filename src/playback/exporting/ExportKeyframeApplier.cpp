@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/keyframe/CameraTimelineEvaluator.h"
+#include "playback/replay/ReplaySession.h"
 
 #include <utility>
 
@@ -20,8 +21,14 @@ void ExportKeyframeApplier::configure(
     }
     size_t keyframeCount = 0;
     for (auto const& camera : project.cameras) keyframeCount += camera.keysByTick.size();
-    mTimeline =
-        std::make_shared<keyframe::CameraTimelineEvaluator>(project, std::nullopt, std::move(cameraFallback), true);
+    auto dimensionTransitionTicks = replay::ReplaySession::getInstance().getDimensionTransitionTicks();
+    mTimeline                     = std::make_shared<keyframe::CameraTimelineEvaluator>(
+        project,
+        std::nullopt,
+        std::move(cameraFallback),
+        true,
+        std::move(dimensionTransitionTicks)
+    );
     keyframe::publishCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline);
     auto& logger = Playback::getInstance().getSelf().getLogger();
     logger.info("Export camera pose timeline ready (cameras={}, keyframes={})", project.cameras.size(), keyframeCount);

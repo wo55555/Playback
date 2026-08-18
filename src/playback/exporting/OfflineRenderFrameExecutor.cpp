@@ -353,7 +353,7 @@ bool OfflineRenderFrameExecutor::isUiStable() const {
     auto& replay = replay::ReplaySession::getInstance();
     return client && replay.isActive() && replay.hasJoinedReplayWorld() && !replay.isDimensionTransitionPending()
         && client->isInWorldAndNotShowingAnyMenuScreens() && !client->isShowingLoadingScreen()
-        && !client->isShowingProgressScreen();
+        && !client->isShowingProgressScreen() && !client->isShowingWorldProgressScreen();
 }
 
 void OfflineRenderFrameExecutor::fail(std::string message) { mMessage = std::move(message); }

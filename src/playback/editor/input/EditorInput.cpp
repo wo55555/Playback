@@ -89,7 +89,6 @@ unsigned textCharacter(uint32_t keyCode, bool shift, bool capsLock) {
     }
 }
 
-// Map Windows VK code 鈫?ImGuiKey
 ImGuiKey vkToImGuiKey(uint32_t vk) {
     if (vk >= 'A' && vk <= 'Z') {
         return static_cast<ImGuiKey>(static_cast<int>(ImGuiKey_A) + (vk - 'A'));

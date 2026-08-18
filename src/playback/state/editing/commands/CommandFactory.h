@@ -46,7 +46,7 @@ public:
     static std::unique_ptr<model::IEditCommand>
     createSetSubActorDetails(const std::string& id, model::AgentDetails details);
 
-    // 鈹€鈹€ Clip commands 鈹€鈹€
+    // Clip commands
     static std::unique_ptr<model::IEditCommand>
     createSplitClip(const std::string& trackId, const std::string& clipId, int atTick);
 
@@ -58,7 +58,7 @@ public:
     static std::unique_ptr<model::IEditCommand>
     createMoveClip(const std::string& trackId, const std::string& clipId, int newTrackTick);
 
-    // 鈹€鈹€ Transition commands 鈹€鈹€
+    // Transition commands
     static std::unique_ptr<model::IEditCommand> createAddTransition(
         const std::string&    fromClipId,
         const std::string&    toClipId,
@@ -66,7 +66,7 @@ public:
         int                   durationTicks
     );
 
-    // 鈹€鈹€ Track commands 鈹€鈹€
+    // Track commands
     static std::unique_ptr<model::IEditCommand> createAddTrack(model::TrackKind kind, const std::string& name);
 
     static std::unique_ptr<model::IEditCommand> createRemoveTrack(const std::string& trackId);

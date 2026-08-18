@@ -174,7 +174,7 @@ bool remapRecordedPlayerReferences(
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
         bool  changed   = addPlayer.mEntityId->rawID == sourceUniqueId.rawID
-                    || addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
+                       || addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
         for (auto& link : *addPlayer.mLinks) {
             changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
             changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
@@ -755,7 +755,6 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
         return SnapshotCaptureResult::Failed;
     }
 
-    // Parallel column serialization
     size_t const       numColumns = columns.size();
     unsigned int const numThreads = std::max(1u, std::thread::hardware_concurrency());
     size_t const       batchSize  = std::max(size_t{1}, (numColumns + numThreads - 1) / numThreads);
@@ -937,7 +936,6 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
         );
     }
 
-    // Collect results from all batches
     std::vector<std::shared_ptr<LevelChunkPacket>> levelChunks;
     std::vector<std::shared_ptr<SubChunkPacket>>   subChunkPackets;
     levelChunks.reserve(columns.size());
@@ -1426,7 +1424,6 @@ bool Recorder::writeEntityMovements() {
             auto& action = ActionMoveEntities::getInstance();
             writer.startAction(action);
             writer.mStream.writeVarInt(0, nullptr, nullptr);
-            writer.mStream.writeVarInt(1, nullptr, nullptr);
             writer.mStream.writeVarInt(static_cast<int>(changed.size()), nullptr, nullptr);
             for (auto const& movement : changed) {
                 writer.mStream.writeVarInt64(movement.id.rawID, nullptr, nullptr);

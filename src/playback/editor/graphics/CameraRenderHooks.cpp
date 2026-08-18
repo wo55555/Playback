@@ -603,8 +603,7 @@ LL_TYPE_INSTANCE_HOOK(
 
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (context) {
-        // Preview/export render the camera exactly from the timeline pose (smooth; no per-frame
-        // observer teleport round-trip).
+        // Timeline cameras bypass vanilla observer interpolation.
         if (context->source == keyframe::CameraTimelineSource::Export) {
             (void)applyCameraEcs(*context);
         }

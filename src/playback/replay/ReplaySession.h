@@ -78,6 +78,8 @@ struct ReplayCameraViewpoint {
     float x{};
     float y{};
     float z{};
+    float pitch{};
+    float yaw{};
 };
 
 class ReplaySession {
@@ -179,6 +181,9 @@ private:
     ::Vec3                                      mLastObserverPreviewFeet{};
     ::Vec2                                      mLastObserverPreviewRotation{};
     std::optional<ChunkPos>                     mLastObserverServerSyncChunk;
+    bool                                        mObserverServerPositionDirty{};
+    std::atomic<uint64_t>                       mObserverServerSyncEpoch{0};
+    std::atomic<uint64_t>                       mObserverServerSyncSequence{0};
     std::optional<int>                          mReplayTime;
     std::optional<DimensionType>                mPendingReplayDimension;
     std::optional<PendingSnapshotApply>         mPendingSnapshotApply;
@@ -204,6 +209,7 @@ private:
 
     std::vector<std::unique_ptr<ReplayReader>>                  mReaders;
     std::vector<PlaybackSnapshotContext>                        mSnapshotContexts;
+    std::vector<int>                                            mDimensionTransitionTicks;
     std::vector<std::string>                                    mChunkPackets;
     std::unordered_map<size_t, std::vector<int>>                mInlineLevelChunkPacketIndices;
     std::unordered_map<size_t, std::vector<int>>                mInlineSubChunkPacketIndices;
@@ -314,6 +320,10 @@ private:
 
     void beginSeek(int targetTick);
 
+    [[nodiscard]] bool hasPendingReplayReaderBoundary() const;
+
+    [[nodiscard]] bool advanceReplayReader(bool stopAtEnd);
+
     [[nodiscard]] bool advanceReplayTick(bool stopAtEnd);
 
 public:
@@ -358,6 +368,10 @@ public:
 
     [[nodiscard]] int getTotalTicks() const;
 
+    [[nodiscard]] std::vector<int> const& getDimensionTransitionTicks() const noexcept {
+        return mDimensionTransitionTicks;
+    }
+
     [[nodiscard]] float getPlaybackSpeed() const { return mPlaybackSpeed; }
 
     void adjustPlaybackSpeed(int direction);
@@ -367,6 +381,8 @@ public:
     [[nodiscard]] bool beginExportTimeline(int startTick);
 
     void setExportCameraViewpoint(std::optional<ReplayCameraViewpoint> viewpoint) noexcept;
+
+    void updateExportObserver(ReplayCameraViewpoint const& viewpoint);
 
     [[nodiscard]] ReplaySceneReadiness getSceneReadiness() const;
 
