@@ -31,16 +31,17 @@ LL_TYPE_INSTANCE_HOOK(
     return origin(std::move(onConfirm));
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    PlaybackCanRenderHook,
-    ll::memory::HookPriority::Highest,
-    MinecraftGame,
-    &MinecraftGame::_canRender,
-    bool
-) {
-    if (exporting::isExportActivityActive()) return true;
-    return origin();
-}
+// TODO: Find alternative function
+// LL_TYPE_INSTANCE_HOOK(
+//     PlaybackCanRenderHook,
+//     ll::memory::HookPriority::Highest,
+//     MinecraftGame,
+//     &MinecraftGame::_canRender,
+//     bool
+// ) {
+//     if (exporting::isExportActivityActive()) return true;
+//     return origin();
+// }
 
 LL_TYPE_INSTANCE_HOOK(
     PlaybackFocusStateHook,
@@ -68,14 +69,16 @@ bool hookIdleDetection(bool enable) {
     auto installAll    = [&] {
         if (!state.warning) state.warning = PlaybackSuspendWarningModalHook::hook() == 0;
         if (!state.warning) return false;
-        if (!state.canRender) state.canRender = PlaybackCanRenderHook::hook() == 0;
+        // TODO
+        // if (!state.canRender) state.canRender = PlaybackCanRenderHook::hook() == 0;
         if (!state.canRender) return false;
         if (!state.focusState) state.focusState = PlaybackFocusStateHook::hook() == 0;
         return state.focusState;
     };
     auto removeAll = [&] {
         if (state.focusState && PlaybackFocusStateHook::unhook()) state.focusState = false;
-        if (state.canRender && PlaybackCanRenderHook::unhook()) state.canRender = false;
+        // TODO
+        // if (state.canRender && PlaybackCanRenderHook::unhook()) state.canRender = false;
         if (state.warning && PlaybackSuspendWarningModalHook::unhook()) state.warning = false;
         return noneInstalled();
     };

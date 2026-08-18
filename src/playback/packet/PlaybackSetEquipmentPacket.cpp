@@ -9,6 +9,8 @@
 
 #include <utility>
 
+NetworkItemStackDescriptor& NetworkItemStackDescriptor::operator=(class NetworkItemStackDescriptor const&) = default;
+
 namespace playback::packet {
 
 PlaybackSetEquipmentPacket::PlaybackSetEquipmentPacket(Actor const& actor, ActorRuntimeID runtimeId, int selectedSlot)

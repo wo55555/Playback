@@ -10,11 +10,11 @@
 #include "ll/api/service/TargetedBedrock.h"
 #include "ll/api/thread/ServerThreadExecutor.h"
 
+#include "mc-external/IOptionRegistry.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
-#include "mc/client/options/IOptions.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
@@ -72,7 +72,6 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
-
 
 #include "snappy.h"
 #include "uuid.h"
@@ -1545,8 +1544,8 @@ bool ReplaySession::ensureReplayDimension(
         "Replay dimension transition generation {} started at tick {} from dimension {} to {}",
         generation,
         mCurrentTick,
-        sourceDimension.id,
-        target.id
+        sourceDimension.mValue,
+        target.mValue
     );
     ll::thread::ServerThreadExecutor::getDefault().execute([request,
                                                             generation,
@@ -1667,7 +1666,7 @@ void ReplaySession::processPendingDimensionTransition() {
             std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
             static_cast<int>(status),
             playerAvailable,
-            playerAvailable ? mReplayPlayer->getDimensionId().id : 0,
+            playerAvailable ? mReplayPlayer->getDimensionId().mValue : 0,
             dimensionMatches,
             waitingForAcknowledgment,
             loadingScreenVisible,
@@ -1713,7 +1712,7 @@ void ReplaySession::processPendingDimensionTransition() {
             "Replay dimension transition generation {} reached dimension {} but its client acknowledgment remains "
             "pending; continuing after the fallback grace period",
             mDimensionTransitionRequest->generation,
-            mPendingReplayDimension->id
+            mPendingReplayDimension->mValue
         );
     }
 
@@ -1727,7 +1726,7 @@ void ReplaySession::processPendingDimensionTransition() {
             "Replay dimension transition generation {} reached dimension {} while the loading screen remains "
             "visible; resuming destination snapshot injection (readyToRender={})",
             mDimensionTransitionRequest->generation,
-            mPendingReplayDimension->id,
+            mPendingReplayDimension->mValue,
             readyToRender
         );
     }
@@ -1747,7 +1746,7 @@ void ReplaySession::completeReplayDimensionTransition() {
         "Replay dimension transition generation {} completed at tick {} in dimension {} after {} ms",
         completedGeneration,
         mCurrentTick,
-        mReplayPlayer->getDimensionId().id,
+        mReplayPlayer->getDimensionId().mValue,
         elapsed.count()
     );
     mReplayDimension.store(&mReplayPlayer->getDimension(), std::memory_order_release);
@@ -3283,7 +3282,7 @@ void ReplaySession::configureReplayDimension(DimensionArguments& arguments) cons
     auto profile = mReplayDimensionProfile.load(std::memory_order_acquire);
     if (!profile || arguments.mDerived->mLevel.getLevelId() != profile->levelId) return;
 
-    auto const dimensionId = arguments.mDimId->id;
+    auto const dimensionId = arguments.mDimId->mValue;
     auto const range       = profile->heightRanges.find(dimensionId);
     if (range == profile->heightRanges.end()) return;
 

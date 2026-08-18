@@ -1,0 +1,375 @@
+#include "mc-external/IOptionReader.h"
+#include "mc/client/input/GamePadRemappingLayout.h"
+#include "mc/client/input/KeyboardRemappingLayout.h"
+#include "mc/client/options/AutoUpdateMode.h"
+#include "mc/client/options/DebugHudOptions.h"
+#include "mc/client/options/OptionsObserver.h"
+#include "mc/client/options/RealmsEnvironment.h"
+#include "mc/client/options/SplitScreenDirection.h"
+#include "mc/client/options/XboxSandboxEnvironment.h"
+#include "mc/client/store/DisplayLoggedErrorType.h"
+#include "mc/deps/core/file/PathBuffer.h"
+#include "mc/deps/core/platform/FileStorageDirectory.h"
+#include "mc/deps/scripting/runtime/watchdog/WatchdogSettings.h"
+#include "mc/input/NewInteractionModel.h"
+#include "mc/network/DevConnectionQuality.h"
+#include "mc/options/TargetRenderAPI.h"
+#include "mc/platform/diagnostics/bedrock_log/LogCategory.h"
+#include "mc/scripting/debugger/ScriptDebuggerSettings.h"
+#include "mc/world/events/ClientInstanceEventCoordinator.h"
+
+class OptionSaveDeferral;
+class ChatOptions;
+
+class IOptionRegistry : public IOptionsReader {
+public:
+    IOptionRegistry() = default;
+    virtual ~IOptionRegistry();
+
+    virtual std::shared_ptr<IOptionRegistry>       sharedFromThis();
+    virtual std::shared_ptr<const IOptionRegistry> sharedFromThis() const;
+
+protected:
+    virtual Option& _registerOption(std::unique_ptr<Option>);
+
+public:
+    virtual void               load(Core::PathBuffer<std::string>);
+    virtual void               tickSaveTimer();
+    virtual void               notifySaveAllowed();
+    virtual void               saveIfNeeded();
+    virtual OptionSaveDeferral requestSaveDeferral();
+    virtual void               reset(OptionResetFlags, InputMode);
+    virtual bool               getPrimaryUserStatus() const;
+    virtual void setClientInstanceCoordinator(const Bedrock::NonOwnerPointer<ClientInstanceEventCoordinator>&);
+    virtual bool isValidOption(OptionID) const;
+    virtual gsl::not_null<Option*>       get(OptionID);
+    virtual std::optional<Option*>       getIfValid(OptionID);
+    virtual std::optional<const Option*> getIfValid(OptionID) const;
+    virtual void                         getTelemetryOptions(std::vector<OptionID>&);
+    virtual void                         refreshRenderDistanceLevels();
+    virtual bool                         isLoadInProgress();
+    virtual void                         addObserver(OptionsObserver&);
+    virtual void                         loadOptionsFromString(std::string);
+
+private:
+    enum class SaveRequestMode : int {
+        None,
+        Save           = 1,
+        ForceCloudSave = 2,
+    };
+
+public:
+    virtual void                                              elevateSaveRequestMode(IOptionRegistry::SaveRequestMode);
+    virtual const ChatOptions&                                getChatOptions() const;
+    virtual ChatOptions&                                      getChatOptions();
+    virtual const std::array<std::unique_ptr<Option>, 813UL>& getAllRegisteredOptions();
+    virtual void                                              forEachOption(std::function<void(Option*)>);
+    virtual bool                                              consumeDevOptionsDirty();
+    virtual void                                              dumpOptionsToLogFile() const;
+    virtual void                                              updateInputMode(InputMode);
+    virtual void                                              setMainVolume(float);
+    virtual float                                             getMainVolume() const;
+    virtual void                                              setMusicVolume(float);
+    virtual float                                             getMusicVolume() const;
+    virtual void                                              setSoundVolume(float);
+    virtual float                                             getSoundVolume() const;
+    virtual void                                              setTTSVolume(float);
+    virtual float                                             getTTSVolume() const;
+    virtual float                                             getChatMessageDuration() const;
+    virtual float                                             getToastNotificationDuration() const;
+    virtual void                                              setSensitivity(float, InputMode);
+    virtual float                                             getSensitivity(InputMode) const;
+    virtual void                                              setSpyglassDamping(float, InputMode);
+    virtual float                                             getSpyglassDamping(InputMode) const;
+    virtual void                                              setDwellBeforeDrag(float);
+    virtual float                                             getDwellBeforeDrag() const;
+    virtual void                                              setStackSplittingTrigger(float);
+    virtual float                                             getStackSplittingTrigger() const;
+    virtual float                                             getGameSensitivity(InputMode) const;
+    virtual void                    setFileStorageLocation(FileStorageDirectory, std::function<void(bool)>);
+    virtual FileStorageDirectory    getFileStorageLocation() const;
+    virtual bool                    getInvertYMouse(InputMode) const;
+    virtual int                     getViewDistanceChunks() const;
+    virtual int                     getDefaultViewDistanceChunks(GraphicsMode) const;
+    virtual int                     getMaxViewDistanceChunksRaw() const;
+    virtual float                   getParticleViewDistance() const;
+    virtual bool                    getBobView() const;
+    virtual float                   getDamageBobStrength() const;
+    virtual bool                    getCameraShake() const;
+    virtual bool                    getHideEndFlash() const;
+    virtual bool                    getIsDitheringEnabledBlocks() const;
+    virtual bool                    getIsDitheringEnabledMobs() const;
+    virtual void                    setResetPlayerAlignment(bool);
+    virtual bool                    getResetPlayerAlignment() const;
+    virtual TargetRenderAPI         getTargetRenderAPI() const;
+    virtual bool                    getTransparentLeaves() const;
+    virtual bool                    getFancyBubbles() const;
+    virtual bool                    getSmoothLighting() const;
+    virtual bool                    getGuiAccessibilityScaling() const;
+    virtual bool                    getRayTracing() const;
+    virtual bool                    getDeferred() const;
+    virtual int                     getGraphicsQualityPresetMode() const;
+    virtual int                     getDeferredTargetFrameRate() const;
+    virtual bool                    getUseMouseForDigging() const;
+    virtual bool                    isLeftHanded() const;
+    virtual bool                    isHotbarOnlyTouch() const;
+    virtual bool                    getDestroyVibration(InputMode) const;
+    virtual bool                    getSplitVibration(InputMode) const;
+    virtual bool                    getAutoJump(InputMode) const;
+    virtual void                    setFullscreen(bool);
+    virtual bool                    getFullscreen() const;
+    virtual void                    toggleFullscreen();
+    virtual GamePadRemappingLayout& getGamePadRemapping();
+    virtual std::shared_ptr<KeyboardRemappingLayout> getCurrentKeyboardRemapping() const;
+    virtual std::shared_ptr<KeyboardRemappingLayout> getKeyboardRemappingByType(KeyboardType) const;
+    virtual void                                     setLanguage(const std::string&);
+    virtual std::string                              getLanguage() const;
+    virtual void                                     setDifficulty(int);
+    virtual void                                     setHideGUI(bool);
+    virtual bool                                     getHideHud() const;
+    virtual bool                                     getHideHand() const;
+    virtual void                                     setHideToolTips(bool);
+    virtual bool                                     getHideToolTips() const;
+    virtual void                                     setHidePaperDoll(bool);
+    virtual bool                                     getHidePaperDoll() const;
+    virtual void                                     setIngamePlayerNames(bool);
+    virtual bool                                     getIngamePlayerNames() const;
+    virtual void                                     setSplitscreenIngamePlayerNames(bool);
+    virtual bool                                     getSplitscreenIngamePlayerNames() const;
+    virtual void                                     setInterfaceOpacity(float);
+    virtual float                                    getInterfaceOpacity() const;
+    virtual void                                     setSplitscreenInterfaceOpacity(float);
+    virtual float                                    getSplitscreenInterfaceOpacity() const;
+    virtual void                                     setShowAutoSaveIcon(bool);
+    virtual bool                                     getShowAutoSaveIcon() const;
+    virtual void                                     setSplitscreenDirection(int);
+    virtual SplitScreenDirection                     getSplitscreenDirection() const;
+    virtual void                                     setHideScreens(bool);
+    virtual bool                                     getHideScreens() const;
+    virtual void                                     setHideItemInHand(bool);
+    virtual bool                                     getHideItemInHand() const;
+    virtual bool                                     getScreenAnimations() const;
+    virtual void                                     setPlayerViewPerspective(int);
+    virtual int                                      getPlayerViewPerspective() const;
+    virtual void                                     setForceUseUnsortedPolys(bool);
+    virtual bool                                     getForceUseUnsortedPolys() const;
+    virtual void                                     setRenderDebug(DebugHudOptions);
+    virtual DebugHudOptions                          getRenderDebug() const;
+    virtual bool                                     getRemoteImguiEnabled() const;
+    virtual void                                     setRemoteImguiEnabled(bool);
+    virtual float                                    getGamma() const;
+    virtual void                                     setMSAA(int);
+    virtual void                                     setTexelAA(bool);
+    virtual void                                     setFixedCamera(bool);
+    virtual bool                                     getFixedCamera() const;
+    virtual void                                     setSkinId(const std::string&);
+    virtual const std::string&                       getSkinId() const;
+    virtual void                                     setLastCustomSkinId(const std::string&);
+    virtual const std::string&                       getLastCustomSkinId() const;
+    virtual void                                     setRecentSkinIds(const std::vector<std::string>&);
+    virtual const std::vector<std::string>&          getRecentSkinIds();
+    virtual bool                                     getFovToggle() const;
+    virtual void                                     setServerVisible(bool);
+    virtual bool                                     getServerVisible() const;
+    virtual void                                     setSplitControls(bool);
+    virtual bool                                     getSplitControls() const;
+    virtual bool                                     getSwapJumpAndSneak() const;
+    virtual bool                                     getFancySkies() const;
+    virtual void                                     setRenderClouds(bool);
+    virtual bool                                     getRenderClouds() const;
+    virtual bool                                     getDevAutoLoadLevel() const;
+    virtual bool                                     getDevAssertionsDebugBreak() const;
+    virtual bool                                     getDevAssertionsShowDialog() const;
+    virtual bool                                     getDevShowDisplayLoggedError() const;
+    virtual bool                                     getDevShowDisplayLoggedError(DisplayLoggedErrorType) const;
+    virtual void                                     setDevShowDevConsoleButton(bool);
+    virtual bool                                     getDevShowDevConsoleButton() const;
+    virtual bool                                     getDevIgnoreUserInput() const;
+    virtual bool                                     getDevDisplayTreatmentPanel() const;
+    virtual void                                     setDevDisplayTreatmentPanel(bool);
+    virtual void                                     setDevShowMinecraftTCUIReplacement(bool);
+    virtual bool                                     getDevShowMinecraftTCUIReplacement() const;
+    virtual bool                                     getDevCreateRealmWithoutPurchase() const;
+    virtual bool                                     getDevDisableConnectedStoragePush() const;
+    virtual bool                                     getDevDisableConnectedStoragePull() const;
+    virtual void                                     setDevFindMobs(bool);
+    virtual bool                                     getDevFindMobs() const;
+    virtual void                                     setDevRenderBoundingBoxes(bool);
+    virtual void                                     setDevRenderPaths(bool);
+    virtual void                                     setDevRenderMobInfoState(bool);
+    virtual void                                     setDevRenderGoalState(bool);
+    virtual void                                     setDevRenderSchedulerInfo(bool);
+    virtual void                                     setDevRenderCoordinateSystems(bool);
+    virtual bool                                     getDevRenderCoordinateSystems() const;
+    virtual bool                                     getDevResetClientId() const;
+    virtual void                                     setDevLogFlushImmediate(bool);
+    virtual bool                                     getDevLogFlushImmediate() const;
+    virtual void                                     setDevLogTimestamp(bool);
+    virtual bool                                     getDevLogTimestamp() const;
+    virtual void                                     setDevLogTrace(bool);
+    virtual bool                                     getDevLogTrace() const;
+    virtual void                                     setDevLogArea(bool);
+    virtual bool                                     getDevLogArea() const;
+    virtual void                                     setDevLogPriority(bool);
+    virtual bool                                     getDevLogPriority() const;
+    virtual void                                     setDevLogThread(bool);
+    virtual bool                                     getDevLogThread() const;
+    virtual void                                     setDevLogAppend(bool);
+    virtual bool                                     getDevLogAppend() const;
+    virtual void                                     setDevLogProcessId(bool);
+    virtual bool                                     getDevLogProcessId() const;
+    virtual void                                     setDevLogThreadId(bool);
+    virtual bool                                     getDevLogThreadId() const;
+    virtual void                                     setDevLogMessageId(bool);
+    virtual bool                                     getDevLogMessageId() const;
+    virtual void                                     setDevLogSilentLogging(bool);
+    virtual bool                                     getDevLogSilentLogging() const;
+    virtual void                                     setDevLogPriorityFilter(const std::string&);
+    virtual const std::string&                       getDevLogPriorityFilter() const;
+    virtual void                                     setDevLogAreaFilter(const std::string&);
+    virtual const std::string&                       getDevLogAreaFilter() const;
+    virtual void                                     setDevGameEventRetentionTicks(uint16_t);
+    virtual void                                     setDevDeepDarkDebugRender(bool);
+    virtual bool                                     isLogCategoryEnabled(BedrockLog::LogCategory) const;
+    virtual bool                                     getDevEnableProfilerOutput();
+    virtual bool                                     getDevAddUsersSilently() const;
+    virtual int                                      getDevBenchmarkModeTime();
+    virtual bool                                     getDevDisableClientBlobCache() const;
+    virtual bool                                     getDevClientBlobCacheOnLocalServer() const;
+    virtual void                                     setLogFlushDelay(int);
+    virtual int                                      getLogFlushDelay();
+    virtual int                                      getAutomationParallelSlices() const;
+    virtual int                                      getAutomationParallelCurrentSlice() const;
+    virtual bool                                     getIsAutomationRun() const;
+    virtual bool                                     getShouldQuitAppAfterTesting() const;
+    virtual bool                                     shouldUploadTestArtifacts() const;
+    virtual bool                                     hasAutomationTestRunTimedOut() const;
+    virtual bool                                     hasAutomationTestRunReachedCrashLimit() const;
+    virtual bool                                     shouldAppendDebugLogTimestamp() const;
+    virtual std::string                              getAutomationServerIp() const;
+    virtual std::string                              getAutomationServerPort() const;
+    virtual std::string                              getAutomationArtifactUploadSas() const;
+    virtual std::string                              getAutomationArtifactUploadUrl() const;
+    virtual std::string                              getAutomationRelativeBlobpath() const;
+    virtual std::string                              getAutomationFunctionalTestTags() const;
+    virtual std::string                              getAutomationServerTestTags() const;
+    virtual std::string                              getAutomationUnitTestTags() const;
+    virtual std::string                              getAutomationFunctionalBrokenTestTags() const;
+    virtual std::string                              getAutomationServerBrokenTestTags() const;
+    virtual std::string                              getAutomationUnitBrokenTestTags() const;
+    virtual std::string                              getAutomationTestBuildID() const;
+    virtual std::string                              getAutomationUploadToken() const;
+    virtual std::string                              getAutomationEnabledFeatures() const;
+    virtual std::string                              getAutomationEnabledExperiments() const;
+    virtual bool                                     getAutomationShouldGroupServerTests() const;
+    virtual bool                                     getAutomationUnrandomTestsEnabled() const;
+    virtual bool                                     getAutomationRunEntireServerTestGroup() const;
+    virtual bool                                     getAutomationRunServerTestAfterEachTest() const;
+    virtual const std::string&                       getTestBranchName() const;
+    virtual bool                                     getFunctionalTestBlockInput() const;
+    virtual bool                                     shouldBlockUserInput() const;
+    virtual bool                                     hasSetSafeZone() const;
+    virtual bool                                     getAutomationDisableTreatmentPackDownloads() const;
+    virtual bool                                     getAutomationProfilerCaptureEnabled() const;
+    virtual bool                                     getAutomationProfilerFlipEnabled() const;
+    virtual int                                      getAutomationRepeatCount() const;
+    virtual int                                      getAutomationSoakTestRunDurationMinutes() const;
+    virtual bool                                     getAutomationRerunFailuresOnly() const;
+    virtual int                                      getAutomationUnitPerTestcaseTimeout() const;
+    virtual int                                      getAutomationFunctionalPerTestcaseTimeout() const;
+    virtual int                                      getAutomationServerPerTestcaseTimeout() const;
+    virtual void                                     setAutomationFunctionalBrokenTestTags(const std::string&);
+    virtual void                                     setAutomationUnitBrokenTestTags(const std::string&);
+    virtual void                                     setAutomationUploadToken(const std::string&);
+    virtual bool                                     getDevAchievementsAlwaysEnabled();
+    virtual bool                                     shouldServerTestsLogWorlds() const;
+    virtual bool                                     shouldServerTestsAssertOnLevelDiff() const;
+    virtual std::string                              getAutomationMultiplayerSessionName() const;
+    virtual int                                      getAutomationMultiplayerDeviceIndex() const;
+    virtual std::vector<std::string>                 getAutomationMultiplayerUserAccounts() const;
+    virtual DevConnectionQuality                     getDevConnectionQuality() const;
+    virtual int                                      getDevRenderAttachPos() const;
+    virtual void                                     setMultiPlayerGame(bool);
+    virtual bool                                     getMultiPlayerGame() const;
+    virtual void                                     setXboxLiveVisible(bool);
+    virtual bool                                     wasLoggedInLastSession();
+    virtual void                                     setHasEverLoggedIntoXbl(bool);
+    virtual bool                                     getHasEverLoggedIntoXbl() const;
+    virtual void                                     setHasShownFirstLaunchWelcomeModal(bool);
+    virtual bool                                     getHasShownFirstLaunchWelcomeModal() const;
+    virtual void                                     setHasShownFirstSocialWelcomeModal(bool);
+    virtual bool                                     getHasShownFirstSocialWelcomeModal() const;
+    virtual void                                     setDoNotShowFriendsListFTUE(bool);
+    virtual bool                                     getDoNotShowFriendsListFTUE() const;
+    virtual void                                     setHasShownBannedModalAtStartup(bool);
+    virtual bool                                     getHasShownBannedModalAtStartup() const;
+    virtual void                                     setAcknowledgedAutoSave(bool);
+    virtual bool                                     getAcknowledgedAutoSave() const;
+    virtual void                                     setRealmsInviteShowFriendsOption(bool);
+    virtual bool                                     getRealmsInviteShowFriendsOption() const;
+    virtual void                                     setNumberOfOwnedRealms(int);
+    virtual int                                      getNumberOfOwnedRealms() const;
+    virtual void                                     setNumberOfFriendsRealms(int);
+    virtual int                                      getNumberOfFriendsRealms() const;
+    virtual void                                     setCreateRealmUpsellCount(int);
+    virtual int                                      getCreateRealmUpsellCount() const;
+    virtual void                                     setSaveAndQuitCount(int);
+    virtual int                                      getSaveAndQuitCount() const;
+    virtual void                                     setIsRatingsPromptShown(bool);
+    virtual bool                                     getIsRatingsPromptShown() const;
+    virtual void                                     setShowRealmsTrialButtonFromPlayScreen(bool);
+    virtual bool                                     getShowRealmsTrialButtonFromPlayScreen() const;
+    virtual AutoUpdateMode                           getAutoUpdateMode() const;
+    virtual void                                     setCanUseCellularData(bool);
+    virtual bool                                     getCanUseCellularData() const;
+    virtual void                                     setRequireWebsocketEncryption(bool);
+    virtual bool                                     getRequireWebsocketEncryption() const;
+    virtual void                                     setWebsocketsEnabled(bool);
+    virtual bool                                     getWebsocketsEnabled() const;
+    virtual void                                     setUseIPv6Only(bool);
+    virtual bool                                     getUseIPv6Only() const;
+    virtual void                                     setUseRetailXboxSandbox(const bool);
+    virtual bool                                     getUseRetailXboxSandbox() const;
+    virtual void                                     setXboxLiveSandbox(XboxSandboxEnvironment);
+    virtual const std::string&                       getXboxLiveSandbox() const;
+    virtual void                                     setRealmsEnvironment(RealmsEnvironment);
+    virtual RealmsEnvironment                        getRealmsEnvironment() const;
+    virtual void                                     setRealmsEndpoint(const std::string&);
+    virtual const std::string&                       getRealmsEndpoint() const;
+    virtual const std::string&                       getRealmsV2Endpoint() const;
+    virtual void                                     setRealmsEndpointPayment(const std::string&);
+    virtual const std::string&                       getRealmsEndpointPayment() const;
+    virtual void                                     setRealmsRelyingParty(const std::string&);
+    virtual const std::string&                       getRealmsRelyingParty() const;
+    virtual void                                     setRealmsRelyingPartyPayment(const std::string&);
+    virtual const std::string&                       getRealmsRelyingPartyPayment() const;
+    virtual void                                     setStoreHasPurchasedCoins(bool);
+    virtual bool                                     getStoreHasPurchasedCoins() const;
+    virtual void                                     setShowUnfulfilledPurchaseModal(bool);
+    virtual bool                                     getShowUnfulfilledPurchaseModal() const;
+    virtual void                                     setSwitchCoinDebug(bool);
+    virtual bool                                     getSwitchCoinDebug() const;
+    virtual float                                    getDefaultPlatformSafeZoneX() const;
+    virtual float                                    getDefaultPlatformSafeZoneY() const;
+    virtual bool                                     getServerboundClientDiagnosticsEnabled() const;
+    virtual ScriptDebuggerSettings                   getScriptDebuggerSettings() const;
+    virtual Scripting::WatchdogSettings              getScriptWatchdogSettings() const;
+    virtual void                                     setEduHasLoggedIn(bool);
+    virtual bool                                     getEduHasLoggedIn() const;
+    virtual void                                     setShownPlatformNetworkConnectConfirmation(bool);
+    virtual bool                                     getShownPlatformNetworkConnectConfirmation() const;
+    virtual void                                     setShownPlatformPremiumUpsell(bool);
+    virtual bool                                     getShownPlatformPremiumUpsell() const;
+    virtual void                                     setAppLaunchedCount(int);
+    virtual int                                      getAppLaunchedCount() const;
+    virtual void                                     setEcoMode(bool);
+    virtual bool                                     getEcoMode() const;
+    virtual void                                     setEduCloudBackupToggle(bool);
+    virtual bool                                     getEduCloudBackupToggle() const;
+    virtual void                                     setUseFontOverrides(bool);
+    virtual bool                                     getUseFontOverrides() const;
+    virtual NewInteractionModel                      getEffectiveTouchScheme() const;
+    virtual void                                     setSaveDeferralCount(int);
+    virtual int                                      getSaveDeferralCount() const;
+    virtual void                                     setForceVibrantVisualsDisabled(bool);
+};
