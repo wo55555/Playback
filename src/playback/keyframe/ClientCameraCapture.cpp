@@ -182,7 +182,7 @@ std::optional<CameraRenderState> captureClientCamera() noexcept {
     if (!finite(position)) return std::nullopt;
 
     float const fov = gameCamera && std::isfinite(gameCamera->mFieldOfView) && gameCamera->mFieldOfView > 0.0f
-                        ? gameCamera->mFieldOfView
+                        ? cameraFovDegrees(gameCamera->mFieldOfView)
                         : cameraFovDegrees(camera->mFov);
 
     std::optional<CameraBasis> basis;

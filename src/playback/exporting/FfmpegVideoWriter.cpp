@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -560,6 +561,21 @@ FrameWriterSubmitResult FfmpegVideoWriter::trySubmit(visuals::CapturedFrame& fra
         mImpl->frameWidth  = frame.width;
         mImpl->frameHeight = frame.height;
     } else if (frame.width != mImpl->frameWidth || frame.height != mImpl->frameHeight) {
+        getLogger().error(
+            "FFmpeg export frame dimensions changed (frame={}, expected={}x{}, actual={}x{}, rowPitch={}, format={}, "
+            "source={}x{}, samples={}, resource=0x{:X})",
+            frame.ticket.frameIndex,
+            mImpl->frameWidth,
+            mImpl->frameHeight,
+            frame.width,
+            frame.height,
+            frame.rowPitch,
+            static_cast<int>(frame.pixelFormat),
+            frame.submission.width,
+            frame.submission.height,
+            frame.submission.sampleCount,
+            reinterpret_cast<uintptr_t>(frame.submission.exportResource)
+        );
         mImpl->setFailureLocked(ExportError::InvalidFrame, "Captured frame dimensions changed during export");
         return FrameWriterSubmitResult::Failed;
     }

@@ -1,11 +1,13 @@
 ﻿#include "ReplayMouseHook.h"
 
+#include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
 #include "playback/exporting/ExportActivity.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/input/KeyInputEvent.h"
 #include "ll/api/event/input/MouseInputEvent.h"
+#include "ll/api/memory/Hook.h"
 
 #include "mc/client/game/ClientInstance.h"
 #include "mc/deps/input/Keyboard.h"
@@ -16,6 +18,7 @@
 #include <Windows.h>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -65,10 +68,6 @@ std::atomic<float> gInputScaleY{1.0f};
 std::atomic<float> gCaptureRequestX{};
 std::atomic<float> gCaptureRequestY{};
 
-std::atomic<LONG> gUiCursorScreenX{};
-std::atomic<LONG> gUiCursorScreenY{};
-std::atomic_bool  gUiCursorScreenValid{};
-
 std::mutex               gQueuedEventsMutex;
 std::vector<QueuedEvent> gQueuedEvents;
 ll::event::ListenerPtr   gMouseInputListener;
@@ -80,6 +79,20 @@ std::condition_variable gActiveCallbacksChanged;
 thread_local uint32_t   gCallbackDepth{};
 
 std::mutex gOwnershipMutex;
+
+auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
+
+char const* mouseOwnerName(MouseOwner owner) {
+    switch (owner) {
+    case MouseOwner::Inactive:
+        return "inactive";
+    case MouseOwner::UiReleased:
+        return "uiReleased";
+    case MouseOwner::GameCaptured:
+        return "gameCaptured";
+    }
+    return "unknown";
+}
 
 class ActiveCallback {
 public:
@@ -99,14 +112,35 @@ public:
     ActiveCallback& operator=(ActiveCallback const&) = delete;
 };
 
+LL_TYPE_INSTANCE_HOOK(
+    ReplayMouseGrabHook,
+    ll::memory::HookPriority::Highest,
+    ClientInstance,
+    &ClientInstance::$grabMouse,
+    void
+) {
+    if (input::shouldMCBEConsumeMouse()) origin();
+}
+
 bool replayUiOwnsMouse() {
     return gInstalled.load(std::memory_order_acquire) && gReplayUiActive.load(std::memory_order_acquire)
         && gInputActive.load(std::memory_order_acquire);
 }
 
 void setMouseOwner(MouseOwner owner) {
+    auto const previous = gMouseOwner.load(std::memory_order_acquire);
     input::setGameInputCaptured(owner == MouseOwner::GameCaptured);
     gMouseOwner.store(owner, std::memory_order_release);
+    if (previous != owner) {
+        Playback::getInstance().getSelf().getLogger().debug(
+            "Replay mouse owner changed ({} -> {}, gameCaptured={}, inputActive={}, blockGame={})",
+            mouseOwnerName(previous),
+            mouseOwnerName(owner),
+            owner == MouseOwner::GameCaptured,
+            gInputActive.load(std::memory_order_acquire),
+            gBlockGameMouseInput.load(std::memory_order_acquire)
+        );
+    }
 }
 
 bool isCurrentProcessForeground(HWND* window = nullptr) {
@@ -157,17 +191,9 @@ bool queryUiCursorPosition(float& x, float& y) {
     POINT clientPosition = screenPosition;
     if (!ScreenToClient(window, &clientPosition)) return false;
 
-    gUiCursorScreenX.store(screenPosition.x, std::memory_order_relaxed);
-    gUiCursorScreenY.store(screenPosition.y, std::memory_order_relaxed);
-    gUiCursorScreenValid.store(true, std::memory_order_release);
     x = static_cast<float>(clientPosition.x) * gInputScaleX.load(std::memory_order_relaxed);
     y = static_cast<float>(clientPosition.y) * gInputScaleY.load(std::memory_order_relaxed);
     return true;
-}
-
-void restoreUiCursorPosition() {
-    if (!gUiCursorScreenValid.load(std::memory_order_acquire)) return;
-    SetCursorPos(gUiCursorScreenX.load(std::memory_order_relaxed), gUiCursorScreenY.load(std::memory_order_relaxed));
 }
 
 void handleMouseInput(ll::event::MouseInputEvent& event) {
@@ -201,7 +227,7 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
 
     float      x{};
     float      y{};
-    bool const hasUiPosition = queryUiCursorPosition(x, y);
+    bool const hasUiPosition = !exportActive && queryUiCursorPosition(x, y);
     bool const inGame        = hasUiPosition && !blockGameInput && isGameViewportPoint(x, y);
 
     int const button = getImGuiMouseButton(action);
@@ -266,7 +292,6 @@ void resetOwnershipRequests() {
     gCaptureRequested.store(false, std::memory_order_release);
     gReleaseRequested.store(false, std::memory_order_release);
     gLeftMouseDown.store(false, std::memory_order_release);
-    gUiCursorScreenValid.store(false, std::memory_order_release);
 }
 
 void removeListeners() {
@@ -291,19 +316,25 @@ bool waitForCallbacks() {
 } // namespace
 
 bool hookReplayMouse(bool enable) {
+    static bool grabHookInstalled{};
     if (enable) {
-        if (gInstalled.load(std::memory_order_acquire) && gMouseInputListener && gKeyInputListener) return true;
+        if (gInstalled.load(std::memory_order_acquire) && gMouseInputListener && gKeyInputListener
+            && grabHookInstalled) {
+            return true;
+        }
 
         gInstalled.store(false, std::memory_order_release);
+        if (!grabHookInstalled) grabHookInstalled = ReplayMouseGrabHook::hook() == 0;
         auto& eventBus      = ll::event::EventBus::getInstance();
         gMouseInputListener = eventBus.emplaceListener<ll::event::MouseInputEvent>(&handleMouseInput);
         gKeyInputListener   = eventBus.emplaceListener<ll::event::KeyInputEvent>(&handleKeyInput);
-        if (gMouseInputListener && gKeyInputListener) {
+        if (grabHookInstalled && gMouseInputListener && gKeyInputListener) {
             gInstalled.store(true, std::memory_order_release);
             return true;
         }
 
         removeListeners();
+        if (grabHookInstalled && ReplayMouseGrabHook::unhook()) grabHookInstalled = false;
         input::resetInputState();
         return false;
     }
@@ -316,8 +347,9 @@ bool hookReplayMouse(bool enable) {
     if (gCallbackDepth != 0) return false;
     removeListeners();
     bool const drained = waitForCallbacks();
+    if (grabHookInstalled && ReplayMouseGrabHook::unhook()) grabHookInstalled = false;
     input::resetInputState();
-    return drained;
+    return drained && !grabHookInstalled;
 }
 
 void setReplayMouseInputActive(bool active) {
@@ -344,13 +376,14 @@ void setReplayUIActive(bool active) {
 
 void beginReplayMouseFrame(float displayWidth, float displayHeight, bool blockGameMouseInput) {
     bool const inputWasActive = gInputActive.load(std::memory_order_acquire);
+    bool const exportActive   = exporting::isExportActivityActive();
     gBlockGameMouseInput.store(blockGameMouseInput, std::memory_order_release);
     if (blockGameMouseInput || !inputWasActive) {
         setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
     }
     if (blockGameMouseInput) {
         gCaptureRequested.store(false, std::memory_order_release);
-        gReleaseRequested.store(true, std::memory_order_release);
+        if (!exportActive) gReleaseRequested.store(true, std::memory_order_release);
         gLeftMouseDown.store(false, std::memory_order_release);
         input::setUiKeyboardCaptured(true);
     }
@@ -376,13 +409,26 @@ void beginReplayMouseFrame(float displayWidth, float displayHeight, bool blockGa
             float const clientWidth  = static_cast<float>(clientRect.right - clientRect.left);
             float const clientHeight = static_cast<float>(clientRect.bottom - clientRect.top);
             if (clientWidth > 0.0f && clientHeight > 0.0f) {
-                gInputScaleX.store(displayWidth / clientWidth, std::memory_order_relaxed);
-                gInputScaleY.store(displayHeight / clientHeight, std::memory_order_relaxed);
+                float const scaleX = displayWidth / clientWidth;
+                float const scaleY = displayHeight / clientHeight;
+                float const oldX   = gInputScaleX.exchange(scaleX, std::memory_order_relaxed);
+                float const oldY   = gInputScaleY.exchange(scaleY, std::memory_order_relaxed);
+                if (std::abs(oldX - scaleX) > 0.001f || std::abs(oldY - scaleY) > 0.001f) {
+                    Playback::getInstance().getSelf().getLogger().debug(
+                        "Replay mouse input scale changed (display={}x{}, client={}x{}, scale={}x{})",
+                        displayWidth,
+                        displayHeight,
+                        clientWidth,
+                        clientHeight,
+                        scaleX,
+                        scaleY
+                    );
+                }
             }
         }
     }
 
-    if (focused && gMouseOwner.load(std::memory_order_acquire) != MouseOwner::GameCaptured) {
+    if (focused && !exportActive && gMouseOwner.load(std::memory_order_acquire) != MouseOwner::GameCaptured) {
         float x{};
         float y{};
         if (queryUiCursorPosition(x, y)) io.AddMousePosEvent(x, y);
@@ -411,11 +457,26 @@ void beginReplayMouseFrame(float displayWidth, float displayHeight, bool blockGa
 
 void setReplayGameViewport(float left, float top, float right, float bottom) {
     std::scoped_lock lock(gGameViewportMutex);
+    auto const       previous = gGameViewport;
     if (right <= left || bottom <= top) {
         gGameViewport = {};
-        return;
+    } else {
+        gGameViewport = {left, top, right, bottom};
     }
-    gGameViewport = {left, top, right, bottom};
+    if (previous.left != gGameViewport.left || previous.top != gGameViewport.top
+        || previous.right != gGameViewport.right || previous.bottom != gGameViewport.bottom) {
+        Playback::getInstance().getSelf().getLogger().debug(
+            "Replay game viewport changed (from=({}, {}, {}, {}), to=({}, {}, {}, {}))",
+            previous.left,
+            previous.top,
+            previous.right,
+            previous.bottom,
+            gGameViewport.left,
+            gGameViewport.top,
+            gGameViewport.right,
+            gGameViewport.bottom
+        );
+    }
 }
 
 void endReplayMouseFrame() {
@@ -437,7 +498,15 @@ void updateReplayMouseOwnership(ClientInstance& client) {
         gReleaseRequested.store(false, std::memory_order_release);
         gLeftMouseDown.store(false, std::memory_order_release);
         setMouseOwner(MouseOwner::Inactive);
-        gUiCursorScreenValid.store(false, std::memory_order_release);
+        return;
+    }
+
+    if (exporting::isExportActivityActive()) {
+        gCaptureRequested.store(false, std::memory_order_release);
+        gReleaseRequested.store(false, std::memory_order_release);
+        gLeftMouseDown.store(false, std::memory_order_release);
+        if (client.getMouseGrabbed()) client.releaseMouse();
+        setMouseOwner(MouseOwner::UiReleased);
         return;
     }
 
@@ -448,11 +517,9 @@ void updateReplayMouseOwnership(ClientInstance& client) {
         gReleaseRequested.store(false, std::memory_order_release);
         if (client.getMouseGrabbed()) {
             client.releaseMouse();
-            if (focused) restoreUiCursorPosition();
         }
     } else if (owner == MouseOwner::UiReleased && client.getMouseGrabbed()) {
         client.releaseMouse();
-        if (focused) restoreUiCursorPosition();
     }
 
     if (!focused) {
@@ -469,9 +536,24 @@ void updateReplayMouseOwnership(ClientInstance& client) {
             gCaptureRequestY.load(std::memory_order_relaxed)
         );
     if (shouldCapture) {
+        getLogger().debug(
+            "Replay mouse capture requested (owner={}, focused={}, leftDown={}, request=({}, {}), "
+            "viewportContains={}, grabbedBefore={})",
+            mouseOwnerName(owner),
+            focused,
+            gLeftMouseDown.load(std::memory_order_acquire),
+            gCaptureRequestX.load(std::memory_order_relaxed),
+            gCaptureRequestY.load(std::memory_order_relaxed),
+            isGameViewportPoint(
+                gCaptureRequestX.load(std::memory_order_relaxed),
+                gCaptureRequestY.load(std::memory_order_relaxed)
+            ),
+            client.getMouseGrabbed()
+        );
         gReleaseRequested.store(false, std::memory_order_release);
-        if (!client.getMouseGrabbed()) client.grabMouse();
         setMouseOwner(MouseOwner::GameCaptured);
+        if (!client.getMouseGrabbed()) client.grabMouse();
+        if (!client.getMouseGrabbed()) setMouseOwner(MouseOwner::UiReleased);
         return;
     }
 
@@ -482,9 +564,19 @@ void updateReplayMouseOwnership(ClientInstance& client) {
                                 || gPopupOpen.load(std::memory_order_acquire) || !client.getMouseGrabbed());
     if (!shouldRelease) return;
 
+    getLogger().debug(
+        "Replay mouse release requested (owner={}, focused={}, leftDown={}, releaseRequested={}, "
+        "blockGame={}, popup={}, grabbedBefore={})",
+        mouseOwnerName(owner),
+        focused,
+        gLeftMouseDown.load(std::memory_order_acquire),
+        gReleaseRequested.load(std::memory_order_acquire),
+        gBlockGameMouseInput.load(std::memory_order_acquire),
+        gPopupOpen.load(std::memory_order_acquire),
+        client.getMouseGrabbed()
+    );
     if (client.getMouseGrabbed()) client.releaseMouse();
     setMouseOwner(MouseOwner::UiReleased);
-    if (focused) restoreUiCursorPosition();
 }
 
 } // namespace playback::editor::graphics

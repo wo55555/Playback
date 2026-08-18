@@ -43,6 +43,10 @@ FramePixelFormat pixelFormat(DXGI_FORMAT format) {
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
+bool shouldLogCapture(FrameTapBackendCapture const& capture) {
+    return capture.ticket.frameIndex < 2 || capture.ticket.frameIndex % 60 == 0;
+}
+
 } // namespace
 
 struct D3D12FrameTapBackend::Impl {
@@ -357,7 +361,7 @@ struct D3D12FrameTapBackend::Impl {
                 if (validLayout) {
                     lastByte    += static_cast<uint64_t>(height - 1) * footprint.Footprint.RowPitch;
                     validLayout  = packedRowBytes <= std::numeric_limits<uint64_t>::max() - lastByte
-                               && lastByte + packedRowBytes <= byteCount;
+                                && lastByte + packedRowBytes <= byteCount;
                 }
                 if (!validLayout) {
                     frameTap.fail(capture, FrameTapError::MapFailed, "D3D12 readback footprint is invalid");
@@ -411,8 +415,24 @@ struct D3D12FrameTapBackend::Impl {
                         for (uint32_t y = 0; y < height; ++y) {
                             auto const* source = static_cast<std::byte const*>(mapped) + footprint.Offset
                                                + static_cast<size_t>(y) * footprint.Footprint.RowPitch;
-                            auto* target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
+                            auto*       target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
                             std::memcpy(target, source, frame.rowPitch);
+                        }
+                        if (shouldLogCapture(capture)) {
+                            getLogger().debug(
+                                "D3D12 frame capture completed (capture={}, frame={}, size={}x{}, rowPitch={}, "
+                                "source={}x{}, samples={}, resource=0x{:X}, fence={})",
+                                capture.captureId,
+                                capture.ticket.frameIndex,
+                                frame.width,
+                                frame.height,
+                                footprint.Footprint.RowPitch,
+                                capture.submission.width,
+                                capture.submission.height,
+                                capture.submission.sampleCount,
+                                reinterpret_cast<uintptr_t>(capture.submission.exportResource),
+                                fenceValue
+                            );
                         }
                         frameTap.complete(capture, std::move(frame));
                     }
@@ -559,6 +579,21 @@ bool D3D12FrameTapBackend::capture(
     slot->state              = Impl::SlotState::AwaitingFence;
     auto const slotIndex     = static_cast<size_t>(std::distance(mImpl->slots.begin(), slot));
     mImpl->pendingSubmission = slotIndex;
+    if (shouldLogCapture(*capture)) {
+        getLogger().debug(
+            "D3D12 frame capture bound (capture={}, frame={}, resource=0x{:X}, slot={}, size={}x{}, format={}, "
+            "samples={}, sourceState=0x{:X})",
+            capture->captureId,
+            capture->ticket.frameIndex,
+            reinterpret_cast<uintptr_t>(source),
+            slotIndex,
+            sourceDesc.Width,
+            sourceDesc.Height,
+            static_cast<uint32_t>(sourceDesc.Format),
+            sourceDesc.SampleDesc.Count,
+            sourceState
+        );
+    }
     return true;
 }
 
@@ -644,6 +679,7 @@ bool D3D12FrameTapBackend::captureSubmitted(
         0,
         sourceState,
     };
+    size_t const slotIndex = static_cast<size_t>(std::distance(mImpl->slots.begin(), slot));
 
     auto failSubmission = [&](FrameTapError error, std::string message) {
         slot->capture.reset();
@@ -752,6 +788,23 @@ bool D3D12FrameTapBackend::captureSubmitted(
         slot->fenceValue,
         sourceState,
     };
+    if (shouldLogCapture(*capture)) {
+        getLogger().debug(
+            "D3D12 submitted frame capture queued (capture={}, frame={}, source=0x{:X}, export=0x{:X}, slot={}, "
+            "size={}x{}, samples={}, format={}, sourceState=0x{:X}, fence={})",
+            capture->captureId,
+            capture->ticket.frameIndex,
+            reinterpret_cast<uintptr_t>(source),
+            reinterpret_cast<uintptr_t>(exportTexture),
+            slotIndex,
+            sourceDesc.Width,
+            sourceDesc.Height,
+            sourceDesc.SampleDesc.Count,
+            static_cast<uint32_t>(sourceDesc.Format),
+            sourceState,
+            slot->fenceValue
+        );
+    }
     slot->capture = *capture;
     ID3D12CommandList* commandLists[]{slot->commandList.Get()};
     queue->ExecuteCommandLists(1, commandLists);

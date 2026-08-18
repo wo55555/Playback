@@ -278,11 +278,11 @@ struct ImGuiRenderer::Impl {
         auto const fontPathString = fontPath.string();
         ImFont*    font           = fontPathString.empty() ? nullptr
                                                            : io.Fonts->AddFontFromFileTTF(
-                                                    fontPathString.c_str(),
-                                                    14.0f,
-                                                    nullptr,
-                                                    io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-                                                );
+                                                                 fontPathString.c_str(),
+                                                                 14.0f,
+                                                                 nullptr,
+                                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                                                             );
         if (font) io.FontDefault = font;
         else io.Fonts->AddFontDefault();
         ImFontConfig cfg;
@@ -927,6 +927,8 @@ void ImGuiRenderer::pollFrameCapture() {
     if (mImpl->d3d11Initialized) mImpl->d3d11FrameTap.poll(mImpl->d3d11Context.Get());
 }
 
+bool ImGuiRenderer::isD3D12RendererActive() const { return playback::editor::graphics::isD3D12RendererActive(); }
+
 bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool allowFrameCapture) {
     auto&            p = *mImpl;
     std::scoped_lock lk(p.mutex);
@@ -1210,6 +1212,26 @@ bool ImGuiRenderer::ownsSwapChain(IDXGISwapChain* swapChain) const {
 bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
+        if (exporting::isOfflineRenderActivityActive()) {
+            DXGI_SWAP_CHAIN_DESC description{};
+            if (SUCCEEDED(sc->GetDesc(&description))) {
+                getLogger().warn(
+                    "Swap-chain resize during offline export (bufferCount={}, size={}x{}, format={}, flags=0x{:X}, "
+                    "captureArmed={})",
+                    description.BufferCount,
+                    description.BufferDesc.Width,
+                    description.BufferDesc.Height,
+                    static_cast<uint32_t>(description.BufferDesc.Format),
+                    description.Flags,
+                    mImpl->frameTap.hasArmedCapture()
+                );
+            } else {
+                getLogger().warn(
+                    "Swap-chain resize during offline export (descriptor unavailable, captureArmed={})",
+                    mImpl->frameTap.hasArmedCapture()
+                );
+            }
+        }
         mImpl->shutdown(visuals::FrameTapError::Resize, "Swap chain resized during frame capture");
         mImpl->initFailed      = false;
         mImpl->lastInitAttempt = {};
@@ -1221,6 +1243,14 @@ void ImGuiRenderer::afterPresent(IDXGISwapChain* sc, long result) {
     if (result != DXGI_ERROR_DEVICE_REMOVED && result != DXGI_ERROR_DEVICE_RESET) return;
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
+        ComPtr<ID3D12Device> device;
+        auto const           deviceResult = sc->GetDevice(IID_PPV_ARGS(&device));
+        getLogger().error(
+            "Graphics device lost during frame capture (present=0x{:08X}, device=0x{:08X}, query=0x{:08X})",
+            static_cast<uint32_t>(result),
+            static_cast<uint32_t>(device ? device->GetDeviceRemovedReason() : E_POINTER),
+            static_cast<uint32_t>(deviceResult)
+        );
         mImpl->shutdown(visuals::FrameTapError::DeviceLost, "Graphics device was lost during frame capture");
     }
     unbindSwapChainQueue(sc);

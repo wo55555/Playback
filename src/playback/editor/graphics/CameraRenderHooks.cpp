@@ -18,6 +18,7 @@
 #include "mc/deps/minecraft_camera/components/RenderCameraComponent.h"
 #include "mc/deps/minecraft_renderer/objects/ViewRenderObject.h"
 #include "mc/deps/renderer/Camera.h"
+#include "mc/world/actor/player/Player.h"
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -28,6 +29,7 @@
 #include <cstdint>
 #include <limits>
 #include <numbers>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -48,6 +50,8 @@ std::array<std::atomic_bool, 2>      gFinalViewFailureLogged{};
 std::array<std::atomic_bool, 2>      gCameraEcsFailureLogged{};
 std::array<std::atomic<uint64_t>, 2> gLastFinalViewFrame{};
 std::array<std::atomic<uint64_t>, 2> gLastCameraEcsFrame{};
+
+thread_local std::optional<keyframe::CameraRenderState> gParkedObserverCamera;
 
 size_t sourceIndex(keyframe::CameraTimelineSource source) noexcept {
     return source == keyframe::CameraTimelineSource::Export ? 1U : 0U;
@@ -281,10 +285,11 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
     auto registry = client ? client->getCameraRegistry() : Bedrock::NonOwnerPointer<CameraRegistry>{};
     if (!registry) return false;
 
-    auto const& state     = context.sample->state;
-    auto const  position  = ::glm::vec3{state.x, state.y, state.z};
-    auto const  basis     = basisFromState(state);
-    auto const  modelView = viewMatrix(position, basis);
+    auto const& state        = context.sample->state;
+    auto const  position     = ::glm::vec3{state.x, state.y, state.z};
+    auto const  basis        = basisFromState(state);
+    auto const  modelView    = viewMatrix(position, basis);
+    auto const  componentFov = state.fov * RadiansPerDegree;
 
     struct AppliedComponent {
         MinecraftCamera::CameraComponent* component{};
@@ -317,7 +322,7 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
         auto const orientation         = orientationFromBasis(basis);
         component->mPosition           = position;
         component->mOrientation        = orientation;
-        component->mFieldOfView        = state.fov;
+        component->mFieldOfView        = componentFov;
         component->mSavedModelView->_m = modelView;
         components.push_back({component, orientation});
         hasGameCamera = hasGameCamera || gameCamera;
@@ -334,7 +339,7 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
         auto const& appliedOrientation = applied.component->mOrientation.get();
         float const orientationDot     = std::abs(::glm::dot(appliedOrientation, applied.orientation));
         verified = verified && maxError(applied.component->mPosition.get(), position) <= PositionTolerance
-                && std::abs(applied.component->mFieldOfView - state.fov) <= 0.001f && std::isfinite(orientationDot)
+                && std::abs(applied.component->mFieldOfView - componentFov) <= 0.001f && std::isfinite(orientationDot)
                 && orientationDot >= 0.9999f;
     }
 
@@ -451,7 +456,6 @@ bool applyTimelineCamera(
     return verified;
 }
 
-// Write the camera exactly from the observer pose, bypassing the follow camera's smoothing.
 void applyObserverCamera(
     LevelRendererPlayer&               level,
     mce::Camera&                       setupCamera,
@@ -467,6 +471,22 @@ void applyObserverCamera(
     auto* worldCamera  = &level.mWorldSpaceCamera.get();
     writeCameraSpaces({&setupCamera, clientCamera}, *worldCamera, position, basis);
     writeLevelCameraPose(level, position, basis);
+}
+
+bool observerStillParked(keyframe::CameraRenderState const& state) noexcept {
+    auto* observer = replay::ReplaySession::getInstance().getReplayPlayer();
+    if (!observer) return false;
+
+    auto const position      = observer->getPosition();
+    auto const rotation      = observer->getRotation();
+    auto const positionDelta = ::glm::vec3{
+        position.x - state.x,
+        position.y - state.y,
+        position.z - state.z,
+    };
+    auto const angleDelta = [](float left, float right) { return std::abs(std::remainder(left - right, 360.0f)); };
+    return dot(positionDelta, positionDelta) <= 0.05f * 0.05f && angleDelta(rotation.x, state.pitch) <= 0.1f
+        && angleDelta(rotation.y, state.yaw) <= 0.1f;
 }
 
 keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext(float partialTick) noexcept {
@@ -497,6 +517,7 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext(float parti
     auto const serial = gPreviewFrameSerial.fetch_add(1, std::memory_order_relaxed) + 1;
     keyframe::setPreviewCameraApplied(true);
     keyframe::setLastPreviewPose(sample->state);
+    gParkedObserverCamera = sample->state;
     return keyframe::publishCameraTimelineRenderContext(
         keyframe::CameraTimelineRenderContext{
             *time,
@@ -529,6 +550,7 @@ LL_TYPE_INSTANCE_HOOK(
     auto const context = makePreviewRenderContext(partialTick);
     if (!context) {
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
+        if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) gParkedObserverCamera.reset();
         origin(partialTick);
         return;
     }
@@ -551,7 +573,8 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     float const native  = origin(amount, enableVariableFov);
     auto const  context = keyframe::currentCameraTimelineRenderContext();
-    return context && context->sample && finite(context->sample->state) ? context->sample->state.fov : native;
+    if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
+    return gParkedObserverCamera && observerStillParked(*gParkedObserverCamera) ? gParkedObserverCamera->fov : native;
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -563,7 +586,8 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     float const native  = origin();
     auto const  context = keyframe::currentCameraTimelineRenderContext();
-    return context && context->sample && finite(context->sample->state) ? context->sample->state.fov : native;
+    if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
+    return gParkedObserverCamera && observerStillParked(*gParkedObserverCamera) ? gParkedObserverCamera->fov : native;
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -588,10 +612,12 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
 
-    // Free camera: write the camera exactly from the observer entity's pose.
-    keyframe::CameraRenderState observerState;
-    if (replay::ReplaySession::getInstance().getObserverCameraPose(observerState)) {
-        applyObserverCamera(*static_cast<LevelRendererPlayer*>(this), camera, observerState);
+    if (gParkedObserverCamera) {
+        if (observerStillParked(*gParkedObserverCamera)) {
+            applyObserverCamera(*static_cast<LevelRendererPlayer*>(this), camera, *gParkedObserverCamera);
+        } else {
+            gParkedObserverCamera.reset();
+        }
     }
 }
 
@@ -732,6 +758,7 @@ bool hookCameraRender(bool enable) {
 
     auto removeAll = [&] {
         gInstalled.store(false, std::memory_order_release);
+        gParkedObserverCamera.reset();
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
         if (state.finalView && ReplayCameraViewRenderObjectHook::unhook()) state.finalView = false;
         if (state.setupCamera && ReplayCameraSetupHook::unhook()) state.setupCamera = false;
@@ -752,6 +779,7 @@ bool hookCameraRender(bool enable) {
     for (auto& frame : gLastFinalViewFrame) frame.store(UnloggedFrame, std::memory_order_release);
     for (auto& frame : gLastCameraEcsFrame) frame.store(UnloggedFrame, std::memory_order_release);
     gPreviewFrameSerial.store(0, std::memory_order_release);
+    gParkedObserverCamera.reset();
     keyframe::setPreviewCameraApplied(false);
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
 

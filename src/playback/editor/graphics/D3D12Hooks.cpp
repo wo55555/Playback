@@ -93,6 +93,7 @@ std::unordered_map<ID3D12Device*, DeviceQueueCandidate> gDeviceQueueMap;
 
 std::atomic<bool> gTimelineHooksStopping{true};
 std::atomic<bool> gRendererInitHookStopping{true};
+std::atomic<bool> gD3D12RendererActive{false};
 
 std::atomic<uint32_t>   gActiveDetours{};
 std::mutex              gActiveDetoursMutex;
@@ -124,6 +125,8 @@ public:
 };
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
+
+bool shouldLogExportFrame(uint64_t frameIndex) { return frameIndex < 2 || frameIndex % 60 == 0; }
 
 bool renderPresentFrame(IDXGISwapChain* swapChain);
 
@@ -623,7 +626,18 @@ LL_TYPE_INSTANCE_HOOK(
     D3D12_RESOURCE_STATES sourceState = D3D12_RESOURCE_STATE_COMMON;
     uint32_t const        colorIndex  = static_cast<uint32_t>(this->m_backBufferColorIdx);
     auto* const           msaa        = this->m_msaaRenderTarget;
-    if (msaa) {
+    if (colorIndex < 3) {
+        auto* const backBuffer = this->m_backBufferColor[colorIndex];
+        if (backBuffer) {
+            auto const desc = backBuffer->GetDesc();
+            bool const supportedBackBuffer =
+                desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && desc.Width != 0 && desc.Height != 0
+                && (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM)
+                && desc.SampleDesc.Count == 1;
+            if (supportedBackBuffer) source = backBuffer;
+        }
+    }
+    if (!source && msaa) {
         auto const desc = msaa->GetDesc();
         bool const supportedMsaa =
             desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && desc.Width != 0 && desc.Height != 0
@@ -634,10 +648,28 @@ LL_TYPE_INSTANCE_HOOK(
             sourceState = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
         }
     }
-    if (!source && colorIndex < 3) source = this->m_backBufferColor[colorIndex];
 
     bool const captureRequested = gImGuiRenderer.frameTap().hasArmedCapture();
     bool       captureStarted   = false;
+    if (captureRequested && ticket && shouldLogExportFrame(ticket->frameIndex)) {
+        auto const sourceDesc = source ? source->GetDesc() : D3D12_RESOURCE_DESC{};
+        getLogger().debug(
+            "D3D12 export source selected (frame={}, bgfxFrame={}, kind={}, source=0x{:X}, size={}x{}, samples={}, "
+            "format={}, msaa=0x{:X}, backbuffer=0x{:X}, colorIndex={}, deviceRemoved=0x{:08X})",
+            ticket->frameIndex,
+            frameNumber,
+            source == msaa ? "msaa" : (source ? "backbuffer" : "none"),
+            reinterpret_cast<uintptr_t>(source),
+            sourceDesc.Width,
+            sourceDesc.Height,
+            sourceDesc.SampleDesc.Count,
+            static_cast<uint32_t>(sourceDesc.Format),
+            reinterpret_cast<uintptr_t>(msaa),
+            reinterpret_cast<uintptr_t>(colorIndex < 3 ? this->m_backBufferColor[colorIndex] : nullptr),
+            colorIndex,
+            static_cast<uint32_t>(device ? device->GetDeviceRemovedReason() : E_POINTER)
+        );
+    }
     if (captureRequested && source && queue && device) {
         captureStarted = gImGuiRenderer.captureSubmittedD3D12Frame(device, queue.Get(), source, sourceState);
     }
@@ -660,7 +692,8 @@ bool renderPresentFrame(IDXGISwapChain* swapChain) {
     }
 
     ComPtr<ID3D12Device> d3d12Device;
-    bool const           explicitSubmitCapture = SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d12Device)));
+    bool const           explicitSubmitCapture = gD3D12RendererActive.load(std::memory_order_acquire)
+                                              || SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d12Device)));
     auto                 ticket = explicitSubmitCapture ? std::nullopt : exporting::claimOfflineRenderPresentFallback();
     bool const           captureRequested = ticket && gImGuiRenderer.frameTap().hasArmedCapture();
     bool const           rendered         = gImGuiRenderer.render(swapChain, !explicitSubmitCapture);
@@ -693,12 +726,16 @@ LL_TYPE_INSTANCE_HOOK(
             "Unable to install replay ImGui timeline hooks before D3D12 renderer initialization"
         );
     }
-    return origin(init);
+    bool const initialized = origin(init);
+    gD3D12RendererActive.store(initialized, std::memory_order_release);
+    return initialized;
 }
 
 } // namespace
 
 bool isTimelineRenderingEnabled() { return !gTimelineHooksStopping.load(std::memory_order_acquire); }
+
+bool isD3D12RendererActive() { return gD3D12RendererActive.load(std::memory_order_acquire); }
 
 bool waitForActiveDetours() {
     std::unique_lock lock(gActiveDetoursMutex);
@@ -936,6 +973,7 @@ bool hookRendererInit(bool enable) {
     }
 
     gRendererInitHookStopping.store(true, std::memory_order_release);
+    gD3D12RendererActive.store(false, std::memory_order_release);
     if (initInstalled) {
         if (RendererInitHook::unhook()) initInstalled = false;
         else return false;

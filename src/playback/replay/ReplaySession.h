@@ -1,6 +1,5 @@
 ﻿#pragma once
 
-#include "playback/keyframe/CameraRenderState.h"
 #include "playback/record/Recorder.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
@@ -179,6 +178,7 @@ private:
     bool                                        mObserverPreviewInRange{false};
     ::Vec3                                      mLastObserverPreviewFeet{};
     ::Vec2                                      mLastObserverPreviewRotation{};
+    std::optional<ChunkPos>                     mLastObserverServerSyncChunk;
     std::optional<int>                          mReplayTime;
     std::optional<DimensionType>                mPendingReplayDimension;
     std::optional<PendingSnapshotApply>         mPendingSnapshotApply;
@@ -341,9 +341,6 @@ public:
     // Preview drives the observer (the camera) per frame at the render partial tick.
     void setObserverPreviewPartialTick(float partialTick);
     void updateObserverPreview();
-
-    // The observer entity's camera pose (eye position + yaw/pitch) for exact rendering.
-    [[nodiscard]] bool getObserverCameraPose(keyframe::CameraRenderState& out) const noexcept;
 
     [[nodiscard]] int getCurrentTick() const {
         int const requestedTick = mRequestedSeekTick.load(std::memory_order_acquire);

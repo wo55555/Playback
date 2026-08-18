@@ -4,6 +4,7 @@
 #include "FrameWriterUtils.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/models/EditorStateExt.h"
@@ -18,7 +19,7 @@ namespace playback::exporting {
 namespace {
 
 constexpr uint32_t ExportCaptureCapacity  = 4;
-constexpr uint32_t MaxClearFrameRerenders = 24;
+constexpr uint32_t MaxClearFrameRerenders = 6;
 constexpr uint8_t  ExportClearRed         = 10;
 constexpr uint8_t  ExportClearGreen       = 12;
 constexpr uint8_t  ExportClearBlue        = 22;
@@ -117,6 +118,19 @@ bool ReplayExportDriver::start(
         mCoordinator.fail(ExportError::ReplayUnavailable, "A replay must be active before video export can start");
         mPhase = Phase::Faulted;
         return false;
+    }
+
+    if (settings.ssaa > 2) {
+        getLogger().warn("Export SSAA {} exceeds the stable limit; falling back to SSAA 2", settings.ssaa);
+        settings.ssaa = 2;
+    }
+
+    if (settings.ssaa > 1 && !editor::graphics::gImGuiRenderer.isD3D12RendererActive()) {
+        getLogger().warn(
+            "D3D11 export does not support stable supersampled readback; falling back from SSAA {} to SSAA 1",
+            settings.ssaa
+        );
+        settings.ssaa = 1;
     }
 
     if (!mCoordinator.start(std::move(settings), project)) {

@@ -545,6 +545,19 @@ void markOfflineRenderBoundaryCompleted(OfflineRenderBoundaryTicket const& ticke
         || (ticket.bgfxFrame && gActiveSample->expectedBgfxFrameNumber != ticket.bgfxFrameNumber)) {
         return;
     }
+    if (gActiveSample->sample.frameIndex < 2 || gActiveSample->sample.frameIndex % 60 == 0
+        || gActiveSample->gameRenderOrdinal != 1 || !gActiveSample->entityApplied) {
+        Playback::getInstance().getSelf().getLogger().debug(
+            "Export render boundary completed (frame={}, token={}, renderSerial={}, gameRenderCalls={}, "
+            "entityApplied={}, bgfxFrameNumber={})",
+            gActiveSample->sample.frameIndex,
+            gActiveSample->token.id,
+            gActiveSample->renderSerial,
+            gActiveSample->gameRenderOrdinal,
+            gActiveSample->entityApplied,
+            ticket.bgfxFrameNumber
+        );
+    }
     gActiveSample->completed = true;
 }
 

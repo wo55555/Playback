@@ -244,12 +244,13 @@ void EditorMenuBar::draw() {
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(exportDialogSize, ImGuiCond_Always);
     if (ImGui::BeginPopupModal("##ExportVideo", &mExportDialogOpen, ImGuiWindowFlags_NoResize)) {
-        std::string const custom            = "playback.refactorEditor.export.custom"_tr();
-        char const*       fpsOptions[]      = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
-        constexpr int     fpsValues[]       = {30, 60, 120};
-        char const*       ssaaOptions[]     = {"1x", "2x", "4x", "8x"};
-        int const         maximumReplayTick = std::max(state.totalTicks, 0);
-        float const       labelWidth        = std::clamp(exportDialogSize.x * 0.28f, 120.0f, 180.0f);
+        std::string const custom        = "playback.refactorEditor.export.custom"_tr();
+        char const*       fpsOptions[]  = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
+        constexpr int     fpsValues[]   = {30, 60, 120};
+        char const*       ssaaOptions[] = {"1x", "2x"};
+        mExportSsaa                     = std::clamp(mExportSsaa, 0, 1);
+        int const   maximumReplayTick   = std::max(state.totalTicks, 0);
+        float const labelWidth          = std::clamp(exportDialogSize.x * 0.28f, 120.0f, 180.0f);
 
         std::string const title = std::string(ICON_EXPORT) + "  " + "playback.refactorEditor.export.title"_tr();
         ImGui::TextUnformatted(title.c_str());
@@ -381,7 +382,7 @@ void EditorMenuBar::draw() {
             ImGui::TableSetColumnIndex(1);
             ImGui::SetNextItemWidth(180.0f);
             if (ImGui::Combo("##export-ssaa", &mExportSsaa, ssaaOptions, IM_ARRAYSIZE(ssaaOptions)))
-                mExportSsaa = std::clamp(mExportSsaa, 0, 3);
+                mExportSsaa = std::clamp(mExportSsaa, 0, 1);
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -392,7 +393,7 @@ void EditorMenuBar::draw() {
             ImGui::EndTable();
         }
 
-        int const      safeSsaaIndex = std::clamp(mExportSsaa, 0, 3);
+        int const      safeSsaaIndex = std::clamp(mExportSsaa, 0, 1);
         uint32_t const ssaaValue     = 1u << safeSsaaIndex;
         bool const     validOutput   = mExportName.front() != '\0' && mExportDirectory.front() != '\0';
         bool const     validTimeline =
@@ -405,7 +406,7 @@ void EditorMenuBar::draw() {
             && static_cast<uint64_t>(mExportWidth) * mExportHeight <= 134217728ull
             && static_cast<uint64_t>(mExportWidth) * mExportHeight * ssaaValue * ssaaValue <= 134217728ull;
         bool const validCapture =
-            mExportSsaa >= 0 && mExportSsaa <= 3 && mExportWarmupFrames >= 0 && mExportWarmupFrames <= 3600;
+            mExportSsaa >= 0 && mExportSsaa <= 1 && mExportWarmupFrames >= 0 && mExportWarmupFrames <= 3600;
         bool const formatAvailable  = mExportFormat != 0 || capabilities.ffmpegVideoExport;
         bool const rawSettingsValid = validOutput && validTimeline && validFps && validResolution && validCapture
                                    && formatAvailable && state.project != nullptr;

@@ -198,6 +198,19 @@ bool OfflineRenderFrameExecutor::configureRenderSize(ExportSettings const& setti
     exportViewport.offset->y = 0.0f;
     client->setViewportInfo(exportViewport);
 
+    auto const appliedRenderSize = currentRenderSize(*client);
+    auto const appliedUiSize     = currentUiSize(*client);
+    getLogger().debug(
+        "Offline render surface after apply (requested={}x{}, viewport={}x{}, ui={}x{}, guiScale={})",
+        mRenderWidth,
+        mRenderHeight,
+        appliedRenderSize ? appliedRenderSize->first : 0,
+        appliedRenderSize ? appliedRenderSize->second : 0,
+        appliedUiSize ? appliedUiSize->first : 0,
+        appliedUiSize ? appliedUiSize->second : 0,
+        client->getGuiData()->getGuiScale()
+    );
+
     mRenderSizeChanged = true;
     getLogger().info(
         "Offline render surface configured: display={}x{}, viewport={}x{} at ({}, {}), render={}x{}, guiScale={}",
@@ -312,6 +325,20 @@ bool OfflineRenderFrameExecutor::prepareNativeRender() {
         viewport.offset->x = 0.0f;
         viewport.offset->y = 0.0f;
         client->setViewportInfo(viewport);
+        if (mPendingTicket && (mPendingTicket->frameIndex < 2 || mPendingTicket->frameIndex % 60 == 0)) {
+            auto const appliedRenderSize = currentRenderSize(*client);
+            auto const appliedUiSize     = currentUiSize(*client);
+            getLogger().debug(
+                "Offline render surface before native frame (frame={}, requested={}x{}, viewport={}x{}, ui={}x{})",
+                mPendingTicket->frameIndex,
+                mRenderWidth,
+                mRenderHeight,
+                appliedRenderSize ? appliedRenderSize->first : 0,
+                appliedRenderSize ? appliedRenderSize->second : 0,
+                appliedUiSize ? appliedUiSize->first : 0,
+                appliedUiSize ? appliedUiSize->second : 0
+            );
+        }
     }
 
     return true;

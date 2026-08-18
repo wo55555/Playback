@@ -13,7 +13,7 @@ constexpr int64_t  ReplayTicksPerSecond = 20;
 constexpr int64_t  MaxFrameRateValue    = 1'000'000;
 constexpr uint64_t MaxExportFrames      = 1'000'000;
 constexpr uint32_t MaxResolution        = 16'384;
-constexpr uint32_t MaxSsaa              = 8;
+constexpr uint32_t MaxSsaa              = 2;
 constexpr uint32_t MaxWarmupFrames      = 3'600;
 constexpr uint64_t MaxFramePixels       = (512ull * 1024 * 1024) / 4;
 
@@ -125,8 +125,8 @@ constexpr uint64_t MaxFramePixels       = (512ull * 1024 * 1024) / 4;
 std::filesystem::path buildExportOutputPath(ExportSettings const& settings) {
     auto const baseName = outputBaseName(settings.outputName);
     auto const variant  = baseName + "_t" + std::to_string(settings.startTick) + "-" + std::to_string(settings.endTick)
-                       + "_" + frameRateLabel(settings.frameRate) + "_" + resolutionLabel(settings);
-    auto const root = settings.outputDirectory / utf8Path(baseName);
+                        + "_" + frameRateLabel(settings.frameRate) + "_" + resolutionLabel(settings);
+    auto const root     = settings.outputDirectory / utf8Path(baseName);
 
     if (settings.format == ExportFormat::Mp4Video) return root / utf8Path(variant + ".mp4");
     return root / utf8Path(variant + "_frames");

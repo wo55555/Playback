@@ -32,6 +32,10 @@ FramePixelFormat pixelFormat(DXGI_FORMAT format) {
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
+bool shouldLogCapture(FrameTapBackendCapture const& capture) {
+    return capture.ticket.frameIndex < 2 || capture.ticket.frameIndex % 60 == 0;
+}
+
 } // namespace
 
 struct D3D11FrameTapBackend::Impl {
@@ -154,6 +158,16 @@ void D3D11FrameTapBackend::poll(ID3D11DeviceContext* context) {
         context->Unmap(slot->staging.Get(), 0);
         auto capture = *slot->capture;
         slot->capture.reset();
+        if (shouldLogCapture(capture)) {
+            getLogger().debug(
+                "D3D11 frame capture completed (capture={}, frame={}, size={}x{}, mappedRowPitch={})",
+                capture.captureId,
+                capture.ticket.frameIndex,
+                frame.width,
+                frame.height,
+                mapped.RowPitch
+            );
+        }
         mImpl->frameTap.complete(capture, std::move(frame));
     }
 }
@@ -197,6 +211,18 @@ bool D3D11FrameTapBackend::capture(ID3D11Device* device, ID3D11DeviceContext* co
 
     auto capture = mImpl->frameTap.beginCapture();
     if (!capture) return false;
+    if (shouldLogCapture(*capture)) {
+        getLogger().debug(
+            "D3D11 frame capture bound (capture={}, frame={}, resource=0x{:X}, size={}x{}, format={}, samples={})",
+            capture->captureId,
+            capture->ticket.frameIndex,
+            reinterpret_cast<uintptr_t>(source),
+            sourceDesc.Width,
+            sourceDesc.Height,
+            static_cast<uint32_t>(sourceDesc.Format),
+            sourceDesc.SampleDesc.Count
+        );
+    }
     slot->capture = *capture;
     context->CopyResource(slot->staging.Get(), source);
     context->End(slot->completionQuery.Get());

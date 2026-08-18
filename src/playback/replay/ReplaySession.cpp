@@ -25,6 +25,7 @@
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/NetworkIdentifier.h"
@@ -167,6 +168,42 @@ void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 
     auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
     if (!interpolator) return;
 
+    *interpolator->mPos          = position;
+    *interpolator->mRot          = rotation;
+    interpolator->mHeadYaw       = headYaw;
+    interpolator->mPositionSteps = 0;
+    interpolator->mRotationSteps = 0;
+    interpolator->mHeadYawSteps  = 0;
+}
+
+void applyReplayEntityMovement(
+    Actor&                           actor,
+    Vec3 const&                      position,
+    visuals::EntityRenderPose const& previousPose,
+    Vec2 const&                      rotation,
+    float                            headYaw
+) {
+    Vec3 const previousPosition{
+        previousPose.position.x,
+        previousPose.position.y,
+        previousPose.position.z,
+    };
+    auto& state     = *actor.mBuiltInComponents->mStateVectorComponent;
+    state.mPos      = position;
+    state.mPosPrev  = previousPosition;
+    state.mPosDelta = Vec3{
+        position.x - previousPosition.x,
+        position.y - previousPosition.y,
+        position.z - previousPosition.z,
+    };
+    if (auto walk = actor.mBuiltInComponents->mWalkAnimationComponent.get()) {
+        HardcodedAnimationSystem::computeMovementThisTick(state, *walk);
+    }
+    actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
+    actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+
+    auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
+    if (!interpolator) return;
     *interpolator->mPos          = position;
     *interpolator->mRot          = rotation;
     interpolator->mHeadYaw       = headYaw;
@@ -372,6 +409,7 @@ void ReplaySession::clearReplayData() {
     mExportCameraViewpoint.reset();
     mPlaybackSpeed           = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
+    mLastObserverServerSyncChunk.reset();
     mReplayTime.reset();
     mPendingReplayDimension.reset();
     mPendingSnapshotApply.reset();
@@ -487,11 +525,15 @@ bool ReplaySession::setPaused(bool paused) {
 
     bool const wasPreviewing = keyframe::wasPreviewCameraApplied();
     mIsPaused                = paused;
+    if (!paused) mLastObserverServerSyncChunk.reset();
     getLogger().debug("Replay {} at tick {}", paused ? "paused" : "playing", mCurrentTick);
     if (paused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive && wasPreviewing) {
         parkReplayCameraAtPreview();
     } else if (paused && mReplayPlayer && mReplayWorldJoined) {
-        syncObserverServerPosition(mReplayPlayer->getPosition(), mReplayPlayer->getRotation());
+        auto const position = mReplayPlayer->getPosition();
+        auto const rotation = mReplayPlayer->getRotation();
+        cancelNativeMovementInterpolation(*mReplayPlayer, position, rotation, rotation.y);
+        syncObserverServerPosition(position, rotation);
     }
     return true;
 }
@@ -500,22 +542,20 @@ void ReplaySession::parkReplayCameraAtPreview() {
     keyframe::setPreviewCameraApplied(false);
     if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
 
-    // Only park when the paused tick is still inside the keyframe range.
     auto const sampleTime = getCameraRenderSampleTime(0.0f);
     if (!sampleTime) return;
     auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *sampleTime);
     if (!sample) return;
 
-    // Park at the last-rendered preview pose; fall back to the paused-tick sample.
     auto const lastPose = keyframe::takeLastPreviewPose();
     auto const pose     = lastPose.value_or(sample->state);
 
-    // The first-person spectator's camera sits at its feet, so the pose is the feet position.
     forceFirstPersonCamera();
-    Vec3 const feetPosition = Vec3{pose.x, pose.y, pose.z};
-    teleportReplayPlayer(feetPosition, Vec2{pose.pitch, pose.yaw});
-    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, Vec2{pose.pitch, pose.yaw}, pose.yaw);
-    syncObserverServerPosition(feetPosition, Vec2{pose.pitch, pose.yaw});
+    Vec3 const feetPosition{pose.x, pose.y, pose.z};
+    Vec2 const rotation{pose.pitch, pose.yaw};
+    teleportReplayPlayer(feetPosition, rotation);
+    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
+    syncObserverServerPosition(feetPosition, rotation);
 }
 
 void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& rotation) {
@@ -536,9 +576,10 @@ void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& r
 
 void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 const& rotation) {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
-    auto const playerUuid    = mReplayPlayer->getUuid();
-    auto const replayLevelId = mReplayLevelId;
-    auto const dimension     = mReplayPlayer->getDimensionId();
+    mLastObserverServerSyncChunk = ChunkPos{feetPosition.x, feetPosition.z};
+    auto const playerUuid        = mReplayPlayer->getUuid();
+    auto const replayLevelId     = mReplayLevelId;
+    auto const dimension         = mReplayPlayer->getDimensionId();
     Vec3 const serverPosition{feetPosition.x, feetPosition.y - kServerEyeHeight, feetPosition.z};
     ll::thread::ServerThreadExecutor::getDefault().execute(
         [playerUuid, replayLevelId, serverPosition, rotation, dimension] {
@@ -553,23 +594,6 @@ void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 co
 
 void ReplaySession::setObserverPreviewPartialTick(float partialTick) {
     mObserverPreviewPartialTick.store(partialTick, std::memory_order_release);
-}
-
-bool ReplaySession::getObserverCameraPose(keyframe::CameraRenderState& out) const noexcept {
-    if (!mReplayPlayer) return false;
-    // First-person spectator: camera sits at the feet, so the pose is the feet position.
-    Vec3 const pos = mReplayPlayer->getPosition();
-    auto const rot = mReplayPlayer->getRotation();
-    out            = {
-        pos.x,
-        pos.y,
-        pos.z,
-        rot.y,
-        rot.x,
-        0.0f,
-        70.0f,
-    };
-    return true;
 }
 
 void ReplaySession::updateObserverPreview() {
@@ -593,18 +617,22 @@ void ReplaySession::updateObserverPreview() {
             );
             syncObserverServerPosition(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
         }
+        mLastObserverServerSyncChunk.reset();
         return;
     }
     mObserverPreviewInRange = true;
 
     // First-person spectator: camera sits at the feet, so the pose is the feet position.
-    Vec3 const feetPosition{sample->state.x, sample->state.y, sample->state.z};
-    Vec2 const rotation{sample->state.pitch, sample->state.yaw};
-    mLastObserverPreviewFeet     = feetPosition;
-    mLastObserverPreviewRotation = rotation;
-
+    Vec3 const     feetPosition{sample->state.x, sample->state.y, sample->state.z};
+    Vec2 const     rotation{sample->state.pitch, sample->state.yaw};
+    ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
+    bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
+                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
+    mLastObserverPreviewFeet        = feetPosition;
+    mLastObserverPreviewRotation    = rotation;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
+    if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
 }
 
 std::optional<visuals::ReplaySampleTime> ReplaySession::getRenderSampleTime(float partialTick) const noexcept {
@@ -1532,7 +1560,7 @@ void ReplaySession::processPendingDimensionTransition() {
     bool const loadingScreenVisible = client
                                    && (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
                                        || client->isShowingWorldProgressScreen());
-    bool const readyToRender = client && client->isReadyToRender();
+    bool const readyToRender        = client && client->isReadyToRender();
 
     if (elapsed >= DIMENSION_TRANSITION_TIMEOUT) {
         getLogger().error(
@@ -2570,13 +2598,12 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             }
 
             if (actor->isRiding()) {
-                actor->mBuiltInComponents->mActorRotationComponent->mRot = rotation;
-                actor->mBuiltInComponents->mActorRotationComponent->mRotPrev =
-                    snapMovement ? rotation : Vec2{previousPose.pitch, previousPose.yaw};
-                actor->setYHeadRotations(headYaw, snapMovement ? headYaw : previousPose.headYaw);
+                actor->mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
+                actor->mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+                actor->setYHeadRotations(headYaw, headYaw);
                 if (auto bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
                     bodyRotation->mYBodyRot  = bodyYaw;
-                    bodyRotation->mYBodyRotO = snapMovement ? bodyYaw : previousPose.bodyYaw;
+                    bodyRotation->mYBodyRotO = bodyYaw;
                 }
 
                 if (onGround) {
@@ -2587,6 +2614,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                     entityContext.removeComponent<OnGroundFlagComponent>();
                 }
                 if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
+                else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw);
                 continue;
             }
 
@@ -2599,8 +2627,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                     move.mPos           = position;
                     move.mRot           = rotation;
                     move.mYHeadRot      = headYaw;
-                    move.mResetPosition = snapMovement ? PlayerPositionModeComponent::PositionMode::Teleport
-                                                       : PlayerPositionModeComponent::PositionMode::Normal;
+                    move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
                     move.mOnGround      = onGround;
                 }
             } else {
@@ -2612,7 +2639,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 if (packet) {
                     auto& move         = *static_cast<MoveActorAbsolutePacket&>(*packet).mMoveData;
                     move.mRuntimeId    = actor->getRuntimeID();
-                    move.mHeader->mRaw = static_cast<uchar>((onGround ? 1 : 0) | (snapMovement ? 2 : 0));
+                    move.mHeader->mRaw = static_cast<uchar>((onGround ? 1 : 0) | 2);
                     move.mPos          = position;
                     move.mRotX         = quantizeRotation(rotation.x);
                     move.mRotY         = quantizeRotation(rotation.y);
@@ -2626,11 +2653,12 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             // MovePlayerPacket has no body-yaw field, so retain the recorded value after native movement handling.
             if (actor->isPlayer()) {
                 if (auto bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
-                    bodyRotation->mYBodyRot = bodyYaw;
-                    if (snapMovement) bodyRotation->mYBodyRotO = bodyYaw;
+                    bodyRotation->mYBodyRot  = bodyYaw;
+                    bodyRotation->mYBodyRotO = bodyYaw;
                 }
             }
             if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
+            else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw);
         }
         return;
     }
@@ -2638,6 +2666,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
     auto const count = markerOrCount;
     if (count < 0) throw std::runtime_error("Entity movement count cannot be negative");
 
+    bool const snapMovement = mSeekTargetTick >= 0 && mSnapMovementDuringSeek;
     for (int index = 0; index < count; ++index) {
         ActorUniqueID const id{data.getVarInt64().value()};
         bool const          isPlayer = data.getBool().value();
@@ -2650,6 +2679,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         visuals::EntityRenderPose               currentPose{};
         std::optional<visuals::EntityRenderKey> renderKey;
         std::shared_ptr<Packet>                 packet;
+        Actor*                                  actor{};
         if (isPlayer) {
             auto const pitch    = data.getFloat().value();
             auto const yaw      = data.getFloat().value();
@@ -2657,7 +2687,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             auto const onGround = data.getBool().value();
 
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
-            auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+            actor = mReplayPlayer->getLevel().fetchEntity(id, false);
             if (!actor || !actor->isPlayer()) continue;
             // The observer is the free camera; skip its recorded movement.
             if (observerIsFree && actor == mReplayPlayer) {
@@ -2685,7 +2715,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             move.mPos           = targetPosition;
             move.mRot           = rotation;
             move.mYHeadRot      = headYaw;
-            move.mResetPosition = PlayerPositionModeComponent::PositionMode::Normal;
+            move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
             move.mOnGround      = onGround;
         } else {
             auto const header   = data.getByte().value();
@@ -2695,7 +2725,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             auto const bodyRotY = data.getByte().value();
 
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
-            auto* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+            actor = mReplayPlayer->getLevel().fetchEntity(id, false);
             if (!actor || actor->isPlayer()) continue;
 
             previousPose = replayRenderPose(*actor);
@@ -2716,7 +2746,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             }
             auto& move         = *static_cast<MoveActorAbsolutePacket&>(*packet).mMoveData;
             move.mRuntimeId    = actor->getRuntimeID();
-            move.mHeader->mRaw = header;
+            move.mHeader->mRaw = static_cast<uchar>(header | 2);
             move.mPos          = targetPosition;
             move.mRotX         = static_cast<schar>(rotX);
             move.mRotY         = static_cast<schar>(rotY);
@@ -2728,6 +2758,11 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         if (renderKey) {
             mEntityRenderKeys.insert_or_assign(id, *renderKey);
             visuals::queueReplayEntityPose(*renderKey, previousPose, currentPose);
+        }
+        if (actor) {
+            Vec2 const rotation{currentPose.pitch, currentPose.yaw};
+            if (snapMovement) cancelNativeMovementInterpolation(*actor, targetPosition, rotation, currentPose.headYaw);
+            else applyReplayEntityMovement(*actor, targetPosition, previousPose, rotation, currentPose.headYaw);
         }
     }
 }

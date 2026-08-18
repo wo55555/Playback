@@ -22,6 +22,7 @@ constexpr auto     RenderWaitTimeout       = std::chrono::seconds{30};
 constexpr auto     RenderWaitLogInterval   = std::chrono::seconds{2};
 constexpr auto     WarmupSceneTimeout      = std::chrono::seconds{30};
 constexpr uint32_t StableWarmupFrames      = 3;
+constexpr uint32_t ClearRetryWarmupFrames  = 3;
 
 bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
     return left.frameIndex == right.frameIndex && left.ptsNumerator == right.ptsNumerator
@@ -516,7 +517,11 @@ bool OfflineRenderBoundary::retryCompletedFrame(visuals::FrameTicket const& tick
         return false;
     }
     mCompletedFrameTicket.reset();
-    mState = OfflineRenderBoundaryState::PreparingReplay;
+    mWarmupFramesRemaining = std::max(mWarmupFramesRemaining, ClearRetryWarmupFrames);
+    mWarmupStableFrames    = 0;
+    mWarmupStartedAt       = {};
+    mWarmupLastLoggedAt    = {};
+    mState                 = OfflineRenderBoundaryState::WarmingUp;
     return true;
 }
 
@@ -573,10 +578,11 @@ OfflineRenderBoundaryStatus OfflineRenderBoundary::status() {
                     result.downloads.message.empty() ? "The renderer frame download failed" : result.downloads.message
                 );
             }
-        } else if (result.state != OfflineRenderBoundaryState::Closed
-                   && result.state != OfflineRenderBoundaryState::Cancelled
-                   && (result.downloads.state == FrameDownloadQueueState::Closed
-                       || result.downloads.state == FrameDownloadQueueState::Cancelled)) {
+        } else if (
+            result.state != OfflineRenderBoundaryState::Closed && result.state != OfflineRenderBoundaryState::Cancelled
+            && (result.downloads.state == FrameDownloadQueueState::Closed
+                || result.downloads.state == FrameDownloadQueueState::Cancelled)
+        ) {
             fault(
                 OfflineRenderBoundaryError::CaptureUnavailable,
                 result.downloads.message.empty() ? "The framebuffer download queue became unavailable"
@@ -610,9 +616,9 @@ std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(Expor
     long double delta             = 0.0L;
     int64_t     previousWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
     if (mLastSubmittedFrame) {
-        delta = current
-              - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
-                    / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
+        delta             = current
+                          - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
+                                / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
         previousWholeTick = mLastSubmittedFrame->replayTickNumerator / mLastSubmittedFrame->replayTickDenominator;
     }
     if (delta < 0.0L || delta > static_cast<long double>(std::numeric_limits<float>::max())) return std::nullopt;
