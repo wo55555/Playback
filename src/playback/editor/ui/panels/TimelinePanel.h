@@ -1,7 +1,7 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/editor/context/EditorAction.h"
-#include "playback/editor/editing/models/TrackTreeModel.h"
+#include "playback/state/EditorAction.h"
+#include "playback/state/editing/models/TrackTreeModel.h"
 
 #include <string>
 
@@ -9,7 +9,16 @@ namespace playback::editor::ui {
 
 class TimelinePanel {
 public:
-    void draw();
+    void draw(bool allowInput);
+
+    void seekTo(int tick);
+    void seekRelative(int tickDelta);
+    void seekAdjacentEditPoint(bool forward);
+    bool addKeyframeAtPlayhead();
+    bool deleteSelection();
+    void zoomIn();
+    void zoomOut();
+    void resetZoom();
 
     [[nodiscard]] float trackListWidthRatio() const { return mTrackListWidthRatio; }
     [[nodiscard]] float zoomScale() const { return mZoomScale; }
@@ -18,24 +27,23 @@ public:
 
 private:
     void submitSeek(int tick);
-    void submitEdit(playback::editor::EditorAction action);
+    void submitEdit(playback::state::EditorAction action);
 
-    editing::model::TrackTreeModel mTrackTree;
-    float                          mZoomScale{1.0f};
-    float                          mScrollX{};
-    float                          mTrackListWidthRatio{0.30f};
-    int                            mPendingSeekTick{-1};
-    std::string                    mTrackSearch;
-    bool                           mSnapEnabled{true};
-    bool                           mCamerasExpanded{true};
-    bool                           mMarkersExpanded{true};
-    bool                           mSeekingTimeline{};
-    int                            mSeekingTick{-1};
-    std::string                    mDraggingSegmentId;
-    bool                           mDraggingWorldActor{};
-    bool                           mDraggingStart{};
-    int                            mDragStartTick{};
-    int                            mDragEndTick{};
+    state::editing::model::TrackTreeModel mTrackTree;
+    float                                 mZoomScale{1.0f};
+    float                                 mScrollX{};
+    float                                 mTrackListWidthRatio{0.30f};
+    int                                   mPendingSeekTick{-1};
+    int                                   mRulerDragTick{-1};
+    std::string                           mTrackSearch;
+    bool                                  mSnapEnabled{true};
+    bool                                  mCamerasExpanded{true};
+    bool                                  mDraggingPlayhead{};
+    std::string                           mDraggingKeyframeCameraId;
+    float                                 mDraggingKeyframeStartMouseX{};
+    int                                   mDraggingKeyframeStartTick{};
+    int                                   mDraggingKeyframeTick{};
+    bool                                  mDraggingKeyframeMoved{};
 };
 
 } // namespace playback::editor::ui

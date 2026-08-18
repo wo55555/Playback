@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/Config.h"
+#include "playback/configuration/Config.h"
 
 #include "ll/api/event/ListenerBase.h"
 #include "ll/api/mod/NativeMod.h"
@@ -23,7 +23,7 @@ public:
 
     static Playback& getInstance();
 
-    [[nodiscard]] config::Config& getConfig();
+    [[nodiscard]] configuration::Config& getConfig();
 
     [[nodiscard]] std::set<ll::event::ListenerPtr>& getEventListeners();
 

@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Playback is currently in Alpha. Security fixes are provided for the latest published release only.
+Playback currently publishes test releases. Security fixes are provided for the latest published release only.
 
 ## Reporting a Vulnerability
 

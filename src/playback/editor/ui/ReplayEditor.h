@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/editor/context/EditorAction.h"
-#include "playback/editor/context/EditorState.h"
-#include "playback/editor/editing/models/SelectionModel.h"
+#include "playback/state/EditorAction.h"
+#include "playback/state/EditorState.h"
+#include "playback/state/editing/models/SelectionModel.h"
 
 #include "EditorTheme.h"
 #include "HintBar.h"
@@ -27,7 +27,7 @@ namespace playback::editor::ui {
 
 class ReplayEditor {
 public:
-    using SubmitAction = std::function<void(playback::editor::EditorAction)>;
+    using SubmitAction = std::function<void(playback::state::EditorAction)>;
 
     static ReplayEditor& getInstance();
 
@@ -35,22 +35,28 @@ public:
     void initialize();
     void shutdown();
 
-    void draw(playback::editor::EditorState const& state, SubmitAction const& submit);
+    void draw(playback::state::EditorState const& state, SubmitAction const& submit);
 
     // Keyboard shortcut processing
     void handleKeyboardShortcuts();
 
-    [[nodiscard]] playback::editor::EditorState const&  state() const;
-    [[nodiscard]] editing::model::SelectionModel const& selection() const { return mSelection; }
-    editing::model::SelectionModel&                     selection() { return mSelection; }
-    void                                                submitAction(playback::editor::EditorAction action) const;
-    CurveEditorPanel&                                   curveEditorPanel() { return mCurveEditorPanel; }
-    void                setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
-    void                setVideoAspectRatio(float aspectRatio);
-    [[nodiscard]] float videoAspectRatio() const { return mVideoAspectRatio; }
-    [[nodiscard]] Rect  viewportVideoRect() const { return mViewportPanel.videoRect(); }
-    void                toggleViewportMaximized() { mViewportMaximized = !mViewportMaximized; }
-    [[nodiscard]] bool  isViewportMaximized() const { return mViewportMaximized; }
+    [[nodiscard]] playback::state::EditorState const&          state() const;
+    [[nodiscard]] state::editing::model::SelectionModel const& selection() const { return mSelection; }
+    state::editing::model::SelectionModel&                     selection() { return mSelection; }
+    void                                                       submitAction(playback::state::EditorAction action) const;
+    void                                                       openExportDialog();
+    void                                                       seekTo(int tick);
+    void                                                       seekRelative(int tickDelta);
+    bool                                                       deleteSelection();
+    bool                                                       addKeyframeAtPlayhead();
+    CurveEditorPanel&                                          curveEditorPanel() { return mCurveEditorPanel; }
+    void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
+    [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
+    void                      setVideoAspectRatio(float aspectRatio);
+    [[nodiscard]] float       videoAspectRatio() const { return mVideoAspectRatio; }
+    [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
+    void                      toggleViewportMaximized() { mViewportMaximized = !mViewportMaximized; }
+    [[nodiscard]] bool        isViewportMaximized() const { return mViewportMaximized; }
 
 private:
     ReplayEditor() = default;
@@ -75,12 +81,13 @@ private:
     EditMode   mEditMode;
     RenderMode mRenderMode;
 
-    playback::editor::EditorState const* mFrameState{};
-    SubmitAction const*                  mSubmit{};
-    editing::model::SelectionModel       mSelection;
+    playback::state::EditorState const*   mFrameState{};
+    SubmitAction const*                   mSubmit{};
+    state::editing::model::SelectionModel mSelection;
+    exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
     // Layout
-    float mDetailsWidthRatio{0.20f};
+    float mDetailsWidthRatio{0.28f};
     float mTimelineHeightRatio{0.35f};
     float mVideoAspectRatio{16.0f / 9.0f};
 
