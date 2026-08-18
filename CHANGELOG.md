@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed free-camera translation stutter, pause rebound, third-person offsets, mouse grab/release loops, and unnecessary pause-time server teleports.
 - Fixed raw camera FOV units, D3D11 supersampling fallback, D3D12 clear-frame recovery, and SSAA values above the stable 2x limit.
 
-### Known Limitations
+  ### Known Limitations
 
 - Video export does not include audio.
 - Editor projects are currently in-memory only and are not persisted between replay sessions.
@@ -109,6 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
+[0.2.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.2-mc26.20...v0.2.0-mc26.20
 [0.1.2-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.1-mc26.20...v0.1.2-mc26.20
 [0.1.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.0-alpha.2...v0.1.1-mc26.20
 [0.1.0-alpha.2]: https://github.com/wo55555/Playback/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
