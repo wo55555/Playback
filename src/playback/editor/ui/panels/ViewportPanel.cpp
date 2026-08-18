@@ -1,12 +1,10 @@
-#include "ViewportPanel.h"
+﻿#include "ViewportPanel.h"
 
 #include "playback/editor/ui/ReplayEditor.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
-
 #include <algorithm>
-#include <utility>
 
 namespace playback::editor::ui {
 
@@ -34,9 +32,7 @@ void ViewportPanel::draw(bool maximized) {
     dl->AddRect(videoMin, videoMax, IM_COL32(0x3a, 0x8c, 0xf0, 0xff));
     ImGui::SetCursorScreenPos(videoMin);
     ImGui::InvisibleButton("##viewport-video", videoSize);
-    bool        videoHovered = ImGui::IsItemHovered();
-    bool        videoActive  = ImGui::IsItemActive();
-    auto const& state        = ReplayEditor::getInstance().state();
+    auto const& state = ReplayEditor::getInstance().state();
     mContextMenu.draw(state.capabilities.cameraEditing);
 
     constexpr float kMaximizeButtonSize = 28.0f;
@@ -80,9 +76,6 @@ void ViewportPanel::draw(bool maximized) {
                        : "playback.refactorEditor.timeline.maximize"_tr())
                 .c_str()
         );
-    if (state.capabilities.cameraEditing) {
-        handleCameraControl(videoHovered && !maximizeHovered, videoActive && !maximizeHovered);
-    }
     if (maximized) drawTransportControls();
 }
 
@@ -107,15 +100,13 @@ void ViewportPanel::drawTransportControls() {
             dl->AddLine({c.x - 9, c.y - 8}, {c.x - 9, c.y + 8}, color, 2);
             dl->AddTriangleFilled({c.x - 7, c.y}, {c.x + 7, c.y - 8}, {c.x + 7, c.y + 8}, color);
         })) {
-        editor.submitAction({playback::editor::EditorActionType::SkipToStart});
+        editor.seekTo(0);
     }
     if (button("##viewport-back", startX + (buttonSize + gap), [](ImDrawList* dl, ImVec2 c, ImU32 color) {
             dl->AddTriangleFilled({c.x - 9, c.y}, {c.x + 5, c.y - 8}, {c.x + 5, c.y + 8}, color);
             dl->AddTriangleFilled({c.x - 2, c.y}, {c.x + 10, c.y - 8}, {c.x + 10, c.y + 8}, color);
         })) {
-        playback::editor::EditorAction action{playback::editor::EditorActionType::Seek};
-        action.tick = std::max(0, state.currentTick - 200);
-        editor.submitAction(std::move(action));
+        editor.seekRelative(-200);
     }
     if (button("##viewport-play", startX + (buttonSize + gap) * 2, [&state](ImDrawList* dl, ImVec2 c, ImU32 color) {
             if (!state.paused) {
@@ -123,42 +114,24 @@ void ViewportPanel::drawTransportControls() {
                 dl->AddRectFilled({c.x + 2, c.y - 8}, {c.x + 7, c.y + 8}, color);
             } else dl->AddTriangleFilled({c.x - 6, c.y - 9}, {c.x - 6, c.y + 9}, {c.x + 9, c.y}, color);
         })) {
-        editor.submitAction({playback::editor::EditorActionType::TogglePause});
+        editor.submitAction({playback::state::EditorActionType::TogglePause});
     }
     if (button("##viewport-forward", startX + (buttonSize + gap) * 3, [](ImDrawList* dl, ImVec2 c, ImU32 color) {
             dl->AddTriangleFilled({c.x - 10, c.y - 8}, {c.x - 10, c.y + 8}, {c.x + 2, c.y}, color);
             dl->AddTriangleFilled({c.x - 3, c.y - 8}, {c.x - 3, c.y + 8}, {c.x + 9, c.y}, color);
         })) {
-        playback::editor::EditorAction action{playback::editor::EditorActionType::Seek};
-        action.tick = std::min(state.totalTicks, state.currentTick + 200);
-        editor.submitAction(std::move(action));
+        editor.seekRelative(200);
     }
     if (button("##viewport-end", startX + (buttonSize + gap) * 4, [](ImDrawList* dl, ImVec2 c, ImU32 color) {
             dl->AddTriangleFilled({c.x - 7, c.y - 8}, {c.x - 7, c.y + 8}, {c.x + 7, c.y}, color);
             dl->AddLine({c.x + 9, c.y - 8}, {c.x + 9, c.y + 8}, color, 2);
         })) {
-        editor.submitAction({playback::editor::EditorActionType::SkipToEnd});
+        editor.seekTo(state.totalTicks);
     }
 }
 
 void ViewportPanel::setGameTexture(ImTextureID texture) { mGameTexture = texture; }
 
 void ViewportPanel::setVideoAspectRatio(float aspectRatio) { mVideoAspectRatio = std::max(0.1f, aspectRatio); }
-
-void ViewportPanel::handleCameraControl(bool hovered, bool active) {
-    ImGuiIO& io = ImGui::GetIO();
-
-    if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        mViewportRotation.x += io.MouseDelta.y * 0.5f;
-        mViewportRotation.y += io.MouseDelta.x * 0.5f;
-    }
-    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-        mViewportAnchor.x += io.MouseDelta.x * 0.1f;
-        mViewportAnchor.z += io.MouseDelta.y * 0.1f;
-    }
-    if (hovered && io.MouseWheel != 0.0f) {
-        mViewportAnchor.y += io.MouseWheel * 5.0f;
-    }
-}
 
 } // namespace playback::editor::ui

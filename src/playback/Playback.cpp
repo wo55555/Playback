@@ -1,14 +1,17 @@
-#include "Playback.h"
+﻿#include "Playback.h"
 
-#include "playback/Config.h"
 #include "playback/Playback.h"
-#include "playback/command/Command.h"
+#include "playback/action/Action.h"
+#include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
-#include "playback/functions/action/Action.h"
-#include "playback/functions/record/ChunkMutationBarrier.h"
-#include "playback/functions/record/Recorder.h"
-#include "playback/functions/replay/ReplaySession.h"
-#include "playback/functions/tick/ClientTickHooks.h"
+#include "playback/editor/graphics/CameraRenderHooks.h"
+#include "playback/exporting/IdleDetectionHooks.h"
+#include "playback/exporting/OfflineRenderClockHooks.h"
+#include "playback/record/ChunkMutationBarrier.h"
+#include "playback/record/Recorder.h"
+#include "playback/replay/ReplaySession.h"
+#include "playback/runtime/ClientTickHooks.h"
+#include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
 
 #include "ll/api/event/EventBus.h"
@@ -34,10 +37,11 @@
 namespace playback {
 
 struct Playback::Impl {
-    config::Config                   mConfig;
+    configuration::Config            mConfig;
     std::set<ll::event::ListenerPtr> mEventListeners;
     std::atomic<PlaybackMode>        mMode{PlaybackMode::Unknown};
     std::string                      mLevelId;
+    bool                             mCameraRenderInstalled{};
     bool                             mRuntimeInstalled{};
 };
 
@@ -49,43 +53,54 @@ Playback& Playback::getInstance() {
     return instance;
 }
 
-config::Config& Playback::getConfig() { return impl->mConfig; }
+configuration::Config& Playback::getConfig() { return impl->mConfig; }
 
 std::set<ll::event::ListenerPtr>& Playback::getEventListeners() { return impl->mEventListeners; }
 
 void Playback::setupCommands() {
     auto& commandConfig = this->getConfig().command;
 
-    command::registerPlaybackCommand();
-    command::registerRecordCommand(commandConfig.record);
+    runtime::command::registerPlaybackCommand();
+    runtime::command::registerRecordCommand(commandConfig.record);
 }
 
 void Playback::registerActions() {
-    auto& registry = functions::ActionRegistry::getInstance();
+    auto& registry = action::ActionRegistry::getInstance();
 
-    registry.registerAction(std::make_unique<functions::ActionNextTick>());
-    registry.registerAction(std::make_unique<functions::ActionSnapshotContext>());
-    registry.registerAction(std::make_unique<functions::ActionCreateLocalPlayer>());
-    registry.registerAction(std::make_unique<functions::ActionLevelChunkCached>());
-    registry.registerAction(std::make_unique<functions::ActionSubChunkCached>());
-    registry.registerAction(std::make_unique<functions::ActionGamePacket>());
-    registry.registerAction(std::make_unique<functions::ActionMoveEntities>());
+    registry.registerAction(std::make_unique<action::ActionNextTick>());
+    registry.registerAction(std::make_unique<action::ActionSnapshotContext>());
+    registry.registerAction(std::make_unique<action::ActionCreateLocalPlayer>());
+    registry.registerAction(std::make_unique<action::ActionLevelChunkCached>());
+    registry.registerAction(std::make_unique<action::ActionSubChunkCached>());
+    registry.registerAction(std::make_unique<action::ActionConfigurationPacket>());
+    registry.registerAction(std::make_unique<action::ActionGamePacket>());
+    registry.registerAction(std::make_unique<action::ActionMoveEntities>());
 }
 
 bool Playback::hook() {
     if (impl->mRuntimeInstalled) return true;
 
     screen::hookMainMenu(true);
-    if (!functions::hookNetwork(true)) {
+    if (!exporting::hookIdleDetection(true)) {
+        getSelf().getLogger().warn("Unable to install the idle detection guard; video export is disabled");
+    }
+    getSelf().getLogger().debug("Offline render hooks deferred until video export starts");
+    if (!record::hookNetwork(true)) {
+        (void)exporting::hookIdleDetection(false);
         screen::hookMainMenu(false);
         return false;
     }
-    if (!functions::hookClientTick(true)) {
-        if (!functions::hookNetwork(false)) {
+    if (!runtime::hookClientTick(true)) {
+        if (!record::hookNetwork(false)) {
             getSelf().getLogger().error("Unable to roll back replay network hooks after client tick hook failure");
         }
+        (void)exporting::hookIdleDetection(false);
         screen::hookMainMenu(false);
         return false;
+    }
+    impl->mCameraRenderInstalled = editor::graphics::hookCameraRender(true);
+    if (!impl->mCameraRenderInstalled) {
+        getSelf().getLogger().warn("Unable to install camera render hooks; camera timelines are disabled");
     }
 
     getEventListeners().emplace(
@@ -95,31 +110,33 @@ bool Playback::hook() {
     );
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientStartJoinLevelEvent>([this](auto&&) {
-            functions::ReplaySession::getInstance().onLevelStartJoin();
-            functions::ChunkMutationBarrier::setActiveLevel(nullptr);
+            replay::ReplaySession::getInstance().onLevelStartJoin();
+            record::ChunkMutationBarrier::setActiveLevel(nullptr);
             impl->mLevelId.clear();
             impl->mMode.store(PlaybackMode::Unknown);
         })
     );
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCancelJoinLevelEvent>([](auto&&) {
-            functions::ReplaySession::getInstance().onLevelJoinCancelled();
+            replay::ReplaySession::getInstance().onLevelJoinCancelled();
         })
     );
-    getEventListeners().emplace(ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
-        [this](ll::event::ClientJoinLevelEvent& event) {
-            functions::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asMultiPlayerLevel());
-            functions::ReplaySession::getInstance().onLevelJoined(event.player());
-            refreshMode(event.player().getLevel());
-        }
-    ));
+    getEventListeners().emplace(
+        ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
+            [this](ll::event::ClientJoinLevelEvent& event) {
+                record::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asMultiPlayerLevel());
+                replay::ReplaySession::getInstance().onLevelJoined(event.player());
+                refreshMode(event.player().getLevel());
+            }
+        )
+    );
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientExitLevelEvent>([this](auto&&) {
-            auto& replaySession = functions::ReplaySession::getInstance();
+            auto& replaySession = replay::ReplaySession::getInstance();
             replaySession.onLevelExit();
-            auto& recorder = functions::Recorder::getInstance();
+            auto& recorder = record::Recorder::getInstance();
             if (recorder.isActive()) recorder.stop();
-            functions::ChunkMutationBarrier::setActiveLevel(nullptr);
+            record::ChunkMutationBarrier::setActiveLevel(nullptr);
             impl->mLevelId.clear();
             impl->mMode.store(PlaybackMode::Unknown);
         })
@@ -130,25 +147,52 @@ bool Playback::hook() {
 
 bool Playback::unhook() {
     if (!impl->mRuntimeInstalled) return true;
-    if (!functions::hookClientTick(false)) return false;
-    if (!functions::hookNetwork(false)) {
-        bool tickRestored = functions::hookClientTick(true);
+    if (impl->mCameraRenderInstalled && !editor::graphics::hookCameraRender(false)) return false;
+    if (!runtime::hookClientTick(false)) {
+        if (impl->mCameraRenderInstalled) (void)editor::graphics::hookCameraRender(true);
+        return false;
+    }
+    if (!record::hookNetwork(false)) {
+        bool tickRestored   = runtime::hookClientTick(true);
+        bool cameraRestored = !impl->mCameraRenderInstalled || editor::graphics::hookCameraRender(true);
         getSelf().getLogger().error(
-            "Unable to remove replay network hooks; client tick hook restoration={}",
-            tickRestored
+            "Unable to remove replay network hooks; client tick hook restoration={}, camera hook restoration={}",
+            tickRestored,
+            cameraRestored
         );
         return false;
     }
     if (!editor::hookReplayUI(false)) {
         bool uiRestored      = editor::hookReplayUI(true);
-        bool networkRestored = functions::hookNetwork(true);
-        bool tickRestored    = functions::hookClientTick(true);
+        bool networkRestored = record::hookNetwork(true);
+        bool tickRestored    = runtime::hookClientTick(true);
+        bool cameraRestored  = !impl->mCameraRenderInstalled || editor::graphics::hookCameraRender(true);
         getSelf().getLogger().error(
             "Unable to remove replay UI hooks (ui restoration={}, network restoration={}, "
-            "client tick restoration={})",
+            "client tick restoration={}, camera hook restoration={})",
             uiRestored,
             networkRestored,
-            tickRestored
+            tickRestored,
+            cameraRestored
+        );
+        return false;
+    }
+    if (!exporting::hookOfflineRenderClock(false)) {
+        getSelf().getLogger().error("Unable to remove export-scoped offline render hooks during shutdown");
+        return false;
+    }
+    if (!exporting::hookIdleDetection(false)) {
+        bool uiRestored      = editor::hookReplayUI(true);
+        bool networkRestored = record::hookNetwork(true);
+        bool tickRestored    = runtime::hookClientTick(true);
+        bool cameraRestored  = !impl->mCameraRenderInstalled || editor::graphics::hookCameraRender(true);
+        getSelf().getLogger().error(
+            "Unable to remove the idle detection guard (UI restoration={}, network restoration={}, client tick "
+            "restoration={}, camera hook restoration={})",
+            uiRestored,
+            networkRestored,
+            tickRestored,
+            cameraRestored
         );
         return false;
     }
@@ -157,7 +201,8 @@ bool Playback::unhook() {
     getEventListeners().clear();
     impl->mLevelId.clear();
     impl->mMode.store(PlaybackMode::Unknown);
-    impl->mRuntimeInstalled = false;
+    impl->mCameraRenderInstalled = false;
+    impl->mRuntimeInstalled      = false;
     return true;
 }
 
@@ -179,7 +224,7 @@ void Playback::refreshMode(Level& level) {
     auto const& levelId = level.getLevelId();
     if (levelId.empty()) return;
 
-    auto mode = functions::ReplaySession::isReplayLevel(level) ? PlaybackMode::Replay : PlaybackMode::Record;
+    auto mode = replay::ReplaySession::isReplayLevel(level) ? PlaybackMode::Replay : PlaybackMode::Record;
 
     if (impl->mLevelId != levelId) {
         impl->mLevelId = levelId;
@@ -240,14 +285,14 @@ bool Playback::enable() {
 bool Playback::disable() {
     const auto& logger = getSelf().getLogger();
 
-    auto& replaySession = functions::ReplaySession::getInstance();
+    auto& replaySession = replay::ReplaySession::getInstance();
     if (replaySession.isIsolatingReplayWorld() || replaySession.isReplayWorldCleanupPending()) {
         replaySession.stop();
         logger.error("Playback cannot disable until the replay world has finished closing and been removed");
         return false;
     }
 
-    functions::Recorder::getInstance().stop();
+    record::Recorder::getInstance().stop();
     if (!unhook()) {
         logger.error("Playback cannot disable because its runtime hooks could not be removed safely");
         return false;

@@ -11,8 +11,10 @@ Playback uses the following third-party projects. Their licenses remain with the
 | [OpenSSL](https://www.openssl.org/) | `1.1.1w` | OpenSSL and SSLeay licenses |
 | [stduuid](https://github.com/mariusbancila/stduuid) | `1.2.3` | MIT |
 | [xxHash](https://github.com/Cyan4973/xxHash) | `0.8.3` | BSD-2-Clause |
+| [FFmpeg](https://ffmpeg.org/) | `7.1` | GPL-3.0-or-later for the bundled `--enable-gpl --enable-version3` build |
+| [x264](https://www.videolan.org/developers/x264.html) | `2024.02.27` (via FFmpeg) | GPL-2.0-or-later |
 
-The complete Dear ImGui license text is distributed in `licenses/DearImGui-LICENSE.txt`. Other dependencies are resolved by xmake from their upstream packages; consult each linked project for its complete license text and source code.
+The complete Dear ImGui, FFmpeg, and x264 license texts are distributed in `licenses/`. Other dependencies are resolved by xmake from their upstream packages; consult each linked project for its complete license text and source code. Playback packages the Xmake-built FFmpeg command-line executable under `tools/ffmpeg.exe`; the pinned build recipe enables x264 and is reproducible from this repository's `xmake.lua` and the linked upstream source releases.
 
 Playback does not redistribute `LeviLamina.dll` or LeviMC's closed-source components. The LeviLamina repository provides `COPYING` and `COPYING.LESSER` for its LGPL-3.0 portions, while `EULA.en.md` and `EULA.zh.md` cover LeviMC closed-source software such as PreLoader and PeEditor.
 

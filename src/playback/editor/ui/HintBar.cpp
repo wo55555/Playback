@@ -18,11 +18,9 @@ void HintBar::draw() {
 
     ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0x90, 0x90, 0x90, 0xff));
 
-    // 6 most used shortcuts: Play / Add Marker / Split / Undo / Export / Help
-    std::array<std::string, 6> const hints{
+    std::array<std::string, 5> const hints{
         std::string(ICON_PLAY) + "=" + "playback.refactorEditor.hints.play"_tr(),
         std::string(ICON_MARKER) + "=" + "playback.refactorEditor.hints.marker"_tr(),
-        std::string(ICON_SPLIT) + "=" + "playback.refactorEditor.hints.split"_tr(),
         std::string(ICON_UNDO) + "=" + "playback.refactorEditor.hints.undo"_tr(),
         std::string(ICON_EXPORT) + "=" + "playback.refactorEditor.hints.export"_tr(),
         std::string(ICON_HELP) + "=" + "playback.refactorEditor.hints.help"_tr()

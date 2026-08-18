@@ -9,7 +9,6 @@ namespace playback::editor::ui {
 using namespace ll::i18n_literals;
 
 CurveEditorPanel::CurveEditorPanel() {
-    // Default linear curve
     mDefaultCurve.name   = "Default";
     mDefaultCurve.points = {
         {0.0f, 0.0f, {0, 0}, {0, 0}},
@@ -21,7 +20,6 @@ CurveEditorPanel::CurveEditorPanel() {
 void CurveEditorPanel::draw() {
     if (!mOpen) return;
 
-    // Preset dropdown
     std::string const presetLabel = "playback.refactorEditor.curve.preset"_tr() + "###curve-preset";
     if (ImGui::BeginCombo(presetLabel.c_str(), "playback.refactorEditor.curve.custom"_tr().c_str())) {
         if (ImGui::Selectable("playback.refactorEditor.curve.linear"_tr().c_str())) {
@@ -67,19 +65,16 @@ void CurveEditorPanel::draw() {
         ImGui::EndCombo();
     }
 
-    // Curve preview area
     ImVec2 avail  = ImGui::GetContentRegionAvail();
     float  curveH = std::min(avail.y - 80.0f, 200.0f);
     Rect   curveArea;
     curveArea.min = ImGui::GetCursorScreenPos();
     curveArea.max = ImVec2(curveArea.min.x + avail.x, curveArea.min.y + curveH);
 
-    // Draw the curve
     mEditor.draw(ImGui::GetWindowDrawList(), curveArea);
 
     ImGui::SetCursorScreenPos(ImVec2(curveArea.min.x, curveArea.max.y));
 
-    // Sample point preview
     ImGui::Separator();
     ImGui::TextUnformatted("playback.refactorEditor.curve.sample"_tr(0.5f, mEditor.sampleAt(0.5f)).c_str());
     ImGui::TextUnformatted("playback.refactorEditor.curve.sample"_tr(0.25f, mEditor.sampleAt(0.25f)).c_str());

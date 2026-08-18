@@ -2,6 +2,10 @@
 
 Thank you for helping improve Playback. Bug fixes, compatibility updates, documentation, and focused replay improvements are welcome.
 
+## Code of Conduct
+
+By participating in this project, you agree to follow our [Code of Conduct](CODE_OF_CONDUCT.md). Please read it before opening issues, participating in discussions, or submitting pull requests.
+
 ## Before You Start
 
 - Search existing issues before opening a new one.

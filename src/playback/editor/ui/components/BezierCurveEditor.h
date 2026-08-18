@@ -1,7 +1,7 @@
-#pragma once
+﻿#pragma once
 
-#include "playback/editor/editing/models/CameraKeyframe.h"
 #include "playback/editor/ui/components/Splitter.h"
+#include "playback/state/editing/models/CameraKeyframe.h"
 
 #include "imgui.h"
 
@@ -12,10 +12,10 @@
 namespace playback::editor::ui {
 
 struct BezierPoint {
-    float                t{0};            // x ∈ [0,1]
-    float                v{0};            // y
-    editing::model::Vec2 inTangent{0, 0}; // relative control point offset
-    editing::model::Vec2 outTangent{0, 0};
+    float                       t{0};            // x 鈭?[0,1]
+    float                       v{0};            // y
+    state::editing::model::Vec2 inTangent{0, 0}; // relative control point offset
+    state::editing::model::Vec2 outTangent{0, 0};
 };
 
 struct BezierCurve {
