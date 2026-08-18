@@ -48,6 +48,7 @@ enum class EditorActionType {
     DeleteCameraKeyframe,
     SetKeyframeInterpolation,
     SetKeyframePosition,
+    SetKeyframeRotation,
     SetKeyframeFov,
     SetCameraEnabled,
     DeleteCamera,

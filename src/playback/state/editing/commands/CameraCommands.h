@@ -179,4 +179,20 @@ private:
     bool                                 mChanged{};
 };
 
+class SetCameraKeyframeRotation final : public model::IEditCommand {
+public:
+    SetCameraKeyframeRotation(std::string cameraId, int tick, model::Vec3 rotation);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mChanged; }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    model::Vec3                          mRotation;
+    std::optional<model::EditorStateExt> mBefore;
+    bool                                 mChanged{};
+};
+
 } // namespace playback::state::editing::command

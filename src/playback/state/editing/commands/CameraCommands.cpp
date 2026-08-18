@@ -239,6 +239,37 @@ void SetCameraKeyframePosition::undo(model::EditorStateExt& state) { restore(mBe
 
 std::string SetCameraKeyframePosition::label() const { return "Set Keyframe Position"; }
 
+SetCameraKeyframeRotation::SetCameraKeyframeRotation(std::string cameraId, int tick, model::Vec3 rotation)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mRotation(rotation) {}
+
+void SetCameraKeyframeRotation::execute(model::EditorStateExt& state) {
+    mChanged     = false;
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end()
+        || key->second.yaw == mRotation.x && key->second.pitch == mRotation.y && key->second.roll == mRotation.z) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore           = state;
+    key->second.yaw   = mRotation.x;
+    key->second.pitch = mRotation.y;
+    key->second.roll  = mRotation.z;
+    mChanged          = true;
+}
+
+void SetCameraKeyframeRotation::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+
+std::string SetCameraKeyframeRotation::label() const { return "Set Keyframe Rotation"; }
+
 SetCameraKeyframeFov::SetCameraKeyframeFov(std::string cameraId, int tick, float fov)
 : mCameraId(std::move(cameraId)),
   mTick(tick),

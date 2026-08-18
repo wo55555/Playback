@@ -22,6 +22,7 @@ constexpr float kSplitterThickness = 4.0f;
 constexpr float kMinZoomScale      = 1.0f;
 constexpr float kMaxZoomScale      = 20.0f;
 constexpr float kZoomStep          = 1.15f;
+constexpr int   kTicksPerSecond    = 20;
 
 constexpr ImU32 kBackground        = IM_COL32(27, 27, 27, 255);
 constexpr ImU32 kSidebarBackground = IM_COL32(41, 41, 41, 255);
@@ -52,15 +53,28 @@ bool iconButton(char const* id, char const* icon, char const* tooltip, bool enab
 
 std::string formatTick(int tick) {
     char value[32]{};
-    tick = std::max(0, tick);
-    std::snprintf(value, sizeof(value), "%02d:%02d", tick / 1200, (tick / 20) % 60);
+    tick                   = std::max(0, tick);
+    int const totalSeconds = tick / kTicksPerSecond;
+    int const centiseconds = tick % kTicksPerSecond * (100 / kTicksPerSecond);
+    std::snprintf(value, sizeof(value), "%02d:%02d.%02d", totalSeconds / 60, totalSeconds % 60, centiseconds);
     return value;
 }
 
 int majorTickStep(float pixelsPerTick, float minimumSpacing) {
-    constexpr int steps[] = {20, 40, 100, 200, 400, 600, 1200, 2400, 6000, 12000};
+    constexpr int steps[] = {
+        kTicksPerSecond,
+        kTicksPerSecond * 2,
+        kTicksPerSecond * 5,
+        kTicksPerSecond * 10,
+        kTicksPerSecond * 20,
+        kTicksPerSecond * 30,
+        kTicksPerSecond * 60,
+        kTicksPerSecond * 120,
+        kTicksPerSecond * 300,
+        kTicksPerSecond * 600,
+    };
     for (int step : steps)
-        if (step * pixelsPerTick >= minimumSpacing) return step;
+        if (static_cast<float>(step) * pixelsPerTick >= minimumSpacing) return step;
     return steps[std::size(steps) - 1];
 }
 
@@ -432,7 +446,7 @@ void TimelinePanel::draw(bool allowInput) {
     auto snapTick = [&](int tick) {
         tick = std::clamp(tick, 0, state.totalTicks);
         if (!mSnapEnabled) return tick;
-        constexpr float GridTicks = 20.0f;
+        constexpr float GridTicks = static_cast<float>(kTicksPerSecond);
         return std::clamp(
             static_cast<int>(std::round(static_cast<float>(tick) / GridTicks) * GridTicks),
             0,

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 
 namespace playback::editor::ui {
@@ -18,6 +19,8 @@ using namespace ll::i18n_literals;
 
 namespace {
 
+constexpr int kTicksPerSecond = 20;
+
 template <typename T>
 T const* findById(std::vector<T> const& values, std::string const& id) {
     auto const it = std::find_if(values.begin(), values.end(), [&id](T const& value) { return value.id == id; });
@@ -26,8 +29,10 @@ T const* findById(std::vector<T> const& values, std::string const& id) {
 
 std::string formatTick(int tick) {
     char value[32]{};
-    tick = std::max(0, tick);
-    std::snprintf(value, sizeof(value), "%02d:%02d", tick / 1200, (tick / 20) % 60);
+    tick                   = std::max(0, tick);
+    int const totalSeconds = tick / kTicksPerSecond;
+    int const centiseconds = tick % kTicksPerSecond * (100 / kTicksPerSecond);
+    std::snprintf(value, sizeof(value), "%02d:%02d.%02d", totalSeconds / 60, totalSeconds % 60, centiseconds);
     return value;
 }
 
@@ -43,6 +48,35 @@ char const* categoryName(state::editing::model::SubActorCategory category) {
 }
 
 void submit(EditorAction action) { ReplayEditor::getInstance().submitAction(std::move(action)); }
+
+bool vectorInput(
+    char const* id,
+    float (&values)[3],
+    std::array<char const*, 3> const& labels,
+    std::array<ImVec4, 3> const*      colors,
+    char const*                       format
+) {
+    bool edited = false;
+    ImGui::PushID(id);
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {3.0f, 0.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {4.0f, 3.0f});
+    if (ImGui::BeginTable("##axes", 3, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
+        for (int axis = 0; axis < 3; ++axis) {
+            ImGui::TableNextColumn();
+            if (colors) ImGui::TextColored((*colors)[axis], "%s", labels[axis]);
+            else ImGui::TextDisabled("%s", labels[axis]);
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::PushID(axis);
+            ImGui::InputFloat("##value", &values[axis], 0.0f, 0.0f, format);
+            edited |= ImGui::IsItemDeactivatedAfterEdit();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar(2);
+    ImGui::PopID();
+    return edited;
+}
 
 } // namespace
 
@@ -319,57 +353,115 @@ void DetailsPanel::draw() {
             return;
         }
         if (property::beginSection("Camera Keyframe")) {
-            ImGui::Text("Camera: %s", camera->name.c_str());
+            ImGui::TextDisabled("Camera");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(camera->name.c_str());
+            property::separator();
             ImGui::BeginDisabled(camera->locked);
-            int const originalTick = key->first;
-            int       tick         = originalTick;
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::InputInt("Tick", &tick) && ImGui::IsItemDeactivatedAfterEdit()) {
-                EditorAction action{EditorActionType::MoveCameraKeyframe};
-                action.id            = camera->id;
-                action.tick          = originalTick;
-                action.secondaryTick = tick;
-                submit(std::move(action));
-            }
-            float position[3] = {key->second.position.x, key->second.position.y, key->second.position.z};
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::DragFloat3("Position", position, 0.5f) && ImGui::IsItemDeactivatedAfterEdit()) {
-                EditorAction action{EditorActionType::SetKeyframePosition};
-                action.id       = camera->id;
-                action.tick     = originalTick;
-                action.position = {position[0], position[1], position[2]};
-                submit(std::move(action));
-            }
-            ImGui::Text(
-                "Rotation: yaw %.1f  pitch %.1f  roll %.1f",
-                key->second.yaw,
-                key->second.pitch,
-                key->second.roll
-            );
-            float fov = key->second.fov;
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::SliderFloat("FOV", &fov, 1.0f, 110.0f, "%.1f") && ImGui::IsItemDeactivatedAfterEdit()) {
-                EditorAction action{EditorActionType::SetKeyframeFov};
-                action.id    = camera->id;
-                action.tick  = originalTick;
-                action.speed = fov;
-                submit(std::move(action));
-            }
-            int interpolation = static_cast<int>(key->second.interpolationType);
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::BeginCombo("Interpolation", interpolationName(key->second.interpolationType))) {
-                for (int index = 0; index < 8; ++index) {
-                    auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
-                    if (ImGui::Selectable(interpolationName(value), index == interpolation)) {
-                        EditorAction action{EditorActionType::SetKeyframeInterpolation};
-                        action.id   = camera->id;
-                        action.tick = originalTick;
-                        action.kind = index;
-                        submit(std::move(action));
-                    }
+            int const       originalTick = key->first;
+            int             tick         = originalTick;
+            constexpr float labelWidth   = 72.0f;
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {4.0f, 5.0f});
+            if (ImGui::BeginTable(
+                    "##keyframe-properties",
+                    2,
+                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+                )) {
+                ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+                ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("Tick");
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::InputInt("##tick", &tick, 0, 0);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    EditorAction action{EditorActionType::MoveCameraKeyframe};
+                    action.id            = camera->id;
+                    action.tick          = originalTick;
+                    action.secondaryTick = tick;
+                    submit(std::move(action));
                 }
-                ImGui::EndCombo();
+
+                float position[3] = {key->second.position.x, key->second.position.y, key->second.position.z};
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("Position");
+                ImGui::TableNextColumn();
+                static constexpr std::array positionLabels{"X", "Y", "Z"};
+                static constexpr std::array positionColors{
+                    ImVec4{0.95f, 0.38f, 0.38f, 1.0f},
+                    ImVec4{0.42f, 0.82f, 0.45f, 1.0f},
+                    ImVec4{0.38f, 0.62f, 0.96f, 1.0f},
+                };
+                if (vectorInput("position", position, positionLabels, &positionColors, "%.3f")
+                    && std::ranges::all_of(position, [](float value) { return std::isfinite(value); })) {
+                    EditorAction action{EditorActionType::SetKeyframePosition};
+                    action.id       = camera->id;
+                    action.tick     = originalTick;
+                    action.position = {position[0], position[1], position[2]};
+                    submit(std::move(action));
+                }
+
+                float rotation[3] = {key->second.yaw, key->second.pitch, key->second.roll};
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("Rotation");
+                ImGui::TableNextColumn();
+                static constexpr std::array rotationLabels{"Yaw", "Pitch", "Roll"};
+                if (vectorInput("rotation", rotation, rotationLabels, nullptr, "%.2f")
+                    && std::ranges::all_of(rotation, [](float value) { return std::isfinite(value); })) {
+                    EditorAction action{EditorActionType::SetKeyframeRotation};
+                    action.id       = camera->id;
+                    action.tick     = originalTick;
+                    action.position = {rotation[0], rotation[1], rotation[2]};
+                    submit(std::move(action));
+                }
+
+                float fov = key->second.fov;
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("FOV");
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::InputFloat("##fov", &fov, 0.0f, 0.0f, "%.2f°");
+                if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(fov)) {
+                    EditorAction action{EditorActionType::SetKeyframeFov};
+                    action.id    = camera->id;
+                    action.tick  = originalTick;
+                    action.speed = std::clamp(fov, 1.0f, 179.0f);
+                    submit(std::move(action));
+                }
+
+                int interpolation = static_cast<int>(key->second.interpolationType);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("Interpolation");
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::BeginCombo("##interpolation", interpolationName(key->second.interpolationType))) {
+                    for (int index = 0; index < 8; ++index) {
+                        auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+                        if (ImGui::Selectable(interpolationName(value), index == interpolation)) {
+                            EditorAction action{EditorActionType::SetKeyframeInterpolation};
+                            action.id   = camera->id;
+                            action.tick = originalTick;
+                            action.kind = index;
+                            submit(std::move(action));
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::EndTable();
             }
+            ImGui::PopStyleVar();
+            property::separator();
             if (property::actionButton("Delete Keyframe")) {
                 EditorAction action{EditorActionType::DeleteCameraKeyframe};
                 action.id   = camera->id;
