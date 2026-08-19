@@ -777,8 +777,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
         futures.push_back(
             std::async(
                 std::launch::async,
-                [&columns, start, end, dimension, air, expectedSubChunks, dimensionMinHeight]()
-                    -> std::vector<ColumnResult> {
+                [&columns, start, end, dimension, air, dimensionMinHeight]() -> std::vector<ColumnResult> {
                     std::vector<ColumnResult> results;
                     results.reserve(end - start);
 
@@ -807,18 +806,6 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
                             results.push_back(std::move(result));
                             return results;
                         }
-                        if (subChunks.size() != expectedSubChunks
-                            || subChunks.size() > static_cast<size_t>(std::numeric_limits<schar>::max()) + 1) {
-                            result.error = snapshotFailure(
-                                pos,
-                                std::nullopt,
-                                "validating slots",
-                                "subchunk count does not cover the complete dimension height in one packet"
-                            );
-                            results.push_back(std::move(result));
-                            return results;
-                        }
-
                         std::string stage = "creating LevelChunkPacket";
                         try {
                             auto levelBase = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
@@ -861,8 +848,8 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
                                 results.push_back(std::move(result));
                                 return results;
                             }
-                            auto subChunkPacket   = std::static_pointer_cast<SubChunkPacket>(std::move(subChunkBase));
-                            int  minimumSubChunkY = dimensionMinHeight / 16;
+                            auto subChunkPacket = std::static_pointer_cast<SubChunkPacket>(std::move(subChunkBase));
+                            int const minimumSubChunkY = dimensionMinHeight / 16;
 
                             subChunkPacket->mCacheEnabled  = false;
                             subChunkPacket->mDimensionType = dimension;
@@ -872,8 +859,9 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
 
                             for (size_t index = 0; index < subChunks.size(); ++index) {
                                 auto const& subChunk = subChunks[index];
-                                int absoluteY = static_cast<int>(static_cast<unsigned char>(subChunk.mAbsoluteIndex));
-                                stage         = "validating subchunk slot";
+                                int const   actualAbsoluteY =
+                                    static_cast<int>(static_cast<schar>(subChunk.mAbsoluteIndex));
+                                stage = "validating subchunk slot";
 
                                 if (subChunk.isPlaceHolderSubChunk()) continue;
                                 if (subChunk.mSubChunkState != SubChunk::SubChunkState::Normal
@@ -881,36 +869,50 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
                                     continue;
                                 }
 
+                                int const relativeY = actualAbsoluteY - minimumSubChunkY;
+                                if (relativeY < std::numeric_limits<schar>::min()
+                                    || relativeY > std::numeric_limits<schar>::max()) {
+                                    result.error = snapshotFailure(
+                                        pos,
+                                        actualAbsoluteY,
+                                        stage,
+                                        "subchunk offset is outside the packet range"
+                                    );
+                                    results.push_back(std::move(result));
+                                    return results;
+                                }
+
                                 BinaryStream serializedSubChunk;
-                                bool         allAir = subChunk.isUniform(*air);
+                                bool const   allAir = subChunk.isUniform(*air);
                                 if (!allAir) {
-                                    VarIntDataOutput output(serializedSubChunk);
-                                    subChunk.serialize(output, true);
+                                    stage = "serializing subchunk";
+                                    VarIntDataOutput subChunkOutput(serializedSubChunk);
+                                    subChunk.serialize(subChunkOutput, false);
                                 }
 
                                 stage = "serializing block actors";
                                 {
-                                    VarIntDataOutput output(serializedSubChunk);
+                                    VarIntDataOutput blockActorOutput(serializedSubChunk);
                                     chunk.serializeBlockEntitiesForSubChunk(
-                                        output,
-                                        SubChunkPos{pos.x, absoluteY, pos.z},
+                                        blockActorOutput,
+                                        SubChunkPos{pos.x, actualAbsoluteY, pos.z},
                                         *saveContext
                                     );
                                 }
 
                                 SubChunkPacket::SubChunkPosOffset offset{};
-                                offset.mX       = 0;
-                                offset.mY       = static_cast<schar>(index);
-                                offset.mZ       = 0;
-                                auto resultFlag = allAir ? SubChunkPacket::SubChunkRequestResult::SuccessAllAir
-                                                         : SubChunkPacket::SubChunkRequestResult::Success;
+                                offset.mX             = 0;
+                                offset.mY             = static_cast<schar>(relativeY);
+                                offset.mZ             = 0;
+                                auto const resultFlag = allAir ? SubChunkPacket::SubChunkRequestResult::SuccessAllAir
+                                                               : SubChunkPacket::SubChunkRequestResult::Success;
                                 subChunkPacket->mSubChunkData->emplace_back(offset, resultFlag);
                                 auto& data               = subChunkPacket->mSubChunkData->back();
                                 data.mSerializedSubChunk = std::move(serializedSubChunk.mBuffer);
                                 data.mBlobId             = 0;
 
                                 stage = "populating heightmaps";
-                                chunk.populateHeightMapDataForSubChunkPacket(static_cast<short>(absoluteY), data);
+                                chunk.populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
                             }
 
                             result.levelChunk = std::move(level);
