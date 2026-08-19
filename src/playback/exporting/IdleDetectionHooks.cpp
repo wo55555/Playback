@@ -57,6 +57,17 @@ LL_TYPE_INSTANCE_HOOK(
     return origin();
 }
 
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackPauseHook,
+    ll::memory::HookPriority::Highest,
+    MinecraftGame,
+    &MinecraftGame::$openPauseMenu,
+    void
+) {
+    if (exporting::isExportActivityActive()) return;
+    origin();
+}
+
 } // namespace
 
 bool hookIdleDetection(bool enable) {
@@ -75,12 +86,14 @@ bool hookIdleDetection(bool enable) {
         if (!state.canRender) state.canRender = PlaybackCanRenderHook::hook() == 0;
         if (!state.canRender) return false;
         if (!state.focusState) state.focusState = PlaybackFocusStateHook::hook() == 0;
+        PlaybackPauseHook::hook();
         return state.focusState;
     };
     auto removeAll = [&] {
         if (state.focusState && PlaybackFocusStateHook::unhook()) state.focusState = false;
         if (state.canRender && PlaybackCanRenderHook::unhook()) state.canRender = false;
         if (state.warning && PlaybackSuspendWarningModalHook::unhook()) state.warning = false;
+        PlaybackPauseHook::unhook();
         return noneInstalled();
     };
 
