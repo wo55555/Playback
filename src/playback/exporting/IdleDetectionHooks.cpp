@@ -32,13 +32,13 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 LL_TYPE_INSTANCE_HOOK(
-    PlaybackCanRenderHook,
+    PlaybackSuspendedHook,
     ll::memory::HookPriority::Highest,
     MinecraftGame,
-    &MinecraftGame::_canRender,
+    &MinecraftGame::$getSuspended,
     bool
 ) {
-    if (exporting::isExportActivityActive()) return true;
+    if (exporting::isExportActivityActive()) return false;
     return origin();
 }
 
@@ -53,29 +53,44 @@ LL_TYPE_INSTANCE_HOOK(
     return origin();
 }
 
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackPauseHook,
+    ll::memory::HookPriority::Highest,
+    MinecraftGame,
+    &MinecraftGame::$openPauseMenu,
+    void
+) {
+    if (exporting::isExportActivityActive()) return;
+    origin();
+}
+
 } // namespace
 
 bool hookIdleDetection(bool enable) {
     struct HookState {
         bool warning{};
-        bool canRender{};
+        bool suspended{};
         bool focusState{};
+        bool pause{};
     };
     static HookState state;
 
-    auto allInstalled  = [&] { return state.warning && state.canRender && state.focusState; };
-    auto noneInstalled = [&] { return !state.warning && !state.canRender && !state.focusState; };
+    auto allInstalled  = [&] { return state.warning && state.suspended && state.focusState && state.pause; };
+    auto noneInstalled = [&] { return !state.warning && !state.suspended && !state.focusState && !state.pause; };
     auto installAll    = [&] {
         if (!state.warning) state.warning = PlaybackSuspendWarningModalHook::hook() == 0;
         if (!state.warning) return false;
-        if (!state.canRender) state.canRender = PlaybackCanRenderHook::hook() == 0;
-        if (!state.canRender) return false;
+        if (!state.suspended) state.suspended = PlaybackSuspendedHook::hook() == 0;
+        if (!state.suspended) return false;
         if (!state.focusState) state.focusState = PlaybackFocusStateHook::hook() == 0;
-        return state.focusState;
+        if (!state.focusState) return false;
+        if (!state.pause) state.pause = PlaybackPauseHook::hook() == 0;
+        return state.pause;
     };
     auto removeAll = [&] {
+        if (state.pause && PlaybackPauseHook::unhook()) state.pause = false;
         if (state.focusState && PlaybackFocusStateHook::unhook()) state.focusState = false;
-        if (state.canRender && PlaybackCanRenderHook::unhook()) state.canRender = false;
+        if (state.suspended && PlaybackSuspendedHook::unhook()) state.suspended = false;
         if (state.warning && PlaybackSuspendWarningModalHook::unhook()) state.warning = false;
         return noneInstalled();
     };
