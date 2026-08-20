@@ -557,6 +557,10 @@ void Recorder::resetStateForNewRecording() {
         mPendingGamePackets.clear();
         mRecordedGamePacketCounts.clear();
     }
+    {
+        std::scoped_lock lock(mPendingPortableChunksMutex);
+        mPendingPortableChunks.clear();
+    }
 }
 
 void Recorder::endTick(bool close) {
@@ -863,7 +867,8 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
 
                                 if (subChunk.isPlaceHolderSubChunk()) continue;
                                 if (subChunk.mSubChunkState != SubChunk::SubChunkState::Normal
-                                    && subChunk.mSubChunkState != SubChunk::SubChunkState::RequestFinished) {
+                                    && subChunk.mSubChunkState != SubChunk::SubChunkState::RequestFinished
+                                    && subChunk.mSubChunkState != SubChunk::SubChunkState::ProcessedSubChunk) {
                                     continue;
                                 }
 
@@ -1586,6 +1591,138 @@ void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSe
     }
 }
 
+void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimension) {
+    if (mState.load(std::memory_order_acquire) != State::Recording) return;
+
+    auto const dimensionId = dimension.getDimensionId().id;
+    {
+        std::scoped_lock lock(mPendingPortableChunksMutex);
+        auto const       byDimension = mPendingPortableChunks.find(dimensionId);
+        if (byDimension == mPendingPortableChunks.end() || !byDimension->second.contains(pos)) return;
+    }
+
+    auto chunk = dimension.getChunkSource().getExistingChunk(pos);
+    if (!chunk || chunk->mIsEmptyClientChunk
+        || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+        return;
+    }
+
+    auto air = Block::tryGetFromRegistry(BedrockBlockNames::Air());
+    if (!air) return;
+
+    auto saveContext = SaveContextFactory::createNetworkSaveContext();
+    if (!saveContext) return;
+
+    auto const& subChunks          = *chunk->mSubChunks;
+    auto const  dimensionMinHeight = static_cast<int>(dimension.mHeightRange->mMin);
+    auto const  dimensionMaxHeight = static_cast<int>(dimension.mHeightRange->mMax);
+    auto const  subChunkCount      = static_cast<size_t>(dimension.getHeightInSubchunks());
+    if (dimensionMinHeight % 16 != 0 || dimensionMaxHeight <= dimensionMinHeight
+        || static_cast<size_t>((dimensionMaxHeight - dimensionMinHeight) / 16) != subChunkCount || subChunks.empty()) {
+        return;
+    }
+
+    auto levelBase = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
+    auto subBase   = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
+    if (!levelBase || !subBase || levelBase->getId() != MinecraftPacketIds::FullChunkData
+        || subBase->getId() != MinecraftPacketIds::SubChunkPacket) {
+        return;
+    }
+
+    auto level                            = std::static_pointer_cast<LevelChunkPacket>(std::move(levelBase));
+    level->mPos                           = pos;
+    level->mDimensionId                   = dimension.getDimensionId();
+    level->mCacheEnabled                  = false;
+    level->mSubChunksCount                = 0;
+    level->mClientNeedsToRequestSubchunks = true;
+    level->mClientRequestSubChunkLimit    = -1;
+    level->mCacheMetadata->clear();
+
+    BinaryStream     levelPayload;
+    VarIntDataOutput levelOutput(levelPayload);
+    chunk->serializeBiomes(levelOutput);
+    chunk->serializeBorderBlocks(levelOutput);
+    level->mSerializedChunk = std::move(levelPayload.mBuffer);
+
+    auto      subChunkPacket       = std::static_pointer_cast<SubChunkPacket>(std::move(subBase));
+    int const minimumSubChunkY     = dimensionMinHeight / 16;
+    subChunkPacket->mCacheEnabled  = false;
+    subChunkPacket->mDimensionType = dimension.getDimensionId();
+    subChunkPacket->mCenterPos     = SubChunkPos{pos.x, minimumSubChunkY, pos.z};
+    subChunkPacket->mSubChunkData->clear();
+    subChunkPacket->mSubChunkData->reserve(subChunks.size());
+
+    for (auto const& subChunk : subChunks) {
+        if (subChunk.isPlaceHolderSubChunk()) continue;
+        if (subChunk.mSubChunkState != SubChunk::SubChunkState::Normal
+            && subChunk.mSubChunkState != SubChunk::SubChunkState::RequestFinished
+            && subChunk.mSubChunkState != SubChunk::SubChunkState::ProcessedSubChunk) {
+            continue;
+        }
+
+        int const actualAbsoluteY = static_cast<int>(static_cast<schar>(subChunk.mAbsoluteIndex));
+        int const relativeY       = actualAbsoluteY - minimumSubChunkY;
+        if (relativeY < std::numeric_limits<schar>::min() || relativeY > std::numeric_limits<schar>::max()) continue;
+
+        BinaryStream serializedSubChunk;
+        bool const   allAir = subChunk.isUniform(*air);
+        if (!allAir) {
+            VarIntDataOutput subChunkOutput(serializedSubChunk);
+            subChunk.serialize(subChunkOutput, false);
+        }
+        VarIntDataOutput blockActorOutput(serializedSubChunk);
+        chunk->serializeBlockEntitiesForSubChunk(
+            blockActorOutput,
+            SubChunkPos{pos.x, actualAbsoluteY, pos.z},
+            *saveContext
+        );
+
+        SubChunkPacket::SubChunkPosOffset offset{};
+        offset.mY         = static_cast<schar>(relativeY);
+        auto const result = allAir ? SubChunkPacket::SubChunkRequestResult::SuccessAllAir
+                                   : SubChunkPacket::SubChunkRequestResult::Success;
+        subChunkPacket->mSubChunkData->emplace_back(offset, result);
+        auto& data               = subChunkPacket->mSubChunkData->back();
+        data.mSerializedSubChunk = std::move(serializedSubChunk.mBuffer);
+        data.mBlobId             = 0;
+        chunk->populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
+    }
+
+    recordGamePacket(*level);
+    if (!subChunkPacket->mSubChunkData->empty()) recordGamePacket(*subChunkPacket);
+
+    std::scoped_lock lock(mPendingPortableChunksMutex);
+    auto const       byDimension = mPendingPortableChunks.find(dimensionId);
+    if (byDimension == mPendingPortableChunks.end()) return;
+    byDimension->second.erase(pos);
+    if (byDimension->second.empty()) mPendingPortableChunks.erase(byDimension);
+}
+
+void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet) {
+    auto const state = mState.load(std::memory_order_acquire);
+    if (state != State::Recording && state != State::Closing) return;
+
+    auto const& pos          = *packet.mPos;
+    auto const  dimensionId  = static_cast<DimensionType const&>(packet.mDimensionId).id;
+    bool const  requestMode  = static_cast<bool>(packet.mClientNeedsToRequestSubchunks);
+    bool const  cacheEnabled = static_cast<bool>(packet.mCacheEnabled);
+    if (requestMode && !cacheEnabled) {
+        {
+            std::scoped_lock lock(mPendingPortableChunksMutex);
+            auto const       byDimension = mPendingPortableChunks.find(dimensionId);
+            if (byDimension != mPendingPortableChunks.end()) {
+                byDimension->second.erase(pos);
+                if (byDimension->second.empty()) mPendingPortableChunks.erase(byDimension);
+            }
+        }
+        recordGamePacket(packet);
+        return;
+    }
+
+    std::scoped_lock lock(mPendingPortableChunksMutex);
+    mPendingPortableChunks[dimensionId].emplace(pos);
+}
+
 void Recorder::recordGamePacket(Packet const& packet) {
     auto const packetId  = packet.getId();
     auto const semantics = describePacketLifecycle(packetId);
@@ -1742,6 +1879,10 @@ void Recorder::cancelRecording(std::string_view reason) {
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mPendingGamePackets.clear();
+    }
+    {
+        std::scoped_lock lock(mPendingPortableChunksMutex);
+        mPendingPortableChunks.clear();
     }
 }
 

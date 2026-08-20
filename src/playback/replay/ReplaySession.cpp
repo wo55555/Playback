@@ -1852,8 +1852,17 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 
         ChunkPos const pos = *levelChunk.mPos;
         if (!levelChunkPositions.emplace(pos).second) {
-            getLogger().error("Replay snapshot contains duplicate LevelChunk column ({}, {})", pos.x, pos.z);
-            return false;
+            auto const duplicate = std::find_if(levelChunks.begin(), levelChunks.end(), [&pos](auto const& existing) {
+                return existing.pos == pos;
+            });
+            if (duplicate != levelChunks.end()) duplicate->index = index;
+            if (static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)) {
+                requestModeLevelChunks.emplace(pos);
+            } else {
+                requestModeLevelChunks.erase(pos);
+            }
+            targetColumns[pos].levelChunkIndex = index;
+            continue;
         }
         if (static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)) {
             requestModeLevelChunks.emplace(pos);
