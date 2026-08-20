@@ -77,7 +77,6 @@ bool hookIdleDetection(bool enable) {
         if (state.pause && PlaybackPauseHook::unhook()) state.pause = false;
         if (state.focusState && PlaybackFocusStateHook::unhook()) state.focusState = false;
         if (state.warning && PlaybackSuspendWarningModalHook::unhook()) state.warning = false;
-        PlaybackPauseHook::unhook();
         return noneInstalled();
     };
 
