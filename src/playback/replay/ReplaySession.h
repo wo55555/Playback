@@ -50,30 +50,6 @@ enum class ReplayExportTickState : uint8_t { Unavailable, Waiting, Ready, Invali
 
 enum class ReplayExportTimelinePhase : uint8_t { Inactive, Initializing, Continuous };
 
-struct ReplaySceneReadiness {
-    int      chunkX{};
-    int      chunkZ{};
-    int      chunkLoadState{-1};
-    uint32_t requiredChunkCount{};
-    uint32_t recordedChunkCount{};
-    uint32_t presentChunkCount{};
-    uint32_t readyChunkCount{};
-    uint32_t emptyChunkCount{};
-    bool     replayReady{};
-    bool     dimensionTransitionPending{};
-    bool     snapshotPending{};
-    bool     chunkInjectionPending{};
-    bool     chunkPresent{};
-    bool     chunkEmpty{};
-    bool     chunkLoaded{};
-
-    [[nodiscard]] bool ready() const noexcept {
-        return replayReady && !dimensionTransitionPending && !snapshotPending && !chunkInjectionPending && chunkPresent
-            && !chunkEmpty && chunkLoaded && requiredChunkCount != 0 && recordedChunkCount == requiredChunkCount
-            && readyChunkCount == requiredChunkCount;
-    }
-};
-
 struct ReplayCameraViewpoint {
     float x{};
     float y{};
@@ -383,8 +359,6 @@ public:
     void setExportCameraViewpoint(std::optional<ReplayCameraViewpoint> viewpoint) noexcept;
 
     void updateExportObserver(ReplayCameraViewpoint const& viewpoint);
-
-    [[nodiscard]] ReplaySceneReadiness getSceneReadiness() const;
 
     [[nodiscard]] std::unique_ptr<visuals::ScopedReplayEntityPose>
     createReplayEntityRenderScope(visuals::ReplaySampleTime const& sample);

@@ -15,7 +15,7 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 > Use a clean LeviLamina instance without other third-party mods whenever possible. Broad mod compatibility is not currently guaranteed.
 
 > [!CAUTION]
-> `v0.2.0-mc26.10` is a test release. Replay archives created by earlier Playback releases are incompatible and must be recorded again. The configuration version and recording-file snapshot context version remain `1`; no migration is provided.
+> `v0.2.0-mc26.10` is a test release. Replay archives created by earlier Playback releases are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.0-mc26.10` archives do not require conversion. The configuration version and recording-file snapshot context version remain `1`; no migration is provided.
 
 ## Install with LeviLauncher and Lip
 
@@ -118,6 +118,6 @@ The experimental exporter renders frames from replay time rather than recording 
 | D3D11    | H.264 MP4, PNG sequence | 1x          |
 
 > [!IMPORTANT]
-> Video export is experimental and currently has no audio. Camera regions must exist in the recorded replay data; Playback cannot reconstruct chunks that were never recorded. Cross-dimension loading, UI stabilization, and camera-scene preparation use timeouts and may fail with a detailed log message when the replay lacks required data.
+> Video export is experimental and currently has no audio. Camera regions must exist in the recorded replay data; Playback cannot reconstruct chunks that were never recorded. Cross-dimension loading, replay-state preparation, UI stabilization, and export warm-up use timeouts. Playback no longer requires every chunk in a fixed camera neighborhood to be present, but missing replay data can still prevent the intended scene from rendering.
 
 For development instructions, see [Building Playback](building.md). Release history is available in the [changelog](../CHANGELOG.md).

@@ -77,6 +77,7 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 ## Minecraft Bedrock Replay and Camera Features
 
 - **Session capture** — Records loaded chunks, block actors, entity movement, player state, time, and selected client-safe game packets.
+- **Multiplayer chunk compatibility** — Preserves local-world chunk handling while capturing portable replay data after client decoding on servers that use alternate chunk transport modes.
 - **Low-impact recording** — Writes replay snapshots and timeline data asynchronously to reduce recording stalls.
 - **Portable archives** — Exports recordings as replay files that are easy to store and share.
 - **Isolated playback** — Opens recordings from a native main-menu browser in a dedicated local replay world.
@@ -92,10 +93,10 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 
 ## Latest Changes
 
-`v0.2.0` adds cinematic camera keyframes, dimension-aware preview, experimental MP4/PNG export, D3D11/D3D12 capture, camera-region chunk tracking, and a large replay/editor architecture cleanup.
+`v0.2.0` adds cinematic camera keyframes, dimension-aware preview, experimental MP4/PNG export, D3D11/D3D12 capture, camera-region chunk tracking, and a large replay/editor architecture cleanup. The August 20, 2026 hotfix improves multiplayer replay compatibility, preserves custom-entity registry data, keeps video export running while Minecraft is unfocused, and removes a fixed camera-neighborhood check that could leave valid exports stuck at frame 0.
 
 > [!CAUTION]
-> Playback releases are still test builds and may make destructive format or configuration changes. Replay archives from earlier releases are incompatible with `v0.2.0-mc26.10` and must be recorded again. The configuration version and recording-file snapshot context version remain `1`; no migration layer is provided.
+> Playback releases are still test builds and may make destructive format or configuration changes. Replay archives from earlier releases are incompatible with `v0.2.0-mc26.10` and must be recorded again. Replays recorded before this hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.0-mc26.10` archives do not require conversion. The configuration version and recording-file snapshot context version remain `1`; no migration layer is provided.
 
 > [!IMPORTANT]
 > The **Playback** main-menu button still uses a lightweight UI resource pack. Complete Lip and release-ZIP installations include it under `mods/playback/resource_packs/playback-ui/`; the Release also provides `playback-ui.mcpack` for standalone manual import.
@@ -141,7 +142,7 @@ Playback is a native Minecraft Bedrock replay recorder and camera editor for the
 
 ### Can Playback record multiplayer servers?
 
-Yes. Playback is client-only and can record the chunks, entities, and selected packets visible to the client in local worlds or multiplayer sessions.
+Yes. Playback is client-only and can record the chunks, entities, and selected packets visible to the client in local worlds or multiplayer sessions. The August 20, 2026 hotfix improves recording for servers that use alternate chunk transport or custom entity registries. Replays recorded before the fix cannot recover data that was never saved and may need to be recorded again.
 
 ### Can Playback export a replay to video?
 
@@ -173,6 +174,7 @@ Use `v0.2.0-mc26.10` for LeviLamina `26.10.*`. Minecraft/LeviLamina `26.20.*` us
 - Experimental video export currently produces silent H.264 MP4 or PNG sequences; audio export is not implemented and additional runtime issues may remain.
 - SSAA is limited to 2x on D3D12 and 1x on D3D11.
 - A camera can only render chunks present in the replay data; unrecorded terrain cannot be reconstructed.
+- The hotfix cannot retroactively restore server chunk or custom-entity registry data missing from an existing replay archive.
 - Compatibility must be checked again after updating Minecraft or LeviLamina.
 
 Please report reproducible problems with logs, versions, and a minimal replay where possible.
