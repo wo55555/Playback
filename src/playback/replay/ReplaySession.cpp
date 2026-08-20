@@ -2160,7 +2160,7 @@ bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_poi
         if (direct) {
             applied = applyRequestModeLevelChunkDirect(mChunkPackets[static_cast<size_t>(index)]);
             if (!applied) {
-                getLogger().warn("Direct replay LevelChunk update became unavailable; falling back to native loading");
+                getLogger().debug("Direct replay LevelChunk update unavailable; using native loading");
                 mDirectLevelChunkIndices.clear();
                 mDirectSnapshotColumns.clear();
                 continue;
@@ -2211,7 +2211,7 @@ bool ReplaySession::injectReadySubChunkPackets(
         bool             applied =
             direct ? applySubChunkDirect(payload) : injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
         if (direct && !applied) {
-            getLogger().warn("Direct replay SubChunk update became unavailable; falling back to native loading");
+            getLogger().debug("Direct replay SubChunk update unavailable; using native loading");
             for (auto const& target : pending.targets) mDirectSnapshotColumns.erase(target);
             applied = injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
         }

@@ -18,7 +18,6 @@
 
 #include <atomic>
 #include <cmath>
-#include <limits>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -62,7 +61,7 @@ struct ActiveRenderSample {
 
 std::atomic_bool                               gHookInstalled{false};
 std::atomic_bool                               gOfflineFlagMismatchLogged{false};
-std::atomic<uint64_t>                          gLastCameraSampleLoggedFrame{std::numeric_limits<uint64_t>::max()};
+std::atomic_bool                               gInitialCameraSampleLogged{false};
 std::atomic_bool                               gMissingCameraSampleLogged{false};
 std::mutex                                     gClockMutex;
 std::optional<ActiveClockSample>               gActiveSample;
@@ -345,7 +344,7 @@ bool hookOfflineRenderClock(bool enable) {
         bool const ready = state.clock && state.gameFrame && state.bgfxSwap;
         gHookInstalled.store(ready, std::memory_order_release);
         if (ready) {
-            gLastCameraSampleLoggedFrame.store(std::numeric_limits<uint64_t>::max(), std::memory_order_release);
+            gInitialCameraSampleLogged.store(false, std::memory_order_release);
             gMissingCameraSampleLogged.store(false, std::memory_order_release);
             return true;
         }
@@ -408,26 +407,15 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
         active.cameraRequired = cameraSample.has_value();
         gActiveSample         = std::move(active);
     }
-    bool logSample = sample.frameIndex == 0 || sample.frameIndex % 60 == 0;
-    if (logSample) {
-        auto previous = gLastCameraSampleLoggedFrame.load(std::memory_order_acquire);
-        while (previous != sample.frameIndex
-               && !gLastCameraSampleLoggedFrame.compare_exchange_weak(
-                   previous,
-                   sample.frameIndex,
-                   std::memory_order_acq_rel,
-                   std::memory_order_acquire
-               )) {}
-        logSample = previous != sample.frameIndex;
-    }
+    bool const logSample  = cameraSample && !gInitialCameraSampleLogged.exchange(true, std::memory_order_acq_rel);
     bool const logMissing = !cameraSample && !gMissingCameraSampleLogged.exchange(true, std::memory_order_acq_rel);
     if (logSample || logMissing) {
         auto& logger = Playback::getInstance().getSelf().getLogger();
         if (cameraSample) {
             auto const& state = cameraSample->state;
-            logger.info(
-                "Export camera pose sample (frame={}, token={}, tick={}/{}, cameraId={}, "
-                "base=({}, {}, {}), yaw={}, pitch={}, roll={}, fov={})",
+            logger.debug(
+                "Initial export camera sample (frame={}, token={}, tick={}/{}, cameraId={}, position=({}, {}, {}), "
+                "yaw={}, pitch={}, roll={}, fov={})",
                 sample.frameIndex,
                 token.id,
                 sample.replayTime.numerator,
