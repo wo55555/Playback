@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0-mc26.10] - 2026-08-18
+## [0.2.0-mc26.10] - 2026-08-20
 
 ### Added
 
@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added Smooth, Linear, Ease In, Ease Out, Ease In/Out, Hold, Hermite, and Cubic Bezier camera interpolation.
 - Added experimental frame-by-frame H.264 MP4 and PNG-sequence export with configurable tick range, frame rate, resolution, SSAA, warm-up, progress, cancellation, finalization, output validation, and clear-frame retry handling.
 - Added D3D11 and D3D12 framebuffer capture paths. D3D12 supports SSAA 1x/2x; D3D11 uses the stable 1x path.
-- Added export-time scene readiness checks, camera-driven observer/chunk tracking, and stable-frame warm-up after fast movement or dimension changes.
+- Added camera-driven observer/chunk tracking and stable-frame warm-up after fast movement or dimension changes.
 
 ### Changed
 
@@ -24,8 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Made paused replay use the freely movable observer camera, while active keyframe preview/export uses the sampled timeline camera.
 - Reworked replay rendering so preview and export share the camera timeline, entity-pose sampling, observer synchronization, and cross-dimension state machine.
 - Unified entity rendering around one sampled pose per frame and temporarily suppressed native movement interpolation during export rendering.
+- Reworked chunk recording to preserve native request-mode packets for local worlds while converting inline or cache-enabled server chunks into portable replay data after client decoding.
+- Changed export preparation to rely on replay tick, dimension transition, UI stability, and warm-up state instead of requiring every chunk in a fixed camera neighborhood.
+- Derived the packaged mod version from the nearest Git release tag so hotfix builds retain the `0.2.0-mc26.10` identifier.
 - Set the product version to `0.2.0` and the MC 26.10 release identifier to `v0.2.0-mc26.10`.
 - Kept the configuration version in `Config.h` and the recording-file snapshot context version at `1`; no configuration or replay migration layer is provided.
+- Replays recorded before this hotfix on affected servers may already be missing portable chunk or custom-entity registry data. Those archives cannot be repaired and must be recorded again; complete `v0.2.0-mc26.10` archives do not require conversion.
 
 ### Removed
 
@@ -39,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed high-speed player ghosting caused by native and replay render paths observing different interpolated positions.
 - Fixed free-camera translation stutter, pause rebound, third-person offsets, mouse grab/release loops, and unnecessary pause-time server teleports.
 - Fixed raw camera FOV units, D3D11 supersampling fallback, D3D12 clear-frame recovery, and SSAA values above the stable 2x limit.
+- Fixed replay terrain appearing as air on servers that send inline or cache-enabled chunk data.
+- Fixed local-world seek failures caused by duplicate chunk columns or missing subchunk sections after server compatibility conversion.
+- Fixed resource-pack handshakes discarding actor-registry configuration required to reconstruct custom server entities in newly recorded replays.
+- Fixed snapshot application choosing an older LevelChunk record when multiple versions of the same chunk column were present.
+- Fixed offline video export stopping when Minecraft lost focus or attempted to open pause or suspend UI.
+- Fixed valid exports remaining at frame 0 because a fixed 5x5 camera-neighborhood readiness check could never be satisfied.
 
 ## [0.1.2-mc26.10] - 2026-08-03
 

@@ -390,16 +390,14 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
         token.id = gNextTokenId++;
         if (gNextTokenId == 0) ++gNextTokenId;
 
-        auto const cameraContext = keyframe::publishCameraTimelineRenderContext(
-            keyframe::CameraTimelineRenderContext{
-                sample.replayTime,
-                keyframe::CameraTimelineSource::Export,
-                token.id,
-                cameraSample,
-                cameraAppliedFlag,
-                sample.frameIndex,
-            }
-        );
+        auto const cameraContext = keyframe::publishCameraTimelineRenderContext(keyframe::CameraTimelineRenderContext{
+            sample.replayTime,
+            keyframe::CameraTimelineSource::Export,
+            token.id,
+            cameraSample,
+            cameraAppliedFlag,
+            sample.frameIndex,
+        });
         ActiveClockSample active{};
         active.token          = token;
         active.sample         = sample;
