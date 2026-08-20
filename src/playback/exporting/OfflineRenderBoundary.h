@@ -113,7 +113,6 @@ private:
     std::chrono::steady_clock::time_point          mWarmupLastLoggedAt{};
     bool                                           mTickGateOpen{};
     bool                                           mTickGateSuspendedForDimension{};
-    bool                                           mCameraSampleActive{};
     bool                                           mTimelineInitialized{};
     bool                                           mInitializationTickObserved{};
     OfflineRenderBoundaryState                     mState{OfflineRenderBoundaryState::Closed};

@@ -733,56 +733,6 @@ void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint)
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
 }
 
-ReplaySceneReadiness ReplaySession::getSceneReadiness() const {
-    ReplaySceneReadiness result;
-    auto const*          player = mReplayPlayer;
-    if (!player) return result;
-
-    auto const&           playerPosition = player->getPosition();
-    ReplayCameraViewpoint position{playerPosition.x, playerPosition.y, playerPosition.z};
-    if (mExportCameraViewpoint) position = *mExportCameraViewpoint;
-    if (!std::isfinite(position.x) || !std::isfinite(position.z)) return result;
-
-    ChunkPos const chunkPos{position.x, position.z};
-    result.chunkX                     = chunkPos.x;
-    result.chunkZ                     = chunkPos.z;
-    result.dimensionTransitionPending = mPendingReplayDimension.has_value();
-    result.snapshotPending            = mPendingSnapshotApply.has_value() || mApplyingChunkSnapshot;
-    result.chunkInjectionPending      = mChunkInjectionPending;
-
-    auto const* dimension = mReplayDimension.load(std::memory_order_acquire);
-    result.replayReady    = mActive && mReplayWorldJoined && mWorldReady && !mReplayFailed && dimension;
-    if (!result.replayReady) return result;
-
-    constexpr int CameraChunkRadius = 2;
-    auto&         chunkSource       = dimension->getChunkSource();
-    for (int dz = -CameraChunkRadius; dz <= CameraChunkRadius; ++dz) {
-        for (int dx = -CameraChunkRadius; dx <= CameraChunkRadius; ++dx) {
-            ChunkPos const candidate{chunkPos.x + dx, chunkPos.z + dz};
-            ++result.requiredChunkCount;
-            bool const recorded = mSnapshotChunks.contains(candidate) || mApplyingSnapshotChunks.contains(candidate);
-            if (recorded) ++result.recordedChunkCount;
-
-            auto const chunk     = chunkSource.getExistingChunk(candidate);
-            bool const present   = static_cast<bool>(chunk);
-            auto const loadState = chunk ? chunk->mLoadState->load(std::memory_order_acquire) : ChunkState::Unloaded;
-            bool const empty     = chunk && chunk->mIsEmptyClientChunk;
-            bool const loaded    = chunk && loadState == ChunkState::Loaded;
-            if (present) ++result.presentChunkCount;
-            if (empty) ++result.emptyChunkCount;
-            if (recorded && present && !empty && loaded) ++result.readyChunkCount;
-
-            if (dx == 0 && dz == 0) {
-                result.chunkPresent   = present;
-                result.chunkEmpty     = empty;
-                result.chunkLoadState = static_cast<int>(loadState);
-                result.chunkLoaded    = loaded;
-            }
-        }
-    }
-    return result;
-}
-
 std::unique_ptr<visuals::ScopedReplayEntityPose>
 ReplaySession::createReplayEntityRenderScope(visuals::ReplaySampleTime const& sample) {
     if (!sample.isValid() || !mActive || !mReplayWorldJoined || !mWorldReady || !refreshReplayPlayer()) return {};
