@@ -21,11 +21,13 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class LevelChunkPacket;
 class SubChunkPacket;
 class Packet;
+class Dimension;
 
 namespace playback::packet {
 struct PacketLifecycleSemantics;
@@ -75,25 +77,27 @@ private:
     };
     std::unique_ptr<AsyncReplaySaver> mAsyncReplaySaver;
 
-    std::vector<std::shared_ptr<LevelChunkPacket>> mSnapshotLevelChunks;
-    std::vector<std::shared_ptr<SubChunkPacket>>   mSnapshotSubChunks;
-    std::vector<PlaybackSerializedGamePacket>      mSnapshotConfigurationPackets;
-    std::vector<PlaybackSerializedGamePacket>      mSnapshotEntityPackets;
-    std::optional<std::string>                     mSnapshotLocalPlayerPayload;
-    std::vector<PlaybackSerializedGamePacket>      mConfigurationPackets;
-    std::unordered_map<int32_t, size_t>            mConfigurationPacketIndices;
-    std::vector<PlaybackSerializedGamePacket>      mPendingGamePackets;
-    mutable std::mutex                             mPendingGamePacketsMutex;
-    std::unordered_map<int32_t, uint64_t>          mRecordedGamePacketCounts;
-    std::unordered_map<ActorUniqueID, std::string> mLastEntityMovements;
-    std::optional<ActorUniqueID>                   mRecordedLocalPlayerId;
-    std::optional<ActorRuntimeID>                  mRecordedLocalPlayerRuntimeId;
-    std::optional<mce::UUID>                       mRecordedLocalPlayerUuid;
-    std::optional<std::string>                     mLastLocalPlayerDataPacket;
-    std::optional<PlaybackSetEquipmentPacket>      mLastLocalPlayerEquipmentPacket;
-    std::optional<int>                             mLastLocalPlayerSwingTime;
-    std::optional<PlaybackView>                    mSnapshotView;
-    std::optional<SnapshotDimension>               mSnapshotDimension;
+    std::vector<std::shared_ptr<LevelChunkPacket>>            mSnapshotLevelChunks;
+    std::vector<std::shared_ptr<SubChunkPacket>>              mSnapshotSubChunks;
+    std::vector<PlaybackSerializedGamePacket>                 mSnapshotConfigurationPackets;
+    std::vector<PlaybackSerializedGamePacket>                 mSnapshotEntityPackets;
+    std::optional<std::string>                                mSnapshotLocalPlayerPayload;
+    std::vector<PlaybackSerializedGamePacket>                 mConfigurationPackets;
+    std::unordered_map<int32_t, size_t>                       mConfigurationPacketIndices;
+    std::vector<PlaybackSerializedGamePacket>                 mPendingGamePackets;
+    mutable std::mutex                                        mPendingGamePacketsMutex;
+    std::unordered_map<int32_t, std::unordered_set<ChunkPos>> mPendingPortableChunks;
+    std::mutex                                                mPendingPortableChunksMutex;
+    std::unordered_map<int32_t, uint64_t>                     mRecordedGamePacketCounts;
+    std::unordered_map<ActorUniqueID, std::string>            mLastEntityMovements;
+    std::optional<ActorUniqueID>                              mRecordedLocalPlayerId;
+    std::optional<ActorRuntimeID>                             mRecordedLocalPlayerRuntimeId;
+    std::optional<mce::UUID>                                  mRecordedLocalPlayerUuid;
+    std::optional<std::string>                                mLastLocalPlayerDataPacket;
+    std::optional<PlaybackSetEquipmentPacket>                 mLastLocalPlayerEquipmentPacket;
+    std::optional<int>                                        mLastLocalPlayerSwingTime;
+    std::optional<PlaybackView>                               mSnapshotView;
+    std::optional<SnapshotDimension>                          mSnapshotDimension;
 
     std::optional<DimensionType>        mRecordingDimension;
     std::string                         mSnapshotFailure;
@@ -179,7 +183,11 @@ public:
 
     void recordNetworkGamePacket(Packet const& packet);
 
+    void recordLevelChunkPacket(LevelChunkPacket const& packet);
+
     void recordGamePacket(Packet const& packet);
+
+    void recordCompletedChunk(ChunkPos const& pos, Dimension const& dimension);
 
     void endTick(bool close);
 

@@ -86,7 +86,6 @@ bool OfflineRenderBoundary::open(
     mReplayTickRecoveryCount       = 0;
     mReplayTickRequestedAt         = {};
     mTickGateSuspendedForDimension = false;
-    mCameraSampleActive            = false;
     mState                         = OfflineRenderBoundaryState::Ready;
     mError                         = OfflineRenderBoundaryError::None;
     mMessage.clear();
@@ -120,7 +119,6 @@ void OfflineRenderBoundary::close() {
     mWarmupStartedAt               = {};
     mWarmupLastLoggedAt            = {};
     mTickGateSuspendedForDimension = false;
-    mCameraSampleActive            = false;
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
     mState                         = OfflineRenderBoundaryState::Closed;
@@ -155,7 +153,6 @@ void OfflineRenderBoundary::cancel() {
     mWarmupStartedAt               = {};
     mWarmupLastLoggedAt            = {};
     mTickGateSuspendedForDimension = false;
-    mCameraSampleActive            = false;
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
     mState                         = OfflineRenderBoundaryState::Cancelled;
@@ -605,11 +602,10 @@ OfflineRenderBoundaryStatus OfflineRenderBoundary::status() {
                     result.downloads.message.empty() ? "The renderer frame download failed" : result.downloads.message
                 );
             }
-        } else if (
-            result.state != OfflineRenderBoundaryState::Closed && result.state != OfflineRenderBoundaryState::Cancelled
-            && (result.downloads.state == FrameDownloadQueueState::Closed
-                || result.downloads.state == FrameDownloadQueueState::Cancelled)
-        ) {
+        } else if (result.state != OfflineRenderBoundaryState::Closed
+                   && result.state != OfflineRenderBoundaryState::Cancelled
+                   && (result.downloads.state == FrameDownloadQueueState::Closed
+                       || result.downloads.state == FrameDownloadQueueState::Cancelled)) {
             fault(
                 OfflineRenderBoundaryError::CaptureUnavailable,
                 result.downloads.message.empty() ? "The framebuffer download queue became unavailable"
@@ -643,9 +639,9 @@ std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(Expor
     long double delta             = 0.0L;
     int64_t     previousWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
     if (mLastSubmittedFrame) {
-        delta             = current
-                          - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
-                                / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
+        delta = current
+              - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
+                    / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
         previousWholeTick = mLastSubmittedFrame->replayTickNumerator / mLastSubmittedFrame->replayTickDenominator;
     }
     if (delta < 0.0L || delta > static_cast<long double>(std::numeric_limits<float>::max())) return std::nullopt;
@@ -663,8 +659,7 @@ std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(Expor
 }
 
 void OfflineRenderBoundary::updateExportCamera(ExportFramePlan const& frame) {
-    mCameraSampleActive = false;
-    auto const sample   = clockSample(frame);
+    auto const sample = clockSample(frame);
     if (!sample) {
         mReplay.setExportCameraViewpoint(std::nullopt);
         return;
@@ -674,8 +669,7 @@ void OfflineRenderBoundary::updateExportCamera(ExportFramePlan const& frame) {
         keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample->replayTime);
     std::optional<replay::ReplayCameraViewpoint> viewpoint;
     if (cameraSample) {
-        mCameraSampleActive = true;
-        viewpoint           = replay::ReplayCameraViewpoint{
+        viewpoint = replay::ReplayCameraViewpoint{
             cameraSample->state.x,
             cameraSample->state.y,
             cameraSample->state.z,
@@ -685,11 +679,6 @@ void OfflineRenderBoundary::updateExportCamera(ExportFramePlan const& frame) {
     }
     mReplay.setExportCameraViewpoint(viewpoint);
     if (viewpoint) mReplay.updateExportObserver(*viewpoint);
-    if (warmupComplete() && mCameraSampleActive && !mReplay.getSceneReadiness().ready()) {
-        mWarmupStableFrames = 0;
-        mWarmupStartedAt    = {};
-        mWarmupLastLoggedAt = {};
-    }
 }
 
 OfflineRenderStepResult OfflineRenderBoundary::advanceWarmup(ExportFramePlan const& frame) {
@@ -755,16 +744,10 @@ OfflineRenderStepResult OfflineRenderBoundary::advanceWarmup(ExportFramePlan con
     mRenderWaitStartedAt    = {};
     mRenderWaitLastLoggedAt = {};
     mExecutor.completeWarmup();
-    auto const                                  executor   = mExecutor.status();
-    bool                                        sceneReady = true;
-    std::optional<replay::ReplaySceneReadiness> scene;
-    if (mCameraSampleActive) {
-        scene      = mReplay.getSceneReadiness();
-        sceneReady = scene->ready();
-    }
+    auto const executor = mExecutor.status();
     clearClockSample();
     if (mWarmupFramesRemaining != 0) --mWarmupFramesRemaining;
-    bool const stableFrame = executor.uiStable && sceneReady;
+    bool const stableFrame = executor.uiStable;
     mWarmupStableFrames    = stableFrame ? mWarmupStableFrames + 1 : 0;
 
     auto const now = std::chrono::steady_clock::now();
@@ -772,56 +755,21 @@ OfflineRenderStepResult OfflineRenderBoundary::advanceWarmup(ExportFramePlan con
         && (mWarmupLastLoggedAt == std::chrono::steady_clock::time_point{}
             || now - mWarmupLastLoggedAt >= RenderWaitLogInterval)) {
         auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - mWarmupStartedAt);
-        if (scene) {
-            Playback::getInstance().getSelf().getLogger().warn(
-                "Offline camera scene is not ready during warm-up (elapsedMs={}, frame={}, chunk=({}, {}), "
-                "replayReady={}, dimensionPending={}, snapshotPending={}, injectionPending={}, present={}, "
-                "empty={}, loaded={}, loadState={}, recorded={}/{}, ready={}/{}, presentCount={}, emptyCount={}, "
-                "uiStable={}, remaining={}, stableFrames={}/{})",
-                elapsed.count(),
-                frame.ticket.frameIndex,
-                scene->chunkX,
-                scene->chunkZ,
-                scene->replayReady,
-                scene->dimensionTransitionPending,
-                scene->snapshotPending,
-                scene->chunkInjectionPending,
-                scene->chunkPresent,
-                scene->chunkEmpty,
-                scene->chunkLoaded,
-                scene->chunkLoadState,
-                scene->recordedChunkCount,
-                scene->requiredChunkCount,
-                scene->readyChunkCount,
-                scene->requiredChunkCount,
-                scene->presentChunkCount,
-                scene->emptyChunkCount,
-                executor.uiStable,
-                mWarmupFramesRemaining,
-                mWarmupStableFrames,
-                StableWarmupFrames
-            );
-        } else {
-            Playback::getInstance().getSelf().getLogger().warn(
-                "Offline scene is not stable during warm-up (elapsedMs={}, frame={}, uiStable={}, remaining={}, "
-                "stableFrames={}/{})",
-                elapsed.count(),
-                frame.ticket.frameIndex,
-                executor.uiStable,
-                mWarmupFramesRemaining,
-                mWarmupStableFrames,
-                StableWarmupFrames
-            );
-        }
+        Playback::getInstance().getSelf().getLogger().warn(
+            "Offline scene is not stable during warm-up (elapsedMs={}, frame={}, uiStable={}, remaining={}, "
+            "stableFrames={}/{})",
+            elapsed.count(),
+            frame.ticket.frameIndex,
+            executor.uiStable,
+            mWarmupFramesRemaining,
+            mWarmupStableFrames,
+            StableWarmupFrames
+        );
         mWarmupLastLoggedAt = now;
     }
 
     if (mWarmupFramesRemaining == 0 && !stableFrame && now - mWarmupStartedAt > WarmupSceneTimeout) {
-        fault(
-            OfflineRenderBoundaryError::ReplayUnavailable,
-            mCameraSampleActive ? "The export camera chunk did not become ready during warm-up"
-                                : "The export scene did not become stable during warm-up"
-        );
+        fault(OfflineRenderBoundaryError::ReplayUnavailable, "The export scene did not become stable during warm-up");
         return OfflineRenderStepResult::Failed;
     }
     if (warmupComplete()) mState = OfflineRenderBoundaryState::PreparingReplay;
