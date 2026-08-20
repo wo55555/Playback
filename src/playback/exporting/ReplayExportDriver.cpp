@@ -146,13 +146,13 @@ bool ReplayExportDriver::start(
         return false;
     }
 
-    mPreviousPaused = mReplay.isPaused();
+    bool const previousPaused = mReplay.isPaused();
     if (!mReplay.setPaused(true)) {
         (void)hookOfflineRenderClock(false);
         fail(ExportError::ReplayUnavailable, "Unable to pause the replay for export");
         return false;
     }
-    mRestorePaused = true;
+    mPreviousPaused = previousPaused;
 
     if (!mRenderBoundary->open(ExportCaptureCapacity, mPlan->settings, project, std::move(cameraFallback))) {
         (void)hookOfflineRenderClock(false);
@@ -435,9 +435,10 @@ void ReplayExportDriver::fail(ExportError error, std::string message) {
 }
 
 void ReplayExportDriver::restoreReplayState() {
-    if (!mRestorePaused) return;
-    mRestorePaused = false;
-    if (mReplay.isActive()) (void)mReplay.setPaused(mPreviousPaused);
+    if (!mPreviousPaused) return;
+    bool const previousPaused = *mPreviousPaused;
+    mPreviousPaused.reset();
+    if (mReplay.isActive()) (void)mReplay.setPaused(previousPaused);
 }
 
 void ReplayExportDriver::closeCapture(bool cancelled) {

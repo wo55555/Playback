@@ -76,22 +76,17 @@ public:
         OfflineRenderClockToken   token        = {},
         uint64_t                  renderSerial = 0
     )
-    : mPrevious(gRenderSample),
-      mHadPrevious(gRenderSample.has_value()) {
+    : mPrevious(gRenderSample) {
         gRenderSample = ActiveRenderSample{time, token, renderSerial};
     }
 
-    ~ScopedRenderSample() {
-        if (mHadPrevious) gRenderSample = mPrevious;
-        else gRenderSample.reset();
-    }
+    ~ScopedRenderSample() { gRenderSample = mPrevious; }
 
     ScopedRenderSample(ScopedRenderSample const&)            = delete;
     ScopedRenderSample& operator=(ScopedRenderSample const&) = delete;
 
 private:
     std::optional<ActiveRenderSample> mPrevious;
-    bool                              mHadPrevious{};
 };
 
 class ScopedTimerOverride {

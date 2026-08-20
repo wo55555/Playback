@@ -64,8 +64,7 @@ private:
     std::unique_ptr<OfflineRenderBoundary> mRenderBoundary;
     std::optional<CompiledExportPlan>      mPlan;
     std::deque<visuals::CapturedFrame>     mReadyFrames;
-    bool                                   mPreviousPaused{};
-    bool                                   mRestorePaused{};
+    std::optional<bool>                    mPreviousPaused;
     uint32_t                               mClearFrameRetryCount{};
     uint64_t                               mRejectedClearFrameCount{};
     uint64_t                               mNextFrameIndex{};

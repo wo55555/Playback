@@ -15,8 +15,8 @@ void restore(std::optional<model::EditorStateExt> const& before, model::EditorSt
 } // namespace
 
 void AddCameraSequence::execute(model::EditorStateExt& state) {
-    mChanged = state.sequence.empty();
-    if (!mChanged) return;
+    mBefore.reset();
+    if (!state.sequence.empty()) return;
     mBefore = state;
     state.sequence.push_back({"sequence", 0, state.totalTicks});
 }
@@ -25,8 +25,8 @@ void        AddCameraSequence::undo(model::EditorStateExt& state) { restore(mBef
 std::string AddCameraSequence::label() const { return "Add Camera Sequence"; }
 
 void DeleteCameraSequence::execute(model::EditorStateExt& state) {
-    mChanged = !state.sequence.empty();
-    if (!mChanged) return;
+    mBefore.reset();
+    if (state.sequence.empty()) return;
     mBefore = state;
     state.sequence.clear();
 }
@@ -38,8 +38,11 @@ SplitSequenceAtPlayhead::SplitSequenceAtPlayhead(int tick) : mTick(tick) {}
 
 void SplitSequenceAtPlayhead::execute(model::EditorStateExt& state) {
     auto before = state;
-    mChanged    = !SequenceOps::splitAt(state.sequence, mTick).empty();
-    mBefore     = mChanged ? std::optional<model::EditorStateExt>(std::move(before)) : std::nullopt;
+    if (SequenceOps::splitAt(state.sequence, mTick).empty()) {
+        mBefore.reset();
+        return;
+    }
+    mBefore = std::move(before);
 }
 
 void        SplitSequenceAtPlayhead::undo(model::EditorStateExt& state) { restore(mBefore, state); }
@@ -52,8 +55,11 @@ TrimSequenceSegment::TrimSequenceSegment(std::string id, int start, int end)
 
 void TrimSequenceSegment::execute(model::EditorStateExt& state) {
     auto before = state;
-    mChanged    = SequenceOps::trimSegment(state.sequence, mId, mStart, mEnd);
-    mBefore     = mChanged ? std::optional<model::EditorStateExt>(std::move(before)) : std::nullopt;
+    if (!SequenceOps::trimSegment(state.sequence, mId, mStart, mEnd)) {
+        mBefore.reset();
+        return;
+    }
+    mBefore = std::move(before);
 }
 
 void        TrimSequenceSegment::undo(model::EditorStateExt& state) { restore(mBefore, state); }
@@ -66,13 +72,16 @@ void DeleteSequenceSegment::execute(model::EditorStateExt& state) {
     auto it     = std::find_if(state.sequence.begin(), state.sequence.end(), [&](auto const& segment) {
         return segment.id == mId;
     });
-    mChanged    = it != state.sequence.end()
-            && SequenceOps::deleteSegment(
-                   state.sequence,
-                   static_cast<size_t>(std::distance(state.sequence.begin(), it)),
-                   state.totalTicks
-            );
-    mBefore = mChanged ? std::optional<model::EditorStateExt>(std::move(before)) : std::nullopt;
+    if (it == state.sequence.end()
+        || !SequenceOps::deleteSegment(
+            state.sequence,
+            static_cast<size_t>(std::distance(state.sequence.begin(), it)),
+            state.totalTicks
+        )) {
+        mBefore.reset();
+        return;
+    }
+    mBefore = std::move(before);
 }
 
 void        DeleteSequenceSegment::undo(model::EditorStateExt& state) { restore(mBefore, state); }
@@ -83,7 +92,6 @@ BindSequenceToCamera::BindSequenceToCamera(std::string id, std::string cameraId)
   mCameraId(std::move(cameraId)) {}
 
 void BindSequenceToCamera::execute(model::EditorStateExt& state) {
-    mChanged = false;
     auto segment =
         std::find_if(state.sequence.begin(), state.sequence.end(), [&](auto const& value) { return value.id == mId; });
     bool const cameraExists =
@@ -97,7 +105,6 @@ void BindSequenceToCamera::execute(model::EditorStateExt& state) {
 
     mBefore = state;
     SequenceOps::bindCamera(*segment, mCameraId);
-    mChanged = true;
 }
 
 void        BindSequenceToCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
