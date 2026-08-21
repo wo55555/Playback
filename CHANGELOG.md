@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the replay editor overlay never appearing while another overlay that detours DXGI `Present`, such as RivaTuner Statistics Server, is attached to the client. The overlay is now composited from the BGFX D3D12 submit path, which the replay browser reaches even when the present detour is bypassed.
+- Fixed the overlay losing its swap-chain resources after a window resize that the `ResizeBuffers` detour did not observe.
+
 ## [0.2.0-mc26.10] - 2026-08-20
 
 ### Added

@@ -1239,6 +1239,17 @@ bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
     return true;
 }
 
+bool ImGuiRenderer::syncSwapChainGeometry(IDXGISwapChain* sc) {
+    std::scoped_lock lk(mImpl->mutex);
+    if (!sc || !mImpl->initialized || sc != mImpl->swapChain) return false;
+    auto const area = getSwapChainArea(sc);
+    if (area == 0 || area == mImpl->surfaceArea) return false;
+    mImpl->shutdown(visuals::FrameTapError::Resize, "Swap chain resized during frame capture");
+    mImpl->initFailed      = false;
+    mImpl->lastInitAttempt = {};
+    return true;
+}
+
 void ImGuiRenderer::afterPresent(IDXGISwapChain* sc, long result) {
     if (result != DXGI_ERROR_DEVICE_REMOVED && result != DXGI_ERROR_DEVICE_RESET) return;
     std::scoped_lock lk(mImpl->mutex);

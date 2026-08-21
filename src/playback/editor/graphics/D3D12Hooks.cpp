@@ -94,6 +94,7 @@ std::unordered_map<ID3D12Device*, DeviceQueueCandidate> gDeviceQueueMap;
 std::atomic<bool> gTimelineHooksStopping{true};
 std::atomic<bool> gRendererInitHookStopping{true};
 std::atomic<bool> gD3D12RendererActive{false};
+std::atomic<bool> gOverlayRenderedInSubmit{false};
 
 std::atomic<uint32_t>   gActiveDetours{};
 std::mutex              gActiveDetoursMutex;
@@ -187,7 +188,8 @@ bool noneInstalled(HookState const& state) {
 DECLARE_DETOUR_FN(present, HRESULT, IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     ActiveDetour activeDetour;
     bool const   offlineRender = exporting::isOfflineRenderActivityActive();
-    if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
+    if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)
+        && !gOverlayRenderedInSubmit.exchange(false, std::memory_order_acq_rel)) {
         (void)renderPresentFrame(swapChain);
     }
     bool const    offlinePresent        = offlineRender && gImGuiRenderer.ownsSwapChain(swapChain);
@@ -210,7 +212,8 @@ DECLARE_DETOUR_FN(
     bool         timelineRendered{};
     bool const   offlineRender = exporting::isOfflineRenderActivityActive();
     if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
-        timelineRendered = renderPresentFrame(baseSwapChain);
+        timelineRendered = gOverlayRenderedInSubmit.exchange(false, std::memory_order_acq_rel)
+                        || renderPresentFrame(baseSwapChain);
     }
 
     DXGI_PRESENT_PARAMETERS fullSurfacePresent{};
@@ -614,6 +617,17 @@ LL_TYPE_INSTANCE_HOOK(
             ? exporting::claimOfflineRenderBoundary(render, frameNumber)
             : std::nullopt;
     origin(render, clearQuad, textVideoMemBlitter);
+
+    // Third-party overlays such as RTSS detour DXGI Present and can bypass the present detour entirely.
+    // BGFX has not flipped the back buffer yet, so compositing here still reaches the presented frame.
+    if (!exporting::isOfflineRenderActivityActive() && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
+        if (auto* const presentTarget = this->m_swapChain) {
+            gImGuiRenderer.syncSwapChainGeometry(presentTarget);
+            if (gImGuiRenderer.render(presentTarget, false)) {
+                gOverlayRenderedInSubmit.store(true, std::memory_order_release);
+            }
+        }
+    }
 
     if (!ticket) return;
 

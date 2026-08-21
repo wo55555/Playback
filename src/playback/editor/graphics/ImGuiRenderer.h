@@ -42,6 +42,7 @@ public:
     [[nodiscard]] bool isD3D12RendererActive() const;
     [[nodiscard]] bool ownsSwapChain(IDXGISwapChain* swapChain) const;
     bool               beforeResize(IDXGISwapChain* swapChain);
+    bool               syncSwapChainGeometry(IDXGISwapChain* swapChain);
     void               afterPresent(IDXGISwapChain* swapChain, long result);
     bool               shutdown();
 
