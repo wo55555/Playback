@@ -165,9 +165,10 @@ void freeSrv(
 
 struct ImGuiRenderer::Impl {
     std::mutex                              mutex;
-    visuals::FrameTap                       frameTap;
-    D3D11FrameTapBackend                    d3d11FrameTap{frameTap};
-    D3D12FrameTapBackend                    d3d12FrameTap{frameTap};
+    exporting::SaveableFramebufferQueue     saveableFramebuffers;
+    visuals::FrameTap                       thumbnailFrameTap;
+    D3D11FrameTapBackend                    d3d11FrameTap{thumbnailFrameTap};
+    D3D12FrameTapBackend                    d3d12FrameTap{thumbnailFrameTap};
     std::mutex                              thumbnailMutex;
     std::optional<visuals::FrameTapSession> thumbnailSession;
     EditorContext*                          editorContext{};
@@ -179,6 +180,10 @@ struct ImGuiRenderer::Impl {
     ComPtr<ID3D12DescriptorHeap>            srvHeap;
     ComPtr<ID3D12Fence>                     fence;
     std::vector<FrameResources>             frames;
+    D3D12_CPU_DESCRIPTOR_HANDLE             exportPreviewSrvCpu{};
+    D3D12_GPU_DESCRIPTOR_HANDLE             exportPreviewSrvGpu{};
+    std::shared_ptr<void>                   exportPreviewLease;
+    uint64_t                                exportPreviewRevision{};
     std::vector<UINT64>                     frameFences;
     std::array<bool, SrvDescriptorCount>    srvUsed{};
     HANDLE                                  fenceEvent{};
@@ -206,6 +211,9 @@ struct ImGuiRenderer::Impl {
     ComPtr<ID3D11RenderTargetView>   d3d11Rtv;
     ComPtr<ID3D11Texture2D>          d3d11GameTexture;
     ComPtr<ID3D11ShaderResourceView> d3d11GameSrv;
+    ComPtr<ID3D11ShaderResourceView> d3d11ExportPreviewSrv;
+    std::shared_ptr<void>            d3d11ExportPreviewLease;
+    uint64_t                         d3d11ExportPreviewRevision{};
     IDXGISwapChain*                  d3d11SwapChain{};
     ImGuiContext*                    d3d11ImguiCtx{};
     bool                             d3d11BackendInit{};
@@ -233,6 +241,55 @@ struct ImGuiRenderer::Impl {
         }
         d3d12ThumbnailTextures.clear();
         d3d11ThumbnailTextures.clear();
+    }
+
+    bool updateExportPreviewSrv() {
+        auto const preview = saveableFramebuffers.preview();
+        if (preview.backend != exporting::SaveableFramebufferBackend::D3D12 || !preview.d3d12Resource || !device) {
+            return false;
+        }
+        ComPtr<ID3D12Device> previewDevice;
+        if (FAILED(preview.d3d12Resource->GetDevice(IID_PPV_ARGS(&previewDevice)))
+            || previewDevice.Get() != device.Get()) {
+            return false;
+        }
+        if (preview.d3d12Fence && preview.fenceValue != 0
+            && preview.d3d12Fence->GetCompletedValue() < preview.fenceValue) {
+            if (!fenceEvent || FAILED(preview.d3d12Fence->SetEventOnCompletion(preview.fenceValue, fenceEvent))
+                || WaitForSingleObject(fenceEvent, GpuWaitTimeoutMs) != WAIT_OBJECT_0) {
+                return false;
+            }
+        }
+        if (preview.revision == exportPreviewRevision) return true;
+        if (!waitForFence(lastFenceValue, fence, fenceEvent)) return false;
+        D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
+        desc.Shader4ComponentMapping   = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(0, 1, 2, 5);
+        desc.Format                    = static_cast<DXGI_FORMAT>(preview.format);
+        desc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
+        desc.Texture2D.MostDetailedMip = 0;
+        desc.Texture2D.MipLevels       = 1;
+        device->CreateShaderResourceView(preview.d3d12Resource, &desc, exportPreviewSrvCpu);
+        exportPreviewLease    = preview.lifetime;
+        exportPreviewRevision = preview.revision;
+        return true;
+    }
+
+    bool updateD3D11ExportPreviewSrv() {
+        auto const preview = saveableFramebuffers.preview();
+        if (preview.backend != exporting::SaveableFramebufferBackend::D3D11 || !preview.d3d11Texture || !d3d11Device) {
+            return false;
+        }
+        ComPtr<ID3D11Device> previewDevice;
+        preview.d3d11Texture->GetDevice(&previewDevice);
+        if (previewDevice.Get() != d3d11Device.Get()) return false;
+        if (preview.revision == d3d11ExportPreviewRevision && d3d11ExportPreviewSrv) return true;
+
+        ComPtr<ID3D11ShaderResourceView> srv;
+        if (FAILED(d3d11Device->CreateShaderResourceView(preview.d3d11Texture, nullptr, &srv))) return false;
+        d3d11ExportPreviewSrv      = std::move(srv);
+        d3d11ExportPreviewLease    = preview.lifetime;
+        d3d11ExportPreviewRevision = preview.revision;
+        return true;
     }
 
     bool initD3D11(IDXGISwapChain* sc) {
@@ -278,11 +335,11 @@ struct ImGuiRenderer::Impl {
         auto const fontPathString = fontPath.string();
         ImFont*    font           = fontPathString.empty() ? nullptr
                                                            : io.Fonts->AddFontFromFileTTF(
-                                                                 fontPathString.c_str(),
-                                                                 14.0f,
-                                                                 nullptr,
-                                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-                                                             );
+                                                    fontPathString.c_str(),
+                                                    14.0f,
+                                                    nullptr,
+                                                    io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                                                );
         if (font) io.FontDefault = font;
         else io.Fonts->AddFontDefault();
         ImFontConfig cfg;
@@ -322,6 +379,7 @@ struct ImGuiRenderer::Impl {
         std::string            frameTapMessage = "D3D11 frame capture backend was released"
     ) {
         if (d3d11Initialized) {
+            saveableFramebuffers.fail(exporting::SaveableFramebufferQueueError::BackendUnavailable, frameTapMessage);
             d3d11FrameTap.reset(frameTapError, std::move(frameTapMessage));
         }
         if (d3d11Context) d3d11Context->ClearState();
@@ -335,6 +393,9 @@ struct ImGuiRenderer::Impl {
         d3d11BackendInit = false;
         d3d11ImguiCtx    = nullptr;
         d3d11GameSrv.Reset();
+        d3d11ExportPreviewSrv.Reset();
+        d3d11ExportPreviewLease.reset();
+        d3d11ExportPreviewRevision = 0;
         d3d11ThumbnailTextures.clear();
         d3d11GameTexture.Reset();
         d3d11Rtv.Reset();
@@ -351,6 +412,7 @@ struct ImGuiRenderer::Impl {
         bool                         renderUi,
         bool                         captureFrame,
         EditorState const&           state,
+        bool                         exportFrame     = false,
         std::optional<std::uint32_t> backBufferIndex = std::nullopt
     ) {
         if (d3d11Initialized && sc != d3d11SwapChain) shutdownD3D11();
@@ -359,6 +421,12 @@ struct ImGuiRenderer::Impl {
         D3D11_TEXTURE2D_DESC desc{};
         d3d11BackBuffer->GetDesc(&desc);
         d3d11FrameTap.poll(d3d11Context.Get());
+        if (!backBufferIndex) {
+            ComPtr<IDXGISwapChain3> indexedSwapChain;
+            if (SUCCEEDED(sc->QueryInterface(IID_PPV_ARGS(&indexedSwapChain)))) {
+                backBufferIndex = indexedSwapChain->GetCurrentBackBufferIndex();
+            }
+        }
         ComPtr<ID3D11Texture2D> source = d3d11BackBuffer;
         if (backBufferIndex && *backBufferIndex != 0) {
             ComPtr<IDXGISwapChain3> indexedSwapChain;
@@ -402,8 +470,11 @@ struct ImGuiRenderer::Impl {
         auto& replayEditor  = ui::ReplayEditor::getInstance();
         if (state.browser.visible) {
             replayBrowser.draw(state.browser, submit);
-        } else if (state.editorVisible) {
-            replayEditor.setGameTexture(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
+        } else if (state.editorVisible || exportFrame) {
+            bool const  previewReady = !exportFrame || updateD3D11ExportPreviewSrv();
+            auto* const gameSrv =
+                exportFrame ? (previewReady ? d3d11ExportPreviewSrv.Get() : nullptr) : d3d11GameSrv.Get();
+            replayEditor.setGameTexture(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(gameSrv)));
             replayEditor.draw(state, submit);
             if (exporting::isExportActive(state.exportStatus.state)) {
                 setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
@@ -415,7 +486,12 @@ struct ImGuiRenderer::Impl {
         endReplayMouseFrame();
         ImGui::Render();
 
-        ID3D11RenderTargetView* rtv = d3d11Rtv.Get();
+        ComPtr<ID3D11RenderTargetView> currentRtv;
+        ID3D11RenderTargetView*        rtv = d3d11Rtv.Get();
+        if (source.Get() != d3d11BackBuffer.Get()) {
+            if (FAILED(d3d11Device->CreateRenderTargetView(source.Get(), nullptr, &currentRtv))) return false;
+            rtv = currentRtv.Get();
+        }
         d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
         if (!state.browser.visible && !exporting::isExportActive(state.exportStatus.state)) {
             float clearColor[]{0.055f, 0.055f, 0.065f, 1};
@@ -485,6 +561,12 @@ struct ImGuiRenderer::Impl {
         auto gd  = bufDesc;
         gd.Flags = D3D12_RESOURCE_FLAG_NONE;
 
+        allocateSrv(srvUsed, srvHeap.Get(), srvDescSize, exportPreviewSrvCpu, exportPreviewSrvGpu);
+        if (exportPreviewSrvCpu.ptr == 0 || exportPreviewSrvGpu.ptr == 0) {
+            initialized = true;
+            this->shutdown();
+            return false;
+        }
         for (UINT i = 0; i < scDesc.BufferCount; ++i) {
             auto& f = frames[i];
             if (i == 0) f.backBuffer = firstBuf;
@@ -496,8 +578,7 @@ struct ImGuiRenderer::Impl {
             f.rtv = rtv;
             device->CreateRenderTargetView(f.backBuffer.Get(), nullptr, f.rtv);
             rtv.ptr += static_cast<SIZE_T>(rtvDescSize);
-            if (FAILED(
-                    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
+            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
                 )) {
                 initialized = true;
                 this->shutdown();
@@ -660,8 +741,31 @@ struct ImGuiRenderer::Impl {
         std::string            frameTapMessage = "D3D12 frame capture backend was released"
     ) {
         setReplayMouseInputActive(false);
+        bool const hadRenderer = initialized || d3d11Initialized;
+        {
+            std::scoped_lock lock(thumbnailMutex);
+            if (thumbnailSession) {
+                thumbnailFrameTap.cancel(*thumbnailSession);
+                thumbnailFrameTap.close(*thumbnailSession);
+                thumbnailSession.reset();
+            }
+        }
         shutdownD3D11(frameTapError, frameTapMessage);
-        if (initialized) frameTap.failActive(frameTapError, frameTapMessage);
+        auto const downloadStatus    = saveableFramebuffers.status();
+        bool const captureInProgress = downloadStatus.renderRequested || downloadStatus.pendingDownloads != 0;
+        if (hadRenderer && captureInProgress) {
+            saveableFramebuffers.fail(exporting::SaveableFramebufferQueueError::BackendUnavailable, frameTapMessage);
+        } else if (hadRenderer && exporting::isOfflineRenderActivityActive()) {
+            getLogger().info(
+                "Rebuilding overlay renderer during offline preparation (queueState={}, requested={}, pending={}, "
+                "inFlight={}, reason={})",
+                static_cast<int>(downloadStatus.state),
+                downloadStatus.renderRequested,
+                downloadStatus.pendingDownloads,
+                downloadStatus.inFlightDownloads,
+                frameTapMessage
+            );
+        }
         if (fence && commandQueue && unfenced) {
             UINT64 fv = lastFenceValue + 1;
             if (SUCCEEDED(commandQueue->Signal(fence.Get(), fv))) {
@@ -682,6 +786,11 @@ struct ImGuiRenderer::Impl {
         imguiCtx    = nullptr;
         frames.clear();
         frameFences.clear();
+        freeSrv(srvUsed, srvHeap.Get(), srvDescSize, exportPreviewSrvCpu);
+        exportPreviewSrvCpu.ptr = 0;
+        exportPreviewSrvGpu.ptr = 0;
+        exportPreviewLease.reset();
+        exportPreviewRevision = 0;
         rtvHeap.Reset();
         srvHeap.Reset();
         fence.Reset();
@@ -840,16 +949,16 @@ void ImGuiRenderer::setContext(EditorContext* context) {
 void ImGuiRenderer::requestReplayThumbnailCapture() {
     std::scoped_lock lock(mImpl->thumbnailMutex);
     if (mImpl->thumbnailSession) {
-        mImpl->frameTap.cancel(*mImpl->thumbnailSession);
-        mImpl->frameTap.close(*mImpl->thumbnailSession);
+        mImpl->thumbnailFrameTap.cancel(*mImpl->thumbnailSession);
+        mImpl->thumbnailFrameTap.close(*mImpl->thumbnailSession);
         mImpl->thumbnailSession.reset();
     }
     visuals::FrameTapSession session;
-    auto const               opened = mImpl->frameTap.open({1, true}, session);
+    auto const               opened = mImpl->thumbnailFrameTap.open({1, true}, session);
     if (opened != visuals::FrameTapOpenResult::Opened) return;
     visuals::FrameTicket const ticket{0, 0, 1};
-    if (mImpl->frameTap.tryArm(session, ticket) != visuals::FrameTapArmResult::Armed) {
-        mImpl->frameTap.close(session);
+    if (mImpl->thumbnailFrameTap.tryArm(session, ticket) != visuals::FrameTapArmResult::Armed) {
+        mImpl->thumbnailFrameTap.close(session);
         return;
     }
     mImpl->thumbnailSession = session;
@@ -862,9 +971,9 @@ bool ImGuiRenderer::saveReplayThumbnail(std::filesystem::path const& output) {
         session = mImpl->thumbnailSession;
     }
     if (!session) return false;
-    auto       frame = mImpl->frameTap.waitPop(*session, std::chrono::milliseconds(GpuWaitTimeoutMs));
+    auto       frame = mImpl->thumbnailFrameTap.waitPop(*session, std::chrono::milliseconds(GpuWaitTimeoutMs));
     bool const saved = frame && visuals::writeReplayThumbnailPng(output, *frame, 640, 360);
-    mImpl->frameTap.close(*session);
+    mImpl->thumbnailFrameTap.close(*session);
     {
         std::scoped_lock lock(mImpl->thumbnailMutex);
         if (mImpl->thumbnailSession && mImpl->thumbnailSession->id == session->id) mImpl->thumbnailSession.reset();
@@ -872,17 +981,7 @@ bool ImGuiRenderer::saveReplayThumbnail(std::filesystem::path const& output) {
     return saved;
 }
 
-visuals::FrameTap& ImGuiRenderer::frameTap() { return mImpl->frameTap; }
-
-bool ImGuiRenderer::captureSubmittedD3D12Frame(
-    ID3D12Device*       device,
-    ID3D12CommandQueue* queue,
-    ID3D12Resource*     source,
-    uint32_t            sourceState
-) {
-    std::scoped_lock lock(mImpl->mutex);
-    return mImpl->d3d12FrameTap.captureSubmitted(device, queue, source, sourceState);
-}
+exporting::SaveableFramebufferQueue& ImGuiRenderer::saveableFramebufferQueue() { return mImpl->saveableFramebuffers; }
 
 void* ImGuiRenderer::acquireReplayThumbnailTexture(std::string_view key, std::string_view png) {
     auto& p      = *mImpl;
@@ -919,7 +1018,11 @@ void* ImGuiRenderer::acquireReplayThumbnailTexture(std::string_view key, std::st
 }
 
 bool ImGuiRenderer::render(IDXGISwapChain* swapChain, bool allowFrameCapture) {
-    return renderInternal(swapChain, true, allowFrameCapture);
+    return renderInternal(swapChain, true, allowFrameCapture, false);
+}
+
+bool ImGuiRenderer::renderExportOverlay(IDXGISwapChain* swapChain) {
+    return renderInternal(swapChain, true, false, true);
 }
 
 void ImGuiRenderer::pollFrameCapture() {
@@ -929,7 +1032,12 @@ void ImGuiRenderer::pollFrameCapture() {
 
 bool ImGuiRenderer::isD3D12RendererActive() const { return playback::editor::graphics::isD3D12RendererActive(); }
 
-bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool allowFrameCapture) {
+bool ImGuiRenderer::renderInternal(
+    IDXGISwapChain* swapChain,
+    bool            allowUi,
+    bool            allowFrameCapture,
+    bool            forceExportOverlay
+) {
     auto&            p = *mImpl;
     std::scoped_lock lk(p.mutex);
 
@@ -941,7 +1049,7 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
     bool const browserOpen   = allowUi && state.browser.visible;
     bool const exportOverlay = allowUi && exporting::isExportActive(state.exportStatus.state);
     bool const editorOpen    = allowUi && state.editorVisible;
-    bool const uiActive      = browserOpen || editorOpen;
+    bool const uiActive      = browserOpen || editorOpen || (forceExportOverlay && exportOverlay);
     if (allowUi) input::setUiVisible(uiActive);
 
     auto const browserRevision = allowUi && state.browser.snapshot ? state.browser.snapshot->revision : 0;
@@ -951,11 +1059,11 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
         p.browserSnapshotRevision = browserRevision;
     }
     if (p.d3d11Initialized) p.d3d11FrameTap.poll(p.d3d11Context.Get());
-    bool const captureActive = allowFrameCapture && p.frameTap.hasArmedCapture();
-    if (!uiActive && !captureActive) {
+    bool const captureActive = allowFrameCapture && p.thumbnailFrameTap.hasArmedCapture();
+    if (!uiActive && !captureActive && !forceExportOverlay) {
         if (allowUi) {
             setReplayMouseInputActive(false);
-            if (!exporting::isOfflineRenderActivityActive() && !p.frameTap.requiresRenderPass()
+            if (!exporting::isOfflineRenderActivityActive() && !p.thumbnailFrameTap.requiresRenderPass()
                 && (p.initialized || p.d3d11Initialized)) {
                 p.shutdown();
             }
@@ -966,7 +1074,7 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
     if (allowUi && p.initialized && swapChain == p.swapChain) p.lastPresent = now;
     if (!uiActive) {
         setReplayMouseInputActive(false);
-        if (!captureActive) return false;
+        if (!captureActive && !forceExportOverlay) return false;
     }
 
     ComPtr<ID3D11Device> d3d11Device;
@@ -974,9 +1082,11 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
         if (p.initialized) p.shutdown();
         if (uiActive) {
             MouseInputAttempt inputAttempt;
-            if (!p.renderD3D11(swapChain, true, captureActive, state)) return false;
+            if (!p.renderD3D11(swapChain, true, captureActive, state, forceExportOverlay && exportOverlay)) {
+                return false;
+            }
             inputAttempt.commit();
-        } else if (!p.renderD3D11(swapChain, false, captureActive, state)) {
+        } else if (!p.renderD3D11(swapChain, false, captureActive, state, false)) {
             return false;
         }
         return true;
@@ -1000,13 +1110,6 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
     MouseInputAttempt ia;
     if (!p.initialized) {
         if (!q) q = getSwapChainQueue(swapChain);
-        if (!q) {
-            ComPtr<ID3D12Device> device;
-            if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&device)))) q = getDeviceQueue(device.Get());
-            if (q) {
-                bindSwapChainQueue(swapChain, q.Get());
-            }
-        }
         if (!q) {
             if (!p.missingQueue) {
                 getLogger().warn("Replay ImGui timeline cannot render: no command queue available");
@@ -1037,6 +1140,7 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
 
     auto const bd = f.backBuffer->GetDesc();
     if (bd.Width == 0 || bd.Height == 0) return false;
+    bool const copyGameTexture = !exportOverlay;
 
     ImGuiContextRestore cr;
     if (uiActive) {
@@ -1064,12 +1168,12 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
         auto& replayEditor  = ui::ReplayEditor::getInstance();
         if (state.browser.visible) {
             replayBrowser.draw(state.browser, submit);
-        } else if (state.editorVisible) {
-            UINT const gameTextureIndex =
-                exportOverlay && p.lastGameTextureIndex && *p.lastGameTextureIndex < static_cast<UINT>(p.frames.size())
-                    ? *p.lastGameTextureIndex
-                    : fi;
-            replayEditor.setGameTexture(static_cast<ImTextureID>(p.frames[gameTextureIndex].gameSrvGpu.ptr));
+        } else if (state.editorVisible || exportOverlay) {
+            bool const previewReady = !exportOverlay || p.updateExportPreviewSrv();
+            auto const gameTexture  = exportOverlay
+                                        ? static_cast<ImTextureID>(previewReady ? p.exportPreviewSrvGpu.ptr : 0)
+                                        : static_cast<ImTextureID>(p.frames[fi].gameSrvGpu.ptr);
+            replayEditor.setGameTexture(gameTexture);
             replayEditor.draw(state, submit);
             if (exporting::isExportActive(state.exportStatus.state)) {
                 setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
@@ -1096,7 +1200,7 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
         barrier.Transition.StateAfter  = after;
     };
     if (captureActive) addCopyBarrier(captureSource, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    if (!exportOverlay) {
+    if (copyGameTexture) {
         if (!captureActive) {
             addCopyBarrier(f.backBuffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
         }
@@ -1111,7 +1215,7 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
                                     captureSource,
                                     static_cast<uint32_t>(D3D12_RESOURCE_STATE_COPY_SOURCE)
                                 );
-    if (!exportOverlay) {
+    if (copyGameTexture) {
         f.commandList->CopyResource(f.gameTexture.Get(), f.backBuffer.Get());
         p.lastGameTextureIndex = fi;
     }
@@ -1133,7 +1237,7 @@ bool ImGuiRenderer::renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool
             uiActive ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_PRESENT
         );
     }
-    if (!exportOverlay) {
+    if (copyGameTexture) {
         if (!captureActive) {
             addRenderBarrier(
                 f.backBuffer.Get(),
@@ -1212,6 +1316,8 @@ bool ImGuiRenderer::ownsSwapChain(IDXGISwapChain* swapChain) const {
 bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
+        bool const wasD3D12SwapChain = sc == mImpl->swapChain;
+        bool const wasD3D11SwapChain = sc == mImpl->d3d11SwapChain;
         if (exporting::isOfflineRenderActivityActive()) {
             DXGI_SWAP_CHAIN_DESC description{};
             if (SUCCEEDED(sc->GetDesc(&description))) {
@@ -1223,16 +1329,18 @@ bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
                     description.BufferDesc.Height,
                     static_cast<uint32_t>(description.BufferDesc.Format),
                     description.Flags,
-                    mImpl->frameTap.hasArmedCapture()
+                    mImpl->saveableFramebuffers.status().renderRequested
                 );
             } else {
                 getLogger().warn(
                     "Swap-chain resize during offline export (descriptor unavailable, captureArmed={})",
-                    mImpl->frameTap.hasArmedCapture()
+                    mImpl->saveableFramebuffers.status().renderRequested
                 );
             }
         }
         mImpl->shutdown(visuals::FrameTapError::Resize, "Swap chain resized during frame capture");
+        if (wasD3D12SwapChain) mImpl->swapChain = sc;
+        if (wasD3D11SwapChain) mImpl->d3d11SwapChain = sc;
         mImpl->initFailed      = false;
         mImpl->lastInitAttempt = {};
     }

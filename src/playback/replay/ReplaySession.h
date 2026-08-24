@@ -56,6 +56,8 @@ struct ReplayCameraViewpoint {
     float z{};
     float pitch{};
     float yaw{};
+    float roll{};
+    float fov{70.0f};
 };
 
 class ReplaySession {
@@ -315,6 +317,10 @@ public:
     void updateControlPlane();
 
     [[nodiscard]] bool isActive() const { return mActive; }
+    [[nodiscard]] bool isReadyForExport() const {
+        return mActive && mReplayWorldJoined && mWorldReady && !mReplayFailed && mReplayPlayer && mNetworkHandler
+            && !mPendingReplayDimension && !mApplyingChunkSnapshot && !mChunkInjectionPending;
+    }
 
     [[nodiscard]] bool isPaused() const { return mIsPaused; }
 
@@ -357,6 +363,8 @@ public:
     [[nodiscard]] bool beginExportTimeline(int startTick);
 
     void setExportCameraViewpoint(std::optional<ReplayCameraViewpoint> viewpoint) noexcept;
+    [[nodiscard]] std::optional<ReplayCameraViewpoint> currentCameraViewpoint() const noexcept;
+    [[nodiscard]] std::optional<ReplayCameraViewpoint> exportCameraViewpoint() const noexcept;
 
     void updateExportObserver(ReplayCameraViewpoint const& viewpoint);
 

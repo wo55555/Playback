@@ -1,16 +1,16 @@
-﻿#include "D3D12Hooks.h"
+#include "D3D12Hooks.h"
 
 #include "playback/Playback.h"
-#include "playback/editor/graphics/D3D12Compat.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
 
-
 #include "ll/api/memory/Hook.h"
 
 #include "mc/external/bgfx/Frame.h"
+#include "mc/external/bgfx/RendererContextD3D11.h"
 #include "mc/external/bgfx/RendererContextD3D12.h"
+
 
 #include <atomic>
 #include <chrono>
@@ -19,8 +19,6 @@
 #include <cstdio>
 #include <mutex>
 #include <optional>
-#include <thread>
-#include <unordered_map>
 #include <utility>
 
 namespace playback::editor::graphics {
@@ -58,8 +56,6 @@ using CreateSwapChainForCompositionFn = HRESULT(STDMETHODCALLTYPE*)(
     IDXGIOutput*,
     IDXGISwapChain1**
 );
-using CreateCommandQueueFn =
-    HRESULT(STDMETHODCALLTYPE*)(ID3D12Device*, D3D12_COMMAND_QUEUE_DESC const*, REFIID, void**);
 
 constexpr size_t SwapChainPresentIndex                     = 8;
 constexpr size_t SwapChainPresent1Index                    = 22;
@@ -69,7 +65,6 @@ constexpr size_t FactoryCreateSwapChainIndex               = 10;
 constexpr size_t FactoryCreateSwapChainForHwndIndex        = 15;
 constexpr size_t FactoryCreateSwapChainForCoreWindowIndex  = 16;
 constexpr size_t FactoryCreateSwapChainForCompositionIndex = 24;
-constexpr size_t DeviceCreateCommandQueueIndex             = 8;
 constexpr DWORD  DetourWaitTimeoutMsLocal                  = 2000;
 
 ll::memory::FuncPtr gOriginalPresent{};
@@ -80,16 +75,6 @@ ll::memory::FuncPtr gOriginalCreateSwapChain{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForHwnd{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForCoreWindow{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForComposition{};
-ll::memory::FuncPtr gOriginalCreateCommandQueue{};
-
-// A device fallback is safe only while exactly one Direct queue has been observed.
-struct DeviceQueueCandidate {
-    ComPtr<ID3D12CommandQueue> queue;
-    bool                       ambiguous{};
-};
-
-std::mutex                                              gDeviceQueueMapMutex;
-std::unordered_map<ID3D12Device*, DeviceQueueCandidate> gDeviceQueueMap;
 
 std::atomic<bool> gTimelineHooksStopping{true};
 std::atomic<bool> gRendererInitHookStopping{true};
@@ -126,7 +111,13 @@ public:
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
-bool shouldLogExportFrame(uint64_t frameIndex) { return frameIndex < 2 || frameIndex % 60 == 0; }
+template <class Callback>
+void runDetourInstrumentation(Callback&& callback) noexcept {
+    try {
+        std::forward<Callback>(callback)();
+    } catch (...) {}
+}
+
 
 bool renderPresentFrame(IDXGISwapChain* swapChain);
 
@@ -144,7 +135,6 @@ struct HookTargets {
     void* createSwapChainForHwnd{};
     void* createSwapChainForCoreWindow{};
     void* createSwapChainForComposition{};
-    void* createCommandQueue{};
 };
 
 struct HookState {
@@ -157,7 +147,6 @@ struct HookState {
     bool        createSwapChainForHwnd{};
     bool        createSwapChainForCoreWindow{};
     bool        createSwapChainForComposition{};
-    bool        createCommandQueue{};
 };
 
 HookState& hookState() {
@@ -171,13 +160,12 @@ bool coreInstalled(HookState const& state) {
 
 bool captureInstalled(HookState const& state) {
     return state.createSwapChain && state.createSwapChainForHwnd && state.createSwapChainForCoreWindow
-        && state.createSwapChainForComposition && state.createCommandQueue;
+        && state.createSwapChainForComposition;
 }
 
 bool noneInstalled(HookState const& state) {
     return !state.present && !state.present1 && !state.resizeBuffers && !state.resizeBuffers1 && !state.createSwapChain
-        && !state.createSwapChainForHwnd && !state.createSwapChainForCoreWindow && !state.createSwapChainForComposition
-        && !state.createCommandQueue;
+        && !state.createSwapChainForHwnd && !state.createSwapChainForCoreWindow && !state.createSwapChainForComposition;
 }
 
 #define DECLARE_DETOUR_FN(NAME, RET, ...)                                                                              \
@@ -186,14 +174,17 @@ bool noneInstalled(HookState const& state) {
 
 DECLARE_DETOUR_FN(present, HRESULT, IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     ActiveDetour activeDetour;
-    bool const   offlineRender = exporting::isOfflineRenderActivityActive();
-    if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
-        (void)renderPresentFrame(swapChain);
-    }
-    bool const    offlinePresent        = offlineRender && gImGuiRenderer.ownsSwapChain(swapChain);
-    UINT const    effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
+    UINT         effectiveSyncInterval = syncInterval;
+    runDetourInstrumentation([&] {
+        if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
+            (void)renderPresentFrame(swapChain);
+        }
+        bool const offlinePresent =
+            exporting::isOfflineRenderActivityActive() && gImGuiRenderer.ownsSwapChain(swapChain);
+        effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
+    });
     HRESULT const result = reinterpret_cast<PresentFn>(gOriginalPresent)(swapChain, effectiveSyncInterval, flags);
-    gImGuiRenderer.afterPresent(swapChain, result);
+    runDetourInstrumentation([&] { gImGuiRenderer.afterPresent(swapChain, result); });
     return result;
 }
 
@@ -206,29 +197,31 @@ DECLARE_DETOUR_FN(
     DXGI_PRESENT_PARAMETERS const* parameters
 ) {
     ActiveDetour activeDetour;
-    auto* const  baseSwapChain = static_cast<IDXGISwapChain*>(swapChain);
-    bool         timelineRendered{};
-    bool const   offlineRender = exporting::isOfflineRenderActivityActive();
-    if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
-        timelineRendered = renderPresentFrame(baseSwapChain);
-    }
+    auto* const  baseSwapChain         = static_cast<IDXGISwapChain*>(swapChain);
+    UINT         effectiveSyncInterval = syncInterval;
 
     DXGI_PRESENT_PARAMETERS fullSurfacePresent{};
     auto const*             effectiveParameters = parameters;
-    if (timelineRendered && parameters) {
-        fullSurfacePresent                 = *parameters;
-        fullSurfacePresent.DirtyRectsCount = 0;
-        fullSurfacePresent.pDirtyRects     = nullptr;
-        fullSurfacePresent.pScrollRect     = nullptr;
-        fullSurfacePresent.pScrollOffset   = nullptr;
-        effectiveParameters                = &fullSurfacePresent;
-    }
-
-    bool const    offlinePresent        = offlineRender && gImGuiRenderer.ownsSwapChain(baseSwapChain);
-    UINT const    effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
+    runDetourInstrumentation([&] {
+        bool timelineRendered{};
+        if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
+            timelineRendered = renderPresentFrame(baseSwapChain);
+        }
+        if (timelineRendered && parameters) {
+            fullSurfacePresent                 = *parameters;
+            fullSurfacePresent.DirtyRectsCount = 0;
+            fullSurfacePresent.pDirtyRects     = nullptr;
+            fullSurfacePresent.pScrollRect     = nullptr;
+            fullSurfacePresent.pScrollOffset   = nullptr;
+            effectiveParameters                = &fullSurfacePresent;
+        }
+        bool const offlinePresent =
+            exporting::isOfflineRenderActivityActive() && gImGuiRenderer.ownsSwapChain(baseSwapChain);
+        effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
+    });
     HRESULT const result =
         reinterpret_cast<Present1Fn>(gOriginalPresent1)(swapChain, effectiveSyncInterval, flags, effectiveParameters);
-    gImGuiRenderer.afterPresent(swapChain, result);
+    runDetourInstrumentation([&] { gImGuiRenderer.afterPresent(swapChain, result); });
     return result;
 }
 
@@ -243,7 +236,9 @@ DECLARE_DETOUR_FN(
     UINT            flags
 ) {
     ActiveDetour activeDetour;
-    if (!gImGuiRenderer.beforeResize(swapChain)) return DXGI_ERROR_INVALID_CALL;
+    bool         allowResize{true};
+    runDetourInstrumentation([&] { allowResize = gImGuiRenderer.beforeResize(swapChain); });
+    if (!allowResize) return DXGI_ERROR_INVALID_CALL;
     return reinterpret_cast<ResizeBuffersFn>(gOriginalResizeBuffers)(
         swapChain,
         bufferCount,
@@ -266,10 +261,15 @@ DECLARE_DETOUR_FN(
     UINT const*      creationNodeMask,
     IUnknown* const* presentQueue
 ) {
-    ActiveDetour                     activeDetour;
-    ComPtr<ID3D12CommandQueue> const queue               = getResizePresentQueue(bufferCount, presentQueue);
-    bool const                       updatesQueueBinding = bufferCount > 0 && presentQueue;
-    if (!gImGuiRenderer.beforeResize(swapChain)) return DXGI_ERROR_INVALID_CALL;
+    ActiveDetour               activeDetour;
+    ComPtr<ID3D12CommandQueue> queue;
+    bool const                 updatesQueueBinding = bufferCount > 0 && presentQueue;
+    bool                       allowResize{true};
+    runDetourInstrumentation([&] {
+        queue       = getResizePresentQueue(bufferCount, presentQueue);
+        allowResize = gImGuiRenderer.beforeResize(swapChain);
+    });
+    if (!allowResize) return DXGI_ERROR_INVALID_CALL;
     HRESULT const result = reinterpret_cast<ResizeBuffers1Fn>(gOriginalResizeBuffers1)(
         swapChain,
         bufferCount,
@@ -281,8 +281,10 @@ DECLARE_DETOUR_FN(
         presentQueue
     );
     if (SUCCEEDED(result) && updatesQueueBinding) {
-        if (queue) bindSwapChainQueue(swapChain, queue.Get());
-        else unbindSwapChainQueue(swapChain);
+        runDetourInstrumentation([&] {
+            if (queue) bindSwapChainQueue(swapChain, queue.Get());
+            else unbindSwapChainQueue(swapChain);
+        });
     }
     return result;
 }
@@ -299,7 +301,7 @@ DECLARE_DETOUR_FN(
     HRESULT const result =
         reinterpret_cast<CreateSwapChainFn>(gOriginalCreateSwapChain)(factory, device, description, swapChain);
     if (SUCCEEDED(result) && swapChain && *swapChain) {
-        bindSwapChainQueue(*swapChain, device);
+        runDetourInstrumentation([&] { bindSwapChainQueue(*swapChain, device); });
     }
     return result;
 }
@@ -326,7 +328,7 @@ DECLARE_DETOUR_FN(
         swapChain
     );
     if (SUCCEEDED(result) && swapChain && *swapChain) {
-        bindSwapChainQueue(*swapChain, device);
+        runDetourInstrumentation([&] { bindSwapChainQueue(*swapChain, device); });
     }
     return result;
 }
@@ -351,7 +353,7 @@ DECLARE_DETOUR_FN(
         swapChain
     );
     if (SUCCEEDED(result) && swapChain && *swapChain) {
-        bindSwapChainQueue(*swapChain, device);
+        runDetourInstrumentation([&] { bindSwapChainQueue(*swapChain, device); });
     }
     return result;
 }
@@ -374,46 +376,8 @@ DECLARE_DETOUR_FN(
         swapChain
     );
     if (SUCCEEDED(result) && swapChain && *swapChain) {
-        bindSwapChainQueue(*swapChain, device);
+        runDetourInstrumentation([&] { bindSwapChainQueue(*swapChain, device); });
     }
-    return result;
-}
-
-DECLARE_DETOUR_FN(
-    createCommandQueue,
-    HRESULT,
-    ID3D12Device*                   device,
-    D3D12_COMMAND_QUEUE_DESC const* desc,
-    REFIID                          riid,
-    void**                          ppCommandQueue
-) {
-    ActiveDetour  activeDetour;
-    HRESULT const result =
-        reinterpret_cast<CreateCommandQueueFn>(gOriginalCreateCommandQueue)(device, desc, riid, ppCommandQueue);
-    if (FAILED(result) || !desc || desc->Type != D3D12_COMMAND_LIST_TYPE_DIRECT || !ppCommandQueue
-        || !*ppCommandQueue) {
-        return result;
-    }
-
-    ComPtr<ID3D12CommandQueue> queue;
-    if (FAILED(reinterpret_cast<IUnknown*>(*ppCommandQueue)->QueryInterface(IID_PPV_ARGS(&queue)))) return result;
-
-    ComPtr<IUnknown> newIdentity;
-    if (FAILED(queue.As(&newIdentity))) return result;
-
-    {
-        std::scoped_lock lock(gDeviceQueueMapMutex);
-        auto&            candidate = gDeviceQueueMap[device];
-        if (!candidate.queue) {
-            candidate.queue = queue;
-        } else {
-            ComPtr<IUnknown> currentIdentity;
-            if (FAILED(candidate.queue.As(&currentIdentity)) || currentIdentity.Get() != newIdentity.Get()) {
-                candidate.ambiguous = true;
-            }
-        }
-    }
-
     return result;
 }
 
@@ -531,20 +495,6 @@ bool installCreateSwapChainForCompositionHook(HookState& state) {
     return true;
 }
 
-bool installCreateCommandQueueHook(HookState& state) {
-    if (state.createCommandQueue) return true;
-    if (ll::memory::hook(
-            state.targets.createCommandQueue,
-            ll::memory::toFuncPtr(&createCommandQueueDetour),
-            &gOriginalCreateCommandQueue,
-            ll::memory::HookPriority::Normal
-        )
-        != 0)
-        return false;
-    state.createCommandQueue = true;
-    return true;
-}
-
 bool installCoreHooks(HookState& state) {
     return installResizeBuffersHook(state) && installResizeBuffers1Hook(state) && installPresentHook(state)
         && installPresent1Hook(state);
@@ -552,7 +502,6 @@ bool installCoreHooks(HookState& state) {
 
 bool installCaptureHooks(HookState& state) {
     bool ok = true;
-    ok      = installCreateCommandQueueHook(state) && ok;
     ok      = installCreateSwapChainHook(state) && ok;
     ok      = installCreateSwapChainForHwndHook(state) && ok;
     ok      = installCreateSwapChainForCoreWindowHook(state) && ok;
@@ -561,9 +510,6 @@ bool installCaptureHooks(HookState& state) {
 }
 
 bool removeAll(HookState& state) {
-    if (state.createCommandQueue
-        && ll::memory::unhook(state.targets.createCommandQueue, ll::memory::toFuncPtr(&createCommandQueueDetour)))
-        state.createCommandQueue = false;
     if (state.present1 && ll::memory::unhook(state.targets.present1, ll::memory::toFuncPtr(&present1Detour)))
         state.present1 = false;
     if (state.present && ll::memory::unhook(state.targets.present, ll::memory::toFuncPtr(&presentDetour)))
@@ -598,6 +544,46 @@ bool removeAll(HookState& state) {
     return noneInstalled(state);
 }
 
+bool renderPresentFrame(IDXGISwapChain* swapChain) {
+    if (!swapChain) return false;
+    if (!exporting::isOfflineRenderActivityActive()) return gImGuiRenderer.render(swapChain);
+    if (!gImGuiRenderer.ownsSwapChain(swapChain)) return false;
+    // The scene capture is owned by the BGFX submit boundary on both backends; Present only draws the overlay.
+    return gImGuiRenderer.renderExportOverlay(swapChain);
+}
+
+// Overlay submissions are a fixed set of ImGui draw calls (measured at 5); world submissions never drop below 104.
+constexpr uint32_t MaxOverlayOnlyRenderItems = 32;
+
+exporting::SceneSubmissionKind classifySubmission(bgfx::Frame const* render) {
+    if (!render) return exporting::SceneSubmissionKind::OverlayOnly;
+    return static_cast<uint32_t>(render->m_numRenderItems) > MaxOverlayOnlyRenderItems
+             ? exporting::SceneSubmissionKind::Scene
+             : exporting::SceneSubmissionKind::OverlayOnly;
+}
+
+std::optional<exporting::OfflineRenderBoundaryTicket> claimSceneSubmitTicket(bgfx::Frame const* render) {
+    if (gTimelineHooksStopping.load(std::memory_order_acquire) || !exporting::isOfflineRenderActivityActive()) {
+        return std::nullopt;
+    }
+    if (!gImGuiRenderer.saveableFramebufferQueue().status().renderRequested) return std::nullopt;
+    return exporting::claimOfflineRenderSubmitBoundary(classifySubmission(render));
+}
+
+void finishSceneSubmit(exporting::OfflineRenderBoundaryTicket const& ticket, bool started, bool sourceAvailable) {
+    auto& downloads = gImGuiRenderer.saveableFramebufferQueue();
+    if (started) {
+        exporting::markOfflineRenderBoundaryCompleted(ticket);
+        return;
+    }
+    if (downloads.status().state != exporting::SaveableFramebufferQueueState::Open) return;
+    downloads.fail(
+        exporting::SaveableFramebufferQueueError::BackendUnavailable,
+        sourceAvailable ? "The BGFX scene submission could not start the framebuffer download"
+                        : "BGFX did not expose the scene render target"
+    );
+}
+
 LL_TYPE_INSTANCE_HOOK(
     OfflineRenderSubmitHook,
     ll::memory::HookPriority::Highest,
@@ -608,108 +594,54 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::ClearQuad&           clearQuad,
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
-    auto const frameNumber = render ? static_cast<uint32_t>(render->m_frameNum) : 0;
-    auto const ticket =
-        !gRendererInitHookStopping.load(std::memory_order_acquire) && exporting::isOfflineRenderActivityActive()
-            ? exporting::claimOfflineRenderBoundary(render, frameNumber)
-            : std::nullopt;
+    ActiveDetour activeDetour;
+    auto const   ticket = claimSceneSubmitTicket(render);
     origin(render, clearQuad, textVideoMemBlitter);
-
     if (!ticket) return;
 
-    auto* const device    = this->m_device;
-    auto* const swapChain = this->m_swapChain;
-    auto        queue     = getSwapChainQueue(swapChain);
-    if (!queue) queue = getDeviceQueue(device);
-
-    ID3D12Resource*       source{};
-    D3D12_RESOURCE_STATES sourceState = D3D12_RESOURCE_STATE_COMMON;
-    uint32_t const        colorIndex  = static_cast<uint32_t>(this->m_backBufferColorIdx);
-    auto* const           msaa        = this->m_msaaRenderTarget;
-    if (colorIndex < 3) {
-        auto* const backBuffer = this->m_backBufferColor[colorIndex];
-        if (backBuffer) {
-            auto const desc = backBuffer->GetDesc();
-            bool const supportedBackBuffer =
-                desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && desc.Width != 0 && desc.Height != 0
-                && (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM)
-                && desc.SampleDesc.Count == 1;
-            if (supportedBackBuffer) source = backBuffer;
+    runDetourInstrumentation([&] {
+        // The swap-chain backbuffer is the UI composition target; only the MSAA target holds the bare scene.
+        auto* const     device  = this->m_device;
+        ID3D12Resource* source  = this->m_msaaRenderTarget;
+        auto const      queue   = getSwapChainQueue(this->m_swapChain);
+        bool            started = false;
+        if (device && queue && source) {
+            started = gImGuiRenderer.saveableFramebufferQueue().startDownload(
+                device,
+                queue.Get(),
+                source,
+                static_cast<uint32_t>(D3D12_RESOURCE_STATE_RESOLVE_SOURCE)
+            );
         }
-    }
-    if (!source && msaa) {
-        auto const desc = msaa->GetDesc();
-        bool const supportedMsaa =
-            desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && desc.Width != 0 && desc.Height != 0
-            && (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM)
-            && (desc.SampleDesc.Count == 2 || desc.SampleDesc.Count == 4 || desc.SampleDesc.Count == 8);
-        if (supportedMsaa) {
-            source      = msaa;
-            sourceState = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
-        }
-    }
-
-    bool const captureRequested = gImGuiRenderer.frameTap().hasArmedCapture();
-    bool       captureStarted   = false;
-    if (captureRequested && ticket && shouldLogExportFrame(ticket->frameIndex)) {
-        auto const sourceDesc = source ? source->GetDesc() : D3D12_RESOURCE_DESC{};
-        getLogger().debug(
-            "D3D12 export source selected (frame={}, bgfxFrame={}, kind={}, source=0x{:X}, size={}x{}, samples={}, "
-            "format={}, msaa=0x{:X}, backbuffer=0x{:X}, colorIndex={}, deviceRemoved=0x{:08X})",
-            ticket->frameIndex,
-            frameNumber,
-            source == msaa ? "msaa" : (source ? "backbuffer" : "none"),
-            reinterpret_cast<uintptr_t>(source),
-            sourceDesc.Width,
-            sourceDesc.Height,
-            sourceDesc.SampleDesc.Count,
-            static_cast<uint32_t>(sourceDesc.Format),
-            reinterpret_cast<uintptr_t>(msaa),
-            reinterpret_cast<uintptr_t>(colorIndex < 3 ? this->m_backBufferColor[colorIndex] : nullptr),
-            colorIndex,
-            static_cast<uint32_t>(device ? device->GetDeviceRemovedReason() : E_POINTER)
-        );
-    }
-    if (captureRequested && source && queue && device) {
-        captureStarted = gImGuiRenderer.captureSubmittedD3D12Frame(device, queue.Get(), source, sourceState);
-    }
-
-    if (!captureRequested || captureStarted) {
-        exporting::markOfflineRenderBoundaryCompleted(*ticket);
-    } else {
-        gImGuiRenderer.frameTap().failActive(
-            visuals::FrameTapError::BackendUnavailable,
-            source ? "The BGFX scene submission could not start D3D12 capture"
-                   : "BGFX did not expose a usable scene target"
-        );
-    }
+        finishSceneSubmit(*ticket, started, source != nullptr);
+    });
 }
 
-bool renderPresentFrame(IDXGISwapChain* swapChain) {
-    if (!swapChain) return false;
-    if (!exporting::isOfflineRenderActivityActive() || !gImGuiRenderer.ownsSwapChain(swapChain)) {
-        return gImGuiRenderer.render(swapChain);
-    }
+LL_TYPE_INSTANCE_HOOK(
+    OfflineRenderSubmitD3D11Hook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d11::RendererContextD3D11,
+    &bgfx::d3d11::RendererContextD3D11::$submit,
+    void,
+    bgfx::Frame*               render,
+    bgfx::ClearQuad&           clearQuad,
+    bgfx::TextVideoMemBlitter& textVideoMemBlitter
+) {
+    ActiveDetour activeDetour;
+    auto const   ticket = claimSceneSubmitTicket(render);
+    origin(render, clearQuad, textVideoMemBlitter);
+    if (!ticket) return;
 
-    ComPtr<ID3D12Device> d3d12Device;
-    bool const           explicitSubmitCapture = gD3D12RendererActive.load(std::memory_order_acquire)
-                                              || SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d12Device)));
-    auto                 ticket = explicitSubmitCapture ? std::nullopt : exporting::claimOfflineRenderPresentFallback();
-    bool const           captureRequested = ticket && gImGuiRenderer.frameTap().hasArmedCapture();
-    bool const           rendered         = gImGuiRenderer.render(swapChain, !explicitSubmitCapture);
-    if (!ticket) return rendered;
-
-    bool const captureStarted = captureRequested && rendered && !gImGuiRenderer.frameTap().hasArmedCapture();
-    if (!captureRequested || captureStarted) {
-        exporting::markOfflineRenderBoundaryCompleted(*ticket);
-    } else {
-        gImGuiRenderer.frameTap().failActive(
-            visuals::FrameTapError::BackendUnavailable,
-            "The matching Present could not start backbuffer capture before ImGui"
-        );
-    }
-
-    return rendered;
+    runDetourInstrumentation([&] {
+        auto* const      device  = this->m_device;
+        auto* const      context = this->m_deviceCtx;
+        ID3D11Texture2D* source  = this->m_msaaRenderTarget;
+        bool             started = false;
+        if (device && context && source) {
+            started = gImGuiRenderer.saveableFramebufferQueue().startDownload(device, context, source);
+        }
+        finishSceneSubmit(*ticket, started, source != nullptr);
+    });
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -759,19 +691,11 @@ bool getDirectCommandQueue(IUnknown* object, ComPtr<ID3D12CommandQueue>& queue) 
     return false;
 }
 
-// Retains swap-chain queues when DXGI private data is unavailable.
-std::mutex                           gSwapChainQueueFallbackMutex;
-std::unordered_map<void*, IUnknown*> gSwapChainQueueFallback;
-
 void bindSwapChainQueue(IDXGISwapChain* swapChain, IUnknown* queueObject) {
     if (!swapChain) return;
     ComPtr<ID3D12CommandQueue> queue;
     if (getDirectCommandQueue(queueObject, queue)) {
         swapChain->SetPrivateDataInterface(SwapChainQueueGuid, queue.Get());
-        std::scoped_lock lock(gSwapChainQueueFallbackMutex);
-        auto&            retained = gSwapChainQueueFallback[swapChain];
-        if (retained) retained->Release();
-        retained = queue.Detach();
     } else {
         swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
     }
@@ -788,37 +712,11 @@ ComPtr<ID3D12CommandQueue> getSwapChainQueue(IDXGISwapChain* swapChain) {
             return queue;
         }
     }
-    {
-        std::scoped_lock lk(gSwapChainQueueFallbackMutex);
-        auto             it = gSwapChainQueueFallback.find(swapChain);
-        if (it != gSwapChainQueueFallback.end() && it->second) {
-            ComPtr<ID3D12CommandQueue> queue;
-            if (SUCCEEDED(it->second->QueryInterface(IID_PPV_ARGS(&queue))) && queue) {
-                return queue;
-            }
-        }
-    }
     return nullptr;
 }
 
-ComPtr<ID3D12CommandQueue> getDeviceQueue(ID3D12Device* device) {
-    if (!device) return nullptr;
-    std::scoped_lock lock(gDeviceQueueMapMutex);
-    auto const       it = gDeviceQueueMap.find(device);
-    if (it == gDeviceQueueMap.end() || it->second.ambiguous) return nullptr;
-    return it->second.queue;
-}
-
 void unbindSwapChainQueue(IDXGISwapChain* swapChain) {
-    if (swapChain) {
-        swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
-        std::scoped_lock lk(gSwapChainQueueFallbackMutex);
-        auto             it = gSwapChainQueueFallback.find(swapChain);
-        if (it != gSwapChainQueueFallback.end()) {
-            if (it->second) it->second->Release();
-            gSwapChainQueueFallback.erase(it);
-        }
-    }
+    if (swapChain) swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
 }
 
 ComPtr<ID3D12CommandQueue> getResizePresentQueue(UINT bufferCount, IUnknown* const* presentQueues) {
@@ -848,8 +746,7 @@ bool resolveHookTargets(
     void*& outCreateSwapChain,
     void*& outCreateSwapChainForHwnd,
     void*& outCreateSwapChainForCoreWindow,
-    void*& outCreateSwapChainForComposition,
-    void*& outCreateCommandQueue
+    void*& outCreateSwapChainForComposition
 ) {
     ComPtr<IDXGIFactory4> factory;
     HRESULT               result = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
@@ -864,28 +761,11 @@ bool resolveHookTargets(
     ComPtr<ID3D12Device> device;
     result = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
     if (FAILED(result)) {
-        HRESULT const        hardwareResult = result;
-        ComPtr<IDXGIAdapter> warpAdapter;
-        result = factory->EnumWarpAdapter(IID_PPV_ARGS(&warpAdapter));
-        if (FAILED(result)) {
-            getLogger().error(
-                "Unable to enumerate a WARP adapter for replay timeline hooks "
-                "(hardware HRESULT=0x{:08X}, WARP HRESULT=0x{:08X})",
-                static_cast<uint32_t>(hardwareResult),
-                static_cast<uint32_t>(result)
-            );
-            return false;
-        }
-        result = D3D12CreateDevice(warpAdapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
-        if (FAILED(result)) {
-            getLogger().error(
-                "Unable to create a D3D12 device for replay timeline hooks "
-                "(hardware HRESULT=0x{:08X}, WARP HRESULT=0x{:08X})",
-                static_cast<uint32_t>(hardwareResult),
-                static_cast<uint32_t>(result)
-            );
-            return false;
-        }
+        getLogger().error(
+            "Unable to create the D3D12 device for replay timeline hooks (HRESULT=0x{:08X})",
+            static_cast<uint32_t>(result)
+        );
+        return false;
     }
 
     D3D12_COMMAND_QUEUE_DESC queueDesc{};
@@ -939,10 +819,9 @@ bool resolveHookTargets(
     outCreateSwapChainForHwnd        = getVtableEntry(factory.Get(), FactoryCreateSwapChainForHwndIndex);
     outCreateSwapChainForCoreWindow  = getVtableEntry(factory.Get(), FactoryCreateSwapChainForCoreWindowIndex);
     outCreateSwapChainForComposition = getVtableEntry(factory.Get(), FactoryCreateSwapChainForCompositionIndex);
-    outCreateCommandQueue            = getVtableEntry(device.Get(), DeviceCreateCommandQueueIndex);
     bool const resolved = outPresent && outPresent1 && outResizeBuffers && outResizeBuffers1 && outCreateSwapChain
                        && outCreateSwapChainForHwnd && outCreateSwapChainForCoreWindow
-                       && outCreateSwapChainForComposition && outCreateCommandQueue;
+                       && outCreateSwapChainForComposition;
     if (!resolved) getLogger().error("One or more replay timeline DXGI vtable targets resolved to null");
     return resolved;
 }
@@ -951,35 +830,49 @@ bool hookRendererInit(bool enable) {
     std::scoped_lock lock(gRendererInitHookMutex);
     static bool      initInstalled{};
     static bool      submitInstalled{};
+    static bool      submitD3D11Installed{};
 
     if (enable) {
-        if (!submitInstalled) {
-            if (OfflineRenderSubmitHook::hook() != 0) return false;
-            submitInstalled = true;
-        }
         if (!initInstalled) {
             gRendererInitHookStopping.store(true, std::memory_order_release);
-            if (RendererInitHook::hook() != 0) {
-                if (submitInstalled && OfflineRenderSubmitHook::unhook()) submitInstalled = false;
-                return false;
-            }
+            if (RendererInitHook::hook() != 0) return false;
             initInstalled = true;
         }
+        // Both backend hooks are installed up front; only the backend BGFX actually selected will run.
+        if (!submitInstalled) {
+            if (OfflineRenderSubmitHook::hook() != 0) {
+                getLogger().error("Unable to install the BGFX D3D12 scene submission capture hook");
+                return false;
+            }
+            submitInstalled = true;
+        }
+        if (!submitD3D11Installed) {
+            if (OfflineRenderSubmitD3D11Hook::hook() != 0) {
+                getLogger().error("Unable to install the BGFX D3D11 scene submission capture hook");
+                return false;
+            }
+            submitD3D11Installed = true;
+        }
+
         gRendererInitHookStopping.store(false, std::memory_order_release);
         return true;
     }
 
     gRendererInitHookStopping.store(true, std::memory_order_release);
     gD3D12RendererActive.store(false, std::memory_order_release);
+    if (submitD3D11Installed) {
+        if (OfflineRenderSubmitD3D11Hook::unhook()) submitD3D11Installed = false;
+        else return false;
+    }
+    if (submitInstalled) {
+        if (OfflineRenderSubmitHook::unhook()) submitInstalled = false;
+        else return false;
+    }
     if (initInstalled) {
         if (RendererInitHook::unhook()) initInstalled = false;
         else return false;
     }
     if (!waitForActiveRendererInitDetours()) return false;
-    if (submitInstalled) {
-        if (!OfflineRenderSubmitHook::unhook()) return false;
-        submitInstalled = false;
-    }
     return waitForActiveDetours();
 }
 
@@ -989,7 +882,18 @@ bool hookD3D12(bool enable) {
 
     if (enable) {
         if (coreInstalled(state)) {
-            if (!captureInstalled(state)) (void)installCaptureHooks(state);
+            if (!captureInstalled(state) && !installCaptureHooks(state)) {
+                bool const removed  = removeAll(state);
+                bool const drained  = removed && waitForActiveDetours();
+                bool const released = drained && gImGuiRenderer.shutdown();
+                getLogger().error(
+                    "Unable to restore the replay swap-chain queue hooks (removed={}, drained={}, cleanup={})",
+                    removed,
+                    drained,
+                    released
+                );
+                return false;
+            }
             gTimelineHooksStopping.store(false, std::memory_order_release);
             return true;
         }
@@ -1017,18 +921,23 @@ bool hookD3D12(bool enable) {
                 state.targets.createSwapChain,
                 state.targets.createSwapChainForHwnd,
                 state.targets.createSwapChainForCoreWindow,
-                state.targets.createSwapChainForComposition,
-                state.targets.createCommandQueue
+                state.targets.createSwapChainForComposition
             )) {
             getLogger().error("Unable to resolve D3D12 hook targets for the replay ImGui timeline");
             return false;
         }
         bool const captureOk = installCaptureHooks(state);
         if (!captureOk) {
-            getLogger().warn(
-                "One or more replay queue capture hooks are unavailable; existing swap chains require a "
-                "unique captured Direct queue"
+            bool const removed  = removeAll(state);
+            bool const drained  = removed && waitForActiveDetours();
+            bool const released = drained && gImGuiRenderer.shutdown();
+            getLogger().error(
+                "Unable to install the replay swap-chain queue hooks (removed={}, drained={}, cleanup={})",
+                removed,
+                drained,
+                released
             );
+            return false;
         }
         if (installCoreHooks(state)) {
             gTimelineHooksStopping.store(false, std::memory_order_release);
@@ -1057,8 +966,8 @@ bool hookD3D12(bool enable) {
         return false;
     }
 
+    gTimelineHooksStopping.store(true, std::memory_order_release);
     if (!noneInstalled(state)) {
-        gTimelineHooksStopping.store(true, std::memory_order_release);
         if (!removeAll(state)) {
             getLogger().error("Unable to remove replay ImGui timeline hooks");
             return false;

@@ -1,5 +1,6 @@
 ﻿#include "IdleDetectionHooks.h"
 
+#include "playback/editor/input/EditorInput.h"
 #include "playback/exporting/ExportActivity.h"
 
 #include "ll/api/memory/Hook.h"
@@ -19,6 +20,12 @@ namespace {
 
 std::atomic_bool gIdleDetectionGuardInstalled{false};
 
+// The pause menu steals the replay editor's input and interrupts export rendering.
+bool shouldBlockPauseMenu() {
+    if (exporting::isExportActivityActive()) return true;
+    return editor::input::isUiVisible() && !editor::input::isGameInputCaptured();
+}
+
 LL_TYPE_INSTANCE_HOOK(
     PlaybackSuspendWarningModalHook,
     ll::memory::HookPriority::Highest,
@@ -27,7 +34,7 @@ LL_TYPE_INSTANCE_HOOK(
     bool,
     std::function<void()> onConfirm
 ) {
-    if (exporting::isExportActivityActive()) return false;
+    if (shouldBlockPauseMenu()) return false;
     return origin(std::move(onConfirm));
 }
 
@@ -49,6 +56,18 @@ LL_TYPE_INSTANCE_HOOK(
     &MinecraftGame::$openPauseMenu,
     void
 ) {
+    if (shouldBlockPauseMenu()) return;
+    origin();
+}
+
+// Long exports have no player input, so the game treats the session as idle and suspends it.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackAppSuspendHook,
+    ll::memory::HookPriority::Highest,
+    MinecraftGame,
+    &MinecraftGame::$onAppSuspended,
+    void
+) {
     if (exporting::isExportActivityActive()) return;
     origin();
 }
@@ -60,20 +79,24 @@ bool hookIdleDetection(bool enable) {
         bool warning{};
         bool focusState{};
         bool pause{};
+        bool suspend{};
     };
     static HookState state;
 
-    auto allInstalled  = [&] { return state.warning && state.focusState && state.pause; };
-    auto noneInstalled = [&] { return !state.warning && !state.focusState && !state.pause; };
+    auto allInstalled  = [&] { return state.warning && state.focusState && state.pause && state.suspend; };
+    auto noneInstalled = [&] { return !state.warning && !state.focusState && !state.pause && !state.suspend; };
     auto installAll    = [&] {
         if (!state.warning) state.warning = PlaybackSuspendWarningModalHook::hook() == 0;
         if (!state.warning) return false;
         if (!state.focusState) state.focusState = PlaybackFocusStateHook::hook() == 0;
         if (!state.focusState) return false;
         if (!state.pause) state.pause = PlaybackPauseHook::hook() == 0;
-        return state.pause;
+        if (!state.pause) return false;
+        if (!state.suspend) state.suspend = PlaybackAppSuspendHook::hook() == 0;
+        return state.suspend;
     };
     auto removeAll = [&] {
+        if (state.suspend && PlaybackAppSuspendHook::unhook()) state.suspend = false;
         if (state.pause && PlaybackPauseHook::unhook()) state.pause = false;
         if (state.focusState && PlaybackFocusStateHook::unhook()) state.focusState = false;
         if (state.warning && PlaybackSuspendWarningModalHook::unhook()) state.warning = false;

@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "playback/visuals/FrameTap.h"
+#include "playback/visuals/FrameCaptureTypes.h"
 
 #include <cstdint>
 #include <filesystem>

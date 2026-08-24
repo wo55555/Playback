@@ -361,7 +361,7 @@ struct D3D12FrameTapBackend::Impl {
                 if (validLayout) {
                     lastByte    += static_cast<uint64_t>(height - 1) * footprint.Footprint.RowPitch;
                     validLayout  = packedRowBytes <= std::numeric_limits<uint64_t>::max() - lastByte
-                                && lastByte + packedRowBytes <= byteCount;
+                               && lastByte + packedRowBytes <= byteCount;
                 }
                 if (!validLayout) {
                     frameTap.fail(capture, FrameTapError::MapFailed, "D3D12 readback footprint is invalid");
@@ -415,7 +415,7 @@ struct D3D12FrameTapBackend::Impl {
                         for (uint32_t y = 0; y < height; ++y) {
                             auto const* source = static_cast<std::byte const*>(mapped) + footprint.Offset
                                                + static_cast<size_t>(y) * footprint.Footprint.RowPitch;
-                            auto*       target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
+                            auto* target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
                             std::memcpy(target, source, frame.rowPitch);
                         }
                         if (shouldLogCapture(capture)) {
@@ -456,6 +456,23 @@ struct D3D12FrameTapBackend::Impl {
     }
 
     void reset(FrameTapError error, std::string message) {
+        std::vector<std::pair<ComPtr<ID3D12Fence>, uint64_t>> outstanding;
+        {
+            std::scoped_lock lock(mutex);
+            for (auto const& slot : slots) {
+                if (slot.fence && slot.fenceValue != 0) outstanding.emplace_back(slot.fence, slot.fenceValue);
+            }
+        }
+        for (auto const& [fence, value] : outstanding) {
+            if (fence->GetCompletedValue() >= value) continue;
+            HANDLE const event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            if (!event) continue;
+            if (SUCCEEDED(fence->SetEventOnCompletion(value, event))) {
+                (void)WaitForSingleObject(event, ReadbackWaitTimeoutMs);
+            }
+            CloseHandle(event);
+        }
+
         frameTap.failActive(error, std::move(message));
         {
             std::scoped_lock lock(mutex);
@@ -624,7 +641,6 @@ bool D3D12FrameTapBackend::captureSubmitted(
         mImpl->frameTap.failActive(FrameTapError::UnsupportedFormat, "Unsupported D3D12 submitted frame format");
         return false;
     }
-
     std::scoped_lock lock(mImpl->mutex);
     if (!mImpl->startWorker() || mImpl->pendingSubmission || !mImpl->ensureSubmissionFence(device)) {
         if (!mImpl->worker.joinable()) {

@@ -2,6 +2,7 @@
 
 #include "ExportActivity.h"
 #include "playback/Playback.h"
+#include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
@@ -11,8 +12,6 @@
 #include "mc/client/game/IClientInstance.h"
 #include "mc/client/game/MinecraftGame.h"
 #include "mc/client/renderer/game/GameRenderer.h"
-#include "mc/external/bgfx/Context.h"
-#include "mc/external/bgfx/Frame.h"
 #include "mc/platform/threading/Mutex.h"
 #include "mc/util/Timer.h"
 
@@ -31,18 +30,16 @@ struct ActiveClockSample {
     OfflineRenderClockSample                    sample;
     keyframe::CameraTimelineRenderContextHandle cameraContext;
     uint64_t                                    renderSerial{};
-    void const*                                 expectedBgfxFrame{};
-    void const*                                 submittedBgfxFrame{};
-    uint32_t                                    expectedBgfxFrameNumber{};
     uint32_t                                    gameRenderOrdinal{};
     bool                                        claimed{};
     bool                                        renderReady{};
-    bool                                        boundaryClaimed{};
-    bool                                        cameraRequired{};
-    bool                                        entityApplied{};
-    bool                                        renderReturned{};
-    bool                                        cameraApplicationFailureLogged{};
-    bool                                        completed{};
+
+    bool boundaryClaimed{};
+    bool cameraRequired{};
+    bool entityApplied{};
+    bool renderReturned{};
+    bool cameraApplicationFailureLogged{};
+    bool completed{};
 };
 
 struct AcquiredClockSample {
@@ -53,10 +50,9 @@ struct AcquiredClockSample {
 };
 
 struct ActiveRenderSample {
-    visuals::ReplaySampleTime time;
-    OfflineRenderClockToken   token;
-    uint64_t                  renderSerial{};
-    uint32_t                  gameRenderCalls{};
+    OfflineRenderClockToken token;
+    uint64_t                renderSerial{};
+    uint32_t                gameRenderCalls{};
 };
 
 std::atomic_bool                               gHookInstalled{false};
@@ -71,13 +67,9 @@ thread_local std::optional<ActiveRenderSample> gRenderSample;
 
 class ScopedRenderSample {
 public:
-    explicit ScopedRenderSample(
-        visuals::ReplaySampleTime time,
-        OfflineRenderClockToken   token        = {},
-        uint64_t                  renderSerial = 0
-    )
+    explicit ScopedRenderSample(OfflineRenderClockToken token = {}, uint64_t renderSerial = 0)
     : mPrevious(gRenderSample) {
-        gRenderSample = ActiveRenderSample{time, token, renderSerial};
+        gRenderSample = ActiveRenderSample{token, renderSerial};
     }
 
     ~ScopedRenderSample() { gRenderSample = mPrevious; }
@@ -165,15 +157,15 @@ private:
 
 std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     std::scoped_lock lock(gClockMutex);
-    if (!gActiveSample || gActiveSample->claimed) return std::nullopt;
+    if (!gActiveSample) return std::nullopt;
+    // Some renders never reach BGFX as a world submission, so an unclaimed sample has to be rendered again.
+    if (gActiveSample->claimed && gActiveSample->boundaryClaimed) return std::nullopt;
 
-    gActiveSample->claimed                        = true;
-    gActiveSample->renderSerial                   = gNextRenderSerial++;
-    gActiveSample->expectedBgfxFrame              = nullptr;
-    gActiveSample->submittedBgfxFrame             = nullptr;
-    gActiveSample->expectedBgfxFrameNumber        = 0;
-    gActiveSample->gameRenderOrdinal              = 0;
-    gActiveSample->renderReady                    = false;
+    gActiveSample->claimed           = true;
+    gActiveSample->renderSerial      = gNextRenderSerial++;
+    gActiveSample->gameRenderOrdinal = 0;
+    gActiveSample->renderReady       = false;
+
     gActiveSample->boundaryClaimed                = false;
     gActiveSample->entityApplied                  = false;
     gActiveSample->renderReturned                 = false;
@@ -201,37 +193,12 @@ void markClockSampleRenderReady(OfflineRenderClockToken token, uint64_t renderSe
     gActiveSample->renderReady = ready;
 }
 
-void recordGameRenderCall(OfflineRenderClockToken token, uint64_t renderSerial, uint32_t ordinal) {
+void recordGameRenderStart(OfflineRenderClockToken token, uint64_t renderSerial, uint32_t ordinal) {
     std::scoped_lock lock(gClockMutex);
     if (!gActiveSample || gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial) {
         return;
     }
     gActiveSample->gameRenderOrdinal = ordinal;
-}
-
-bool recordClockSampleBgfxFrame(
-    OfflineRenderClockToken token,
-    uint64_t                renderSerial,
-    void const*             frame,
-    uint32_t                frameNumber,
-    uint32_t                gameRenderOrdinal,
-    bool                    requireScopedSample
-) {
-    if (!frame) return false;
-
-    std::scoped_lock lock(gClockMutex);
-    if (!gActiveSample || !gActiveSample->claimed || !gActiveSample->renderReady || gActiveSample->expectedBgfxFrame
-        || gActiveSample->completed) {
-        return false;
-    }
-    if (requireScopedSample && (gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial)) {
-        return false;
-    }
-
-    gActiveSample->expectedBgfxFrame       = frame;
-    gActiveSample->expectedBgfxFrameNumber = frameNumber;
-    if (gameRenderOrdinal != 0) gActiveSample->gameRenderOrdinal = gameRenderOrdinal;
-    return true;
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -243,12 +210,15 @@ LL_TYPE_INSTANCE_HOOK(
     Bedrock::NotNullNonOwnerPtr<IClientInstance> const& client,
     Timer const&                                        timer
 ) {
+    // Export steps resolve on this path, so advance before rendering instead of waiting for the 20Hz client tick.
+    if (isOfflineRenderActivityActive()) editor::tickReplayExportDuringGraphics();
+
     auto const sample = acquireClockSampleForRender();
     if (sample) {
         bool poseApplied = false;
         {
-            ScopedTimerOverride timerOverride(timer, sample->sample);
-            ScopedRenderSample  renderSample(sample->sample.replayTime, sample->token, sample->renderSerial);
+            ScopedTimerOverride                         timerOverride(timer, sample->sample);
+            ScopedRenderSample                          renderSample(sample->token, sample->renderSerial);
             keyframe::ScopedCameraTimelineRenderContext cameraContext(sample->cameraContext);
             auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
             poseApplied = pose != nullptr;
@@ -282,35 +252,13 @@ LL_TYPE_INSTANCE_HOOK(
     float partialTick
 ) {
     auto* const sample = gRenderSample ? &*gRenderSample : nullptr;
-    if (sample && sample->token) {
-        ++sample->gameRenderCalls;
-        recordGameRenderCall(sample->token, sample->renderSerial, sample->gameRenderCalls);
+    if (!sample || !sample->token) {
+        origin(partialTick);
+        return;
     }
+    ++sample->gameRenderCalls;
+    recordGameRenderStart(sample->token, sample->renderSerial, sample->gameRenderCalls);
     origin(partialTick);
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    OfflineRenderBgfxSwapHook,
-    ll::memory::HookPriority::Highest,
-    bgfx::Context,
-    &bgfx::Context::swap,
-    void
-) {
-    auto* const sample = gRenderSample ? &*gRenderSample : nullptr;
-    auto* const frame  = this->m_submit;
-    if (sample && sample->token && sample->renderSerial != 0) {
-        recordClockSampleBgfxFrame(
-            sample->token,
-            sample->renderSerial,
-            frame,
-            frame ? static_cast<uint32_t>(frame->m_frameNum) : 0,
-            sample->gameRenderCalls,
-            true
-        );
-    } else if (isOfflineRenderActivityActive()) {
-        recordClockSampleBgfxFrame({}, 0, frame, frame ? static_cast<uint32_t>(frame->m_frameNum) : 0, 0, false);
-    }
-    origin();
 }
 
 } // namespace
@@ -319,24 +267,21 @@ bool hookOfflineRenderClock(bool enable) {
     struct HookState {
         bool clock{};
         bool gameFrame{};
-        bool bgfxSwap{};
     };
     static HookState state;
 
     auto removeAll = [&] {
         gHookInstalled.store(false, std::memory_order_release);
         resetOfflineRenderClock();
-        if (state.bgfxSwap && OfflineRenderBgfxSwapHook::unhook()) state.bgfxSwap = false;
         if (state.gameFrame && OfflineRenderGameFrameHook::unhook()) state.gameFrame = false;
         if (state.clock && OfflineRenderClockUpdateGraphicsHook::unhook()) state.clock = false;
-        return !state.clock && !state.gameFrame && !state.bgfxSwap;
+        return !state.clock && !state.gameFrame;
     };
 
     if (enable) {
         if (!state.clock) state.clock = OfflineRenderClockUpdateGraphicsHook::hook() == 0;
         if (!state.gameFrame) state.gameFrame = OfflineRenderGameFrameHook::hook() == 0;
-        if (!state.bgfxSwap) state.bgfxSwap = OfflineRenderBgfxSwapHook::hook() == 0;
-        bool const ready = state.clock && state.gameFrame && state.bgfxSwap;
+        bool const ready = state.clock && state.gameFrame;
         gHookInstalled.store(ready, std::memory_order_release);
         if (ready) {
             gInitialCameraSampleLogged.store(false, std::memory_order_release);
@@ -346,13 +291,11 @@ bool hookOfflineRenderClock(bool enable) {
 
         bool const clockInstalled     = state.clock;
         bool const gameFrameInstalled = state.gameFrame;
-        bool const bgfxSwapInstalled  = state.bgfxSwap;
         bool const rolledBack         = removeAll();
         Playback::getInstance().getSelf().getLogger().error(
-            "Unable to install export-scoped render hooks (updateGraphics={}, gameFrame={}, bgfxSwap={}, rollback={})",
+            "Unable to install export-scoped render hooks (updateGraphics={}, gameFrame={}, rollback={})",
             clockInstalled,
             gameFrameInstalled,
-            bgfxSwapInstalled,
             rolledBack
         );
         return false;
@@ -372,7 +315,23 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
     }
     if (!gHookInstalled.load(std::memory_order_acquire)) return OfflineRenderClockPublishResult::Unavailable;
 
-    auto const cameraSample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample.replayTime);
+    auto cameraSample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample.replayTime);
+    if (!cameraSample) {
+        if (auto const viewpoint = replay::ReplaySession::getInstance().exportCameraViewpoint()) {
+            cameraSample = keyframe::CameraTimelineSample{
+                keyframe::CameraRenderState{
+                                            viewpoint->x,
+                                            viewpoint->y,
+                                            viewpoint->z,
+                                            viewpoint->yaw,
+                                            viewpoint->pitch,
+                                            viewpoint->roll,
+                                            viewpoint->fov,
+                                            },
+                "__playback_export_observer__",
+            };
+        }
+    }
     if (cameraSample && !editor::graphics::isCameraRenderInstalled())
         return OfflineRenderClockPublishResult::Unavailable;
     auto const cameraAppliedFlag =
@@ -385,14 +344,16 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
         token.id = gNextTokenId++;
         if (gNextTokenId == 0) ++gNextTokenId;
 
-        auto const cameraContext = keyframe::publishCameraTimelineRenderContext(keyframe::CameraTimelineRenderContext{
-            sample.replayTime,
-            keyframe::CameraTimelineSource::Export,
-            token.id,
-            cameraSample,
-            cameraAppliedFlag,
-            sample.frameIndex,
-        });
+        auto const cameraContext = keyframe::publishCameraTimelineRenderContext(
+            keyframe::CameraTimelineRenderContext{
+                sample.replayTime,
+                keyframe::CameraTimelineSource::Export,
+                token.id,
+                cameraSample,
+                cameraAppliedFlag,
+                sample.frameIndex,
+            }
+        );
         ActiveClockSample active{};
         active.token          = token;
         active.sample         = sample;
@@ -448,18 +409,9 @@ bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token) {
         cameraContext && cameraContext->appliedFlag && cameraContext->appliedFlag->load(std::memory_order_acquire);
     if (!applied && !gActiveSample->cameraApplicationFailureLogged) {
         gActiveSample->cameraApplicationFailureLogged = true;
-        auto const publishedContext                   = keyframe::currentCameraTimelineRenderContext();
         Playback::getInstance().getSelf().getLogger().error(
-            "Export camera sample missed the final ViewRenderObject boundary (frame={}, token={}, renderSerial={}, "
-            "tick={}/{}, contextPresent={}, contextMatches={}, publishedToken={})",
-            gActiveSample->sample.frameIndex,
-            gActiveSample->token.id,
-            gActiveSample->renderSerial,
-            gActiveSample->sample.replayTime.numerator,
-            gActiveSample->sample.replayTime.denominator,
-            publishedContext != nullptr,
-            publishedContext == cameraContext,
-            publishedContext ? publishedContext->renderToken : 0
+            "Export camera sample missed the final ViewRenderObject boundary (frame={})",
+            gActiveSample->sample.frameIndex
         );
     }
     return applied;
@@ -471,32 +423,13 @@ bool wasOfflineRenderClockSampleCompleted(OfflineRenderClockToken token) {
     return gActiveSample && gActiveSample->token.id == token.id && gActiveSample->completed;
 }
 
-std::optional<OfflineRenderBoundaryTicket> claimOfflineRenderBoundary(void const* frame, uint32_t frameNumber) {
-    if (!frame) return std::nullopt;
+std::optional<OfflineRenderBoundaryTicket>
+claimOfflineRenderSubmitBoundary(SceneSubmissionKind submissionCarriesScene) {
     std::scoped_lock lock(gClockMutex);
+    // BGFX submits on its own render thread, and overlay-only submissions carry no world geometry.
     if (!gActiveSample || !gActiveSample->claimed || !gActiveSample->renderReady || gActiveSample->boundaryClaimed
-        || gActiveSample->completed || gActiveSample->submittedBgfxFrame || gActiveSample->expectedBgfxFrame != frame
-        || gActiveSample->expectedBgfxFrameNumber != frameNumber) {
-        return std::nullopt;
-    }
-
-    auto& sample              = *gActiveSample;
-    sample.boundaryClaimed    = true;
-    sample.submittedBgfxFrame = frame;
-    return OfflineRenderBoundaryTicket{
-        sample.token.id,
-        sample.sample.frameIndex,
-        sample.renderSerial,
-        frame,
-        frameNumber,
-        sample.gameRenderOrdinal,
-    };
-}
-
-std::optional<OfflineRenderBoundaryTicket> claimOfflineRenderPresentFallback() {
-    std::scoped_lock lock(gClockMutex);
-    if (!gActiveSample || !gActiveSample->claimed || !gActiveSample->renderReady || gActiveSample->boundaryClaimed
-        || gActiveSample->completed) {
+        || gActiveSample->completed || gActiveSample->gameRenderOrdinal == 0
+        || submissionCarriesScene == SceneSubmissionKind::OverlayOnly) {
         return std::nullopt;
     }
 
@@ -506,8 +439,6 @@ std::optional<OfflineRenderBoundaryTicket> claimOfflineRenderPresentFallback() {
         sample.token.id,
         sample.sample.frameIndex,
         sample.renderSerial,
-        nullptr,
-        0,
         sample.gameRenderOrdinal,
     };
 }
@@ -516,23 +447,8 @@ void markOfflineRenderBoundaryCompleted(OfflineRenderBoundaryTicket const& ticke
     if (ticket.clockToken == 0 || ticket.renderSerial == 0) return;
     std::scoped_lock lock(gClockMutex);
     if (!gActiveSample || gActiveSample->token.id != ticket.clockToken
-        || gActiveSample->renderSerial != ticket.renderSerial || !gActiveSample->boundaryClaimed
-        || (ticket.bgfxFrame && gActiveSample->submittedBgfxFrame != ticket.bgfxFrame)
-        || (ticket.bgfxFrame && gActiveSample->expectedBgfxFrameNumber != ticket.bgfxFrameNumber)) {
+        || gActiveSample->renderSerial != ticket.renderSerial || !gActiveSample->boundaryClaimed) {
         return;
-    }
-    if (gActiveSample->sample.frameIndex < 2 || gActiveSample->sample.frameIndex % 60 == 0
-        || gActiveSample->gameRenderOrdinal != 1 || !gActiveSample->entityApplied) {
-        Playback::getInstance().getSelf().getLogger().debug(
-            "Export render boundary completed (frame={}, token={}, renderSerial={}, gameRenderCalls={}, "
-            "entityApplied={}, bgfxFrameNumber={})",
-            gActiveSample->sample.frameIndex,
-            gActiveSample->token.id,
-            gActiveSample->renderSerial,
-            gActiveSample->gameRenderOrdinal,
-            gActiveSample->entityApplied,
-            ticket.bgfxFrameNumber
-        );
     }
     gActiveSample->completed = true;
 }

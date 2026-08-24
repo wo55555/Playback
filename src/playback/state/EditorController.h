@@ -13,10 +13,6 @@
 #include <string>
 #include <string_view>
 
-namespace playback::visuals {
-class FrameTap;
-}
-
 namespace playback::state {
 
 class EditorController {
@@ -24,9 +20,10 @@ public:
     explicit EditorController(EditorContext& context);
     ~EditorController();
 
-    void setFrameTap(visuals::FrameTap* frameTap);
+    void setSaveableFramebufferQueue(exporting::SaveableFramebufferQueue* downloads);
     void reset();
     void tickExportBeforeClientUpdate();
+    void tickExportDuringGraphics();
     void tick(bool hudVisible);
 
 private:
@@ -59,6 +56,7 @@ private:
     std::optional<std::string>                     mPreviewCameraId;
     int                                            mProjectTotalTicks{-1};
     bool                                           mExportTickedBeforeClientUpdate{};
+    bool                                           mExportTickReentered{};
 };
 
 } // namespace playback::state

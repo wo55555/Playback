@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <numbers>
 #include <optional>
 #include <utility>
@@ -52,6 +53,8 @@ std::array<std::atomic<uint64_t>, 2> gLastFinalViewFrame{};
 std::array<std::atomic<uint64_t>, 2> gLastCameraEcsFrame{};
 
 thread_local std::optional<keyframe::CameraRenderState> gParkedObserverCamera;
+std::mutex                                              gRendererCameraMutex;
+std::optional<keyframe::CameraRenderState>              gRendererCameraState;
 
 size_t sourceIndex(keyframe::CameraTimelineSource source) noexcept {
     return source == keyframe::CameraTimelineSource::Export ? 1U : 0U;
@@ -601,6 +604,28 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     origin(camera, partialTick);
 
+    auto&      level    = *static_cast<LevelRendererPlayer*>(this);
+    auto const position = ::glm::vec3{level.mCameraPos->x, level.mCameraPos->y, level.mCameraPos->z};
+    auto const target   = ::glm::vec3{
+        level.mCameraTargetPos->x,
+        level.mCameraTargetPos->y,
+        level.mCameraTargetPos->z,
+    };
+    auto const direction = normalized(target - position);
+    if (finite(position) && finite(direction) && dot(direction, direction) > 0.5f) {
+        keyframe::CameraRenderState nativeState{
+            position.x,
+            position.y,
+            position.z,
+            std::atan2(-direction.x, direction.z) / RadiansPerDegree,
+            std::asin(std::clamp(-direction.y, -1.0f, 1.0f)) / RadiansPerDegree,
+            0.0f,
+            std::isfinite(camera.mFov) && camera.mFov > 1.0f && camera.mFov < 179.0f ? camera.mFov : 70.0f,
+        };
+        std::scoped_lock lock(gRendererCameraMutex);
+        gRendererCameraState = nativeState;
+    }
+
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (context) {
         // Timeline cameras bypass vanilla observer interpolation.
@@ -820,5 +845,10 @@ bool hookCameraRender(bool enable) {
 }
 
 bool isCameraRenderInstalled() { return gInstalled.load(std::memory_order_acquire); }
+
+std::optional<keyframe::CameraRenderState> currentRendererCameraState() {
+    std::scoped_lock lock(gRendererCameraMutex);
+    return gRendererCameraState;
+}
 
 } // namespace playback::editor::graphics

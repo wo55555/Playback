@@ -52,8 +52,8 @@ EditorController::EditorController(EditorContext& context)
 
 EditorController::~EditorController() { keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview); }
 
-void EditorController::setFrameTap(visuals::FrameTap* frameTap) {
-    if (mExportDriver) mExportDriver->setFrameTap(frameTap);
+void EditorController::setSaveableFramebufferQueue(exporting::SaveableFramebufferQueue* downloads) {
+    if (mExportDriver) mExportDriver->setSaveableFramebufferQueue(downloads);
 }
 
 void EditorController::publishCameraTimeline() {
@@ -108,6 +108,15 @@ void EditorController::tickExportBeforeClientUpdate() {
     if (!mExportDriver || !mExportDriver->isActive()) return;
     mExportDriver->tick();
     mExportTickedBeforeClientUpdate = true;
+}
+
+void EditorController::tickExportDuringGraphics() {
+    if (!mExportDriver || !mExportDriver->isActive()) return;
+    // Advancing runs inside the graphics hook, which the driver itself can re-enter.
+    if (mExportTickReentered) return;
+    mExportTickReentered = true;
+    mExportDriver->tick();
+    mExportTickReentered = false;
 }
 
 void EditorController::ensureProject(int totalTicks, std::string_view replayPath) {
