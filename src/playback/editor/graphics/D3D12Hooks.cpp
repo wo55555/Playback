@@ -8,6 +8,7 @@
 #include "ll/api/memory/Hook.h"
 
 #include "mc/external/bgfx/Frame.h"
+#include "mc/external/bgfx/RenderDraw.h"
 #include "mc/external/bgfx/RendererContextD3D11.h"
 #include "mc/external/bgfx/RendererContextD3D12.h"
 
@@ -15,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
@@ -552,14 +554,26 @@ bool renderPresentFrame(IDXGISwapChain* swapChain) {
     return gImGuiRenderer.renderExportOverlay(swapChain);
 }
 
-// Overlay submissions are a fixed set of ImGui draw calls (measured at 5); world submissions never drop below 104.
-constexpr uint32_t MaxOverlayOnlyRenderItems = 32;
+// m_renderItem is a 128-byte union slot and RenderDraw is only one of its members, so this is not sizeof().
+constexpr size_t RenderItemStride = 8388608u / 65536u;
 
+// Every submission carries exactly one draw with this declaration, overlay or not, so it cannot mark a scene.
+constexpr uint32_t SharedVertexDeclIndex  = 4;
+constexpr uint32_t InvalidVertexDeclIndex = 0xFFFFu;
+
+// Only world geometry brings its own vertex formats; measured overlay submissions never do.
 exporting::SceneSubmissionKind classifySubmission(bgfx::Frame const* render) {
     if (!render) return exporting::SceneSubmissionKind::OverlayOnly;
-    return static_cast<uint32_t>(render->m_numRenderItems) > MaxOverlayOnlyRenderItems
-             ? exporting::SceneSubmissionKind::Scene
-             : exporting::SceneSubmissionKind::OverlayOnly;
+    auto const  items = static_cast<uint32_t>(render->m_numRenderItems);
+    auto const* base  = reinterpret_cast<std::byte const*>(&render->m_renderItem[0].get());
+    for (uint32_t i = 0; i < items; ++i) {
+        auto const& draw = *reinterpret_cast<bgfx::RenderDraw const*>(base + i * RenderItemStride);
+        auto const  decl = static_cast<uint32_t>(draw.m_stream[0].get().m_decl.get().idx);
+        if (decl != InvalidVertexDeclIndex && decl != SharedVertexDeclIndex) {
+            return exporting::SceneSubmissionKind::Scene;
+        }
+    }
+    return exporting::SceneSubmissionKind::OverlayOnly;
 }
 
 std::optional<exporting::OfflineRenderBoundaryTicket> claimSceneSubmitTicket(bgfx::Frame const* render) {
