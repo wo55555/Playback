@@ -6,13 +6,13 @@
 #include "ll/api/memory/Hook.h"
 
 #include "mc/client/game/MinecraftGame.h"
-#include "mc/client/gui/screens/controllers/MinecraftScreenController.h"
+#include "mc/client/gui/oreui/Idle.h"
+#include "mc/client/gui/oreui/routing/Router.h"
 #include "mc/deps/application/AppPlatform.h"
 #include "mc/deps/core/platform/AppFocusState.h"
 
 #include <atomic>
-#include <functional>
-#include <utility>
+#include <string>
 
 namespace playback::exporting {
 
@@ -20,22 +20,10 @@ namespace {
 
 std::atomic_bool gIdleDetectionGuardInstalled{false};
 
-// The pause menu steals the replay editor's input and interrupts export rendering.
-bool shouldBlockPauseMenu() {
+// Playback owns the cursor while its UI is up, so the game sees no input and interrupts itself.
+bool shouldSuppressGameInterruptions() {
     if (exporting::isExportActivityActive()) return true;
     return editor::input::isUiVisible() && !editor::input::isGameInputCaptured();
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    PlaybackSuspendWarningModalHook,
-    ll::memory::HookPriority::Highest,
-    MinecraftScreenController,
-    &MinecraftScreenController::_tryShowSuspendWarningModal,
-    bool,
-    std::function<void()> onConfirm
-) {
-    if (shouldBlockPauseMenu()) return false;
-    return origin(std::move(onConfirm));
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -56,50 +44,48 @@ LL_TYPE_INSTANCE_HOOK(
     &MinecraftGame::$openPauseMenu,
     void
 ) {
-    if (shouldBlockPauseMenu()) return;
+    if (shouldSuppressGameInterruptions()) return;
     origin();
 }
 
-// Long exports have no player input, so the game treats the session as idle and suspends it.
+// The idle screen is an HBUI route, not a native screen, so it has to be blocked at the router.
 LL_TYPE_INSTANCE_HOOK(
-    PlaybackAppSuspendHook,
+    PlaybackIdleRouteHook,
     ll::memory::HookPriority::Highest,
-    MinecraftGame,
-    &MinecraftGame::$onAppSuspended,
-    void
+    OreUI::Router,
+    &OreUI::Router::_pushRoute,
+    bool,
+    std::string const&            route,
+    OreUI::Router::RouterPushMode mode
 ) {
-    if (exporting::isExportActivityActive()) return;
-    origin();
+    if (shouldSuppressGameInterruptions() && route == OreUI::EntryPoints::Idle::ROUTE()) return false;
+    return origin(route, mode);
 }
 
 } // namespace
 
 bool hookIdleDetection(bool enable) {
     struct HookState {
-        bool warning{};
         bool focusState{};
         bool pause{};
-        bool suspend{};
+        bool idleRoute{};
     };
     static HookState state;
 
-    auto allInstalled  = [&] { return state.warning && state.focusState && state.pause && state.suspend; };
-    auto noneInstalled = [&] { return !state.warning && !state.focusState && !state.pause && !state.suspend; };
+    auto allInstalled  = [&] { return state.focusState && state.pause && state.idleRoute; };
+    auto noneInstalled = [&] { return !state.focusState && !state.pause && !state.idleRoute; };
     auto installAll    = [&] {
-        if (!state.warning) state.warning = PlaybackSuspendWarningModalHook::hook() == 0;
-        if (!state.warning) return false;
         if (!state.focusState) state.focusState = PlaybackFocusStateHook::hook() == 0;
         if (!state.focusState) return false;
         if (!state.pause) state.pause = PlaybackPauseHook::hook() == 0;
         if (!state.pause) return false;
-        if (!state.suspend) state.suspend = PlaybackAppSuspendHook::hook() == 0;
-        return state.suspend;
+        if (!state.idleRoute) state.idleRoute = PlaybackIdleRouteHook::hook() == 0;
+        return state.idleRoute;
     };
     auto removeAll = [&] {
-        if (state.suspend && PlaybackAppSuspendHook::unhook()) state.suspend = false;
+        if (state.idleRoute && PlaybackIdleRouteHook::unhook()) state.idleRoute = false;
         if (state.pause && PlaybackPauseHook::unhook()) state.pause = false;
         if (state.focusState && PlaybackFocusStateHook::unhook()) state.focusState = false;
-        if (state.warning && PlaybackSuspendWarningModalHook::unhook()) state.warning = false;
         return noneInstalled();
     };
 

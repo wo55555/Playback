@@ -837,10 +837,7 @@ bool hookCameraRender(bool enable) {
         );
         return false;
     }
-    Playback::getInstance().getSelf().getLogger().info(
-        "Camera render hooks installed (frameScope=true, cameraEcs=true, fov=true, actorPose=false, "
-        "setupCamera=true, finalViewHook=true)"
-    );
+    Playback::getInstance().getSelf().getLogger().debug("Camera render hooks installed");
     return true;
 }
 

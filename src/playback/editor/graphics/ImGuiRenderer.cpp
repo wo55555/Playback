@@ -756,7 +756,7 @@ struct ImGuiRenderer::Impl {
         if (hadRenderer && captureInProgress) {
             saveableFramebuffers.fail(exporting::SaveableFramebufferQueueError::BackendUnavailable, frameTapMessage);
         } else if (hadRenderer && exporting::isOfflineRenderActivityActive()) {
-            getLogger().info(
+            getLogger().debug(
                 "Rebuilding overlay renderer during offline preparation (queueState={}, requested={}, pending={}, "
                 "inFlight={}, reason={})",
                 static_cast<int>(downloadStatus.state),
