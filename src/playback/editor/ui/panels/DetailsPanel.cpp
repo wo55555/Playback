@@ -36,15 +36,42 @@ std::string formatTick(int tick) {
     return value;
 }
 
-char const* interpolationName(state::editing::model::CameraInterpolationType interpolation) {
-    static constexpr std::array
-        names{"Smooth", "Linear", "Ease In", "Ease Out", "Ease InOut", "Hold", "Hermite", "Cubic Bezier"};
-    return names[std::clamp(static_cast<int>(interpolation), 0, static_cast<int>(names.size()) - 1)];
+std::string interpolationName(state::editing::model::CameraInterpolationType interpolation) {
+    using Interpolation = state::editing::model::CameraInterpolationType;
+    switch (interpolation) {
+    case Interpolation::Linear:
+        return "playback.refactorEditor.details.interpolationType.linear"_tr();
+    case Interpolation::EaseIn:
+        return "playback.refactorEditor.details.interpolationType.easeIn"_tr();
+    case Interpolation::EaseOut:
+        return "playback.refactorEditor.details.interpolationType.easeOut"_tr();
+    case Interpolation::EaseInOut:
+        return "playback.refactorEditor.details.interpolationType.easeInOut"_tr();
+    case Interpolation::Hold:
+        return "playback.refactorEditor.details.interpolationType.hold"_tr();
+    case Interpolation::Hermite:
+        return "playback.refactorEditor.details.interpolationType.hermite"_tr();
+    case Interpolation::CubicBezier:
+        return "playback.refactorEditor.details.interpolationType.cubicBezier"_tr();
+    case Interpolation::Smooth:
+    default:
+        return "playback.refactorEditor.details.interpolationType.smooth"_tr();
+    }
 }
 
-char const* categoryName(state::editing::model::SubActorCategory category) {
-    static constexpr std::array names{"Default", "Players", "Creatures", "Entities"};
-    return names[std::clamp(static_cast<int>(category), 0, static_cast<int>(names.size()) - 1)];
+std::string categoryName(state::editing::model::SubActorCategory category) {
+    using Category = state::editing::model::SubActorCategory;
+    switch (category) {
+    case Category::Players:
+        return "playback.refactorEditor.details.categoryName.players"_tr();
+    case Category::Creatures:
+        return "playback.refactorEditor.details.categoryName.creatures"_tr();
+    case Category::Entities:
+        return "playback.refactorEditor.details.categoryName.entities"_tr();
+    case Category::Default:
+    default:
+        return "playback.refactorEditor.details.categoryName.default"_tr();
+    }
 }
 
 void submit(EditorAction action) { ReplayEditor::getInstance().submitAction(std::move(action)); }
@@ -91,15 +118,42 @@ void DetailsPanel::draw() {
 
     auto const& selection = editor.selection();
     char        search[128]{};
-    property::beginInspector("Details", "Property Inspector");
-    property::searchBar("##details-search", "Search properties", search, sizeof(search));
+    // Subtitle names the current selection so the header carries information instead of a fixed caption.
+    std::string subject = "playback.refactorEditor.details.noSelection"_tr();
+    if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
+        subject = "playback.refactorEditor.details.worldActor"_tr();
+    } else if (selection.getAs<state::editing::model::SelectedWorldActorSegment>()) {
+        subject = "playback.refactorEditor.details.worldActorSegment"_tr();
+    } else if (selection.getAs<state::editing::model::SelectedSubActor>()) {
+        subject = "playback.refactorEditor.details.subActor"_tr();
+    } else if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
+        auto const* camera = findById(project->cameras, selectedCamera->cameraId);
+        subject            = camera ? camera->name : "playback.refactorEditor.details.camera"_tr();
+    } else if (selection.getAs<state::editing::model::SelectedKeyframe>()) {
+        subject = "playback.refactorEditor.details.cameraKeyframe"_tr();
+    } else if (selection.getAs<state::editing::model::SelectedMarker>()) {
+        subject = "playback.refactorEditor.details.marker"_tr();
+    }
+    auto const inspectorTitle = "playback.refactorEditor.details.title"_tr();
+    auto const searchHint     = "playback.refactorEditor.details.searchProperties"_tr();
+    property::beginInspector(inspectorTitle, subject);
+    property::searchBar("##details-search", searchHint.c_str(), search, sizeof(search));
 
     // ===== World Actor (overview + sub actor tree) =====
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
-        if (property::beginSection("World Actor")) {
-            ImGui::Text("Name: %s", project->worldActor.name.empty() ? "(untitled)" : project->worldActor.name.c_str());
-            ImGui::Text("Total: %s", formatTick(project->worldActor.totalTicks).c_str());
-            ImGui::Text("Segments: %zu", project->worldActor.segments.size());
+        if (property::beginSection("playback.refactorEditor.details.worldActor"_tr().c_str())) {
+            ImGui::TextUnformatted("playback.refactorEditor.details.name"_tr(
+                                       project->worldActor.name.empty()
+                                           ? "playback.refactorEditor.details.untitled"_tr()
+                                           : project->worldActor.name
+            )
+                                       .c_str());
+            ImGui::TextUnformatted(
+                "playback.refactorEditor.details.total"_tr(formatTick(project->worldActor.totalTicks)).c_str()
+            );
+            ImGui::TextUnformatted(
+                "playback.refactorEditor.details.segments"_tr(project->worldActor.segments.size()).c_str()
+            );
             for (auto const& segment : project->worldActor.segments) {
                 if (ImGui::Selectable((formatTick(segment.startTick) + " - " + formatTick(segment.endTick) + "  "
                                        + std::to_string(segment.speed) + "x")
@@ -108,7 +162,7 @@ void DetailsPanel::draw() {
                 }
             }
             property::separator();
-            if (property::beginSection("Sub Actors")) {
+            if (property::beginSection("playback.refactorEditor.details.subActors"_tr().c_str())) {
                 static constexpr std::array<state::editing::model::SubActorCategory, 4> categories{
                     state::editing::model::SubActorCategory::Default,
                     state::editing::model::SubActorCategory::Players,
@@ -121,14 +175,16 @@ void DetailsPanel::draw() {
                         static_cast<size_t>(std::count_if(actors.begin(), actors.end(), [category](auto const& actor) {
                             return actor.category == category;
                         }));
-                    char header[64]{};
-                    std::snprintf(header, sizeof(header), "%s (%zu)", categoryName(category), count);
-                    if (count > 0 && ImGui::CollapsingHeader(header)) {
+                    std::string const header = categoryName(category) + " (" + std::to_string(count) + ")";
+                    if (count > 0 && ImGui::CollapsingHeader(header.c_str())) {
                         size_t shown = 0;
                         for (auto const& actor : actors) {
                             if (actor.category != category) continue;
                             if (shown >= 100) {
-                                ImGui::TextDisabled("... %zu more", count - shown);
+                                ImGui::TextDisabled(
+                                    "%s",
+                                    "playback.refactorEditor.details.moreActors"_tr(count - shown).c_str()
+                                );
                                 break;
                             }
                             ++shown;
@@ -154,15 +210,22 @@ void DetailsPanel::draw() {
         }
         bool const isFirst = &project->worldActor.segments.front() == segment;
         bool const isLast  = &project->worldActor.segments.back() == segment;
-        if (property::beginSection("World Actor Segment")) {
-            ImGui::Text("Range: %s - %s", formatTick(segment->startTick).c_str(), formatTick(segment->endTick).c_str());
-            ImGui::Text("Duration: %d ticks", segment->endTick - segment->startTick);
-            ImGui::Text("Source Tick: %d", segment->sourceTick);
+        if (property::beginSection("playback.refactorEditor.details.worldActorSegment"_tr().c_str())) {
+            ImGui::TextUnformatted(
+                "playback.refactorEditor.details.range"_tr(formatTick(segment->startTick), formatTick(segment->endTick))
+                    .c_str()
+            );
+            ImGui::TextUnformatted(
+                "playback.refactorEditor.details.duration"_tr(segment->endTick - segment->startTick).c_str()
+            );
+            ImGui::TextUnformatted("playback.refactorEditor.details.sourceTick"_tr(segment->sourceTick).c_str());
             ImGui::BeginDisabled(segment->locked);
-            int startTick = segment->startTick;
-            int endTick   = segment->endTick;
+            int        startTick  = segment->startTick;
+            int        endTick    = segment->endTick;
+            auto const startLabel = "playback.refactorEditor.details.start"_tr();
+            auto const endLabel   = "playback.refactorEditor.details.end"_tr();
             ImGui::BeginDisabled(isFirst);
-            if (ImGui::InputInt("Start", &startTick) && ImGui::IsItemDeactivatedAfterEdit()) {
+            if (ImGui::InputInt(startLabel.c_str(), &startTick) && ImGui::IsItemDeactivatedAfterEdit()) {
                 EditorAction action{EditorActionType::TrimWorldActor};
                 action.id   = segment->id;
                 action.tick = std::clamp(startTick, 1, endTick - 1);
@@ -171,7 +234,7 @@ void DetailsPanel::draw() {
             }
             ImGui::EndDisabled();
             ImGui::BeginDisabled(isLast);
-            if (ImGui::InputInt("End", &endTick) && ImGui::IsItemDeactivatedAfterEdit()) {
+            if (ImGui::InputInt(endLabel.c_str(), &endTick) && ImGui::IsItemDeactivatedAfterEdit()) {
                 EditorAction action{EditorActionType::TrimWorldActor};
                 action.id   = segment->id;
                 action.tick = startTick;
@@ -179,25 +242,29 @@ void DetailsPanel::draw() {
                 submit(std::move(action));
             }
             ImGui::EndDisabled();
-            float speed = segment->speed;
-            if (ImGui::SliderFloat("Speed", &speed, 0.1f, 10.0f, "%.2fx") && ImGui::IsItemDeactivatedAfterEdit()) {
+            float      speed      = segment->speed;
+            auto const speedLabel = "playback.refactorEditor.details.speed"_tr();
+            if (ImGui::SliderFloat(speedLabel.c_str(), &speed, 0.1f, 10.0f, "%.2fx")
+                && ImGui::IsItemDeactivatedAfterEdit()) {
                 EditorAction action{EditorActionType::SetWorldActorSpeed};
                 action.id    = segment->id;
                 action.speed = speed;
                 submit(std::move(action));
             }
-            if (property::actionButton("Split at Playhead")) {
+            if (property::actionButton("playback.refactorEditor.details.splitAtPlayhead"_tr().c_str())) {
                 EditorAction action{EditorActionType::SplitWorldActor};
                 action.tick = state.currentTick;
                 submit(std::move(action));
             }
-            if (property::actionButton("Ripple Delete")) {
+            if (property::actionButton("playback.refactorEditor.details.rippleDelete"_tr().c_str())) {
                 EditorAction action{EditorActionType::RippleDeleteWorldActorSegment};
                 action.id = segment->id;
                 submit(std::move(action));
             }
             ImGui::EndDisabled();
-            if (segment->locked) ImGui::TextDisabled("Segment is locked.");
+            if (segment->locked) {
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.segmentLocked"_tr().c_str());
+            }
             property::endSection();
         }
         return;
@@ -210,15 +277,25 @@ void DetailsPanel::draw() {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.subActorMissing"_tr().c_str());
             return;
         }
-        if (property::beginSection("Sub Actor")) {
-            ImGui::Text("Name: %s", actor->name.empty() ? actor->id.c_str() : actor->name.c_str());
-            ImGui::Text("Category: %s", categoryName(actor->category));
-            ImGui::Text("Position: (%.1f, %.1f, %.1f)", actor->position.x, actor->position.y, actor->position.z);
-            ImGui::Text("Rotation: (%.1f, %.1f)", actor->rotation.x, actor->rotation.y);
+        if (property::beginSection("playback.refactorEditor.details.subActor"_tr().c_str())) {
+            ImGui::TextUnformatted(
+                "playback.refactorEditor.details.name"_tr(actor->name.empty() ? actor->id : actor->name).c_str()
+            );
+            ImGui::TextUnformatted("playback.refactorEditor.details.category"_tr(categoryName(actor->category)).c_str()
+            );
+            ImGui::TextUnformatted("playback.refactorEditor.details.positionValue"_tr(
+                                       actor->position.x,
+                                       actor->position.y,
+                                       actor->position.z
+            )
+                                       .c_str());
+            ImGui::TextUnformatted(
+                "playback.refactorEditor.details.rotationValue"_tr(actor->rotation.x, actor->rotation.y).c_str()
+            );
             if (actor->boundCameraIds.empty()) {
-                ImGui::Text("Bound Cameras: none");
+                ImGui::TextUnformatted("playback.refactorEditor.details.noBoundCameras"_tr().c_str());
             } else {
-                ImGui::Text("Bound Cameras:");
+                ImGui::TextUnformatted("playback.refactorEditor.details.boundCamerasLabel"_tr().c_str());
                 for (auto const& cameraId : actor->boundCameraIds) {
                     auto const* camera = findById(project->cameras, cameraId);
                     ImGui::BulletText("%s", camera ? camera->name.c_str() : cameraId.c_str());
@@ -226,7 +303,7 @@ void DetailsPanel::draw() {
             }
             property::separator();
             if (!actor->agentDetails.empty()) {
-                if (property::beginSection("Agent Details")) {
+                if (property::beginSection("playback.refactorEditor.details.agentDetails"_tr().c_str())) {
                     auto updated = actor->agentDetails;
                     bool edited  = false;
                     for (auto& [key, value] : updated) {
@@ -246,9 +323,11 @@ void DetailsPanel::draw() {
                 }
             }
             static char newDetailKey[64]{};
+            auto const  newFieldHint = "playback.refactorEditor.details.newDetailField"_tr();
             ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputTextWithHint("##agent-new-key", "New detail field name", newDetailKey, sizeof(newDetailKey));
-            if (property::actionButton("Add Detail Field") && newDetailKey[0] != '\0') {
+            ImGui::InputTextWithHint("##agent-new-key", newFieldHint.c_str(), newDetailKey, sizeof(newDetailKey));
+            if (property::actionButton("playback.refactorEditor.details.addDetailField"_tr().c_str())
+                && newDetailKey[0] != '\0') {
                 auto details          = actor->agentDetails;
                 details[newDetailKey] = "";
                 EditorAction action{EditorActionType::SetSubActorDetails};
@@ -258,7 +337,7 @@ void DetailsPanel::draw() {
                 newDetailKey[0] = '\0';
             }
             ImGui::Spacing();
-            if (property::actionButton("Create Binding Camera")) {
+            if (property::actionButton("playback.refactorEditor.details.createBindingCamera"_tr().c_str())) {
                 EditorAction action{EditorActionType::CreateBindingCamera};
                 action.id   = actor->id;
                 action.name = "playback.refactorEditor.details.bindingCameraName"_tr(actor->name);
@@ -276,37 +355,34 @@ void DetailsPanel::draw() {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.cameraMissing"_tr().c_str());
             return;
         }
-        if (property::beginSection("Camera")) {
-            property::textRow("Name", camera->name.c_str());
+        if (property::beginSection("playback.refactorEditor.details.camera"_tr().c_str())) {
+            property::textRow("playback.refactorEditor.details.nameLabel"_tr().c_str(), camera->name.c_str());
             std::string const keyframeCount = std::to_string(camera->keysByTick.size());
-            property::textRow("Keyframes", keyframeCount.c_str());
-            bool enabled = camera->enabled;
-            if (ImGui::Checkbox("Enabled", &enabled)) {
+            property::textRow("playback.refactorEditor.details.keyframesLabel"_tr().c_str(), keyframeCount.c_str());
+            bool       enabled      = camera->enabled;
+            auto const enabledLabel = "playback.refactorEditor.details.enabled"_tr();
+            if (ImGui::Checkbox(enabledLabel.c_str(), &enabled)) {
                 EditorAction action{EditorActionType::SetCameraEnabled};
                 action.id    = camera->id;
                 action.value = enabled;
                 submit(std::move(action));
             }
             ImGui::BeginDisabled(camera->locked);
-            ImGui::Text("Source: KeyframeTrack");
-            ImGui::Separator();
             if (!camera->bindingEntityUuid.empty()) {
+                property::separator();
                 auto const* actor = findById(project->worldActor.subActors, camera->bindingEntityUuid);
-                ImGui::Text("Bound to: %s", actor ? actor->name.c_str() : camera->bindingEntityUuid.c_str());
-                ImGui::Text("Binding Mode: %d", camera->bindingMode);
-                ImGui::Text("Damping: %.2f", camera->bindingDamping);
-                if (property::actionButton("Unbind Camera")) {
+                ImGui::TextUnformatted(
+                    "playback.refactorEditor.details.boundTo"_tr(actor ? actor->name : camera->bindingEntityUuid)
+                        .c_str()
+                );
+                if (property::actionButton("playback.refactorEditor.details.unbindCamera"_tr().c_str())) {
                     EditorAction action{EditorActionType::UnbindCamera};
                     action.id = camera->id;
                     submit(std::move(action));
                 }
-                ImGui::Separator();
-            }
-            if (camera->shake) {
-                ImGui::Text("Shake: %d - %d", camera->shake->startTick, camera->shake->endTick);
             }
             property::separator();
-            if (property::actionButton("Add Keyframe at Playhead")) {
+            if (property::actionButton("playback.refactorEditor.details.addKeyframeAtPlayhead"_tr().c_str())) {
                 EditorAction action{EditorActionType::AddCameraKeyframe};
                 action.id   = camera->id;
                 action.tick = state.currentTick;
@@ -318,7 +394,7 @@ void DetailsPanel::draw() {
                 ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(176, 128, 18, 255));
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(205, 157, 32, 255));
                 ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(232, 184, 45, 255));
-                if (ImGui::Selectable(("Tick " + std::to_string(keyTick)).c_str(), selected)) {
+                if (ImGui::Selectable("playback.refactorEditor.details.tickValue"_tr(keyTick).c_str(), selected)) {
                     editor.selection().select(state::editing::model::SelectedKeyframe{camera->id, keyTick});
                     EditorAction previewAction{EditorActionType::SetPreviewCamera};
                     previewAction.id = camera->id;
@@ -328,13 +404,15 @@ void DetailsPanel::draw() {
                 ImGui::PopStyleColor(3);
             }
             property::separator();
-            if (property::actionButton("Delete Camera")) {
+            if (property::actionButton("playback.refactorEditor.details.deleteCamera"_tr().c_str())) {
                 EditorAction action{EditorActionType::DeleteCamera};
                 action.id = camera->id;
                 submit(std::move(action));
             }
             ImGui::EndDisabled();
-            if (camera->locked) ImGui::TextDisabled("Camera is locked.");
+            if (camera->locked) {
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.cameraLocked"_tr().c_str());
+            }
             property::endSection();
         }
         return;
@@ -352,8 +430,8 @@ void DetailsPanel::draw() {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
             return;
         }
-        if (property::beginSection("Camera Keyframe")) {
-            ImGui::TextDisabled("Camera");
+        if (property::beginSection("playback.refactorEditor.details.cameraKeyframe"_tr().c_str())) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.camera"_tr().c_str());
             ImGui::SameLine();
             ImGui::TextUnformatted(camera->name.c_str());
             property::separator();
@@ -373,7 +451,7 @@ void DetailsPanel::draw() {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("Tick");
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
                 ImGui::TableNextColumn();
                 ImGui::SetNextItemWidth(-1.0f);
                 ImGui::InputInt("##tick", &tick, 0, 0);
@@ -389,7 +467,7 @@ void DetailsPanel::draw() {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("Position");
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.position"_tr().c_str());
                 ImGui::TableNextColumn();
                 static constexpr std::array positionLabels{"X", "Y", "Z"};
                 static constexpr std::array positionColors{
@@ -410,7 +488,7 @@ void DetailsPanel::draw() {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("Rotation");
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.rotation"_tr().c_str());
                 ImGui::TableNextColumn();
                 static constexpr std::array rotationLabels{"Yaw", "Pitch", "Roll"};
                 if (vectorInput("rotation", rotation, rotationLabels, nullptr, "%.2f")
@@ -442,13 +520,13 @@ void DetailsPanel::draw() {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("Interpolation");
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
                 ImGui::TableNextColumn();
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::BeginCombo("##interpolation", interpolationName(key->second.interpolationType))) {
+                if (ImGui::BeginCombo("##interpolation", interpolationName(key->second.interpolationType).c_str())) {
                     for (int index = 0; index < 8; ++index) {
                         auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
-                        if (ImGui::Selectable(interpolationName(value), index == interpolation)) {
+                        if (ImGui::Selectable(interpolationName(value).c_str(), index == interpolation)) {
                             EditorAction action{EditorActionType::SetKeyframeInterpolation};
                             action.id   = camera->id;
                             action.tick = originalTick;
@@ -462,14 +540,16 @@ void DetailsPanel::draw() {
             }
             ImGui::PopStyleVar();
             property::separator();
-            if (property::actionButton("Delete Keyframe")) {
+            if (property::actionButton("playback.refactorEditor.details.deleteKeyframe"_tr().c_str())) {
                 EditorAction action{EditorActionType::DeleteCameraKeyframe};
                 action.id   = camera->id;
                 action.tick = originalTick;
                 submit(std::move(action));
             }
             ImGui::EndDisabled();
-            if (camera->locked) ImGui::TextDisabled("Camera is locked.");
+            if (camera->locked) {
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.cameraLocked"_tr().c_str());
+            }
             property::endSection();
         }
         return;
@@ -479,31 +559,37 @@ void DetailsPanel::draw() {
     if (auto const* selected = selection.getAs<state::editing::model::SelectedMarker>()) {
         auto const* marker = findById(project->markers, selected->markerId);
         if (!marker) {
-            ImGui::TextDisabled("Marker no longer exists.");
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.markerMissing"_tr().c_str());
             return;
         }
-        if (property::beginSection("Marker")) {
-            ImGui::Text("Label: %s", marker->label.c_str());
-            ImGui::Text("Tick: %s", formatTick(marker->tick).c_str());
+        if (property::beginSection("playback.refactorEditor.details.marker"_tr().c_str())) {
+            property::textRow("playback.refactorEditor.details.nameLabel"_tr().c_str(), marker->label.c_str());
+            property::textRow("playback.refactorEditor.details.tick"_tr().c_str(), formatTick(marker->tick).c_str());
             ImGui::BeginDisabled();
-            if (property::actionButton("Delete Marker", false)) {}
+            if (property::actionButton("playback.refactorEditor.details.deleteMarker"_tr().c_str(), false)) {}
             ImGui::EndDisabled();
-            ImGui::TextDisabled("Marker editing is not yet wired to the backend.");
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.markerNotWired"_tr().c_str());
             property::endSection();
         }
         return;
     }
 
     // ===== Empty state =====
-    if (property::beginSection("Replay Overview")) {
-        ImGui::TextDisabled("Select a world actor, camera, keyframe or marker.");
+    if (property::beginSection("playback.refactorEditor.details.overview"_tr().c_str())) {
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.selectionHint"_tr().c_str());
         ImGui::Spacing();
-        ImGui::Text("Replay: %s", project->worldActor.name.empty() ? "(untitled)" : project->worldActor.name.c_str());
-        ImGui::Text("Duration: %s", formatTick(project->totalTicks).c_str());
-        ImGui::Text("Cameras: %zu", project->cameras.size());
-        ImGui::Text("World actor segments: %zu", project->worldActor.segments.size());
+        ImGui::TextUnformatted("playback.refactorEditor.details.name"_tr(
+                                   project->worldActor.name.empty() ? "playback.refactorEditor.details.untitled"_tr()
+                                                                    : project->worldActor.name
+        )
+                                   .c_str());
+        ImGui::TextUnformatted("playback.refactorEditor.details.total"_tr(formatTick(project->totalTicks)).c_str());
+        ImGui::TextUnformatted("playback.refactorEditor.details.cameras"_tr(project->cameras.size()).c_str());
+        ImGui::TextUnformatted(
+            "playback.refactorEditor.details.segments"_tr(project->worldActor.segments.size()).c_str()
+        );
         ImGui::Spacing();
-        if (property::actionButton("Add Free Camera")) {
+        if (property::actionButton("playback.refactorEditor.details.addFreeCamera"_tr().c_str())) {
             EditorAction action{EditorActionType::AddFreeCamera};
             action.name = "playback.refactorEditor.defaults.camera"_tr(project->cameras.size() + 1);
             submit(std::move(action));

@@ -5,10 +5,8 @@
 #include "playback/state/editing/models/SelectionModel.h"
 
 #include "EditorTheme.h"
-#include "HintBar.h"
 #include "modes/EditMode.h"
 #include "modes/RenderMode.h"
-#include "panels/CurveEditorPanel.h"
 #include "panels/DetailsPanel.h"
 #include "panels/StatusPanel.h"
 #include "panels/TimelinePanel.h"
@@ -49,7 +47,6 @@ public:
     void                                                       seekRelative(int tickDelta);
     bool                                                       deleteSelection();
     bool                                                       addKeyframeAtPlayhead();
-    CurveEditorPanel&                                          curveEditorPanel() { return mCurveEditorPanel; }
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     void                      setVideoAspectRatio(float aspectRatio);
@@ -67,15 +64,13 @@ private:
     EditorTheme   mTheme;
     ModeManager&  mModeManager{ModeManager::getInstance()};
     EditorMenuBar mMenuBar;
-    HintBar       mHintBar;
     Splitter      mSplitter;
 
     // Panels
-    ViewportPanel    mViewportPanel;
-    DetailsPanel     mDetailsPanel;
-    TimelinePanel    mTimelinePanel;
-    StatusPanel      mStatusPanel;
-    CurveEditorPanel mCurveEditorPanel;
+    ViewportPanel mViewportPanel;
+    DetailsPanel  mDetailsPanel;
+    TimelinePanel mTimelinePanel;
+    StatusPanel   mStatusPanel;
 
     // Modes
     EditMode   mEditMode;

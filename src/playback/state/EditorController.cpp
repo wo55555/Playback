@@ -350,12 +350,6 @@ void EditorController::tick(bool hudVisible) {
         case EditorActionType::Seek:
             session.requestSeek(action.tick);
             break;
-        case EditorActionType::SkipToStart:
-            session.requestSeek(0);
-            break;
-        case EditorActionType::SkipToEnd:
-            session.requestSeek(session.getTotalTicks());
-            break;
         case EditorActionType::DecreaseSpeed:
             session.adjustPlaybackSpeed(-1);
             break;

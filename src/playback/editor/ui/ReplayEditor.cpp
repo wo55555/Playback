@@ -42,9 +42,8 @@ void ReplayEditor::shutdown() {
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
     mViewportMaximized = false;
-    mCurveEditorPanel.setOpen(false);
-    mFrameState = nullptr;
-    mSubmit     = nullptr;
+    mFrameState        = nullptr;
+    mSubmit            = nullptr;
     mSelection.clear();
     mLastExportState = exporting::ExportState::Idle;
 }

@@ -32,8 +32,6 @@ void ViewportPanel::draw(bool maximized) {
     dl->AddRect(videoMin, videoMax, IM_COL32(0x3a, 0x8c, 0xf0, 0xff));
     ImGui::SetCursorScreenPos(videoMin);
     ImGui::InvisibleButton("##viewport-video", videoSize);
-    auto const& state = ReplayEditor::getInstance().state();
-    mContextMenu.draw(state.capabilities.cameraEditing);
 
     constexpr float kMaximizeButtonSize = 28.0f;
     ImVec2          maximizePos(sceneMax.x - kMaximizeButtonSize - 8.0f, sceneMax.y - kMaximizeButtonSize - 8.0f);

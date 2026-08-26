@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "playback/editor/ui/components/Animator.h"
 #include "playback/state/EditorAction.h"
 #include "playback/state/editing/models/TrackTreeModel.h"
 
@@ -30,8 +31,10 @@ private:
     void submitEdit(playback::state::EditorAction action);
 
     state::editing::model::TrackTreeModel mTrackTree;
+    Animator                              mAnimator;
     float                                 mZoomScale{1.0f};
     float                                 mScrollX{};
+    float                                 mScrollY{};
     float                                 mTrackListWidthRatio{0.30f};
     int                                   mPendingSeekTick{-1};
     int                                   mRulerDragTick{-1};
