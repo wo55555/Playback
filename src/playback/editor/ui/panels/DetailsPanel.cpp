@@ -118,7 +118,6 @@ void DetailsPanel::draw() {
 
     auto const& selection = editor.selection();
     char        search[128]{};
-    // Subtitle names the current selection so the header carries information instead of a fixed caption.
     std::string subject = "playback.refactorEditor.details.noSelection"_tr();
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         subject = "playback.refactorEditor.details.worldActor"_tr();
@@ -139,7 +138,6 @@ void DetailsPanel::draw() {
     property::beginInspector(inspectorTitle, subject);
     property::searchBar("##details-search", searchHint.c_str(), search, sizeof(search));
 
-    // ===== World Actor (overview + sub actor tree) =====
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         if (property::beginSection("playback.refactorEditor.details.worldActor"_tr().c_str())) {
             ImGui::TextUnformatted("playback.refactorEditor.details.name"_tr(
@@ -201,7 +199,6 @@ void DetailsPanel::draw() {
         return;
     }
 
-    // ===== World Actor Segment =====
     if (auto const* selected = selection.getAs<state::editing::model::SelectedWorldActorSegment>()) {
         auto const* segment = findById(project->worldActor.segments, selected->segmentId);
         if (!segment) {
@@ -270,7 +267,6 @@ void DetailsPanel::draw() {
         return;
     }
 
-    // ===== Sub Actor =====
     if (auto const* selected = selection.getAs<state::editing::model::SelectedSubActor>()) {
         auto const* actor = findById(project->worldActor.subActors, selected->subActorId);
         if (!actor) {
@@ -348,7 +344,6 @@ void DetailsPanel::draw() {
         return;
     }
 
-    // ===== Camera =====
     if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
         auto const* camera = findById(project->cameras, selectedCamera->cameraId);
         if (!camera) {
@@ -418,7 +413,6 @@ void DetailsPanel::draw() {
         return;
     }
 
-    // ===== Camera Keyframe =====
     if (auto const* selected = selection.getAs<state::editing::model::SelectedKeyframe>()) {
         auto const* camera = findById(project->cameras, selected->trackId);
         if (!camera) {
@@ -555,7 +549,6 @@ void DetailsPanel::draw() {
         return;
     }
 
-    // ===== Marker =====
     if (auto const* selected = selection.getAs<state::editing::model::SelectedMarker>()) {
         auto const* marker = findById(project->markers, selected->markerId);
         if (!marker) {
@@ -574,7 +567,6 @@ void DetailsPanel::draw() {
         return;
     }
 
-    // ===== Empty state =====
     if (property::beginSection("playback.refactorEditor.details.overview"_tr().c_str())) {
         ImGui::TextDisabled("%s", "playback.refactorEditor.details.selectionHint"_tr().c_str());
         ImGui::Spacing();

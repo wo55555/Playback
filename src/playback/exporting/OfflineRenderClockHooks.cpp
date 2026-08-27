@@ -344,16 +344,14 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
         token.id = gNextTokenId++;
         if (gNextTokenId == 0) ++gNextTokenId;
 
-        auto const cameraContext = keyframe::publishCameraTimelineRenderContext(
-            keyframe::CameraTimelineRenderContext{
-                sample.replayTime,
-                keyframe::CameraTimelineSource::Export,
-                token.id,
-                cameraSample,
-                cameraAppliedFlag,
-                sample.frameIndex,
-            }
-        );
+        auto const cameraContext = keyframe::publishCameraTimelineRenderContext(keyframe::CameraTimelineRenderContext{
+            sample.replayTime,
+            keyframe::CameraTimelineSource::Export,
+            token.id,
+            cameraSample,
+            cameraAppliedFlag,
+            sample.frameIndex,
+        });
         ActiveClockSample active{};
         active.token          = token;
         active.sample         = sample;
@@ -423,8 +421,8 @@ bool wasOfflineRenderClockSampleCompleted(OfflineRenderClockToken token) {
     return gActiveSample && gActiveSample->token.id == token.id && gActiveSample->completed;
 }
 
-std::optional<OfflineRenderBoundaryTicket>
-claimOfflineRenderSubmitBoundary(SceneSubmissionKind submissionCarriesScene) {
+std::optional<OfflineRenderBoundaryTicket> claimOfflineRenderSubmitBoundary(SceneSubmissionKind submissionCarriesScene
+) {
     std::scoped_lock lock(gClockMutex);
     // BGFX submits on its own render thread, and overlay-only submissions carry no world geometry.
     if (!gActiveSample || !gActiveSample->claimed || !gActiveSample->renderReady || gActiveSample->boundaryClaimed

@@ -543,11 +543,10 @@ OfflineRenderBoundaryStatus OfflineRenderBoundary::status() {
                 OfflineRenderBoundaryError::CaptureFailed,
                 result.downloads.message.empty() ? "The renderer frame download failed" : result.downloads.message
             );
-        } else if (
-            result.state != OfflineRenderBoundaryState::Closed && result.state != OfflineRenderBoundaryState::Cancelled
-            && (result.downloads.state == SaveableFramebufferQueueState::Closed
-                || result.downloads.state == SaveableFramebufferQueueState::Cancelled)
-        ) {
+        } else if (result.state != OfflineRenderBoundaryState::Closed
+                   && result.state != OfflineRenderBoundaryState::Cancelled
+                   && (result.downloads.state == SaveableFramebufferQueueState::Closed
+                       || result.downloads.state == SaveableFramebufferQueueState::Cancelled)) {
             fault(
                 OfflineRenderBoundaryError::CaptureUnavailable,
                 result.downloads.message.empty() ? "The framebuffer download queue became unavailable"
@@ -581,9 +580,9 @@ std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(Expor
     long double delta             = 0.0L;
     int64_t     previousWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
     if (mLastSubmittedFrame) {
-        delta             = current
-                          - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
-                                / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
+        delta = current
+              - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
+                    / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
         previousWholeTick = mLastSubmittedFrame->replayTickNumerator / mLastSubmittedFrame->replayTickDenominator;
     }
     if (delta < 0.0L || delta > static_cast<long double>(std::numeric_limits<float>::max())) return std::nullopt;

@@ -22,9 +22,7 @@ struct ReplaySampleTime {
         return numerator % denominator == 0 ? whole : whole + 1;
     }
 
-    // Progress from requiredAppliedTick() - 1 to requiredAppliedTick(), so an exact tick sits at the end of its
-    // own step rather than at the start of it. Returning 0 there would make vanilla alpha blending render the
-    // previous tick's state for everything the export pose does not pin, one tick behind the sampled pose.
+    // Exact ticks end their step so vanilla interpolation does not render unpinned state one tick late.
     [[nodiscard]] float partialTick() const noexcept {
         if (!isValid()) return 0.0f;
         auto const remainder = numerator % denominator;

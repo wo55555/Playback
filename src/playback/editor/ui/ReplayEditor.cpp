@@ -1,6 +1,7 @@
 ﻿#include "playback/editor/ui/ReplayEditor.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/ErrorDialog.h"
 
 #include "imgui.h"

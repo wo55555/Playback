@@ -1,7 +1,5 @@
 ﻿#include "ReplayEntityInterpolator.h"
 
-#include "playback/Playback.h"
-
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
@@ -47,17 +45,6 @@ using EntityPoseMap = std::unordered_map<EntityRenderKey, EntityPoseHistory, Ent
 std::atomic<std::shared_ptr<EntityPoseMap const>>                           gEntityPoses;
 std::mutex                                                                  gPendingMutex;
 std::unordered_map<EntityRenderKey, PendingEntityPose, EntityRenderKeyHash> gPending;
-std::atomic<int64_t>                                                        gLastRenderDiagnosticBucket{-1};
-
-bool shouldLogRenderDiagnostic(ReplaySampleTime const& sample) {
-    auto const bucket = static_cast<int64_t>(std::floor(sample.value() / 20.0L));
-    if (bucket < 0) return false;
-    auto previous = gLastRenderDiagnosticBucket.load(std::memory_order_acquire);
-    while (previous != bucket
-           && !gLastRenderDiagnosticBucket
-                   .compare_exchange_weak(previous, bucket, std::memory_order_acq_rel, std::memory_order_acquire)) {}
-    return previous != bucket;
-}
 
 bool finite(EntityRenderPosition const& value) noexcept {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
@@ -176,8 +163,6 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
         auto const poses = gEntityPoses.load(std::memory_order_acquire);
         auto       state = std::make_unique<ScopedReplayEntityPose::State>();
         state->actors.reserve(targets.size());
-        bool const logDiagnostic = shouldLogRenderDiagnostic(sample);
-        bool       diagnosticLogged{};
 
         for (auto const& target : targets) {
             if (!target.actor) return {};
@@ -197,68 +182,33 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             if (!stateVector || !renderPosition || !actorRotation) return {};
 
             auto const sampled = samplePose(history->second, sample);
-            if (logDiagnostic && (!diagnosticLogged || target.actor->isPlayer())) {
-                auto const& nativeState = *target.actor->mBuiltInComponents->mStateVectorComponent;
-                auto&       logger      = Playback::getInstance().getSelf().getLogger();
-                logger.debug(
-                    "Replay entity render pose (sample={}/{}, player={}, entity={}:{}, sampled=({}, {}, {}), "
-                    "renderBefore=({}, {}, {}), native=({}, {}, {}), nativePrev=({}, {}, {}), "
-                    "interpolator=({}, {}, {}), steps=({},{},{})",
-                    sample.numerator,
-                    sample.denominator,
-                    target.actor->isPlayer(),
-                    target.key.registryId,
-                    target.key.entityId,
-                    sampled.position.x,
-                    sampled.position.y,
-                    sampled.position.z,
-                    renderPosition->mValue->x,
-                    renderPosition->mValue->y,
-                    renderPosition->mValue->z,
-                    nativeState.mPos->x,
-                    nativeState.mPos->y,
-                    nativeState.mPos->z,
-                    nativeState.mPosPrev->x,
-                    nativeState.mPosPrev->y,
-                    nativeState.mPosPrev->z,
-                    movementInterpolator ? movementInterpolator->mPos->x : 0.0f,
-                    movementInterpolator ? movementInterpolator->mPos->y : 0.0f,
-                    movementInterpolator ? movementInterpolator->mPos->z : 0.0f,
-                    movementInterpolator ? movementInterpolator->mPositionSteps : 0,
-                    movementInterpolator ? movementInterpolator->mRotationSteps : 0,
-                    movementInterpolator ? movementInterpolator->mHeadYawSteps : 0
-                );
-                diagnosticLogged = true;
-            }
-            state->actors.emplace_back(
-                ScopedReplayEntityPose::State::ActorState{
-                    stateVector,
-                    stateVector->mPos.get(),
-                    stateVector->mPosPrev.get(),
-                    stateVector->mPosDelta.get(),
-                    renderPosition,
-                    renderPosition->mValue.get(),
-                    Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
-                    movementInterpolator,
-                    movementInterpolator ? movementInterpolator->mPos.get() : Vec3{},
-                    movementInterpolator ? movementInterpolator->mRot.get() : Vec2{},
-                    movementInterpolator ? movementInterpolator->mHeadYaw : 0.0f,
-                    movementInterpolator ? movementInterpolator->mPositionSteps : 0,
-                    movementInterpolator ? movementInterpolator->mRotationSteps : 0,
-                    movementInterpolator ? movementInterpolator->mHeadYawSteps : 0,
-                    renderRotation,
-                    renderRotation ? renderRotation->mRot.get() : Vec2{},
-                    actorRotation,
-                    actorRotation->mRot.get(),
-                    actorRotation->mRotPrev.get(),
-                    headRotation,
-                    headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
-                    headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
-                    bodyRotation,
-                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
-                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
-            }
-            );
+            state->actors.emplace_back(ScopedReplayEntityPose::State::ActorState{
+                stateVector,
+                stateVector->mPos.get(),
+                stateVector->mPosPrev.get(),
+                stateVector->mPosDelta.get(),
+                renderPosition,
+                renderPosition->mValue.get(),
+                Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
+                movementInterpolator,
+                movementInterpolator ? movementInterpolator->mPos.get() : Vec3{},
+                movementInterpolator ? movementInterpolator->mRot.get() : Vec2{},
+                movementInterpolator ? movementInterpolator->mHeadYaw : 0.0f,
+                movementInterpolator ? movementInterpolator->mPositionSteps : 0,
+                movementInterpolator ? movementInterpolator->mRotationSteps : 0,
+                movementInterpolator ? movementInterpolator->mHeadYawSteps : 0,
+                renderRotation,
+                renderRotation ? renderRotation->mRot.get() : Vec2{},
+                actorRotation,
+                actorRotation->mRot.get(),
+                actorRotation->mRotPrev.get(),
+                headRotation,
+                headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
+                headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
+                bodyRotation,
+                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
+                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
+            });
 
             auto& applied                  = state->actors.back();
             applied.stateVector->mPos      = applied.exportPosition;

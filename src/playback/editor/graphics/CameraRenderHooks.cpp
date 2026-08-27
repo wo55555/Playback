@@ -41,17 +41,14 @@ namespace {
 
 constexpr float PositionTolerance  = 0.02f;
 constexpr float DirectionTolerance = 0.002f;
-constexpr auto  UnloggedFrame      = std::numeric_limits<uint64_t>::max();
 constexpr float RadiansPerDegree   = std::numbers::pi_v<float> / 180.0f;
 
-std::atomic_bool                     gInstalled{};
-std::atomic<uint64_t>                gPreviewFrameSerial{};
-std::array<std::atomic_bool, 2>      gMissingSampleLogged{};
-std::array<std::atomic_bool, 2>      gApplicationFailureLogged{};
-std::array<std::atomic_bool, 2>      gFinalViewFailureLogged{};
-std::array<std::atomic_bool, 2>      gCameraEcsFailureLogged{};
-std::array<std::atomic<uint64_t>, 2> gLastFinalViewFrame{};
-std::array<std::atomic<uint64_t>, 2> gLastCameraEcsFrame{};
+std::atomic_bool                gInstalled{};
+std::atomic<uint64_t>           gPreviewFrameSerial{};
+std::array<std::atomic_bool, 2> gMissingSampleLogged{};
+std::array<std::atomic_bool, 2> gApplicationFailureLogged{};
+std::array<std::atomic_bool, 2> gFinalViewFailureLogged{};
+std::array<std::atomic_bool, 2> gCameraEcsFailureLogged{};
 
 thread_local std::optional<keyframe::CameraRenderState> gParkedObserverCamera;
 std::mutex                                              gRendererCameraMutex;
@@ -222,7 +219,8 @@ void writeCameraSpaces(
     size_t                      appliedCount{};
     for (auto* camera : localCameras) {
         if (!camera || camera == &worldCamera) continue;
-        if (std::find(applied.begin(), applied.begin() + appliedCount, camera) != applied.begin() + appliedCount) {
+        auto const appliedEnd = applied.begin() + static_cast<std::ptrdiff_t>(appliedCount);
+        if (std::find(applied.begin(), appliedEnd, camera) != appliedEnd) {
             continue;
         }
         writeLocalCameraPose(*camera, basis);
@@ -240,28 +238,6 @@ void writeLevelCameraPose(LevelRendererPlayer& level, ::glm::vec3 const& positio
     };
     level.mCameraForward = Vec3{basis.forward.x, basis.forward.y, basis.forward.z};
     level.mCameraUp      = Vec3{basis.up.x, basis.up.y, basis.up.z};
-}
-
-bool shouldLogFinalView(keyframe::CameraTimelineRenderContext const& context) noexcept {
-    bool const selected = context.source == keyframe::CameraTimelineSource::Export
-                            ? context.frameIndex == 0 || context.frameIndex == 1 || context.frameIndex % 60U == 0
-                            : context.frameIndex <= 1;
-    if (!selected) return false;
-
-    auto&      last     = gLastFinalViewFrame[sourceIndex(context.source)];
-    auto const previous = last.exchange(context.frameIndex, std::memory_order_acq_rel);
-    return previous != context.frameIndex;
-}
-
-bool shouldLogCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexcept {
-    bool const selected = context.source == keyframe::CameraTimelineSource::Export
-                            ? context.frameIndex == 0 || context.frameIndex == 1 || context.frameIndex % 60U == 0
-                            : context.frameIndex <= 3 || context.frameIndex % 60U == 0;
-    if (!selected) return false;
-
-    auto&      last     = gLastCameraEcsFrame[sourceIndex(context.source)];
-    auto const previous = last.exchange(context.frameIndex, std::memory_order_acq_rel);
-    return previous != context.frameIndex;
 }
 
 void logMissingSample(keyframe::CameraTimelineRenderContext const& context) noexcept {
@@ -302,12 +278,6 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
     std::vector<AppliedComponent> components;
     components.reserve(registry->mCameraEntities->size() + 1);
 
-    ::glm::vec3       beforePosition{};
-    ::glm::qua<float> beforeOrientation{};
-    float             beforeFov{};
-    bool              capturedBefore{};
-    bool              hasGameCamera{};
-
     auto applyEntity = [&](EntityContext& entity, bool gameCamera) {
         auto* component = entity.tryGetComponent<MinecraftCamera::CameraComponent>().as_ptr();
         if (!component) return;
@@ -317,19 +287,12 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
         }
         if (std::ranges::find(components, component, &AppliedComponent::component) != components.end()) return;
 
-        if (!capturedBefore) {
-            beforePosition    = component->mPosition.get();
-            beforeOrientation = component->mOrientation.get();
-            beforeFov         = component->mFieldOfView;
-            capturedBefore    = true;
-        }
         auto const orientation         = orientationFromBasis(basis);
         component->mPosition           = position;
         component->mOrientation        = orientation;
         component->mFieldOfView        = componentFov;
         component->mSavedModelView->_m = modelView;
         components.push_back({component, orientation});
-        hasGameCamera = hasGameCamera || gameCamera;
     };
 
     auto& gameCamera = registry->mGameCamera.get();
@@ -347,51 +310,19 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
                 && orientationDot >= 0.9999f;
     }
 
-    bool const logSelected = shouldLogCameraEcs(context);
     auto&      failureFlag = gCameraEcsFailureLogged[sourceIndex(context.source)];
     bool const logFailure  = !verified && !failureFlag.exchange(true, std::memory_order_acq_rel);
-    if (logSelected || logFailure) {
-        auto const* applied          = components.empty() ? nullptr : components.front().component;
-        auto const  afterPosition    = applied ? applied->mPosition.get() : ::glm::vec3{};
-        auto const  afterOrientation = applied ? applied->mOrientation.get() : ::glm::qua<float>{};
-        float const afterFov         = applied ? applied->mFieldOfView : 0.0f;
-        Playback::getInstance().getSelf().getLogger().debug(
-            "Camera ECS apply (source={}, token={}, frame={}, tick={}/{}, cameraId={}, targets={}, gameCamera={}, "
-            "sample=(position=({}, {}, {}), yaw={}, pitch={}, roll={}, fov={}), "
-            "before=(position=({}, {}, {}), orientation=({}, {}, {}, {}), fov={}), "
-            "after=(position=({}, {}, {}), orientation=({}, {}, {}, {}), fov={}), verified={})",
+    if (logFailure) {
+        Playback::getInstance().getSelf().getLogger().error(
+            "Camera sample did not reach the camera ECS (source={}, token={}, frame={}, tick={}/{}, cameraId={}, "
+            "targets={})",
             sourceName(context.source),
             context.renderToken,
             context.frameIndex,
             context.time.numerator,
             context.time.denominator,
             context.sample->cameraId,
-            components.size(),
-            hasGameCamera,
-            state.x,
-            state.y,
-            state.z,
-            state.yaw,
-            state.pitch,
-            state.roll,
-            state.fov,
-            beforePosition.x,
-            beforePosition.y,
-            beforePosition.z,
-            beforeOrientation.w,
-            beforeOrientation.x,
-            beforeOrientation.y,
-            beforeOrientation.z,
-            beforeFov,
-            afterPosition.x,
-            afterPosition.y,
-            afterPosition.z,
-            afterOrientation.w,
-            afterOrientation.x,
-            afterOrientation.y,
-            afterOrientation.z,
-            afterFov,
-            verified
+            components.size()
         );
     }
     return verified;
@@ -477,8 +408,7 @@ void applyObserverCamera(
     writeLevelCameraPose(level, position, basis);
 }
 
-// The observer stays free so it can keep loading chunks, so it is expected to drift away from the parked pose;
-// comparing the two would abandon the park on ordinary server sync. Only the player taking over ends it.
+// Server sync drift must not cancel parking; only player input does.
 bool observerStillParked() noexcept {
     return replay::ReplaySession::getInstance().getReplayPlayer() != nullptr && !editor::input::isGameInputCaptured();
 }
@@ -512,16 +442,14 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept 
     keyframe::setPreviewCameraApplied(true);
     keyframe::setLastPreviewPose(sample->state);
     gParkedObserverCamera = sample->state;
-    return keyframe::publishCameraTimelineRenderContext(
-        keyframe::CameraTimelineRenderContext{
-            *time,
-            keyframe::CameraTimelineSource::Preview,
-            0,
-            std::move(sample),
-            {},
-            serial,
-        }
-    );
+    return keyframe::publishCameraTimelineRenderContext(keyframe::CameraTimelineRenderContext{
+        *time,
+        keyframe::CameraTimelineSource::Preview,
+        0,
+        std::move(sample),
+        {},
+        serial,
+    });
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -669,10 +597,8 @@ LL_TYPE_INSTANCE_HOOK(
     writeCameraSpaces({clientCamera, nullptr}, worldCamera, position, basis);
     writeLevelCameraPose(level, position, basis);
 
-    auto       renderObject       = origin(screenContext, clientSubId);
-    auto&      view               = renderObject.mViewData.get();
-    auto const nativeViewPosition = view.mCameraPos.get();
-    auto const nativeViewTarget   = view.mCameraTargetPos.get();
+    auto  renderObject = origin(screenContext, clientSubId);
+    auto& view         = renderObject.mViewData.get();
 
     (void)applyCameraEcs(*context);
     writeCameraSpaces({clientCamera, nullptr}, worldCamera, position, basis);
@@ -699,53 +625,8 @@ LL_TYPE_INSTANCE_HOOK(
 
     if (verified && context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
 
-    bool const logSelected = shouldLogFinalView(*context);
     auto&      failureFlag = gFinalViewFailureLogged[sourceIndex(context->source)];
     bool const logFailure  = !verified && !failureFlag.exchange(true, std::memory_order_acq_rel);
-    if (logSelected || logFailure) {
-        Playback::getInstance().getSelf().getLogger().debug(
-            "Camera final view (source={}, token={}, frame={}, tick={}/{}, cameraId={}, "
-            "sample=(position=({}, {}, {}), yaw={}, pitch={}, roll={}, fov={}), "
-            "nativeView=(position=({}, {}, {}), target=({}, {}, {})), "
-            "final=(view=({}, {}, {}), target=({}, {}, {}), fovRadians={}), "
-            "errors=(world=({}, {}, {}, {}), level=({}, {}), view=({}, {})), verified={})",
-            sourceName(context->source),
-            context->renderToken,
-            context->frameIndex,
-            context->time.numerator,
-            context->time.denominator,
-            sample.cameraId,
-            position.x,
-            position.y,
-            position.z,
-            sample.state.yaw,
-            sample.state.pitch,
-            sample.state.roll,
-            sample.state.fov,
-            nativeViewPosition.x,
-            nativeViewPosition.y,
-            nativeViewPosition.z,
-            nativeViewTarget.x,
-            nativeViewTarget.y,
-            nativeViewTarget.z,
-            view.mCameraPos->x,
-            view.mCameraPos->y,
-            view.mCameraPos->z,
-            view.mCameraTargetPos->x,
-            view.mCameraTargetPos->y,
-            view.mCameraTargetPos->z,
-            worldCamera.mFov,
-            worldCheck.publicPositionError,
-            worldCheck.viewPositionError,
-            worldCheck.publicDirectionError,
-            worldCheck.viewDirectionError,
-            levelPositionError,
-            levelDirectionError,
-            viewPositionError,
-            viewDirectionError,
-            verified
-        );
-    }
     if (logFailure) {
         Playback::getInstance().getSelf().getLogger().error(
             "Camera sample did not reach the final ViewRenderObject (source={}, token={}, frame={})",
@@ -789,8 +670,6 @@ bool hookCameraRender(bool enable) {
     for (auto& flag : gApplicationFailureLogged) flag.store(false, std::memory_order_release);
     for (auto& flag : gFinalViewFailureLogged) flag.store(false, std::memory_order_release);
     for (auto& flag : gCameraEcsFailureLogged) flag.store(false, std::memory_order_release);
-    for (auto& frame : gLastFinalViewFrame) frame.store(UnloggedFrame, std::memory_order_release);
-    for (auto& frame : gLastCameraEcsFrame) frame.store(UnloggedFrame, std::memory_order_release);
     gPreviewFrameSerial.store(0, std::memory_order_release);
     gParkedObserverCamera.reset();
     keyframe::setPreviewCameraApplied(false);

@@ -33,7 +33,7 @@ struct OfflineRenderBoundaryTicket {
 [[nodiscard]] bool isOfflineRenderClockInstalled();
 
 [[nodiscard]] OfflineRenderClockPublishResult
-publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
+                   publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
 [[nodiscard]] bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token);
 [[nodiscard]] bool wasOfflineRenderClockSampleCompleted(OfflineRenderClockToken token);
 // Overlay-only BGFX submissions carry no world geometry and must never satisfy an armed capture.
@@ -41,7 +41,7 @@ enum class SceneSubmissionKind : uint8_t { OverlayOnly, Scene };
 
 
 [[nodiscard]] std::optional<OfflineRenderBoundaryTicket>
-claimOfflineRenderSubmitBoundary(SceneSubmissionKind submissionCarriesScene);
+     claimOfflineRenderSubmitBoundary(SceneSubmissionKind submissionCarriesScene);
 void markOfflineRenderBoundaryCompleted(OfflineRenderBoundaryTicket const& ticket);
 void clearOfflineRenderClockSample(OfflineRenderClockToken token);
 void resetOfflineRenderClock();

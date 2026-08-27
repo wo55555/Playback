@@ -457,12 +457,12 @@ std::optional<visuals::CapturedFrame> SaveableFramebuffer::finish(std::string& e
 
     uint64_t const packedRowBytes = static_cast<uint64_t>(mWidth) * 4;
     uint64_t       lastByte       = mFootprint.Offset;
-    bool valid                    = mHeight != 0 && mFootprint.Footprint.RowPitch >= packedRowBytes
-                                 && (mHeight - 1) <= (std::numeric_limits<uint64_t>::max() - lastByte) / mFootprint.Footprint.RowPitch;
+    bool           valid          = mHeight != 0 && mFootprint.Footprint.RowPitch >= packedRowBytes
+              && (mHeight - 1) <= (std::numeric_limits<uint64_t>::max() - lastByte) / mFootprint.Footprint.RowPitch;
     if (valid) {
         lastByte += static_cast<uint64_t>(mHeight - 1) * mFootprint.Footprint.RowPitch;
         valid     = packedRowBytes <= std::numeric_limits<uint64_t>::max() - lastByte
-                 && lastByte + packedRowBytes <= mReadbackBytes;
+             && lastByte + packedRowBytes <= mReadbackBytes;
     }
     if (!valid || packedRowBytes * mHeight > std::numeric_limits<size_t>::max()) {
         error  = "The D3D12 framebuffer readback footprint is invalid";

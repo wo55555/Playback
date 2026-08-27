@@ -1,9 +1,8 @@
 ﻿#pragma once
 
 #include "playback/state/editing/models/CameraEntity.h"
-#include "playback/state/editing/models/EditorStateExt.h"
 #include "playback/state/editing/models/IEditCommand.h"
-#include "playback/state/editing/models/Track.h"
+#include "playback/state/editing/models/SubActor.h"
 
 #include <memory>
 #include <optional>
@@ -45,31 +44,6 @@ public:
     static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
     static std::unique_ptr<model::IEditCommand>
     createSetSubActorDetails(const std::string& id, model::AgentDetails details);
-
-    // Clip commands
-    static std::unique_ptr<model::IEditCommand>
-    createSplitClip(const std::string& trackId, const std::string& clipId, int atTick);
-
-    static std::unique_ptr<model::IEditCommand> createRemoveClip(const std::string& trackId, const std::string& clipId);
-
-    static std::unique_ptr<model::IEditCommand>
-    createTrimClip(const std::string& trackId, const std::string& clipId, int newInTick, int newOutTick);
-
-    static std::unique_ptr<model::IEditCommand>
-    createMoveClip(const std::string& trackId, const std::string& clipId, int newTrackTick);
-
-    // Transition commands
-    static std::unique_ptr<model::IEditCommand> createAddTransition(
-        const std::string&    fromClipId,
-        const std::string&    toClipId,
-        model::TransitionKind kind,
-        int                   durationTicks
-    );
-
-    // Track commands
-    static std::unique_ptr<model::IEditCommand> createAddTrack(model::TrackKind kind, const std::string& name);
-
-    static std::unique_ptr<model::IEditCommand> createRemoveTrack(const std::string& trackId);
 };
 
 } // namespace playback::state::editing::command

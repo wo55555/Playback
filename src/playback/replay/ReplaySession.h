@@ -146,18 +146,18 @@ private:
     bool                          mCenterChunksReady          = false;
     SnapshotGamePacketPhase       mSnapshotGamePacketPhase    = SnapshotGamePacketPhase::StreamingChunks;
 
-    std::atomic<bool>                           mStopRequested{false};
-    std::atomic<int>                            mRequestedSeekTick{-1};
-    int                                         mSeekTargetTick{-1};
-    bool                                        mExportSeekRequested{};
-    bool                                        mSnapMovementDuringSeek{};
-    ReplayExportTimelinePhase                   mExportTimelinePhase{ReplayExportTimelinePhase::Inactive};
-    int                                         mExportTargetTick{-1};
-    std::optional<ReplayCameraViewpoint>        mExportCameraViewpoint;
-    float                                       mPlaybackSpeed{1.0f};
-    float                                       mPlaybackTickAccumulator{};
-    std::atomic<SteadyTimePoint>                mTickAdvancedAt{};
-    std::atomic<float>                          mFrozenPreviewPartial{-1.0f};
+    std::atomic<bool>                    mStopRequested{false};
+    std::atomic<int>                     mRequestedSeekTick{-1};
+    int                                  mSeekTargetTick{-1};
+    bool                                 mExportSeekRequested{};
+    bool                                 mSnapMovementDuringSeek{};
+    ReplayExportTimelinePhase            mExportTimelinePhase{ReplayExportTimelinePhase::Inactive};
+    int                                  mExportTargetTick{-1};
+    std::optional<ReplayCameraViewpoint> mExportCameraViewpoint;
+    float                                mPlaybackSpeed{1.0f};
+    float                                mPlaybackTickAccumulator{};
+    std::atomic<SteadyTimePoint>         mTickAdvancedAt{};
+    std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
 
     bool                                        mObserverPreviewInRange{false};
     ::Vec3                                      mLastObserverPreviewFeet{};

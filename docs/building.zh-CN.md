@@ -12,18 +12,21 @@ Playback 目前面向 Windows x64 的 LeviLamina 客户端运行环境。`xmake.
 
 ## Release 构建
 
-执行发行构建前，请同步以下版本声明：
+打包后的模组版本默认来自最近的 Git 发行标签。在标签创建前验证发行构建时，请显式设置 `PLAYBACK_VERSION`。
 
-- `xmake.lua` 中的 `mod_version`。
+发布前请同步以下声明：
+
 - `tooth.json` 中的 `version`。
-- `resources/manifest.json` 中资源包 header 与 module 的版本数组。
 - `CHANGELOG.md` 顶部的当前版本条目和比较链接。
+- 中英文文档中的发行徽章、兼容性表、安装命令和兼容性说明。
+- 仅当资源包本身发生语义变化时，才更新 `resources/manifest.json` 中 header 与 module 的版本数组。
 
 Tooth `format_version`、资源包 `format_version` 和 VS Code 配置版本等外部 schema 字段不是 Playback 发行版本，不应随版本号一起修改。
 
 在仓库根目录配置并执行干净的 Release 客户端构建：
 
 ```powershell
+$env:PLAYBACK_VERSION = 'v0.2.1-mc26.10'
 xmake f -y -p windows -a x64 -m release --target_type=client
 xmake -r -y
 ```
@@ -32,7 +35,7 @@ xmake -r -y
 
 Xmake 会使用 x264 构建固定版本的 FFmpeg 7.1 命令行运行时，并将静态可执行文件复制到 `bin/playback/tools/ffmpeg.exe`。发行版用户无需单独安装 FFmpeg。首次源码构建需要下载并编译这套工具链，因此依赖配置会比后续命中缓存的构建耗时更长。
 
-构建完成后，请确认 `bin/playback/manifest.json` 显示 `0.2.0-mc26.10`、`bin/playback/tools/ffmpeg.exe` 存在，并执行 `git diff --check`。涉及运行时行为的发行版本还应在支持的渲染路径上分别导出短 PNG 序列和 MP4。
+构建完成后，请确认 `bin/playback/manifest.json` 显示 `0.2.1-mc26.10`、`bin/playback/tools/ffmpeg.exe` 存在，并执行 `git diff --check`。涉及运行时行为的发行版本还应在支持的渲染路径上分别导出短 PNG 序列和 MP4。
 
 ## 刷新依赖
 

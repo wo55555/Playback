@@ -11,7 +11,6 @@
 #include "panels/StatusPanel.h"
 #include "panels/TimelinePanel.h"
 #include "panels/ViewportPanel.h"
-#include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/components/Splitter.h"
 #include "playback/editor/ui/menus/EditorMenuBar.h"
 #include "playback/editor/ui/modes/ModeManager.h"
@@ -29,13 +28,11 @@ public:
 
     static ReplayEditor& getInstance();
 
-    // Core lifecycle
     void initialize();
     void shutdown();
 
     void draw(playback::state::EditorState const& state, SubmitAction const& submit);
 
-    // Keyboard shortcut processing
     void handleKeyboardShortcuts();
 
     [[nodiscard]] playback::state::EditorState const&          state() const;
@@ -60,19 +57,16 @@ private:
 
     bool mViewportMaximized{false};
 
-    // Core components
     EditorTheme   mTheme;
     ModeManager&  mModeManager{ModeManager::getInstance()};
     EditorMenuBar mMenuBar;
     Splitter      mSplitter;
 
-    // Panels
     ViewportPanel mViewportPanel;
     DetailsPanel  mDetailsPanel;
     TimelinePanel mTimelinePanel;
     StatusPanel   mStatusPanel;
 
-    // Modes
     EditMode   mEditMode;
     RenderMode mRenderMode;
 
@@ -81,7 +75,6 @@ private:
     state::editing::model::SelectionModel mSelection;
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
-    // Layout
     float mDetailsWidthRatio{0.28f};
     float mTimelineHeightRatio{0.35f};
     float mVideoAspectRatio{16.0f / 9.0f};
@@ -98,7 +91,6 @@ private:
     void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
 
-    // Allow EditMode to access ReplayEditor members
     friend class EditMode;
     friend class RenderMode;
 };

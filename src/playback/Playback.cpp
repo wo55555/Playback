@@ -121,15 +121,13 @@ bool Playback::hook() {
             replay::ReplaySession::getInstance().onLevelJoinCancelled();
         })
     );
-    getEventListeners().emplace(
-        ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
-            [this](ll::event::ClientJoinLevelEvent& event) {
-                record::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asMultiPlayerLevel());
-                replay::ReplaySession::getInstance().onLevelJoined(event.player());
-                refreshMode(event.player().getLevel());
-            }
-        )
-    );
+    getEventListeners().emplace(ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
+        [this](ll::event::ClientJoinLevelEvent& event) {
+            record::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asMultiPlayerLevel());
+            replay::ReplaySession::getInstance().onLevelJoined(event.player());
+            refreshMode(event.player().getLevel());
+        }
+    ));
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientExitLevelEvent>([this](auto&&) {
             auto& replaySession = replay::ReplaySession::getInstance();

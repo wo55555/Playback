@@ -65,7 +65,7 @@ private:
     std::unique_ptr<State> mState;
 
     friend std::unique_ptr<ScopedReplayEntityPose>
-        createReplayEntityRenderScope(std::vector<EntityRenderTarget> const&, ReplaySampleTime const&);
+    createReplayEntityRenderScope(std::vector<EntityRenderTarget> const&, ReplaySampleTime const&);
 };
 
 } // namespace playback::visuals
