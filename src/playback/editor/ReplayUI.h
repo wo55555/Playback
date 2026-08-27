@@ -11,6 +11,8 @@ namespace playback::editor {
 [[nodiscard]] bool isReplayBrowserVisible();
 
 void tickReplayExportBeforeClientUpdate();
+// Export waits resolve on the graphics path, so it also has to advance there instead of once per client tick.
+void tickReplayExportDuringGraphics();
 void tickReplayUI(bool hudVisible);
 
 void submitEditorAction(state::EditorAction action);

@@ -154,6 +154,10 @@ struct FfmpegVideoWriter::Impl {
     uint64_t                           nextFrameIndex{};
     uint32_t                           frameWidth{};
     uint32_t                           frameHeight{};
+    uint32_t                           targetWidth{};
+    uint32_t                           targetHeight{};
+    uint32_t                           sourceWidth{};
+    uint32_t                           sourceHeight{};
     ExportError                        error{ExportError::None};
     std::string                        message;
     HANDLE                             process{};
@@ -188,7 +192,7 @@ struct FfmpegVideoWriter::Impl {
             }
         }
         if (requested) {
-            getLogger().info(
+            getLogger().debug(
                 "FFmpeg video writer cancellation requested ({} submitted, {} written)",
                 submittedCopy,
                 writtenCopy
@@ -279,22 +283,13 @@ struct FfmpegVideoWriter::Impl {
             stdinWrite = writeHandle.release();
             if (state == FrameWriterState::Cancelling) TerminateProcess(process, 0xC000013A);
         }
-        getLogger().info(
-            "FFmpeg process started: pid={}, executable={}, output={}, size={}x{}, fps={}/{}",
-            processInfo.dwProcessId,
-            executable,
-            temporary,
-            frameWidth,
-            frameHeight,
-            frameRateNumerator,
-            frameRateDenominator
-        );
+        getLogger().debug("FFmpeg process started: pid={}, output={}", processInfo.dwProcessId, temporary);
         return true;
     }
 
-    [[nodiscard]] bool writeBytes(std::vector<uint8_t> const& rgba, std::string& failure) {
+    [[nodiscard]] bool writeBytes(uint8_t const* bytes, size_t size, std::string& failure) {
         size_t offset = 0;
-        while (offset < rgba.size()) {
+        while (offset < size) {
             HANDLE pipe{};
             {
                 std::scoped_lock lock(mutex);
@@ -305,9 +300,9 @@ struct FfmpegVideoWriter::Impl {
                 failure = "The FFmpeg input pipe is unavailable";
                 return false;
             }
-            DWORD const remaining = static_cast<DWORD>(std::min<size_t>(rgba.size() - offset, 1u << 20));
+            DWORD const remaining = static_cast<DWORD>(std::min<size_t>(size - offset, 1u << 20));
             DWORD       writtenBytes{};
-            if (!WriteFile(pipe, rgba.data() + offset, remaining, &writtenBytes, nullptr) || writtenBytes == 0) {
+            if (!WriteFile(pipe, bytes + offset, remaining, &writtenBytes, nullptr) || writtenBytes == 0) {
                 std::scoped_lock lock(mutex);
                 if (state == FrameWriterState::Cancelling) return false;
                 failure = windowsErrorMessage("Unable to write a frame to FFmpeg", GetLastError());
@@ -396,9 +391,30 @@ struct FfmpegVideoWriter::Impl {
                 processStarted = true;
             }
 
-            detail::copyPackedRgba(item, rgba);
+            if (!detail::normalizeFrame(item, targetWidth, targetHeight)) {
+                std::scoped_lock lock(mutex);
+                if (state != FrameWriterState::Cancelling) {
+                    setFailureLocked(
+                        ExportError::InvalidFrame,
+                        "The captured frame could not be normalized to the export resolution"
+                    );
+                }
+                break;
+            }
+            // Normalization already produced tightly packed RGBA, so the extra staging copy is skipped.
+            size_t const   packedRowPitch = static_cast<size_t>(item.width) * 4;
+            uint8_t const* frameBytes     = nullptr;
+            size_t         frameSize      = 0;
+            if (item.pixelFormat == visuals::FramePixelFormat::Rgba8 && item.rowPitch == packedRowPitch) {
+                frameBytes = reinterpret_cast<uint8_t const*>(item.pixels.data());
+                frameSize  = packedRowPitch * item.height;
+            } else {
+                detail::copyPackedRgba(item, rgba);
+                frameBytes = rgba.data();
+                frameSize  = rgba.size();
+            }
             std::string writeFailure;
-            if (!writeBytes(rgba, writeFailure)) {
+            if (!writeBytes(frameBytes, frameSize, writeFailure)) {
                 std::scoped_lock lock(mutex);
                 if (state != FrameWriterState::Cancelling) {
                     setFailureLocked(ExportError::WriteFailed, std::move(writeFailure));
@@ -423,13 +439,7 @@ struct FfmpegVideoWriter::Impl {
 
         closeInput();
         DWORD const exitCode = processStarted ? waitForProcess() : 1;
-        getLogger().info(
-            "FFmpeg process ended (started {}, exit code {}, cancelled {}, error {})",
-            processStarted,
-            exitCode,
-            cancelled,
-            static_cast<int>(failureError)
-        );
+        getLogger().debug("FFmpeg process ended (exitCode={}, cancelled={})", exitCode, cancelled);
         {
             std::scoped_lock lock(mutex);
             cancelled = state == FrameWriterState::Cancelling;
@@ -483,10 +493,13 @@ struct FfmpegVideoWriter::Impl {
         executable           = ffmpegPath();
         frameRateNumerator   = plan.settings.frameRate.numerator;
         frameRateDenominator = plan.settings.frameRate.denominator;
+        targetWidth          = plan.settings.resolutionX;
+        targetHeight         = plan.settings.resolutionY;
         state                = FrameWriterState::Idle;
         submitted = written = nextFrameIndex = 0;
         frameWidth = frameHeight = 0;
-        error                    = ExportError::None;
+        sourceWidth = sourceHeight = 0;
+        error                      = ExportError::None;
         message.clear();
         process    = nullptr;
         stdinWrite = nullptr;
@@ -535,12 +548,7 @@ bool FfmpegVideoWriter::open(CompiledExportPlan const& plan) {
         std::scoped_lock lock(mImpl->mutex);
         mImpl->state = FrameWriterState::Running;
     }
-    getLogger().info(
-        "FFmpeg video writer opened: output={}, capacity={}, executable={}",
-        mImpl->output,
-        mImpl->capacity,
-        mImpl->executable
-    );
+    getLogger().debug("FFmpeg video writer opened: executable={}", mImpl->executable);
     mImpl->worker = std::thread([impl = mImpl.get()] { impl->workerLoop(); });
     return true;
 }
@@ -557,10 +565,13 @@ FrameWriterSubmitResult FfmpegVideoWriter::trySubmit(visuals::CapturedFrame& fra
         mImpl->setFailureLocked(ExportError::FrameOutOfOrder, "Captured frames were submitted out of order");
         return FrameWriterSubmitResult::Failed;
     }
+    // The worker normalizes to the target resolution, so the encoder size comes from the plan, not the capture.
     if (mImpl->frameWidth == 0) {
-        mImpl->frameWidth  = frame.width;
-        mImpl->frameHeight = frame.height;
-    } else if (frame.width != mImpl->frameWidth || frame.height != mImpl->frameHeight) {
+        mImpl->frameWidth   = mImpl->targetWidth != 0 ? mImpl->targetWidth : frame.width;
+        mImpl->frameHeight  = mImpl->targetHeight != 0 ? mImpl->targetHeight : frame.height;
+        mImpl->sourceWidth  = frame.width;
+        mImpl->sourceHeight = frame.height;
+    } else if (frame.width != mImpl->sourceWidth || frame.height != mImpl->sourceHeight) {
         getLogger().error(
             "FFmpeg export frame dimensions changed (frame={}, expected={}x{}, actual={}x{}, rowPitch={}, format={}, "
             "source={}x{}, samples={}, resource=0x{:X})",

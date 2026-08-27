@@ -1,11 +1,12 @@
 ﻿#pragma once
 
-#include "playback/visuals/FrameTap.h"
+#include "FrameWorkerPool.h"
 
-#include <algorithm>
-#include <cmath>
+#include "playback/visuals/FrameCaptureTypes.h"
+
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -75,51 +76,83 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
         return pixel[channel];
     };
 
+    // Export render sizes are always an integer supersample of the output, so only that ratio is supported.
+    bool const sameSize          = frame.width == targetWidth && frame.height == targetHeight;
+    bool const integerDownsample = !sameSize && frame.width % targetWidth == 0 && frame.height % targetHeight == 0
+                                && frame.width / targetWidth == frame.height / targetHeight;
+    if (!sameSize && !integerDownsample) return false;
+
     std::vector<std::byte> output(static_cast<size_t>(targetBytes));
-    bool const             integerDownsample = frame.width % targetWidth == 0 && frame.height % targetHeight == 0
-                                && frame.width / targetWidth == frame.height / targetHeight
-                                && frame.width / targetWidth > 1;
     if (integerDownsample) {
+        // Folding the swizzle into the box filter leaves the later packed copy as a plain memcpy per row.
         uint32_t const scale       = frame.width / targetWidth;
-        uint64_t const sampleCount = static_cast<uint64_t>(scale) * scale;
-        for (uint32_t y = 0; y < targetHeight; ++y) {
-            for (uint32_t x = 0; x < targetWidth; ++x) {
-                uint64_t sums[4]{};
-                for (uint32_t sampleY = 0; sampleY < scale; ++sampleY) {
-                    for (uint32_t sampleX = 0; sampleX < scale; ++sampleX) {
-                        uint32_t const sourceX = x * scale + sampleX;
-                        uint32_t const sourceY = y * scale + sampleY;
-                        for (uint32_t channel = 0; channel < 4; ++channel) {
-                            sums[channel] += read(sourceX, sourceY, channel);
-                        }
+        uint32_t const sampleCount = scale * scale;
+        uint32_t const half        = sampleCount / 2;
+        bool const     swapRedBlue = frame.pixelFormat == visuals::FramePixelFormat::Bgra8;
+        uint32_t const redIndex    = swapRedBlue ? 2 : 0;
+        uint32_t const blueIndex   = swapRedBlue ? 0 : 2;
+
+        uint32_t shift = 0;
+        while ((1u << shift) < sampleCount) ++shift;
+        bool const powerOfTwo = (1u << shift) == sampleCount;
+
+        if (scale == 2 && powerOfTwo) {
+            std::function<void(uint32_t, uint32_t)> const rows = [&](uint32_t firstRow, uint32_t lastRow) {
+                for (uint32_t y = firstRow; y < lastRow; ++y) {
+                    auto* out = reinterpret_cast<uint8_t*>(output.data()) + static_cast<size_t>(y) * targetWidth * 4;
+                    auto const* row0 = source + static_cast<size_t>(y) * 2 * frame.rowPitch;
+                    auto const* row1 = row0 + frame.rowPitch;
+                    for (uint32_t x = 0; x < targetWidth; ++x, out += 4, row0 += 8, row1 += 8) {
+                        uint32_t const sums[4]{
+                            static_cast<uint32_t>(row0[0]) + row0[4] + row1[0] + row1[4],
+                            static_cast<uint32_t>(row0[1]) + row0[5] + row1[1] + row1[5],
+                            static_cast<uint32_t>(row0[2]) + row0[6] + row1[2] + row1[6],
+                            static_cast<uint32_t>(row0[3]) + row0[7] + row1[3] + row1[7],
+                        };
+                        out[0] = static_cast<uint8_t>((sums[redIndex] + 2) >> 2);
+                        out[1] = static_cast<uint8_t>((sums[1] + 2) >> 2);
+                        out[2] = static_cast<uint8_t>((sums[blueIndex] + 2) >> 2);
+                        out[3] = static_cast<uint8_t>((sums[3] + 2) >> 2);
                     }
                 }
-
-                auto* out = reinterpret_cast<uint8_t*>(output.data()) + (static_cast<size_t>(y) * targetWidth + x) * 4;
-                for (uint32_t channel = 0; channel < 4; ++channel) {
-                    out[channel] = static_cast<uint8_t>((sums[channel] + sampleCount / 2) / sampleCount);
+            };
+            frameWorkerPool().runRows(targetHeight, rows);
+        } else {
+            for (uint32_t y = 0; y < targetHeight; ++y) {
+                auto*       out = reinterpret_cast<uint8_t*>(output.data()) + static_cast<size_t>(y) * targetWidth * 4;
+                auto const* blockRow = source + static_cast<size_t>(y) * scale * frame.rowPitch;
+                for (uint32_t x = 0; x < targetWidth; ++x, out += 4) {
+                    uint32_t    sums[4]{};
+                    auto const* block = blockRow + static_cast<size_t>(x) * scale * 4;
+                    for (uint32_t sampleY = 0; sampleY < scale; ++sampleY) {
+                        auto const* row = block + static_cast<size_t>(sampleY) * frame.rowPitch;
+                        for (uint32_t sampleX = 0; sampleX < scale; ++sampleX, row += 4) {
+                            sums[0] += row[0];
+                            sums[1] += row[1];
+                            sums[2] += row[2];
+                            sums[3] += row[3];
+                        }
+                    }
+                    if (powerOfTwo) {
+                        out[0] = static_cast<uint8_t>((sums[redIndex] + half) >> shift);
+                        out[1] = static_cast<uint8_t>((sums[1] + half) >> shift);
+                        out[2] = static_cast<uint8_t>((sums[blueIndex] + half) >> shift);
+                        out[3] = static_cast<uint8_t>((sums[3] + half) >> shift);
+                    } else {
+                        out[0] = static_cast<uint8_t>((sums[redIndex] + half) / sampleCount);
+                        out[1] = static_cast<uint8_t>((sums[1] + half) / sampleCount);
+                        out[2] = static_cast<uint8_t>((sums[blueIndex] + half) / sampleCount);
+                        out[3] = static_cast<uint8_t>((sums[3] + half) / sampleCount);
+                    }
                 }
             }
         }
     } else {
         for (uint32_t y = 0; y < targetHeight; ++y) {
-            double const   sourceY = (static_cast<double>(y) + 0.5) * frame.height / targetHeight - 0.5;
-            uint32_t const y0 =
-                static_cast<uint32_t>(std::clamp(std::floor(sourceY), 0.0, static_cast<double>(frame.height - 1)));
-            uint32_t const y1 = std::min<uint32_t>(y0 + 1, frame.height - 1);
-            double const   fy = std::clamp(sourceY - std::floor(sourceY), 0.0, 1.0);
             for (uint32_t x = 0; x < targetWidth; ++x) {
-                double const   sourceX = (static_cast<double>(x) + 0.5) * frame.width / targetWidth - 0.5;
-                uint32_t const x0 =
-                    static_cast<uint32_t>(std::clamp(std::floor(sourceX), 0.0, static_cast<double>(frame.width - 1)));
-                uint32_t const x1 = std::min<uint32_t>(x0 + 1, frame.width - 1);
-                double const   fx = std::clamp(sourceX - std::floor(sourceX), 0.0, 1.0);
                 auto* out = reinterpret_cast<uint8_t*>(output.data()) + (static_cast<size_t>(y) * targetWidth + x) * 4;
                 for (uint32_t channel = 0; channel < 4; ++channel) {
-                    double const top    = read(x0, y0, channel) * (1.0 - fx) + read(x1, y0, channel) * fx;
-                    double const bottom = read(x0, y1, channel) * (1.0 - fx) + read(x1, y1, channel) * fx;
-                    out[channel] =
-                        static_cast<uint8_t>(std::clamp(std::lround(top * (1.0 - fy) + bottom * fy), 0l, 255l));
+                    out[channel] = read(x, y, channel);
                 }
             }
         }

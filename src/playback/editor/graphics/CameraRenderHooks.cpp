@@ -1,6 +1,7 @@
 #include "CameraRenderHooks.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/input/EditorInput.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 
@@ -28,6 +29,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <numbers>
 #include <optional>
 #include <utility>
@@ -39,19 +41,18 @@ namespace {
 
 constexpr float PositionTolerance  = 0.02f;
 constexpr float DirectionTolerance = 0.002f;
-constexpr auto  UnloggedFrame      = std::numeric_limits<uint64_t>::max();
 constexpr float RadiansPerDegree   = std::numbers::pi_v<float> / 180.0f;
 
-std::atomic_bool                     gInstalled{};
-std::atomic<uint64_t>                gPreviewFrameSerial{};
-std::array<std::atomic_bool, 2>      gMissingSampleLogged{};
-std::array<std::atomic_bool, 2>      gApplicationFailureLogged{};
-std::array<std::atomic_bool, 2>      gFinalViewFailureLogged{};
-std::array<std::atomic_bool, 2>      gCameraEcsFailureLogged{};
-std::array<std::atomic<uint64_t>, 2> gLastFinalViewFrame{};
-std::array<std::atomic<uint64_t>, 2> gLastCameraEcsFrame{};
+std::atomic_bool                gInstalled{};
+std::atomic<uint64_t>           gPreviewFrameSerial{};
+std::array<std::atomic_bool, 2> gMissingSampleLogged{};
+std::array<std::atomic_bool, 2> gApplicationFailureLogged{};
+std::array<std::atomic_bool, 2> gFinalViewFailureLogged{};
+std::array<std::atomic_bool, 2> gCameraEcsFailureLogged{};
 
 thread_local std::optional<keyframe::CameraRenderState> gParkedObserverCamera;
+std::mutex                                              gRendererCameraMutex;
+std::optional<keyframe::CameraRenderState>              gRendererCameraState;
 
 size_t sourceIndex(keyframe::CameraTimelineSource source) noexcept {
     return source == keyframe::CameraTimelineSource::Export ? 1U : 0U;
@@ -218,7 +219,8 @@ void writeCameraSpaces(
     size_t                      appliedCount{};
     for (auto* camera : localCameras) {
         if (!camera || camera == &worldCamera) continue;
-        if (std::find(applied.begin(), applied.begin() + appliedCount, camera) != applied.begin() + appliedCount) {
+        auto const appliedEnd = applied.begin() + static_cast<std::ptrdiff_t>(appliedCount);
+        if (std::find(applied.begin(), appliedEnd, camera) != appliedEnd) {
             continue;
         }
         writeLocalCameraPose(*camera, basis);
@@ -236,28 +238,6 @@ void writeLevelCameraPose(LevelRendererPlayer& level, ::glm::vec3 const& positio
     };
     level.mCameraForward = Vec3{basis.forward.x, basis.forward.y, basis.forward.z};
     level.mCameraUp      = Vec3{basis.up.x, basis.up.y, basis.up.z};
-}
-
-bool shouldLogFinalView(keyframe::CameraTimelineRenderContext const& context) noexcept {
-    bool const selected = context.source == keyframe::CameraTimelineSource::Export
-                            ? context.frameIndex == 0 || context.frameIndex == 1 || context.frameIndex % 60U == 0
-                            : context.frameIndex <= 1;
-    if (!selected) return false;
-
-    auto&      last     = gLastFinalViewFrame[sourceIndex(context.source)];
-    auto const previous = last.exchange(context.frameIndex, std::memory_order_acq_rel);
-    return previous != context.frameIndex;
-}
-
-bool shouldLogCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexcept {
-    bool const selected = context.source == keyframe::CameraTimelineSource::Export
-                            ? context.frameIndex == 0 || context.frameIndex == 1 || context.frameIndex % 60U == 0
-                            : context.frameIndex <= 3 || context.frameIndex % 60U == 0;
-    if (!selected) return false;
-
-    auto&      last     = gLastCameraEcsFrame[sourceIndex(context.source)];
-    auto const previous = last.exchange(context.frameIndex, std::memory_order_acq_rel);
-    return previous != context.frameIndex;
 }
 
 void logMissingSample(keyframe::CameraTimelineRenderContext const& context) noexcept {
@@ -298,12 +278,6 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
     std::vector<AppliedComponent> components;
     components.reserve(registry->mCameraEntities->size() + 1);
 
-    ::glm::vec3       beforePosition{};
-    ::glm::qua<float> beforeOrientation{};
-    float             beforeFov{};
-    bool              capturedBefore{};
-    bool              hasGameCamera{};
-
     auto applyEntity = [&](EntityContext& entity, bool gameCamera) {
         auto* component = entity.tryGetComponent<MinecraftCamera::CameraComponent>().as_ptr();
         if (!component) return;
@@ -313,19 +287,12 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
         }
         if (std::ranges::find(components, component, &AppliedComponent::component) != components.end()) return;
 
-        if (!capturedBefore) {
-            beforePosition    = component->mPosition.get();
-            beforeOrientation = component->mOrientation.get();
-            beforeFov         = component->mFieldOfView;
-            capturedBefore    = true;
-        }
         auto const orientation         = orientationFromBasis(basis);
         component->mPosition           = position;
         component->mOrientation        = orientation;
         component->mFieldOfView        = componentFov;
         component->mSavedModelView->_m = modelView;
         components.push_back({component, orientation});
-        hasGameCamera = hasGameCamera || gameCamera;
     };
 
     auto& gameCamera = registry->mGameCamera.get();
@@ -343,51 +310,19 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
                 && orientationDot >= 0.9999f;
     }
 
-    bool const logSelected = shouldLogCameraEcs(context);
     auto&      failureFlag = gCameraEcsFailureLogged[sourceIndex(context.source)];
     bool const logFailure  = !verified && !failureFlag.exchange(true, std::memory_order_acq_rel);
-    if (logSelected || logFailure) {
-        auto const* applied          = components.empty() ? nullptr : components.front().component;
-        auto const  afterPosition    = applied ? applied->mPosition.get() : ::glm::vec3{};
-        auto const  afterOrientation = applied ? applied->mOrientation.get() : ::glm::qua<float>{};
-        float const afterFov         = applied ? applied->mFieldOfView : 0.0f;
-        Playback::getInstance().getSelf().getLogger().debug(
-            "Camera ECS apply (source={}, token={}, frame={}, tick={}/{}, cameraId={}, targets={}, gameCamera={}, "
-            "sample=(position=({}, {}, {}), yaw={}, pitch={}, roll={}, fov={}), "
-            "before=(position=({}, {}, {}), orientation=({}, {}, {}, {}), fov={}), "
-            "after=(position=({}, {}, {}), orientation=({}, {}, {}, {}), fov={}), verified={})",
+    if (logFailure) {
+        Playback::getInstance().getSelf().getLogger().error(
+            "Camera sample did not reach the camera ECS (source={}, token={}, frame={}, tick={}/{}, cameraId={}, "
+            "targets={})",
             sourceName(context.source),
             context.renderToken,
             context.frameIndex,
             context.time.numerator,
             context.time.denominator,
             context.sample->cameraId,
-            components.size(),
-            hasGameCamera,
-            state.x,
-            state.y,
-            state.z,
-            state.yaw,
-            state.pitch,
-            state.roll,
-            state.fov,
-            beforePosition.x,
-            beforePosition.y,
-            beforePosition.z,
-            beforeOrientation.w,
-            beforeOrientation.x,
-            beforeOrientation.y,
-            beforeOrientation.z,
-            beforeFov,
-            afterPosition.x,
-            afterPosition.y,
-            afterPosition.z,
-            afterOrientation.w,
-            afterOrientation.x,
-            afterOrientation.y,
-            afterOrientation.z,
-            afterFov,
-            verified
+            components.size()
         );
     }
     return verified;
@@ -473,23 +408,12 @@ void applyObserverCamera(
     writeLevelCameraPose(level, position, basis);
 }
 
-bool observerStillParked(keyframe::CameraRenderState const& state) noexcept {
-    auto* observer = replay::ReplaySession::getInstance().getReplayPlayer();
-    if (!observer) return false;
-
-    auto const position      = observer->getPosition();
-    auto const rotation      = observer->getRotation();
-    auto const positionDelta = ::glm::vec3{
-        position.x - state.x,
-        position.y - state.y,
-        position.z - state.z,
-    };
-    auto const angleDelta = [](float left, float right) { return std::abs(std::remainder(left - right, 360.0f)); };
-    return dot(positionDelta, positionDelta) <= 0.05f * 0.05f && angleDelta(rotation.x, state.pitch) <= 0.1f
-        && angleDelta(rotation.y, state.yaw) <= 0.1f;
+// Server sync drift must not cancel parking; only player input does.
+bool observerStillParked() noexcept {
+    return replay::ReplaySession::getInstance().getReplayPlayer() != nullptr && !editor::input::isGameInputCaptured();
 }
 
-keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext(float partialTick) noexcept {
+keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept {
     auto& replay = replay::ReplaySession::getInstance();
 
     auto const clear = [] { keyframe::setPreviewCameraApplied(false); };
@@ -503,7 +427,7 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext(float parti
         return {};
     }
 
-    auto const time = replay.getCameraRenderSampleTime(partialTick);
+    auto const time = replay.getCameraRenderSampleTime();
     if (!time) {
         clear();
         return {};
@@ -518,16 +442,14 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext(float parti
     keyframe::setPreviewCameraApplied(true);
     keyframe::setLastPreviewPose(sample->state);
     gParkedObserverCamera = sample->state;
-    return keyframe::publishCameraTimelineRenderContext(
-        keyframe::CameraTimelineRenderContext{
-            *time,
-            keyframe::CameraTimelineSource::Preview,
-            0,
-            std::move(sample),
-            {},
-            serial,
-        }
-    );
+    return keyframe::publishCameraTimelineRenderContext(keyframe::CameraTimelineRenderContext{
+        *time,
+        keyframe::CameraTimelineSource::Preview,
+        0,
+        std::move(sample),
+        {},
+        serial,
+    });
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -538,8 +460,6 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     float partialTick
 ) {
-    replay::ReplaySession::getInstance().setObserverPreviewPartialTick(partialTick);
-
     auto const existing = keyframe::currentCameraTimelineRenderContext();
     if (existing && existing->source == keyframe::CameraTimelineSource::Export) {
         (void)applyCameraEcs(*existing);
@@ -547,7 +467,7 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
 
-    auto const context = makePreviewRenderContext(partialTick);
+    auto const context = makePreviewRenderContext();
     if (!context) {
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
         if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) gParkedObserverCamera.reset();
@@ -574,7 +494,7 @@ LL_TYPE_INSTANCE_HOOK(
     float const native  = origin(amount, enableVariableFov);
     auto const  context = keyframe::currentCameraTimelineRenderContext();
     if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
-    return gParkedObserverCamera && observerStillParked(*gParkedObserverCamera) ? gParkedObserverCamera->fov : native;
+    return gParkedObserverCamera && observerStillParked() ? gParkedObserverCamera->fov : native;
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -587,7 +507,7 @@ LL_TYPE_INSTANCE_HOOK(
     float const native  = origin();
     auto const  context = keyframe::currentCameraTimelineRenderContext();
     if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
-    return gParkedObserverCamera && observerStillParked(*gParkedObserverCamera) ? gParkedObserverCamera->fov : native;
+    return gParkedObserverCamera && observerStillParked() ? gParkedObserverCamera->fov : native;
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -601,6 +521,28 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     origin(camera, partialTick);
 
+    auto&      level    = *static_cast<LevelRendererPlayer*>(this);
+    auto const position = ::glm::vec3{level.mCameraPos->x, level.mCameraPos->y, level.mCameraPos->z};
+    auto const target   = ::glm::vec3{
+        level.mCameraTargetPos->x,
+        level.mCameraTargetPos->y,
+        level.mCameraTargetPos->z,
+    };
+    auto const direction = normalized(target - position);
+    if (finite(position) && finite(direction) && dot(direction, direction) > 0.5f) {
+        keyframe::CameraRenderState nativeState{
+            position.x,
+            position.y,
+            position.z,
+            std::atan2(-direction.x, direction.z) / RadiansPerDegree,
+            std::asin(std::clamp(-direction.y, -1.0f, 1.0f)) / RadiansPerDegree,
+            0.0f,
+            std::isfinite(camera.mFov) && camera.mFov > 1.0f && camera.mFov < 179.0f ? camera.mFov : 70.0f,
+        };
+        std::scoped_lock lock(gRendererCameraMutex);
+        gRendererCameraState = nativeState;
+    }
+
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (context) {
         // Timeline cameras bypass vanilla observer interpolation.
@@ -612,7 +554,7 @@ LL_TYPE_INSTANCE_HOOK(
     }
 
     if (gParkedObserverCamera) {
-        if (observerStillParked(*gParkedObserverCamera)) {
+        if (observerStillParked()) {
             applyObserverCamera(*static_cast<LevelRendererPlayer*>(this), camera, *gParkedObserverCamera);
         } else {
             gParkedObserverCamera.reset();
@@ -655,10 +597,8 @@ LL_TYPE_INSTANCE_HOOK(
     writeCameraSpaces({clientCamera, nullptr}, worldCamera, position, basis);
     writeLevelCameraPose(level, position, basis);
 
-    auto       renderObject       = origin(screenContext, clientSubId);
-    auto&      view               = renderObject.mViewData.get();
-    auto const nativeViewPosition = view.mCameraPos.get();
-    auto const nativeViewTarget   = view.mCameraTargetPos.get();
+    auto  renderObject = origin(screenContext, clientSubId);
+    auto& view         = renderObject.mViewData.get();
 
     (void)applyCameraEcs(*context);
     writeCameraSpaces({clientCamera, nullptr}, worldCamera, position, basis);
@@ -685,53 +625,8 @@ LL_TYPE_INSTANCE_HOOK(
 
     if (verified && context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
 
-    bool const logSelected = shouldLogFinalView(*context);
     auto&      failureFlag = gFinalViewFailureLogged[sourceIndex(context->source)];
     bool const logFailure  = !verified && !failureFlag.exchange(true, std::memory_order_acq_rel);
-    if (logSelected || logFailure) {
-        Playback::getInstance().getSelf().getLogger().debug(
-            "Camera final view (source={}, token={}, frame={}, tick={}/{}, cameraId={}, "
-            "sample=(position=({}, {}, {}), yaw={}, pitch={}, roll={}, fov={}), "
-            "nativeView=(position=({}, {}, {}), target=({}, {}, {})), "
-            "final=(view=({}, {}, {}), target=({}, {}, {}), fovRadians={}), "
-            "errors=(world=({}, {}, {}, {}), level=({}, {}), view=({}, {})), verified={})",
-            sourceName(context->source),
-            context->renderToken,
-            context->frameIndex,
-            context->time.numerator,
-            context->time.denominator,
-            sample.cameraId,
-            position.x,
-            position.y,
-            position.z,
-            sample.state.yaw,
-            sample.state.pitch,
-            sample.state.roll,
-            sample.state.fov,
-            nativeViewPosition.x,
-            nativeViewPosition.y,
-            nativeViewPosition.z,
-            nativeViewTarget.x,
-            nativeViewTarget.y,
-            nativeViewTarget.z,
-            view.mCameraPos->x,
-            view.mCameraPos->y,
-            view.mCameraPos->z,
-            view.mCameraTargetPos->x,
-            view.mCameraTargetPos->y,
-            view.mCameraTargetPos->z,
-            worldCamera.mFov,
-            worldCheck.publicPositionError,
-            worldCheck.viewPositionError,
-            worldCheck.publicDirectionError,
-            worldCheck.viewDirectionError,
-            levelPositionError,
-            levelDirectionError,
-            viewPositionError,
-            viewDirectionError,
-            verified
-        );
-    }
     if (logFailure) {
         Playback::getInstance().getSelf().getLogger().error(
             "Camera sample did not reach the final ViewRenderObject (source={}, token={}, frame={})",
@@ -775,8 +670,6 @@ bool hookCameraRender(bool enable) {
     for (auto& flag : gApplicationFailureLogged) flag.store(false, std::memory_order_release);
     for (auto& flag : gFinalViewFailureLogged) flag.store(false, std::memory_order_release);
     for (auto& flag : gCameraEcsFailureLogged) flag.store(false, std::memory_order_release);
-    for (auto& frame : gLastFinalViewFrame) frame.store(UnloggedFrame, std::memory_order_release);
-    for (auto& frame : gLastCameraEcsFrame) frame.store(UnloggedFrame, std::memory_order_release);
     gPreviewFrameSerial.store(0, std::memory_order_release);
     gParkedObserverCamera.reset();
     keyframe::setPreviewCameraApplied(false);
@@ -812,13 +705,15 @@ bool hookCameraRender(bool enable) {
         );
         return false;
     }
-    Playback::getInstance().getSelf().getLogger().info(
-        "Camera render hooks installed (frameScope=true, cameraEcs=true, fov=true, actorPose=false, "
-        "setupCamera=true, finalViewHook=true)"
-    );
+    Playback::getInstance().getSelf().getLogger().debug("Camera render hooks installed");
     return true;
 }
 
 bool isCameraRenderInstalled() { return gInstalled.load(std::memory_order_acquire); }
+
+std::optional<keyframe::CameraRenderState> currentRendererCameraState() {
+    std::scoped_lock lock(gRendererCameraMutex);
+    return gRendererCameraState;
+}
 
 } // namespace playback::editor::graphics

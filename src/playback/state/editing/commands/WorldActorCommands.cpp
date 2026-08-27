@@ -17,8 +17,11 @@ SplitWorldActorAtPlayhead::SplitWorldActorAtPlayhead(int tick) : mTick(tick) {}
 
 void SplitWorldActorAtPlayhead::execute(model::EditorStateExt& state) {
     auto before = state;
-    mChanged    = !WorldActorOps::splitAt(state.worldActor, mTick).empty();
-    mBefore     = mChanged ? std::optional<model::EditorStateExt>(std::move(before)) : std::nullopt;
+    if (WorldActorOps::splitAt(state.worldActor, mTick).empty()) {
+        mBefore.reset();
+        return;
+    }
+    mBefore = std::move(before);
 }
 
 void        SplitWorldActorAtPlayhead::undo(model::EditorStateExt& state) { restore(mBefore, state); }
@@ -31,8 +34,11 @@ TrimWorldActorSegment::TrimWorldActorSegment(std::string id, int start, int end)
 
 void TrimWorldActorSegment::execute(model::EditorStateExt& state) {
     auto before = state;
-    mChanged    = WorldActorOps::trimSegment(state.worldActor, mId, mStart, mEnd, state.totalTicks);
-    mBefore     = mChanged ? std::optional<model::EditorStateExt>(std::move(before)) : std::nullopt;
+    if (!WorldActorOps::trimSegment(state.worldActor, mId, mStart, mEnd, state.totalTicks)) {
+        mBefore.reset();
+        return;
+    }
+    mBefore = std::move(before);
 }
 
 void        TrimWorldActorSegment::undo(model::EditorStateExt& state) { restore(mBefore, state); }
@@ -42,8 +48,11 @@ SetWorldActorSegmentSpeed::SetWorldActorSegmentSpeed(std::string id, float speed
 
 void SetWorldActorSegmentSpeed::execute(model::EditorStateExt& state) {
     auto before = state;
-    mChanged    = WorldActorOps::setSpeed(state.worldActor, mId, mSpeed);
-    mBefore     = mChanged ? std::optional<model::EditorStateExt>(std::move(before)) : std::nullopt;
+    if (!WorldActorOps::setSpeed(state.worldActor, mId, mSpeed)) {
+        mBefore.reset();
+        return;
+    }
+    mBefore = std::move(before);
 }
 
 void        SetWorldActorSegmentSpeed::undo(model::EditorStateExt& state) { restore(mBefore, state); }
@@ -53,8 +62,11 @@ RippleDeleteWorldActorSeg::RippleDeleteWorldActorSeg(std::string id) : mId(std::
 
 void RippleDeleteWorldActorSeg::execute(model::EditorStateExt& state) {
     auto before = state;
-    mChanged    = WorldActorOps::rippleDelete(state.worldActor, mId, state.totalTicks);
-    mBefore     = mChanged ? std::optional<model::EditorStateExt>(std::move(before)) : std::nullopt;
+    if (!WorldActorOps::rippleDelete(state.worldActor, mId, state.totalTicks)) {
+        mBefore.reset();
+        return;
+    }
+    mBefore = std::move(before);
 }
 
 void        RippleDeleteWorldActorSeg::undo(model::EditorStateExt& state) { restore(mBefore, state); }

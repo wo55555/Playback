@@ -1,9 +1,10 @@
-﻿#pragma once
+#pragma once
 
 #include "ExportTypes.h"
 #include "OfflineRenderClockHooks.h"
 #include "OfflineRenderFrameExecutor.h"
 #include "SaveableFramebufferQueue.h"
+
 
 #include "playback/runtime/ClientTickHooks.h"
 
@@ -48,7 +49,7 @@ struct OfflineRenderBoundaryStatus {
     OfflineRenderBoundaryState       state{OfflineRenderBoundaryState::Closed};
     OfflineRenderBoundaryError       error{OfflineRenderBoundaryError::None};
     std::string                      message;
-    FrameDownloadQueueStatus         downloads;
+    SaveableFramebufferQueueStatus   downloads;
     OfflineRenderFrameExecutorStatus executor;
     uint32_t                         warmupFramesRemaining{};
     uint32_t                         warmupStableFrames{};
@@ -56,7 +57,7 @@ struct OfflineRenderBoundaryStatus {
 
 class OfflineRenderBoundary {
 public:
-    OfflineRenderBoundary(replay::ReplaySession& replay, visuals::FrameTap& frameTap);
+    OfflineRenderBoundary(replay::ReplaySession& replay, SaveableFramebufferQueue& downloads);
     ~OfflineRenderBoundary();
 
     OfflineRenderBoundary(OfflineRenderBoundary const&)            = delete;
@@ -74,7 +75,6 @@ public:
     [[nodiscard]] OfflineRenderStepResult advance(ExportFramePlan const& frame);
     [[nodiscard]] bool                    beginDrain();
     [[nodiscard]] bool                    isDrained();
-    [[nodiscard]] bool                    retryCompletedFrame(visuals::FrameTicket const& ticket);
 
     [[nodiscard]] std::optional<visuals::CapturedFrame> finishDownload();
 
@@ -86,13 +86,12 @@ private:
     void                                                  updateExportCamera(ExportFramePlan const& frame);
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
     [[nodiscard]] bool                                    warmupComplete() const;
-    [[nodiscard]] bool recoverDownloadFailure(FrameDownloadQueueStatus const& status);
-    [[nodiscard]] bool publishClockSample(ExportFramePlan const& frame);
-    void               clearClockSample();
-    void               fault(OfflineRenderBoundaryError error, std::string message);
+    [[nodiscard]] bool                                    publishClockSample(ExportFramePlan const& frame);
+    void                                                  clearClockSample();
+    void                                                  fault(OfflineRenderBoundaryError error, std::string message);
 
     replay::ReplaySession&                         mReplay;
-    SaveableFramebufferQueue                       mDownloads;
+    SaveableFramebufferQueue&                      mDownloads;
     OfflineRenderFrameExecutor                     mExecutor;
     std::optional<ExportFramePlan>                 mPendingFrame;
     std::optional<ExportFramePlan>                 mLastSubmittedFrame;
@@ -100,12 +99,8 @@ private:
     std::optional<runtime::OfflineReplayTickToken> mReplayTickToken;
     std::optional<OfflineRenderClockToken>         mClockToken;
     int64_t                                        mMaximumReplayTick{};
-    uint32_t                                       mCaptureCapacity{};
-    uint32_t                                       mCaptureRetryCount{};
-    uint32_t                                       mReplayTickRecoveryCount{};
     uint32_t                                       mWarmupFramesRemaining{};
     uint32_t                                       mWarmupStableFrames{};
-    uint64_t                                       mRenderWaitPolls{};
     std::chrono::steady_clock::time_point          mRenderWaitStartedAt{};
     std::chrono::steady_clock::time_point          mRenderWaitLastLoggedAt{};
     std::chrono::steady_clock::time_point          mReplayTickRequestedAt{};

@@ -14,8 +14,6 @@ namespace playback::state {
 enum class EditorActionType {
     TogglePause,
     Seek,
-    SkipToStart,
-    SkipToEnd,
     DecreaseSpeed,
     IncreaseSpeed,
     StopReplay,

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1-mc26.20] - 2026-08-27
+
+### Changed
+
+- Reworked export capture around the RenderDragon scene target and semantic world-submission detection instead of the swap-chain UI target and a draw-count threshold.
+- Polished editor and replay-browser scrolling, timeline routing, selection feedback, icon alignment, compact controls, animations, and bilingual labels.
+- Preserved the release tag during CI builds so packaged manifests carry the published version.
+- Kept the configuration version and recording-file snapshot context version at `1`; complete `v0.2.0-mc26.10` archives remain compatible and require no conversion.
+
+### Removed
+
+- Removed unreachable legacy clip, track, transition, clipboard, menu, hint-bar, curve-editor, and entity-render-hook code.
+- Removed periodic camera, entity-pose, and graphics-capture diagnostics from normal rendering and export paths.
+
+### Fixed
+
+- Fixed D3D12 exports capturing the UI composition target, which could produce uniform sky-color frames or include the export overlay instead of the world scene.
+- Fixed sparse scenes stalling export when world submissions fell below an arbitrary draw-count threshold.
+- Fixed the HBUI idle screen appearing in captures while Playback owned input.
+- Fixed camera preview stepping backward when native render alpha and replay ticks advanced on different clocks, especially at reduced playback speeds.
+- Fixed ordinary observer server synchronization abandoning a parked preview camera after pausing.
+- Fixed replay-browser wheel scrolling and crowded timeline labels or click routing obscuring the intended target.
+
 ## [0.2.0-mc26.20] - 2026-08-20
 
 ### Added

@@ -1,20 +1,16 @@
 ﻿#pragma once
 
+#include "FrameCaptureTypes.h"
+
 #include <chrono>
 #include <condition_variable>
-#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace playback::visuals {
-
-enum class FramePixelFormat : uint8_t { Rgba8, Bgra8 };
-
-enum class FrameColorSpace : uint8_t { SdrSrgb };
 
 enum class FrameTapState : uint8_t { Idle, Active, Completed, Cancelled, Faulted };
 
@@ -44,35 +40,6 @@ struct FrameTapSession {
     [[nodiscard]] explicit operator bool() const { return id != 0; }
 };
 
-struct FrameTicket {
-    uint64_t frameIndex{};
-    int64_t  ptsNumerator{};
-    int64_t  ptsDenominator{1};
-};
-
-struct FrameTapSubmission {
-    uint32_t         width{};
-    uint32_t         height{};
-    uint32_t         sampleCount{1};
-    FramePixelFormat pixelFormat{FramePixelFormat::Rgba8};
-    void*            exportResource{};
-    void*            commandQueue{};
-    void*            completionFence{};
-    uint64_t         completionFenceValue{};
-    uint32_t         sourceState{};
-};
-
-struct CapturedFrame {
-    FrameTicket            ticket;
-    FrameTapSubmission     submission;
-    uint32_t               width{};
-    uint32_t               height{};
-    uint32_t               rowPitch{};
-    FramePixelFormat       pixelFormat{FramePixelFormat::Rgba8};
-    FrameColorSpace        colorSpace{FrameColorSpace::SdrSrgb};
-    std::vector<std::byte> pixels;
-};
-
 struct FrameTapStatus {
     FrameTapState state{FrameTapState::Idle};
     FrameTapError error{FrameTapError::None};
@@ -83,10 +50,10 @@ struct FrameTapStatus {
 };
 
 struct FrameTapBackendCapture {
-    FrameTapSession    session;
-    FrameTicket        ticket;
-    uint64_t           captureId{};
-    FrameTapSubmission submission;
+    FrameTapSession session;
+    FrameTicket     ticket;
+    uint64_t        captureId{};
+    FrameSubmission submission;
 };
 
 class FrameTap {

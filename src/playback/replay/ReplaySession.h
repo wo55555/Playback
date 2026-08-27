@@ -46,6 +46,8 @@ using playback::record::PlaybackChunkMeta;
 using playback::record::PlaybackMeta;
 using playback::record::PlaybackView;
 
+using SteadyTimePoint = std::chrono::steady_clock::time_point;
+
 enum class ReplayExportTickState : uint8_t { Unavailable, Waiting, Ready, Invalid, Failed };
 
 enum class ReplayExportTimelinePhase : uint8_t { Inactive, Initializing, Continuous };
@@ -56,6 +58,8 @@ struct ReplayCameraViewpoint {
     float z{};
     float pitch{};
     float yaw{};
+    float roll{};
+    float fov{70.0f};
 };
 
 class ReplaySession {
@@ -142,17 +146,19 @@ private:
     bool                          mCenterChunksReady          = false;
     SnapshotGamePacketPhase       mSnapshotGamePacketPhase    = SnapshotGamePacketPhase::StreamingChunks;
 
-    std::atomic<bool>                           mStopRequested{false};
-    std::atomic<int>                            mRequestedSeekTick{-1};
-    int                                         mSeekTargetTick{-1};
-    bool                                        mExportSeekRequested{};
-    bool                                        mSnapMovementDuringSeek{};
-    ReplayExportTimelinePhase                   mExportTimelinePhase{ReplayExportTimelinePhase::Inactive};
-    int                                         mExportTargetTick{-1};
-    std::optional<ReplayCameraViewpoint>        mExportCameraViewpoint;
-    float                                       mPlaybackSpeed{1.0f};
-    float                                       mPlaybackTickAccumulator{};
-    std::atomic<float>                          mObserverPreviewPartialTick{0.0f};
+    std::atomic<bool>                    mStopRequested{false};
+    std::atomic<int>                     mRequestedSeekTick{-1};
+    int                                  mSeekTargetTick{-1};
+    bool                                 mExportSeekRequested{};
+    bool                                 mSnapMovementDuringSeek{};
+    ReplayExportTimelinePhase            mExportTimelinePhase{ReplayExportTimelinePhase::Inactive};
+    int                                  mExportTargetTick{-1};
+    std::optional<ReplayCameraViewpoint> mExportCameraViewpoint;
+    float                                mPlaybackSpeed{1.0f};
+    float                                mPlaybackTickAccumulator{};
+    std::atomic<SteadyTimePoint>         mTickAdvancedAt{};
+    std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
+
     bool                                        mObserverPreviewInRange{false};
     ::Vec3                                      mLastObserverPreviewFeet{};
     ::Vec2                                      mLastObserverPreviewRotation{};
@@ -315,6 +321,10 @@ public:
     void updateControlPlane();
 
     [[nodiscard]] bool isActive() const { return mActive; }
+    [[nodiscard]] bool isReadyForExport() const {
+        return mActive && mReplayWorldJoined && mWorldReady && !mReplayFailed && mReplayPlayer && mNetworkHandler
+            && !mPendingReplayDimension && !mApplyingChunkSnapshot && !mChunkInjectionPending;
+    }
 
     [[nodiscard]] bool isPaused() const { return mIsPaused; }
 
@@ -325,7 +335,7 @@ public:
     void teleportReplayPlayer(::Vec3 const& feetPosition, ::Vec2 const& rotation);
 
     // Preview drives the observer (the camera) per frame at the render partial tick.
-    void setObserverPreviewPartialTick(float partialTick);
+
     void updateObserverPreview();
 
     [[nodiscard]] int getCurrentTick() const {
@@ -338,9 +348,10 @@ public:
     [[nodiscard]] int getAppliedReplayTick() const { return mCurrentTick; }
 
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
-    [[nodiscard]] std::optional<visuals::ReplaySampleTime> getRenderSampleTime(float partialTick) const noexcept;
-    [[nodiscard]] std::optional<visuals::ReplaySampleTime> getCameraRenderSampleTime(float partialTick) const noexcept;
-    [[nodiscard]] std::optional<long double>               getFractionalReplayTick(float partialTick) const noexcept;
+    [[nodiscard]] std::optional<visuals::ReplaySampleTime> getCameraRenderSampleTime() const noexcept;
+    void                                                   markReplayTickAdvanced() noexcept;
+    [[nodiscard]] float                                    previewPartialTick() const noexcept;
+    void                                                   resumePreviewClockFromFrozenPartial() noexcept;
 
     [[nodiscard]] int getTotalTicks() const;
 
@@ -357,6 +368,8 @@ public:
     [[nodiscard]] bool beginExportTimeline(int startTick);
 
     void setExportCameraViewpoint(std::optional<ReplayCameraViewpoint> viewpoint) noexcept;
+    [[nodiscard]] std::optional<ReplayCameraViewpoint> currentCameraViewpoint() const noexcept;
+    [[nodiscard]] std::optional<ReplayCameraViewpoint> exportCameraViewpoint() const noexcept;
 
     void updateExportObserver(ReplayCameraViewpoint const& viewpoint);
 

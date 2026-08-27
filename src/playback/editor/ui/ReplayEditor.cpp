@@ -1,6 +1,7 @@
 ﻿#include "playback/editor/ui/ReplayEditor.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/ErrorDialog.h"
 
 #include "imgui.h"
@@ -42,9 +43,8 @@ void ReplayEditor::shutdown() {
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
     mViewportMaximized = false;
-    mCurveEditorPanel.setOpen(false);
-    mFrameState = nullptr;
-    mSubmit     = nullptr;
+    mFrameState        = nullptr;
+    mSubmit            = nullptr;
     mSelection.clear();
     mLastExportState = exporting::ExportState::Idle;
 }
@@ -177,7 +177,8 @@ bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(); 
 bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(); }
 
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
-    if (!state.editorVisible) {
+    bool const exportActive = exporting::isExportActive(state.exportStatus.state);
+    if (!state.editorVisible && !exportActive) {
         if (!mActiveReplayPath.empty()) {
             mTimelineViewPreferences.insert_or_assign(
                 mActiveReplayPath,
@@ -198,7 +199,6 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     io.FontGlobalScale         = savedFontScale * (18.0f / 14.0f);
     mTheme.apply();
 
-    auto const exportActive = exporting::isExportActive(state.exportStatus.state);
     if (exportActive && mModeManager.current() != EditorMode::Render) {
         mModeManager.switchTo(EditorMode::Render);
     } else if (!exportActive && mModeManager.current() != EditorMode::Edit) {

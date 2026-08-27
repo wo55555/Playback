@@ -23,7 +23,7 @@ public:
     ReplayExportDriver(ReplayExportDriver const&)            = delete;
     ReplayExportDriver& operator=(ReplayExportDriver const&) = delete;
 
-    void setFrameTap(visuals::FrameTap* frameTap);
+    void setSaveableFramebufferQueue(SaveableFramebufferQueue* downloads);
 
     [[nodiscard]] bool start(
         ExportSettings                               settings,
@@ -64,10 +64,7 @@ private:
     std::unique_ptr<OfflineRenderBoundary> mRenderBoundary;
     std::optional<CompiledExportPlan>      mPlan;
     std::deque<visuals::CapturedFrame>     mReadyFrames;
-    bool                                   mPreviousPaused{};
-    bool                                   mRestorePaused{};
-    uint32_t                               mClearFrameRetryCount{};
-    uint64_t                               mRejectedClearFrameCount{};
+    std::optional<bool>                    mPreviousPaused;
     uint64_t                               mNextFrameIndex{};
     Phase                                  mPhase{Phase::Idle};
 };

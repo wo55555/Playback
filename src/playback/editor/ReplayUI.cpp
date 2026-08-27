@@ -29,7 +29,7 @@ bool hookReplayUI(bool enable) {
         gController.reset();
         gContext.reset();
         editor::graphics::gImGuiRenderer.setContext(&gContext);
-        gController.setFrameTap(&editor::graphics::gImGuiRenderer.frameTap());
+        gController.setSaveableFramebufferQueue(&editor::graphics::gImGuiRenderer.saveableFramebufferQueue());
         record::Recorder::getInstance().setThumbnailCaptureProvider(&editor::graphics::gImGuiRenderer);
         editor::graphics::setReplayUIActive(true);
 
@@ -39,7 +39,7 @@ bool hookReplayUI(bool enable) {
         if (!hookReplayUIRendererInit(true)) {
             editor::graphics::setReplayUIActive(false);
             record::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
-            gController.setFrameTap(nullptr);
+            gController.setSaveableFramebufferQueue(nullptr);
             editor::graphics::gImGuiRenderer.setContext(nullptr);
             ui::ReplayEditor::getInstance().shutdown();
             gContext.reset();
@@ -64,7 +64,7 @@ bool hookReplayUI(bool enable) {
     editor::graphics::setReplayUIActive(false);
     editor::graphics::setReplayMouseInputActive(false);
     record::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
-    gController.setFrameTap(nullptr);
+    gController.setSaveableFramebufferQueue(nullptr);
 
     bool ok = true;
     if (!hookReplayUIRendererInit(false)) {
@@ -92,6 +92,8 @@ bool hookReplayUI(bool enable) {
 bool isReplayBrowserVisible() { return gContext.snapshot().browser.visible; }
 
 void tickReplayExportBeforeClientUpdate() { gController.tickExportBeforeClientUpdate(); }
+
+void tickReplayExportDuringGraphics() { gController.tickExportDuringGraphics(); }
 
 void tickReplayUI(bool hudVisible) {
     gController.tick(hudVisible);

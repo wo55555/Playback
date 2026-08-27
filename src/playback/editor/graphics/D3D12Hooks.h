@@ -6,8 +6,6 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
-#include <cstdint>
-
 struct ID3D12CommandQueue;
 
 namespace playback::editor::graphics {
@@ -21,7 +19,7 @@ inline constexpr GUID  SwapChainQueueGuid{
     0xe185a345,
     0x1169,
     0x4fc8,
-    {0xa4, 0x4b, 0x86, 0x73, 0xd1, 0x5d, 0x7b, 0x2f}
+     {0xa4, 0x4b, 0x86, 0x73, 0xd1, 0x5d, 0x7b, 0x2f}
 };
 
 [[nodiscard]] bool isTimelineRenderingEnabled();
@@ -43,8 +41,6 @@ void unbindSwapChainQueue(IDXGISwapChain* swapChain);
 
 ComPtr<ID3D12CommandQueue> getResizePresentQueue(UINT bufferCount, IUnknown* const* presentQueues);
 
-ComPtr<ID3D12CommandQueue> getDeviceQueue(ID3D12Device* device);
-
 [[nodiscard]] bool resolveHookTargets(
     void*& outPresent,
     void*& outPresent1,
@@ -53,8 +49,7 @@ ComPtr<ID3D12CommandQueue> getDeviceQueue(ID3D12Device* device);
     void*& outCreateSwapChain,
     void*& outCreateSwapChainForHwnd,
     void*& outCreateSwapChainForCoreWindow,
-    void*& outCreateSwapChainForComposition,
-    void*& outCreateCommandQueue
+    void*& outCreateSwapChainForComposition
 );
 
 } // namespace playback::editor::graphics

@@ -4,10 +4,8 @@
 
 namespace playback::state::editing::model {
 
-// Forward declarations
 struct EditorStateExt;
 
-// Base interface for undo/redo commands
 class IEditCommand {
 public:
     virtual ~IEditCommand() = default;

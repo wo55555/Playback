@@ -45,27 +45,23 @@ PlaybackSetEquipmentPacket::createPackets(PlaybackSetEquipmentPacket const* prev
     bool const mainhandChanged = runtimeChanged || previous == nullptr || mSelectedSlot != previous->mSelectedSlot
                               || changed(SharedTypes::Legacy::EquipmentSlot::Mainhand);
     if (mainhandChanged) {
-        packets.emplace_back(
-            std::make_shared<MobEquipmentPacket>(
-                mRuntimeId,
-                item(SharedTypes::Legacy::EquipmentSlot::Mainhand),
-                mSelectedSlot,
-                mSelectedSlot,
-                ContainerID::Inventory
-            )
-        );
+        packets.emplace_back(std::make_shared<MobEquipmentPacket>(
+            mRuntimeId,
+            item(SharedTypes::Legacy::EquipmentSlot::Mainhand),
+            mSelectedSlot,
+            mSelectedSlot,
+            ContainerID::Inventory
+        ));
     }
 
     if (changed(SharedTypes::Legacy::EquipmentSlot::Offhand)) {
-        packets.emplace_back(
-            std::make_shared<MobEquipmentPacket>(
-                mRuntimeId,
-                item(SharedTypes::Legacy::EquipmentSlot::Offhand),
-                0,
-                0,
-                ContainerID::Offhand
-            )
-        );
+        packets.emplace_back(std::make_shared<MobEquipmentPacket>(
+            mRuntimeId,
+            item(SharedTypes::Legacy::EquipmentSlot::Offhand),
+            0,
+            0,
+            ContainerID::Offhand
+        ));
     }
 
     bool const armorChanged =

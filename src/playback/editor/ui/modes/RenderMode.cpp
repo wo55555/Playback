@@ -67,12 +67,7 @@ void RenderMode::draw() {
     auto* const background = ImGui::GetBackgroundDrawList();
     background->AddRectFilled({0.0f, 0.0f}, displaySize, IM_COL32(0, 0, 0, 255));
     if (auto const texture = editor.gameTexture()) {
-        float const aspect = std::clamp(editor.videoAspectRatio(), 0.25f, 4.0f);
-        ImVec2      imageSize{displaySize.x, displaySize.x / aspect};
-        if (imageSize.y > displaySize.y) imageSize = {displaySize.y * aspect, displaySize.y};
-        ImVec2 const imageMin{(displaySize.x - imageSize.x) * 0.5f, (displaySize.y - imageSize.y) * 0.5f};
-        ImVec2 const imageMax{imageMin.x + imageSize.x, imageMin.y + imageSize.y};
-        background->AddImage(ImTextureRef(texture), imageMin, imageMax);
+        background->AddImage(ImTextureRef(texture), {0.0f, 0.0f}, displaySize);
     }
 
     ImGui::SetNextWindowPos({0.0f, 0.0f});

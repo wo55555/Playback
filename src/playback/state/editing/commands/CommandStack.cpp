@@ -13,9 +13,8 @@ void CommandStack::push(std::unique_ptr<model::IEditCommand> cmd, model::EditorS
     mUndo.push_back(std::move(cmd));
     mRedo.clear();
 
-    // Trim to max steps
     if (mUndo.size() > mMaxSteps) {
-        mUndo.erase(mUndo.begin(), mUndo.begin() + (mUndo.size() - mMaxSteps));
+        mUndo.erase(mUndo.begin(), mUndo.begin() + static_cast<std::ptrdiff_t>(mUndo.size() - mMaxSteps));
     }
 }
 
