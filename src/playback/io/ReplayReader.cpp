@@ -207,14 +207,12 @@ void ReplayReader::handleSnapshot(ReplaySession& session) {
         action->handle(session, stream);
 
         if (stream.mReadPointer != stream.getWritePointer()) {
-            throw std::runtime_error(
-                std::format(
-                    "Action {} failed to fully read. Had {} bytes available, only read {}",
-                    mLastActionName,
-                    stream.getWritePointer(),
-                    stream.mReadPointer
-                )
-            );
+            throw std::runtime_error(std::format(
+                "Action {} failed to fully read. Had {} bytes available, only read {}",
+                mLastActionName,
+                stream.getWritePointer(),
+                stream.mReadPointer
+            ));
         }
         mStream.mReadPointer += dataSize;
     }
@@ -246,14 +244,12 @@ bool ReplayReader::handleNextAction(ReplaySession& session) {
     action->handle(session, stream);
 
     if (stream.mReadPointer != stream.getWritePointer()) {
-        throw std::runtime_error(
-            std::format(
-                "Action {} failed to fully read. Had {} bytes available, only read {}",
-                mLastActionName,
-                stream.getWritePointer(),
-                stream.mReadPointer
-            )
-        );
+        throw std::runtime_error(std::format(
+            "Action {} failed to fully read. Had {} bytes available, only read {}",
+            mLastActionName,
+            stream.getWritePointer(),
+            stream.mReadPointer
+        ));
     }
 
     mStream.mReadPointer += dataSize;

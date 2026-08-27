@@ -9,8 +9,13 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      PLAYBACK_VERSION: ${{ github.event.release.tag_name }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
 
       - uses: xmake-io/github-action-setup-xmake@v1
         # with:
@@ -68,6 +73,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - id: extract-release-notes
         uses: ffurrer2/extract-release-notes@v3
@@ -86,6 +93,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - uses: actions/download-artifact@v8
         with:

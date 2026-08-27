@@ -1,8 +1,11 @@
 ﻿#pragma once
 
+#include <cstddef>
 #include <functional>
-#include <list>
 #include <mutex>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
 namespace playback::utils::event {
 
@@ -13,9 +16,7 @@ struct StateChangedEvent {
     float playbackSpeed{};
 };
 
-struct SelectionChangedEvent {
-    // Empty = selection cleared
-};
+struct SelectionChangedEvent {};
 
 struct CommandExecutedEvent {
     std::string commandLabel;
@@ -26,9 +27,7 @@ struct ReplayStartedEvent {
     std::string filePath;
 };
 
-struct ReplayStoppedEvent {
-    // Empty
-};
+struct ReplayStoppedEvent {};
 
 class EventBus {
 public:

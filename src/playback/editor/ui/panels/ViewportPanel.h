@@ -1,8 +1,6 @@
 #pragma once
 
 #include "playback/editor/ui/components/Splitter.h"
-#include "playback/editor/ui/menus/ViewportMenu.h"
-
 
 #include "imgui.h"
 
@@ -21,10 +19,9 @@ public:
 private:
     void drawTransportControls();
 
-    ImTextureID  mGameTexture{};
-    float        mVideoAspectRatio{16.0f / 9.0f};
-    Rect         mVideoRect{};
-    ViewportMenu mContextMenu;
+    ImTextureID mGameTexture{};
+    float       mVideoAspectRatio{16.0f / 9.0f};
+    Rect        mVideoRect{};
 };
 
 } // namespace playback::editor::ui

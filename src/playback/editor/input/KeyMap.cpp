@@ -20,11 +20,9 @@ struct KeyBinding {
 };
 
 constexpr KeyBinding kBindings[] = {
-    // File
     {EditorKeybind::NamedOnly,               "playback.editor.openReplay",       'O',          true,  false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.saveProject",      'S',          true,  false, false},
     {EditorKeybind::OpenExport,              "playback.editor.export",           'E',          true,  false, false},
-    // Edit
     {EditorKeybind::Undo,                    "playback.editor.undo",             'Z',          true,  false, false},
     {EditorKeybind::Redo,                    "playback.editor.redo",             'Y',          true,  false, false},
     {EditorKeybind::Redo,                    "playback.editor.redo",             'Z',          true,  true,  false},
@@ -35,7 +33,6 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::NamedOnly,               "playback.editor.cut",              'X',          true,  false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.copy",             'C',          true,  false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.paste",            'V',          true,  false, false},
-    // Playback
     {EditorKeybind::JumpStart,               "playback.editor.jumpStart",        VK_HOME,      false, false, false},
     {EditorKeybind::JumpEnd,                 "playback.editor.jumpEnd",          VK_END,       false, false, false},
     {EditorKeybind::SeekSecondLeft,          "playback.editor.stepSecondLeft",   VK_LEFT,      false, false, false},
@@ -46,7 +43,6 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::NextEditPoint,           "playback.editor.nextPoint",        VK_UP,        false, false, false},
     {EditorKeybind::DecreaseSpeed,           "playback.editor.decreaseSpeed",    VK_OEM_MINUS, false, false, false},
     {EditorKeybind::IncreaseSpeed,           "playback.editor.increaseSpeed",    VK_OEM_PLUS,  false, false, false},
-    // Timeline editing
     {EditorKeybind::AddKeyframe,             "playback.editor.addKeyframe",      'K',          false, false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.addCameraTrack",   'N',          true,  true,  false},
     {EditorKeybind::NamedOnly,               "playback.editor.camera1",          '1',          false, false, false},

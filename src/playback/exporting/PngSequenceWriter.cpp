@@ -73,6 +73,8 @@ struct PngSequenceWriter::Impl {
     uint64_t                nextFrameIndex{};
     uint32_t                frameWidth{};
     uint32_t                frameHeight{};
+    uint32_t                targetWidth{};
+    uint32_t                targetHeight{};
     ExportError             error{ExportError::None};
     std::string             message;
     std::filesystem::path   latestFramePath;
@@ -124,6 +126,16 @@ struct PngSequenceWriter::Impl {
                 changed.notify_all();
             }
 
+            if (!detail::normalizeFrame(item.frame, targetWidth, targetHeight)) {
+                std::scoped_lock lock(mutex);
+                if (state != FrameWriterState::Cancelling) {
+                    setFailureLocked(
+                        ExportError::InvalidFrame,
+                        "The captured frame could not be normalized to the export resolution"
+                    );
+                }
+                break;
+            }
             detail::copyPackedRgba(item.frame, rgba);
             auto const output  = framePath(directory, item.index);
             auto const partial = temporaryFramePath(directory, item.index);
@@ -201,7 +213,9 @@ bool PngSequenceWriter::open(CompiledExportPlan const& plan) {
 
     {
         std::scoped_lock lock(mImpl->mutex);
-        mImpl->directory = plan.outputPath;
+        mImpl->directory    = plan.outputPath;
+        mImpl->targetWidth  = plan.settings.resolutionX;
+        mImpl->targetHeight = plan.settings.resolutionY;
     }
 
     std::error_code ec;

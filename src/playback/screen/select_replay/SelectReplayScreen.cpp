@@ -151,8 +151,8 @@ constexpr ImU32 kColorAccentHover  = IM_COL32(78, 158, 250, 255);
 constexpr ImU32 kColorBg           = IM_COL32(22, 23, 25, 255);
 constexpr ImU32 kColorPanelBg      = IM_COL32(30, 32, 35, 255);
 constexpr ImU32 kColorCardBg       = IM_COL32(25, 27, 29, 255);
-constexpr ImU32 kColorCardSelected = IM_COL32(29, 36, 46, 255);
-constexpr ImU32 kColorListSelected = IM_COL32(30, 58, 92, 255);
+constexpr ImU32 kColorCardSelected = IM_COL32(70, 72, 76, 255);
+constexpr ImU32 kColorListSelected = IM_COL32(70, 72, 76, 255);
 constexpr ImU32 kColorCardBorder   = IM_COL32(76, 80, 86, 220);
 constexpr ImU32 kColorCardHover    = IM_COL32(104, 110, 120, 255);
 constexpr ImU32 kColorButton       = IM_COL32(48, 50, 54, 255);
@@ -235,6 +235,11 @@ float centeredIconY(char const* icon, float minimumY, float maximumY) {
     return minimumY + (maximumY - minimumY - ImGui::CalcTextSize(icon).y) * 0.5f;
 }
 
+// Per-glyph centering misaligns icons sharing a row, since glyph heights differ.
+float sharedIconBaselineY(float minimumY, float maximumY) {
+    return minimumY + (maximumY - minimumY - ImGui::GetFontSize()) * 0.5f;
+}
+
 float centeredIconX(char const* icon, float minimumX, float maximumX) {
     float const visualLeft = minimumX + (maximumX - minimumX - iconVisualWidth(icon)) * 0.5f;
     return iconDrawX(icon, visualLeft);
@@ -286,14 +291,8 @@ void drawIconTextLine(
     ImU32            color,
     float            gap = 6.0f
 ) {
-    float const lineBottom = position.y + ImGui::GetFontSize();
-    ImGui::GetWindowDrawList()->AddText(
-        ImGui::GetFont(),
-        ImGui::GetFontSize(),
-        {iconDrawX(icon, position.x), centeredIconY(icon, position.y, lineBottom)},
-        color,
-        icon
-    );
+    ImGui::GetWindowDrawList()
+        ->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {iconDrawX(icon, position.x), position.y}, color, icon);
     drawClippedText(
         text,
         {position.x + iconVisualWidth(icon) + gap, position.y + kTextOpticalOffsetY},
@@ -377,15 +376,12 @@ void drawCenteredIconLabel(
     float const iconX =
         text.empty() && !trailingIcon ? centeredIconX(icon, minimum.x, maximum.x) : iconDrawX(icon, groupX);
 
-    ImDrawList* const draw  = ImGui::GetWindowDrawList();
-    ImU32 const       color = ImGui::GetColorU32(kColorText);
-    draw->AddText(
-        ImGui::GetFont(),
-        ImGui::GetFontSize(),
-        {iconX, centeredIconY(icon, minimum.y, maximum.y)},
-        color,
-        icon
-    );
+    ImDrawList* const draw      = ImGui::GetWindowDrawList();
+    ImU32 const       color     = ImGui::GetColorU32(kColorText);
+    bool const        sharesRow = !text.empty() || trailingIcon;
+    float const       iconY =
+        sharesRow ? sharedIconBaselineY(minimum.y, maximum.y) : centeredIconY(icon, minimum.y, maximum.y);
+    draw->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {iconX, iconY}, color, icon);
     if (!text.empty()) {
         ImVec2 const textSize = ImGui::CalcTextSize(text.data(), text.data() + text.size());
         draw->AddText(
@@ -405,7 +401,7 @@ void drawCenteredIconLabel(
         draw->AddText(
             ImGui::GetFont(),
             ImGui::GetFontSize(),
-            {iconDrawX(trailingIcon, trailingX), centeredIconY(trailingIcon, minimum.y, maximum.y)},
+            {iconDrawX(trailingIcon, trailingX), iconY},
             color,
             trailingIcon
         );
@@ -459,7 +455,7 @@ bool viewToggleButton(
     float const  dividerX = minimum.x + segmentWidth;
 
     auto const backgroundFor = [hovered, held](bool selected) {
-        if (selected) return hovered ? kColorAccentHover : kColorAccent;
+        if (selected) return hovered ? kColorButtonHover : kColorCardSelected;
         if (held) return kColorButtonActive;
         if (hovered) return kColorButtonHover;
         return kColorButton;
@@ -698,6 +694,7 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
     mState  = &state;
     mSubmit = &submitAction;
     syncSnapshot();
+    mAnimator.beginFrame();
     playback::editor::ui::EditorTheme theme;
     theme.apply();
     auto const& io = ImGui::GetIO();
@@ -717,8 +714,7 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
         "##replay-browser",
         nullptr,
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
-            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-            | ImGuiWindowFlags_NoBackground
+            | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground
     );
     ImGui::PopStyleVar();
     ImGui::SetWindowFontScale(kFontScaleBody);
@@ -731,12 +727,7 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
     ImGui::PushStyleColor(ImGuiCol_Border, kColorCardBorder);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-    ImGui::BeginChild(
-        "##replay-browser-panel",
-        panelSize,
-        true,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-    );
+    ImGui::BeginChild("##replay-browser-panel", panelSize, true, ImGuiWindowFlags_NoScrollbar);
 
     ImGui::SetWindowFontScale(kFontScaleBody);
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
@@ -748,9 +739,12 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
     ImGui::Separator();
 
     float const actionHeight = (mViewMode == ViewMode::Grid && !mSelectedIds.empty()) ? kActionBarHeight : 0.0f;
-    ImGui::BeginChild("##content", {0.0f, -actionHeight}, false);
+    mViewTransition          = playback::editor::ui::advanceAnimation(mViewTransition, 1.0f, io.DeltaTime);
+    ImGui::BeginChild("##content", {0.0f, -actionHeight}, false, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * mViewTransition);
     if (mViewMode == ViewMode::Grid) drawGrid();
     else drawDetails();
+    ImGui::PopStyleVar();
     ImGui::EndChild();
 
     if (mViewMode == ViewMode::Grid && !mSelectedIds.empty()) drawActionBar();
@@ -770,12 +764,7 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
 }
 
 void SelectReplayScreen::drawNavigation() {
-    ImGui::BeginChild(
-        "##header",
-        {0.0f, kNavHeight},
-        false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-    );
+    ImGui::BeginChild("##header", {0.0f, kNavHeight}, false, ImGuiWindowFlags_NoScrollbar);
 
     float const width   = ImGui::GetWindowWidth();
     float const margin  = kNavigationLayout.horizontalMargin;
@@ -908,7 +897,8 @@ void SelectReplayScreen::drawNavigation() {
             viewSegmentW,
             mViewMode == ViewMode::Grid
         )) {
-        mViewMode = mViewMode == ViewMode::Grid ? ViewMode::Details : ViewMode::Grid;
+        mViewMode       = mViewMode == ViewMode::Grid ? ViewMode::Details : ViewMode::Grid;
+        mViewTransition = 0.0f;
     }
     std::string const viewTooltip = mViewMode == ViewMode::Grid
                                       ? "playback.replayBrowser.navigation.switchToDetails"_tr()
@@ -918,10 +908,11 @@ void SelectReplayScreen::drawNavigation() {
     ImGui::EndChild();
 }
 
-void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& replay, ImVec2 size) {
-    auto start = ImGui::GetCursorScreenPos();
-    auto end   = ImVec2(start.x + size.x, start.y + size.y);
-    ImGui::GetWindowDrawList()->AddRectFilled(start, end, kColorPreviewBg, 0.0f);
+void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& replay, ImVec2 size, float rounding) {
+    auto        start    = ImGui::GetCursorScreenPos();
+    auto        end      = ImVec2(start.x + size.x, start.y + size.y);
+    auto* const drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(start, end, kColorPreviewBg, rounding);
 
     auto texture = playback::editor::graphics::gImGuiRenderer.acquireReplayThumbnailTexture(
         replay.path.string(),
@@ -942,13 +933,13 @@ void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& 
             uv0.y                     = (1.0f - visibleHeight) * 0.5f;
             uv1.y                     = 1.0f - uv0.y;
         }
-        ImGui::Image(texture, size, uv0, uv1);
+        drawList->AddImageRounded(texture, start, end, uv0, uv1, IM_COL32_WHITE, rounding);
+        ImGui::Dummy(size);
     } else {
         auto              center = ImVec2(start.x + size.x * 0.5f, start.y + size.y * 0.5f);
         std::string const msg    = "playback.replayBrowser.previewUnavailable"_tr();
         auto              ts     = ImGui::CalcTextSize(msg.c_str());
-        ImGui::GetWindowDrawList()
-            ->AddText(ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f), kColorTextDim, msg.c_str());
+        drawList->AddText(ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f), kColorTextDim, msg.c_str());
         ImGui::Dummy(size);
     }
 }
@@ -969,20 +960,22 @@ void SelectReplayScreen::drawCard(
     float const footerY       = modifiedY + kCardLayout.metadataRowAdvance();
 
     ImGui::PushID(replay.replayId.c_str());
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, selected ? kColorCardSelected : kColorCardBg);
+    float const selectedAmount = mAnimator.animate("card-selected", replay.replayId, selected ? 1.0f : 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
-    ImGui::BeginChild(
-        "##card",
-        {width, height},
-        false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-    );
+    ImGui::BeginChild("##card", {width, height}, false, ImGuiWindowFlags_NoScrollbar);
     ImVec2 const cardMinimum = ImGui::GetWindowPos();
     ImVec2 const cardMaximum{cardMinimum.x + width, cardMinimum.y + height};
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        cardMinimum,
+        cardMaximum,
+        playback::editor::ui::lerpColor(kColorCardBg, kColorCardSelected, selectedAmount),
+        8.0f
+    );
 
     ImGui::SetCursorPos({kCardLayout.previewInset, kCardLayout.previewInset});
-    drawPreview(replay, {previewWidth, previewHeight});
+    drawPreview(replay, {previewWidth, previewHeight}, 8.0f);
 
     ImGui::SetCursorPos({0.0f, 0.0f});
     ImGui::SetNextItemAllowOverlap();
@@ -994,7 +987,8 @@ void SelectReplayScreen::drawCard(
     } else if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
         select(replay.replayId, visibleIndex, ImGui::GetIO().KeyCtrl, ImGui::GetIO().KeyShift);
     }
-    bool const cardHovered = ImGui::IsItemHovered();
+    bool const  cardHovered = ImGui::IsItemHovered();
+    float const hoverAmount = mAnimator.animate("card-hover", replay.replayId, cardHovered ? 1.0f : 0.0f);
 
     // Keep full file details in the info-button tooltip without crowding the card body.
     float const infoSize = 28.0f;
@@ -1028,9 +1022,9 @@ void SelectReplayScreen::drawCard(
     ImGui::GetWindowDrawList()->AddText(
         ImGui::GetFont(),
         ImGui::GetFontSize(),
-        {centeredIconX(ICON_MORE, infoMin.x, infoMax.x), centeredIconY(ICON_MORE, infoMin.y, infoMax.y)},
+        {centeredIconX(ICON_INFO, infoMin.x, infoMax.x), centeredIconY(ICON_INFO, infoMin.y, infoMax.y)},
         infoHovered ? kColorText : kColorTextDim,
-        ICON_MORE
+        ICON_INFO
     );
     if (infoHovered) {
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, tooltipAlpha);
@@ -1112,35 +1106,13 @@ void SelectReplayScreen::drawCard(
         tooltip(replay.problem.c_str());
     }
 
-    if (selected) {
-        constexpr float badgeSize = 28.0f;
-        ImVec2 const    badgeMinimum{
-            cardMinimum.x + kCardLayout.previewInset + 8.0f,
-            cardMinimum.y + kCardLayout.previewInset + 8.0f,
-        };
-        ImVec2 const badgeMaximum{badgeMinimum.x + badgeSize, badgeMinimum.y + badgeSize};
-        ImGui::GetWindowDrawList()->AddRectFilled(badgeMinimum, badgeMaximum, kColorAccent, 4.0f);
-        ImGui::GetWindowDrawList()->AddText(
-            ImGui::GetFont(),
-            ImGui::GetFontSize(),
-            {
-                centeredIconX(ICON_CHECK, badgeMinimum.x, badgeMaximum.x),
-                centeredIconY(ICON_CHECK, badgeMinimum.y, badgeMaximum.y),
-            },
-            kColorText,
-            ICON_CHECK
-        );
-    }
-
     ImGui::GetWindowDrawList()->AddRect(
         {cardMinimum.x + 1.0f, cardMinimum.y + 1.0f},
         {cardMaximum.x - 1.0f, cardMaximum.y - 1.0f},
-        selected      ? kColorAccent
-        : cardHovered ? kColorCardHover
-                      : kColorCardBorder,
+        playback::editor::ui::lerpColor(kColorCardBorder, kColorCardHover, std::max(selectedAmount, hoverAmount)),
         8.0f,
         0,
-        selected ? 2.0f : 1.0f
+        1.0f
     );
 
     ImGui::SetWindowFontScale(kFontScaleBody);
@@ -1175,7 +1147,7 @@ void SelectReplayScreen::drawGrid() {
         "##grid-location",
         {gridWidth, kContentLayout.locationHeight},
         false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
     ImGui::SetWindowFontScale(kFontScaleCardMeta);
     ImVec2 const locationMinimum = ImGui::GetWindowPos();
@@ -1207,6 +1179,9 @@ void SelectReplayScreen::drawGrid() {
         return;
     }
 
+    ImGui::SetCursorPos({gridX, gridStartY});
+    ImGui::BeginChild("##grid-scroll", {gridWidth, 0.0f}, false, ImGuiWindowFlags_NoScrollbar);
+
     constexpr float minimumCardWidth = 330.0f;
     int const       capacity = std::max(1, static_cast<int>((gridWidth + kCardGap) / (minimumCardWidth + kCardGap)));
     int const       defaultColumns = std::min(4, capacity);
@@ -1216,17 +1191,18 @@ void SelectReplayScreen::drawGrid() {
     for (int item = 0; item < static_cast<int>(mVisible.size()); ++item) {
         int const column = item % columns;
         int const row    = item / columns;
-        ImGui::SetCursorPos({gridX + column * (width + kCardGap), gridStartY + row * (height + kCardGap)});
+        ImGui::SetCursorPos({column * (width + kCardGap), row * (height + kCardGap)});
         drawCard(replays()[mVisible[static_cast<size_t>(item)]], static_cast<std::size_t>(item), width);
     }
 
     int const   rows       = (static_cast<int>(mVisible.size()) + columns - 1) / columns;
     float const gridHeight = rows * height + std::max(0, rows - 1) * kCardGap;
-    ImGui::SetCursorPos({gridX, gridStartY + gridHeight + kContentLayout.bottomMargin});
+    ImGui::SetCursorPos({0.0f, gridHeight + kContentLayout.bottomMargin});
     ImGui::Dummy({gridWidth, 1.0f});
 
     // Only clicks on the true blank canvas reach here; cards, the scrollbar, and header controls are excluded.
     clearSelectionOnBlankClick();
+    ImGui::EndChild();
 }
 
 void SelectReplayScreen::drawDetailsListItem(
@@ -1245,21 +1221,32 @@ void SelectReplayScreen::drawDetailsListItem(
     float const thumbnailY      = (itemHeight - thumbnailHeight) * 0.5f;
 
     ImGui::PushID(replay.replayId.c_str());
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, selected ? kColorListSelected : kColorCardBg);
+    float const selectedAmount = mAnimator.animate("details-selected", replay.replayId, selected ? 1.0f : 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, kDetailsLayout.panelRounding);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
-    ImGui::BeginChild(
-        "##details-list-item",
-        {width, itemHeight},
-        false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-    );
+    ImGui::BeginChild("##details-list-item", {width, itemHeight}, false, ImGuiWindowFlags_NoScrollbar);
 
     ImVec2 const itemMinimum = ImGui::GetWindowPos();
     ImVec2 const itemMaximum{itemMinimum.x + width, itemMinimum.y + itemHeight};
+    // Hit-tested here rather than from the overlay button so the fill can be drawn beneath the thumbnail.
+    float const hoverAmount = mAnimator.animate(
+        "details-hover",
+        replay.replayId,
+        ImGui::IsMouseHoveringRect(itemMinimum, itemMaximum) ? 1.0f : 0.0f
+    );
+    float const highlight = std::max(selectedAmount, hoverAmount * 0.45f);
+    if (highlight > 0.0f) {
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            itemMinimum,
+            itemMaximum,
+            playback::editor::ui::lerpColor(kColorPanelBg, kColorListSelected, highlight),
+            kDetailsLayout.panelRounding
+        );
+    }
     ImGui::SetCursorPos({kDetailsLayout.listItemHorizontalPadding, thumbnailY});
     ImVec2 const thumbnailMinimum = ImGui::GetCursorScreenPos();
-    drawPreview(replay, {thumbnailWidth, thumbnailHeight});
+    drawPreview(replay, {thumbnailWidth, thumbnailHeight}, 3.0f);
     ImVec2 const thumbnailMaximum{thumbnailMinimum.x + thumbnailWidth, thumbnailMinimum.y + thumbnailHeight};
     ImGui::GetWindowDrawList()->AddRect(thumbnailMinimum, thumbnailMaximum, kColorCardBorder, 3.0f);
 
@@ -1276,7 +1263,6 @@ void SelectReplayScreen::drawDetailsListItem(
     if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
         select(replay.replayId, visibleIndex, false, false);
     }
-    bool const itemHovered = ImGui::IsItemHovered();
 
     // Keep secondary file operations available without crowding the primary action bar.
     if (ImGui::BeginPopupContextItem("##details-item-menu")) {
@@ -1346,17 +1332,6 @@ void SelectReplayScreen::drawDetailsListItem(
         );
     }
 
-    ImGui::GetWindowDrawList()->AddRect(
-        {itemMinimum.x + 1.0f, itemMinimum.y + 1.0f},
-        {itemMaximum.x - 1.0f, itemMaximum.y - 1.0f},
-        selected      ? kColorAccent
-        : itemHovered ? kColorCardHover
-                      : kColorCardBorder,
-        kDetailsLayout.panelRounding,
-        0,
-        selected ? 2.0f : 1.0f
-    );
-
     ImGui::SetWindowFontScale(kFontScaleBody);
     ImGui::EndChild();
     ImGui::PopStyleVar(2);
@@ -1380,7 +1355,7 @@ void SelectReplayScreen::drawDetails() {
         "##details-location",
         {contentWidth, kContentLayout.locationHeight},
         false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        ImGuiWindowFlags_NoScrollbar
     );
     ImGui::SetWindowFontScale(kFontScaleCardMeta);
     ImVec2 const      locationMinimum = ImGui::GetWindowPos();
@@ -1437,14 +1412,14 @@ void SelectReplayScreen::drawDetails() {
     ImGui::PushStyleColor(ImGuiCol_Border, kColorCardBorder);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, kDetailsLayout.panelRounding);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-    ImGui::BeginChild(
-        "##details-list",
-        {listWidth, listHeight},
-        true,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-    );
+    ImGui::BeginChild("##details-list", {listWidth, listHeight}, true, ImGuiWindowFlags_NoScrollbar);
 
-    ImGui::BeginChild("##details-list-scroll", {0.0f, -kDetailsLayout.listFooterHeight}, false);
+    ImGui::BeginChild(
+        "##details-list-scroll",
+        {0.0f, -kDetailsLayout.listFooterHeight},
+        false,
+        ImGuiWindowFlags_NoScrollbar
+    );
     if (mVisible.empty()) {
         ImGui::SetWindowFontScale(kFontScaleSmall);
         ImGui::TextDisabled("%s", "playback.replayBrowser.empty"_tr().c_str());
@@ -1479,12 +1454,7 @@ void SelectReplayScreen::drawDetails() {
     ImGui::PushStyleColor(ImGuiCol_Border, kColorCardBorder);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, kDetailsLayout.panelRounding);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-    ImGui::BeginChild(
-        "##details-panel",
-        {panelWidth, panelHeight},
-        true,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-    );
+    ImGui::BeginChild("##details-panel", {panelWidth, panelHeight}, true, ImGuiWindowFlags_NoScrollbar);
 
     auto replay = selectedReplay();
     if (!replay) {
@@ -1511,7 +1481,7 @@ void SelectReplayScreen::drawDetails() {
 
         ImGui::SetCursorPos({kDetailsLayout.panelPadding, kDetailsLayout.panelPadding});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
-        ImGui::BeginChild("##details-scroll", {scrollWidth, scrollHeight}, false);
+        ImGui::BeginChild("##details-scroll", {scrollWidth, scrollHeight}, false, ImGuiWindowFlags_NoScrollbar);
         ImGui::PopStyleVar();
 
         float const detailWidth = ImGui::GetContentRegionAvail().x;
@@ -1531,7 +1501,7 @@ void SelectReplayScreen::drawDetails() {
         float const previewX      = std::max(0.0f, (detailWidth - previewWidth) * 0.5f);
         ImGui::SetCursorPosX(previewX);
         ImVec2 const previewMinimum = ImGui::GetCursorScreenPos();
-        drawPreview(selectedReplayEntry, {previewWidth, previewHeight});
+        drawPreview(selectedReplayEntry, {previewWidth, previewHeight}, 3.0f);
         ImVec2 const previewMaximum{previewMinimum.x + previewWidth, previewMinimum.y + previewHeight};
         ImGui::GetWindowDrawList()->AddRect(previewMinimum, previewMaximum, kColorCardBorder, 3.0f);
         ImGui::SetCursorPosX(0.0f);
@@ -1638,12 +1608,7 @@ void SelectReplayScreen::drawDetails() {
 void SelectReplayScreen::drawActionBar() {
     auto replay = selectedReplay();
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kColorPanelBg);
-    ImGui::BeginChild(
-        "##actions",
-        {0.0f, kActionBarHeight},
-        false,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
-    );
+    ImGui::BeginChild("##actions", {0.0f, kActionBarHeight}, false, ImGuiWindowFlags_NoScrollbar);
 
     float const  contentW   = ImGui::GetWindowWidth();
     ImVec2 const barMinimum = ImGui::GetWindowPos();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "playback/editor/ui/components/Animator.h"
 #include "playback/state/EditorAction.h"
 #include "playback/state/ReplayBrowserState.h"
 
@@ -35,7 +36,7 @@ private:
     void drawDetails();
     void drawDetailsListItem(playback::state::ReplayBrowserEntry const& replay, std::size_t visibleIndex, float width);
     void drawCard(playback::state::ReplayBrowserEntry const& replay, std::size_t visibleIndex, float width);
-    void drawPreview(playback::state::ReplayBrowserEntry const& replay, ImVec2 size);
+    void drawPreview(playback::state::ReplayBrowserEntry const& replay, ImVec2 size, float rounding);
     void drawActionBar();
     void drawDeleteDialog();
     void drawRenameDialog();
@@ -61,6 +62,8 @@ private:
     bool                                       mShowDeleteDialog{};
     bool                                       mRenameDialogOpen{};
     std::string                                mRenameBuffer;
+    playback::editor::ui::Animator             mAnimator;
+    float                                      mViewTransition{1.0f};
 };
 
 } // namespace playback::screen::select_replay

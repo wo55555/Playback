@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "playback/exporting/SaveableFramebufferQueue.h"
 #include "playback/visuals/ReplayThumbnail.h"
 
 #include <cstdint>
@@ -25,19 +26,14 @@ public:
     ImGuiRenderer();
     ~ImGuiRenderer();
 
-    void                             setContext(state::EditorContext* context);
-    void                             requestReplayThumbnailCapture() override;
-    [[nodiscard]] bool               saveReplayThumbnail(std::filesystem::path const& output) override;
-    [[nodiscard]] visuals::FrameTap& frameTap();
-    [[nodiscard]] bool               captureSubmittedD3D12Frame(
-        ID3D12Device*       device,
-        ID3D12CommandQueue* queue,
-        ID3D12Resource*     source,
-        uint32_t            sourceState
-    );
+    void               setContext(state::EditorContext* context);
+    void               requestReplayThumbnailCapture() override;
+    [[nodiscard]] bool saveReplayThumbnail(std::filesystem::path const& output) override;
+    [[nodiscard]] exporting::SaveableFramebufferQueue& saveableFramebufferQueue();
     [[nodiscard]] void* acquireReplayThumbnailTexture(std::string_view key, std::string_view png);
 
     bool               render(IDXGISwapChain* swapChain, bool allowFrameCapture = true);
+    bool               renderExportOverlay(IDXGISwapChain* swapChain);
     void               pollFrameCapture();
     [[nodiscard]] bool isD3D12RendererActive() const;
     [[nodiscard]] bool ownsSwapChain(IDXGISwapChain* swapChain) const;
@@ -46,7 +42,7 @@ public:
     bool               shutdown();
 
 private:
-    bool renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool allowFrameCapture);
+    bool renderInternal(IDXGISwapChain* swapChain, bool allowUi, bool allowFrameCapture, bool forceExportOverlay);
 
     struct Impl;
     std::unique_ptr<Impl> mImpl;

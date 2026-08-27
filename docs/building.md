@@ -12,18 +12,21 @@ Playback currently targets the Windows x64 LeviLamina client runtime. The depend
 
 ## Release Build
 
-Before building a release, keep these version declarations aligned:
+The packaged mod version comes from the nearest Git release tag. Set `PLAYBACK_VERSION` explicitly when validating a release before its tag exists.
 
-- `mod_version` in `xmake.lua`.
+Before publishing a release, keep these declarations aligned:
+
 - `version` in `tooth.json`.
-- The resource-pack header and module versions in `resources/manifest.json`.
-- The current entry and comparison link in `CHANGELOG.md`.
+- The current entry and comparison links in `CHANGELOG.md`.
+- The release badge, compatibility table, installation command, and compatibility notes in the English and Chinese documentation.
+- The resource-pack header and module versions in `resources/manifest.json` only when the resource pack itself changes semantically.
 
 External schema fields such as Tooth `format_version`, resource-pack `format_version`, and VS Code configuration versions are not Playback release versions and must not be changed as part of a version bump.
 
 From the repository root, configure and build a clean Release client target:
 
 ```powershell
+$env:PLAYBACK_VERSION = 'v0.2.1-mc26.10'
 xmake f -y -p windows -a x64 -m release --target_type=client
 xmake -r -y
 ```
@@ -32,7 +35,7 @@ The packaged mod is written to `bin/playback/`. Native translations are copied t
 
 Xmake builds the pinned FFmpeg 7.1 command-line runtime with x264 and copies the static executable to `bin/playback/tools/ffmpeg.exe`. Release users do not need to install FFmpeg separately. The first source build downloads and compiles this toolchain, so dependency setup takes longer than subsequent cached builds.
 
-After building, verify `bin/playback/manifest.json` reports `0.2.0-mc26.10`, confirm `bin/playback/tools/ffmpeg.exe` exists, and run `git diff --check`. Runtime-sensitive releases should also export a short PNG sequence and MP4 on the supported renderer paths.
+After building, verify `bin/playback/manifest.json` reports `0.2.1-mc26.10`, confirm `bin/playback/tools/ffmpeg.exe` exists, and run `git diff --check`. Runtime-sensitive releases should also export a short PNG sequence and MP4 on the supported renderer paths.
 
 ## Refresh Dependencies
 

@@ -22,11 +22,13 @@ struct ReplaySampleTime {
         return numerator % denominator == 0 ? whole : whole + 1;
     }
 
+    // Exact ticks end their step so vanilla interpolation does not render unpinned state one tick late.
     [[nodiscard]] float partialTick() const noexcept {
         if (!isValid()) return 0.0f;
         auto const remainder = numerator % denominator;
+        if (remainder == 0) return 1.0f;
         auto result = static_cast<float>(static_cast<long double>(remainder) / static_cast<long double>(denominator));
-        if (remainder != 0 && result >= 1.0f) result = std::nextafter(1.0f, 0.0f);
+        if (result >= 1.0f) result = std::nextafter(1.0f, 0.0f);
         return result;
     }
 

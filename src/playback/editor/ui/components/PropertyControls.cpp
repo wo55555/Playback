@@ -39,8 +39,7 @@ void beginInspector(std::string_view title, std::string_view objectName) {
     ImGui::TextUnformatted(title.data(), title.data() + title.size());
     ImGui::PopStyleColor();
     ImGui::SetCursorScreenPos({origin.x + 12.0f * scale, origin.y + ImGui::GetFontSize() + 10.0f * scale});
-    if (objectName.empty()) ImGui::TextDisabled("No selection");
-    else ImGui::TextDisabled("%.*s", static_cast<int>(objectName.size()), objectName.data());
+    ImGui::TextDisabled("%.*s", static_cast<int>(objectName.size()), objectName.data());
     ImGui::SetCursorScreenPos({origin.x, origin.y + height + 8.0f * scale});
 }
 

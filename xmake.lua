@@ -63,15 +63,22 @@ if not has_config("vs_runtime") then
 end
 
 local get_version = function(os)
-    local tag = os.iorun("git describe --tags --abbrev=0 --always")
-    local major, minor, patch, suffix = tag:match("v(%d+)%.(%d+)%.(%d+)(.*)")
+    local version_override      = os.getenv("PLAYBACK_VERSION")
+    local has_version_override = version_override and version_override:match("%S") ~= nil
+    local tag                   = has_version_override and version_override or os.iorun("git describe --tags --abbrev=0 --always")
+    tag                         = (tag or ""):gsub("^%s+", ""):gsub("%s+$", "")
+
+    local major, minor, patch, suffix = tag:match("^v?(%d+)%.(%d+)%.(%d+)(.*)$")
     if not major then
+        local ci = os.getenv("CI")
+        if has_version_override or ci == "true" or ci == "1" then
+            os.raise("Unable to parse Playback version tag: " .. (tag ~= "" and tag or "<empty>"))
+        end
         print("Failed to parse version tag, using 0.0.0")
-        major, minor, patch = 0, 0, 0
+        return "0.0.0"
     end
-    if suffix and suffix ~= "" then
-        return major .. "." .. minor .. "." .. patch .. string.gsub(suffix, "%s+$", "")
-    end
+
+    if suffix ~= "" then return major .. "." .. minor .. "." .. patch .. suffix end
     return major .. "." .. minor .. "." .. patch
 end
 

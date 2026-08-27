@@ -19,15 +19,13 @@ bool isKeyframeCamera(state::editing::model::CameraEntity const& camera) noexcep
 
 void applyRotationShake(CameraRenderState& state, state::editing::model::CameraShake const& shake, long double tick) {
     if (shake.endTick <= shake.startTick || tick < shake.startTick || tick > shake.endTick) return;
-    float const elapsed  = static_cast<float>(tick - static_cast<long double>(shake.startTick));
-    float const phase    = elapsed * shake.frequency * 6.2831853071795864769f;
-    float const envelope = clampUnit(
-        static_cast<float>(
-            (static_cast<long double>(shake.endTick) - tick) / static_cast<long double>(shake.endTick - shake.startTick)
-        )
-    );
-    state.yaw   += std::sin(phase * 1.11f) * shake.rotationAmplitude * envelope;
-    state.pitch += std::cos(phase * 0.91f) * shake.rotationAmplitude * envelope;
+    float const elapsed   = static_cast<float>(tick - static_cast<long double>(shake.startTick));
+    float const phase     = elapsed * shake.frequency * 6.2831853071795864769f;
+    float const envelope  = clampUnit(static_cast<float>(
+        (static_cast<long double>(shake.endTick) - tick) / static_cast<long double>(shake.endTick - shake.startTick)
+    ));
+    state.yaw            += std::sin(phase * 1.11f) * shake.rotationAmplitude * envelope;
+    state.pitch          += std::cos(phase * 0.91f) * shake.rotationAmplitude * envelope;
 }
 
 } // namespace
@@ -59,13 +57,11 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
         size_t                          segmentIndex  = dimensionSegmentForTick(camera.keysByTick.begin()->first);
         auto                            appendSegment = [&] {
             if (segmentKeys.empty()) return;
-            segments.emplace_back(
-                CameraTrackSegment{
-                    segmentIndex,
-                    segmentKeys.rbegin()->first,
-                    KeyframeTrack{segmentKeys},
-                }
-            );
+            segments.emplace_back(CameraTrackSegment{
+                segmentIndex,
+                segmentKeys.rbegin()->first,
+                KeyframeTrack{segmentKeys},
+            });
             segmentKeys.clear();
         };
 

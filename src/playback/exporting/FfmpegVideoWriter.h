@@ -8,7 +8,8 @@ namespace playback::exporting {
 
 class FfmpegVideoWriter final : public IFrameWriter {
 public:
-    explicit FfmpegVideoWriter(uint32_t capacity = 4);
+    // Frames arrive at full supersampled size, so the queue needs enough slack to absorb the downsample cost.
+    explicit FfmpegVideoWriter(uint32_t capacity = 16);
     ~FfmpegVideoWriter() override;
 
     FfmpegVideoWriter(FfmpegVideoWriter const&)            = delete;
