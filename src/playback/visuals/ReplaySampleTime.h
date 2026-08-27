@@ -22,11 +22,15 @@ struct ReplaySampleTime {
         return numerator % denominator == 0 ? whole : whole + 1;
     }
 
+    // Progress from requiredAppliedTick() - 1 to requiredAppliedTick(), so an exact tick sits at the end of its
+    // own step rather than at the start of it. Returning 0 there would make vanilla alpha blending render the
+    // previous tick's state for everything the export pose does not pin, one tick behind the sampled pose.
     [[nodiscard]] float partialTick() const noexcept {
         if (!isValid()) return 0.0f;
         auto const remainder = numerator % denominator;
+        if (remainder == 0) return 1.0f;
         auto result = static_cast<float>(static_cast<long double>(remainder) / static_cast<long double>(denominator));
-        if (remainder != 0 && result >= 1.0f) result = std::nextafter(1.0f, 0.0f);
+        if (result >= 1.0f) result = std::nextafter(1.0f, 0.0f);
         return result;
     }
 

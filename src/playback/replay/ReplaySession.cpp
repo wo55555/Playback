@@ -1,4 +1,4 @@
-﻿#include "ReplaySession.h"
+#include "ReplaySession.h"
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
@@ -173,6 +173,16 @@ void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 
     interpolator->mPositionSteps = 0;
     interpolator->mRotationSteps = 0;
     interpolator->mHeadYawSteps  = 0;
+}
+
+// The movement packets carry head/body yaw, but the vanilla interpolator only lands them while it has steps left,
+// and replay pins those to zero. Write them directly instead.
+void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
+    actor.setYHeadRotations(headYaw, headYaw);
+    if (auto bodyRotation = actor.getEntityContext().tryGetComponent<MobBodyRotationComponent>()) {
+        bodyRotation->mYBodyRot  = bodyYaw;
+        bodyRotation->mYBodyRotO = bodyYaw;
+    }
 }
 
 void applyReplayEntityMovement(
@@ -527,11 +537,14 @@ bool ReplaySession::setPaused(bool paused) {
     if (mIsPaused == paused) return true;
 
     bool const wasPreviewing = keyframe::wasPreviewCameraApplied();
-    mIsPaused                = paused;
+    // Hold the fraction the preview stopped at, so resuming continues from the same pose instead of the tick boundary.
+    if (paused) mFrozenPreviewPartial.store(previewPartialTick(), std::memory_order_release);
+    mIsPaused = paused;
     if (!paused) {
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
         mObserverServerPositionDirty = false;
         mLastObserverServerSyncChunk.reset();
+        resumePreviewClockFromFrozenPartial();
     }
     getLogger().debug("Replay {} at tick {}", paused ? "paused" : "playing", mCurrentTick);
     if (paused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive && wasPreviewing) {
@@ -550,7 +563,7 @@ void ReplaySession::parkReplayCameraAtPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
     if (mPendingReplayDimension) return;
 
-    auto const sampleTime = getCameraRenderSampleTime(0.0f);
+    auto const sampleTime = getCameraRenderSampleTime();
     if (!sampleTime) return;
     auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *sampleTime);
     if (!sample) return;
@@ -620,17 +633,13 @@ void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 co
     });
 }
 
-void ReplaySession::setObserverPreviewPartialTick(float partialTick) {
-    mObserverPreviewPartialTick.store(partialTick, std::memory_order_release);
-}
-
 void ReplaySession::updateObserverPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
     if (mIsPaused) return;
     if (mPendingReplayDimension) return;
     if (!mNetworkHandler) return;
     if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return;
-    auto const time = getCameraRenderSampleTime(mObserverPreviewPartialTick.load(std::memory_order_acquire));
+    auto const time = getCameraRenderSampleTime();
     if (!time) return;
     auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
     if (!sample) {
@@ -664,26 +673,42 @@ void ReplaySession::updateObserverPreview() {
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
 }
 
-std::optional<visuals::ReplaySampleTime> ReplaySession::getRenderSampleTime(float partialTick) const noexcept {
+void ReplaySession::markReplayTickAdvanced() noexcept {
+    mTickAdvancedAt.store(std::chrono::steady_clock::now(), std::memory_order_release);
+    mFrozenPreviewPartial.store(-1.0f, std::memory_order_release);
+}
+
+// Backdate the tick start by the frozen fraction so the first resumed frame keeps the paused pose.
+void ReplaySession::resumePreviewClockFromFrozenPartial() noexcept {
+    auto const frozen = mFrozenPreviewPartial.exchange(-1.0f, std::memory_order_acq_rel);
+    auto const speed  = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
+    auto const offset = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<float>(std::max(0.0f, frozen) / (20.0f * speed))
+    );
+    mTickAdvancedAt.store(std::chrono::steady_clock::now() - offset, std::memory_order_release);
+}
+
+float ReplaySession::previewPartialTick() const noexcept {
+    auto const frozen = mFrozenPreviewPartial.load(std::memory_order_acquire);
+    if (frozen >= 0.0f) return frozen;
+
+    auto const advancedAt = mTickAdvancedAt.load(std::memory_order_acquire);
+    if (advancedAt == SteadyTimePoint{}) return 0.0f;
+
+    auto const speed = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
+    auto const elapsed =
+        std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - advancedAt).count();
+    constexpr float SecondsPerTick = 1.0f / 20.0f;
+    return std::clamp(elapsed * speed / SecondsPerTick, 0.0f, 1.0f);
+}
+
+// The native render alpha advances with the client tick, not the replay tick, so pairing it with mCurrentTick makes
+// the sampled time jump backwards whenever the two disagree. Derive the fraction from the replay tick itself instead.
+std::optional<visuals::ReplaySampleTime> ReplaySession::getCameraRenderSampleTime() const noexcept {
     if (!mActive || !mReplayWorldJoined) return std::nullopt;
 
     auto const appliedTick = std::max(0, mCurrentTick);
-    if (mIsPaused) return visuals::ReplaySampleTime::fromRational(appliedTick, 1);
-
-    return visuals::ReplaySampleTime::fromPreview(std::max(0, appliedTick - 1), partialTick);
-}
-
-std::optional<visuals::ReplaySampleTime> ReplaySession::getCameraRenderSampleTime(float partialTick) const noexcept {
-    if (!mActive || !mReplayWorldJoined) return std::nullopt;
-
-    auto const appliedTick = std::max(0, mCurrentTick);
-    if (mIsPaused) return visuals::ReplaySampleTime::fromRational(appliedTick, 1);
-    return visuals::ReplaySampleTime::fromPreview(appliedTick, partialTick);
-}
-
-std::optional<long double> ReplaySession::getFractionalReplayTick(float partialTick) const noexcept {
-    auto const sample = getRenderSampleTime(partialTick);
-    return sample ? std::optional<long double>{sample->value()} : std::nullopt;
+    return visuals::ReplaySampleTime::fromPreview(appliedTick, previewPartialTick());
 }
 
 bool ReplaySession::beginExportTimeline(int startTick) {
@@ -1031,7 +1056,9 @@ void ReplaySession::tick() {
         for (int tick = 0;
              tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
              ++tick) {
+            int const before = mCurrentTick;
             if (!advanceReplayTick(true)) break;
+            if (mCurrentTick != before) markReplayTickAdvanced();
         }
     } catch (std::exception const& e) {
         getLogger().error("Replay session failed: {}", e.what());
@@ -2673,11 +2700,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             if (actor->isRiding()) {
                 actor->mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
                 actor->mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
-                actor->setYHeadRotations(headYaw, headYaw);
-                if (auto bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
-                    bodyRotation->mYBodyRot  = bodyYaw;
-                    bodyRotation->mYBodyRotO = bodyYaw;
-                }
+                pinReplayEntityHeadRotation(*actor, headYaw, bodyYaw);
 
                 if (onGround) {
                     if (!entityContext.hasComponent<OnGroundFlagComponent>()) {
@@ -2723,13 +2746,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
 
             if (!dispatchMovementPacket(packet)) return;
 
-            // MovePlayerPacket has no body-yaw field, so retain the recorded value after native movement handling.
-            if (actor->isPlayer()) {
-                if (auto bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
-                    bodyRotation->mYBodyRot  = bodyYaw;
-                    bodyRotation->mYBodyRotO = bodyYaw;
-                }
-            }
+            pinReplayEntityHeadRotation(*actor, headYaw, bodyYaw);
             if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
             else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw);
         }
@@ -2834,6 +2851,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         }
         if (actor) {
             Vec2 const rotation{currentPose.pitch, currentPose.yaw};
+            pinReplayEntityHeadRotation(*actor, currentPose.headYaw, currentPose.bodyYaw);
             if (snapMovement) cancelNativeMovementInterpolation(*actor, targetPosition, rotation, currentPose.headYaw);
             else applyReplayEntityMovement(*actor, targetPosition, previousPose, rotation, currentPose.headYaw);
         }

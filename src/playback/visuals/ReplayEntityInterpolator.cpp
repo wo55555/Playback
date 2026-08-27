@@ -336,14 +336,4 @@ void clearReplayEntityPoses() {
     gEntityPoses.store({}, std::memory_order_release);
 }
 
-void reapplyReplayEntityPosition(RenderPositionComponent& position) noexcept {
-    auto* state = ScopedReplayEntityPose::State::gActiveState;
-    if (!state) return;
-    for (auto const& actor : state->actors) {
-        if (actor.renderPosition != &position) continue;
-        position.mValue = actor.exportPosition;
-        return;
-    }
-}
-
 } // namespace playback::visuals

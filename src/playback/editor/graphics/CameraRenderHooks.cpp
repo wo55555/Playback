@@ -1,6 +1,7 @@
 #include "CameraRenderHooks.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/input/EditorInput.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 
@@ -476,23 +477,13 @@ void applyObserverCamera(
     writeLevelCameraPose(level, position, basis);
 }
 
-bool observerStillParked(keyframe::CameraRenderState const& state) noexcept {
-    auto* observer = replay::ReplaySession::getInstance().getReplayPlayer();
-    if (!observer) return false;
-
-    auto const position      = observer->getPosition();
-    auto const rotation      = observer->getRotation();
-    auto const positionDelta = ::glm::vec3{
-        position.x - state.x,
-        position.y - state.y,
-        position.z - state.z,
-    };
-    auto const angleDelta = [](float left, float right) { return std::abs(std::remainder(left - right, 360.0f)); };
-    return dot(positionDelta, positionDelta) <= 0.05f * 0.05f && angleDelta(rotation.x, state.pitch) <= 0.1f
-        && angleDelta(rotation.y, state.yaw) <= 0.1f;
+// The observer stays free so it can keep loading chunks, so it is expected to drift away from the parked pose;
+// comparing the two would abandon the park on ordinary server sync. Only the player taking over ends it.
+bool observerStillParked() noexcept {
+    return replay::ReplaySession::getInstance().getReplayPlayer() != nullptr && !editor::input::isGameInputCaptured();
 }
 
-keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext(float partialTick) noexcept {
+keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept {
     auto& replay = replay::ReplaySession::getInstance();
 
     auto const clear = [] { keyframe::setPreviewCameraApplied(false); };
@@ -506,7 +497,7 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext(float parti
         return {};
     }
 
-    auto const time = replay.getCameraRenderSampleTime(partialTick);
+    auto const time = replay.getCameraRenderSampleTime();
     if (!time) {
         clear();
         return {};
@@ -541,8 +532,6 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     float partialTick
 ) {
-    replay::ReplaySession::getInstance().setObserverPreviewPartialTick(partialTick);
-
     auto const existing = keyframe::currentCameraTimelineRenderContext();
     if (existing && existing->source == keyframe::CameraTimelineSource::Export) {
         (void)applyCameraEcs(*existing);
@@ -550,7 +539,7 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
 
-    auto const context = makePreviewRenderContext(partialTick);
+    auto const context = makePreviewRenderContext();
     if (!context) {
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
         if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) gParkedObserverCamera.reset();
@@ -577,7 +566,7 @@ LL_TYPE_INSTANCE_HOOK(
     float const native  = origin(amount, enableVariableFov);
     auto const  context = keyframe::currentCameraTimelineRenderContext();
     if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
-    return gParkedObserverCamera && observerStillParked(*gParkedObserverCamera) ? gParkedObserverCamera->fov : native;
+    return gParkedObserverCamera && observerStillParked() ? gParkedObserverCamera->fov : native;
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -590,7 +579,7 @@ LL_TYPE_INSTANCE_HOOK(
     float const native  = origin();
     auto const  context = keyframe::currentCameraTimelineRenderContext();
     if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
-    return gParkedObserverCamera && observerStillParked(*gParkedObserverCamera) ? gParkedObserverCamera->fov : native;
+    return gParkedObserverCamera && observerStillParked() ? gParkedObserverCamera->fov : native;
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -637,7 +626,7 @@ LL_TYPE_INSTANCE_HOOK(
     }
 
     if (gParkedObserverCamera) {
-        if (observerStillParked(*gParkedObserverCamera)) {
+        if (observerStillParked()) {
             applyObserverCamera(*static_cast<LevelRendererPlayer*>(this), camera, *gParkedObserverCamera);
         } else {
             gParkedObserverCamera.reset();

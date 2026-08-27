@@ -48,8 +48,6 @@ void commitReplayEntityPoses(int64_t tick);
 void removeReplayEntityPose(EntityRenderKey key);
 void clearReplayEntityPoses();
 
-void reapplyReplayEntityPosition(RenderPositionComponent& position) noexcept;
-
 class ScopedReplayEntityPose {
 public:
     ~ScopedReplayEntityPose();
@@ -67,8 +65,7 @@ private:
     std::unique_ptr<State> mState;
 
     friend std::unique_ptr<ScopedReplayEntityPose>
-                createReplayEntityRenderScope(std::vector<EntityRenderTarget> const&, ReplaySampleTime const&);
-    friend void reapplyReplayEntityPosition(RenderPositionComponent&) noexcept;
+        createReplayEntityRenderScope(std::vector<EntityRenderTarget> const&, ReplaySampleTime const&);
 };
 
 } // namespace playback::visuals
