@@ -335,11 +335,11 @@ struct ImGuiRenderer::Impl {
         auto const fontPathString = fontPath.string();
         ImFont*    font           = fontPathString.empty() ? nullptr
                                                            : io.Fonts->AddFontFromFileTTF(
-                                                    fontPathString.c_str(),
-                                                    14.0f,
-                                                    nullptr,
-                                                    io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-                                                );
+                                                                 fontPathString.c_str(),
+                                                                 14.0f,
+                                                                 nullptr,
+                                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                                                             );
         if (font) io.FontDefault = font;
         else io.Fonts->AddFontDefault();
         ImFontConfig cfg;
@@ -578,7 +578,8 @@ struct ImGuiRenderer::Impl {
             f.rtv = rtv;
             device->CreateRenderTargetView(f.backBuffer.Get(), nullptr, f.rtv);
             rtv.ptr += static_cast<SIZE_T>(rtvDescSize);
-            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
+            if (FAILED(
+                    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
                 )) {
                 initialized = true;
                 this->shutdown();
@@ -1063,7 +1064,12 @@ bool ImGuiRenderer::renderInternal(
     if (!uiActive && !captureActive && !forceExportOverlay) {
         if (allowUi) {
             setReplayMouseInputActive(false);
-            if (!exporting::isOfflineRenderActivityActive() && !p.thumbnailFrameTap.requiresRenderPass()
+            // A one-shot capture stops needing a render pass once submitted, but the backend must outlive it
+            // until the caller collects the frame.
+            auto const tap = p.thumbnailFrameTap.status({});
+            bool const tapBusy =
+                tap.state == visuals::FrameTapState::Active || tap.bufferedFrames != 0 || tap.inFlightFrames != 0;
+            if (!exporting::isOfflineRenderActivityActive() && !p.thumbnailFrameTap.requiresRenderPass() && !tapBusy
                 && (p.initialized || p.d3d11Initialized)) {
                 p.shutdown();
             }
