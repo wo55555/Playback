@@ -543,11 +543,28 @@ constexpr size_t RenderItemStride = 8388608u / 65536u;
 constexpr uint32_t SharedVertexDeclIndex  = 4;
 constexpr uint32_t InvalidVertexDeclIndex = 0xFFFFu;
 
+// The 26.20 headers mis-declare the alignment of m_blitKeys/m_blitItem/m_frameCache, so offsetof lands 56
+// bytes short of the real m_numRenderItems and reads padding that is always zero. Walk from m_renderItem,
+// which precedes the broken fields and is therefore trustworthy, using the declared member sizes.
+constexpr size_t FrameCounterOffsetFromRenderItem = 8388608u  // m_renderItem
+                                                  + 88080384u // m_renderItemBind
+                                                  + 524288u   // m_rangedRenderItemBind
+                                                  + 4160u     // m_blitKeys
+                                                  + 65600u    // m_blitItem
+                                                  + 4718624u  // m_frameCache
+                                                  + 8u;       // m_uniformBuffer
+
+uint32_t readRenderItemCount(bgfx::Frame const* render) {
+    auto const* base = reinterpret_cast<std::byte const*>(&render->m_renderItem[0].get());
+    return *reinterpret_cast<uint32_t const*>(base + FrameCounterOffsetFromRenderItem);
+}
+
 // Only world geometry brings its own vertex formats; measured overlay submissions never do.
 exporting::SceneSubmissionKind classifySubmission(bgfx::Frame const* render) {
     if (!render) return exporting::SceneSubmissionKind::OverlayOnly;
-    auto const  items = static_cast<uint32_t>(render->m_numRenderItems);
-    auto const* base  = reinterpret_cast<std::byte const*>(&render->m_renderItem[0].get());
+    auto const items = readRenderItemCount(render);
+    if (items == 0 || items > 65536u) return exporting::SceneSubmissionKind::OverlayOnly;
+    auto const* base = reinterpret_cast<std::byte const*>(&render->m_renderItem[0].get());
     for (uint32_t i = 0; i < items; ++i) {
         auto const& draw = *reinterpret_cast<bgfx::RenderDraw const*>(base + i * RenderItemStride);
         auto const  decl = static_cast<uint32_t>(draw.m_stream[0].get().m_decl.get().idx);
