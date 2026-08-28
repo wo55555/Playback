@@ -4,6 +4,7 @@
 
 #include "playback/visuals/FrameCaptureTypes.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -76,11 +77,14 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
         return pixel[channel];
     };
 
-    // Export render sizes are always an integer supersample of the output, so only that ratio is supported.
     bool const sameSize          = frame.width == targetWidth && frame.height == targetHeight;
     bool const integerDownsample = !sameSize && frame.width % targetWidth == 0 && frame.height % targetHeight == 0
                                 && frame.width / targetWidth == frame.height / targetHeight;
-    if (!sameSize && !integerDownsample) return false;
+    // Present-time capture hands back the swap-chain size, which is rarely an integer multiple of the output,
+    // so anything at least as large as the target goes through a general box filter instead.
+    bool const boxDownsample =
+        !sameSize && !integerDownsample && frame.width >= targetWidth && frame.height >= targetHeight;
+    if (!sameSize && !integerDownsample && !boxDownsample) return false;
 
     std::vector<std::byte> output(static_cast<size_t>(targetBytes));
     if (integerDownsample) {
@@ -147,6 +151,45 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
                 }
             }
         }
+    } else if (boxDownsample) {
+        // Each output pixel averages the source rectangle it maps to, so non-integer ratios stay artefact free.
+        bool const     swapRedBlue = frame.pixelFormat == visuals::FramePixelFormat::Bgra8;
+        uint32_t const redIndex    = swapRedBlue ? 2 : 0;
+        uint32_t const blueIndex   = swapRedBlue ? 0 : 2;
+
+        std::function<void(uint32_t, uint32_t)> const rows = [&](uint32_t firstRow, uint32_t lastRow) {
+            for (uint32_t y = firstRow; y < lastRow; ++y) {
+                auto const sourceTop = static_cast<uint64_t>(y) * frame.height / targetHeight;
+                auto const sourceBottom =
+                    std::max(sourceTop + 1, static_cast<uint64_t>(y + 1) * frame.height / targetHeight);
+                auto* out = reinterpret_cast<uint8_t*>(output.data()) + static_cast<size_t>(y) * targetWidth * 4;
+                for (uint32_t x = 0; x < targetWidth; ++x, out += 4) {
+                    auto const sourceLeft = static_cast<uint64_t>(x) * frame.width / targetWidth;
+                    auto const sourceRight =
+                        std::max(sourceLeft + 1, static_cast<uint64_t>(x + 1) * frame.width / targetWidth);
+
+                    uint32_t sums[4]{};
+                    uint32_t samples{};
+                    for (auto sourceY = sourceTop; sourceY < sourceBottom; ++sourceY) {
+                        auto const* row = source + static_cast<size_t>(sourceY) * frame.rowPitch
+                                        + static_cast<size_t>(sourceLeft) * 4;
+                        for (auto sourceX = sourceLeft; sourceX < sourceRight; ++sourceX, row += 4) {
+                            sums[0] += row[0];
+                            sums[1] += row[1];
+                            sums[2] += row[2];
+                            sums[3] += row[3];
+                            ++samples;
+                        }
+                    }
+                    auto const half = samples / 2;
+                    out[0]          = static_cast<uint8_t>((sums[redIndex] + half) / samples);
+                    out[1]          = static_cast<uint8_t>((sums[1] + half) / samples);
+                    out[2]          = static_cast<uint8_t>((sums[blueIndex] + half) / samples);
+                    out[3]          = static_cast<uint8_t>((sums[3] + half) / samples);
+                }
+            }
+        };
+        frameWorkerPool().runRows(targetHeight, rows);
     } else {
         for (uint32_t y = 0; y < targetHeight; ++y) {
             for (uint32_t x = 0; x < targetWidth; ++x) {

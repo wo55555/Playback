@@ -34,12 +34,30 @@ using ResizeBuffers1Fn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, UINT const*, IUnknown* const*);
 using CreateSwapChainFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
-using CreateSwapChainForHwndFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, DXGI_SWAP_CHAIN_DESC1 const*, DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*, IDXGIOutput*, IDXGISwapChain1**);
-using CreateSwapChainForCoreWindowFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
-using CreateSwapChainForCompositionFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
+using CreateSwapChainForHwndFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    HWND,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
+using CreateSwapChainForCoreWindowFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    IUnknown*,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
+using CreateSwapChainForCompositionFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
 
 constexpr size_t SwapChainPresentIndex                     = 8;
 constexpr size_t SwapChainPresent1Index                    = 22;
@@ -532,7 +550,8 @@ bool renderPresentFrame(IDXGISwapChain* swapChain) {
     if (!swapChain) return false;
     if (!exporting::isOfflineRenderActivityActive()) return gImGuiRenderer.render(swapChain);
     if (!gImGuiRenderer.ownsSwapChain(swapChain)) return false;
-    // The scene capture is owned by the BGFX submit boundary on both backends; Present only draws the overlay.
+    // The export frame is captured here, before the overlay is drawn, so the back buffer still holds the bare
+    // world. The overlay is then rendered on top for the on-screen preview only.
     return gImGuiRenderer.renderExportOverlay(swapChain);
 }
 
@@ -575,28 +594,6 @@ exporting::SceneSubmissionKind classifySubmission(bgfx::Frame const* render) {
     return exporting::SceneSubmissionKind::OverlayOnly;
 }
 
-std::optional<exporting::OfflineRenderBoundaryTicket> claimSceneSubmitTicket(bgfx::Frame const* render) {
-    if (gTimelineHooksStopping.load(std::memory_order_acquire) || !exporting::isOfflineRenderActivityActive()) {
-        return std::nullopt;
-    }
-    if (!gImGuiRenderer.saveableFramebufferQueue().status().renderRequested) return std::nullopt;
-    return exporting::claimOfflineRenderSubmitBoundary(classifySubmission(render));
-}
-
-void finishSceneSubmit(exporting::OfflineRenderBoundaryTicket const& ticket, bool started, bool sourceAvailable) {
-    auto& downloads = gImGuiRenderer.saveableFramebufferQueue();
-    if (started) {
-        exporting::markOfflineRenderBoundaryCompleted(ticket);
-        return;
-    }
-    if (downloads.status().state != exporting::SaveableFramebufferQueueState::Open) return;
-    downloads.fail(
-        exporting::SaveableFramebufferQueueError::BackendUnavailable,
-        sourceAvailable ? "The BGFX scene submission could not start the framebuffer download"
-                        : "BGFX did not expose the scene render target"
-    );
-}
-
 LL_TYPE_INSTANCE_HOOK(
     OfflineRenderSubmitHook,
     ll::memory::HookPriority::Highest,
@@ -608,26 +605,13 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
     ActiveDetour activeDetour;
-    auto const   ticket = claimSceneSubmitTicket(render);
+    // Present is what captures the frame, but only this hook knows when the world geometry has actually been
+    // submitted: the game thread returning from updateGraphics says nothing about the BGFX render thread.
+    bool const carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
+                           && exporting::isOfflineRenderActivityActive()
+                           && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
-    if (!ticket) return;
-
-    runDetourInstrumentation([&] {
-        // The swap-chain backbuffer is the UI composition target; only the MSAA target holds the bare scene.
-        auto* const     device  = this->m_device;
-        ID3D12Resource* source  = this->m_msaaRenderTarget;
-        auto const      queue   = getSwapChainQueue(this->m_swapChain);
-        bool            started = false;
-        if (device && queue && source) {
-            started = gImGuiRenderer.saveableFramebufferQueue().startDownload(
-                device,
-                queue.Get(),
-                source,
-                static_cast<uint32_t>(D3D12_RESOURCE_STATE_RESOLVE_SOURCE)
-            );
-        }
-        finishSceneSubmit(*ticket, started, source != nullptr);
-    });
+    if (carriesScene) exporting::markOfflineRenderSceneSubmitted();
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -641,20 +625,11 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
     ActiveDetour activeDetour;
-    auto const   ticket = claimSceneSubmitTicket(render);
+    bool const   carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
+                             && exporting::isOfflineRenderActivityActive()
+                             && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
-    if (!ticket) return;
-
-    runDetourInstrumentation([&] {
-        auto* const      device  = this->m_device;
-        auto* const      context = this->m_deviceCtx;
-        ID3D11Texture2D* source  = this->m_msaaRenderTarget;
-        bool             started = false;
-        if (device && context && source) {
-            started = gImGuiRenderer.saveableFramebufferQueue().startDownload(device, context, source);
-        }
-        finishSceneSubmit(*ticket, started, source != nullptr);
-    });
+    if (carriesScene) exporting::markOfflineRenderSceneSubmitted();
 }
 
 LL_TYPE_INSTANCE_HOOK(

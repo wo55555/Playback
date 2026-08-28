@@ -29,7 +29,7 @@ bool hookReplayUI(bool enable) {
         gController.reset();
         gContext.reset();
         editor::graphics::gImGuiRenderer.setContext(&gContext);
-        gController.setSaveableFramebufferQueue(&editor::graphics::gImGuiRenderer.saveableFramebufferQueue());
+        gController.setRendererAvailable(true);
         record::Recorder::getInstance().setThumbnailCaptureProvider(&editor::graphics::gImGuiRenderer);
         editor::graphics::setReplayUIActive(true);
 
@@ -39,7 +39,7 @@ bool hookReplayUI(bool enable) {
         if (!hookReplayUIRendererInit(true)) {
             editor::graphics::setReplayUIActive(false);
             record::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
-            gController.setSaveableFramebufferQueue(nullptr);
+            gController.setRendererAvailable(false);
             editor::graphics::gImGuiRenderer.setContext(nullptr);
             ui::ReplayEditor::getInstance().shutdown();
             gContext.reset();
@@ -64,7 +64,7 @@ bool hookReplayUI(bool enable) {
     editor::graphics::setReplayUIActive(false);
     editor::graphics::setReplayMouseInputActive(false);
     record::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);
-    gController.setSaveableFramebufferQueue(nullptr);
+    gController.setRendererAvailable(false);
 
     bool ok = true;
     if (!hookReplayUIRendererInit(false)) {

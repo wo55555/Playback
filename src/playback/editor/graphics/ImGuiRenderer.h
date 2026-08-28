@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "playback/exporting/SaveableFramebufferQueue.h"
+#include "playback/visuals/FrameTap.h"
 #include "playback/visuals/ReplayThumbnail.h"
 
 #include <cstdint>
@@ -29,7 +29,14 @@ public:
     void               setContext(state::EditorContext* context);
     void               requestReplayThumbnailCapture() override;
     [[nodiscard]] bool saveReplayThumbnail(std::filesystem::path const& output) override;
-    [[nodiscard]] exporting::SaveableFramebufferQueue& saveableFramebufferQueue();
+
+    // Present-time export capture. The back buffer at this point holds the world without any overlay, so it
+    // needs neither MSAA nor a resize of the swap chain.
+    [[nodiscard]] bool                                  openExportCapture(uint32_t capacity);
+    void                                                closeExportCapture();
+    [[nodiscard]] bool                                  armExportCapture(visuals::FrameTicket const& ticket);
+    [[nodiscard]] std::optional<visuals::CapturedFrame> collectExportFrame();
+    [[nodiscard]] visuals::FrameTapStatus               exportCaptureStatus() const;
     [[nodiscard]] void* acquireReplayThumbnailTexture(std::string_view key, std::string_view png);
 
     bool               render(IDXGISwapChain* swapChain, bool allowFrameCapture = true);

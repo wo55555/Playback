@@ -23,7 +23,8 @@ public:
     ReplayExportDriver(ReplayExportDriver const&)            = delete;
     ReplayExportDriver& operator=(ReplayExportDriver const&) = delete;
 
-    void setSaveableFramebufferQueue(SaveableFramebufferQueue* downloads);
+    // Export needs the ImGui renderer alive to capture at Present, so the boundary only exists while it is up.
+    void setRendererAvailable(bool available);
 
     [[nodiscard]] bool start(
         ExportSettings                               settings,

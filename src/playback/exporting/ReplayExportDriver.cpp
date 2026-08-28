@@ -26,10 +26,10 @@ ReplayExportDriver::ReplayExportDriver(ExportCoordinator& coordinator, replay::R
 
 ReplayExportDriver::~ReplayExportDriver() { reset(); }
 
-void ReplayExportDriver::setSaveableFramebufferQueue(SaveableFramebufferQueue* downloads) {
+void ReplayExportDriver::setRendererAvailable(bool available) {
     if (mRenderBoundary && isActive()) cancel();
     mRenderBoundary.reset();
-    if (downloads) mRenderBoundary = std::make_unique<OfflineRenderBoundary>(mReplay, *downloads);
+    if (available) mRenderBoundary = std::make_unique<OfflineRenderBoundary>(mReplay);
 }
 
 bool ReplayExportDriver::start(

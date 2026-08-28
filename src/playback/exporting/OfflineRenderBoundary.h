@@ -3,10 +3,9 @@
 #include "ExportTypes.h"
 #include "OfflineRenderClockHooks.h"
 #include "OfflineRenderFrameExecutor.h"
-#include "SaveableFramebufferQueue.h"
-
 
 #include "playback/runtime/ClientTickHooks.h"
+#include "playback/visuals/FrameTap.h"
 
 #include <chrono>
 #include <cstdint>
@@ -49,7 +48,7 @@ struct OfflineRenderBoundaryStatus {
     OfflineRenderBoundaryState       state{OfflineRenderBoundaryState::Closed};
     OfflineRenderBoundaryError       error{OfflineRenderBoundaryError::None};
     std::string                      message;
-    SaveableFramebufferQueueStatus   downloads;
+    visuals::FrameTapStatus          capture;
     OfflineRenderFrameExecutorStatus executor;
     uint32_t                         warmupFramesRemaining{};
     uint32_t                         warmupStableFrames{};
@@ -57,7 +56,7 @@ struct OfflineRenderBoundaryStatus {
 
 class OfflineRenderBoundary {
 public:
-    OfflineRenderBoundary(replay::ReplaySession& replay, SaveableFramebufferQueue& downloads);
+    explicit OfflineRenderBoundary(replay::ReplaySession& replay);
     ~OfflineRenderBoundary();
 
     OfflineRenderBoundary(OfflineRenderBoundary const&)            = delete;
@@ -91,7 +90,8 @@ private:
     void                                                  fault(OfflineRenderBoundaryError error, std::string message);
 
     replay::ReplaySession&                         mReplay;
-    SaveableFramebufferQueue&                      mDownloads;
+    uint32_t                                       mCaptureCapacity{};
+    bool                                           mCaptureArmed{};
     OfflineRenderFrameExecutor                     mExecutor;
     std::optional<ExportFramePlan>                 mPendingFrame;
     std::optional<ExportFramePlan>                 mLastSubmittedFrame;

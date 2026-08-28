@@ -52,8 +52,8 @@ EditorController::EditorController(EditorContext& context)
 
 EditorController::~EditorController() { keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview); }
 
-void EditorController::setSaveableFramebufferQueue(exporting::SaveableFramebufferQueue* downloads) {
-    if (mExportDriver) mExportDriver->setSaveableFramebufferQueue(downloads);
+void EditorController::setRendererAvailable(bool available) {
+    if (mExportDriver) mExportDriver->setRendererAvailable(available);
 }
 
 void EditorController::publishCameraTimeline() {
