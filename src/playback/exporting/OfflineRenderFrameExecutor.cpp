@@ -258,9 +258,9 @@ OfflineRenderFrameExecutor::executeSample(ExportFramePlan const& frame, OfflineR
         if (!prepareNativeRender()) return OfflineRenderFrameExecutionResult::Failed;
         mSampleRenderInvoked = true;
     }
-    bool const applied   = wasOfflineRenderClockSampleApplied(clockToken);
-    bool const completed = wasOfflineRenderClockSampleCompleted(clockToken);
-    if (!applied || !completed) return OfflineRenderFrameExecutionResult::Waiting;
+    // The capture completes at Present, which the boundary tracks separately, so the clock being applied is
+    // the only completion signal available here.
+    if (!wasOfflineRenderClockSampleApplied(clockToken)) return OfflineRenderFrameExecutionResult::Waiting;
     return OfflineRenderFrameExecutionResult::Executed;
 }
 
