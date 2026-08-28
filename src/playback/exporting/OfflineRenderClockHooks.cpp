@@ -33,13 +33,10 @@ struct ActiveClockSample {
     uint32_t                                    gameRenderOrdinal{};
     bool                                        claimed{};
     bool                                        renderReady{};
-
-    bool boundaryClaimed{};
-    bool cameraRequired{};
-    bool entityApplied{};
-    bool renderReturned{};
-    bool cameraApplicationFailureLogged{};
-    bool completed{};
+    bool                                        cameraRequired{};
+    bool                                        entityApplied{};
+    bool                                        renderReturned{};
+    bool                                        cameraApplicationFailureLogged{};
 };
 
 struct AcquiredClockSample {
@@ -158,19 +155,16 @@ private:
 std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     std::scoped_lock lock(gClockMutex);
     if (!gActiveSample) return std::nullopt;
-    // Some renders never reach BGFX as a world submission, so an unclaimed sample has to be rendered again.
-    if (gActiveSample->claimed && gActiveSample->boundaryClaimed) return std::nullopt;
+    // The frame is captured at Present, so a sample that already rendered must not be rendered again.
+    if (gActiveSample->claimed && gActiveSample->renderReturned) return std::nullopt;
 
-    gActiveSample->claimed           = true;
-    gActiveSample->renderSerial      = gNextRenderSerial++;
-    gActiveSample->gameRenderOrdinal = 0;
-    gActiveSample->renderReady       = false;
-
-    gActiveSample->boundaryClaimed                = false;
+    gActiveSample->claimed                        = true;
+    gActiveSample->renderSerial                   = gNextRenderSerial++;
+    gActiveSample->gameRenderOrdinal              = 0;
+    gActiveSample->renderReady                    = false;
     gActiveSample->entityApplied                  = false;
     gActiveSample->renderReturned                 = false;
     gActiveSample->cameraApplicationFailureLogged = false;
-    gActiveSample->completed                      = false;
     if (gNextRenderSerial == 0) ++gNextRenderSerial;
     return AcquiredClockSample{
         gActiveSample->token,
@@ -344,14 +338,16 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
         token.id = gNextTokenId++;
         if (gNextTokenId == 0) ++gNextTokenId;
 
-        auto const cameraContext = keyframe::publishCameraTimelineRenderContext(keyframe::CameraTimelineRenderContext{
-            sample.replayTime,
-            keyframe::CameraTimelineSource::Export,
-            token.id,
-            cameraSample,
-            cameraAppliedFlag,
-            sample.frameIndex,
-        });
+        auto const cameraContext = keyframe::publishCameraTimelineRenderContext(
+            keyframe::CameraTimelineRenderContext{
+                sample.replayTime,
+                keyframe::CameraTimelineSource::Export,
+                token.id,
+                cameraSample,
+                cameraAppliedFlag,
+                sample.frameIndex,
+            }
+        );
         ActiveClockSample active{};
         active.token          = token;
         active.sample         = sample;
@@ -413,42 +409,6 @@ bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token) {
         );
     }
     return applied;
-}
-
-bool wasOfflineRenderClockSampleCompleted(OfflineRenderClockToken token) {
-    if (!token) return false;
-    std::scoped_lock lock(gClockMutex);
-    return gActiveSample && gActiveSample->token.id == token.id && gActiveSample->completed;
-}
-
-std::optional<OfflineRenderBoundaryTicket> claimOfflineRenderSubmitBoundary(SceneSubmissionKind submissionCarriesScene
-) {
-    std::scoped_lock lock(gClockMutex);
-    // BGFX submits on its own render thread, and overlay-only submissions carry no world geometry.
-    if (!gActiveSample || !gActiveSample->claimed || !gActiveSample->renderReady || gActiveSample->boundaryClaimed
-        || gActiveSample->completed || gActiveSample->gameRenderOrdinal == 0
-        || submissionCarriesScene == SceneSubmissionKind::OverlayOnly) {
-        return std::nullopt;
-    }
-
-    auto& sample           = *gActiveSample;
-    sample.boundaryClaimed = true;
-    return OfflineRenderBoundaryTicket{
-        sample.token.id,
-        sample.sample.frameIndex,
-        sample.renderSerial,
-        sample.gameRenderOrdinal,
-    };
-}
-
-void markOfflineRenderBoundaryCompleted(OfflineRenderBoundaryTicket const& ticket) {
-    if (ticket.clockToken == 0 || ticket.renderSerial == 0) return;
-    std::scoped_lock lock(gClockMutex);
-    if (!gActiveSample || gActiveSample->token.id != ticket.clockToken
-        || gActiveSample->renderSerial != ticket.renderSerial || !gActiveSample->boundaryClaimed) {
-        return;
-    }
-    gActiveSample->completed = true;
 }
 
 void clearOfflineRenderClockSample(OfflineRenderClockToken token) {

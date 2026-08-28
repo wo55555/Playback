@@ -20,7 +20,7 @@ public:
     explicit EditorController(EditorContext& context);
     ~EditorController();
 
-    void setSaveableFramebufferQueue(exporting::SaveableFramebufferQueue* downloads);
+    void setRendererAvailable(bool available);
     void reset();
     void tickExportBeforeClientUpdate();
     void tickExportDuringGraphics();
