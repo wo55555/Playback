@@ -1,6 +1,7 @@
 #include "TimelinePanel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/TimelineScale.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 
@@ -265,6 +266,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     float const maxScroll             = hasHorizontalOverflow ? overflowWidth : 0.0f;
     mScrollX                          = std::clamp(mScrollX, 0.0f, maxScroll);
 
+    TimelineScale const scale{canvasLeft, canvasWidth, pixelsPerTick, mScrollX, state.totalTicks};
+
     float trackContentHeight = 0.0f;
     for (auto const& row : mTrackTree.rows()) trackContentHeight += row.height + 2.0f;
     float const visibleTrackHeight = std::max(0.0f, workBottom - bodyTop - 2.0f);
@@ -435,11 +438,11 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     float const       minimumMajorSpacing = std::max(90.0f, ImGui::CalcTextSize(longestRulerLabel.c_str()).x + 24.0f);
     int const         majorStep           = majorTickStep(pixelsPerTick, minimumMajorSpacing);
     int const         minorStep           = std::max(1, majorStep / 5);
-    int const   firstTick = std::max(0, static_cast<int>(std::floor(mScrollX / pixelsPerTick / minorStep)) * minorStep);
-    float const rulerBaseline  = bodyTop - 2.0f;
-    float       lastLabelRight = canvasLeft - 6.0f;
+    int const         firstTick           = scale.firstVisibleTick(minorStep);
+    float const       rulerBaseline       = bodyTop - 2.0f;
+    float             lastLabelRight      = canvasLeft - 6.0f;
     for (int tick = firstTick; tick <= state.totalTicks; tick += minorStep) {
-        float x = canvasLeft + tick * pixelsPerTick - mScrollX;
+        float x = scale.xAt(static_cast<float>(tick));
         if (x < canvasLeft || x > fullMax.x) continue;
         bool const  major      = tick % majorStep == 0;
         float const tickHeight = major ? 9.0f : 5.0f;
@@ -463,26 +466,16 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     ImGui::SetCursorScreenPos({canvasLeft, workTop});
     ImGui::InvisibleButton("##timeline-ruler", {canvasWidth, rulerHeight});
     if (allowInput && ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        mRulerDragTick = std::clamp(
-            static_cast<int>((ImGui::GetMousePos().x - canvasLeft + mScrollX) / pixelsPerTick),
-            0,
-            state.totalTicks
-        );
-        displayTick = mRulerDragTick;
+        mRulerDragTick = std::clamp(scale.tickAt(ImGui::GetMousePos().x), 0, state.totalTicks);
+        displayTick    = mRulerDragTick;
     }
     if (allowInput && ImGui::IsItemDeactivated()) {
         if (mRulerDragTick >= 0) submitSeek(ctx, mRulerDragTick);
         mRulerDragTick = -1;
     }
 
-    auto tickFromMouse = [&] {
-        return std::clamp(
-            static_cast<int>((ImGui::GetMousePos().x - canvasLeft + mScrollX) / pixelsPerTick),
-            0,
-            state.totalTicks
-        );
-    };
-    auto snapTick = [&](int tick) {
+    auto tickFromMouse = [&] { return std::clamp(scale.tickAt(ImGui::GetMousePos().x), 0, state.totalTicks); };
+    auto snapTick      = [&](int tick) {
         tick = std::clamp(tick, 0, state.totalTicks);
         if (!mSnapEnabled) return tick;
         constexpr float GridTicks = static_cast<float>(kTicksPerSecond);
@@ -532,7 +525,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             for (auto const& [keyTick, _] : camera.keysByTick) {
                 bool const dragging  = mDraggingKeyframeCameraId == camera.id && mDraggingKeyframeStartTick == keyTick;
                 int const  drawnTick = dragging ? mDraggingKeyframeTick : keyTick;
-                float      x         = canvasLeft + drawnTick * pixelsPerTick - mScrollX;
+                float      x         = scale.xAt(static_cast<float>(drawnTick));
                 bool const selected =
                     selectedKeyframe && selectedKeyframe->trackId == camera.id && selectedKeyframe->tick == keyTick;
                 ImVec2 const top{x, centerY - 5.0f};
@@ -583,7 +576,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         int const candidateTick =
             mDraggingKeyframeMoved ? boundedKeyframeTick(snapTick(tickFromMouse())) : mDraggingKeyframeStartTick;
         mDraggingKeyframeTick = candidateTick;
-        float const markerX   = canvasLeft + candidateTick * pixelsPerTick - mScrollX;
+        float const markerX   = scale.xAt(static_cast<float>(candidateTick));
         drawList->AddLine({markerX, bodyTop}, {markerX, bodyBottom}, IM_COL32(240, 192, 32, 180), 2.0f);
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             if (mDraggingKeyframeMoved) {
@@ -603,7 +596,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         }
     }
 
-    float const playheadX = std::clamp(canvasLeft + displayTick * pixelsPerTick - mScrollX, canvasLeft, fullMax.x);
+    float const playheadX = std::clamp(scale.xAt(static_cast<float>(displayTick)), canvasLeft, fullMax.x);
     if (allowInput && !clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
         && std::abs(ImGui::GetMousePos().x - playheadX) <= 6.0f && ImGui::GetMousePos().y >= workTop
         && ImGui::GetMousePos().y < workBottom) {
@@ -625,7 +618,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     }
 
     float const visiblePlayheadX =
-        std::clamp(canvasLeft + displayTick * pixelsPerTick - mScrollX, canvasLeft + 5.0f, fullMax.x - 5.0f);
+        std::clamp(scale.xAt(static_cast<float>(displayTick)), canvasLeft + 5.0f, fullMax.x - 5.0f);
     drawList->AddLine({visiblePlayheadX, bodyTop - 2.0f}, {visiblePlayheadX, bodyBottom}, kPlayheadColor, 1.5f);
     drawList->AddTriangleFilled(
         {visiblePlayheadX - 5.0f, bodyTop - 11.0f},
@@ -643,7 +636,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         float const wheel = ImGui::GetIO().MouseWheel;
         if (ImGui::GetIO().KeyShift) {
             float const anchorX    = std::clamp(wheelMouse.x - canvasLeft, 0.0f, canvasWidth);
-            float const anchorTick = (anchorX + mScrollX) / pixelsPerTick;
+            float const anchorTick = scale.tickAtExact(canvasLeft + anchorX);
             mZoomScale =
                 std::clamp(mZoomScale * (wheel > 0.0f ? kZoomStep : 1.0f / kZoomStep), kMinZoomScale, kMaxZoomScale);
             float const nextPixelsPerTick = fitPixelsPerTick * mZoomScale;
