@@ -34,30 +34,12 @@ using ResizeBuffers1Fn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, UINT const*, IUnknown* const*);
 using CreateSwapChainFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
-using CreateSwapChainForHwndFn = HRESULT(STDMETHODCALLTYPE*)(
-    IDXGIFactory2*,
-    IUnknown*,
-    HWND,
-    DXGI_SWAP_CHAIN_DESC1 const*,
-    DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*,
-    IDXGIOutput*,
-    IDXGISwapChain1**
-);
-using CreateSwapChainForCoreWindowFn = HRESULT(STDMETHODCALLTYPE*)(
-    IDXGIFactory2*,
-    IUnknown*,
-    IUnknown*,
-    DXGI_SWAP_CHAIN_DESC1 const*,
-    IDXGIOutput*,
-    IDXGISwapChain1**
-);
-using CreateSwapChainForCompositionFn = HRESULT(STDMETHODCALLTYPE*)(
-    IDXGIFactory2*,
-    IUnknown*,
-    DXGI_SWAP_CHAIN_DESC1 const*,
-    IDXGIOutput*,
-    IDXGISwapChain1**
-);
+using CreateSwapChainForHwndFn =
+    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, DXGI_SWAP_CHAIN_DESC1 const*, DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*, IDXGIOutput*, IDXGISwapChain1**);
+using CreateSwapChainForCoreWindowFn =
+    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
+using CreateSwapChainForCompositionFn =
+    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
 
 constexpr size_t SwapChainPresentIndex                     = 8;
 constexpr size_t SwapChainPresent1Index                    = 22;
@@ -550,8 +532,7 @@ bool renderPresentFrame(IDXGISwapChain* swapChain) {
     if (!swapChain) return false;
     if (!exporting::isOfflineRenderActivityActive()) return gImGuiRenderer.render(swapChain);
     if (!gImGuiRenderer.ownsSwapChain(swapChain)) return false;
-    // The export frame is captured here, before the overlay is drawn, so the back buffer still holds the bare
-    // world. The overlay is then rendered on top for the on-screen preview only.
+    // Captures before drawing the overlay, so the export frame holds the bare world.
     return gImGuiRenderer.renderExportOverlay(swapChain);
 }
 
@@ -588,8 +569,7 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
     ActiveDetour activeDetour;
-    // Present is what captures the frame, but only this hook knows when the world geometry has actually been
-    // submitted: the game thread returning from updateGraphics says nothing about the BGFX render thread.
+    // Only this hook sees the BGFX render thread submit world geometry; updateGraphics returning does not.
     bool const carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
                            && exporting::isOfflineRenderActivityActive()
                            && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
@@ -609,8 +589,8 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     ActiveDetour activeDetour;
     bool const   carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
-                             && exporting::isOfflineRenderActivityActive()
-                             && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
+                           && exporting::isOfflineRenderActivityActive()
+                           && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
     if (carriesScene) exporting::markOfflineRenderSceneSubmitted();
 }

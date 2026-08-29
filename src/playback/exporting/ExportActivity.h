@@ -33,8 +33,7 @@ inline std::atomic_bool gOfflineRenderSceneSubmitted{false};
 
 } // namespace detail
 
-// Set by the BGFX submit hook once world geometry reached the GPU, consumed by the Present capture. The game
-// thread returning from updateGraphics is not enough: BGFX submits on its own render thread.
+// Set by the BGFX submit hook, consumed at Present; updateGraphics returning does not imply a submitted scene.
 inline void markOfflineRenderSceneSubmitted() noexcept {
     detail::gOfflineRenderSceneSubmitted.store(true, std::memory_order_release);
 }

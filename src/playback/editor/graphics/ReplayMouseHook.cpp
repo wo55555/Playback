@@ -133,12 +133,9 @@ void setMouseOwner(MouseOwner owner) {
     gMouseOwner.store(owner, std::memory_order_release);
     if (previous != owner) {
         Playback::getInstance().getSelf().getLogger().debug(
-            "Replay mouse owner changed ({} -> {}, gameCaptured={}, inputActive={}, blockGame={})",
+            "Replay mouse owner changed ({} -> {})",
             mouseOwnerName(previous),
-            mouseOwnerName(owner),
-            owner == MouseOwner::GameCaptured,
-            gInputActive.load(std::memory_order_acquire),
-            gBlockGameMouseInput.load(std::memory_order_acquire)
+            mouseOwnerName(owner)
         );
     }
 }
@@ -415,11 +412,7 @@ void beginReplayMouseFrame(float displayWidth, float displayHeight, bool blockGa
                 float const oldY   = gInputScaleY.exchange(scaleY, std::memory_order_relaxed);
                 if (std::abs(oldX - scaleX) > 0.001f || std::abs(oldY - scaleY) > 0.001f) {
                     Playback::getInstance().getSelf().getLogger().debug(
-                        "Replay mouse input scale changed (display={}x{}, client={}x{}, scale={}x{})",
-                        displayWidth,
-                        displayHeight,
-                        clientWidth,
-                        clientHeight,
+                        "Replay mouse input scale changed (scale={}x{})",
                         scaleX,
                         scaleY
                     );
@@ -457,25 +450,10 @@ void beginReplayMouseFrame(float displayWidth, float displayHeight, bool blockGa
 
 void setReplayGameViewport(float left, float top, float right, float bottom) {
     std::scoped_lock lock(gGameViewportMutex);
-    auto const       previous = gGameViewport;
     if (right <= left || bottom <= top) {
         gGameViewport = {};
     } else {
         gGameViewport = {left, top, right, bottom};
-    }
-    if (previous.left != gGameViewport.left || previous.top != gGameViewport.top
-        || previous.right != gGameViewport.right || previous.bottom != gGameViewport.bottom) {
-        Playback::getInstance().getSelf().getLogger().debug(
-            "Replay game viewport changed (from=({}, {}, {}, {}), to=({}, {}, {}, {}))",
-            previous.left,
-            previous.top,
-            previous.right,
-            previous.bottom,
-            gGameViewport.left,
-            gGameViewport.top,
-            gGameViewport.right,
-            gGameViewport.bottom
-        );
     }
 }
 
@@ -537,17 +515,8 @@ void updateReplayMouseOwnership(ClientInstance& client) {
         );
     if (shouldCapture) {
         getLogger().debug(
-            "Replay mouse capture requested (owner={}, focused={}, leftDown={}, request=({}, {}), "
-            "viewportContains={}, grabbedBefore={})",
+            "Replay mouse capture requested (owner={}, grabbedBefore={})",
             mouseOwnerName(owner),
-            focused,
-            gLeftMouseDown.load(std::memory_order_acquire),
-            gCaptureRequestX.load(std::memory_order_relaxed),
-            gCaptureRequestY.load(std::memory_order_relaxed),
-            isGameViewportPoint(
-                gCaptureRequestX.load(std::memory_order_relaxed),
-                gCaptureRequestY.load(std::memory_order_relaxed)
-            ),
             client.getMouseGrabbed()
         );
         gReleaseRequested.store(false, std::memory_order_release);
@@ -565,14 +534,9 @@ void updateReplayMouseOwnership(ClientInstance& client) {
     if (!shouldRelease) return;
 
     getLogger().debug(
-        "Replay mouse release requested (owner={}, focused={}, leftDown={}, releaseRequested={}, "
-        "blockGame={}, popup={}, grabbedBefore={})",
+        "Replay mouse release requested (owner={}, focused={}, grabbedBefore={})",
         mouseOwnerName(owner),
         focused,
-        gLeftMouseDown.load(std::memory_order_acquire),
-        gReleaseRequested.load(std::memory_order_acquire),
-        gBlockGameMouseInput.load(std::memory_order_acquire),
-        gPopupOpen.load(std::memory_order_acquire),
         client.getMouseGrabbed()
     );
     if (client.getMouseGrabbed()) client.releaseMouse();

@@ -80,8 +80,7 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
     bool const sameSize          = frame.width == targetWidth && frame.height == targetHeight;
     bool const integerDownsample = !sameSize && frame.width % targetWidth == 0 && frame.height % targetHeight == 0
                                 && frame.width / targetWidth == frame.height / targetHeight;
-    // Present-time capture hands back the swap-chain size, which is rarely an integer multiple of the output,
-    // so anything at least as large as the target goes through a general box filter instead.
+    // Present hands back the swap-chain size, rarely an integer multiple of the output.
     bool const boxDownsample =
         !sameSize && !integerDownsample && frame.width >= targetWidth && frame.height >= targetHeight;
     if (!sameSize && !integerDownsample && !boxDownsample) return false;

@@ -110,7 +110,7 @@ Playback maintains separate release lines for Minecraft and LeviLamina versions.
 | Minecraft / LeviLamina | Playback release                                                                    | Status               |
 | ---------------------- | ----------------------------------------------------------------------------------- | -------------------- |
 | `26.10.*`              | [`v0.2.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.2.1-mc26.10) | Current test release |
-| `26.20.*`              | [`v0.1.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.1.1-mc26.20) | Maintained           |
+| `26.20.*`              | [`v0.2.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.2.1-mc26.20) | Maintained           |
 
 Both release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
 
@@ -172,6 +172,7 @@ Use `v0.2.1-mc26.10` for LeviLamina `26.10.*`. Minecraft/LeviLamina `26.20.*` us
 - Pending scheduled ticks and server-owned systems such as villages, raids, and POI state are not currently persisted as authoritative simulation state.
 - Editor changes currently live in memory and are not persisted between replay sessions.
 - Experimental video export currently produces silent H.264 MP4 or PNG sequences; audio export is not implemented and additional runtime issues may remain.
+- Vibrant Visuals is not supported yet. Recording, replay, and export are only validated with the standard renderer; turn Vibrant Visuals off before using Playback.
 - SSAA is limited to 2x on D3D12 and 1x on D3D11.
 - A camera can only render chunks present in the replay data; unrecorded terrain cannot be reconstructed.
 - The August 20, 2026 fix cannot retroactively restore server chunk or custom-entity registry data missing from an existing replay archive.

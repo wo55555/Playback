@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Documented that Vibrant Visuals is not supported yet; recording, replay, and export are only validated with the standard renderer.
+
 ## [0.2.1-mc26.10] - 2026-08-27
 
 ### Changed
