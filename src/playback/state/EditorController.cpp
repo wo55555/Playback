@@ -367,15 +367,29 @@ void EditorController::applyEditorAction(EditorAction const& action) {
 void EditorController::publishState(bool hudVisible) {
     auto& session = replay::ReplaySession::getInstance();
 
+    bool const sessionActive = session.isActive();
+
     EditorState state;
-    state.replayVisible = session.isActive() && session.hasJoinedReplayWorld();
-    state.editorVisible = session.isActive();
+    state.replayVisible = sessionActive && session.hasJoinedReplayWorld();
+    // The editor stays hidden until the replay world is up, so resource downloads and
+    // sign-in prompts are not covered by the overlay.
+    state.editorVisible = state.replayVisible;
     state.hudVisible    = hudVisible;
     state.paused        = session.isPaused();
     state.playbackSpeed = session.getPlaybackSpeed();
     state.currentTick   = std::max(0, session.getCurrentTick());
     state.totalTicks    = std::max(0, session.getTotalTicks());
-    if (!state.editorVisible) {
+    if (sessionActive != mSessionActiveLogged) {
+        mSessionActiveLogged = sessionActive;
+        Playback::getInstance().getSelf().getLogger().debug(
+            "Replay session {} (joined={}, totalTicks={}, projectFile={})",
+            sessionActive ? "became active" : "became inactive",
+            state.replayVisible,
+            state.totalTicks,
+            mProjectFile.empty() ? std::string{"<none>"} : mProjectFile.filename().string()
+        );
+    }
+    if (!sessionActive) {
         flushProjectOnClose();
         mActiveReplayPath.clear();
     }

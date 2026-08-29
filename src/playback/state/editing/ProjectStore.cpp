@@ -28,7 +28,8 @@ std::string sanitizeStem(std::string_view replayPath) {
 
 std::filesystem::path ProjectStore::defaultProjectPath(std::string_view replayPath) {
     if (replayPath.empty()) return {};
-    return utils::PathUtils::getProjectsDir() / (sanitizeStem(replayPath) + kProjectExtension);
+    auto const path = utils::PathUtils::getProjectsDir() / (sanitizeStem(replayPath) + kProjectExtension);
+    return path.lexically_normal();
 }
 
 bool ProjectStore::save(model::EditorStateExt const& project, std::filesystem::path const& path, std::string& error) {

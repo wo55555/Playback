@@ -69,6 +69,7 @@ private:
     std::string                           mProjectError;
     std::uint64_t                         mSavedRevision{};
     std::chrono::steady_clock::time_point mLastAutosave{};
+    bool                                  mSessionActiveLogged{};
 };
 
 } // namespace playback::state
