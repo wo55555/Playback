@@ -94,7 +94,8 @@
             },
             "problem": {
                 "missingMetadata": "缺少 metadata.json",
-                "invalidMetadata": "无法解析回放元数据：{}"
+                "invalidMetadata": "无法解析回放元数据：{}",
+                "versionMismatch": "录制于 Minecraft {}，当前运行时为 {}"
             },
             "error": {
                 "archiveMissingEntry": "回放归档中缺少 {}",

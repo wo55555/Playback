@@ -60,11 +60,17 @@ struct PlaybackMeta {
     std::string name = "Unnamed";
     std::string worldName;
     int         totalTicks = 0;
+    // Packet and entity layouts differ between game versions, so a replay is only safe to open
+    // on the runtime that recorded it. Empty means the file predates this field.
+    std::string gameVersion;
 
     utils::container::LinkedHashMap<std::string, PlaybackChunkMeta> chunks;
 
     static PlaybackMeta       fromJson(std::string_view json);
     [[nodiscard]] std::string toJson() const;
+
+    [[nodiscard]] static std::string currentGameVersion();
+    [[nodiscard]] bool               isCompatibleWithRuntime() const;
 };
 
 class Recorder {

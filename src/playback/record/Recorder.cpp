@@ -12,6 +12,7 @@
 
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/player/LocalPlayer.h"
+#include "mc/common/Common.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/shared_types/legacy/LevelEvent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
@@ -342,10 +343,11 @@ nlohmann::ordered_json metaToJson(PlaybackMeta const& meta) {
     }
 
     nlohmann::ordered_json json{
-        {"name",       meta.name        },
-        {"worldName",  meta.worldName   },
-        {"totalTicks", meta.totalTicks  },
-        {"chunks",     std::move(chunks)}
+        {"name",        meta.name        },
+        {"worldName",   meta.worldName   },
+        {"totalTicks",  meta.totalTicks  },
+        {"gameVersion", meta.gameVersion },
+        {"chunks",      std::move(chunks)}
     };
 
     return json;
@@ -360,6 +362,9 @@ PlaybackMeta metaFromJson(nlohmann::ordered_json const& json) {
     meta.name       = json.at("name").get<std::string>();
     meta.worldName  = json.at("worldName").get<std::string>();
     meta.totalTicks = json.at("totalTicks").get<int>();
+    if (auto const it = json.find("gameVersion"); it != json.end() && it->is_string()) {
+        meta.gameVersion = it->get<std::string>();
+    }
 
     auto const& chunks = json.at("chunks");
     if (!chunks.is_object()) {
@@ -377,6 +382,13 @@ PlaybackMeta metaFromJson(nlohmann::ordered_json const& json) {
 PlaybackMeta PlaybackMeta::fromJson(std::string_view json) {
     auto j = nlohmann::ordered_json::parse(json);
     return metaFromJson(j);
+}
+
+std::string PlaybackMeta::currentGameVersion() { return Common::getGameVersionString(); }
+
+bool PlaybackMeta::isCompatibleWithRuntime() const {
+    // Files recorded before the field existed cannot be verified; let them through.
+    return gameVersion.empty() || gameVersion == currentGameVersion();
 }
 
 std::string PlaybackMeta::toJson() const { return metaToJson(*this).dump(); }
@@ -528,7 +540,8 @@ void Recorder::resetStateForNewRecording() {
     mAsyncReplaySaver = std::make_unique<AsyncReplaySaver>();
 
     mMetadata.chunks.clear();
-    mMetadata.totalTicks = 0;
+    mMetadata.totalTicks  = 0;
+    mMetadata.gameVersion = PlaybackMeta::currentGameVersion();
     mRecordingDimension.reset();
     resetChunkSnapshot();
     if (auto level = ll::service::getMultiPlayerLevel()) {

@@ -94,7 +94,8 @@
             },
             "problem": {
                 "missingMetadata": "Missing metadata.json",
-                "invalidMetadata": "Unable to parse replay metadata: {}"
+                "invalidMetadata": "Unable to parse replay metadata: {}",
+                "versionMismatch": "Recorded on Minecraft {}; this runtime is {}"
             },
             "error": {
                 "archiveMissingEntry": "Replay archive is missing {}",
