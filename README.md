@@ -7,8 +7,12 @@
   <p>
     <img src="https://img.shields.io/badge/release-v0.2.1-4c8bf5?style=flat-square" alt="Playback v0.2.1">
     <img src="https://img.shields.io/badge/Minecraft%20Bedrock-Windows%20x64-62b47a?style=flat-square" alt="Minecraft Bedrock for Windows x64">
-    <img src="https://img.shields.io/badge/LeviLamina-26.10.*-7b68ee?style=flat-square" alt="LeviLamina 26.10">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 license"></a>
+  </p>
+
+  <p>
+    <img src="https://img.shields.io/badge/LeviLamina-26.10.*-7b68ee?style=flat-square" alt="LeviLamina 26.10">
+    <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
   </p>
 
   <p>
@@ -93,7 +97,7 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 
 ## Latest Changes
 
-`v0.2.1` is a focused MC 26.10 patch release. It captures the bare RenderDragon scene instead of the UI composition target, uses semantic world-submission detection to avoid sparse-scene export stalls, blocks the HBUI idle route during Playback input ownership, fixes reduced-speed camera preview stepping and pause parking, and polishes editor and replay-browser scrolling, selection, labels, icons, and animations.
+`v0.2.1` is a focused patch release published for both MC 26.10 and MC 26.20. It captures the bare RenderDragon scene instead of the UI composition target, uses semantic world-submission detection to avoid sparse-scene export stalls, blocks the HBUI idle route during Playback input ownership, fixes reduced-speed camera preview stepping and pause parking, and polishes editor and replay-browser scrolling, selection, labels, icons, and animations.
 
 > [!CAUTION]
 > Playback releases are still test builds and may make destructive format or configuration changes. Replay archives from releases before `v0.2.0-mc26.10` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.0-mc26.10` archives are compatible with `v0.2.1-mc26.10` and require no conversion. The configuration version and recording-file snapshot context version remain `1`; no migration layer is provided.
@@ -105,14 +109,17 @@ See the full [changelog](CHANGELOG.md) for release history and detailed changes.
 
 ## Compatibility
 
-Playback maintains separate release lines for Minecraft and LeviLamina versions. Product version `0.2.1` is published for this branch as `v0.2.1-mc26.10`; use the listed MC 26.20 release for that runtime.
+Playback maintains separate release lines for Minecraft and LeviLamina versions. Product version `0.2.1` is published for both runtimes.
 
 | Minecraft / LeviLamina | Playback release                                                                    | Status               |
 | ---------------------- | ----------------------------------------------------------------------------------- | -------------------- |
 | `26.10.*`              | [`v0.2.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.2.1-mc26.10) | Current test release |
-| `26.20.*`              | [`v0.2.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.2.1-mc26.20) | Maintained           |
+| `26.20.*`              | [`v0.2.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.2.1-mc26.20) | Current test release |
 
 Both release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
+
+> [!NOTE]
+> `0.2.0` was deliberately skipped on MC 26.20. Video export did not work on that runtime: the 26.20 headers mis-declare a struct alignment, so the capture path read a render-item count from padding, classified every submission as overlay-only, and stalled every export on frame 0. The 26.20 line therefore goes from `v0.1.2-mc26.20` straight to `v0.2.1-mc26.20`, which carries the fix. The MC 26.10 line is unaffected and did publish `v0.2.0-mc26.10`.
 
 > [!TIP]
 > Playback is a client-only mod that can record sessions in both local worlds and multiplayer servers.
@@ -154,7 +161,7 @@ No. Every recorded dimension change splits the camera timeline, including transi
 
 ### Which Playback build should I install?
 
-Use `v0.2.1-mc26.10` for LeviLamina `26.10.*`. Minecraft/LeviLamina `26.20.*` uses its separately maintained release line.
+Use `v0.2.1-mc26.10` for LeviLamina `26.10.*` and `v0.2.1-mc26.20` for `26.20.*`. The two release lines are maintained separately; do not mix them.
 
 ## Development Status and Roadmap
 
