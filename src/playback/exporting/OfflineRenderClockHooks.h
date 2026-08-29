@@ -25,8 +25,10 @@ enum class OfflineRenderClockPublishResult : uint8_t { Published, Unavailable, B
 [[nodiscard]] bool hookOfflineRenderClock(bool enable);
 [[nodiscard]] bool isOfflineRenderClockInstalled();
 
+// clang-format off
 [[nodiscard]] OfflineRenderClockPublishResult
 publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
+// clang-format on
 [[nodiscard]] bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token);
 // Overlay-only BGFX submissions carry no world geometry and must never satisfy an armed capture.
 enum class SceneSubmissionKind : uint8_t { OverlayOnly, Scene };

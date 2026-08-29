@@ -357,7 +357,7 @@ struct D3D12FrameTapBackend::Impl {
                 if (validLayout) {
                     lastByte    += static_cast<uint64_t>(height - 1) * footprint.Footprint.RowPitch;
                     validLayout  = packedRowBytes <= std::numeric_limits<uint64_t>::max() - lastByte
-                                && lastByte + packedRowBytes <= byteCount;
+                               && lastByte + packedRowBytes <= byteCount;
                 }
                 if (!validLayout) {
                     frameTap.fail(capture, FrameTapError::MapFailed, "D3D12 readback footprint is invalid");
@@ -411,7 +411,7 @@ struct D3D12FrameTapBackend::Impl {
                         for (uint32_t y = 0; y < height; ++y) {
                             auto const* source = static_cast<std::byte const*>(mapped) + footprint.Offset
                                                + static_cast<size_t>(y) * footprint.Footprint.RowPitch;
-                            auto*       target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
+                            auto* target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
                             std::memcpy(target, source, frame.rowPitch);
                         }
                         frameTap.complete(capture, std::move(frame));
