@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reworked export capture around the RenderDragon scene target and semantic world-submission detection instead of the swap-chain UI target and a draw-count threshold.
 - Polished editor and replay-browser scrolling, timeline routing, selection feedback, icon alignment, compact controls, animations, and bilingual labels.
 - Preserved the release tag during CI builds so packaged manifests carry the published version.
-- Kept the configuration version and recording-file snapshot context version at `1`; complete `v0.2.0-mc26.10` archives remain compatible and require no conversion.
+- Kept the configuration version and recording-file snapshot context version at `1`; complete `v0.2.0-mc26.20` archives remain compatible and require no conversion.
 
 ### Removed
 
@@ -53,10 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified entity rendering around one sampled pose per frame and temporarily suppressed native movement interpolation during export rendering.
 - Reworked chunk recording to preserve native request-mode packets for local worlds while converting inline or cache-enabled server chunks into portable replay data after client decoding.
 - Changed export preparation to rely on replay tick, dimension transition, UI stability, and warm-up state instead of requiring every chunk in a fixed camera neighborhood.
-- Derived the packaged mod version from the nearest Git release tag so hotfix builds retain the `0.2.0-mc26.10` identifier.
-- Set the product version to `0.2.0` and the MC 26.10 release identifier to `v0.2.0-mc26.10`.
+- Derived the packaged mod version from the nearest Git release tag so hotfix builds retain the `0.2.0-mc26.20` identifier.
+- Set the product version to `0.2.0` and the MC 26.20 release identifier to `v0.2.0-mc26.20`.
 - Kept the configuration version in `Config.h` and the recording-file snapshot context version at `1`; no configuration or replay migration layer is provided.
-- Replays recorded before this hotfix on affected servers may already be missing portable chunk or custom-entity registry data. Those archives cannot be repaired and must be recorded again; complete `v0.2.0-mc26.10` archives do not require conversion.
+- Replays recorded before this hotfix on affected servers may already be missing portable chunk or custom-entity registry data. Those archives cannot be repaired and must be recorded again; complete `v0.2.0-mc26.20` archives do not require conversion.
 
 ### Removed
 
@@ -134,6 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
+[0.2.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.20...v0.2.1-mc26.20
 [0.2.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.2-mc26.20...v0.2.0-mc26.20
 [0.1.2-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.1-mc26.20...v0.1.2-mc26.20
 [0.1.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.0-alpha.2...v0.1.1-mc26.20
