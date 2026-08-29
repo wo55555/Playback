@@ -270,9 +270,8 @@ void handleKeyInput(ll::event::KeyInputEvent& event) {
         return;
     }
 
-    if (input::isUiVisible() && input::isGameInputCaptured() && event.keyCode() == Keyboard::Escape) {
-        if (event.isDown()) gReleaseRequested.store(true, std::memory_order_release);
-        return;
+    if (input::isUiVisible() && input::isGameInputCaptured() && event.keyCode() == Keyboard::Escape && event.isDown()) {
+        gReleaseRequested.store(true, std::memory_order_release);
     }
 
     if (!input::routeKeyEvent(event.keyCode(), event.isDown())) event.cancel();

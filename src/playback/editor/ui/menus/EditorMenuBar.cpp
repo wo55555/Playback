@@ -87,11 +87,26 @@ void EditorMenuBar::draw() {
     auto const  undoShortcut   = input::KeyMap::displayString(input::EditorKeybind::Undo);
     auto const  redoShortcut   = input::KeyMap::displayString(input::EditorKeybind::Redo);
     auto const  deleteShortcut = input::KeyMap::displayString(input::EditorKeybind::DeleteSelection);
+    auto const  saveShortcut   = input::KeyMap::displayString(input::EditorKeybind::SaveProject);
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
             ImGui::MenuItem("playback.refactorEditor.menu.openReplay"_tr().c_str(), nullptr, false, false);
-            ImGui::MenuItem("playback.refactorEditor.menu.saveProject"_tr().c_str(), nullptr, false, false);
-            ImGui::MenuItem("playback.refactorEditor.menu.recent"_tr().c_str(), nullptr, false, false);
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.saveProject"_tr().c_str(),
+                    saveShortcut.c_str(),
+                    false,
+                    state.editorVisible && !exportActive
+                )) {
+                editor.submitAction({EditorActionType::SaveProject});
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.reloadProject"_tr().c_str(),
+                    nullptr,
+                    false,
+                    state.editorVisible && !exportActive && !state.persistence.projectFile.empty()
+                )) {
+                editor.submitAction({EditorActionType::LoadProject});
+            }
             ImGui::Separator();
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.export"_tr().c_str(),
@@ -192,6 +207,10 @@ void EditorMenuBar::draw() {
                 "playback.refactorEditor.shortcuts.undoRedo"_tr()
             );
             shortcutRow(
+                input::KeyMap::displayString(input::EditorKeybind::SaveProject),
+                "playback.refactorEditor.shortcuts.saveProject"_tr()
+            );
+            shortcutRow(
                 input::KeyMap::displayString(input::EditorKeybind::AddKeyframe),
                 "playback.refactorEditor.shortcuts.keyframe"_tr()
             );
@@ -222,10 +241,12 @@ void EditorMenuBar::draw() {
         }
         ImGui::Spacing();
         float const closeWidth = 110.0f;
-        ImGui::SetCursorPosX(std::max(
-            ImGui::GetStyle().WindowPadding.x,
-            ImGui::GetWindowWidth() - closeWidth - ImGui::GetStyle().WindowPadding.x
-        ));
+        ImGui::SetCursorPosX(
+            std::max(
+                ImGui::GetStyle().WindowPadding.x,
+                ImGui::GetWindowWidth() - closeWidth - ImGui::GetStyle().WindowPadding.x
+            )
+        );
         if (ImGui::Button("playback.refactorEditor.shortcuts.close"_tr().c_str(), {closeWidth, 32.0f})) {
             mShortcutDialogOpen = false;
             ImGui::CloseCurrentPopup();
@@ -447,13 +468,15 @@ void EditorMenuBar::draw() {
             ImGui::TableSetColumnIndex(0);
             ImGui::TextDisabled("%s", "playback.refactorEditor.export.captureSummary"_tr().c_str());
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted("playback.refactorEditor.export.captureValue"_tr(
-                                       mExportWidth,
-                                       mExportHeight,
-                                       ssaaValue,
-                                       mExportWarmupFrames
-            )
-                                       .c_str());
+            ImGui::TextUnformatted(
+                "playback.refactorEditor.export.captureValue"_tr(
+                    mExportWidth,
+                    mExportHeight,
+                    ssaaValue,
+                    mExportWarmupFrames
+                )
+                    .c_str()
+            );
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::AlignTextToFramePadding();

@@ -7,12 +7,14 @@
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/CameraBindingOps.h"
+#include "playback/state/editing/ProjectStore.h"
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/CommandFactory.h"
 #include "playback/visuals/FrameTap.h"
 
 #include "ll/api/i18n/I18n.h"
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <utility>
 
@@ -40,6 +42,8 @@ std::string replayPreferenceKey(std::filesystem::path const& path) {
     auto const utf8Path = path.lexically_normal().generic_u8string();
     return {reinterpret_cast<char const*>(utf8Path.data()), utf8Path.size()};
 }
+
+constexpr auto kAutosaveInterval = std::chrono::seconds(30);
 
 } // namespace
 
@@ -88,6 +92,7 @@ std::optional<state::editing::model::CameraKeyframe> EditorController::captureCa
 }
 
 void EditorController::reset() {
+    flushProjectOnClose();
     if (mExportDriver) mExportDriver->reset();
     else mExportCoordinator.reset();
     mBrowserVisible   = false;
@@ -99,6 +104,9 @@ void EditorController::reset() {
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
     mCommandStack.clear();
     mActiveReplayPath.clear();
+    mProjectFile.clear();
+    mProjectError.clear();
+    mSavedRevision                  = mCommandStack.revision();
     mProjectTotalTicks              = -1;
     mExportTickedBeforeClientUpdate = false;
 }
@@ -123,6 +131,19 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     totalTicks = std::max(0, totalTicks);
     if (mProjectTotalTicks == totalTicks && mProject.projectPath == replayPath) return;
 
+    // Replay metadata can settle a few frames after the session starts; growing the timeline
+    // must not discard the project that was already loaded or edited for this replay.
+    if (mProject.projectPath == replayPath && !replayPath.empty()) {
+        mProject.totalTicks            = totalTicks;
+        mProject.worldActor.totalTicks = totalTicks;
+        for (auto& segment : mProject.worldActor.segments) {
+            if (segment.endTick == mProjectTotalTicks) segment.endTick = totalTicks;
+        }
+        mProjectTotalTicks = totalTicks;
+        publishCameraTimeline();
+        return;
+    }
+
     mProject             = {};
     mProject.projectPath = std::string(replayPath);
     mProject.totalTicks  = totalTicks;
@@ -131,7 +152,73 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     mCommandStack.clear();
     mPreviewCameraId.reset();
     mProjectTotalTicks = totalTicks;
+    loadProjectForReplay(replayPath);
+    mSavedRevision = mCommandStack.revision();
+    mLastAutosave  = std::chrono::steady_clock::now();
     publishCameraTimeline();
+}
+
+void EditorController::loadProjectForReplay(std::string_view replayPath) {
+    mProjectFile.clear();
+    mProjectError.clear();
+    if (replayPath.empty()) return;
+
+    mProjectFile = state::editing::ProjectStore::defaultProjectPath(replayPath);
+    if (!state::editing::ProjectStore::exists(mProjectFile)) return;
+
+    state::editing::model::EditorStateExt loaded;
+    std::string                           error;
+    if (!state::editing::ProjectStore::load(mProjectFile, loaded, error)) {
+        mProjectError = error;
+        Playback::getInstance().getSelf().getLogger().warn("Unable to load editor project {}: {}", mProjectFile, error);
+        return;
+    }
+
+    // The replay on disk is authoritative for length; a stale project must not shrink the timeline.
+    loaded.projectPath           = mProject.projectPath;
+    loaded.totalTicks            = mProject.totalTicks;
+    loaded.worldActor.totalTicks = mProject.totalTicks;
+    if (loaded.cameras.empty()) state::editing::CameraBindingOps::addFreeCamera(loaded, "Camera 1");
+    if (loaded.worldActor.segments.empty()) {
+        loaded.worldActor.segments.push_back({"worldActor", 0, mProject.totalTicks, 0});
+    }
+    mProject = std::move(loaded);
+    Playback::getInstance().getSelf().getLogger().info("Loaded editor project {}", mProjectFile);
+}
+
+bool EditorController::saveProject(std::filesystem::path const& path) {
+    if (path.empty()) return false;
+
+    std::string error;
+    if (!state::editing::ProjectStore::save(mProject, path, error)) {
+        mProjectError = error;
+        Playback::getInstance().getSelf().getLogger().error("Unable to save editor project {}: {}", path, error);
+        return false;
+    }
+    mProjectFile = path;
+    mProjectError.clear();
+    mSavedRevision = mCommandStack.revision();
+    mLastAutosave  = std::chrono::steady_clock::now();
+    return true;
+}
+
+void EditorController::autosaveIfDue() {
+    if (mProjectFile.empty() || !isProjectDirty()) return;
+    if (mExportDriver && mExportDriver->isActive()) return;
+
+    auto const now = std::chrono::steady_clock::now();
+    if (now - mLastAutosave < kAutosaveInterval) return;
+    mLastAutosave = now;
+    if (saveProject(mProjectFile)) {
+        Playback::getInstance().getSelf().getLogger().debug("Autosaved editor project {}", mProjectFile);
+    }
+}
+
+void EditorController::flushProjectOnClose() {
+    if (mProjectFile.empty() || !isProjectDirty()) return;
+    if (saveProject(mProjectFile)) {
+        Playback::getInstance().getSelf().getLogger().info("Saved editor project on close {}", mProjectFile);
+    }
 }
 
 void EditorController::applyEditorAction(EditorAction const& action) {
@@ -288,7 +375,10 @@ void EditorController::publishState(bool hudVisible) {
     state.playbackSpeed = session.getPlaybackSpeed();
     state.currentTick   = std::max(0, session.getCurrentTick());
     state.totalTicks    = std::max(0, session.getTotalTicks());
-    if (!state.editorVisible) mActiveReplayPath.clear();
+    if (!state.editorVisible) {
+        flushProjectOnClose();
+        mActiveReplayPath.clear();
+    }
     ensureProject(state.totalTicks, mActiveReplayPath);
     mProject.currentTick             = state.currentTick;
     mProject.playing                 = !state.paused;
@@ -296,6 +386,9 @@ void EditorController::publishState(bool hudVisible) {
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
     state.canUndo                    = mCommandStack.canUndo();
     state.canRedo                    = mCommandStack.canRedo();
+    state.persistence.dirty          = state.editorVisible && isProjectDirty();
+    state.persistence.projectFile    = mProjectFile.empty() ? std::string{} : mProjectFile.filename().string();
+    state.persistence.error          = mProjectError;
     state.capabilities.cameraEditing = state.editorVisible;
     state.capabilities.videoEditing  = state.editorVisible;
     state.capabilities.videoExport   = state.editorVisible && mExportDriver && mExportDriver->isAvailable();
@@ -458,11 +551,41 @@ void EditorController::tick(bool hudVisible) {
         case EditorActionType::ClearReplayBrowserError:
             mBrowserError.clear();
             break;
+        case EditorActionType::SaveProject: {
+            auto target = action.path.empty() ? mProjectFile : action.path;
+            if (target.empty()) target = state::editing::ProjectStore::defaultProjectPath(mProject.projectPath);
+            if (!target.empty() && saveProject(target)) {
+                Playback::getInstance().getSelf().getLogger().info("Saved editor project {}", target);
+            }
+            break;
+        }
+        case EditorActionType::LoadProject: {
+            auto const target = action.path.empty() ? mProjectFile : action.path;
+            if (target.empty()) break;
+            state::editing::model::EditorStateExt loaded;
+            std::string                           error;
+            if (!state::editing::ProjectStore::load(target, loaded, error)) {
+                mProjectError = error;
+                break;
+            }
+            loaded.projectPath           = mProject.projectPath;
+            loaded.totalTicks            = mProject.totalTicks;
+            loaded.worldActor.totalTicks = mProject.totalTicks;
+            mProject                     = std::move(loaded);
+            mProjectFile                 = target;
+            mProjectError.clear();
+            mCommandStack.clear();
+            mSavedRevision = mCommandStack.revision();
+            mPreviewCameraId.reset();
+            publishCameraTimeline();
+            break;
+        }
         }
     }
 
     if (mExportDriver && !mExportTickedBeforeClientUpdate) mExportDriver->tick();
     mExportTickedBeforeClientUpdate = false;
+    autosaveIfDue();
     publishState(hudVisible);
 }
 

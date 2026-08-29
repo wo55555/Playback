@@ -91,7 +91,7 @@ void StatusPanel::draw() {
     float const statusWidth   = ImGui::CalcTextSize(statusText.c_str()).x;
     float const playbackWidth = ImGui::CalcTextSize(replayText.c_str()).x + ImGui::CalcTextSize(tickText.c_str()).x
                               + ImGui::CalcTextSize(speedText).x + style.ItemSpacing.x * 2.0f;
-    bool const showPlaybackSummary = playbackWidth + statusWidth + 12.0f <= contentWidth;
+    bool const  showPlaybackSummary = playbackWidth + statusWidth + 12.0f <= contentWidth;
 
     if (showPlaybackSummary) {
         ImGui::TextUnformatted(replayText.c_str());
@@ -99,6 +99,16 @@ void StatusPanel::draw() {
         ImGui::TextUnformatted(tickText.c_str());
         ImGui::SameLine();
         ImGui::TextUnformatted(speedText);
+        if (!state.persistence.projectFile.empty()) {
+            auto const projectText =
+                state.persistence.dirty
+                    ? "playback.refactorEditor.status.projectUnsaved"_tr(state.persistence.projectFile)
+                    : "playback.refactorEditor.status.projectSaved"_tr(state.persistence.projectFile);
+            if (ImGui::CalcTextSize(projectText.c_str()).x + playbackWidth + statusWidth + 24.0f <= contentWidth) {
+                ImGui::SameLine();
+                ImGui::TextUnformatted(projectText.c_str());
+            }
+        }
         ImGui::SameLine(std::max(contentStart, rightEdge - statusWidth));
     } else {
         ImGui::SetCursorPosX(std::max(contentStart, rightEdge - statusWidth));

@@ -75,6 +75,8 @@ private:
     state::editing::model::SelectionModel mSelection;
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
+    float mExitHoldSeconds{};
+
     float mDetailsWidthRatio{0.28f};
     float mTimelineHeightRatio{0.35f};
     float mVideoAspectRatio{16.0f / 9.0f};
@@ -90,6 +92,7 @@ private:
     void loadLayoutPreferences();
     void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
+    void updateExitHold();
 
     friend class EditMode;
     friend class RenderMode;

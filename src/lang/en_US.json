@@ -116,7 +116,7 @@
                 "help": "Help",
                 "openReplay": "Open Replay",
                 "saveProject": "Save Project",
-                "recent": "Recent",
+                "reloadProject": "Reload Project",
                 "export": "Export...",
                 "exit": "Exit Editor",
                 "undo": "Undo",
@@ -225,7 +225,9 @@
                 "replay": "[Replay]",
                 "tick": "Tick {} / {}",
                 "ready": "Ready to export",
-                "exportUnavailable": "Export unavailable"
+                "exportUnavailable": "Export unavailable",
+                "projectSaved": "{} saved",
+                "projectUnsaved": "{} *"
             },
             "export": {
                 "title": "Export Replay",
@@ -283,6 +285,7 @@
                 "seekTicks": "Seek 1 tick",
                 "editPoints": "Previous / next edit point",
                 "undoRedo": "Undo / Redo",
+                "saveProject": "Save project",
                 "keyframe": "Add camera keyframe",
                 "zoom": "Zoom timeline",
                 "delete": "Delete selected item",

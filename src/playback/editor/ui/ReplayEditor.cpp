@@ -1,6 +1,7 @@
 ﻿#include "playback/editor/ui/ReplayEditor.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/input/EditorInput.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/ErrorDialog.h"
 
@@ -16,7 +17,8 @@ namespace playback::editor::ui {
 
 namespace {
 
-constexpr char kLayoutPreferencesPath[] = "mods/playback/editor-layout.json";
+constexpr char  kLayoutPreferencesPath[] = "mods/playback/editor-layout.json";
+constexpr float kExitHoldDuration        = 0.8f;
 
 float readFiniteFloat(nlohmann::ordered_json const& object, char const* key, float fallback) {
     auto const value = object.find(key);
@@ -47,6 +49,7 @@ void ReplayEditor::shutdown() {
     mSubmit            = nullptr;
     mSelection.clear();
     mLastExportState = exporting::ExportState::Idle;
+    mExitHoldSeconds = 0.0f;
 }
 
 void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
@@ -214,6 +217,7 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     else mEditMode.draw();
 
     ErrorDialog::getInstance().draw();
+    updateExitHold();
     if (!exportActive) handleKeyboardShortcuts();
 
     io.FontGlobalScale = savedFontScale;
@@ -221,8 +225,25 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     mSubmit            = nullptr;
 }
 
+void ReplayEditor::updateExitHold() {
+    ImGuiIO const& io = ImGui::GetIO();
+    if (!ImGui::IsKeyDown(ImGuiKey_Escape)) {
+        mExitHoldSeconds = 0.0f;
+        return;
+    }
+
+    float const previous  = mExitHoldSeconds;
+    mExitHoldSeconds     += io.DeltaTime;
+    if (previous < kExitHoldDuration && mExitHoldSeconds >= kExitHoldDuration) {
+        submitAction({playback::state::EditorActionType::StopReplay});
+    }
+}
+
 void ReplayEditor::handleKeyboardShortcuts() {
     using input::EditorKeybind;
+
+    // While the camera is being driven the game owns the keyboard; only the exit hold stays live.
+    if (input::isGameInputCaptured()) return;
 
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantTextInput || ImGui::IsAnyItemActive() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
@@ -231,6 +252,10 @@ void ReplayEditor::handleKeyboardShortcuts() {
 
     if (mViewportMaximized && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         mViewportMaximized = false;
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SaveProject)) {
+        submitAction({playback::state::EditorActionType::SaveProject});
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::Undo)) {
