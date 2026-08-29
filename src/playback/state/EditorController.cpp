@@ -45,6 +45,8 @@ std::string replayPreferenceKey(std::filesystem::path const& path) {
 
 constexpr auto kAutosaveInterval = std::chrono::seconds(30);
 
+auto& logger() { return Playback::getInstance().getSelf().getLogger(); }
+
 } // namespace
 
 EditorController::EditorController(EditorContext& context)
@@ -107,6 +109,7 @@ void EditorController::reset() {
     mProjectFile.clear();
     mProjectError.clear();
     mSavedRevision                  = mCommandStack.revision();
+    mEditorReadyLatched             = false;
     mProjectTotalTicks              = -1;
     mExportTickedBeforeClientUpdate = false;
 }
@@ -131,8 +134,7 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     totalTicks = std::max(0, totalTicks);
     if (mProjectTotalTicks == totalTicks && mProject.projectPath == replayPath) return;
 
-    // Replay metadata can settle a few frames after the session starts; growing the timeline
-    // must not discard the project that was already loaded or edited for this replay.
+    // Metadata settles a few frames in; growing the timeline must not discard the loaded project.
     if (mProject.projectPath == replayPath && !replayPath.empty()) {
         mProject.totalTicks            = totalTicks;
         mProject.worldActor.totalTicks = totalTicks;
@@ -170,7 +172,7 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
     std::string                           error;
     if (!state::editing::ProjectStore::load(mProjectFile, loaded, error)) {
         mProjectError = error;
-        Playback::getInstance().getSelf().getLogger().warn("Unable to load editor project {}: {}", mProjectFile, error);
+        logger().warn("Unable to load editor project {}: {}", mProjectFile, error);
         return;
     }
 
@@ -183,7 +185,7 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
         loaded.worldActor.segments.push_back({"worldActor", 0, mProject.totalTicks, 0});
     }
     mProject = std::move(loaded);
-    Playback::getInstance().getSelf().getLogger().info("Loaded editor project {}", mProjectFile);
+    logger().debug("Loaded editor project {}", mProjectFile);
 }
 
 bool EditorController::saveProject(std::filesystem::path const& path) {
@@ -192,13 +194,14 @@ bool EditorController::saveProject(std::filesystem::path const& path) {
     std::string error;
     if (!state::editing::ProjectStore::save(mProject, path, error)) {
         mProjectError = error;
-        Playback::getInstance().getSelf().getLogger().error("Unable to save editor project {}: {}", path, error);
+        logger().error("Unable to save editor project {}: {}", path, error);
         return false;
     }
     mProjectFile = path;
     mProjectError.clear();
     mSavedRevision = mCommandStack.revision();
     mLastAutosave  = std::chrono::steady_clock::now();
+    logger().debug("Saved editor project {}", path);
     return true;
 }
 
@@ -209,16 +212,12 @@ void EditorController::autosaveIfDue() {
     auto const now = std::chrono::steady_clock::now();
     if (now - mLastAutosave < kAutosaveInterval) return;
     mLastAutosave = now;
-    if (saveProject(mProjectFile)) {
-        Playback::getInstance().getSelf().getLogger().debug("Autosaved editor project {}", mProjectFile);
-    }
+    (void)saveProject(mProjectFile);
 }
 
 void EditorController::flushProjectOnClose() {
     if (mProjectFile.empty() || !isProjectDirty()) return;
-    if (saveProject(mProjectFile)) {
-        Playback::getInstance().getSelf().getLogger().info("Saved editor project on close {}", mProjectFile);
-    }
+    (void)saveProject(mProjectFile);
 }
 
 void EditorController::applyEditorAction(EditorAction const& action) {
@@ -266,26 +265,14 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::AddCameraKeyframe:
         if (auto captured = captureCameraKeyframe()) {
-            Playback::getInstance().getSelf().getLogger().info(
-                "Captured camera keyframe (camera={}, tick={}, position=({}, {}, {}), yaw={}, pitch={}, roll={}, "
-                "fov={})",
-                action.id,
-                action.tick,
-                captured->position.x,
-                captured->position.y,
-                captured->position.z,
-                captured->yaw,
-                captured->pitch,
-                captured->roll,
-                captured->fov
-            );
+            logger().debug("Captured camera keyframe (camera={}, tick={})", action.id, action.tick);
             mCommandStack.push(
                 CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)),
                 mProject
             );
         } else {
-            Playback::getInstance().getSelf().getLogger().warn(
-                "Camera keyframe capture unavailable (camera={}, tick={}); using model defaults",
+            logger().debug(
+                "Camera keyframe capture unavailable (camera={}, tick={}); using defaults",
                 action.id,
                 action.tick
             );
@@ -371,22 +358,24 @@ void EditorController::publishState(bool hudVisible) {
 
     EditorState state;
     state.replayVisible = sessionActive && session.hasJoinedReplayWorld();
-    // The editor stays hidden until the replay world is up, so resource downloads and
-    // sign-in prompts are not covered by the overlay.
-    state.editorVisible = state.replayVisible;
+    // Latched, so opening a menu does not flicker the editor away once it is up.
+    if (!sessionActive) mEditorReadyLatched = false;
+    else if (hudVisible && session.isReplayWorldReady()) mEditorReadyLatched = true;
+    state.editorVisible = mEditorReadyLatched;
     state.hudVisible    = hudVisible;
     state.paused        = session.isPaused();
     state.playbackSpeed = session.getPlaybackSpeed();
     state.currentTick   = std::max(0, session.getCurrentTick());
     state.totalTicks    = std::max(0, session.getTotalTicks());
-    if (sessionActive != mSessionActiveLogged) {
-        mSessionActiveLogged = sessionActive;
-        Playback::getInstance().getSelf().getLogger().debug(
-            "Replay session {} (joined={}, totalTicks={}, projectFile={})",
-            sessionActive ? "became active" : "became inactive",
-            state.replayVisible,
-            state.totalTicks,
-            mProjectFile.empty() ? std::string{"<none>"} : mProjectFile.filename().string()
+    if (state.editorVisible != mEditorVisibleLogged) {
+        mEditorVisibleLogged = state.editorVisible;
+        logger().debug(
+            "Replay editor {} (joined={}, worldReady={}, hud={}, totalTicks={})",
+            state.editorVisible ? "shown" : "hidden",
+            session.hasJoinedReplayWorld(),
+            session.isReplayWorldReady(),
+            hudVisible,
+            state.totalTicks
         );
     }
     if (!sessionActive) {
@@ -568,9 +557,7 @@ void EditorController::tick(bool hudVisible) {
         case EditorActionType::SaveProject: {
             auto target = action.path.empty() ? mProjectFile : action.path;
             if (target.empty()) target = state::editing::ProjectStore::defaultProjectPath(mProject.projectPath);
-            if (!target.empty() && saveProject(target)) {
-                Playback::getInstance().getSelf().getLogger().info("Saved editor project {}", target);
-            }
+            if (!target.empty()) (void)saveProject(target);
             break;
         }
         case EditorActionType::LoadProject: {

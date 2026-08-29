@@ -208,8 +208,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     auto        nextGroup = [] { ImGui::SameLine(0.0f, 8.0f); };
     auto const& selection = ctx.selection;
     bool const  canDelete = (selection.getAs<state::editing::model::SelectedCamera>() && project->cameras.size() > 1)
-                         || selection.getAs<state::editing::model::SelectedKeyframe>();
-    auto const  deleteTooltip = "playback.refactorEditor.timeline.deleteSelection"_tr();
+                        || selection.getAs<state::editing::model::SelectedKeyframe>();
+    auto const deleteTooltip = "playback.refactorEditor.timeline.deleteSelection"_tr();
     if (iconButton("delete", ICON_DELETE, deleteTooltip.c_str(), canDelete)) (void)deleteSelection(ctx);
     sameIcon();
     auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>();
@@ -324,10 +324,10 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     for (auto const& row : mTrackTree.rows()) {
         float const rowBottom        = listY + row.height;
         auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
-        bool selected                = row.kind == TrackRowKind::Camera
-                                    && ((ctx.selection.getAs<state::editing::model::SelectedCamera>()
-                                         && ctx.selection.getAs<state::editing::model::SelectedCamera>()->cameraId == row.id.substr(7))
-                                        || (selectedKeyframe && selectedKeyframe->trackId == row.id.substr(7)));
+        bool        selected         = row.kind == TrackRowKind::Camera
+                     && ((ctx.selection.getAs<state::editing::model::SelectedCamera>()
+                          && ctx.selection.getAs<state::editing::model::SelectedCamera>()->cameraId == row.id.substr(7))
+                         || (selectedKeyframe && selectedKeyframe->trackId == row.id.substr(7)));
         if (rowBottom < bodyTop || listY > workBottom) {
             listY = rowBottom + 2.0f;
             continue;

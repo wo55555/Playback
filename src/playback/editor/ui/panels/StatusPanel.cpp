@@ -89,7 +89,7 @@ void StatusPanel::draw(PanelContext const& ctx) {
     float const statusWidth   = ImGui::CalcTextSize(statusText.c_str()).x;
     float const playbackWidth = ImGui::CalcTextSize(replayText.c_str()).x + ImGui::CalcTextSize(tickText.c_str()).x
                               + ImGui::CalcTextSize(speedText).x + style.ItemSpacing.x * 2.0f;
-    bool const  showPlaybackSummary = playbackWidth + statusWidth + 12.0f <= contentWidth;
+    bool const showPlaybackSummary = playbackWidth + statusWidth + 12.0f <= contentWidth;
 
     if (showPlaybackSummary) {
         ImGui::TextUnformatted(replayText.c_str());

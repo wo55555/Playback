@@ -142,13 +142,12 @@ bool DetailsPanel::drawWorldActor(PanelContext const& ctx) {
 
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         if (property::beginSection("playback.refactorEditor.details.worldActor"_tr().c_str())) {
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.name"_tr(
-                    project->worldActor.name.empty() ? "playback.refactorEditor.details.untitled"_tr()
-                                                     : project->worldActor.name
-                )
-                    .c_str()
-            );
+            ImGui::TextUnformatted("playback.refactorEditor.details.name"_tr(
+                                       project->worldActor.name.empty()
+                                           ? "playback.refactorEditor.details.untitled"_tr()
+                                           : project->worldActor.name
+            )
+                                       .c_str());
             ImGui::TextUnformatted(
                 "playback.refactorEditor.details.total"_tr(formatTick(project->worldActor.totalTicks)).c_str()
             );
@@ -294,17 +293,14 @@ bool DetailsPanel::drawSubActor(PanelContext const& ctx) {
             ImGui::TextUnformatted(
                 "playback.refactorEditor.details.name"_tr(actor->name.empty() ? actor->id : actor->name).c_str()
             );
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.category"_tr(categoryName(actor->category)).c_str()
+            ImGui::TextUnformatted("playback.refactorEditor.details.category"_tr(categoryName(actor->category)).c_str()
             );
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.positionValue"_tr(
-                    actor->position.x,
-                    actor->position.y,
-                    actor->position.z
-                )
-                    .c_str()
-            );
+            ImGui::TextUnformatted("playback.refactorEditor.details.positionValue"_tr(
+                                       actor->position.x,
+                                       actor->position.y,
+                                       actor->position.z
+            )
+                                       .c_str());
             ImGui::TextUnformatted(
                 "playback.refactorEditor.details.rotationValue"_tr(actor->rotation.x, actor->rotation.y).c_str()
             );
@@ -616,13 +612,11 @@ void DetailsPanel::drawOverview(PanelContext const& ctx) {
     if (property::beginSection("playback.refactorEditor.details.overview"_tr().c_str())) {
         ImGui::TextDisabled("%s", "playback.refactorEditor.details.selectionHint"_tr().c_str());
         ImGui::Spacing();
-        ImGui::TextUnformatted(
-            "playback.refactorEditor.details.name"_tr(
-                project->worldActor.name.empty() ? "playback.refactorEditor.details.untitled"_tr()
-                                                 : project->worldActor.name
-            )
-                .c_str()
-        );
+        ImGui::TextUnformatted("playback.refactorEditor.details.name"_tr(
+                                   project->worldActor.name.empty() ? "playback.refactorEditor.details.untitled"_tr()
+                                                                    : project->worldActor.name
+        )
+                                   .c_str());
         ImGui::TextUnformatted("playback.refactorEditor.details.total"_tr(formatTick(project->totalTicks)).c_str());
         ImGui::TextUnformatted("playback.refactorEditor.details.cameras"_tr(project->cameras.size()).c_str());
         ImGui::TextUnformatted(

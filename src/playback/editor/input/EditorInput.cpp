@@ -294,8 +294,7 @@ bool routeKeyEvent(uint32_t keyCode, bool down, bool forceUi) {
         return true;
     }
 
-    // Editor is up but the mouse has not been captured: the UI owns the keyboard, so game
-    // movement keys cannot fire and cannot collide with editor shortcuts.
+    // Editor up but mouse not captured: UI owns the keyboard, so WASD cannot reach the game.
     queueUiEventLocked(keyCode, down);
     return false;
 }

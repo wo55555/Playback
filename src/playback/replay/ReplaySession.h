@@ -330,6 +330,12 @@ public:
 
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
 
+    // True once the snapshot and chunks are in and no transition is pending; gates the editor UI.
+    [[nodiscard]] bool isReplayWorldReady() const {
+        return mActive && mReplayWorldJoined && mWorldReady && !mReplayFailed && !mPendingReplayDimension
+            && !mApplyingChunkSnapshot && !mChunkInjectionPending;
+    }
+
     [[nodiscard]] Player* getReplayPlayer() const noexcept { return mReplayPlayer; }
 
     void teleportReplayPlayer(::Vec3 const& feetPosition, ::Vec2 const& rotation);

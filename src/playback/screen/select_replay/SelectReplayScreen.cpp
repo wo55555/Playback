@@ -1490,8 +1490,8 @@ void SelectReplayScreen::drawDetails() {
             + kDetailsLayout.metadataWrapReserve;
         float const contentLimitedPreviewHeight = ImGui::GetWindowHeight() - kDetailsLayout.previewToMetadataGap
                                                 - estimatedMetadataHeight - kDetailsLayout.detailContentBottomGap;
-        float const ratioLimitedPreviewHeight   = ImGui::GetWindowHeight() * kDetailsLayout.detailPreviewMaxHeightRatio;
-        float const maxPreviewHeight            = std::max(
+        float const ratioLimitedPreviewHeight = ImGui::GetWindowHeight() * kDetailsLayout.detailPreviewMaxHeightRatio;
+        float const maxPreviewHeight          = std::max(
             kDetailsLayout.detailPreviewMinHeight,
             std::min(contentLimitedPreviewHeight, ratioLimitedPreviewHeight)
         );

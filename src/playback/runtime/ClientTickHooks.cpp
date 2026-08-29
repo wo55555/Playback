@@ -99,13 +99,12 @@ LL_TYPE_INSTANCE_HOOK(
     editor::graphics::updateReplayMouseOwnership(*this);
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
+    // Gates the editor overlay, so loading, progress and sign-in screens must clear first.
     bool hudVisible = false;
-    if (isInitFinished && replay.isActive()) {
-        auto const topScene     = static_cast<unsigned int>(getTopSceneType());
-        auto const hudScene     = static_cast<unsigned int>(ui::SceneType::HudScene);
-        bool const replayReady  = replay.hasJoinedReplayWorld();
-        bool const sceneVisible = (topScene & hudScene) != 0 || replayReady;
-        hudVisible              = sceneVisible && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
+    if (isInitFinished && replay.isActive() && replay.hasJoinedReplayWorld()) {
+        auto const topScene = static_cast<unsigned int>(getTopSceneType());
+        auto const hudScene = static_cast<unsigned int>(ui::SceneType::HudScene);
+        hudVisible = (topScene & hudScene) != 0 && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
                   && !isShowingProgressScreen();
     }
     editor::tickReplayUI(hudVisible);
