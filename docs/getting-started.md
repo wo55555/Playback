@@ -14,6 +14,9 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 > [!IMPORTANT]
 > Use a clean LeviLamina instance without other third-party mods whenever possible. Broad mod compatibility is not currently guaranteed.
 
+> [!WARNING]
+> Vibrant Visuals is not supported yet. Turn it off in the video settings before recording, replaying, or exporting; leaving it on is untested and can break rendering and capture.
+
 > [!CAUTION]
 > `v0.2.1-mc26.10` is a test release. Replay archives created before `v0.2.0-mc26.10` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.0-mc26.10` archives are compatible with `v0.2.1-mc26.10` and require no conversion. The configuration version and recording-file snapshot context version remain `1`; no migration is provided.
 
@@ -118,6 +121,6 @@ The experimental exporter renders frames from replay time rather than recording 
 | D3D11    | H.264 MP4, PNG sequence | 1x          |
 
 > [!IMPORTANT]
-> Video export is experimental and currently has no audio. Camera regions must exist in the recorded replay data; Playback cannot reconstruct chunks that were never recorded. Cross-dimension loading, replay-state preparation, UI stabilization, and export warm-up use timeouts. Playback no longer requires every chunk in a fixed camera neighborhood to be present, but missing replay data can still prevent the intended scene from rendering.
+> Video export is experimental and currently has no audio, and Vibrant Visuals is not supported. Camera regions must exist in the recorded replay data; Playback cannot reconstruct chunks that were never recorded. Cross-dimension loading, replay-state preparation, UI stabilization, and export warm-up use timeouts. Playback no longer requires every chunk in a fixed camera neighborhood to be present, but missing replay data can still prevent the intended scene from rendering.
 
 For development instructions, see [Building Playback](building.md). Release history is available in the [changelog](../CHANGELOG.md).

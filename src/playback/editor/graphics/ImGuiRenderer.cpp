@@ -282,11 +282,11 @@ struct ImGuiRenderer::Impl {
         auto const fontPathString = fontPath.string();
         ImFont*    font           = fontPathString.empty() ? nullptr
                                                            : io.Fonts->AddFontFromFileTTF(
-                                                                 fontPathString.c_str(),
-                                                                 14.0f,
-                                                                 nullptr,
-                                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-                                                             );
+                                                    fontPathString.c_str(),
+                                                    14.0f,
+                                                    nullptr,
+                                                    io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                                                );
         if (font) io.FontDefault = font;
         else io.Fonts->AddFontDefault();
         ImFontConfig cfg;
@@ -511,8 +511,7 @@ struct ImGuiRenderer::Impl {
             f.rtv = rtv;
             device->CreateRenderTargetView(f.backBuffer.Get(), nullptr, f.rtv);
             rtv.ptr += static_cast<SIZE_T>(rtvDescSize);
-            if (FAILED(
-                    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
+            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
                 )) {
                 initialized = true;
                 this->shutdown();
@@ -692,8 +691,7 @@ struct ImGuiRenderer::Impl {
         bool const hadRenderer = initialized || d3d11Initialized;
         {
             std::scoped_lock lock(captureMutex);
-            // The export capture must survive renderer rebuilds, which happen when the viewport changes during
-            // export setup. Thumbnail sessions stay disposable.
+            // Export capture must survive the renderer rebuild that export setup triggers; thumbnails need not.
             if (captureSession && exportCaptureCapacity != 0) {
                 exportCaptureReopenCapacity = exportCaptureCapacity;
             }
@@ -1055,15 +1053,13 @@ bool ImGuiRenderer::renderInternal(
         p.browserSnapshotRevision = browserRevision;
     }
     if (p.d3d11Initialized) p.d3d11FrameTap.poll(p.d3d11Context.Get());
-    // During export the back buffer only holds the finished world once the native render has returned; capturing
-    // earlier yields a sky-only frame.
+    // Capturing before the native render returns yields a sky-only frame.
     bool const sceneReady = !exporting::isOfflineRenderActivityActive() || exporting::isOfflineRenderSceneSubmitted();
     bool const captureActive = allowFrameCapture && sceneReady && p.frameTap.hasArmedCapture();
     if (!uiActive && !captureActive && !forceExportOverlay) {
         if (allowUi) {
             setReplayMouseInputActive(false);
-            // A one-shot capture stops needing a render pass once submitted, but the backend must outlive it
-            // until the caller collects the frame.
+            // A submitted one-shot capture needs no render pass, but the backend must outlive its collection.
             auto const tap = p.frameTap.status({});
             bool const tapBusy =
                 tap.state == visuals::FrameTapState::Active || tap.bufferedFrames != 0 || tap.inFlightFrames != 0;
@@ -1144,8 +1140,7 @@ bool ImGuiRenderer::renderInternal(
 
     auto const bd = f.backBuffer->GetDesc();
     if (bd.Width == 0 || bd.Height == 0) return false;
-    // The export preview reuses the same back buffer copy as the editor viewport: at Present the back buffer
-    // already holds the clean world frame, so no separate preview resource is needed.
+    // The export preview reuses the editor viewport copy, since Present already holds the clean world frame.
     bool const copyGameTexture = !exportOverlay || captureActive;
 
     ImGuiContextRestore cr;

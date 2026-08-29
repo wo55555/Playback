@@ -30,34 +30,11 @@ void ExportKeyframeApplier::configure(
         std::move(dimensionTransitionTicks)
     );
     keyframe::publishCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline);
-    auto& logger = Playback::getInstance().getSelf().getLogger();
-    logger.info("Export camera pose timeline ready (cameras={}, keyframes={})", project.cameras.size(), keyframeCount);
-    for (auto const& camera : project.cameras) {
-        if (camera.keysByTick.empty()) continue;
-        auto const& first = *camera.keysByTick.begin();
-        auto const& last  = *camera.keysByTick.rbegin();
-        logger.info(
-            "Export camera pose range (camera={}, firstTick={}, first=({}, {}, {}, yaw={}, pitch={}, roll={}, fov={}), "
-            "lastTick={}, last=({}, {}, {}, yaw={}, pitch={}, roll={}, fov={}))",
-            camera.id,
-            first.first,
-            first.second.position.x,
-            first.second.position.y,
-            first.second.position.z,
-            first.second.yaw,
-            first.second.pitch,
-            first.second.roll,
-            first.second.fov,
-            last.first,
-            last.second.position.x,
-            last.second.position.y,
-            last.second.position.z,
-            last.second.yaw,
-            last.second.pitch,
-            last.second.roll,
-            last.second.fov
-        );
-    }
+    Playback::getInstance().getSelf().getLogger().debug(
+        "Export camera pose timeline ready (cameras={}, keyframes={})",
+        project.cameras.size(),
+        keyframeCount
+    );
 }
 
 void ExportKeyframeApplier::reset() {

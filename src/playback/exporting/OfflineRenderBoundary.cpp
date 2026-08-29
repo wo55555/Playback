@@ -408,8 +408,8 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         return OfflineRenderStepResult::Failed;
     }
 
-    // Arming has to be retried every step: the tap refuses while a previous capture is still in flight, and a
-    // single failed attempt must not strand the pending frame.
+    // Retried every step: the tap refuses while a previous capture is in flight, and one refusal must not strand the
+    // frame.
     if (!mCaptureArmed) {
         mCaptureArmed = editor::graphics::gImGuiRenderer.armExportCapture(mPendingFrame->ticket);
     }
@@ -430,8 +430,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         return OfflineRenderStepResult::Failed;
     }
 
-    // The frame is captured at Present, so keep the wait armed while the native render is still in flight;
-    // executeSample only reports that the clock has been applied, not that the capture landed.
+    // executeSample only reports the clock being applied, not that the Present capture landed.
     auto const executed = mExecutor.executeSample(*mPendingFrame, *mClockToken);
     if (executed == OfflineRenderFrameExecutionResult::Failed) {
         auto const executorStatus = mExecutor.status();

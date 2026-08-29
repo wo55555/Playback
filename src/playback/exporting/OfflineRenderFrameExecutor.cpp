@@ -258,8 +258,7 @@ OfflineRenderFrameExecutor::executeSample(ExportFramePlan const& frame, OfflineR
         if (!prepareNativeRender()) return OfflineRenderFrameExecutionResult::Failed;
         mSampleRenderInvoked = true;
     }
-    // The capture completes at Present, which the boundary tracks separately, so the clock being applied is
-    // the only completion signal available here.
+    // The Present capture is tracked by the boundary, so the clock is the only signal available here.
     if (!wasOfflineRenderClockSampleApplied(clockToken)) return OfflineRenderFrameExecutionResult::Waiting;
     return OfflineRenderFrameExecutionResult::Executed;
 }
