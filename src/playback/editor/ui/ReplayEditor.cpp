@@ -1,4 +1,4 @@
-﻿#include "playback/editor/ui/ReplayEditor.h"
+#include "playback/editor/ui/ReplayEditor.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
@@ -171,13 +171,18 @@ void ReplayEditor::openExportDialog() {
     mMenuBar.openExportDialog(currentState.totalTicks, currentState.capabilities.ffmpegVideoExport);
 }
 
-void ReplayEditor::seekTo(int tick) { mTimelinePanel.seekTo(tick); }
+PanelContext ReplayEditor::frameContext() {
+    static SubmitAction const noSubmit{};
+    return {state(), mSelection, mSubmit ? *mSubmit : noSubmit, *this};
+}
 
-void ReplayEditor::seekRelative(int tickDelta) { mTimelinePanel.seekRelative(tickDelta); }
+void ReplayEditor::seekTo(int tick) { mTimelinePanel.seekTo(frameContext(), tick); }
 
-bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(); }
+void ReplayEditor::seekRelative(int tickDelta) { mTimelinePanel.seekRelative(frameContext(), tickDelta); }
 
-bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(); }
+bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(frameContext()); }
+
+bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(frameContext()); }
 
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
@@ -200,7 +205,7 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     auto&       io             = ImGui::GetIO();
     float const savedFontScale = io.FontGlobalScale;
     io.FontGlobalScale         = savedFontScale * (18.0f / 14.0f);
-    mTheme.apply();
+    theme::apply();
 
     if (exportActive && mModeManager.current() != EditorMode::Render) {
         mModeManager.switchTo(EditorMode::Render);
@@ -213,8 +218,9 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     }
     mLastExportState = state.exportStatus.state;
 
-    if (mModeManager.current() == EditorMode::Render) mRenderMode.draw();
-    else mEditMode.draw();
+    auto const ctx = frameContext();
+    if (mModeManager.current() == EditorMode::Render) mRenderMode.draw(ctx);
+    else mEditMode.draw(ctx);
 
     ErrorDialog::getInstance().draw();
     updateExitHold();
@@ -291,27 +297,27 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekTickLeft, true)) {
-        mTimelinePanel.seekRelative(-1);
+        mTimelinePanel.seekRelative(frameContext(), -1);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekTickRight, true)) {
-        mTimelinePanel.seekRelative(1);
+        mTimelinePanel.seekRelative(frameContext(), 1);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekSecondLeft, true)) {
-        mTimelinePanel.seekRelative(-20);
+        mTimelinePanel.seekRelative(frameContext(), -20);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekSecondRight, true)) {
-        mTimelinePanel.seekRelative(20);
+        mTimelinePanel.seekRelative(frameContext(), 20);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::PreviousEditPoint, true)) {
-        mTimelinePanel.seekAdjacentEditPoint(false);
+        mTimelinePanel.seekAdjacentEditPoint(frameContext(), false);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::NextEditPoint, true)) {
-        mTimelinePanel.seekAdjacentEditPoint(true);
+        mTimelinePanel.seekAdjacentEditPoint(frameContext(), true);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::ZoomOutTimeline, true)) {

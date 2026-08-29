@@ -1,7 +1,7 @@
-﻿#include "DetailsPanel.h"
+#include "DetailsPanel.h"
 
-#include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/components/PropertyControls.h"
+#include "playback/editor/ui/components/Widgets.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -27,14 +27,7 @@ T const* findById(std::vector<T> const& values, std::string const& id) {
     return it == values.end() ? nullptr : &*it;
 }
 
-std::string formatTick(int tick) {
-    char value[32]{};
-    tick                   = std::max(0, tick);
-    int const totalSeconds = tick / kTicksPerSecond;
-    int const centiseconds = tick % kTicksPerSecond * (100 / kTicksPerSecond);
-    std::snprintf(value, sizeof(value), "%02d:%02d.%02d", totalSeconds / 60, totalSeconds % 60, centiseconds);
-    return value;
-}
+using widgets::formatTick;
 
 std::string interpolationName(state::editing::model::CameraInterpolationType interpolation) {
     using Interpolation = state::editing::model::CameraInterpolationType;
@@ -74,8 +67,6 @@ std::string categoryName(state::editing::model::SubActorCategory category) {
     }
 }
 
-void submit(EditorAction action) { ReplayEditor::getInstance().submitAction(std::move(action)); }
-
 bool vectorInput(
     char const* id,
     float (&values)[3],
@@ -107,16 +98,16 @@ bool vectorInput(
 
 } // namespace
 
-void DetailsPanel::draw() {
-    auto&       editor  = ReplayEditor::getInstance();
-    auto const& state   = editor.state();
+void DetailsPanel::draw(PanelContext const& ctx) {
+    auto const& state   = ctx.state;
     auto const  project = state.project;
     if (!project) {
-        ImGui::TextDisabled("%s", "playback.refactorEditor.common.noActiveProject"_tr().c_str());
+        widgets::noActiveProjectPlaceholder();
         return;
     }
 
-    auto const& selection = editor.selection();
+    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
+    auto const& selection = ctx.selection;
     char        search[128]{};
     std::string subject = "playback.refactorEditor.details.noSelection"_tr();
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
@@ -156,7 +147,7 @@ void DetailsPanel::draw() {
                 if (ImGui::Selectable((formatTick(segment.startTick) + " - " + formatTick(segment.endTick) + "  "
                                        + std::to_string(segment.speed) + "x")
                                           .c_str())) {
-                    editor.selection().select(state::editing::model::SelectedWorldActorSegment{segment.id});
+                    ctx.selection.select(state::editing::model::SelectedWorldActorSegment{segment.id});
                 }
             }
             property::separator();
@@ -187,7 +178,7 @@ void DetailsPanel::draw() {
                             }
                             ++shown;
                             if (ImGui::Selectable(actor.name.empty() ? actor.id.c_str() : actor.name.c_str())) {
-                                editor.selection().select(state::editing::model::SelectedSubActor{actor.id});
+                                ctx.selection.select(state::editing::model::SelectedSubActor{actor.id});
                             }
                         }
                     }
@@ -384,17 +375,17 @@ void DetailsPanel::draw() {
                 submit(std::move(action));
             }
             for (auto const& [keyTick, _] : camera->keysByTick) {
-                auto const* selectedKey = editor.selection().getAs<state::editing::model::SelectedKeyframe>();
+                auto const* selectedKey = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
                 bool const selected = selectedKey && selectedKey->trackId == camera->id && selectedKey->tick == keyTick;
                 ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(176, 128, 18, 255));
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(205, 157, 32, 255));
                 ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(232, 184, 45, 255));
                 if (ImGui::Selectable("playback.refactorEditor.details.tickValue"_tr(keyTick).c_str(), selected)) {
-                    editor.selection().select(state::editing::model::SelectedKeyframe{camera->id, keyTick});
+                    ctx.selection.select(state::editing::model::SelectedKeyframe{camera->id, keyTick});
                     EditorAction previewAction{EditorActionType::SetPreviewCamera};
                     previewAction.id = camera->id;
                     submit(std::move(previewAction));
-                    editor.seekTo(keyTick);
+                    ctx.commands.seekTo(keyTick);
                 }
                 ImGui::PopStyleColor(3);
             }

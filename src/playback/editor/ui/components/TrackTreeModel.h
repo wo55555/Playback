@@ -5,8 +5,10 @@
 #include <vector>
 
 namespace playback::state::editing::model {
-
 struct EditorStateExt;
+}
+
+namespace playback::editor::ui {
 
 enum class TrackRowKind { Camera, Marker };
 
@@ -27,8 +29,8 @@ public:
 
     void                                           setSearch(std::string_view query);
     void                                           setCamerasExpanded(bool expanded);
-    void                                           rebuild(const EditorStateExt& state);
-    [[nodiscard]] const std::vector<TrackTreeRow>& rows() const;
+    void                                           rebuild(state::editing::model::EditorStateExt const& state);
+    [[nodiscard]] std::vector<TrackTreeRow> const& rows() const;
 
 private:
     std::string               mSearch;
@@ -36,4 +38,4 @@ private:
     bool                      mCamerasExpanded{true};
 };
 
-} // namespace playback::state::editing::model
+} // namespace playback::editor::ui

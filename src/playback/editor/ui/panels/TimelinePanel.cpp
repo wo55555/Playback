@@ -1,6 +1,7 @@
-﻿#include "TimelinePanel.h"
+#include "TimelinePanel.h"
 
-#include "playback/editor/ui/ReplayEditor.h"
+#include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 
 #include "ll/api/i18n/I18n.h"
@@ -24,44 +25,19 @@ constexpr float kMaxZoomScale      = 20.0f;
 constexpr float kZoomStep          = 1.15f;
 constexpr int   kTicksPerSecond    = 20;
 
-constexpr ImU32 kBackground        = IM_COL32(27, 27, 27, 255);
-constexpr ImU32 kSidebarBackground = IM_COL32(41, 41, 41, 255);
-constexpr ImU32 kRulerBackground   = IM_COL32(32, 32, 32, 255);
-constexpr ImU32 kLine              = IM_COL32(73, 73, 73, 255);
-constexpr ImU32 kCameraColor       = IM_COL32(77, 63, 83, 255);
-constexpr ImU32 kCameraSelected    = IM_COL32(112, 87, 124, 255);
-constexpr ImU32 kPlayheadColor     = IM_COL32(58, 140, 240, 255);
-constexpr ImU32 kRowHighlight      = IM_COL32(58, 58, 58, 255);
-constexpr ImU32 kRowSelectedBorder = IM_COL32(122, 142, 166, 255);
+constexpr ImU32 kBackground        = theme::kTimelineBg;
+constexpr ImU32 kSidebarBackground = theme::kTimelineSidebar;
+constexpr ImU32 kRulerBackground   = theme::kTimelineRuler;
+constexpr ImU32 kLine              = theme::kLine;
+constexpr ImU32 kCameraColor       = theme::kCameraColor;
+constexpr ImU32 kCameraSelected    = theme::kCameraSelected;
+constexpr ImU32 kPlayheadColor     = theme::kAccent;
+constexpr ImU32 kRowHighlight      = theme::kRowHighlight;
+constexpr ImU32 kRowSelectedBorder = theme::kRowSelectedBorder;
 
-float iconButtonSize() { return std::max(25.0f, ImGui::GetFontSize() + 12.0f); }
-
-bool iconButton(char const* id, char const* icon, char const* tooltip, bool enabled = true) {
-    ImGui::BeginDisabled(!enabled);
-    float const  buttonSize = iconButtonSize();
-    ImVec2 const cursor     = ImGui::GetCursorScreenPos();
-    ImVec2 const mouse      = ImGui::GetMousePos();
-    bool const   hovered    = enabled && mouse.x >= cursor.x && mouse.x <= cursor.x + buttonSize && mouse.y >= cursor.y
-                      && mouse.y <= cursor.y + buttonSize;
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_Text, hovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(170, 170, 170, 255));
-    bool const clicked = ImGui::Button((std::string(icon) + "##" + id).c_str(), {buttonSize, buttonSize});
-    ImGui::PopStyleColor(4);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && tooltip) ImGui::SetTooltip("%s", tooltip);
-    ImGui::EndDisabled();
-    return clicked;
-}
-
-std::string formatTick(int tick) {
-    char value[32]{};
-    tick                   = std::max(0, tick);
-    int const totalSeconds = tick / kTicksPerSecond;
-    int const centiseconds = tick % kTicksPerSecond * (100 / kTicksPerSecond);
-    std::snprintf(value, sizeof(value), "%02d:%02d.%02d", totalSeconds / 60, totalSeconds % 60, centiseconds);
-    return value;
-}
+using widgets::formatTick;
+using widgets::iconButton;
+using widgets::iconButtonSize;
 
 int majorTickStep(float pixelsPerTick, float minimumSpacing) {
     constexpr int steps[] = {
@@ -100,26 +76,22 @@ void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScal
     mDraggingKeyframeMoved     = false;
 }
 
-void TimelinePanel::submitSeek(int tick) {
-    auto const& state = ReplayEditor::getInstance().state();
-    mPendingSeekTick  = std::clamp(tick, 0, std::max(0, state.totalTicks));
+void TimelinePanel::submitSeek(PanelContext const& ctx, int tick) {
+    mPendingSeekTick = std::clamp(tick, 0, std::max(0, ctx.state.totalTicks));
     EditorAction action{EditorActionType::Seek};
     action.tick = mPendingSeekTick;
-    submitEdit(std::move(action));
+    ctx.submitAction(std::move(action));
 }
 
-void TimelinePanel::submitEdit(EditorAction action) { ReplayEditor::getInstance().submitAction(std::move(action)); }
+void TimelinePanel::seekTo(PanelContext const& ctx, int tick) { submitSeek(ctx, tick); }
 
-void TimelinePanel::seekTo(int tick) { submitSeek(tick); }
-
-void TimelinePanel::seekRelative(int tickDelta) {
-    auto const& state    = ReplayEditor::getInstance().state();
-    int const   baseTick = mPendingSeekTick >= 0 ? mPendingSeekTick : state.currentTick;
-    submitSeek(baseTick + tickDelta);
+void TimelinePanel::seekRelative(PanelContext const& ctx, int tickDelta) {
+    int const baseTick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+    submitSeek(ctx, baseTick + tickDelta);
 }
 
-void TimelinePanel::seekAdjacentEditPoint(bool forward) {
-    auto const& state   = ReplayEditor::getInstance().state();
+void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward) {
+    auto const& state   = ctx.state;
     auto const  project = state.project;
     if (!project) return;
 
@@ -146,32 +118,30 @@ void TimelinePanel::seekAdjacentEditPoint(bool forward) {
         for (auto const& [tick, _] : camera.keysByTick) consider(tick);
     }
     for (auto const& marker : project->markers) consider(marker.tick);
-    submitSeek(target);
+    submitSeek(ctx, target);
 }
 
-bool TimelinePanel::addKeyframeAtPlayhead() {
-    auto&       editor         = ReplayEditor::getInstance();
-    auto const* selectedCamera = editor.selection().getAs<state::editing::model::SelectedCamera>();
+bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
+    auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
     if (!selectedCamera) return false;
 
     EditorAction action{EditorActionType::AddCameraKeyframe};
     action.id   = selectedCamera->cameraId;
-    action.tick = mPendingSeekTick >= 0 ? mPendingSeekTick : editor.state().currentTick;
-    submitEdit(std::move(action));
+    action.tick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+    ctx.submitAction(std::move(action));
     return true;
 }
 
-bool TimelinePanel::deleteSelection() {
-    auto&      editor  = ReplayEditor::getInstance();
-    auto const project = editor.state().project;
+bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
+    auto const project = ctx.state.project;
     if (!project) return false;
 
     EditorAction action;
-    if (auto const* selectedCamera = editor.selection().getAs<state::editing::model::SelectedCamera>();
+    if (auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
         selectedCamera && project->cameras.size() > 1) {
         action.type = EditorActionType::DeleteCamera;
         action.id   = selectedCamera->cameraId;
-    } else if (auto const* selectedKeyframe = editor.selection().getAs<state::editing::model::SelectedKeyframe>()) {
+    } else if (auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>()) {
         action.type = EditorActionType::DeleteCameraKeyframe;
         action.id   = selectedKeyframe->trackId;
         action.tick = selectedKeyframe->tick;
@@ -179,8 +149,8 @@ bool TimelinePanel::deleteSelection() {
         return false;
     }
 
-    submitEdit(std::move(action));
-    editor.selection().clear();
+    ctx.submitAction(std::move(action));
+    ctx.selection.clear();
     return true;
 }
 
@@ -193,12 +163,11 @@ void TimelinePanel::resetZoom() {
     mScrollX   = 0.0f;
 }
 
-void TimelinePanel::draw(bool allowInput) {
-    auto&       editor  = ReplayEditor::getInstance();
-    auto const& state   = editor.state();
+void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
+    auto const& state   = ctx.state;
     auto const  project = state.project;
     if (!project) {
-        ImGui::TextDisabled("%s", "playback.refactorEditor.common.noActiveProject"_tr().c_str());
+        widgets::noActiveProjectPlaceholder();
         return;
     }
 
@@ -236,16 +205,16 @@ void TimelinePanel::draw(bool allowInput) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(32, 32, 32, 255));
     auto        sameIcon  = [] { ImGui::SameLine(0.0f, 1.0f); };
     auto        nextGroup = [] { ImGui::SameLine(0.0f, 8.0f); };
-    auto const& selection = editor.selection();
+    auto const& selection = ctx.selection;
     bool const  canDelete = (selection.getAs<state::editing::model::SelectedCamera>() && project->cameras.size() > 1)
                         || selection.getAs<state::editing::model::SelectedKeyframe>();
     auto const deleteTooltip = "playback.refactorEditor.timeline.deleteSelection"_tr();
-    if (iconButton("delete", ICON_DELETE, deleteTooltip.c_str(), canDelete)) (void)deleteSelection();
+    if (iconButton("delete", ICON_DELETE, deleteTooltip.c_str(), canDelete)) (void)deleteSelection(ctx);
     sameIcon();
     auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>();
     auto const  addKeyTooltip  = "playback.refactorEditor.timeline.addKeyframe"_tr();
     if (iconButton("add-key", ICON_ADD_KEYFRAME, addKeyTooltip.c_str(), selectedCamera != nullptr))
-        (void)addKeyframeAtPlayhead();
+        (void)addKeyframeAtPlayhead(ctx);
     nextGroup();
     ImGui::PushStyleColor(ImGuiCol_CheckMark, IM_COL32(42, 147, 222, 255));
     ImGui::Checkbox(("playback.refactorEditor.timeline.snap"_tr() + "##timeline-snap").c_str(), &mSnapEnabled);
@@ -325,7 +294,7 @@ void TimelinePanel::draw(bool allowInput) {
         if (ImGui::MenuItem("playback.refactorEditor.details.addFreeCamera"_tr().c_str())) {
             EditorAction action{EditorActionType::AddFreeCamera};
             action.name = "playback.refactorEditor.defaults.camera"_tr(project->cameras.size() + 1);
-            submitEdit(std::move(action));
+            ctx.submitAction(std::move(action));
         }
         ImGui::EndPopup();
     }
@@ -351,12 +320,11 @@ void TimelinePanel::draw(bool allowInput) {
     float listY = bodyTop + 2.0f - mScrollY;
     for (auto const& row : mTrackTree.rows()) {
         float const rowBottom        = listY + row.height;
-        auto const* selectedKeyframe = editor.selection().getAs<state::editing::model::SelectedKeyframe>();
-        bool        selected =
-            row.kind == state::editing::model::TrackRowKind::Camera
-            && ((editor.selection().getAs<state::editing::model::SelectedCamera>()
-                 && editor.selection().getAs<state::editing::model::SelectedCamera>()->cameraId == row.id.substr(7))
-                || (selectedKeyframe && selectedKeyframe->trackId == row.id.substr(7)));
+        auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
+        bool        selected         = row.kind == TrackRowKind::Camera
+                     && ((ctx.selection.getAs<state::editing::model::SelectedCamera>()
+                          && ctx.selection.getAs<state::editing::model::SelectedCamera>()->cameraId == row.id.substr(7))
+                         || (selectedKeyframe && selectedKeyframe->trackId == row.id.substr(7)));
         if (rowBottom < bodyTop || listY > workBottom) {
             listY = rowBottom + 2.0f;
             continue;
@@ -392,7 +360,7 @@ void TimelinePanel::draw(bool allowInput) {
         }
         float const textY = listY + (row.height - ImGui::GetFontSize()) * 0.5f;
         std::string label;
-        if (row.kind == state::editing::model::TrackRowKind::Camera) {
+        if (row.kind == TrackRowKind::Camera) {
             label = std::string(ICON_CAMERA) + "  " + row.name;
             if (!row.enabled) {
                 drawList->AddText({fullMin.x + 12.0f, textY}, IM_COL32(118, 118, 118, 255), label.c_str());
@@ -415,7 +383,7 @@ void TimelinePanel::draw(bool allowInput) {
                 EditorAction action{EditorActionType::SetCameraEnabled};
                 action.id    = row.id.substr(7);
                 action.value = !row.enabled;
-                submitEdit(std::move(action));
+                ctx.submitAction(std::move(action));
             }
             drawList->AddText(
                 {enabledX + (controlSize - ImGui::CalcTextSize(row.enabled ? ICON_EYE : ICON_HIDE).x) * 0.5f, textY},
@@ -427,13 +395,13 @@ void TimelinePanel::draw(bool allowInput) {
                 ImGui::GetMousePos().x >= enabledX && ImGui::GetMousePos().x <= enabledX + controlSize;
             if (clicked && !clickOnControls) {
                 auto const cameraId = row.id.substr(7);
-                editor.selection().select(state::editing::model::SelectedCamera{cameraId});
+                ctx.selection.select(state::editing::model::SelectedCamera{cameraId});
                 EditorAction action{EditorActionType::SetPreviewCamera};
                 action.id = cameraId;
-                editor.submitAction(std::move(action));
+                ctx.submitAction(std::move(action));
             }
         }
-        if (row.kind == state::editing::model::TrackRowKind::Camera && row.enabled) {
+        if (row.kind == TrackRowKind::Camera && row.enabled) {
             drawList->AddText({fullMin.x + 12.0f, textY}, IM_COL32(210, 210, 210, 255), label.c_str());
         }
         if (row.locked) {
@@ -503,7 +471,7 @@ void TimelinePanel::draw(bool allowInput) {
         displayTick = mRulerDragTick;
     }
     if (allowInput && ImGui::IsItemDeactivated()) {
-        if (mRulerDragTick >= 0) submitSeek(mRulerDragTick);
+        if (mRulerDragTick >= 0) submitSeek(ctx, mRulerDragTick);
         mRulerDragTick = -1;
     }
 
@@ -539,7 +507,7 @@ void TimelinePanel::draw(bool allowInput) {
         if (minimum > maximum) return mDraggingKeyframeStartTick;
         return std::clamp(tick, minimum, maximum);
     };
-    auto const* selectedKeyframe = editor.selection().getAs<state::editing::model::SelectedKeyframe>();
+    auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
     float       y                = bodyTop + 2.0f - mScrollY;
     bool        clickConsumed    = false;
     for (auto const& row : mTrackTree.rows()) {
@@ -548,13 +516,13 @@ void TimelinePanel::draw(bool allowInput) {
             y = rowBottom + 2.0f;
             continue;
         }
-        drawList->AddRectFilled({canvasLeft, y}, {fullMax.x, rowBottom}, IM_COL32(29, 29, 29, 255));
-        if (row.kind == state::editing::model::TrackRowKind::Camera && row.cameraIndex >= 0
+        drawList->AddRectFilled({canvasLeft, y}, {fullMax.x, rowBottom}, theme::kTimelineTrackBg);
+        if (row.kind == TrackRowKind::Camera && row.cameraIndex >= 0
             && row.cameraIndex < static_cast<int>(project->cameras.size())) {
             auto const& camera = project->cameras[row.cameraIndex];
             bool const  cameraSelected =
-                (editor.selection().getAs<state::editing::model::SelectedCamera>()
-                 && editor.selection().getAs<state::editing::model::SelectedCamera>()->cameraId == camera.id)
+                (ctx.selection.getAs<state::editing::model::SelectedCamera>()
+                 && ctx.selection.getAs<state::editing::model::SelectedCamera>()->cameraId == camera.id)
                 || (selectedKeyframe && selectedKeyframe->trackId == camera.id);
             float const cameraAmount = mAnimator.animate("canvas-selected", camera.id, cameraSelected ? 1.0f : 0.0f);
             ImU32 const cameraColor =
@@ -573,19 +541,19 @@ void TimelinePanel::draw(bool allowInput) {
                 ImVec2 const left{x - 5.0f, centerY};
                 ImU32 const  keyColor = !camera.enabled
                                           ? IM_COL32(132, 132, 132, 180)
-                                          : (selected ? IM_COL32(244, 202, 47, 255) : IM_COL32(255, 255, 255, 255));
+                                          : (selected ? IM_COL32(244, 202, 47, 255) : theme::kIconHighlight);
                 drawList->AddQuadFilled(top, right, bottom, left, keyColor);
                 drawList->AddQuad(top, right, bottom, left, IM_COL32(24, 24, 24, 255), 1.0f);
                 if (allowInput && !clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
                     && std::abs(ImGui::GetMousePos().x - x) <= 7.0f && ImGui::GetMousePos().y >= y
                     && ImGui::GetMousePos().y <= rowBottom) {
                     clickConsumed = true;
-                    editor.selection().select(state::editing::model::SelectedKeyframe{camera.id, keyTick});
+                    ctx.selection.select(state::editing::model::SelectedKeyframe{camera.id, keyTick});
                     EditorAction previewAction{EditorActionType::SetPreviewCamera};
                     previewAction.id = camera.id;
-                    editor.submitAction(std::move(previewAction));
+                    ctx.submitAction(std::move(previewAction));
                     if (camera.locked || !camera.enabled) {
-                        submitSeek(keyTick);
+                        submitSeek(ctx, keyTick);
                     } else {
                         mDraggingKeyframeCameraId    = camera.id;
                         mDraggingKeyframeStartMouseX = ImGui::GetMousePos().x;
@@ -599,10 +567,10 @@ void TimelinePanel::draw(bool allowInput) {
             if (allowInput && !clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
                 && contains({canvasLeft, y + 5.0f}, {fullMax.x, rowBottom - 5.0f}, ImGui::GetMousePos())) {
                 clickConsumed = true;
-                editor.selection().select(state::editing::model::SelectedCamera{camera.id});
+                ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
                 EditorAction action{EditorActionType::SetPreviewCamera};
                 action.id = camera.id;
-                editor.submitAction(std::move(action));
+                ctx.submitAction(std::move(action));
             }
         }
         y = rowBottom + 2.0f;
@@ -624,10 +592,10 @@ void TimelinePanel::draw(bool allowInput) {
                     action.id            = mDraggingKeyframeCameraId;
                     action.tick          = mDraggingKeyframeStartTick;
                     action.secondaryTick = candidateTick;
-                    submitEdit(std::move(action));
+                    ctx.submitAction(std::move(action));
                 }
             } else {
-                submitSeek(mDraggingKeyframeStartTick);
+                submitSeek(ctx, mDraggingKeyframeStartTick);
             }
             mDraggingKeyframeCameraId.clear();
             mDraggingKeyframeStartTick = -1;
@@ -645,7 +613,7 @@ void TimelinePanel::draw(bool allowInput) {
     if (allowInput && mDraggingPlayhead) {
         displayTick = tickFromMouse();
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            submitSeek(displayTick);
+            submitSeek(ctx, displayTick);
             mDraggingPlayhead = false;
         }
     }
@@ -653,7 +621,7 @@ void TimelinePanel::draw(bool allowInput) {
         && ImGui::GetMousePos().x >= canvasLeft && ImGui::GetMousePos().x <= fullMax.x
         && ImGui::GetMousePos().y >= bodyTop
         && ImGui::GetMousePos().y < workBottom - (maxScroll > 0.0f ? 18.0f : 0.0f)) {
-        submitSeek(tickFromMouse());
+        submitSeek(ctx, tickFromMouse());
     }
 
     float const visiblePlayheadX =
@@ -725,30 +693,30 @@ void TimelinePanel::draw(bool allowInput) {
 
     float const playbackWidth = buttonSize * 5.0f + 4.0f;
     ImGui::SetCursorPos({std::max(0.0f, (transportContentWidth - playbackWidth) * 0.5f), transportRowY});
-    if (iconButton("transport-start", ICON_SKIP_BACK, startTooltip.c_str())) seekTo(0);
+    if (iconButton("transport-start", ICON_SKIP_BACK, startTooltip.c_str())) seekTo(ctx, 0);
     sameIcon();
-    if (iconButton("transport-prev", ICON_CHEVRONS_LEFT, prevTooltip.c_str())) seekRelative(-1);
+    if (iconButton("transport-prev", ICON_CHEVRONS_LEFT, prevTooltip.c_str())) seekRelative(ctx, -1);
     sameIcon();
     if (iconButton(
             "transport-play",
             state.paused ? ICON_PLAY : ICON_PAUSE,
             state.paused ? playTooltip.c_str() : pauseTooltip.c_str()
         )) {
-        submitEdit({EditorActionType::TogglePause});
+        ctx.submitAction({EditorActionType::TogglePause});
     }
     sameIcon();
-    if (iconButton("transport-next", ICON_CHEVRONS_RIGHT, nextTooltip.c_str())) seekRelative(1);
+    if (iconButton("transport-next", ICON_CHEVRONS_RIGHT, nextTooltip.c_str())) seekRelative(ctx, 1);
     sameIcon();
-    if (iconButton("transport-end", ICON_SKIP_FORWARD, endTooltip.c_str())) seekTo(state.totalTicks);
+    if (iconButton("transport-end", ICON_SKIP_FORWARD, endTooltip.c_str())) seekTo(ctx, state.totalTicks);
 
     float const speedWidth = buttonSize * 2.0f + 4.0f + ImGui::CalcTextSize(speedLabel).x;
     ImGui::SetCursorPos({std::max(0.0f, transportContentWidth - speedWidth - 8.0f), transportRowY});
-    if (iconButton("speed-down", "-", slowerTooltip.c_str())) submitEdit({EditorActionType::DecreaseSpeed});
+    if (iconButton("speed-down", "-", slowerTooltip.c_str())) ctx.submitAction({EditorActionType::DecreaseSpeed});
     ImGui::SameLine(0.0f, 2.0f);
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("%s", speedLabel);
     ImGui::SameLine(0.0f, 2.0f);
-    if (iconButton("speed-up", "+", fasterTooltip.c_str())) submitEdit({EditorActionType::IncreaseSpeed});
+    if (iconButton("speed-up", "+", fasterTooltip.c_str())) ctx.submitAction({EditorActionType::IncreaseSpeed});
     ImGui::EndChild();
     ImGui::PopStyleVar();
 }

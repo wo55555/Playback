@@ -1,16 +1,22 @@
 #pragma once
 
+#include "playback/editor/ui/PanelContext.h"
+
 #include <array>
 
 namespace playback::editor::ui {
 
 class EditorMenuBar {
 public:
-    void               draw();
+    void               draw(PanelContext const& ctx);
     void               openExportDialog(int totalTicks, bool ffmpegAvailable);
     [[nodiscard]] bool isAnyMenuOpen() const;
 
 private:
+    void drawMenus(PanelContext const& ctx);
+    void drawShortcutDialog();
+    void drawExportDialog(PanelContext const& ctx);
+
     bool                  mExportDialogOpen{false};
     bool                  mExportSettingsInitialized{false};
     bool                  mShortcutDialogOpen{false};

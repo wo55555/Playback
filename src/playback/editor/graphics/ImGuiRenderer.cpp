@@ -394,8 +394,7 @@ struct ImGuiRenderer::Impl {
         auto&      io              = ImGui::GetIO();
         io.DisplaySize             = surfaceMetrics.displaySize;
         io.DisplayFramebufferScale = surfaceMetrics.framebufferScale;
-        auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
-        io.FontGlobalScale         = std::max(1.0f, layout.scale);
+        io.FontGlobalScale         = std::max(1.0f, ui::calculateReplayUIScale(io.DisplaySize.y));
         auto frameNow              = std::chrono::steady_clock::now();
         io.DeltaTime  = std::clamp(std::chrono::duration<float>(frameNow - lastFrameTime).count(), 1.f / 240.f, 0.25f);
         lastFrameTime = frameNow;
@@ -1150,8 +1149,7 @@ bool ImGuiRenderer::renderInternal(
         auto&      io              = ImGui::GetIO();
         io.DisplaySize             = surfaceMetrics.displaySize;
         io.DisplayFramebufferScale = surfaceMetrics.framebufferScale;
-        auto layout                = ui::calculateReplayUILayout(io.DisplaySize.x, io.DisplaySize.y);
-        io.FontGlobalScale         = std::max(1.0f, layout.scale);
+        io.FontGlobalScale         = std::max(1.0f, ui::calculateReplayUIScale(io.DisplaySize.y));
         auto fn                    = std::chrono::steady_clock::now();
         io.DeltaTime    = std::clamp(std::chrono::duration<float>(fn - p.lastFrameTime).count(), 1.f / 240.f, 0.25f);
         p.lastFrameTime = fn;
