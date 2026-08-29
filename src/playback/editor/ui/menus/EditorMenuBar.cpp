@@ -247,10 +247,12 @@ void EditorMenuBar::drawShortcutDialog() {
         }
         ImGui::Spacing();
         float const closeWidth = 110.0f;
-        ImGui::SetCursorPosX(std::max(
-            ImGui::GetStyle().WindowPadding.x,
-            ImGui::GetWindowWidth() - closeWidth - ImGui::GetStyle().WindowPadding.x
-        ));
+        ImGui::SetCursorPosX(
+            std::max(
+                ImGui::GetStyle().WindowPadding.x,
+                ImGui::GetWindowWidth() - closeWidth - ImGui::GetStyle().WindowPadding.x
+            )
+        );
         if (ImGui::Button("playback.refactorEditor.shortcuts.close"_tr().c_str(), {closeWidth, 32.0f})) {
             mShortcutDialogOpen = false;
             ImGui::CloseCurrentPopup();
@@ -478,13 +480,15 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             ImGui::TableSetColumnIndex(0);
             ImGui::TextDisabled("%s", "playback.refactorEditor.export.captureSummary"_tr().c_str());
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted("playback.refactorEditor.export.captureValue"_tr(
-                                       mExportWidth,
-                                       mExportHeight,
-                                       ssaaValue,
-                                       mExportWarmupFrames
-            )
-                                       .c_str());
+            ImGui::TextUnformatted(
+                "playback.refactorEditor.export.captureValue"_tr(
+                    mExportWidth,
+                    mExportHeight,
+                    ssaaValue,
+                    mExportWarmupFrames
+                )
+                    .c_str()
+            );
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::AlignTextToFramePadding();
