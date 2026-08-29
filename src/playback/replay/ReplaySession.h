@@ -214,6 +214,7 @@ private:
     std::vector<std::pair<MinecraftPacketIds, std::string>>     mPendingSnapshotGamePackets;
     std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
+    std::vector<std::string>                                    mAppliedPlayerListAdds;
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     std::unordered_set<std::string>                             mReplayObjectiveNames;
     std::unordered_set<ChunkPos>                                mCenterChunkPositions;
@@ -252,7 +253,8 @@ private:
 
     [[nodiscard]] bool prepareChunkInjectionPlan(PlaybackView const& view);
 
-    [[nodiscard]] bool tryFinishChunkInjection();
+    [[nodiscard]] bool
+    tryFinishChunkInjection(std::optional<std::chrono::steady_clock::time_point> catchUpDeadline = std::nullopt);
 
     [[nodiscard]] bool finishChunkInjection();
 
@@ -285,6 +287,8 @@ private:
         std::chrono::steady_clock::time_point const& deadline
     );
 
+    [[nodiscard]] bool clearReplayPlayerList();
+
     [[nodiscard]] bool clearRecordedEntities();
 
     [[nodiscard]] bool refreshReplayPlayer();
@@ -301,6 +305,10 @@ private:
     void finishWorldCleanup();
 
     void beginSeek(int targetTick);
+
+    void finishSeek();
+
+    void settleAfterSeek();
 
     [[nodiscard]] bool hasPendingReplayReaderBoundary() const;
 
