@@ -160,6 +160,7 @@ private:
     std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
 
     bool                                        mObserverPreviewInRange{false};
+    uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
     ::Vec2                                      mLastObserverPreviewRotation{};
     std::optional<ChunkPos>                     mLastObserverServerSyncChunk;
@@ -214,7 +215,6 @@ private:
     std::vector<std::pair<MinecraftPacketIds, std::string>>     mPendingSnapshotGamePackets;
     std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
-    std::vector<std::string>                                    mAppliedPlayerListAdds;
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     std::unordered_set<std::string>                             mReplayObjectiveNames;
     std::unordered_set<ChunkPos>                                mCenterChunkPositions;
@@ -286,8 +286,6 @@ private:
         size_t                                       maxPackets,
         std::chrono::steady_clock::time_point const& deadline
     );
-
-    [[nodiscard]] bool clearReplayPlayerList();
 
     [[nodiscard]] bool clearRecordedEntities();
 

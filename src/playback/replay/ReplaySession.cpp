@@ -493,7 +493,6 @@ void ReplaySession::clearReplayData() {
     mPendingSnapshotGamePackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
-    mAppliedPlayerListAdds.clear();
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     mReplayObjectiveNames.clear();
@@ -656,6 +655,14 @@ void ReplaySession::updateObserverPreview() {
     if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return;
     auto const time = getCameraRenderSampleTime();
     if (!time) return;
+    // Republishing (a track was toggled or edited) invalidates the cached pose, unlike merely leaving the range.
+    auto const timelineGeneration = keyframe::previewTimelineGeneration();
+    if (mObserverPreviewGeneration != timelineGeneration) {
+        mObserverPreviewGeneration = timelineGeneration;
+        mObserverPreviewInRange    = false;
+        mLastObserverServerSyncChunk.reset();
+    }
+
     auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
     if (!sample) {
         // Leaving the range: pin the observer and server to the last in-range pose.
@@ -1279,7 +1286,6 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mPendingSnapshotGamePackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
-    mAppliedPlayerListAdds.clear();
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     mReplayObjectiveNames.clear();
@@ -1424,10 +1430,6 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
     mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
     if (!clearRecordedEntities()) {
-        mReplayFailed = true;
-        return;
-    }
-    if (!clearReplayPlayerList()) {
         mReplayFailed = true;
         return;
     }
@@ -2962,14 +2964,10 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     if (packetId == MinecraftPacketIds::PlayerList) {
         auto& playerList = static_cast<PlayerListPacket&>(*packet);
-        if (playerList.mAction == PlayerListPacketType::Add) {
-            for (auto& entry : *playerList.mEntries) {
-                auto& skinOwner = entry.mSkin->mSkinImpl;
-                if (!skinOwner) return false;
-                skinOwner->mObject.mIsPrimaryUser = false;
-            }
-            // Kept so a snapshot reload can withdraw the roster it registered; entries cannot be rebuilt by hand.
-            mAppliedPlayerListAdds.emplace_back(payload);
+        for (auto& entry : *playerList.mEntries) {
+            auto& skinOwner = entry.mSkin->mSkinImpl;
+            if (!skinOwner) return false;
+            skinOwner->mObject.mIsPrimaryUser = false;
         }
     }
 
@@ -3140,32 +3138,6 @@ bool ReplaySession::flushPendingSnapshotGamePackets(
             applied,
             playerListOnly ? "player-list" : "entity"
         );
-    }
-    return true;
-}
-
-// A snapshot re-adds its own roster, but a stale entry makes the client keep the skin it already resolved.
-bool ReplaySession::clearReplayPlayerList() {
-    if (mAppliedPlayerListAdds.empty()) return true;
-    if (!mNetworkHandler) return false;
-
-    auto payloads = std::move(mAppliedPlayerListAdds);
-    mAppliedPlayerListAdds.clear();
-
-    // PlayerListEntry has no callable constructor, so removals reuse the decoded Add entries.
-    for (auto const& payload : payloads) {
-        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::PlayerList);
-        if (!packet || !packet->mHandler) return false;
-
-        ReadOnlyBinaryStream stream(payload, false);
-        if (!packet->read(stream) || !stream.ensureReadCompleted()) return false;
-
-        auto& playerList   = static_cast<PlayerListPacket&>(*packet);
-        playerList.mAction = PlayerListPacketType::Remove;
-
-        mInjectingPacket.store(packet.get(), std::memory_order_release);
-        InjectionReset reset{mInjectingPacket};
-        packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
     }
     return true;
 }
