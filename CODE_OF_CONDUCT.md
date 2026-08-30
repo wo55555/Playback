@@ -46,7 +46,7 @@ Tensions can occur between community members even when they are trying their bes
 
 When an incident does occur, it is important to report it promptly. To report a possible violation, use the following private channel:
 
-- **Discord:** Open a private support ticket in the official community server: [https://discord.gg/mUhRUD8AM](https://discord.gg/mUhRUD8AM).
+- **Discord:** Open a private support ticket in the official community server: [https://discord.gg/qKrT38mFh7](https://discord.gg/qKrT38mFh7).
 
 > [!NOTE]
 > - Reports must be submitted privately. Do not post alleged violations in public GitHub issues, GitHub Discussions, pull requests, or public Discord channels.

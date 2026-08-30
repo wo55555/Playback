@@ -28,7 +28,7 @@
   </p>
 
   <p>
-    <a href="https://discord.gg/mUhRUD8AM"><img src="https://img.shields.io/discord/1531092797367652403?style=for-the-badge&amp;logo=discord" alt="Playback Discord online member count"></a>
+    <a href="https://discord.gg/qKrT38mFh7"><img src="https://img.shields.io/discord/1531092797367652403?style=for-the-badge&amp;logo=discord" alt="Playback Discord online member count"></a>
     <a href="https://qm.qq.com/q/ufJatMDcha"><img src="https://img.shields.io/badge/QQ-Join%20group-EA0000?style=for-the-badge&amp;logo=qq&amp;logoColor=white" alt="Join the Playback QQ group"></a>
   </p>
 </div>
