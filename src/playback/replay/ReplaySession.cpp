@@ -1063,8 +1063,8 @@ void ReplaySession::tick() {
             if (mPendingSnapshotApply || mPendingReplayDimension) return;
         }
         if (mPendingSnapshotApply || mPendingReplayDimension) return;
-        // A pending injection is drained inside the catch-up loop, so only non-seek ticks bail out here.
-        if (mChunkInjectionPending && mSeekTargetTick < 0) return;
+        // Yielding the tick that finishes a snapshot lets the client rebuild its players before catch-up resumes.
+        if (mChunkInjectionPending) return;
 
         if (mSeekTargetTick >= 0) {
             auto const deadline = std::chrono::steady_clock::now() + SeekCatchUpBudget;
