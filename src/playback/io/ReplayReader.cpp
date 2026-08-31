@@ -25,6 +25,7 @@ void writeSnapshotContext(PlaybackBuffer& buffer, PlaybackSnapshotContext const&
     buffer.writeFloat(context.z, nullptr, nullptr);
     buffer.writeFloat(context.yaw, nullptr, nullptr);
     buffer.writeFloat(context.pitch, nullptr, nullptr);
+    buffer.writeString(context.dimensionName, nullptr, nullptr);
 }
 
 PlaybackSnapshotContext readSnapshotContext(PlaybackBuffer& buffer) {
@@ -42,6 +43,7 @@ PlaybackSnapshotContext readSnapshotContext(PlaybackBuffer& buffer) {
     context.z                  = buffer.getFloat().value();
     context.yaw                = buffer.getFloat().value();
     context.pitch              = buffer.getFloat().value();
+    context.dimensionName      = buffer.getString(MAX_STRING_LENGTH).value();
     return context;
 }
 

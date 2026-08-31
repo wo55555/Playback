@@ -1163,7 +1163,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
         mSnapshotConfigurationPackets = mConfigurationPackets;
     }
     mSnapshotView       = view;
-    mSnapshotDimension  = SnapshotDimension{dimension, dimensionMinHeight, dimensionMaxHeight};
+    mSnapshotDimension  = SnapshotDimension{dimension, dimensionMinHeight, dimensionMaxHeight, *dimensionObject.mName};
     mRecordingDimension = dimension;
 
     return SnapshotCaptureResult::Success;
@@ -1257,6 +1257,7 @@ bool Recorder::writeSnapshot() {
     context.z                  = mSnapshotView->z;
     context.yaw                = mSnapshotView->yaw;
     context.pitch              = mSnapshotView->pitch;
+    context.dimensionName      = mSnapshotDimension->name;
     if (!mAsyncReplaySaver->submit([context](ReplayWriter& writer) {
             writer.startSnapshot();
             auto& action = ActionSnapshotContext::getInstance();

@@ -66,6 +66,7 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/level/ActorRuntimeIDManager.h"
+#include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
 #include "mc/world/level/chunk/ChunkSource.h"
@@ -376,6 +377,10 @@ bool ReplaySession::start(std::filesystem::path filePath) {
                         maximum
                     )
                 );
+            }
+
+            if (!snapshot.dimensionName.empty()) {
+                dimensionProfile->names.insert_or_assign(snapshot.dimensionId, snapshot.dimensionName);
             }
 
             RecordedDimensionHeightRange const range{minimum, maximum};
@@ -1593,6 +1598,11 @@ bool ReplaySession::ensureReplayDimension(
         sourceDimension.id,
         target.id
     );
+    std::string targetName;
+    if (auto const profile = mReplayDimensionProfile.load(std::memory_order_acquire)) {
+        if (auto const it = profile->names.find(target.id); it != profile->names.end()) targetName = it->second;
+    }
+
     ll::thread::ServerThreadExecutor::getDefault().execute([request,
                                                             generation,
                                                             generationCounter,
@@ -1600,7 +1610,8 @@ bool ReplaySession::ensureReplayDimension(
                                                             replayLevelId = std::move(replayLevelId),
                                                             position,
                                                             rotation,
-                                                            target] {
+                                                            target,
+                                                            targetName = std::move(targetName)] {
         if (generationCounter->load(std::memory_order_acquire) != generation) return;
         auto expected = DimensionTransitionStatus::Pending;
         if (!request->status.compare_exchange_strong(
@@ -1631,8 +1642,12 @@ bool ReplaySession::ensureReplayDimension(
                 return;
             }
 
-            auto  targetDimension = level->getOrCreateDimension(target).lock();
-            auto* player          = level->getPlayer(playerUuid);
+            auto targetDimension = level->getOrCreateDimension(target).lock();
+            // Custom dimension ids are absent from VanillaDimensions, so resolve them by name instead.
+            if (!targetDimension && !targetName.empty()) {
+                targetDimension = level->getDimensionManager().getOrCreateDimension(targetName).lock();
+            }
+            auto* player = level->getPlayer(playerUuid);
             if (!targetDimension || !player) {
                 getLogger().error(
                     "Unable to change replay dimension to {}: target dimension or server player is unavailable",
@@ -3355,7 +3370,11 @@ void ReplaySession::configureReplayDimension(DimensionArguments& arguments) cons
     if (!profile || arguments.mDerived->mLevel.getLevelId() != profile->levelId) return;
 
     auto const dimensionId = arguments.mDimId->id;
-    auto const range       = profile->heightRanges.find(dimensionId);
+    if (auto const name = profile->names.find(dimensionId); name != profile->names.end()) {
+        arguments.mName = name->second;
+    }
+
+    auto const range = profile->heightRanges.find(dimensionId);
     if (range == profile->heightRanges.end()) return;
 
     arguments.mHeightRange->mMin = static_cast<short>(range->second.minimum);
