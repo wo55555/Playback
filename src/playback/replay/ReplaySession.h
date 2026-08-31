@@ -115,6 +115,7 @@ private:
     struct ReplayDimensionProfile {
         std::string                                           levelId;
         std::unordered_map<int, RecordedDimensionHeightRange> heightRanges;
+        std::unordered_map<int, std::string>                  names;
     };
 
     int    mCurrentTick             = 0;

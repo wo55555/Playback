@@ -51,6 +51,8 @@ struct PlaybackSnapshotContext {
     float   z{};
     float   yaw{};
     float   pitch{};
+    // Custom dimensions have ids outside VanillaDimensions, so the name is the only way to resolve them.
+    std::string dimensionName;
 
     bool operator==(PlaybackSnapshotContext const&) const = default;
 };

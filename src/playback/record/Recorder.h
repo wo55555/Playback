@@ -80,6 +80,7 @@ private:
         DimensionType id{};
         int32_t       minHeight{};
         int32_t       maxHeight{};
+        std::string   name;
     };
     std::unique_ptr<AsyncReplaySaver> mAsyncReplaySaver;
 
