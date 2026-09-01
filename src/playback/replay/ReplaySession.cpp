@@ -2681,14 +2681,17 @@ void ReplaySession::handleConfigurationPacket(PlaybackBuffer& data) {
     std::string payload(data.mView.data() + data.mReadPointer, remaining);
     data.mReadPointer += remaining;
 
+    // A newer recorder may classify a packet as configuration that this build still treats as timeline. Skipping it
+    // keeps such replays playable instead of failing them outright.
     auto const semantics = describePacketLifecycle(packetId);
     if (!semantics.isConfiguration()) {
-        getLogger().error(
-            "Replay contains packet {} with lifecycle {} in a configuration action",
-            packetIdValue,
-            packetLifecycleName(semantics.lifecycle)
-        );
-        mReplayFailed = true;
+        if (mUnknownConfigurationPackets.insert(packetIdValue).second) {
+            getLogger().warn(
+                "Skipping configuration packet {} recorded with an unknown lifecycle ({} in this build)",
+                packetIdValue,
+                packetLifecycleName(semantics.lifecycle)
+            );
+        }
         return;
     }
 
