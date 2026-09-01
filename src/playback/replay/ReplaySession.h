@@ -30,8 +30,10 @@ class Actor;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
 class Player;
+class CompoundTag;
 class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
+class StartGamePacket;
 struct DimensionArguments;
 enum class MinecraftPacketIds : int;
 
@@ -232,6 +234,9 @@ private:
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
     bool                                                        mReplayCachedResourcePacksLoaded{};
 
+    std::shared_ptr<StartGamePacket const> mReplayStartGame;
+    bool                                   mRecordedBlockRegistryApplied{};
+
 public:
     bool mIsProcessingSnapshot = false;
 
@@ -278,6 +283,10 @@ private:
     [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
 
     void releaseReplayResourcePacks();
+
+    void prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
+
+    void reportRecordedBlockGraphics(std::vector<std::pair<std::string, CompoundTag>> const& properties) const;
 
     [[nodiscard]] bool applyPendingSnapshotLocalPlayer();
 
@@ -408,6 +417,8 @@ public:
     [[nodiscard]] std::shared_ptr<ResourcePackStackPacket const> getReplayResourcePackStack() const {
         return mReplayResourcePackStack.load(std::memory_order_acquire);
     }
+
+    void applyRecordedBlockRegistry();
 
     [[nodiscard]] bool shouldIsolateChunkPackets() const;
 
