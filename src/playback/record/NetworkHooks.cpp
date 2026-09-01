@@ -24,6 +24,7 @@
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/network/packet/SetTimePacket.h"
+#include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/TakeItemActorPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
@@ -51,6 +52,7 @@ struct NetworkHookState {
     bool setTime{};
     bool resourcePacksInfo{};
     bool resourcePackStack{};
+    bool startGame{};
     bool actorIdentifiers{};
     bool completion{};
     bool packetObserver{};
@@ -75,9 +77,11 @@ struct NetworkHookState {
             && !updateSubChunkBlocks;
     }
 
-    [[nodiscard]] bool resourceHandlersInstalled() const { return resourcePacksInfo && resourcePackStack; }
+    [[nodiscard]] bool resourceHandlersInstalled() const { return resourcePacksInfo && resourcePackStack && startGame; }
 
-    [[nodiscard]] bool resourceHandlersRemoved() const { return !resourcePacksInfo && !resourcePackStack; }
+    [[nodiscard]] bool resourceHandlersRemoved() const {
+        return !resourcePacksInfo && !resourcePackStack && !startGame;
+    }
 };
 
 NetworkHookState& networkHookState() {
@@ -368,6 +372,27 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 LL_TYPE_INSTANCE_HOOK(
+    PlaybackStartGameHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const& source,
+    StartGamePacket const&   packet
+) {
+    auto& replaySession = ReplaySession::getInstance();
+    if (!replaySession.isIsolatingReplayWorld()) {
+        Recorder::getInstance().recordGamePacket(packet);
+        origin(source, packet);
+        return;
+    }
+
+    // The local world keeps its own StartGame; the recorded block properties are digested afterwards.
+    origin(source, packet);
+    replaySession.applyRecordedBlockRegistry();
+}
+
+LL_TYPE_INSTANCE_HOOK(
     PlaybackChunkHandleCompletedHook,
     ll::memory::HookPriority::Normal,
     ClientNetworkHandler,
@@ -419,6 +444,7 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackSetTimeHook>(state.setTime)
             && installNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo)
             && installNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack)
+            && installNetworkHook<PlaybackStartGameHook>(state.startGame)
             && installNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers)
             && installNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion)
             && installNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver)
@@ -447,6 +473,7 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver);
         removeNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion);
         removeNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers);
+        removeNetworkHook<PlaybackStartGameHook>(state.startGame);
         removeNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack);
         removeNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo);
         removeNetworkHook<PlaybackSetTimeHook>(state.setTime);
