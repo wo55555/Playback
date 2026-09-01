@@ -11,6 +11,8 @@ PathUtils::PathUtils() : mDataDir(Playback::getInstance().getSelf().getDataDir()
 
 std::filesystem::path PathUtils::getReplaysDir() { return getInstance().mDataDir / "replays"; }
 
+std::filesystem::path PathUtils::getProjectsDir() { return getInstance().mDataDir / "projects"; }
+
 std::filesystem::path PathUtils::getSharedTempDir() { return getInstance().mDataDir / "temp"; }
 
 std::filesystem::path PathUtils::createTemp(std::string_view uuid) {

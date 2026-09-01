@@ -12,6 +12,11 @@
   </p>
 
   <p>
+    <img src="https://img.shields.io/badge/LeviLamina-26.10.*-7b68ee?style=flat-square" alt="LeviLamina 26.10">
+    <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
+  </p>
+
+  <p>
     <a href="docs/getting-started.md">Get started</a>
     ·
     <a href="https://github.com/wo55555/Playback/releases">Releases</a>
@@ -113,6 +118,9 @@ Playback maintains separate release lines for Minecraft and LeviLamina versions.
 | `26.20.*`              | [`v0.2.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.2.1-mc26.20) | Current test release |
 
 Both release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
+
+> [!NOTE]
+> `0.2.0` was deliberately skipped on MC 26.20. Video export did not work on that runtime: the 26.20 headers mis-declare a struct alignment, so the capture path read a render-item count from padding, classified every submission as overlay-only, and stalled every export on frame 0. The 26.20 line therefore goes from `v0.1.2-mc26.20` straight to `v0.2.1-mc26.20`, which carries the fix. The MC 26.10 line is unaffected and did publish `v0.2.0-mc26.10`.
 
 > [!TIP]
 > Playback is a client-only mod that can record sessions in both local worlds and multiplayer servers.

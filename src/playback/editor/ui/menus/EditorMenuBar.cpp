@@ -1,7 +1,6 @@
-﻿#include "EditorMenuBar.h"
+#include "EditorMenuBar.h"
 
 #include "playback/editor/input/KeyMap.h"
-#include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
 
@@ -78,20 +77,40 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
     mExportDialogOpen = true;
 }
 
-void EditorMenuBar::draw() {
-    auto&       editor         = ReplayEditor::getInstance();
-    auto const& state          = editor.state();
+void EditorMenuBar::draw(PanelContext const& ctx) {
+    drawMenus(ctx);
+    drawShortcutDialog();
+    drawExportDialog(ctx);
+}
+
+void EditorMenuBar::drawMenus(PanelContext const& ctx) {
+    auto const& state          = ctx.state;
     auto const& capabilities   = state.capabilities;
     auto const  exportActive   = exporting::isExportActive(state.exportStatus.state);
     auto const  exportShortcut = input::KeyMap::displayString(input::EditorKeybind::OpenExport);
     auto const  undoShortcut   = input::KeyMap::displayString(input::EditorKeybind::Undo);
     auto const  redoShortcut   = input::KeyMap::displayString(input::EditorKeybind::Redo);
     auto const  deleteShortcut = input::KeyMap::displayString(input::EditorKeybind::DeleteSelection);
+    auto const  saveShortcut   = input::KeyMap::displayString(input::EditorKeybind::SaveProject);
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
             ImGui::MenuItem("playback.refactorEditor.menu.openReplay"_tr().c_str(), nullptr, false, false);
-            ImGui::MenuItem("playback.refactorEditor.menu.saveProject"_tr().c_str(), nullptr, false, false);
-            ImGui::MenuItem("playback.refactorEditor.menu.recent"_tr().c_str(), nullptr, false, false);
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.saveProject"_tr().c_str(),
+                    saveShortcut.c_str(),
+                    false,
+                    state.editorVisible && !exportActive
+                )) {
+                ctx.submitAction({EditorActionType::SaveProject});
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.reloadProject"_tr().c_str(),
+                    nullptr,
+                    false,
+                    state.editorVisible && !exportActive && !state.persistence.projectFile.empty()
+                )) {
+                ctx.submitAction({EditorActionType::LoadProject});
+            }
             ImGui::Separator();
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.export"_tr().c_str(),
@@ -103,7 +122,7 @@ void EditorMenuBar::draw() {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("playback.refactorEditor.menu.exit"_tr().c_str(), "Esc (hold)")) {
-                editor.submitAction({playback::state::EditorActionType::StopReplay});
+                ctx.submitAction({playback::state::EditorActionType::StopReplay});
             }
             ImGui::EndMenu();
         }
@@ -115,7 +134,7 @@ void EditorMenuBar::draw() {
                     false,
                     state.canUndo
                 )) {
-                editor.submitAction({EditorActionType::UndoEditorEdit});
+                ctx.submitAction({EditorActionType::UndoEditorEdit});
             }
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.redo"_tr().c_str(),
@@ -123,16 +142,16 @@ void EditorMenuBar::draw() {
                     false,
                     state.canRedo
                 )) {
-                editor.submitAction({EditorActionType::RedoEditorEdit});
+                ctx.submitAction({EditorActionType::RedoEditorEdit});
             }
             ImGui::Separator();
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.delete"_tr().c_str(),
                     deleteShortcut.c_str(),
                     false,
-                    editor.selection().hasSelection()
+                    ctx.selection.hasSelection()
                 )) {
-                (void)editor.deleteSelection();
+                (void)ctx.commands.deleteSelection();
             }
             ImGui::MenuItem("playback.refactorEditor.menu.selectAll"_tr().c_str(), "Ctrl+A", false, false);
             ImGui::EndMenu();
@@ -148,7 +167,9 @@ void EditorMenuBar::draw() {
 
         ImGui::EndMenuBar();
     }
+}
 
+void EditorMenuBar::drawShortcutDialog() {
     if (mShortcutDialogOpen) ImGui::OpenPopup("##KeyboardShortcuts");
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     float const shortcutWidth = std::min(620.0f, std::max(420.0f, ImGui::GetMainViewport()->WorkSize.x - 32.0f));
@@ -192,6 +213,10 @@ void EditorMenuBar::draw() {
                 "playback.refactorEditor.shortcuts.undoRedo"_tr()
             );
             shortcutRow(
+                input::KeyMap::displayString(input::EditorKeybind::SaveProject),
+                "playback.refactorEditor.shortcuts.saveProject"_tr()
+            );
+            shortcutRow(
                 input::KeyMap::displayString(input::EditorKeybind::AddKeyframe),
                 "playback.refactorEditor.shortcuts.keyframe"_tr()
             );
@@ -232,6 +257,12 @@ void EditorMenuBar::draw() {
         }
         ImGui::EndPopup();
     }
+}
+
+void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
+    auto const& state        = ctx.state;
+    auto const& capabilities = state.capabilities;
+    auto const  exportActive = exporting::isExportActive(state.exportStatus.state);
 
     if (mExportDialogOpen) ImGui::OpenPopup("##ExportVideo");
     ImVec2 const exportWorkSize = ImGui::GetMainViewport()->WorkSize;
@@ -502,7 +533,7 @@ void EditorMenuBar::draw() {
         if (ImGui::Button(startLabel.c_str(), {startWidth, 32.0f})) {
             EditorAction action{EditorActionType::StartExport};
             action.exportSettings = std::move(previewSettings);
-            editor.submitAction(std::move(action));
+            ctx.submitAction(std::move(action));
             mExportDialogOpen = false;
             ImGui::CloseCurrentPopup();
         }

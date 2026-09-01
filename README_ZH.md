@@ -12,6 +12,11 @@
   </p>
 
   <p>
+    <img src="https://img.shields.io/badge/LeviLamina-26.10.*-7b68ee?style=flat-square" alt="LeviLamina 26.10">
+    <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
+  </p>
+
+  <p>
     <a href="docs/getting-started.zh-CN.md">开始使用</a>
     ·
     <a href="https://github.com/wo55555/Playback/releases">发行版本</a>
@@ -113,6 +118,9 @@ Playback 针对不同 Minecraft 与 LeviLamina 版本维护独立发行线。产
 | `26.20.*`              | [`v0.2.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.2.1-mc26.20) | 当前测试版 |
 
 两个版本均面向 Windows x64 平台的 Minecraft 基岩版，并以纯客户端模组形式发布。
+
+> [!NOTE]
+> MC 26.20 有意跳过 `0.2.0` 版本。该运行时上的视频导出无法工作：26.20 头文件错误声明了结构体对齐，导致采集路径从填充字节读取渲染项数量，把所有提交都判定为纯覆盖层，每次导出都卡在第 0 帧。因此 26.20 发行线从 `v0.1.2-mc26.20` 直接进入包含该修复的 `v0.2.1-mc26.20`。MC 26.10 发行线不受影响，已正常发布 `v0.2.0-mc26.10`。
 
 > [!TIP]
 > Playback 为纯客户端模组，支持在本地世界和多人服务器中录制游戏过程。

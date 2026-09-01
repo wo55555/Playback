@@ -21,7 +21,7 @@ struct KeyBinding {
 
 constexpr KeyBinding kBindings[] = {
     {EditorKeybind::NamedOnly,               "playback.editor.openReplay",       'O',          true,  false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.saveProject",      'S',          true,  false, false},
+    {EditorKeybind::SaveProject,             "playback.editor.saveProject",      'S',          true,  false, false},
     {EditorKeybind::OpenExport,              "playback.editor.export",           'E',          true,  false, false},
     {EditorKeybind::Undo,                    "playback.editor.undo",             'Z',          true,  false, false},
     {EditorKeybind::Redo,                    "playback.editor.redo",             'Y',          true,  false, false},
@@ -63,8 +63,6 @@ constexpr KeyBinding kBindings[] = {
 [[nodiscard]] bool modifiersMatch(KeyBinding const& binding, bool ctrl, bool shift, bool alt) {
     return binding.ctrl == ctrl && binding.shift == shift && binding.alt == alt;
 }
-
-[[nodiscard]] bool currentWindowsModifier(UINT key) { return (GetKeyState(static_cast<int>(key)) & 0x8000) != 0; }
 
 [[nodiscard]] ImGuiKey vkeyToImGuiKey(UINT vkey) {
     if (vkey >= 'A' && vkey <= 'Z') {
@@ -175,33 +173,6 @@ template <class Predicate>
 }
 
 } // namespace
-
-bool KeyMap::matches(const std::string& actionName, WPARAM wParam) {
-    bool const ctrl  = currentWindowsModifier(VK_CONTROL);
-    bool const shift = currentWindowsModifier(VK_SHIFT);
-    bool const alt   = currentWindowsModifier(VK_MENU);
-    return anyBinding([&](KeyBinding const& binding) {
-        return binding.action == actionName && binding.vkey == static_cast<UINT>(wParam)
-            && modifiersMatch(binding, ctrl, shift, alt);
-    });
-}
-
-bool KeyMap::matches(EditorKeybind bindingId, WPARAM wParam) {
-    bool const ctrl  = currentWindowsModifier(VK_CONTROL);
-    bool const shift = currentWindowsModifier(VK_SHIFT);
-    bool const alt   = currentWindowsModifier(VK_MENU);
-    return anyBinding([&](KeyBinding const& binding) {
-        return binding.id == bindingId && binding.vkey == static_cast<UINT>(wParam)
-            && modifiersMatch(binding, ctrl, shift, alt);
-    });
-}
-
-bool KeyMap::isEditorShortcut(uint32_t keyCode, bool ctrl, bool shift, bool alt) {
-    return anyBinding([&](KeyBinding const& binding) {
-        return binding.id != EditorKeybind::NamedOnly && binding.vkey == keyCode
-            && modifiersMatch(binding, ctrl, shift, alt);
-    });
-}
 
 void KeyMap::initialize() {}
 

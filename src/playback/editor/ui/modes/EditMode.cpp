@@ -8,7 +8,7 @@
 
 namespace playback::editor::ui {
 
-void EditMode::draw() {
+void EditMode::draw(PanelContext const& ctx) {
     auto& editor = ReplayEditor::getInstance();
 
     float const fontSize           = ImGui::GetFontSize();
@@ -45,7 +45,7 @@ void EditMode::draw() {
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
                 | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_MenuBar
         );
-        editor.mMenuBar.draw();
+        editor.mMenuBar.draw(ctx);
         ImGui::End();
     };
 
@@ -58,7 +58,7 @@ void EditMode::draw() {
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
                 | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
-        editor.mViewportPanel.draw(true);
+        editor.mViewportPanel.draw(ctx, true);
         ImGui::End();
 
         ImGui::SetNextWindowPos(ImVec2(0, displaySize.y - kStatusHeight));
@@ -69,7 +69,7 @@ void EditMode::draw() {
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
                 | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
-        editor.mStatusPanel.draw();
+        editor.mStatusPanel.draw(ctx);
         ImGui::End();
         drawMenuBar();
         return;
@@ -83,7 +83,7 @@ void EditMode::draw() {
         ImGui::SetNextWindowPos(ImVec2(detailsX, detailsY));
         ImGui::SetNextWindowSize(ImVec2(detailsWidth, detailsH));
         ImGui::Begin("##DetailsPanel", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | inputBlock);
-        editor.mDetailsPanel.draw();
+        editor.mDetailsPanel.draw(ctx);
         ImGui::End();
     }
 
@@ -98,7 +98,7 @@ void EditMode::draw() {
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
                 | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
-        editor.mViewportPanel.draw(false);
+        editor.mViewportPanel.draw(ctx, false);
         ImGui::End();
     }
 
@@ -112,7 +112,7 @@ void EditMode::draw() {
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
                 | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
-        editor.mTimelinePanel.draw(!popupOpen);
+        editor.mTimelinePanel.draw(ctx, !popupOpen);
         ImGui::End();
     }
 
@@ -187,7 +187,7 @@ void EditMode::draw() {
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
                 | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
         );
-        editor.mStatusPanel.draw();
+        editor.mStatusPanel.draw(ctx);
         ImGui::End();
     }
 

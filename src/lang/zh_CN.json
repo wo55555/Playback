@@ -94,7 +94,8 @@
             },
             "problem": {
                 "missingMetadata": "缺少 metadata.json",
-                "invalidMetadata": "无法解析回放元数据：{}"
+                "invalidMetadata": "无法解析回放元数据：{}",
+                "versionMismatch": "录制于 Minecraft {}，当前运行时为 {}"
             },
             "error": {
                 "archiveMissingEntry": "回放归档中缺少 {}",
@@ -116,7 +117,7 @@
                 "help": "帮助",
                 "openReplay": "打开回放",
                 "saveProject": "保存项目",
-                "recent": "最近打开",
+                "reloadProject": "重新加载项目",
                 "export": "导出…",
                 "exit": "退出编辑器",
                 "undo": "撤销",
@@ -225,7 +226,9 @@
                 "replay": "[回放]",
                 "tick": "游戏刻 {} / {}",
                 "ready": "可开始导出",
-                "exportUnavailable": "导出不可用"
+                "exportUnavailable": "导出不可用",
+                "projectSaved": "{} 已保存",
+                "projectUnsaved": "{} *"
             },
             "export": {
                 "title": "导出回放",
@@ -283,6 +286,7 @@
                 "seekTicks": "跳转 1 游戏刻",
                 "editPoints": "上一个 / 下一个编辑点",
                 "undoRedo": "撤销 / 重做",
+                "saveProject": "保存项目",
                 "keyframe": "添加相机关键帧",
                 "zoom": "缩放时间轴",
                 "delete": "删除选中项",

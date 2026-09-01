@@ -115,6 +115,7 @@ private:
     struct ReplayDimensionProfile {
         std::string                                           levelId;
         std::unordered_map<int, RecordedDimensionHeightRange> heightRanges;
+        std::unordered_map<int, std::string>                  names;
     };
 
     int    mCurrentTick             = 0;
@@ -160,6 +161,7 @@ private:
     std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
 
     bool                                        mObserverPreviewInRange{false};
+    uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
     ::Vec2                                      mLastObserverPreviewRotation{};
     std::optional<ChunkPos>                     mLastObserverServerSyncChunk;
@@ -252,7 +254,8 @@ private:
 
     [[nodiscard]] bool prepareChunkInjectionPlan(PlaybackView const& view);
 
-    [[nodiscard]] bool tryFinishChunkInjection();
+    [[nodiscard]] bool
+    tryFinishChunkInjection(std::optional<std::chrono::steady_clock::time_point> catchUpDeadline = std::nullopt);
 
     [[nodiscard]] bool finishChunkInjection();
 
@@ -302,6 +305,10 @@ private:
 
     void beginSeek(int targetTick);
 
+    void finishSeek();
+
+    void settleAfterSeek();
+
     [[nodiscard]] bool hasPendingReplayReaderBoundary() const;
 
     [[nodiscard]] bool advanceReplayReader(bool stopAtEnd);
@@ -329,6 +336,12 @@ public:
     [[nodiscard]] bool isPaused() const { return mIsPaused; }
 
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
+
+    // True once the snapshot and chunks are in and no transition is pending; gates the editor UI.
+    [[nodiscard]] bool isReplayWorldReady() const {
+        return mActive && mReplayWorldJoined && mWorldReady && !mReplayFailed && !mPendingReplayDimension
+            && !mApplyingChunkSnapshot && !mChunkInjectionPending;
+    }
 
     [[nodiscard]] Player* getReplayPlayer() const noexcept { return mReplayPlayer; }
 

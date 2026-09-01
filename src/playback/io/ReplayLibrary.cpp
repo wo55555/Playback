@@ -127,7 +127,13 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
         summary.worldName     = std::move(meta.worldName);
         summary.durationTicks = meta.totalTicks;
         summary.totalTicks    = meta.totalTicks;
-        summary.canOpen       = true;
+        summary.canOpen       = meta.isCompatibleWithRuntime();
+        if (!summary.canOpen) {
+            summary.problem = "playback.replayBrowser.problem.versionMismatch"_tr(
+                meta.gameVersion,
+                record::PlaybackMeta::currentGameVersion()
+            );
+        }
         if (auto thumbnail = readZipEntry(summary.path, "icon.png", MaxReplayThumbnailBytes)) {
             summary.thumbnailPng = std::move(*thumbnail);
         }

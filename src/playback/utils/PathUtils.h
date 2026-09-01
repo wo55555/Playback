@@ -16,6 +16,8 @@ private:
 public:
     [[nodiscard]] static std::filesystem::path getReplaysDir();
 
+    [[nodiscard]] static std::filesystem::path getProjectsDir();
+
     [[nodiscard]] static std::filesystem::path getSharedTempDir();
 
     [[nodiscard]] static std::filesystem::path createTemp(std::string_view uuid);
