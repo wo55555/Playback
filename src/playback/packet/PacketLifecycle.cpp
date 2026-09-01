@@ -23,6 +23,8 @@ constexpr auto PacketLifecycleTable = std::to_array<PacketLifecycleEntry>({
 
     {MinecraftPacketIds::ResourcePacksInfo,                       {PacketLifecycle::PreWorldHandshake, false, true}},
     {MinecraftPacketIds::ResourcePackStack,                       {PacketLifecycle::PreWorldHandshake}             },
+    // Recorded for mBlockProperties; the local world keeps its own StartGame, so this is stored and never replayed.
+    {MinecraftPacketIds::StartGame,                               {PacketLifecycle::PreWorldHandshake}             },
 
     {MinecraftPacketIds::AvailableActorIDList,                    {PacketLifecycle::SnapshotLatest}                },
     {MinecraftPacketIds::BiomeDefinitionList,                     {PacketLifecycle::SnapshotLatest}                },
