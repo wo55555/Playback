@@ -1,11 +1,13 @@
-﻿#include "TrackTreeModel.h"
+#include "TrackTreeModel.h"
 
-#include "EditorStateExt.h"
+#include "playback/state/editing/models/EditorStateExt.h"
 
 #include <algorithm>
 #include <cctype>
 
-namespace playback::state::editing::model {
+namespace playback::editor::ui {
+
+using namespace playback::state::editing::model;
 
 namespace {
 
@@ -62,4 +64,4 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
 
 const std::vector<TrackTreeRow>& TrackTreeModel::rows() const { return mRows; }
 
-} // namespace playback::state::editing::model
+} // namespace playback::editor::ui

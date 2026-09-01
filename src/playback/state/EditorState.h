@@ -5,6 +5,7 @@
 #include "playback/state/editing/models/EditorStateExt.h"
 
 #include <memory>
+#include <string>
 
 namespace playback::state {
 
@@ -13,6 +14,12 @@ struct EditorCapabilities {
     bool videoEditing{};
     bool videoExport{};
     bool ffmpegVideoExport{};
+};
+
+struct ProjectPersistenceState {
+    bool        dirty{};
+    std::string projectFile;
+    std::string error;
 };
 
 struct EditorState {
@@ -27,6 +34,7 @@ struct EditorState {
     bool                                                         canRedo{};
     std::shared_ptr<state::editing::model::EditorStateExt const> project;
     EditorCapabilities                                           capabilities;
+    ProjectPersistenceState                                      persistence;
     exporting::ExportStatus                                      exportStatus;
     ReplayBrowserState                                           browser;
 };
