@@ -215,6 +215,7 @@ private:
     std::optional<std::string>                                  mPendingSnapshotLocalPlayer;
     std::vector<std::pair<MinecraftPacketIds, std::string>>     mPendingSnapshotGamePackets;
     std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
+    std::unordered_set<int32_t>                                 mUnknownConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     std::unordered_set<std::string>                             mReplayObjectiveNames;
