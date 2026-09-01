@@ -18,10 +18,15 @@
 #include "mc/client/particle/ParticleEngine.h"
 #include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 #include "mc/client/player/LocalPlayer.h"
+#include "mc/client/renderer/block/BlockGraphics.h"
 #include "mc/client/renderer/game/LevelRenderer.h"
+#include "mc/client/renderer/texture/TextureUVCoordinateSet.h"
+#include "mc/deps/core/string/HashedString.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
 #include "mc/deps/ecs/strict/StrictEntityContext.h"
+#include "mc/deps/nbt/CompoundTag.h"
+#include "mc/deps/nbt/IntTag.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
@@ -53,6 +58,7 @@
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/network/packet/SetDisplayObjectivePacket.h"
 #include "mc/network/packet/SetTimePacket.h"
+#include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
@@ -69,6 +75,12 @@
 #include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
+#include "mc/world/level/block/Block.h"
+#include "mc/world/level/block/BlockType.h"
+#include "mc/world/level/block/definition/BlockDefinition.h"
+#include "mc/world/level/block/definition/BlockDefinitionGroup.h"
+#include "mc/world/level/block/definition/BlockDescription.h"
+#include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/chunk/ChunkSource.h"
 #include "mc/world/level/chunk/ChunkViewSource.h"
 #include "mc/world/level/chunk/LevelChunk.h"
@@ -345,9 +357,11 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             return false;
         }
         if (mSnapshotContexts.empty()) throw std::runtime_error("Replay contains no snapshot contexts");
-        if (!prepareReplayResourcePacks(mReaders.front()->readConfigurationPackets())) {
+        auto const configurationPackets = mReaders.front()->readConfigurationPackets();
+        if (!prepareReplayResourcePacks(configurationPackets)) {
             throw std::runtime_error("Unable to prepare the recorded resource-pack configuration");
         }
+        prepareRecordedBlockRegistry(configurationPackets);
         auto const& context = mSnapshotContexts.front();
 
         LevelSettings settings;
@@ -1352,6 +1366,171 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
     mReplayResourcePacksInfo.store(std::move(info), std::memory_order_release);
     mReplayResourcePackStack.store(std::move(stack), std::memory_order_release);
     return true;
+}
+
+void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets) {
+    mReplayStartGame.reset();
+    mRecordedBlockRegistryApplied = false;
+
+    PlaybackSerializedGamePacket const* serialized = nullptr;
+    for (auto it = packets.rbegin(); it != packets.rend(); ++it) {
+        if (it->mPacketId == static_cast<int32_t>(MinecraftPacketIds::StartGame)) {
+            serialized = &*it;
+            break;
+        }
+    }
+    if (!serialized) {
+        getLogger().debug("Replay contains no recorded StartGame packet; custom blocks stay unregistered");
+        return;
+    }
+
+    try {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::StartGame);
+        if (!packet) throw std::runtime_error("Unable to create a recorded StartGame packet");
+
+        ReadOnlyBinaryStream stream(serialized->mPayload, false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            throw std::runtime_error("Unable to decode the recorded StartGame packet");
+        }
+
+        auto startGame = std::static_pointer_cast<StartGamePacket>(packet);
+        getLogger().info("Replay carries {} recorded block properties", startGame->mBlockProperties->size());
+        mReplayStartGame = std::move(startGame);
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to prepare the recorded block registry: {}", exception.what());
+    } catch (...) {
+        getLogger().error("Unable to prepare the recorded block registry");
+    }
+}
+
+void ReplaySession::applyRecordedBlockRegistry() {
+    if (mRecordedBlockRegistryApplied) return;
+    auto startGame = mReplayStartGame;
+    if (!startGame) return;
+    mRecordedBlockRegistryApplied = true;
+
+    auto& properties = *startGame->mBlockProperties;
+    if (properties.empty()) {
+        getLogger().debug("Recorded StartGame carries no block properties");
+        return;
+    }
+
+    try {
+        auto level = ll::service::getLevel();
+        if (!level) throw std::runtime_error("Level is unavailable");
+
+        auto* definitions = level->getBlockDefinitions();
+        if (!definitions) throw std::runtime_error("Block definitions are unavailable");
+
+        auto& registry = BlockTypeRegistry::get();
+
+        // Permutations need the updater version and the registry exposes no accessor, so read it back from a
+        // vanilla block before any custom type exists.
+        std::optional<uint> updaterVersion;
+        registry.forEachBlockType([&updaterVersion](BlockType const& blockType) {
+            if (updaterVersion) return false;
+            for (auto const& permutation : *blockType.mBlockPermutations) {
+                if (!permutation) continue;
+                auto const& serializationId = permutation->mSerializationId;
+                if (!serializationId->contains("version", Tag::Type::Int)) continue;
+                updaterVersion = static_cast<uint>(serializationId->at("version").get<IntTag>().data);
+                return false;
+            }
+            return true;
+        });
+        if (!updaterVersion) throw std::runtime_error("Unable to resolve the block updater version");
+
+        auto const before = registry.mBlockLookupMap->size();
+        definitions->digestServerBlockProperties(properties);
+
+        size_t registered = 0;
+        for (auto const& [name, tag] : properties) {
+            auto const* definition = definitions->tryGetBlockDefinition(name);
+            if (!definition) continue;
+
+            auto blockType = definitions->registerDataDrivenBlock(definition->mDescription);
+            if (!blockType) continue;
+
+            blockType->createBlockPermutations(*updaterVersion);
+            definitions->initBlockTypeFromDefinition(*blockType, *definition);
+            ++registered;
+        }
+
+        registry.setupDirectAccessBlocks();
+        registry.finalizeBlockComponentStorage();
+
+        getLogger().info(
+            "Registered {} recorded custom block types ({} block properties, registry {} -> {})",
+            registered,
+            properties.size(),
+            before,
+            registry.mBlockLookupMap->size()
+        );
+
+        reportRecordedBlockGraphics(properties);
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to register recorded custom blocks: {}", exception.what());
+    } catch (...) {
+        getLogger().error("Unable to register recorded custom blocks");
+    }
+}
+
+// Reports whether the terrain atlas already carries the recorded textures, which decides whether block graphics can
+// be filled in directly or the atlas has to be rebuilt.
+void ReplaySession::reportRecordedBlockGraphics(
+    std::vector<std::pair<std::string, CompoundTag>> const& properties
+) const {
+    auto&       registry    = BlockTypeRegistry::get();
+    auto const  initialized = BlockGraphics::isInitialized();
+    auto const  graphics    = BlockGraphics::getBlocks().size();
+    auto const* dummy       = BlockGraphics::mDummyBlock().get();
+    auto const  atlas       = BlockGraphics::mTerrainTextureAtlas().lock();
+
+    size_t      withGraphics = 0;
+    size_t      missing      = 0;
+    size_t      resolvedUvs  = 0;
+    std::string firstMissing;
+
+    for (auto const& [name, tag] : properties) {
+        auto blockType = registry.lookupByName(HashedString{name}, false);
+        if (!blockType) continue;
+
+        auto const* entry = BlockGraphics::getForBlock(*blockType);
+        if (entry && entry != dummy) {
+            ++withGraphics;
+            continue;
+        }
+        ++missing;
+        if (firstMissing.empty()) firstMissing = name;
+    }
+
+    // A texture name that resolves to a sized UV rectangle proves the atlas already holds the pack art.
+    std::string firstResolved;
+    size_t      probedNames = 0;
+    for (auto const& [name, tag] : properties) {
+        if (probedNames >= 32) break;
+        ++probedNames;
+        auto const shortName = name.find(':') == std::string::npos ? name : name.substr(name.find(':') + 1);
+        auto const uvs       = BlockGraphics::getTextureUVCoordinateSet(shortName, 0, 0);
+        if (uvs._u1 <= uvs._u0 || uvs._v1 <= uvs._v0) continue;
+        if (static_cast<ushort>(uvs._texSizeW) == 0) continue;
+        ++resolvedUvs;
+        if (firstResolved.empty()) firstResolved = shortName;
+    }
+
+    getLogger().info(
+        "Recorded block graphics: initialized={} entries={} atlas={} withGraphics={} missing={} "
+        "resolvedUvs={}/{} firstMissing={} firstResolved={}",
+        initialized,
+        graphics,
+        static_cast<bool>(atlas),
+        withGraphics,
+        missing,
+        resolvedUvs,
+        probedNames,
+        firstMissing.empty() ? "(none)" : firstMissing,
+        firstResolved.empty() ? "(none)" : firstResolved
+    );
 }
 
 void ReplaySession::releaseReplayResourcePacks() {
