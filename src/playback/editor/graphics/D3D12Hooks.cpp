@@ -543,9 +543,7 @@ constexpr size_t RenderItemStride = 8388608u / 65536u;
 constexpr uint32_t SharedVertexDeclIndex  = 4;
 constexpr uint32_t InvalidVertexDeclIndex = 0xFFFFu;
 
-// The 26.20 headers mis-declare the alignment of m_blitKeys/m_blitItem/m_frameCache, so offsetof lands 56
-// bytes short of the real m_numRenderItems and reads padding that is always zero. Walk from m_renderItem,
-// which precedes the broken fields and is therefore trustworthy, using the declared member sizes.
+// The 26.20 headers mis-align m_blitKeys/m_blitItem/m_frameCache, so walk from m_renderItem by declared sizes.
 constexpr size_t FrameCounterOffsetFromRenderItem = 8388608u  // m_renderItem
                                                   + 88080384u // m_renderItemBind
                                                   + 524288u   // m_rangedRenderItemBind
