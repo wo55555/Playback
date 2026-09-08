@@ -8,8 +8,8 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 | Minecraft / LeviLamina | Playback 版本                                                                       |
 | ---------------------- | ----------------------------------------------------------------------------------- |
-| `26.10.*`              | [`v0.2.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.2.1-mc26.10) |
-| `26.20.*`              | [`v0.2.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.2.1-mc26.20) |
+| `26.10.*`              | [`v0.3.0-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.0-mc26.10) |
+| `26.20.*`              | [`v0.3.0-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.0-mc26.20) |
 
 > [!IMPORTANT]
 > 建议尽量使用未安装其他第三方模组的独立 LeviLamina 实例。目前暂不保证与其他模组广泛兼容。
@@ -18,7 +18,7 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 > 暂不支持灵动视效（Vibrant Visuals）。录制、回放和导出前请在视频设置中关闭该选项；保持开启的情况未经测试，可能导致渲染和采集异常。
 
 > [!CAUTION]
-> `v0.2.1-mc26.20` 仍是测试版本。早于 `v0.2.0-mc26.20` 的版本创建的回放不兼容，必须重新录制。受影响服务器在 2026 年 8 月 20 日热更新前录制的回放可能已经缺少可移植区块或自定义实体注册数据，这类归档无法修复，也必须重新录制；数据完整的 `v0.2.0-mc26.20` 回放与 `v0.2.1-mc26.20` 兼容，无需转换。配置版本和录制文件的快照上下文版本均保持为 `1`，不提供迁移。
+> `v0.3.0-mc26.20` 仍是测试版本。早于 `v0.2.0-mc26.20` 的版本创建的回放不兼容，必须重新录制。受影响服务器在 2026 年 8 月 20 日热更新前录制的回放可能已经缺少可移植区块或自定义实体注册数据，这类归档无法修复，也必须重新录制；数据完整的 `v0.2.1-mc26.20` 回放与 `v0.3.0-mc26.20` 兼容，无需转换。配置版本、录制文件的快照上下文版本和编辑器工程格式版本均为 `1`，不提供迁移。
 
 ## 使用 LeviLauncher 和 Lip 安装
 
@@ -62,10 +62,10 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 ```powershell
 # Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.2.1-mc26.10#client
+lip install github.com/wo55555/Playback@0.3.0-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
-lip install github.com/wo55555/Playback@0.2.1-mc26.20#client
+lip install github.com/wo55555/Playback@0.3.0-mc26.20#client
 ```
 
 > [!NOTE]
