@@ -1436,24 +1436,14 @@ void ReplaySession::applyRecordedBlockRegistry() {
     try {
         auto level = ll::service::getLevel();
         if (!level) throw std::runtime_error("Level is unavailable");
-
-        bool initializedDefinitionGroup = false;
-        try {
-            level->initializeBlockDefinitionGroup();
-            initializedDefinitionGroup = true;
-        } catch (std::exception const& exception) {
-            getLogger().error("Unable to initialize the client block definition group: {}", exception.what());
-        } catch (...) {
-            getLogger().error("Unable to initialize the client block definition group");
-        }
+        level->initializeBlockDefinitionGroup();
 
         auto* definitions = level->getBlockDefinitions();
         if (!definitions) throw std::runtime_error("Block definitions are unavailable");
 
         auto& registry = BlockTypeRegistry::get();
 
-        // Permutations need the updater version and the registry exposes no accessor, so read it back from a
-        // vanilla block before any custom type exists.
+        // The registry exposes no updater version accessor, so read it back from a vanilla permutation.
         std::optional<uint> updaterVersion;
         registry.forEachBlockType([&updaterVersion](BlockType const& blockType) {
             if (updaterVersion) return false;
@@ -1468,7 +1458,6 @@ void ReplaySession::applyRecordedBlockRegistry() {
         });
         if (!updaterVersion) throw std::runtime_error("Unable to resolve the block updater version");
 
-        auto const before            = registry.mBlockLookupMap->size();
         auto const preloadedGeometry = preloadRecordedBlockGeometry(properties);
         definitions->digestServerBlockProperties(properties);
 
@@ -1485,20 +1474,13 @@ void ReplaySession::applyRecordedBlockRegistry() {
             ++registered;
         }
 
-        auto const injectedMaterials = injectRecordedBlockMaterialComponents(properties);
+        auto const injectedVisuals = injectRecordedBlockMaterialComponents(properties);
 
         registry.setupDirectAccessBlocks();
         registry.finalizeBlockComponentStorage();
+        definitions->initializeBlocks(*level);
 
         auto& palette = level->getBlockPalette();
-        try {
-            definitions->initializeBlocks(*level);
-        } catch (std::exception const& exception) {
-            getLogger().error("Unable to initialize recorded block definitions: {}", exception.what());
-        } catch (...) {
-            getLogger().error("Unable to initialize recorded block definitions");
-        }
-
         palette.initFromBlockDefinitions();
         palette.cacheBlockComponentData();
         for (auto const& [name, tag] : properties) {
@@ -1510,15 +1492,10 @@ void ReplaySession::applyRecordedBlockRegistry() {
         }
 
         getLogger().debug(
-            "Registered {} recorded custom block types ({} block properties, registry {} -> {}), "
-            "definitionGroupInitialized={}, preloadedGeometry={}, injectedVisuals={}",
+            "Registered {} recorded custom block types (geometry={}, visuals={})",
             registered,
-            properties.size(),
-            before,
-            registry.mBlockLookupMap->size(),
-            initializedDefinitionGroup,
             preloadedGeometry,
-            injectedMaterials
+            injectedVisuals
         );
     } catch (std::exception const& exception) {
         getLogger().error("Unable to register recorded custom blocks: {}", exception.what());
