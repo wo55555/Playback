@@ -1,6 +1,7 @@
-﻿#include "playback/editor/ui/ReplayEditor.h"
+#include "playback/editor/ui/ReplayEditor.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/input/EditorInput.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/ErrorDialog.h"
 
@@ -16,7 +17,8 @@ namespace playback::editor::ui {
 
 namespace {
 
-constexpr char kLayoutPreferencesPath[] = "mods/playback/editor-layout.json";
+constexpr char  kLayoutPreferencesPath[] = "mods/playback/editor-layout.json";
+constexpr float kExitHoldDuration        = 0.8f;
 
 float readFiniteFloat(nlohmann::ordered_json const& object, char const* key, float fallback) {
     auto const value = object.find(key);
@@ -47,6 +49,7 @@ void ReplayEditor::shutdown() {
     mSubmit            = nullptr;
     mSelection.clear();
     mLastExportState = exporting::ExportState::Idle;
+    mExitHoldSeconds = 0.0f;
 }
 
 void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
@@ -168,13 +171,18 @@ void ReplayEditor::openExportDialog() {
     mMenuBar.openExportDialog(currentState.totalTicks, currentState.capabilities.ffmpegVideoExport);
 }
 
-void ReplayEditor::seekTo(int tick) { mTimelinePanel.seekTo(tick); }
+PanelContext ReplayEditor::frameContext() {
+    static SubmitAction const noSubmit{};
+    return {state(), mSelection, mSubmit ? *mSubmit : noSubmit, *this};
+}
 
-void ReplayEditor::seekRelative(int tickDelta) { mTimelinePanel.seekRelative(tickDelta); }
+void ReplayEditor::seekTo(int tick) { mTimelinePanel.seekTo(frameContext(), tick); }
 
-bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(); }
+void ReplayEditor::seekRelative(int tickDelta) { mTimelinePanel.seekRelative(frameContext(), tickDelta); }
 
-bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(); }
+bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(frameContext()); }
+
+bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(frameContext()); }
 
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
@@ -197,7 +205,7 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     auto&       io             = ImGui::GetIO();
     float const savedFontScale = io.FontGlobalScale;
     io.FontGlobalScale         = savedFontScale * (18.0f / 14.0f);
-    mTheme.apply();
+    theme::apply();
 
     if (exportActive && mModeManager.current() != EditorMode::Render) {
         mModeManager.switchTo(EditorMode::Render);
@@ -210,10 +218,12 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     }
     mLastExportState = state.exportStatus.state;
 
-    if (mModeManager.current() == EditorMode::Render) mRenderMode.draw();
-    else mEditMode.draw();
+    auto const ctx = frameContext();
+    if (mModeManager.current() == EditorMode::Render) mRenderMode.draw(ctx);
+    else mEditMode.draw(ctx);
 
     ErrorDialog::getInstance().draw();
+    updateExitHold();
     if (!exportActive) handleKeyboardShortcuts();
 
     io.FontGlobalScale = savedFontScale;
@@ -221,8 +231,25 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     mSubmit            = nullptr;
 }
 
+void ReplayEditor::updateExitHold() {
+    ImGuiIO const& io = ImGui::GetIO();
+    if (!ImGui::IsKeyDown(ImGuiKey_Escape)) {
+        mExitHoldSeconds = 0.0f;
+        return;
+    }
+
+    float const previous  = mExitHoldSeconds;
+    mExitHoldSeconds     += io.DeltaTime;
+    if (previous < kExitHoldDuration && mExitHoldSeconds >= kExitHoldDuration) {
+        submitAction({playback::state::EditorActionType::StopReplay});
+    }
+}
+
 void ReplayEditor::handleKeyboardShortcuts() {
     using input::EditorKeybind;
+
+    // While the camera is being driven the game owns the keyboard; only the exit hold stays live.
+    if (input::isGameInputCaptured()) return;
 
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantTextInput || ImGui::IsAnyItemActive() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
@@ -231,6 +258,10 @@ void ReplayEditor::handleKeyboardShortcuts() {
 
     if (mViewportMaximized && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         mViewportMaximized = false;
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SaveProject)) {
+        submitAction({playback::state::EditorActionType::SaveProject});
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::Undo)) {
@@ -266,27 +297,27 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekTickLeft, true)) {
-        mTimelinePanel.seekRelative(-1);
+        mTimelinePanel.seekRelative(frameContext(), -1);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekTickRight, true)) {
-        mTimelinePanel.seekRelative(1);
+        mTimelinePanel.seekRelative(frameContext(), 1);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekSecondLeft, true)) {
-        mTimelinePanel.seekRelative(-20);
+        mTimelinePanel.seekRelative(frameContext(), -20);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekSecondRight, true)) {
-        mTimelinePanel.seekRelative(20);
+        mTimelinePanel.seekRelative(frameContext(), 20);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::PreviousEditPoint, true)) {
-        mTimelinePanel.seekAdjacentEditPoint(false);
+        mTimelinePanel.seekAdjacentEditPoint(frameContext(), false);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::NextEditPoint, true)) {
-        mTimelinePanel.seekAdjacentEditPoint(true);
+        mTimelinePanel.seekAdjacentEditPoint(frameContext(), true);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::ZoomOutTimeline, true)) {

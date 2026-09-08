@@ -20,6 +20,7 @@ std::atomic<CameraTimelineRenderContextHandle> gPreviewRenderContext;
 std::atomic<CameraTimelineRenderContextHandle> gExportRenderContext;
 thread_local CameraTimelineRenderContextHandle gRenderContext;
 std::atomic_bool                               gPreviewWasApplied{};
+std::atomic_uint64_t                           gPreviewGeneration{};
 
 std::mutex                       gPreviewPoseMutex;
 std::optional<CameraRenderState> gLastPreviewPose;
@@ -48,6 +49,12 @@ void publishCameraTimeline(CameraTimelineSource source, CameraTimelineHandle tim
     }
     if (source == CameraTimelineSource::Preview) {
         gPreviewWasApplied.store(false, std::memory_order_release);
+        gPreviewGeneration.fetch_add(1, std::memory_order_acq_rel);
+        // Disabling a track keeps the timeline but invalidates the pose it produced, so parking must not reuse it.
+        {
+            std::lock_guard lock(gPreviewPoseMutex);
+            gLastPreviewPose.reset();
+        }
     }
     bindingFor(source).store(std::make_shared<Binding const>(Binding{std::move(timeline)}), std::memory_order_release);
 }
@@ -59,6 +66,7 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
         if (target.compare_exchange_weak(current, {}, std::memory_order_acq_rel, std::memory_order_acquire)) {
             if (source == CameraTimelineSource::Preview) {
                 gPreviewWasApplied.store(false, std::memory_order_release);
+                gPreviewGeneration.fetch_add(1, std::memory_order_acq_rel);
                 clearCameraTimelineRenderContext(CameraTimelineSource::Preview);
             }
             return;
@@ -66,6 +74,7 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
     }
     if (!current && source == CameraTimelineSource::Preview && !expected) {
         gPreviewWasApplied.store(false, std::memory_order_release);
+        gPreviewGeneration.fetch_add(1, std::memory_order_acq_rel);
         clearCameraTimelineRenderContext(CameraTimelineSource::Preview);
     }
 }
@@ -93,6 +102,8 @@ bool hasCameraTimeline(CameraTimelineSource source) noexcept {
 }
 
 bool wasPreviewCameraApplied() noexcept { return gPreviewWasApplied.load(std::memory_order_acquire); }
+
+uint64_t previewTimelineGeneration() noexcept { return gPreviewGeneration.load(std::memory_order_acquire); }
 
 void setPreviewCameraApplied(bool applied) noexcept { gPreviewWasApplied.store(applied, std::memory_order_release); }
 

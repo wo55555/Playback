@@ -1,7 +1,7 @@
-﻿#include "DetailsPanel.h"
+#include "DetailsPanel.h"
 
-#include "playback/editor/ui/ReplayEditor.h"
 #include "playback/editor/ui/components/PropertyControls.h"
+#include "playback/editor/ui/components/Widgets.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -27,14 +27,7 @@ T const* findById(std::vector<T> const& values, std::string const& id) {
     return it == values.end() ? nullptr : &*it;
 }
 
-std::string formatTick(int tick) {
-    char value[32]{};
-    tick                   = std::max(0, tick);
-    int const totalSeconds = tick / kTicksPerSecond;
-    int const centiseconds = tick % kTicksPerSecond * (100 / kTicksPerSecond);
-    std::snprintf(value, sizeof(value), "%02d:%02d.%02d", totalSeconds / 60, totalSeconds % 60, centiseconds);
-    return value;
-}
+using widgets::formatTick;
 
 std::string interpolationName(state::editing::model::CameraInterpolationType interpolation) {
     using Interpolation = state::editing::model::CameraInterpolationType;
@@ -74,8 +67,6 @@ std::string categoryName(state::editing::model::SubActorCategory category) {
     }
 }
 
-void submit(EditorAction action) { ReplayEditor::getInstance().submitAction(std::move(action)); }
-
 bool vectorInput(
     char const* id,
     float (&values)[3],
@@ -107,18 +98,15 @@ bool vectorInput(
 
 } // namespace
 
-void DetailsPanel::draw() {
-    auto&       editor  = ReplayEditor::getInstance();
-    auto const& state   = editor.state();
-    auto const  project = state.project;
+void DetailsPanel::draw(PanelContext const& ctx) {
+    auto const project = ctx.state.project;
     if (!project) {
-        ImGui::TextDisabled("%s", "playback.refactorEditor.common.noActiveProject"_tr().c_str());
+        widgets::noActiveProjectPlaceholder();
         return;
     }
 
-    auto const& selection = editor.selection();
-    char        search[128]{};
-    std::string subject = "playback.refactorEditor.details.noSelection"_tr();
+    auto const& selection = ctx.selection;
+    std::string subject   = "playback.refactorEditor.details.noSelection"_tr();
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         subject = "playback.refactorEditor.details.worldActor"_tr();
     } else if (selection.getAs<state::editing::model::SelectedWorldActorSegment>()) {
@@ -136,7 +124,21 @@ void DetailsPanel::draw() {
     auto const inspectorTitle = "playback.refactorEditor.details.title"_tr();
     auto const searchHint     = "playback.refactorEditor.details.searchProperties"_tr();
     property::beginInspector(inspectorTitle, subject);
-    property::searchBar("##details-search", searchHint.c_str(), search, sizeof(search));
+    property::searchBar("##details-search", searchHint.c_str(), mSearch.data(), mSearch.size());
+
+    if (drawWorldActor(ctx)) return;
+    if (drawWorldActorSegment(ctx)) return;
+    if (drawSubActor(ctx)) return;
+    if (drawCamera(ctx)) return;
+    if (drawKeyframe(ctx)) return;
+    if (drawMarker(ctx)) return;
+    drawOverview(ctx);
+}
+
+bool DetailsPanel::drawWorldActor(PanelContext const& ctx) {
+    auto const  project   = ctx.state.project;
+    auto const& selection = ctx.selection;
+    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         if (property::beginSection("playback.refactorEditor.details.worldActor"_tr().c_str())) {
@@ -156,7 +158,7 @@ void DetailsPanel::draw() {
                 if (ImGui::Selectable((formatTick(segment.startTick) + " - " + formatTick(segment.endTick) + "  "
                                        + std::to_string(segment.speed) + "x")
                                           .c_str())) {
-                    editor.selection().select(state::editing::model::SelectedWorldActorSegment{segment.id});
+                    ctx.selection.select(state::editing::model::SelectedWorldActorSegment{segment.id});
                 }
             }
             property::separator();
@@ -187,7 +189,7 @@ void DetailsPanel::draw() {
                             }
                             ++shown;
                             if (ImGui::Selectable(actor.name.empty() ? actor.id.c_str() : actor.name.c_str())) {
-                                editor.selection().select(state::editing::model::SelectedSubActor{actor.id});
+                                ctx.selection.select(state::editing::model::SelectedSubActor{actor.id});
                             }
                         }
                     }
@@ -196,14 +198,21 @@ void DetailsPanel::draw() {
             }
             property::endSection();
         }
-        return;
+        return true;
     }
+    return false;
+}
+
+bool DetailsPanel::drawWorldActorSegment(PanelContext const& ctx) {
+    auto const  project   = ctx.state.project;
+    auto const& selection = ctx.selection;
+    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (auto const* selected = selection.getAs<state::editing::model::SelectedWorldActorSegment>()) {
         auto const* segment = findById(project->worldActor.segments, selected->segmentId);
         if (!segment) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.worldActorSegmentMissing"_tr().c_str());
-            return;
+            return true;
         }
         bool const isFirst = &project->worldActor.segments.front() == segment;
         bool const isLast  = &project->worldActor.segments.back() == segment;
@@ -250,7 +259,7 @@ void DetailsPanel::draw() {
             }
             if (property::actionButton("playback.refactorEditor.details.splitAtPlayhead"_tr().c_str())) {
                 EditorAction action{EditorActionType::SplitWorldActor};
-                action.tick = state.currentTick;
+                action.tick = ctx.state.currentTick;
                 submit(std::move(action));
             }
             if (property::actionButton("playback.refactorEditor.details.rippleDelete"_tr().c_str())) {
@@ -264,14 +273,21 @@ void DetailsPanel::draw() {
             }
             property::endSection();
         }
-        return;
+        return true;
     }
+    return false;
+}
+
+bool DetailsPanel::drawSubActor(PanelContext const& ctx) {
+    auto const  project   = ctx.state.project;
+    auto const& selection = ctx.selection;
+    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (auto const* selected = selection.getAs<state::editing::model::SelectedSubActor>()) {
         auto const* actor = findById(project->worldActor.subActors, selected->subActorId);
         if (!actor) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.subActorMissing"_tr().c_str());
-            return;
+            return true;
         }
         if (property::beginSection("playback.refactorEditor.details.subActor"_tr().c_str())) {
             ImGui::TextUnformatted(
@@ -341,14 +357,21 @@ void DetailsPanel::draw() {
             }
             property::endSection();
         }
-        return;
+        return true;
     }
+    return false;
+}
+
+bool DetailsPanel::drawCamera(PanelContext const& ctx) {
+    auto const  project   = ctx.state.project;
+    auto const& selection = ctx.selection;
+    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
         auto const* camera = findById(project->cameras, selectedCamera->cameraId);
         if (!camera) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.cameraMissing"_tr().c_str());
-            return;
+            return true;
         }
         if (property::beginSection("playback.refactorEditor.details.camera"_tr().c_str())) {
             property::textRow("playback.refactorEditor.details.nameLabel"_tr().c_str(), camera->name.c_str());
@@ -380,21 +403,21 @@ void DetailsPanel::draw() {
             if (property::actionButton("playback.refactorEditor.details.addKeyframeAtPlayhead"_tr().c_str())) {
                 EditorAction action{EditorActionType::AddCameraKeyframe};
                 action.id   = camera->id;
-                action.tick = state.currentTick;
+                action.tick = ctx.state.currentTick;
                 submit(std::move(action));
             }
             for (auto const& [keyTick, _] : camera->keysByTick) {
-                auto const* selectedKey = editor.selection().getAs<state::editing::model::SelectedKeyframe>();
+                auto const* selectedKey = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
                 bool const selected = selectedKey && selectedKey->trackId == camera->id && selectedKey->tick == keyTick;
                 ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(176, 128, 18, 255));
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(205, 157, 32, 255));
                 ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(232, 184, 45, 255));
                 if (ImGui::Selectable("playback.refactorEditor.details.tickValue"_tr(keyTick).c_str(), selected)) {
-                    editor.selection().select(state::editing::model::SelectedKeyframe{camera->id, keyTick});
+                    ctx.selection.select(state::editing::model::SelectedKeyframe{camera->id, keyTick});
                     EditorAction previewAction{EditorActionType::SetPreviewCamera};
                     previewAction.id = camera->id;
                     submit(std::move(previewAction));
-                    editor.seekTo(keyTick);
+                    ctx.commands.seekTo(keyTick);
                 }
                 ImGui::PopStyleColor(3);
             }
@@ -410,19 +433,26 @@ void DetailsPanel::draw() {
             }
             property::endSection();
         }
-        return;
+        return true;
     }
+    return false;
+}
+
+bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
+    auto const  project   = ctx.state.project;
+    auto const& selection = ctx.selection;
+    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (auto const* selected = selection.getAs<state::editing::model::SelectedKeyframe>()) {
         auto const* camera = findById(project->cameras, selected->trackId);
         if (!camera) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
-            return;
+            return true;
         }
         auto const key = camera->keysByTick.find(selected->tick);
         if (key == camera->keysByTick.end()) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
-            return;
+            return true;
         }
         if (property::beginSection("playback.refactorEditor.details.cameraKeyframe"_tr().c_str())) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.camera"_tr().c_str());
@@ -546,14 +576,20 @@ void DetailsPanel::draw() {
             }
             property::endSection();
         }
-        return;
+        return true;
     }
+    return false;
+}
+
+bool DetailsPanel::drawMarker(PanelContext const& ctx) {
+    auto const  project   = ctx.state.project;
+    auto const& selection = ctx.selection;
 
     if (auto const* selected = selection.getAs<state::editing::model::SelectedMarker>()) {
         auto const* marker = findById(project->markers, selected->markerId);
         if (!marker) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.markerMissing"_tr().c_str());
-            return;
+            return true;
         }
         if (property::beginSection("playback.refactorEditor.details.marker"_tr().c_str())) {
             property::textRow("playback.refactorEditor.details.nameLabel"_tr().c_str(), marker->label.c_str());
@@ -564,8 +600,14 @@ void DetailsPanel::draw() {
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.markerNotWired"_tr().c_str());
             property::endSection();
         }
-        return;
+        return true;
     }
+    return false;
+}
+
+void DetailsPanel::drawOverview(PanelContext const& ctx) {
+    auto const project = ctx.state.project;
+    auto const submit  = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (property::beginSection("playback.refactorEditor.details.overview"_tr().c_str())) {
         ImGui::TextDisabled("%s", "playback.refactorEditor.details.selectionHint"_tr().c_str());

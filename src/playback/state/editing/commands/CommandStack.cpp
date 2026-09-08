@@ -12,6 +12,7 @@ void CommandStack::push(std::unique_ptr<model::IEditCommand> cmd, model::EditorS
 
     mUndo.push_back(std::move(cmd));
     mRedo.clear();
+    ++mRevision;
 
     if (mUndo.size() > mMaxSteps) {
         mUndo.erase(mUndo.begin(), mUndo.begin() + static_cast<std::ptrdiff_t>(mUndo.size() - mMaxSteps));
@@ -24,6 +25,7 @@ bool CommandStack::undo(model::EditorStateExt& state) {
     mUndo.pop_back();
     cmd->undo(state);
     mRedo.push_back(std::move(cmd));
+    ++mRevision;
     return true;
 }
 
@@ -37,12 +39,14 @@ bool CommandStack::redo(model::EditorStateExt& state) {
         return false;
     }
     mUndo.push_back(std::move(cmd));
+    ++mRevision;
     return true;
 }
 
 void CommandStack::clear() {
     mUndo.clear();
     mRedo.clear();
+    ++mRevision;
 }
 
 std::vector<std::string> CommandStack::undoLabels() const {

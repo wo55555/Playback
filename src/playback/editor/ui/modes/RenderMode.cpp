@@ -59,9 +59,9 @@ void drawSpinner(float radius, float thickness) {
 
 } // namespace
 
-void RenderMode::draw() {
+void RenderMode::draw(PanelContext const& ctx) {
     auto&        editor      = ReplayEditor::getInstance();
-    auto const&  status      = editor.state().exportStatus;
+    auto const&  status      = ctx.state.exportStatus;
     ImVec2 const displaySize = ImGui::GetIO().DisplaySize;
 
     auto* const background = ImGui::GetBackgroundDrawList();
@@ -179,7 +179,7 @@ void RenderMode::draw() {
             cancelling ? "playback.refactorEditor.render.cancelling"_tr()
                        : std::string(ICON_CLOSE) + "  " + "playback.refactorEditor.render.cancel"_tr();
         if (ImGui::Button(cancelLabel.c_str(), ImVec2(buttonWidth, buttonHeight))) {
-            editor.submitAction({EditorActionType::CancelExport});
+            ctx.submitAction({EditorActionType::CancelExport});
         }
         ImGui::EndDisabled();
     }

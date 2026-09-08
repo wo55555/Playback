@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "playback/editor/ui/PanelContext.h"
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorState.h"
 #include "playback/state/editing/models/SelectionModel.h"
@@ -22,10 +23,8 @@
 
 namespace playback::editor::ui {
 
-class ReplayEditor {
+class ReplayEditor : public EditorCommands {
 public:
-    using SubmitAction = std::function<void(playback::state::EditorAction)>;
-
     static ReplayEditor& getInstance();
 
     void initialize();
@@ -40,24 +39,27 @@ public:
     state::editing::model::SelectionModel&                     selection() { return mSelection; }
     void                                                       submitAction(playback::state::EditorAction action) const;
     void                                                       openExportDialog();
-    void                                                       seekTo(int tick);
-    void                                                       seekRelative(int tickDelta);
-    bool                                                       deleteSelection();
-    bool                                                       addKeyframeAtPlayhead();
+
+    void               seekTo(int tick) override;
+    void               seekRelative(int tickDelta) override;
+    void               toggleViewportMaximized() override { mViewportMaximized = !mViewportMaximized; }
+    [[nodiscard]] bool isViewportMaximized() const override { return mViewportMaximized; }
+    bool               deleteSelection() override;
+    bool               addKeyframeAtPlayhead() override;
+
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     void                      setVideoAspectRatio(float aspectRatio);
     [[nodiscard]] float       videoAspectRatio() const { return mVideoAspectRatio; }
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
-    void                      toggleViewportMaximized() { mViewportMaximized = !mViewportMaximized; }
-    [[nodiscard]] bool        isViewportMaximized() const { return mViewportMaximized; }
 
 private:
     ReplayEditor() = default;
 
+    [[nodiscard]] PanelContext frameContext();
+
     bool mViewportMaximized{false};
 
-    EditorTheme   mTheme;
     ModeManager&  mModeManager{ModeManager::getInstance()};
     EditorMenuBar mMenuBar;
     Splitter      mSplitter;
@@ -75,6 +77,8 @@ private:
     state::editing::model::SelectionModel mSelection;
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
+    float mExitHoldSeconds{};
+
     float mDetailsWidthRatio{0.28f};
     float mTimelineHeightRatio{0.35f};
     float mVideoAspectRatio{16.0f / 9.0f};
@@ -90,6 +94,7 @@ private:
     void loadLayoutPreferences();
     void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
+    void updateExitHold();
 
     friend class EditMode;
     friend class RenderMode;
