@@ -408,8 +408,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         return OfflineRenderStepResult::Failed;
     }
 
-    // Retried every step: the tap refuses while a previous capture is in flight, and one refusal must not strand the
-    // frame.
+    // Retried every step: the tap refuses while a previous capture is in flight.
     if (!mCaptureArmed) {
         mCaptureArmed = editor::graphics::gImGuiRenderer.armExportCapture(mPendingFrame->ticket);
     }
