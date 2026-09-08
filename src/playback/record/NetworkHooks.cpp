@@ -30,7 +30,11 @@
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/platform/brstd/function_ref.h"
 #include "mc/world/level/Level.h"
+#include "mc/world/level/block/Block.h"
+#include "mc/world/level/block/BlockType.h"
+#include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 
@@ -66,6 +70,7 @@ struct NetworkHookState {
     bool updateBlock{};
     bool updateBlockSynced{};
     bool updateSubChunkBlocks{};
+    bool renderFinalizer{};
 
     [[nodiscard]] bool fastPathHandlersInstalled() const {
         return removeActor && takeItemActor && actorEvent && levelEvent && updateBlock && updateBlockSynced
@@ -392,6 +397,20 @@ LL_TYPE_INSTANCE_HOOK(
     replaySession.applyRecordedBlockRegistry();
 }
 
+// Materials are only baked inside this pass, so the recorded blocks must be registered before it runs.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackRenderFinalizerHook,
+    ll::memory::HookPriority::Normal,
+    BlockTypeRegistry,
+    &BlockTypeRegistry::finalizeBlockComponentStorageForRendering,
+    void,
+    brstd::function_ref<void(BlockType&)> finalizer
+) {
+    auto& replaySession = ReplaySession::getInstance();
+    if (replaySession.isIsolatingReplayWorld()) replaySession.applyRecordedBlockRegistry();
+    origin(finalizer);
+}
+
 LL_TYPE_INSTANCE_HOOK(
     PlaybackChunkHandleCompletedHook,
     ll::memory::HookPriority::Normal,
@@ -430,12 +449,14 @@ bool hookNetwork(bool enable) {
     auto allInstalled = [&] {
         return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
             && state.resourceHandlersInstalled() && state.actorIdentifiers && state.completion && state.packetObserver
-            && state.packetSender && state.addActor && state.addItemActor && state.fastPathHandlersInstalled();
+            && state.packetSender && state.addActor && state.addItemActor && state.fastPathHandlersInstalled()
+            && state.renderFinalizer;
     };
     auto noneInstalled = [&] {
         return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime
             && state.resourceHandlersRemoved() && !state.actorIdentifiers && !state.completion && !state.packetObserver
-            && !state.packetSender && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved();
+            && !state.packetSender && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved()
+            && !state.renderFinalizer;
     };
     auto installAll = [&] {
         return installNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor)
@@ -457,9 +478,11 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackLevelEventHook>(state.levelEvent)
             && installNetworkHook<PlaybackUpdateBlockHook>(state.updateBlock)
             && installNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced)
-            && installNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks);
+            && installNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks)
+            && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
     };
     auto removeAll = [&] {
+        removeNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
         removeNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks);
         removeNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced);
         removeNetworkHook<PlaybackUpdateBlockHook>(state.updateBlock);
