@@ -14,14 +14,21 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
+#include "mc/client/model/GeometryGroup.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
 #include "mc/client/particle/ParticleEngine.h"
 #include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/LevelRenderer.h"
+#include "mc/deps/core/file/Path.h"
+#include "mc/deps/core/file/PathView.h"
+#include "mc/deps/core/resource/ResourceLocation.h"
+#include "mc/deps/core/string/HashedString.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
 #include "mc/deps/ecs/strict/StrictEntityContext.h"
+#include "mc/deps/nbt/CompoundTag.h"
+#include "mc/deps/nbt/IntTag.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
@@ -53,11 +60,15 @@
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/network/packet/SetDisplayObjectivePacket.h"
 #include "mc/network/packet/SetTimePacket.h"
+#include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/resources/IResourcePackRepository.h"
+#include "mc/resources/MinEngineVersion.h"
+#include "mc/resources/PackInstance.h"
+#include "mc/resources/ResourcePackManager.h"
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
 #include "mc/world/actor/Actor.h"
@@ -66,9 +77,25 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/level/ActorRuntimeIDManager.h"
+#include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
+#include "mc/world/level/block/Block.h"
+#include "mc/world/level/block/BlockRenderLayer.h"
+#include "mc/world/level/block/BlockType.h"
+#include "mc/world/level/block/TintMethod.h"
+#include "mc/world/level/block/components/BlockComponentDescription.h"
+#include "mc/world/level/block/components/BlockComponentStorageFinalizer.h"
+#include "mc/world/level/block/components/BlockGeometryDescription.h"
+#include "mc/world/level/block/components/BlockMaterialInstance.h"
+#include "mc/world/level/block/components/BlockMaterialInstancesDescription.h"
+#include "mc/world/level/block/components/BlockTypeComponentStorageFinalizer.h"
+#include "mc/world/level/block/definition/BlockComponentGroupDescription.h"
+#include "mc/world/level/block/definition/BlockDefinition.h"
+#include "mc/world/level/block/definition/BlockDefinitionGroup.h"
+#include "mc/world/level/block/definition/BlockDescription.h"
+#include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/chunk/ChunkSource.h"
 #include "mc/world/level/chunk/ChunkViewSource.h"
 #include "mc/world/level/chunk/LevelChunk.h"
@@ -76,10 +103,14 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
+#include "mc/world/level/storage/LevelData.h"
+
 
 #include "snappy.h"
 #include "uuid.h"
 #include "zip.h"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -344,9 +375,11 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             return false;
         }
         if (mSnapshotContexts.empty()) throw std::runtime_error("Replay contains no snapshot contexts");
-        if (!prepareReplayResourcePacks(mReaders.front()->readConfigurationPackets())) {
+        auto const configurationPackets = mReaders.front()->readConfigurationPackets();
+        if (!prepareReplayResourcePacks(configurationPackets)) {
             throw std::runtime_error("Unable to prepare the recorded resource-pack configuration");
         }
+        prepareRecordedBlockRegistry(configurationPackets);
         auto const& context = mSnapshotContexts.front();
 
         LevelSettings settings;
@@ -1351,6 +1384,296 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
     mReplayResourcePacksInfo.store(std::move(info), std::memory_order_release);
     mReplayResourcePackStack.store(std::move(stack), std::memory_order_release);
     return true;
+}
+
+void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets) {
+    mReplayStartGame.reset();
+    mRecordedBlockRegistryApplied = false;
+
+    PlaybackSerializedGamePacket const* serialized = nullptr;
+    for (auto it = packets.rbegin(); it != packets.rend(); ++it) {
+        if (it->mPacketId == static_cast<int32_t>(MinecraftPacketIds::StartGame)) {
+            serialized = &*it;
+            break;
+        }
+    }
+    if (!serialized) {
+        getLogger().debug("Replay contains no recorded StartGame packet; custom blocks stay unregistered");
+        return;
+    }
+
+    try {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::StartGame);
+        if (!packet) throw std::runtime_error("Unable to create a recorded StartGame packet");
+
+        ReadOnlyBinaryStream stream(serialized->mPayload, false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            throw std::runtime_error("Unable to decode the recorded StartGame packet");
+        }
+
+        auto startGame = std::static_pointer_cast<StartGamePacket>(packet);
+        getLogger().debug("Replay carries {} recorded block properties", startGame->mBlockProperties->size());
+        mReplayStartGame = std::move(startGame);
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to prepare the recorded block registry: {}", exception.what());
+    } catch (...) {
+        getLogger().error("Unable to prepare the recorded block registry");
+    }
+}
+
+void ReplaySession::applyRecordedBlockRegistry() {
+    if (mRecordedBlockRegistryApplied) return;
+    auto startGame = mReplayStartGame;
+    if (!startGame) return;
+    mRecordedBlockRegistryApplied = true;
+
+    auto& properties = *startGame->mBlockProperties;
+    if (properties.empty()) {
+        getLogger().debug("Recorded StartGame carries no block properties");
+        return;
+    }
+
+    try {
+        auto level = ll::service::getLevel();
+        if (!level) throw std::runtime_error("Level is unavailable");
+
+        bool initializedDefinitionGroup = false;
+        try {
+            level->initializeBlockDefinitionGroup();
+            initializedDefinitionGroup = true;
+        } catch (std::exception const& exception) {
+            getLogger().error("Unable to initialize the client block definition group: {}", exception.what());
+        } catch (...) {
+            getLogger().error("Unable to initialize the client block definition group");
+        }
+
+        auto* definitions = level->getBlockDefinitions();
+        if (!definitions) throw std::runtime_error("Block definitions are unavailable");
+
+        auto& registry = BlockTypeRegistry::get();
+
+        // Permutations need the updater version and the registry exposes no accessor, so read it back from a
+        // vanilla block before any custom type exists.
+        std::optional<uint> updaterVersion;
+        registry.forEachBlockType([&updaterVersion](BlockType const& blockType) {
+            if (updaterVersion) return false;
+            for (auto const& permutation : *blockType.mBlockPermutations) {
+                if (!permutation) continue;
+                auto const& serializationId = permutation->mSerializationId;
+                if (!serializationId->contains("version", Tag::Type::Int)) continue;
+                updaterVersion = static_cast<uint>(serializationId->at("version").get<IntTag>().data);
+                return false;
+            }
+            return true;
+        });
+        if (!updaterVersion) throw std::runtime_error("Unable to resolve the block updater version");
+
+        auto const before            = registry.mBlockLookupMap->size();
+        auto const preloadedGeometry = preloadRecordedBlockGeometry(properties);
+        definitions->digestServerBlockProperties(properties);
+
+        size_t registered = 0;
+        for (auto const& [name, tag] : properties) {
+            auto const* definition = definitions->tryGetBlockDefinition(name);
+            if (!definition) continue;
+
+            auto blockType = definitions->registerDataDrivenBlock(definition->mDescription);
+            if (!blockType) continue;
+
+            blockType->createBlockPermutations(*updaterVersion);
+            definitions->initBlockTypeFromDefinition(*blockType, *definition);
+            ++registered;
+        }
+
+        auto const injectedMaterials = injectRecordedBlockMaterialComponents(properties);
+
+        registry.setupDirectAccessBlocks();
+        registry.finalizeBlockComponentStorage();
+
+        auto& palette = level->getBlockPalette();
+        try {
+            definitions->initializeBlocks(*level);
+        } catch (std::exception const& exception) {
+            getLogger().error("Unable to initialize recorded block definitions: {}", exception.what());
+        } catch (...) {
+            getLogger().error("Unable to initialize recorded block definitions");
+        }
+
+        palette.initFromBlockDefinitions();
+        palette.cacheBlockComponentData();
+        for (auto const& [name, tag] : properties) {
+            auto blockType = registry.lookupByName(HashedString{name}, false);
+            if (!blockType) continue;
+            for (auto const& permutation : *blockType->mBlockPermutations) {
+                if (permutation) permutation->cacheComponentData();
+            }
+        }
+
+        getLogger().debug(
+            "Registered {} recorded custom block types ({} block properties, registry {} -> {}), "
+            "definitionGroupInitialized={}, preloadedGeometry={}, injectedVisuals={}",
+            registered,
+            properties.size(),
+            before,
+            registry.mBlockLookupMap->size(),
+            initializedDefinitionGroup,
+            preloadedGeometry,
+            injectedMaterials
+        );
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to register recorded custom blocks: {}", exception.what());
+    } catch (...) {
+        getLogger().error("Unable to register recorded custom blocks");
+    }
+}
+
+size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties) {
+    auto client = ll::service::getClientInstance();
+    if (!client) return 0;
+
+    auto                            geometry        = client->getGeometryGroup();
+    auto&                           resourceManager = client->getResourcePackManager();
+    MinEngineVersion                minEngineVersion;
+    std::unordered_set<std::string> geometryPaths;
+
+    std::function<void(CompoundTagVariant const&)> collectGeometryNames;
+    collectGeometryNames = [&](CompoundTagVariant const& value) {
+        if (auto const* stringTag = std::get_if<StringTag>(&value.mTagStorage)) {
+            auto const& geometryName = static_cast<std::string const&>(*stringTag);
+            auto const  marker       = geometryName.find(".block.");
+            if (!geometryName.starts_with("geometry.") || marker == std::string::npos) return;
+
+            auto path  = std::string{"models/blocks/"};
+            path      += geometryName.substr(9, marker - 9);
+            path      += '/';
+            path      += geometryName.substr(marker + 7);
+            for (auto& character : path) {
+                if (character == '.') character = '_';
+            }
+            path += ".geometry.json";
+            geometryPaths.insert(std::move(path));
+            return;
+        }
+        if (auto const* compound = std::get_if<CompoundTag>(&value.mTagStorage)) {
+            for (auto const& [key, nested] : *compound) collectGeometryNames(nested);
+        }
+    };
+
+    for (auto const& [name, tag] : properties) {
+        for (auto const& [key, value] : tag) collectGeometryNames(value);
+    }
+
+    size_t loaded = 0;
+    for (auto const& path : geometryPaths) {
+        std::string content;
+        if (!resourceManager.load(ResourceLocation{Core::PathView{path}}, content)) continue;
+        geometry->loadModelPackFromStringSync(path, content, minEngineVersion);
+        ++loaded;
+    }
+    return loaded;
+}
+
+size_t ReplaySession::injectRecordedBlockMaterialComponents(
+    std::vector<std::pair<std::string, CompoundTag>> const& properties
+) {
+    auto level = ll::service::getLevel();
+    if (!level) return 0;
+
+    auto* definitions = level->getBlockDefinitions();
+    if (!definitions) return 0;
+
+    auto& registry = BlockTypeRegistry::get();
+
+    // Blocks without material_instances fall back to the legacy blocks.json texture aliases.
+    std::unordered_map<std::string, std::string> legacyTextures;
+    if (auto client = ll::service::getClientInstance()) {
+        auto collectLegacyTextures = [&](std::string const& content) {
+            auto root = nlohmann::ordered_json::parse(content, nullptr, false);
+            if (root.is_object()) {
+                for (auto const& [blockName, value] : root.items()) {
+                    if (!value.is_object()) continue;
+                    auto const textures = value.find("textures");
+                    if (textures == value.end()) continue;
+
+                    std::string texture;
+                    if (textures->is_string()) {
+                        texture = textures->get<std::string>();
+                    } else if (textures->is_object()) {
+                        for (auto const& face : {"north", "up", "south", "east", "west", "down"}) {
+                            auto const faceTexture = textures->find(face);
+                            if (faceTexture != textures->end() && faceTexture->is_string()) {
+                                texture = faceTexture->get<std::string>();
+                                break;
+                            }
+                        }
+                    }
+                    if (!texture.empty()) legacyTextures.emplace(blockName, std::move(texture));
+                }
+            }
+        };
+        client->getResourcePackManager().iteratePacks([&](PackInstance const& pack) {
+            std::string content;
+            if (pack.getResource(Core::Path{"blocks.json"}, content)) collectLegacyTextures(content);
+        });
+    }
+
+    size_t modernInjected = 0;
+    size_t legacyInjected = 0;
+    for (auto const& [name, tag] : properties) {
+        auto const* definition = definitions->tryGetBlockDefinition(name);
+        if (!definition) continue;
+
+        auto const* materialDescription =
+            definition->mBaseComponents->getComponentDescription("minecraft:material_instances");
+        auto const* geometryDescription = definition->mBaseComponents->getComponentDescription("minecraft:geometry");
+
+        auto blockType = registry.lookupByName(HashedString{name}, false);
+        if (!blockType) continue;
+        auto& type = *blockType;
+
+        // Init layer only: the engine's rendering pass skips blocks whose Rendering layer is already marked.
+        auto inject = [&type](auto const& description) {
+            type.mComponents->allowComponentReplacement();
+            description.$initializeComponent(*type.mComponents);
+            BlockTypeComponentStorageFinalizer{}.finalizeComponentData(type);
+
+            for (auto const& permutation : *type.mBlockPermutations) {
+                if (!permutation) continue;
+                permutation->mComponents->allowComponentReplacement();
+                description.$initializeComponent(*permutation->mComponents);
+                permutation->finalizeBlockComponentStorage();
+                BlockComponentStorageFinalizer{}.finalizeComponentData(*permutation);
+            }
+        };
+
+        if (materialDescription) {
+            if (geometryDescription) {
+                inject(*reinterpret_cast<BlockGeometryDescription const*>(geometryDescription));
+            }
+            inject(*reinterpret_cast<BlockMaterialInstancesDescription const*>(materialDescription));
+            ++modernInjected;
+            continue;
+        }
+
+        auto const legacy = legacyTextures.find(name);
+        if (legacy == legacyTextures.end()) continue;
+
+        BlockMaterialInstancesDescription const material{
+            legacy->second,
+            BlockRenderLayer::RenderlayerOpaque,
+            1.0f,
+            true,
+            TintMethod::None,
+            false,
+            false,
+            false,
+            false
+        };
+        inject(material);
+        ++legacyInjected;
+    }
+    getLogger().debug("Injected recorded block visuals: material={} legacy={}", modernInjected, legacyInjected);
+    return modernInjected + legacyInjected;
 }
 
 void ReplaySession::releaseReplayResourcePacks() {
