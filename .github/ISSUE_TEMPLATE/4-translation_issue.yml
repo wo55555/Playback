@@ -1,0 +1,64 @@
+name: 🌐 Translation Issue
+description: Report an incorrect, missing, or untranslated string in the UI or docs
+title: "[Translation] "
+labels: ["enhancement"]
+
+body:
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      description: Please search existing issues first. By submitting this issue, you agree to follow the project's Code of Conduct.
+      options:
+        - label: I have searched the existing issues to ensure this is not a duplicate
+          required: true
+        - label: I have read and agree to follow the Code of Conduct
+          required: true
+
+  - type: input
+    id: language
+    attributes:
+      label: Language
+      description: Which language is affected?
+      placeholder: e.g. en_US, zh_CN
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: Specify where the string appears — in-game, replay browser, editor, command output, docs, or the main-menu button.
+      placeholder: e.g. Replay browser, error dialog, record start command output
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Paste the current string and describe the problem — untranslated text, incorrect meaning, typo, or hardcoded string.
+      placeholder: |
+        e.g. The replay browser shows "无法找到回放文件" which is an unnatural phrasing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected translation
+      description: Provide the correct translation or the fix you would suggest.
+      placeholder: |
+        e.g. Should be "找不到回放文件" — the current wording is unnatural.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other relevant information.
+      placeholder: |
+        - Screenshots
+        - The translation key if known (e.g. playback.replay.not_found)
+        - Any other notes
