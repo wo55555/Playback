@@ -286,7 +286,9 @@ private:
 
     void prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
 
-    void reportRecordedBlockGraphics(std::vector<std::pair<std::string, CompoundTag>> const& properties) const;
+    size_t preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties);
+
+    size_t injectRecordedBlockMaterialComponents(std::vector<std::pair<std::string, CompoundTag>> const& properties);
 
     [[nodiscard]] bool applyPendingSnapshotLocalPlayer();
 
@@ -409,6 +411,8 @@ public:
     }
 
     [[nodiscard]] bool isIsolatingReplayWorld() const { return mActive; }
+
+    [[nodiscard]] bool hasRecordedBlockRegistryApplied() const { return mRecordedBlockRegistryApplied; }
 
     [[nodiscard]] std::shared_ptr<ResourcePacksInfoPacket const> getReplayResourcePacksInfo() const {
         return mReplayResourcePacksInfo.load(std::memory_order_acquire);

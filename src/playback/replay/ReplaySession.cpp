@@ -14,13 +14,15 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
+#include "mc/client/model/GeometryGroup.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
 #include "mc/client/particle/ParticleEngine.h"
 #include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 #include "mc/client/player/LocalPlayer.h"
-#include "mc/client/renderer/block/BlockGraphics.h"
 #include "mc/client/renderer/game/LevelRenderer.h"
-#include "mc/client/renderer/texture/TextureUVCoordinateSet.h"
+#include "mc/deps/core/file/Path.h"
+#include "mc/deps/core/file/PathView.h"
+#include "mc/deps/core/resource/ResourceLocation.h"
 #include "mc/deps/core/string/HashedString.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
@@ -64,6 +66,9 @@
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/resources/IResourcePackRepository.h"
+#include "mc/resources/MinEngineVersion.h"
+#include "mc/resources/PackInstance.h"
+#include "mc/resources/ResourcePackManager.h"
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
 #include "mc/world/actor/Actor.h"
@@ -72,11 +77,21 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/level/ActorRuntimeIDManager.h"
+#include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
 #include "mc/world/level/block/Block.h"
+#include "mc/world/level/block/BlockRenderLayer.h"
 #include "mc/world/level/block/BlockType.h"
+#include "mc/world/level/block/TintMethod.h"
+#include "mc/world/level/block/components/BlockComponentDescription.h"
+#include "mc/world/level/block/components/BlockComponentStorageFinalizer.h"
+#include "mc/world/level/block/components/BlockGeometryDescription.h"
+#include "mc/world/level/block/components/BlockMaterialInstance.h"
+#include "mc/world/level/block/components/BlockMaterialInstancesDescription.h"
+#include "mc/world/level/block/components/BlockTypeComponentStorageFinalizer.h"
+#include "mc/world/level/block/definition/BlockComponentGroupDescription.h"
 #include "mc/world/level/block/definition/BlockDefinition.h"
 #include "mc/world/level/block/definition/BlockDefinitionGroup.h"
 #include "mc/world/level/block/definition/BlockDescription.h"
@@ -88,11 +103,14 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
+#include "mc/world/level/storage/LevelData.h"
 
 
 #include "snappy.h"
 #include "uuid.h"
 #include "zip.h"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1394,7 +1412,7 @@ void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedG
         }
 
         auto startGame = std::static_pointer_cast<StartGamePacket>(packet);
-        getLogger().info("Replay carries {} recorded block properties", startGame->mBlockProperties->size());
+        getLogger().debug("Replay carries {} recorded block properties", startGame->mBlockProperties->size());
         mReplayStartGame = std::move(startGame);
     } catch (std::exception const& exception) {
         getLogger().error("Unable to prepare the recorded block registry: {}", exception.what());
@@ -1419,6 +1437,16 @@ void ReplaySession::applyRecordedBlockRegistry() {
         auto level = ll::service::getLevel();
         if (!level) throw std::runtime_error("Level is unavailable");
 
+        bool initializedDefinitionGroup = false;
+        try {
+            level->initializeBlockDefinitionGroup();
+            initializedDefinitionGroup = true;
+        } catch (std::exception const& exception) {
+            getLogger().error("Unable to initialize the client block definition group: {}", exception.what());
+        } catch (...) {
+            getLogger().error("Unable to initialize the client block definition group");
+        }
+
         auto* definitions = level->getBlockDefinitions();
         if (!definitions) throw std::runtime_error("Block definitions are unavailable");
 
@@ -1440,7 +1468,8 @@ void ReplaySession::applyRecordedBlockRegistry() {
         });
         if (!updaterVersion) throw std::runtime_error("Unable to resolve the block updater version");
 
-        auto const before = registry.mBlockLookupMap->size();
+        auto const before            = registry.mBlockLookupMap->size();
+        auto const preloadedGeometry = preloadRecordedBlockGeometry(properties);
         definitions->digestServerBlockProperties(properties);
 
         size_t registered = 0;
@@ -1456,18 +1485,41 @@ void ReplaySession::applyRecordedBlockRegistry() {
             ++registered;
         }
 
+        auto const injectedMaterials = injectRecordedBlockMaterialComponents(properties);
+
         registry.setupDirectAccessBlocks();
         registry.finalizeBlockComponentStorage();
 
-        getLogger().info(
-            "Registered {} recorded custom block types ({} block properties, registry {} -> {})",
+        auto& palette = level->getBlockPalette();
+        try {
+            definitions->initializeBlocks(*level);
+        } catch (std::exception const& exception) {
+            getLogger().error("Unable to initialize recorded block definitions: {}", exception.what());
+        } catch (...) {
+            getLogger().error("Unable to initialize recorded block definitions");
+        }
+
+        palette.initFromBlockDefinitions();
+        palette.cacheBlockComponentData();
+        for (auto const& [name, tag] : properties) {
+            auto blockType = registry.lookupByName(HashedString{name}, false);
+            if (!blockType) continue;
+            for (auto const& permutation : *blockType->mBlockPermutations) {
+                if (permutation) permutation->cacheComponentData();
+            }
+        }
+
+        getLogger().debug(
+            "Registered {} recorded custom block types ({} block properties, registry {} -> {}), "
+            "definitionGroupInitialized={}, preloadedGeometry={}, injectedVisuals={}",
             registered,
             properties.size(),
             before,
-            registry.mBlockLookupMap->size()
+            registry.mBlockLookupMap->size(),
+            initializedDefinitionGroup,
+            preloadedGeometry,
+            injectedMaterials
         );
-
-        reportRecordedBlockGraphics(properties);
     } catch (std::exception const& exception) {
         getLogger().error("Unable to register recorded custom blocks: {}", exception.what());
     } catch (...) {
@@ -1475,62 +1527,153 @@ void ReplaySession::applyRecordedBlockRegistry() {
     }
 }
 
-// Reports whether the terrain atlas already carries the recorded textures, which decides whether block graphics can
-// be filled in directly or the atlas has to be rebuilt.
-void ReplaySession::reportRecordedBlockGraphics(
-    std::vector<std::pair<std::string, CompoundTag>> const& properties
-) const {
-    auto&       registry    = BlockTypeRegistry::get();
-    auto const  initialized = BlockGraphics::isInitialized();
-    auto const  graphics    = BlockGraphics::getBlocks().size();
-    auto const* dummy       = BlockGraphics::mDummyBlock().get();
-    auto const  atlas       = BlockGraphics::mTerrainTextureAtlas().lock();
+size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties) {
+    auto client = ll::service::getClientInstance();
+    if (!client) return 0;
 
-    size_t      withGraphics = 0;
-    size_t      missing      = 0;
-    size_t      resolvedUvs  = 0;
-    std::string firstMissing;
+    auto                            geometry        = client->getGeometryGroup();
+    auto&                           resourceManager = client->getResourcePackManager();
+    MinEngineVersion                minEngineVersion;
+    std::unordered_set<std::string> geometryPaths;
+
+    std::function<void(CompoundTagVariant const&)> collectGeometryNames;
+    collectGeometryNames = [&](CompoundTagVariant const& value) {
+        if (auto const* stringTag = std::get_if<StringTag>(&value.mTagStorage)) {
+            auto const& geometryName = static_cast<std::string const&>(*stringTag);
+            auto const  marker       = geometryName.find(".block.");
+            if (!geometryName.starts_with("geometry.") || marker == std::string::npos) return;
+
+            auto path  = std::string{"models/blocks/"};
+            path      += geometryName.substr(9, marker - 9);
+            path      += '/';
+            path      += geometryName.substr(marker + 7);
+            for (auto& character : path) {
+                if (character == '.') character = '_';
+            }
+            path += ".geometry.json";
+            geometryPaths.insert(std::move(path));
+            return;
+        }
+        if (auto const* compound = std::get_if<CompoundTag>(&value.mTagStorage)) {
+            for (auto const& [key, nested] : *compound) collectGeometryNames(nested);
+        }
+    };
 
     for (auto const& [name, tag] : properties) {
+        for (auto const& [key, value] : tag) collectGeometryNames(value);
+    }
+
+    size_t loaded = 0;
+    for (auto const& path : geometryPaths) {
+        std::string content;
+        if (!resourceManager.load(ResourceLocation{Core::PathView{path}}, content)) continue;
+        geometry->loadModelPackFromStringSync(path, content, minEngineVersion);
+        ++loaded;
+    }
+    return loaded;
+}
+
+size_t ReplaySession::injectRecordedBlockMaterialComponents(
+    std::vector<std::pair<std::string, CompoundTag>> const& properties
+) {
+    auto level = ll::service::getLevel();
+    if (!level) return 0;
+
+    auto* definitions = level->getBlockDefinitions();
+    if (!definitions) return 0;
+
+    auto& registry = BlockTypeRegistry::get();
+
+    // Blocks without material_instances fall back to the legacy blocks.json texture aliases.
+    std::unordered_map<std::string, std::string> legacyTextures;
+    if (auto client = ll::service::getClientInstance()) {
+        auto collectLegacyTextures = [&](std::string const& content) {
+            auto root = nlohmann::ordered_json::parse(content, nullptr, false);
+            if (root.is_object()) {
+                for (auto const& [blockName, value] : root.items()) {
+                    if (!value.is_object()) continue;
+                    auto const textures = value.find("textures");
+                    if (textures == value.end()) continue;
+
+                    std::string texture;
+                    if (textures->is_string()) {
+                        texture = textures->get<std::string>();
+                    } else if (textures->is_object()) {
+                        for (auto const& face : {"north", "up", "south", "east", "west", "down"}) {
+                            auto const faceTexture = textures->find(face);
+                            if (faceTexture != textures->end() && faceTexture->is_string()) {
+                                texture = faceTexture->get<std::string>();
+                                break;
+                            }
+                        }
+                    }
+                    if (!texture.empty()) legacyTextures.emplace(blockName, std::move(texture));
+                }
+            }
+        };
+        client->getResourcePackManager().iteratePacks([&](PackInstance const& pack) {
+            std::string content;
+            if (pack.getResource(Core::Path{"blocks.json"}, content)) collectLegacyTextures(content);
+        });
+    }
+
+    size_t modernInjected = 0;
+    size_t legacyInjected = 0;
+    for (auto const& [name, tag] : properties) {
+        auto const* definition = definitions->tryGetBlockDefinition(name);
+        if (!definition) continue;
+
+        auto const* materialDescription =
+            definition->mBaseComponents->getComponentDescription("minecraft:material_instances");
+        auto const* geometryDescription = definition->mBaseComponents->getComponentDescription("minecraft:geometry");
+
         auto blockType = registry.lookupByName(HashedString{name}, false);
         if (!blockType) continue;
+        auto& type = *blockType;
 
-        auto const* entry = BlockGraphics::getForBlock(*blockType);
-        if (entry && entry != dummy) {
-            ++withGraphics;
+        // Init layer only: the engine's rendering pass skips blocks whose Rendering layer is already marked.
+        auto inject = [&type](auto const& description) {
+            type.mComponents->allowComponentReplacement();
+            description.$initializeComponent(*type.mComponents);
+            BlockTypeComponentStorageFinalizer{}.finalizeComponentData(type);
+
+            for (auto const& permutation : *type.mBlockPermutations) {
+                if (!permutation) continue;
+                permutation->mComponents->allowComponentReplacement();
+                description.$initializeComponent(*permutation->mComponents);
+                permutation->finalizeBlockComponentStorage();
+                BlockComponentStorageFinalizer{}.finalizeComponentData(*permutation);
+            }
+        };
+
+        if (materialDescription) {
+            if (geometryDescription) {
+                inject(*reinterpret_cast<BlockGeometryDescription const*>(geometryDescription));
+            }
+            inject(*reinterpret_cast<BlockMaterialInstancesDescription const*>(materialDescription));
+            ++modernInjected;
             continue;
         }
-        ++missing;
-        if (firstMissing.empty()) firstMissing = name;
-    }
 
-    // A texture name that resolves to a sized UV rectangle proves the atlas already holds the pack art.
-    std::string firstResolved;
-    size_t      probedNames = 0;
-    for (auto const& [name, tag] : properties) {
-        if (probedNames >= 32) break;
-        ++probedNames;
-        auto const shortName = name.find(':') == std::string::npos ? name : name.substr(name.find(':') + 1);
-        auto const uvs       = BlockGraphics::getTextureUVCoordinateSet(shortName, 0, 0);
-        if (uvs._u1 <= uvs._u0 || uvs._v1 <= uvs._v0) continue;
-        if (static_cast<ushort>(uvs._texSizeW) == 0) continue;
-        ++resolvedUvs;
-        if (firstResolved.empty()) firstResolved = shortName;
-    }
+        auto const legacy = legacyTextures.find(name);
+        if (legacy == legacyTextures.end()) continue;
 
-    getLogger().info(
-        "Recorded block graphics: initialized={} entries={} atlas={} withGraphics={} missing={} "
-        "resolvedUvs={}/{} firstMissing={} firstResolved={}",
-        initialized,
-        graphics,
-        static_cast<bool>(atlas),
-        withGraphics,
-        missing,
-        resolvedUvs,
-        probedNames,
-        firstMissing.empty() ? "(none)" : firstMissing,
-        firstResolved.empty() ? "(none)" : firstResolved
-    );
+        BlockMaterialInstancesDescription const material{
+            legacy->second,
+            BlockRenderLayer::RenderlayerOpaque,
+            1.0f,
+            true,
+            TintMethod::None,
+            false,
+            false,
+            false,
+            false
+        };
+        inject(material);
+        ++legacyInjected;
+    }
+    getLogger().debug("Injected recorded block visuals: material={} legacy={}", modernInjected, legacyInjected);
+    return modernInjected + legacyInjected;
 }
 
 void ReplaySession::releaseReplayResourcePacks() {
