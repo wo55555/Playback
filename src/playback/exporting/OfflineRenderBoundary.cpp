@@ -408,8 +408,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         return OfflineRenderStepResult::Failed;
     }
 
-    // Retried every step: the tap refuses while a previous capture is in flight, and one refusal must not strand the
-    // frame.
+    // Retried every step: the tap refuses while a previous capture is in flight.
     if (!mCaptureArmed) {
         mCaptureArmed = editor::graphics::gImGuiRenderer.armExportCapture(mPendingFrame->ticket);
     }
@@ -535,10 +534,9 @@ OfflineRenderBoundaryStatus OfflineRenderBoundary::status() {
                 OfflineRenderBoundaryError::CaptureFailed,
                 result.capture.message.empty() ? "The export frame capture failed" : result.capture.message
             );
-        } else if (
-            result.state != OfflineRenderBoundaryState::Closed && result.state != OfflineRenderBoundaryState::Cancelled
-            && result.capture.state == visuals::FrameTapState::Cancelled
-        ) {
+        } else if (result.state != OfflineRenderBoundaryState::Closed
+                   && result.state != OfflineRenderBoundaryState::Cancelled
+                   && result.capture.state == visuals::FrameTapState::Cancelled) {
             fault(
                 OfflineRenderBoundaryError::CaptureUnavailable,
                 result.capture.message.empty() ? "The export frame capture became unavailable" : result.capture.message
@@ -571,9 +569,9 @@ std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(Expor
     long double delta             = 0.0L;
     int64_t     previousWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
     if (mLastSubmittedFrame) {
-        delta             = current
-                          - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
-                                / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
+        delta = current
+              - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
+                    / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
         previousWholeTick = mLastSubmittedFrame->replayTickNumerator / mLastSubmittedFrame->replayTickDenominator;
     }
     if (delta < 0.0L || delta > static_cast<long double>(std::numeric_limits<float>::max())) return std::nullopt;
