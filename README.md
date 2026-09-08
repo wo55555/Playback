@@ -89,7 +89,8 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 - **Replay browser** — Searches, imports, filters, sorts, renames, deletes, and opens replay files, with grid and list views.
 - **Replay thumbnails** — Captures a preview image during recording when the game is in a menu-free state.
 - **Timeline controls** — Supports play, pause, seek, speed control, and quick navigation during replay.
-- **Timeline editor** — Provides zoomable tracks, resizable panels, camera/sequence/entity-segment editing, and undo/redo for the active in-memory project.
+- **Timeline editor** — Provides zoomable tracks, resizable panels, camera/sequence/entity-segment editing, and undo/redo, with projects saved next to the replay data and restored on reopen.
+- **Server custom blocks and dimensions** — Registers block types recorded from the server and resolves custom dimensions by name, so modded worlds replay with their own geometry, materials, and dimension layout.
 - **Cinematic camera keyframes** — Captures position, yaw, pitch, roll, and FOV with Smooth, Linear, Ease, Hold, Hermite, and Cubic Bezier interpolation.
 - **Dimension-aware camera paths** — Splits camera tracks at every dimension change so preview and export never interpolate through unrelated worlds.
 - **Experimental video export** — Renders a selected tick range to H.264 MP4 or PNG sequences with configurable frame rate, resolution, SSAA, and warm-up frames.
@@ -168,7 +169,7 @@ Use `v0.2.1-mc26.20` for LeviLamina `26.20.*`. Minecraft/LeviLamina `26.10.*` us
 
 - The recording, replay, camera, and export workflows remain under active development and optimization.
 - Multiplayer server recording and replay will receive further debugging; testing and feedback are welcome.
-- Planned work includes persistent editor projects, audio export, broader renderer compatibility, and additional camera tooling.
+- Planned work includes audio export, broader renderer compatibility, and additional camera tooling.
 
 > [!TIP]
 > **Testing focus:** Please report reproducible camera, cross-dimension, chunk-loading, and export issues with the replay file, logs, GPU, renderer backend, and export settings.
@@ -178,7 +179,6 @@ Use `v0.2.1-mc26.20` for LeviLamina `26.20.*`. Minecraft/LeviLamina `26.10.*` us
 - The replay format is still under development and may change during Alpha releases.
 - Playback reconstructs recorded client-visible state; it is not a deterministic copy of the original server simulation.
 - Pending scheduled ticks and server-owned systems such as villages, raids, and POI state are not currently persisted as authoritative simulation state.
-- Editor changes currently live in memory and are not persisted between replay sessions.
 - Experimental video export currently produces silent H.264 MP4 or PNG sequences; audio export is not implemented and additional runtime issues may remain.
 - Vibrant Visuals is not supported yet. Recording, replay, and export are only validated with the standard renderer; turn Vibrant Visuals off before using Playback.
 - SSAA is limited to 2x on D3D12 and 1x on D3D11.

@@ -7,10 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added persistent editor projects. Editing state is saved to `<dataDir>/projects/<replay>.pbproj` on Ctrl+S, from the menu, every 30 seconds, and when the editor closes; the replay file remains authoritative for the timeline duration.
+- Added replay of server custom blocks. Block types recorded in the StartGame packet are registered when the replay world loads and rendered with their recorded geometry and materials.
+- Added resolution of custom dimensions by their recorded name, so replays can reconstruct dimensions whose ids are not vanilla.
+- Added the recording game version to replay metadata. The replay browser refuses to open files recorded on a different Minecraft version and shows both versions.
+
 ### Changed
 
+- Made keyboard input UI-exclusive while the editor is open unless the left mouse button is held over the game viewport. Escape no longer reaches the game; holding it for 0.8 s exits the editor and saves the project.
+- Kept the editor hidden until the replay world is joined and ready, so loading, resource-pack download, and sign-in screens are no longer covered.
+- Cut seek time roughly in half by draining chunk injection inline during catch-up and reusing already-applied snapshot columns.
+- Downgraded project save/load, keyframe capture, and custom block registration logs to debug.
 - Documented that Vibrant Visuals is not supported yet; recording, replay, and export are only validated with the standard renderer.
 - Documented that `0.2.0` was skipped on the MC 26.20 line because video export stalled on that runtime, and that `0.2.1` is published for both runtimes.
+
+### Fixed
+
+- Fixed replays recorded by a newer build failing outright when a configuration packet had an unknown lifecycle; such packets are now skipped with a warning.
+- Fixed Ctrl shortcuts such as undo/redo never triggering because ImGui modifier state was not submitted.
+- Fixed the camera preview keeping a stale cached pose after a camera track was toggled.
+- Fixed timeline wheel-zoom anchoring to the wrong tick when the cursor was outside the canvas.
+- Fixed the property search box discarding typed text every frame.
+- Fixed a rewind keeping stale player-list skins instead of re-registering them.
 
 ## [0.2.1-mc26.20] - 2026-08-27
 
