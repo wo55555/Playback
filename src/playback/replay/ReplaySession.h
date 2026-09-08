@@ -30,8 +30,10 @@ class Actor;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
 class Player;
+class CompoundTag;
 class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
+class StartGamePacket;
 struct DimensionArguments;
 enum class MinecraftPacketIds : int;
 
@@ -232,6 +234,9 @@ private:
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
     bool                                                        mReplayCachedResourcePacksLoaded{};
 
+    std::shared_ptr<StartGamePacket const> mReplayStartGame;
+    bool                                   mRecordedBlockRegistryApplied{};
+
 public:
     bool mIsProcessingSnapshot = false;
 
@@ -278,6 +283,12 @@ private:
     [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
 
     void releaseReplayResourcePacks();
+
+    void prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
+
+    size_t preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties);
+
+    size_t injectRecordedBlockMaterialComponents(std::vector<std::pair<std::string, CompoundTag>> const& properties);
 
     [[nodiscard]] bool applyPendingSnapshotLocalPlayer();
 
@@ -401,6 +412,8 @@ public:
 
     [[nodiscard]] bool isIsolatingReplayWorld() const { return mActive; }
 
+    [[nodiscard]] bool hasRecordedBlockRegistryApplied() const { return mRecordedBlockRegistryApplied; }
+
     [[nodiscard]] std::shared_ptr<ResourcePacksInfoPacket const> getReplayResourcePacksInfo() const {
         return mReplayResourcePacksInfo.load(std::memory_order_acquire);
     }
@@ -408,6 +421,8 @@ public:
     [[nodiscard]] std::shared_ptr<ResourcePackStackPacket const> getReplayResourcePackStack() const {
         return mReplayResourcePackStack.load(std::memory_order_acquire);
     }
+
+    void applyRecordedBlockRegistry();
 
     [[nodiscard]] bool shouldIsolateChunkPackets() const;
 

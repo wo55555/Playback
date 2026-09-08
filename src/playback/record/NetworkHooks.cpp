@@ -24,12 +24,17 @@
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/network/packet/SetTimePacket.h"
+#include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/TakeItemActorPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/platform/brstd/function_ref.h"
 #include "mc/world/level/Level.h"
+#include "mc/world/level/block/Block.h"
+#include "mc/world/level/block/BlockType.h"
+#include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 
@@ -51,6 +56,7 @@ struct NetworkHookState {
     bool setTime{};
     bool resourcePacksInfo{};
     bool resourcePackStack{};
+    bool startGame{};
     bool actorIdentifiers{};
     bool completion{};
     bool packetObserver{};
@@ -64,6 +70,7 @@ struct NetworkHookState {
     bool updateBlock{};
     bool updateBlockSynced{};
     bool updateSubChunkBlocks{};
+    bool renderFinalizer{};
 
     [[nodiscard]] bool fastPathHandlersInstalled() const {
         return removeActor && takeItemActor && actorEvent && levelEvent && updateBlock && updateBlockSynced
@@ -75,9 +82,11 @@ struct NetworkHookState {
             && !updateSubChunkBlocks;
     }
 
-    [[nodiscard]] bool resourceHandlersInstalled() const { return resourcePacksInfo && resourcePackStack; }
+    [[nodiscard]] bool resourceHandlersInstalled() const { return resourcePacksInfo && resourcePackStack && startGame; }
 
-    [[nodiscard]] bool resourceHandlersRemoved() const { return !resourcePacksInfo && !resourcePackStack; }
+    [[nodiscard]] bool resourceHandlersRemoved() const {
+        return !resourcePacksInfo && !resourcePackStack && !startGame;
+    }
 };
 
 NetworkHookState& networkHookState() {
@@ -368,6 +377,41 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 LL_TYPE_INSTANCE_HOOK(
+    PlaybackStartGameHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const& source,
+    StartGamePacket const&   packet
+) {
+    auto& replaySession = ReplaySession::getInstance();
+    if (!replaySession.isIsolatingReplayWorld()) {
+        Recorder::getInstance().recordGamePacket(packet);
+        origin(source, packet);
+        return;
+    }
+
+    // The local world keeps its own StartGame; the recorded block properties are digested afterwards.
+    origin(source, packet);
+    replaySession.applyRecordedBlockRegistry();
+}
+
+// Materials are only baked inside this pass, so the recorded blocks must be registered before it runs.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackRenderFinalizerHook,
+    ll::memory::HookPriority::Normal,
+    BlockTypeRegistry,
+    &BlockTypeRegistry::finalizeBlockComponentStorageForRendering,
+    void,
+    brstd::function_ref<void(BlockType&)> finalizer
+) {
+    auto& replaySession = ReplaySession::getInstance();
+    if (replaySession.isIsolatingReplayWorld()) replaySession.applyRecordedBlockRegistry();
+    origin(finalizer);
+}
+
+LL_TYPE_INSTANCE_HOOK(
     PlaybackChunkHandleCompletedHook,
     ll::memory::HookPriority::Normal,
     ClientNetworkHandler,
@@ -405,12 +449,14 @@ bool hookNetwork(bool enable) {
     auto allInstalled = [&] {
         return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
             && state.resourceHandlersInstalled() && state.actorIdentifiers && state.completion && state.packetObserver
-            && state.packetSender && state.addActor && state.addItemActor && state.fastPathHandlersInstalled();
+            && state.packetSender && state.addActor && state.addItemActor && state.fastPathHandlersInstalled()
+            && state.renderFinalizer;
     };
     auto noneInstalled = [&] {
         return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime
             && state.resourceHandlersRemoved() && !state.actorIdentifiers && !state.completion && !state.packetObserver
-            && !state.packetSender && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved();
+            && !state.packetSender && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved()
+            && !state.renderFinalizer;
     };
     auto installAll = [&] {
         return installNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor)
@@ -419,6 +465,7 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackSetTimeHook>(state.setTime)
             && installNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo)
             && installNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack)
+            && installNetworkHook<PlaybackStartGameHook>(state.startGame)
             && installNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers)
             && installNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion)
             && installNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver)
@@ -431,9 +478,11 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackLevelEventHook>(state.levelEvent)
             && installNetworkHook<PlaybackUpdateBlockHook>(state.updateBlock)
             && installNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced)
-            && installNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks);
+            && installNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks)
+            && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
     };
     auto removeAll = [&] {
+        removeNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
         removeNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks);
         removeNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced);
         removeNetworkHook<PlaybackUpdateBlockHook>(state.updateBlock);
@@ -447,6 +496,7 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver);
         removeNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion);
         removeNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers);
+        removeNetworkHook<PlaybackStartGameHook>(state.startGame);
         removeNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack);
         removeNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo);
         removeNetworkHook<PlaybackSetTimeHook>(state.setTime);
