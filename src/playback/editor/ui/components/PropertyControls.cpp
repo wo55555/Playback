@@ -1,5 +1,7 @@
 #include "PropertyControls.h"
 
+#include "playback/editor/ui/EditorTheme.h"
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -9,12 +11,12 @@ namespace playback::editor::ui::property {
 
 namespace {
 
-constexpr ImU32 kInspectorHeaderColor = IM_COL32(32, 32, 32, 255);
-constexpr ImU32 kSectionColor         = IM_COL32(45, 45, 45, 255);
-constexpr ImU32 kSectionHoverColor    = IM_COL32(56, 56, 56, 255);
-constexpr ImU32 kSectionAccentColor   = IM_COL32(58, 140, 240, 255);
-constexpr ImU32 kFineDividerColor     = IM_COL32(66, 66, 66, 210);
-constexpr float kFineDividerThickness = 0.75f;
+constexpr ImU32 kInspectorHeaderColor = theme::kInspectorHeader;
+constexpr ImU32 kSectionColor         = theme::kSection;
+constexpr ImU32 kSectionHoverColor    = theme::kSectionHover;
+constexpr ImU32 kSectionAccentColor   = theme::kAccent;
+constexpr ImU32 kFineDividerColor     = theme::kFineDivider;
+constexpr float kFineDividerThickness = theme::kFineDividerWidth;
 
 float uiScale() { return std::max(1.0f, ImGui::GetIO().FontGlobalScale); }
 

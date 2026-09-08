@@ -28,6 +28,8 @@ enum class EditorActionType {
     RenameReplay,
     ShowReplayInFolder,
     ClearReplayBrowserError,
+    SaveProject,
+    LoadProject,
     UndoEditorEdit,
     RedoEditorEdit,
     AddFreeCamera,

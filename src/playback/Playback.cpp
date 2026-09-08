@@ -269,6 +269,7 @@ bool Playback::load() {
 bool Playback::enable() {
     const auto& logger = getSelf().getLogger();
 
+    logger.debug("Recording replays for Minecraft {}", record::PlaybackMeta::currentGameVersion());
     if (!hook()) {
         logger.error("Playback cannot enable because its required runtime hooks are unavailable");
         return false;

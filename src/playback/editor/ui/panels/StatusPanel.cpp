@@ -1,7 +1,5 @@
 #include "StatusPanel.h"
 
-#include "playback/editor/ui/ReplayEditor.h"
-
 #include "ll/api/i18n/I18n.h"
 
 #include "imgui.h"
@@ -59,8 +57,8 @@ std::string pathText(std::filesystem::path const& path) {
 
 } // namespace
 
-void StatusPanel::draw() {
-    auto const& state        = ReplayEditor::getInstance().state();
+void StatusPanel::draw(PanelContext const& ctx) {
+    auto const& state        = ctx.state;
     auto const& exportStatus = state.exportStatus;
     std::string statusText;
     ImVec4      color;
@@ -99,6 +97,16 @@ void StatusPanel::draw() {
         ImGui::TextUnformatted(tickText.c_str());
         ImGui::SameLine();
         ImGui::TextUnformatted(speedText);
+        if (!state.persistence.projectFile.empty()) {
+            auto const projectText =
+                state.persistence.dirty
+                    ? "playback.refactorEditor.status.projectUnsaved"_tr(state.persistence.projectFile)
+                    : "playback.refactorEditor.status.projectSaved"_tr(state.persistence.projectFile);
+            if (ImGui::CalcTextSize(projectText.c_str()).x + playbackWidth + statusWidth + 24.0f <= contentWidth) {
+                ImGui::SameLine();
+                ImGui::TextUnformatted(projectText.c_str());
+            }
+        }
         ImGui::SameLine(std::max(contentStart, rightEdge - statusWidth));
     } else {
         ImGui::SetCursorPosX(std::max(contentStart, rightEdge - statusWidth));

@@ -60,11 +60,16 @@ struct PlaybackMeta {
     std::string name = "Unnamed";
     std::string worldName;
     int         totalTicks = 0;
+    // Packet layouts differ per game version; empty means the file predates this field.
+    std::string gameVersion;
 
     utils::container::LinkedHashMap<std::string, PlaybackChunkMeta> chunks;
 
     static PlaybackMeta       fromJson(std::string_view json);
     [[nodiscard]] std::string toJson() const;
+
+    [[nodiscard]] static std::string currentGameVersion();
+    [[nodiscard]] bool               isCompatibleWithRuntime() const;
 };
 
 class Recorder {
@@ -75,6 +80,7 @@ private:
         DimensionType id{};
         int32_t       minHeight{};
         int32_t       maxHeight{};
+        std::string   name;
     };
     std::unique_ptr<AsyncReplaySaver> mAsyncReplaySaver;
 

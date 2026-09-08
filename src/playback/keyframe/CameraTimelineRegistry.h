@@ -58,7 +58,10 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
 
 // Tracks whether the preview camera was applied in the most recently rendered frame.
 [[nodiscard]] bool wasPreviewCameraApplied() noexcept;
-void               setPreviewCameraApplied(bool applied) noexcept;
+
+// Bumped whenever the preview timeline is republished or cleared, so cached poses can be invalidated.
+[[nodiscard]] uint64_t previewTimelineGeneration() noexcept;
+void                   setPreviewCameraApplied(bool applied) noexcept;
 
 // Remembers the most recently applied preview pose so the free camera can be parked there on pause.
 void                                           setLastPreviewPose(CameraRenderState const& pose) noexcept;

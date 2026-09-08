@@ -30,8 +30,10 @@ class Actor;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
 class Player;
+class CompoundTag;
 class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
+class StartGamePacket;
 struct DimensionArguments;
 enum class MinecraftPacketIds : int;
 
@@ -115,6 +117,7 @@ private:
     struct ReplayDimensionProfile {
         std::string                                           levelId;
         std::unordered_map<int, RecordedDimensionHeightRange> heightRanges;
+        std::unordered_map<int, std::string>                  names;
     };
 
     int    mCurrentTick             = 0;
@@ -160,6 +163,7 @@ private:
     std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
 
     bool                                        mObserverPreviewInRange{false};
+    uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
     ::Vec2                                      mLastObserverPreviewRotation{};
     std::optional<ChunkPos>                     mLastObserverServerSyncChunk;
@@ -213,6 +217,7 @@ private:
     std::optional<std::string>                                  mPendingSnapshotLocalPlayer;
     std::vector<std::pair<MinecraftPacketIds, std::string>>     mPendingSnapshotGamePackets;
     std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
+    std::unordered_set<int32_t>                                 mUnknownConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     std::unordered_set<std::string>                             mReplayObjectiveNames;
@@ -228,6 +233,9 @@ private:
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
     bool                                                        mReplayCachedResourcePacksLoaded{};
+
+    std::shared_ptr<StartGamePacket const> mReplayStartGame;
+    bool                                   mRecordedBlockRegistryApplied{};
 
 public:
     bool mIsProcessingSnapshot = false;
@@ -252,7 +260,8 @@ private:
 
     [[nodiscard]] bool prepareChunkInjectionPlan(PlaybackView const& view);
 
-    [[nodiscard]] bool tryFinishChunkInjection();
+    [[nodiscard]] bool
+    tryFinishChunkInjection(std::optional<std::chrono::steady_clock::time_point> catchUpDeadline = std::nullopt);
 
     [[nodiscard]] bool finishChunkInjection();
 
@@ -274,6 +283,12 @@ private:
     [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
 
     void releaseReplayResourcePacks();
+
+    void prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
+
+    size_t preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties);
+
+    size_t injectRecordedBlockMaterialComponents(std::vector<std::pair<std::string, CompoundTag>> const& properties);
 
     [[nodiscard]] bool applyPendingSnapshotLocalPlayer();
 
@@ -302,6 +317,10 @@ private:
 
     void beginSeek(int targetTick);
 
+    void finishSeek();
+
+    void settleAfterSeek();
+
     [[nodiscard]] bool hasPendingReplayReaderBoundary() const;
 
     [[nodiscard]] bool advanceReplayReader(bool stopAtEnd);
@@ -329,6 +348,12 @@ public:
     [[nodiscard]] bool isPaused() const { return mIsPaused; }
 
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
+
+    // True once the snapshot and chunks are in and no transition is pending; gates the editor UI.
+    [[nodiscard]] bool isReplayWorldReady() const {
+        return mActive && mReplayWorldJoined && mWorldReady && !mReplayFailed && !mPendingReplayDimension
+            && !mApplyingChunkSnapshot && !mChunkInjectionPending;
+    }
 
     [[nodiscard]] Player* getReplayPlayer() const noexcept { return mReplayPlayer; }
 
@@ -387,6 +412,8 @@ public:
 
     [[nodiscard]] bool isIsolatingReplayWorld() const { return mActive; }
 
+    [[nodiscard]] bool hasRecordedBlockRegistryApplied() const { return mRecordedBlockRegistryApplied; }
+
     [[nodiscard]] std::shared_ptr<ResourcePacksInfoPacket const> getReplayResourcePacksInfo() const {
         return mReplayResourcePacksInfo.load(std::memory_order_acquire);
     }
@@ -394,6 +421,8 @@ public:
     [[nodiscard]] std::shared_ptr<ResourcePackStackPacket const> getReplayResourcePackStack() const {
         return mReplayResourcePackStack.load(std::memory_order_acquire);
     }
+
+    void applyRecordedBlockRegistry();
 
     [[nodiscard]] bool shouldIsolateChunkPackets() const;
 

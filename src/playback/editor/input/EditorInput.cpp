@@ -1,5 +1,4 @@
 ﻿#include "EditorInput.h"
-#include "KeyMap.h"
 #include "playback/exporting/ExportActivity.h"
 
 #include "imgui.h"
@@ -185,6 +184,19 @@ ImGuiKey vkToImGuiKey(uint32_t vk) {
     }
 }
 
+ImGuiKey vkToImGuiMod(uint32_t vk) {
+    switch (vk) {
+    case Keyboard::Control:
+        return ImGuiMod_Ctrl;
+    case Keyboard::Lshift:
+        return ImGuiMod_Shift;
+    case Keyboard::Menu:
+        return ImGuiMod_Alt;
+    default:
+        return ImGuiKey_None;
+    }
+}
+
 void releaseEditorKeysLocked() {
     gKeyQueue.clear();
     gPendingImGuiReleases.insert(gImGuiPressedKeys.begin(), gImGuiPressedKeys.end());
@@ -192,9 +204,8 @@ void releaseEditorKeysLocked() {
     gRoutedPressedKeys.clear();
 }
 
-bool isModifier(uint32_t keyCode) {
-    return keyCode == Keyboard::Lshift || keyCode == Keyboard::Control || keyCode == Keyboard::Menu;
-}
+// Escape must never reach the game while the editor is up, or MCBE opens its own pause menu.
+bool isEditorOwnedEscape(uint32_t keyCode) { return keyCode == Keyboard::Escape; }
 
 void queueUiEventLocked(uint32_t keyCode, bool down) {
     if (gKeyQueue.size() >= MaxQueuedKeyEvents) releaseEditorKeysLocked();
@@ -214,17 +225,21 @@ void syncFrame() {
     ImGuiIO&         io = ImGui::GetIO();
     std::scoped_lock lock(gKeyMutex);
 
-    for (uint32_t keyCode : gPendingImGuiReleases) {
+    // io.KeyCtrl and friends are not derived from the left/right keys; the backend must submit them.
+    auto submitKey = [&io](uint32_t keyCode, bool down) {
         ImGuiKey const key = vkToImGuiKey(keyCode);
-        if (key != ImGuiKey_None) io.AddKeyEvent(key, false);
-    }
+        if (key == ImGuiKey_None) return;
+        io.AddKeyEvent(key, down);
+        if (ImGuiKey const mod = vkToImGuiMod(keyCode); mod != ImGuiKey_None) io.AddKeyEvent(mod, down);
+    };
+
+    for (uint32_t keyCode : gPendingImGuiReleases) submitKey(keyCode, false);
     gPendingImGuiReleases.clear();
 
     while (!gKeyQueue.empty()) {
-        auto const& ev  = gKeyQueue.front();
-        ImGuiKey    key = vkToImGuiKey(ev.keyCode);
-        if (key != ImGuiKey_None) {
-            io.AddKeyEvent(key, ev.down);
+        auto const& ev = gKeyQueue.front();
+        if (vkToImGuiKey(ev.keyCode) != ImGuiKey_None) {
+            submitKey(ev.keyCode, ev.down);
             if (ev.down) {
                 gImGuiPressedKeys.insert(ev.keyCode);
                 if (ev.character != 0) io.AddInputCharacter(ev.character);
@@ -243,6 +258,13 @@ bool routeKeyEvent(uint32_t keyCode, bool down, bool forceUi) {
     bool const uiOwned   = gRoutedPressedKeys.contains(keyCode);
     if (down) gPhysicalPressedKeys.insert(keyCode);
     else gPhysicalPressedKeys.erase(keyCode);
+
+    // Checked before any game-ownership branch, including while the mouse is captured.
+    if (isEditorOwnedEscape(keyCode) && gUiVisible.load(std::memory_order_acquire)) {
+        gGamePressedKeys.erase(keyCode);
+        queueUiEventLocked(keyCode, down);
+        return false;
+    }
 
     if (!down) {
         if (uiOwned) queueUiEventLocked(keyCode, false);
@@ -272,22 +294,9 @@ bool routeKeyEvent(uint32_t keyCode, bool down, bool forceUi) {
         return true;
     }
 
-    if (isModifier(keyCode)) {
-        queueUiEventLocked(keyCode, down);
-        if (down) gGamePressedKeys.insert(keyCode);
-        return true;
-    }
-
-    bool const ctrl  = gPhysicalPressedKeys.contains(Keyboard::Control);
-    bool const shift = gPhysicalPressedKeys.contains(Keyboard::Lshift);
-    bool const alt   = gPhysicalPressedKeys.contains(Keyboard::Menu);
-    if (KeyMap::isEditorShortcut(keyCode, ctrl, shift, alt)) {
-        queueUiEventLocked(keyCode, down);
-        return false;
-    }
-
-    if (down) gGamePressedKeys.insert(keyCode);
-    return true;
+    // Editor up but mouse not captured: UI owns the keyboard, so WASD cannot reach the game.
+    queueUiEventLocked(keyCode, down);
+    return false;
 }
 
 void setUiVisible(bool visible) {

@@ -1,6 +1,6 @@
-﻿#include "ViewportPanel.h"
+#include "ViewportPanel.h"
 
-#include "playback/editor/ui/ReplayEditor.h"
+#include "playback/editor/ui/EditorTheme.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -10,7 +10,7 @@ namespace playback::editor::ui {
 
 using namespace ll::i18n_literals;
 
-void ViewportPanel::draw(bool maximized) {
+void ViewportPanel::draw(PanelContext const& ctx, bool maximized) {
     ImVec2 viewportSize = ImGui::GetContentRegionAvail();
 
     constexpr float kTransportHeight = 42.0f;
@@ -19,7 +19,7 @@ void ViewportPanel::draw(bool maximized) {
     ImDrawList* dl       = ImGui::GetWindowDrawList();
     ImVec2      sceneMin = ImGui::GetCursorScreenPos();
     ImVec2      sceneMax = ImVec2(sceneMin.x + sceneSize.x, sceneMin.y + sceneSize.y);
-    dl->AddRectFilled(sceneMin, sceneMax, IM_COL32(0x0d, 0x0d, 0x0d, 0xff));
+    dl->AddRectFilled(sceneMin, sceneMax, theme::kViewportBg);
     float  sceneAspectRatio = sceneSize.x / std::max(1.0f, sceneSize.y);
     ImVec2 videoSize = sceneAspectRatio > mVideoAspectRatio ? ImVec2(sceneSize.y * mVideoAspectRatio, sceneSize.y)
                                                             : ImVec2(sceneSize.x, sceneSize.x / mVideoAspectRatio);
@@ -29,7 +29,7 @@ void ViewportPanel::draw(bool maximized) {
     if (mGameTexture) {
         dl->AddImage(ImTextureRef(mGameTexture), videoMin, videoMax);
     }
-    dl->AddRect(videoMin, videoMax, IM_COL32(0x3a, 0x8c, 0xf0, 0xff));
+    dl->AddRect(videoMin, videoMax, theme::kAccent);
     ImGui::SetCursorScreenPos(videoMin);
     ImGui::InvisibleButton("##viewport-video", videoSize);
 
@@ -42,10 +42,10 @@ void ViewportPanel::draw(bool maximized) {
     overlay->AddRectFilled(
         maximizePos,
         {maximizePos.x + kMaximizeButtonSize, maximizePos.y + kMaximizeButtonSize},
-        maximizeHovered ? IM_COL32(58, 90, 140, 235) : IM_COL32(20, 20, 24, 210),
+        maximizeHovered ? theme::kOverlayHover : theme::kOverlayBg,
         4.0f
     );
-    ImU32 iconColor = IM_COL32(230, 232, 238, 255);
+    ImU32 iconColor = theme::kIconActive;
     float x = maximizePos.x, y = maximizePos.y;
     if (maximized) {
         overlay->AddLine({x + 8, y + 12}, {x + 8, y + 8}, iconColor, 1.8f);
@@ -66,7 +66,7 @@ void ViewportPanel::draw(bool maximized) {
         overlay->AddLine({x + 12, y + 21}, {x + 7, y + 21}, iconColor, 1.8f);
         overlay->AddLine({x + 7, y + 21}, {x + 7, y + 16}, iconColor, 1.8f);
     }
-    if (ImGui::IsItemClicked()) ReplayEditor::getInstance().toggleViewportMaximized();
+    if (ImGui::IsItemClicked()) ctx.commands.toggleViewportMaximized();
     if (maximizeHovered)
         ImGui::SetTooltip(
             "%s",
@@ -74,12 +74,11 @@ void ViewportPanel::draw(bool maximized) {
                        : "playback.refactorEditor.timeline.maximize"_tr())
                 .c_str()
         );
-    if (maximized) drawTransportControls();
+    if (maximized) drawTransportControls(ctx);
 }
 
-void ViewportPanel::drawTransportControls() {
-    auto&           editor        = ReplayEditor::getInstance();
-    auto const&     state         = editor.state();
+void ViewportPanel::drawTransportControls(PanelContext const& ctx) {
+    auto const&     state         = ctx.state;
     ImVec2          available     = ImGui::GetContentRegionAvail();
     ImVec2          origin        = ImGui::GetCursorScreenPos();
     constexpr float buttonSize    = 32.0f;
@@ -90,7 +89,7 @@ void ViewportPanel::drawTransportControls() {
     auto            button        = [y](const char* id, float x, auto drawIcon) {
         ImGui::SetCursorScreenPos({x, y});
         ImGui::InvisibleButton(id, {buttonSize, buttonSize});
-        ImU32 color = ImGui::IsItemHovered() ? IM_COL32(240, 192, 32, 255) : IM_COL32(230, 232, 238, 255);
+        ImU32 color = ImGui::IsItemHovered() ? theme::kSelected : theme::kIconActive;
         drawIcon(ImGui::GetWindowDrawList(), ImVec2(x + buttonSize * 0.5f, y + buttonSize * 0.5f), color);
         return ImGui::IsItemClicked();
     };
@@ -98,13 +97,13 @@ void ViewportPanel::drawTransportControls() {
             dl->AddLine({c.x - 9, c.y - 8}, {c.x - 9, c.y + 8}, color, 2);
             dl->AddTriangleFilled({c.x - 7, c.y}, {c.x + 7, c.y - 8}, {c.x + 7, c.y + 8}, color);
         })) {
-        editor.seekTo(0);
+        ctx.commands.seekTo(0);
     }
     if (button("##viewport-back", startX + (buttonSize + gap), [](ImDrawList* dl, ImVec2 c, ImU32 color) {
             dl->AddTriangleFilled({c.x - 9, c.y}, {c.x + 5, c.y - 8}, {c.x + 5, c.y + 8}, color);
             dl->AddTriangleFilled({c.x - 2, c.y}, {c.x + 10, c.y - 8}, {c.x + 10, c.y + 8}, color);
         })) {
-        editor.seekRelative(-200);
+        ctx.commands.seekRelative(-200);
     }
     if (button("##viewport-play", startX + (buttonSize + gap) * 2, [&state](ImDrawList* dl, ImVec2 c, ImU32 color) {
             if (!state.paused) {
@@ -112,19 +111,19 @@ void ViewportPanel::drawTransportControls() {
                 dl->AddRectFilled({c.x + 2, c.y - 8}, {c.x + 7, c.y + 8}, color);
             } else dl->AddTriangleFilled({c.x - 6, c.y - 9}, {c.x - 6, c.y + 9}, {c.x + 9, c.y}, color);
         })) {
-        editor.submitAction({playback::state::EditorActionType::TogglePause});
+        ctx.submitAction({playback::state::EditorActionType::TogglePause});
     }
     if (button("##viewport-forward", startX + (buttonSize + gap) * 3, [](ImDrawList* dl, ImVec2 c, ImU32 color) {
             dl->AddTriangleFilled({c.x - 10, c.y - 8}, {c.x - 10, c.y + 8}, {c.x + 2, c.y}, color);
             dl->AddTriangleFilled({c.x - 3, c.y - 8}, {c.x - 3, c.y + 8}, {c.x + 9, c.y}, color);
         })) {
-        editor.seekRelative(200);
+        ctx.commands.seekRelative(200);
     }
     if (button("##viewport-end", startX + (buttonSize + gap) * 4, [](ImDrawList* dl, ImVec2 c, ImU32 color) {
             dl->AddTriangleFilled({c.x - 7, c.y - 8}, {c.x - 7, c.y + 8}, {c.x + 7, c.y}, color);
             dl->AddLine({c.x + 9, c.y - 8}, {c.x + 9, c.y + 8}, color, 2);
         })) {
-        editor.seekTo(state.totalTicks);
+        ctx.commands.seekTo(state.totalTicks);
     }
 }
 

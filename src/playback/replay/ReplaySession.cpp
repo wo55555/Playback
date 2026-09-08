@@ -1,4 +1,4 @@
-#include "ReplaySession.h"
+﻿#include "ReplaySession.h"
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
@@ -13,12 +13,23 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
+#include "mc/client/model/GeometryGroup.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
 #include "mc/client/options/IOptions.h"
+#include "mc/client/particle/ParticleEngine.h"
+#include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 #include "mc/client/player/LocalPlayer.h"
+#include "mc/client/renderer/game/LevelRenderer.h"
+#include "mc/common/SharedConstants.h"
+#include "mc/deps/core/file/Path.h"
+#include "mc/deps/core/file/PathView.h"
+#include "mc/deps/core/resource/ResourceLocation.h"
+#include "mc/deps/core/string/HashedString.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
 #include "mc/deps/ecs/strict/StrictEntityContext.h"
+#include "mc/deps/nbt/CompoundTag.h"
+#include "mc/deps/nbt/IntTag.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
@@ -50,11 +61,15 @@
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/network/packet/SetDisplayObjectivePacket.h"
 #include "mc/network/packet/SetTimePacket.h"
+#include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/resources/IResourcePackRepository.h"
+#include "mc/resources/MinEngineVersion.h"
+#include "mc/resources/ResourcePack.h"
+#include "mc/resources/ResourcePackManager.h"
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
 #include "mc/world/actor/Actor.h"
@@ -63,8 +78,28 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/level/ActorRuntimeIDManager.h"
+#include "mc/world/level/BlockPalette.h"
+#include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
+#include "mc/world/level/block/Block.h"
+#include "mc/world/level/block/BlockRenderLayer.h"
+#include "mc/world/level/block/BlockType.h"
+#include "mc/world/level/block/TintMethod.h"
+#include "mc/world/level/block/components/BlockComponentDescription.h"
+#include "mc/world/level/block/components/BlockComponentStorageFinalizer.h"
+#include "mc/world/level/block/components/BlockGeometryDescription.h"
+#include "mc/world/level/block/components/BlockMaterialInstance.h"
+#include "mc/world/level/block/components/BlockMaterialInstancesDescription.h"
+#include "mc/world/level/block/components/BlockRendererDescription.h"
+#include "mc/world/level/block/components/BlockRendererName.h"
+#include "mc/world/level/block/components/BlockTransformationComponent.h"
+#include "mc/world/level/block/components/BlockTypeComponentStorageFinalizer.h"
+#include "mc/world/level/block/definition/BlockComponentGroupDescription.h"
+#include "mc/world/level/block/definition/BlockDefinition.h"
+#include "mc/world/level/block/definition/BlockDefinitionGroup.h"
+#include "mc/world/level/block/definition/BlockDescription.h"
+#include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/chunk/ChunkSource.h"
 #include "mc/world/level/chunk/ChunkViewSource.h"
 #include "mc/world/level/chunk/LevelChunk.h"
@@ -72,16 +107,20 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
+#include "mc/world/level/storage/LevelData.h"
 
 
 #include "snappy.h"
 #include "uuid.h"
 #include "zip.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -89,10 +128,12 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 namespace playback::replay {
 using namespace playback::action;
@@ -107,8 +148,9 @@ constexpr std::string_view ReplayLevelIdPrefix        = "__playback_replay_world
 constexpr auto             CenterChunkInjectionBudget = std::chrono::milliseconds(8);
 constexpr auto             OuterChunkInjectionBudget  = std::chrono::milliseconds(4);
 constexpr auto             SnapshotGamePacketBudget   = std::chrono::milliseconds(2);
-constexpr int              SeekTicksPerClientTick     = 400;
-constexpr std::array       PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f};
+// Every client tick a seek spills into is one more frame of visible catch-up, so land it in as few as possible.
+constexpr auto       SeekCatchUpBudget = std::chrono::milliseconds(2000);
+constexpr std::array PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f};
 
 bool shouldIgnoreReplayPacket(MinecraftPacketIds packetId) {
     switch (packetId) {
@@ -290,6 +332,17 @@ void forceFirstPersonCamera() {
     if (options.getPlayerViewPerspective() != 0) options.setPlayerViewPerspective(0);
 }
 
+// A seek replays every particle event it crosses, so they would all pile up on the landing frame.
+void clearReplayParticles() {
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    auto* renderer = client->getLevelRenderer();
+    if (!renderer) return;
+
+    if (auto particles = renderer->mParticleEngine.get()) particles->clear();
+    if (auto systems = renderer->mParticleSystemEngine.get()) systems->clear();
+}
+
 // Server teleport lands one eye height above the request; compensate so the feet agree.
 constexpr float kServerEyeHeight = 1.62f;
 
@@ -329,9 +382,11 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             return false;
         }
         if (mSnapshotContexts.empty()) throw std::runtime_error("Replay contains no snapshot contexts");
-        if (!prepareReplayResourcePacks(mReaders.front()->readConfigurationPackets())) {
+        auto const configurationPackets = mReaders.front()->readConfigurationPackets();
+        if (!prepareReplayResourcePacks(configurationPackets)) {
             throw std::runtime_error("Unable to prepare the recorded resource-pack configuration");
         }
+        prepareRecordedBlockRegistry(configurationPackets);
         auto const& context = mSnapshotContexts.front();
 
         LevelSettings settings;
@@ -353,29 +408,29 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             auto const height  = static_cast<int64_t>(maximum) - static_cast<int64_t>(minimum);
             if (minimum < std::numeric_limits<short>::min() || maximum > std::numeric_limits<short>::max()
                 || minimum % 16 != 0 || maximum <= minimum || height % 16 != 0) {
-                throw std::runtime_error(
-                    std::format(
-                        "Replay dimension {} has invalid recorded height range [{}, {})",
-                        snapshot.dimensionId,
-                        minimum,
-                        maximum
-                    )
-                );
+                throw std::runtime_error(std::format(
+                    "Replay dimension {} has invalid recorded height range [{}, {})",
+                    snapshot.dimensionId,
+                    minimum,
+                    maximum
+                ));
+            }
+
+            if (!snapshot.dimensionName.empty()) {
+                dimensionProfile->names.insert_or_assign(snapshot.dimensionId, snapshot.dimensionName);
             }
 
             RecordedDimensionHeightRange const range{minimum, maximum};
             auto const [it, inserted] = dimensionProfile->heightRanges.emplace(snapshot.dimensionId, range);
             if (!inserted && it->second != range) {
-                throw std::runtime_error(
-                    std::format(
-                        "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
-                        snapshot.dimensionId,
-                        it->second.minimum,
-                        it->second.maximum,
-                        minimum,
-                        maximum
-                    )
-                );
+                throw std::runtime_error(std::format(
+                    "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
+                    snapshot.dimensionId,
+                    it->second.minimum,
+                    it->second.maximum,
+                    minimum,
+                    maximum
+                ));
             }
         }
         mReplayDimensionProfile.store(std::move(dimensionProfile), std::memory_order_release);
@@ -640,6 +695,14 @@ void ReplaySession::updateObserverPreview() {
     if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return;
     auto const time = getCameraRenderSampleTime();
     if (!time) return;
+    // Republishing (a track was toggled or edited) invalidates the cached pose, unlike merely leaving the range.
+    auto const timelineGeneration = keyframe::previewTimelineGeneration();
+    if (mObserverPreviewGeneration != timelineGeneration) {
+        mObserverPreviewGeneration = timelineGeneration;
+        mObserverPreviewInRange    = false;
+        mLastObserverServerSyncChunk.reset();
+    }
+
     auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
     if (!sample) {
         // Leaving the range: pin the observer and server to the last in-range pose.
@@ -664,9 +727,9 @@ void ReplaySession::updateObserverPreview() {
     Vec2 const     rotation{sample->state.pitch, sample->state.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    mLastObserverPreviewFeet        = feetPosition;
-    mLastObserverPreviewRotation    = rotation;
+                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
+    mLastObserverPreviewFeet     = feetPosition;
+    mLastObserverPreviewRotation = rotation;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -767,7 +830,7 @@ void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint)
     Vec2 const     rotation{viewpoint.pitch, viewpoint.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
+                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -891,10 +954,36 @@ void ReplaySession::adjustPlaybackSpeed(int direction) {
     getLogger().debug("Replay speed set to {:.2f}x", mPlaybackSpeed);
 }
 
+void ReplaySession::finishSeek() {
+    mSeekTargetTick         = -1;
+    mExportSeekRequested    = false;
+    mSnapMovementDuringSeek = false;
+    settleAfterSeek();
+    // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
+    markReplayTickAdvanced();
+    if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
+}
+
+// Per-action snapping misses entities that never moved during catch-up, so settle every recorded one here.
+void ReplaySession::settleAfterSeek() {
+    clearReplayParticles();
+    if (!mReplayPlayer || !mReplayWorldJoined) return;
+
+    auto& level = mReplayPlayer->getLevel();
+    for (auto const& id : mRecordedEntityIds) {
+        auto* actor = level.fetchEntity(id, false);
+        if (!actor || actor == mReplayPlayer) continue;
+        auto const rotation = actor->getRotation();
+        cancelNativeMovementInterpolation(*actor, actor->getPosition(), rotation, rotation.y);
+    }
+}
+
 void ReplaySession::beginSeek(int targetTick) {
     targetTick = std::clamp(targetTick, 0, getTotalTicks());
     if (mReaders.empty()) return;
     if (!refreshReplayPlayer()) throw std::runtime_error("Replay player is unavailable while seeking");
+
+
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
 
@@ -1011,28 +1100,35 @@ void ReplaySession::tick() {
         int const requestedSeek = mRequestedSeekTick.exchange(-1, std::memory_order_acq_rel);
         if (requestedSeek >= 0) {
             beginSeek(requestedSeek);
-            if (mChunkInjectionPending || mPendingSnapshotApply || mPendingReplayDimension) return;
+            if (mPendingSnapshotApply || mPendingReplayDimension) return;
         }
-        if (mChunkInjectionPending || mPendingSnapshotApply || mPendingReplayDimension) return;
+        if (mPendingSnapshotApply || mPendingReplayDimension) return;
+        // Yielding the tick that finishes a snapshot lets the client rebuild its players before catch-up resumes.
+        if (mChunkInjectionPending) return;
 
         if (mSeekTargetTick >= 0) {
-            int advancedTicks = 0;
-            while (mCurrentTick < mSeekTargetTick && !mChunkInjectionPending && !mPendingSnapshotApply
-                   && !mPendingReplayDimension && advancedTicks < SeekTicksPerClientTick) {
+            auto const deadline = std::chrono::steady_clock::now() + SeekCatchUpBudget;
+            while (mCurrentTick < mSeekTargetTick) {
+                // Draining here instead of returning keeps the rest of this client tick usable for replay.
+                if (mChunkInjectionPending) {
+                    if (!tryFinishChunkInjection(deadline)) {
+                        if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
+                        break;
+                    }
+                    if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
+                }
+                if (mPendingSnapshotApply || mPendingReplayDimension) break;
                 if (!advanceReplayTick(false)) {
                     getLogger().warn("Replay ended at tick {} while seeking to tick {}", mCurrentTick, mSeekTargetTick);
-                    mSeekTargetTick         = -1;
-                    mExportSeekRequested    = false;
-                    mSnapMovementDuringSeek = false;
+                    finishSeek();
                     return;
                 }
-                ++advancedTicks;
+                if (std::chrono::steady_clock::now() >= deadline) break;
             }
+
             if (mCurrentTick >= mSeekTargetTick) {
                 getLogger().debug("Replay seek completed at tick {}", mCurrentTick);
-                mSeekTargetTick         = -1;
-                mExportSeekRequested    = false;
-                mSnapMovementDuringSeek = false;
+                finishSeek();
             }
             return;
         }
@@ -1293,6 +1389,300 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
     return true;
 }
 
+void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets) {
+    mReplayStartGame.reset();
+    mRecordedBlockRegistryApplied = false;
+
+    PlaybackSerializedGamePacket const* serialized = nullptr;
+    for (auto it = packets.rbegin(); it != packets.rend(); ++it) {
+        if (it->mPacketId == static_cast<int32_t>(MinecraftPacketIds::StartGame)) {
+            serialized = &*it;
+            break;
+        }
+    }
+    if (!serialized) {
+        getLogger().debug("Replay contains no recorded StartGame packet; custom blocks stay unregistered");
+        return;
+    }
+
+    try {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::StartGame);
+        if (!packet) throw std::runtime_error("Unable to create a recorded StartGame packet");
+
+        ReadOnlyBinaryStream stream(serialized->mPayload, false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            throw std::runtime_error("Unable to decode the recorded StartGame packet");
+        }
+
+        auto startGame = std::static_pointer_cast<StartGamePacket>(packet);
+        getLogger().debug("Replay carries {} recorded block properties", startGame->mBlockProperties->size());
+        mReplayStartGame = std::move(startGame);
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to prepare the recorded block registry: {}", exception.what());
+    } catch (...) {
+        getLogger().error("Unable to prepare the recorded block registry");
+    }
+}
+
+void ReplaySession::applyRecordedBlockRegistry() {
+    if (mRecordedBlockRegistryApplied) return;
+    auto startGame = mReplayStartGame;
+    if (!startGame) return;
+    mRecordedBlockRegistryApplied = true;
+
+    auto& properties = *startGame->mBlockProperties;
+    if (properties.empty()) {
+        getLogger().debug("Recorded StartGame carries no block properties");
+        return;
+    }
+
+    try {
+        auto level = ll::service::getLevel();
+        if (!level) throw std::runtime_error("Level is unavailable");
+        level->initializeBlockDefinitionGroup();
+
+        auto* definitions = level->getBlockDefinitions();
+        if (!definitions) throw std::runtime_error("Block definitions are unavailable");
+
+        auto& registry = BlockTypeRegistry::get();
+
+        // The registry exposes no updater version accessor, so read it back from a vanilla permutation.
+        std::optional<uint> updaterVersion;
+        registry.forEachBlockType([&updaterVersion](BlockType const& blockType) {
+            if (updaterVersion) return false;
+            for (auto const& permutation : *blockType.mBlockPermutations) {
+                if (!permutation) continue;
+                auto const& serializationId = permutation->mSerializationId;
+                if (!serializationId->contains("version", Tag::Type::Int)) continue;
+                updaterVersion = static_cast<uint>(serializationId->at("version").get<IntTag>().data);
+                return false;
+            }
+            return true;
+        });
+        if (!updaterVersion) throw std::runtime_error("Unable to resolve the block updater version");
+
+        auto const preloadedGeometry = preloadRecordedBlockGeometry(properties);
+        definitions->digestServerBlockProperties(properties);
+
+        auto findDefinition = [definitions](std::string const& name) -> BlockDefinition const* {
+            auto const entry = definitions->mBlockDefinitions->find(name);
+            return entry == definitions->mBlockDefinitions->end() ? nullptr : entry->second.get();
+        };
+
+        size_t registered = 0;
+        for (auto const& [name, tag] : properties) {
+            auto const* definition = findDefinition(name);
+            if (!definition) continue;
+
+            auto blockType = definitions->registerDataDrivenBlock(definition->mDescription);
+            if (!blockType) continue;
+
+            blockType->createBlockPermutations(*updaterVersion);
+            definitions->initBlockTypeFromDefinition(*blockType, *definition);
+            ++registered;
+        }
+
+        auto const injectedVisuals = injectRecordedBlockMaterialComponents(properties);
+
+        registry.setupDirectAccessBlocks();
+        registry.finalizeBlockComponentStorage();
+
+        for (auto const& [name, tag] : properties) {
+            if (auto const* definition = findDefinition(name)) {
+                definitions->initializeBlockFromDefinition(*definition, *level);
+            }
+        }
+
+        getLogger().debug(
+            "Registered {} recorded custom block types (geometry={}, visuals={})",
+            registered,
+            preloadedGeometry,
+            injectedVisuals
+        );
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to register recorded custom blocks: {}", exception.what());
+    } catch (...) {
+        getLogger().error("Unable to register recorded custom blocks");
+    }
+}
+
+size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties) {
+    auto client = ll::service::getClientInstance();
+    if (!client) return 0;
+
+    auto                            geometry         = client->getGeometryGroup();
+    auto&                           resourceManager  = client->getResourcePackManager();
+    auto const                      minEngineVersion = MinEngineVersion::fromString(std::format(
+        "{}.{}.{}",
+        SharedConstants::MajorVersion(),
+        SharedConstants::MinorVersion(),
+        SharedConstants::PatchVersion()
+    ));
+    std::unordered_set<std::string> geometryPaths;
+
+    std::function<void(CompoundTagVariant const&)> collectGeometryNames;
+    collectGeometryNames = [&](CompoundTagVariant const& value) {
+        if (auto const* stringTag = std::get_if<StringTag>(&value.mTagStorage)) {
+            auto const& geometryName = static_cast<std::string const&>(*stringTag);
+            auto const  marker       = geometryName.find(".block.");
+            if (!geometryName.starts_with("geometry.") || marker == std::string::npos) return;
+
+            auto path  = std::string{"models/blocks/"};
+            path      += geometryName.substr(9, marker - 9);
+            path      += '/';
+            path      += geometryName.substr(marker + 7);
+            for (auto& character : path) {
+                if (character == '.') character = '_';
+            }
+            path += ".geometry.json";
+            geometryPaths.insert(std::move(path));
+            return;
+        }
+        if (auto const* compound = std::get_if<CompoundTag>(&value.mTagStorage)) {
+            for (auto const& [key, nested] : *compound) collectGeometryNames(nested);
+        }
+    };
+
+    for (auto const& [name, tag] : properties) {
+        for (auto const& [key, value] : tag) collectGeometryNames(value);
+    }
+
+    size_t loaded = 0;
+    for (auto const& path : geometryPaths) {
+        std::string content;
+        if (!resourceManager.load(ResourceLocation{Core::PathView{path}}, content)) continue;
+        geometry->loadModelPackFromStringSync(path, content, minEngineVersion);
+        ++loaded;
+    }
+    return loaded;
+}
+
+size_t
+ReplaySession::injectRecordedBlockMaterialComponents(std::vector<std::pair<std::string, CompoundTag>> const& properties
+) {
+    auto level = ll::service::getLevel();
+    if (!level) return 0;
+
+    auto* definitions = level->getBlockDefinitions();
+    if (!definitions) return 0;
+
+    auto& registry = BlockTypeRegistry::get();
+
+    // Blocks without material_instances fall back to the legacy blocks.json texture aliases.
+    std::unordered_map<std::string, std::string> legacyTextures;
+    if (auto client = ll::service::getClientInstance()) {
+        auto collectLegacyTextures = [&](std::string const& content) {
+            auto root = nlohmann::ordered_json::parse(content, nullptr, false);
+            if (root.is_object()) {
+                for (auto const& [blockName, value] : root.items()) {
+                    if (!value.is_object()) continue;
+                    auto const textures = value.find("textures");
+                    if (textures == value.end()) continue;
+
+                    std::string texture;
+                    if (textures->is_string()) {
+                        texture = textures->get<std::string>();
+                    } else if (textures->is_object()) {
+                        for (auto const& face : {"north", "up", "south", "east", "west", "down"}) {
+                            auto const faceTexture = textures->find(face);
+                            if (faceTexture != textures->end() && faceTexture->is_string()) {
+                                texture = faceTexture->get<std::string>();
+                                break;
+                            }
+                        }
+                    }
+                    if (!texture.empty()) legacyTextures.emplace(blockName, std::move(texture));
+                }
+            }
+        };
+        client->getResourcePackRepository().forEachPack([&](ResourcePack const& pack) {
+            std::string content;
+            if (pack.getResource(Core::Path{"blocks.json"}, content, 0)) collectLegacyTextures(content);
+        });
+    }
+
+    // Geometry-less blocks would fall back to BlockGraphics here, so legacy cubes get full_block geometry.
+    alignas(16) std::array<std::byte, 512> fullBlockGeometryStorage{};
+    auto& fullBlockGeometry = *reinterpret_cast<BlockGeometryDescription*>(fullBlockGeometryStorage.data());
+    HashedString const                               noCullingName;
+    std::variant<bool, std::set<HashedString>> const uvLock{false};
+    BlockRendererDescription const                   renderer{
+        BlockRendererName::Default,
+        Vec3{},
+        BlockTransformationComponent::RotationType{0, 0, 0, Vec3{0.5f}},
+        Vec3::ONE()
+    };
+    fullBlockGeometry.$ctor(
+        BlockGeometryDescription::FULL_BLOCK_GEO_NAME(),
+        noCullingName,
+        BlockGeometryDescription::CULLING_SHAPE_DEFAULT(),
+        BlockGeometryDescription::CULLING_LAYER_UNDEFINED(),
+        uvLock,
+        renderer,
+        false
+    );
+
+    size_t modernInjected = 0;
+    size_t legacyInjected = 0;
+    for (auto const& [name, tag] : properties) {
+        auto const  entry      = definitions->mBlockDefinitions->find(name);
+        auto const* definition = entry == definitions->mBlockDefinitions->end() ? nullptr : entry->second.get();
+        if (!definition) continue;
+
+        auto const* materialDescription =
+            definition->mBaseComponents->getComponentDescription("minecraft:material_instances");
+        auto const* geometryDescription = definition->mBaseComponents->getComponentDescription("minecraft:geometry");
+
+        auto blockType = registry.lookupByName(HashedString{name}, false);
+        if (!blockType) continue;
+        auto& type = *blockType;
+
+        // Init layer only: the engine's rendering pass skips blocks whose Rendering layer is already marked.
+        auto inject = [&type](auto const& description) {
+            type.mComponents->mAllowComponentReplacement = true;
+            description.$initializeComponent(*type.mComponents);
+            BlockTypeComponentStorageFinalizer{}.finalizeComponentData(type);
+
+            for (auto const& permutation : *type.mBlockPermutations) {
+                if (!permutation) continue;
+                permutation->mComponents->mAllowComponentReplacement = true;
+                description.$initializeComponent(*permutation->mComponents);
+                BlockComponentStorageFinalizer{}.finalizeComponentData(*permutation);
+            }
+        };
+
+        if (materialDescription) {
+            if (geometryDescription) {
+                inject(*reinterpret_cast<BlockGeometryDescription const*>(geometryDescription));
+            }
+            inject(*reinterpret_cast<BlockMaterialInstancesDescription const*>(materialDescription));
+            ++modernInjected;
+            continue;
+        }
+
+        auto const legacy = legacyTextures.find(name);
+        if (legacy == legacyTextures.end()) continue;
+
+        BlockMaterialInstancesDescription const material{
+            legacy->second,
+            BlockRenderLayer::RenderlayerOpaque,
+            1.0f,
+            true,
+            TintMethod::None,
+            false,
+            false,
+            false,
+            false
+        };
+        inject(fullBlockGeometry);
+        inject(material);
+        ++legacyInjected;
+    }
+    fullBlockGeometry.$dtor();
+    getLogger().debug("Injected recorded block visuals: material={} legacy={}", modernInjected, legacyInjected);
+    return modernInjected + legacyInjected;
+}
+
 void ReplaySession::releaseReplayResourcePacks() {
     mReplayResourcePacksInfo.store(nullptr, std::memory_order_release);
     mReplayResourcePackStack.store(nullptr, std::memory_order_release);
@@ -1537,6 +1927,11 @@ bool ReplaySession::ensureReplayDimension(
         sourceDimension.id,
         target.id
     );
+    std::string targetName;
+    if (auto const profile = mReplayDimensionProfile.load(std::memory_order_acquire)) {
+        if (auto const it = profile->names.find(target.id); it != profile->names.end()) targetName = it->second;
+    }
+
     ll::thread::ServerThreadExecutor::getDefault().execute([request,
                                                             generation,
                                                             generationCounter,
@@ -1544,7 +1939,8 @@ bool ReplaySession::ensureReplayDimension(
                                                             replayLevelId = std::move(replayLevelId),
                                                             position,
                                                             rotation,
-                                                            target] {
+                                                            target,
+                                                            targetName = std::move(targetName)] {
         if (generationCounter->load(std::memory_order_acquire) != generation) return;
         auto expected = DimensionTransitionStatus::Pending;
         if (!request->status.compare_exchange_strong(
@@ -1575,8 +1971,12 @@ bool ReplaySession::ensureReplayDimension(
                 return;
             }
 
-            auto  targetDimension = level->getOrCreateDimension(target).lock();
-            auto* player          = level->getPlayer(playerUuid);
+            auto targetDimension = level->getOrCreateDimension(target).lock();
+            // Custom dimension ids are absent from VanillaDimensions, so resolve them by name instead.
+            if (!targetDimension && !targetName.empty()) {
+                targetDimension = level->getDimensionManager().getOrCreateDimension(targetName).lock();
+            }
+            auto* player = level->getPlayer(playerUuid);
             if (!targetDimension || !player) {
                 getLogger().error(
                     "Unable to change replay dimension to {}: target dimension or server player is unavailable",
@@ -1644,7 +2044,7 @@ void ReplaySession::processPendingDimensionTransition() {
     bool const loadingScreenVisible = client
                                    && (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
                                        || client->isShowingWorldProgressScreen());
-    bool const readyToRender        = client && client->isReadyToRender();
+    bool const readyToRender = client && client->isReadyToRender();
 
     if (elapsed >= DIMENSION_TRANSITION_TIMEOUT) {
         getLogger().error(
@@ -2000,18 +2400,20 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     mDirectLevelChunkIndices.clear();
     auto& chunkSource = replayDimension->getChunkSource();
     for (auto const& [pos, identity] : targetColumns) {
-        if (mReusableSnapshotColumns.contains(pos) || identity.levelChunkIndex < 0
-            || !requestModeLevelChunks.contains(pos)) {
+        if (mReusableSnapshotColumns.contains(pos) || identity.levelChunkIndex < 0) continue;
+        if (!requestModeLevelChunks.contains(pos)) {
             continue;
         }
 
         auto covered = subChunkIndicesByColumn.find(pos);
-        if (covered == subChunkIndicesByColumn.end() || covered->second.size() != subChunkCount) continue;
+        if (covered == subChunkIndicesByColumn.end() || covered->second.size() != subChunkCount) {}
         bool const coversCompleteHeight =
             std::all_of(covered->second.begin(), covered->second.end(), [minimumSubChunk, subChunkCount](int index) {
                 return index >= minimumSubChunk && static_cast<size_t>(index - minimumSubChunk) < subChunkCount;
             });
-        if (!coversCompleteHeight) continue;
+        if (!coversCompleteHeight) {
+            continue;
+        }
 
         auto chunk = chunkSource.getExistingChunk(pos);
         if (!chunk || chunk->mIsEmptyClientChunk
@@ -2083,7 +2485,7 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     return true;
 }
 
-bool ReplaySession::tryFinishChunkInjection() {
+bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_clock::time_point> catchUpDeadline) {
     if (!mChunkInjectionPending) return true;
     if (mSnapshotGamePacketPhase == SnapshotGamePacketPhase::WaitingAfterPlayerList) {
         auto const deadline = std::chrono::steady_clock::now() + SnapshotGamePacketBudget;
@@ -2091,7 +2493,9 @@ bool ReplaySession::tryFinishChunkInjection() {
             mReplayFailed = true;
             return false;
         }
-        if (!mPendingSnapshotGamePackets.empty()) return false;
+        if (!mPendingSnapshotGamePackets.empty()) {
+            return false;
+        }
         mSnapshotGamePacketPhase = SnapshotGamePacketPhase::WaitingAfterEntities;
         return false;
     }
@@ -2130,15 +2534,21 @@ bool ReplaySession::tryFinishChunkInjection() {
     bool const   completionProgress = mChunkCompletionObserved.exchange(false, std::memory_order_acq_rel);
     size_t const levelCursorBefore  = mPendingLevelChunkCursor;
     size_t const subCursorBefore    = mPendingSubChunkCursor;
-
-    ++mChunkInjectionTicks;
-    auto const injectionStarted = std::chrono::steady_clock::now();
-    auto const deadline =
-        injectionStarted + (mCenterChunksReady ? OuterChunkInjectionBudget : CenterChunkInjectionBudget);
-    size_t injectedSubChunkPackets = 0;
-    if (!injectReadySubChunkPackets(injectedSubChunkPackets, deadline) || !injectPendingLevelChunks(deadline)
-        || !injectReadySubChunkPackets(injectedSubChunkPackets, deadline)) {
+    auto const   injectionStarted   = std::chrono::steady_clock::now();
+    // A seek shares one deadline across its whole catch-up; normal playback keeps the per-tick frame budget.
+    auto const perTickBudget           = mCenterChunksReady ? OuterChunkInjectionBudget : CenterChunkInjectionBudget;
+    auto const deadline                = catchUpDeadline ? *catchUpDeadline : injectionStarted + perTickBudget;
+    size_t     injectedSubChunkPackets = 0;
+    if (!injectReadySubChunkPackets(injectedSubChunkPackets, deadline) || !injectPendingLevelChunks(deadline)) {
         return false;
+    }
+    // Each SubChunk pass can unblock later ones, so keep going while a pass still injects something.
+    for (;;) {
+        size_t const before = injectedSubChunkPackets;
+        if (!injectReadySubChunkPackets(injectedSubChunkPackets, deadline)) {
+            return false;
+        }
+        if (injectedSubChunkPackets == before) break;
     }
     updateCenterChunkReadiness();
     mChunkInjectionDurationsMs.emplace_back(
@@ -2189,13 +2599,17 @@ bool ReplaySession::tryFinishChunkInjection() {
 bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_point deadline) {
     size_t processed = 0;
     while (mPendingLevelChunkCursor < mPendingLevelChunkIndices.size()) {
-        if (processed != 0 && std::chrono::steady_clock::now() >= deadline) break;
+        if (processed != 0 && std::chrono::steady_clock::now() >= deadline) {
+            break;
+        }
 
         int const  index  = mPendingLevelChunkIndices[mPendingLevelChunkCursor];
         bool const direct = mDirectLevelChunkIndices.contains(index);
         if (!direct) {
             std::scoped_lock lock(mPendingLevelChunksMutex);
-            if (mPendingLevelChunks.size() >= MAX_LEVEL_CHUNKS_IN_FLIGHT) break;
+            if (mPendingLevelChunks.size() >= MAX_LEVEL_CHUNKS_IN_FLIGHT) {
+                break;
+            }
         }
 
         bool applied = false;
@@ -2230,18 +2644,19 @@ bool ReplaySession::injectReadySubChunkPackets(
     size_t&                               injectedPackets,
     std::chrono::steady_clock::time_point deadline
 ) {
-    std::unordered_set<ChunkPos> completed;
-    {
+    // Injection completes columns synchronously, so re-read rather than snapshotting the set once up front.
+    auto dependenciesMet = [this](std::vector<ChunkPos> const& dependencies) {
+        if (dependencies.empty()) return true;
         std::scoped_lock lock(mPendingLevelChunksMutex);
-        completed = mCompletedLevelChunkPositions;
-    }
+        return std::all_of(dependencies.begin(), dependencies.end(), [this](ChunkPos const& pos) {
+            return mCompletedLevelChunkPositions.contains(pos);
+        });
+    };
 
     for (auto& pending : mPendingSubChunkPackets) {
         if (pending.injected) continue;
         if (std::chrono::steady_clock::now() >= deadline) break;
-        if (!std::all_of(pending.dependencies.begin(), pending.dependencies.end(), [&completed](ChunkPos const& pos) {
-                return completed.contains(pos);
-            })) {
+        if (!dependenciesMet(pending.dependencies)) {
             continue;
         }
         bool const direct = std::all_of(pending.targets.begin(), pending.targets.end(), [this](ChunkPos const& pos) {
@@ -2294,12 +2709,12 @@ void ReplaySession::updateCenterChunkReadiness() {
     mCenterChunksReady = true;
     auto const elapsed =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt);
-    size_t const queuedCenterColumns = static_cast<size_t>(
-        std::count_if(mCenterChunkPositions.begin(), mCenterChunkPositions.end(), [this](ChunkPos const& pos) {
-            return !mReusableSnapshotColumns.contains(pos);
-        })
-    );
-    size_t const queuedOuterColumns = mPendingLevelChunkIndices.size() - queuedCenterColumns;
+    size_t const queuedCenterColumns = static_cast<size_t>(std::count_if(
+        mCenterChunkPositions.begin(),
+        mCenterChunkPositions.end(),
+        [this](ChunkPos const& pos) { return !mReusableSnapshotColumns.contains(pos); }
+    ));
+    size_t const queuedOuterColumns  = mPendingLevelChunkIndices.size() - queuedCenterColumns;
     getLogger().debug(
         "Replay center ready with {} columns in {:.3f} ms after {} ticks; streaming {} outer columns",
         mCenterChunkPositions.size(),
@@ -2412,7 +2827,11 @@ bool ReplaySession::finishChunkInjection() {
     mChunkPlanPreparationMs = 0.0;
 
     if (!applyingSnapshot) {
-        for (auto const& [pos, _] : mPendingSnapshotColumns) mDirtySnapshotColumns.emplace(pos);
+        // A seek re-sends the same columns repeatedly, so record what landed; dirty marks must survive for replay.
+        for (auto& [pos, identity] : mPendingSnapshotColumns) {
+            if (identity.levelChunkIndex < 0) mDirtySnapshotColumns.emplace(pos);
+            else mAppliedSnapshotColumns.insert_or_assign(pos, std::move(identity));
+        }
         mPendingSnapshotColumns.clear();
         mReusableSnapshotColumns.clear();
         mDirectSnapshotColumns.clear();
@@ -2589,14 +3008,16 @@ void ReplaySession::handleConfigurationPacket(PlaybackBuffer& data) {
     std::string payload(data.mView.data() + data.mReadPointer, remaining);
     data.mReadPointer += remaining;
 
+    // A newer recorder may classify as configuration a packet this build still treats as timeline; skip it.
     auto const semantics = describePacketLifecycle(packetId);
     if (!semantics.isConfiguration()) {
-        getLogger().error(
-            "Replay contains packet {} with lifecycle {} in a configuration action",
-            packetIdValue,
-            packetLifecycleName(semantics.lifecycle)
-        );
-        mReplayFailed = true;
+        if (mUnknownConfigurationPackets.insert(packetIdValue).second) {
+            getLogger().warn(
+                "Skipping configuration packet {} recorded with an unknown lifecycle ({} in this build)",
+                packetIdValue,
+                packetLifecycleName(semantics.lifecycle)
+            );
+        }
         return;
     }
 
@@ -2620,6 +3041,7 @@ void ReplaySession::handleConfigurationPacket(PlaybackBuffer& data) {
 }
 
 void ReplaySession::handleGamePacket(PlaybackBuffer& data) {
+
     auto        packetId  = static_cast<MinecraftPacketIds>(data.getVarInt().value());
     auto const  remaining = data.getWritePointer() - data.mReadPointer;
     std::string payload(data.mView.data() + data.mReadPointer, remaining);
@@ -2644,6 +3066,7 @@ void ReplaySession::handleGamePacket(PlaybackBuffer& data) {
 }
 
 void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
+
     auto dispatchMovementPacket = [this](std::shared_ptr<Packet>& packet) {
         if (!packet || !mNetworkHandler || !packet->mHandler) {
             mReplayFailed = true;
@@ -2969,7 +3392,8 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         }
     }
 
-    if (!mIsProcessingSnapshot && !mChunkInjectionPending) invalidateSnapshotColumns(*packet);
+    // Must also run while chunks are streaming: a seek keeps applying block updates between batches.
+    if (!mIsProcessingSnapshot) invalidateSnapshotColumns(*packet);
 
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
@@ -3086,13 +3510,17 @@ bool ReplaySession::clearRecordedEntities() {
 
 bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
     auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
-    if (!replayDimension) return false;
+    if (!replayDimension) {
+        return false;
+    }
 
     auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
     if (!packet) return false;
 
     ReadOnlyBinaryStream packetStream(payload, false);
-    if (!packet->read(packetStream) || !packetStream.ensureReadCompleted()) return false;
+    if (!packet->read(packetStream) || !packetStream.ensureReadCompleted()) {
+        return false;
+    }
 
     auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
     if (static_cast<bool>(levelChunk.mCacheEnabled) || !static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)
@@ -3273,7 +3701,11 @@ void ReplaySession::configureReplayDimension(DimensionArguments& arguments) cons
     if (!profile || arguments.mDerived->mLevel.getLevelId() != profile->levelId) return;
 
     auto const dimensionId = arguments.mDimId->id;
-    auto const range       = profile->heightRanges.find(dimensionId);
+    if (auto const name = profile->names.find(dimensionId); name != profile->names.end()) {
+        arguments.mName = name->second;
+    }
+
+    auto const range = profile->heightRanges.find(dimensionId);
     if (range == profile->heightRanges.end()) return;
 
     arguments.mHeightRange->mMin = static_cast<short>(range->second.minimum);

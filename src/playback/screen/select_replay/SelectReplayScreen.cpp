@@ -146,7 +146,7 @@ constexpr float kFontScaleNavTitle    = kNavigationLayout.titleFontSize / kBaseF
 constexpr float kFontScaleNavBackIcon = kNavigationLayout.backIconFontSize / kBaseFontSize;
 constexpr float kFontScaleNavControl  = kNavigationLayout.controlFontSize / kBaseFontSize;
 
-constexpr ImU32 kColorAccent       = IM_COL32(58, 140, 240, 255);
+constexpr ImU32 kColorAccent       = playback::editor::ui::theme::kAccent;
 constexpr ImU32 kColorAccentHover  = IM_COL32(78, 158, 250, 255);
 constexpr ImU32 kColorBg           = IM_COL32(22, 23, 25, 255);
 constexpr ImU32 kColorPanelBg      = IM_COL32(30, 32, 35, 255);
@@ -695,8 +695,7 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
     mSubmit = &submitAction;
     syncSnapshot();
     mAnimator.beginFrame();
-    playback::editor::ui::EditorTheme theme;
-    theme.apply();
+    playback::editor::ui::theme::apply();
     auto const& io = ImGui::GetIO();
 
     ImVec2 const panelSize{
