@@ -2,7 +2,7 @@
   "format_version": 3,
   "format_uuid": "289f771f-2c9a-4d73-9f3f-8492495a924d",
   "tooth": "github.com/wo55555/Playback",
-  "version": "0.2.1-mc26.10",
+  "version": "0.3.0-mc26.10",
   "info": {
     "name": "Playback",
     "description": "Open-source Minecraft Bedrock replay mod with recording, cinematic camera keyframes, and experimental video export.",
