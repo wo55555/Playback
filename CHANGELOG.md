@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0-mc26.20] - 2026-09-08
+
 ### Added
 
 - Added persistent editor projects. Editing state is saved to `<dataDir>/projects/<replay>.pbproj` on Ctrl+S, from the menu, every 30 seconds, and when the editor closes; the replay file remains authoritative for the timeline duration.
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kept the editor hidden until the replay world is joined and ready, so loading, resource-pack download, and sign-in screens are no longer covered.
 - Cut seek time roughly in half by draining chunk injection inline during catch-up and reusing already-applied snapshot columns.
 - Downgraded project save/load, keyframe capture, and custom block registration logs to debug.
+- Kept the configuration version, recording-file snapshot context version, and new project format version at `1`; complete `v0.2.1-mc26.20` archives remain compatible and require no conversion.
 - Documented that Vibrant Visuals is not supported yet; recording, replay, and export are only validated with the standard renderer.
 - Documented that `0.2.0` was skipped on the MC 26.20 line because video export stalled on that runtime, and that `0.2.1` is published for both runtimes.
 
@@ -155,6 +158,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.20...HEAD
+[0.3.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.20...v0.3.0-mc26.20
 [0.2.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.20...v0.2.1-mc26.20
 [0.2.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.2-mc26.20...v0.2.0-mc26.20
 [0.1.2-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.1-mc26.20...v0.1.2-mc26.20

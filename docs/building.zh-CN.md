@@ -26,7 +26,7 @@ Tooth `format_version`、资源包 `format_version` 和 VS Code 配置版本等�
 在仓库根目录配置并执行干净的 Release 客户端构建：
 
 ```powershell
-$env:PLAYBACK_VERSION = 'v0.2.1-mc26.10'
+$env:PLAYBACK_VERSION = 'v0.3.0-mc26.20'
 xmake f -y -p windows -a x64 -m release --target_type=client
 xmake -r -y
 ```
@@ -35,7 +35,7 @@ xmake -r -y
 
 Xmake 会使用 x264 构建固定版本的 FFmpeg 7.1 命令行运行时，并将静态可执行文件复制到 `bin/playback/tools/ffmpeg.exe`。发行版用户无需单独安装 FFmpeg。首次源码构建需要下载并编译这套工具链，因此依赖配置会比后续命中缓存的构建耗时更长。
 
-构建完成后，请确认 `bin/playback/manifest.json` 显示 `0.2.1-mc26.10`、`bin/playback/tools/ffmpeg.exe` 存在，并执行 `git diff --check`。涉及运行时行为的发行版本还应在支持的渲染路径上分别导出短 PNG 序列和 MP4。
+构建完成后，请确认 `bin/playback/manifest.json` 显示 `0.3.0-mc26.20`、`bin/playback/tools/ffmpeg.exe` 存在，并执行 `git diff --check`。涉及运行时行为的发行版本还应在支持的渲染路径上分别导出短 PNG 序列和 MP4。
 
 ## 刷新依赖
 
