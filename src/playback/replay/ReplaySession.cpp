@@ -408,14 +408,12 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             auto const height  = static_cast<int64_t>(maximum) - static_cast<int64_t>(minimum);
             if (minimum < std::numeric_limits<short>::min() || maximum > std::numeric_limits<short>::max()
                 || minimum % 16 != 0 || maximum <= minimum || height % 16 != 0) {
-                throw std::runtime_error(
-                    std::format(
-                        "Replay dimension {} has invalid recorded height range [{}, {})",
-                        snapshot.dimensionId,
-                        minimum,
-                        maximum
-                    )
-                );
+                throw std::runtime_error(std::format(
+                    "Replay dimension {} has invalid recorded height range [{}, {})",
+                    snapshot.dimensionId,
+                    minimum,
+                    maximum
+                ));
             }
 
             if (!snapshot.dimensionName.empty()) {
@@ -425,16 +423,14 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             RecordedDimensionHeightRange const range{minimum, maximum};
             auto const [it, inserted] = dimensionProfile->heightRanges.emplace(snapshot.dimensionId, range);
             if (!inserted && it->second != range) {
-                throw std::runtime_error(
-                    std::format(
-                        "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
-                        snapshot.dimensionId,
-                        it->second.minimum,
-                        it->second.maximum,
-                        minimum,
-                        maximum
-                    )
-                );
+                throw std::runtime_error(std::format(
+                    "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
+                    snapshot.dimensionId,
+                    it->second.minimum,
+                    it->second.maximum,
+                    minimum,
+                    maximum
+                ));
             }
         }
         mReplayDimensionProfile.store(std::move(dimensionProfile), std::memory_order_release);
@@ -731,9 +727,9 @@ void ReplaySession::updateObserverPreview() {
     Vec2 const     rotation{sample->state.pitch, sample->state.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    mLastObserverPreviewFeet        = feetPosition;
-    mLastObserverPreviewRotation    = rotation;
+                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
+    mLastObserverPreviewFeet     = feetPosition;
+    mLastObserverPreviewRotation = rotation;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -834,7 +830,7 @@ void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint)
     Vec2 const     rotation{viewpoint.pitch, viewpoint.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
+                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -1514,16 +1510,14 @@ size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::st
     auto client = ll::service::getClientInstance();
     if (!client) return 0;
 
-    auto       geometry         = client->getGeometryGroup();
-    auto&      resourceManager  = client->getResourcePackManager();
-    auto const minEngineVersion = MinEngineVersion::fromString(
-        std::format(
-            "{}.{}.{}",
-            SharedConstants::MajorVersion(),
-            SharedConstants::MinorVersion(),
-            SharedConstants::PatchVersion()
-        )
-    );
+    auto                            geometry         = client->getGeometryGroup();
+    auto&                           resourceManager  = client->getResourcePackManager();
+    auto const                      minEngineVersion = MinEngineVersion::fromString(std::format(
+        "{}.{}.{}",
+        SharedConstants::MajorVersion(),
+        SharedConstants::MinorVersion(),
+        SharedConstants::PatchVersion()
+    ));
     std::unordered_set<std::string> geometryPaths;
 
     std::function<void(CompoundTagVariant const&)> collectGeometryNames;
@@ -1563,8 +1557,8 @@ size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::st
     return loaded;
 }
 
-size_t ReplaySession::injectRecordedBlockMaterialComponents(
-    std::vector<std::pair<std::string, CompoundTag>> const& properties
+size_t
+ReplaySession::injectRecordedBlockMaterialComponents(std::vector<std::pair<std::string, CompoundTag>> const& properties
 ) {
     auto level = ll::service::getLevel();
     if (!level) return 0;
@@ -1610,18 +1604,21 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(
     // Geometry-less blocks would fall back to BlockGraphics here, so legacy cubes get full_block geometry.
     alignas(16) std::array<std::byte, 512> fullBlockGeometryStorage{};
     auto& fullBlockGeometry = *reinterpret_cast<BlockGeometryDescription*>(fullBlockGeometryStorage.data());
+    HashedString const                               noCullingName;
+    std::variant<bool, std::set<HashedString>> const uvLock{false};
+    BlockRendererDescription const                   renderer{
+        BlockRendererName::Default,
+        Vec3{},
+        BlockTransformationComponent::RotationType{0, 0, 0, Vec3{0.5f}},
+        Vec3::ONE()
+    };
     fullBlockGeometry.$ctor(
         BlockGeometryDescription::FULL_BLOCK_GEO_NAME(),
-        HashedString{},
+        noCullingName,
         BlockGeometryDescription::CULLING_SHAPE_DEFAULT(),
         BlockGeometryDescription::CULLING_LAYER_UNDEFINED(),
-        std::variant<bool, std::set<HashedString>>{false},
-        BlockRendererDescription{
-            BlockRendererName::Default,
-            Vec3{},
-            BlockTransformationComponent::RotationType{0, 0, 0, Vec3{0.5f}},
-            Vec3::ONE()
-        },
+        uvLock,
+        renderer,
         false
     );
 
@@ -2047,7 +2044,7 @@ void ReplaySession::processPendingDimensionTransition() {
     bool const loadingScreenVisible = client
                                    && (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
                                        || client->isShowingWorldProgressScreen());
-    bool const readyToRender        = client && client->isReadyToRender();
+    bool const readyToRender = client && client->isReadyToRender();
 
     if (elapsed >= DIMENSION_TRANSITION_TIMEOUT) {
         getLogger().error(
@@ -2712,12 +2709,12 @@ void ReplaySession::updateCenterChunkReadiness() {
     mCenterChunksReady = true;
     auto const elapsed =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt);
-    size_t const queuedCenterColumns = static_cast<size_t>(
-        std::count_if(mCenterChunkPositions.begin(), mCenterChunkPositions.end(), [this](ChunkPos const& pos) {
-            return !mReusableSnapshotColumns.contains(pos);
-        })
-    );
-    size_t const queuedOuterColumns = mPendingLevelChunkIndices.size() - queuedCenterColumns;
+    size_t const queuedCenterColumns = static_cast<size_t>(std::count_if(
+        mCenterChunkPositions.begin(),
+        mCenterChunkPositions.end(),
+        [this](ChunkPos const& pos) { return !mReusableSnapshotColumns.contains(pos); }
+    ));
+    size_t const queuedOuterColumns  = mPendingLevelChunkIndices.size() - queuedCenterColumns;
     getLogger().debug(
         "Replay center ready with {} columns in {:.3f} ms after {} ticks; streaming {} outer columns",
         mCenterChunkPositions.size(),
@@ -3011,8 +3008,7 @@ void ReplaySession::handleConfigurationPacket(PlaybackBuffer& data) {
     std::string payload(data.mView.data() + data.mReadPointer, remaining);
     data.mReadPointer += remaining;
 
-    // A newer recorder may classify a packet as configuration that this build still treats as timeline. Skipping it
-    // keeps such replays playable instead of failing them outright.
+    // A newer recorder may classify as configuration a packet this build still treats as timeline; skip it.
     auto const semantics = describePacketLifecycle(packetId);
     if (!semantics.isConfiguration()) {
         if (mUnknownConfigurationPackets.insert(packetIdValue).second) {
