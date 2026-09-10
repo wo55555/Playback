@@ -14,7 +14,6 @@
 #include <iterator>
 #include <limits>
 #include <numbers>
-#include <string_view>
 #include <utility>
 
 namespace playback::editor::ui {
@@ -46,7 +45,7 @@ ImU32 fade(ImU32 colour, float opacity) {
     return (colour & ~IM_COL32_A_MASK) | (alpha << IM_COL32_A_SHIFT);
 }
 
-// Clips against w >= nearW and the four side planes; first/last are the kept parameter range along from->to.
+// Clip to near/side planes; first/last are the kept range along from->to.
 bool clipLine(::glm::dvec4& from, ::glm::dvec4& to, double nearW, double& first, double& last) {
     first = 0.0;
     last  = 1.0;
@@ -113,7 +112,7 @@ Basis basisOf(keyframe::CameraRenderState const& pose) {
     return {::glm::normalize(basis.right), ::glm::normalize(basis.up), ::glm::normalize(basis.forward)};
 }
 
-// Joins consecutive world-space segments into anti-aliased screen polylines.
+// World segments to screen polylines.
 class PathPainter {
 public:
     PathPainter(ImDrawList* drawList, ::glm::dmat4 const& transform, double nearW, Rect const& rect)
@@ -143,27 +142,12 @@ public:
         }
         auto const start = screenPoint(from, mRect);
         auto const end   = screenPoint(to, mRect);
-        // A clipped start means the run re-enters the view, so it must not join the previous point.
         if (mPoints.empty() || first > 0.0 || distanceSquared(mPoints.back(), start) > 0.25f) {
             flush();
             mPoints.push_back(start);
         }
         if (distanceSquared(mPoints.back(), end) >= 0.01f) mPoints.push_back(end);
         if (last < 1.0) flush();
-    }
-
-    // Screen position of a world point strictly inside the frustum, so callers can size glyphs on screen.
-    [[nodiscard]] bool visiblePoint(::glm::vec3 const& point, ImVec2& out) const {
-        if (!finite(point)) return false;
-        auto const clip = project(point);
-        if (!finite(clip) || clip.w < mNearW || std::abs(clip.x) > clip.w || std::abs(clip.y) > clip.w) return false;
-        out = screenPoint(clip, mRect);
-        return true;
-    }
-
-    void dot(ImVec2 const& centre, ImU32 colour, float radius) {
-        flush();
-        mDrawList->AddCircleFilled(centre, radius, colour, 12);
     }
 
     void flush() {
@@ -196,8 +180,7 @@ void drawCameraGlyph(
     float                              thickness
 ) {
     if (!finite(pose)) return;
-    float const fov = std::clamp(pose.fov, 5.0f, 170.0f);
-    // Focal-length based sizing keeps the glyph a similar on-screen size regardless of fov.
+    float const fov        = std::clamp(pose.fov, 5.0f, 170.0f);
     float const focal      = 1.0f / std::tan(fov * 0.5f * kRadiansPerDegree);
     float const targetArea = std::sqrt(aspect) * 0.3f;
     float const depth      = (focal * std::sqrt(targetArea / aspect) + 0.5f) * 0.5f;
@@ -215,15 +198,6 @@ void drawCameraGlyph(
     auto const br = corner(1.0f, -1.0f);
     auto const bl = corner(-1.0f, -1.0f);
 
-    // Distant glyphs collapse to sub-pixel strokes that the painter drops; a line-width dot keeps the keyframe visible.
-    ImVec2 apexScreen{};
-    ImVec2 cornerScreen{};
-    if (painter.visiblePoint(apex, apexScreen) && painter.visiblePoint(tr, cornerScreen)
-        && distanceSquared(apexScreen, cornerScreen) < 9.0f) {
-        painter.dot(apexScreen, colour, thickness);
-        return;
-    }
-
     painter.style(colour, thickness);
     for (auto const& c : {tl, tr, br, bl}) {
         painter.segment(apex, c);
@@ -236,80 +210,147 @@ void drawCameraGlyph(
     painter.flush();
 }
 
+struct NeighborTicks {
+    int lastLast{-1};
+    int last{-1};
+    int next{-1};
+    int nextNext{-1};
+};
+
+NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, int currentTick) {
+    NeighborTicks window;
+    bool          hasLast = false;
+    bool          hasNext = false;
+    for (auto const& camera : timeline.cameras()) {
+        if (!camera.enabled || camera.keysByTick.empty()) continue;
+        auto const nextIt = camera.keysByTick.upper_bound(currentTick);
+        if (nextIt != camera.keysByTick.begin()) {
+            int const tick = std::prev(nextIt)->first;
+            if (tick >= 0 && (!hasLast || tick > window.last)) {
+                window.last = tick;
+                hasLast     = true;
+            }
+        }
+        if (nextIt != camera.keysByTick.end() && nextIt->first >= 0) {
+            if (!hasNext || nextIt->first < window.next) {
+                window.next = nextIt->first;
+                hasNext     = true;
+            }
+        }
+    }
+    if (!hasLast) window.last = -1;
+    if (!hasNext) window.next = -1;
+
+    bool hasLastLast = false;
+    bool hasNextNext = false;
+    for (auto const& camera : timeline.cameras()) {
+        if (!camera.enabled || camera.keysByTick.empty()) continue;
+        if (hasLast) {
+            auto const it = camera.keysByTick.lower_bound(window.last);
+            if (it != camera.keysByTick.begin()) {
+                int const tick = std::prev(it)->first;
+                if (tick >= 0 && (!hasLastLast || tick > window.lastLast)) {
+                    window.lastLast = tick;
+                    hasLastLast     = true;
+                }
+            }
+        }
+        if (hasNext) {
+            auto const it = camera.keysByTick.upper_bound(window.next);
+            if (it != camera.keysByTick.end() && it->first >= 0) {
+                if (!hasNextNext || it->first < window.nextNext) {
+                    window.nextNext = it->first;
+                    hasNextNext     = true;
+                }
+            }
+        }
+    }
+    if (!hasLastLast) window.lastLast = -1;
+    if (!hasNextNext) window.nextNext = -1;
+    return window;
+}
+
+bool holdAt(keyframe::CameraTimelineEvaluator const& timeline, int tick) {
+    for (auto const& camera : timeline.cameras()) {
+        if (!camera.enabled) continue;
+        auto const it = camera.keysByTick.find(tick);
+        if (it != camera.keysByTick.end()) {
+            return it->second.interpolationType == state::editing::model::CameraInterpolationType::Hold;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 void CameraPathOverlay::clear() {
-    mPaths.clear();
+    mPolylines.clear();
+    mMarkers.clear();
     mTimeline.reset();
-    mNextPath = 0;
+    mWindow   = {};
     mNextLine = 0;
 }
 
-void CameraPathOverlay::rebuild(keyframe::CameraTimelineHandle const& timeline) {
-    clear();
-    for (auto const& camera : timeline->cameras()) {
-        if (!camera.enabled || camera.keysByTick.empty()) continue;
-        CameraPath  path{camera.id, {}, {}};
-        auto const& keys = camera.keysByTick;
-        // Up to one sample per tick and 2000 per segment; the total budget keeps huge tracks incremental.
-        auto const resolution = std::clamp<int64_t>(
-            65536 / static_cast<int64_t>(std::max<size_t>(1, keys.size() - 1)),
-            32,
-            kMaxSegmentSteps
-        );
-        for (auto it = keys.begin(); it != keys.end(); ++it) {
-            int const tick = it->first;
-            if (tick < 0) continue;
-            size_t const                      dimension = timeline->dimensionSegmentForTick(tick);
-            auto const&                       key       = it->second;
-            keyframe::CameraRenderState const pose{
-                key.position.x,
-                key.position.y,
-                key.position.z,
-                key.yaw,
-                key.pitch,
-                key.roll,
-                key.fov,
-            };
-            if (finite(pose)) path.markers.push_back({tick, dimension, pose});
-
-            auto const next = std::next(it);
-            if (next == keys.end() || timeline->dimensionSegmentForTick(next->first) != dimension
-                || key.interpolationType == state::editing::model::CameraInterpolationType::Hold) {
-                continue;
-            }
-            int64_t const duration = static_cast<int64_t>(next->first) - tick;
-            int64_t const steps    = std::min<int64_t>(resolution, std::max<int64_t>(8, duration));
-            Polyline      line{dimension, {}, tick, next->first, steps};
-            line.points.reserve(static_cast<size_t>(steps + 1));
-            path.polylines.push_back(std::move(line));
-        }
-        mPaths.push_back(std::move(path));
-    }
+void CameraPathOverlay::rebuild(keyframe::CameraTimelineHandle const& timeline, PathWindow const& window) {
+    mPolylines.clear();
+    mMarkers.clear();
+    mNextLine = 0;
     mTimeline = timeline;
+    mWindow   = window;
+    if (!timeline) return;
+
+    auto addMarker = [&](int tick, float opacity) {
+        if (tick < 0) return;
+        auto const sample = timeline->sample({tick, 1});
+        if (!sample || !finite(sample->state)) return;
+        mMarkers.push_back(
+            Marker{
+                tick,
+                timeline->dimensionSegmentForTick(tick),
+                sample->state,
+                opacity,
+            }
+        );
+    };
+    auto addSegment = [&](int from, int to, float opacity) {
+        if (from < 0 || to < 0 || to <= from) return;
+        if (holdAt(*timeline, from)) return;
+        auto const dimension = timeline->dimensionSegmentForTick(from);
+        if (timeline->dimensionSegmentForTick(to) != dimension) return;
+        int64_t const duration = static_cast<int64_t>(to) - from;
+        int64_t const steps    = std::min<int64_t>(kMaxSegmentSteps, std::max<int64_t>(8, duration));
+        Polyline      line{dimension, {}, from, to, steps, opacity};
+        line.points.reserve(static_cast<size_t>(steps + 1));
+        mPolylines.push_back(std::move(line));
+    };
+
+    addMarker(window.last, 1.0f);
+    if (window.lastLast >= 0) {
+        addMarker(window.lastLast, kInactiveOpacity);
+        addSegment(window.lastLast, window.last, kInactiveOpacity);
+    }
+    addMarker(window.next, 1.0f);
+    if (window.nextNext >= 0) {
+        addMarker(window.nextNext, kInactiveOpacity);
+        addSegment(window.next, window.nextNext, kInactiveOpacity);
+    }
+    addSegment(window.last, window.next, 1.0f);
 }
 
 void CameraPathOverlay::advanceBuild() {
+    if (!mTimeline) return;
     auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3);
     size_t     sampled  = 0;
-    while (mNextPath < mPaths.size()) {
-        auto& path = mPaths[mNextPath];
-        if (mNextLine == path.polylines.size()) {
-            ++mNextPath;
-            mNextLine = 0;
-            continue;
-        }
-        auto&      line  = path.polylines[mNextLine];
+    while (mNextLine < mPolylines.size()) {
+        auto&      line  = mPolylines[mNextLine];
         auto const index = static_cast<int64_t>(line.points.size());
         if (index > line.steps) {
             ++mNextLine;
             continue;
         }
         int64_t const duration = static_cast<int64_t>(line.toTick) - line.fromTick;
-        auto const    sample   = mTimeline->sampleCameraById(
-            path.cameraId,
-            {static_cast<int64_t>(line.fromTick) * line.steps + duration * index, line.steps}
-        );
+        auto const    sample =
+            mTimeline->sample({static_cast<int64_t>(line.fromTick) * line.steps + duration * index, line.steps});
         line.points.push_back(
             sample ? ::glm::vec3{sample->state.x, sample->state.y, sample->state.z}
                    : ::glm::vec3{std::numeric_limits<float>::quiet_NaN()}
@@ -328,60 +369,32 @@ void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImD
         || videoRect.GetHeight() <= 0.0f) {
         return;
     }
-    if (mTimeline != timeline) rebuild(timeline);
+    auto const       ticks = neighborTicks(*timeline, ctx.state.currentTick);
+    PathWindow const window{ticks.lastLast, ticks.last, ticks.next, ticks.nextNext};
+    if (mTimeline != timeline || mWindow != window) rebuild(timeline, window);
     advanceBuild();
 
-    int const              currentTick    = ctx.state.currentTick;
-    auto const             dimension      = timeline->dimensionSegmentForTick(currentTick);
-    auto const*            selectedKey    = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
-    auto const*            selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
-    std::string_view const selectedId     = selectedKey    ? selectedKey->trackId
-                                          : selectedCamera ? selectedCamera->cameraId
-                                                           : std::string_view{};
-    double const           nearW          = std::max(0.001, static_cast<double>(ctx.cameraProjection->nearClipW));
-    float const            aspect         = videoRect.GetWidth() / videoRect.GetHeight();
-    PathPainter            painter(drawList, ctx.cameraProjection->viewProjection, nearW, videoRect);
+    auto const   dimension = timeline->dimensionSegmentForTick(ctx.state.currentTick);
+    double const nearW     = std::max(0.001, static_cast<double>(ctx.cameraProjection->nearClipW));
+    float const  aspect    = videoRect.GetWidth() / videoRect.GetHeight();
+    PathPainter  painter(drawList, ctx.cameraProjection->viewProjection, nearW, videoRect);
 
     drawList->PushClipRect(videoRect.min, videoRect.max, true);
-    for (auto const& path : mPaths) {
-        bool const  selected = path.cameraId == selectedId;
-        ImU32 const colour   = selected ? theme::kAccent : theme::kCameraPath;
-
-        // The segment around the playhead stays solid and its neighbours are dimmed.
-        Polyline const* focus         = nullptr;
-        int64_t         focusDistance = std::numeric_limits<int64_t>::max();
-        for (auto const& line : path.polylines) {
-            if (line.dimensionSegment != dimension) continue;
-            int64_t const distance = currentTick < line.fromTick ? line.fromTick - currentTick
-                                   : currentTick > line.toTick   ? currentTick - line.toTick
-                                                                 : 0;
-            if (distance < focusDistance) {
-                focus         = &line;
-                focusDistance = distance;
-            }
+    for (auto const& line : mPolylines) {
+        if (line.dimensionSegment != dimension || line.points.size() < 2) continue;
+        painter.style(fade(theme::kCameraPath, line.opacity), kPathThickness);
+        for (size_t index = 1; index < line.points.size(); ++index) {
+            painter.segment(line.points[index - 1], line.points[index]);
         }
-
-        for (auto const& line : path.polylines) {
-            if (line.dimensionSegment != dimension || line.points.size() < 2) continue;
-            painter.style(fade(colour, &line == focus ? 1.0f : kInactiveOpacity), kPathThickness);
-            for (size_t index = 1; index < line.points.size(); ++index) {
-                painter.segment(line.points[index - 1], line.points[index]);
-            }
-            painter.flush();
-        }
-
-        for (auto const& marker : path.markers) {
-            if (marker.dimensionSegment != dimension) continue;
-            bool const  keySelected = selectedKey && selected && selectedKey->tick == marker.tick;
-            bool const  nearFocus   = !focus || (marker.tick >= focus->fromTick && marker.tick <= focus->toTick);
-            ImU32 const glyphColour =
-                keySelected ? theme::kCameraPathSelected : fade(colour, nearFocus ? 1.0f : kInactiveOpacity);
-            drawCameraGlyph(painter, marker.pose, aspect, glyphColour, kGlyphThickness);
-        }
+        painter.flush();
+    }
+    for (auto const& marker : mMarkers) {
+        if (marker.dimensionSegment != dimension) continue;
+        drawCameraGlyph(painter, marker.pose, aspect, fade(theme::kCameraPath, marker.opacity), kGlyphThickness);
     }
     if (ctx.state.paused) {
-        if (auto const current = timeline->sample({currentTick, 1})) {
-            drawCameraGlyph(painter, current->state, aspect, theme::kSuccess, kGlyphThickness);
+        if (auto const current = timeline->sample({ctx.state.currentTick, 1})) {
+            drawCameraGlyph(painter, current->state, aspect, theme::kCameraPathPlayhead, kGlyphThickness);
         }
     }
     drawList->PopClipRect();
