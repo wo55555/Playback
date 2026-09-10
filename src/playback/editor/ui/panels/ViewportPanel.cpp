@@ -29,6 +29,8 @@ void ViewportPanel::draw(PanelContext const& ctx, bool maximized) {
     if (mGameTexture) {
         dl->AddImage(ImTextureRef(mGameTexture), videoMin, videoMax);
     }
+    if (mGameTexture) mCameraPath.draw(ctx, mVideoRect, dl);
+    else mCameraPath.clear();
     dl->AddRect(videoMin, videoMax, theme::kAccent);
     ImGui::SetCursorScreenPos(videoMin);
     ImGui::InvisibleButton("##viewport-video", videoSize);

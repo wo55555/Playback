@@ -114,6 +114,8 @@
             "menu": {
                 "file": "File",
                 "edit": "Edit",
+                "view": "View",
+                "cameraPath": "Camera Path Preview",
                 "help": "Help",
                 "openReplay": "Open Replay",
                 "saveProject": "Save Project",

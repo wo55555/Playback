@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "playback/exporting/ExportTypes.h"
+#include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/state/ReplayBrowserState.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 
@@ -33,6 +34,7 @@ struct EditorState {
     bool                                                         canUndo{};
     bool                                                         canRedo{};
     std::shared_ptr<state::editing::model::EditorStateExt const> project;
+    keyframe::CameraTimelineHandle                               cameraTimeline;
     EditorCapabilities                                           capabilities;
     ProjectPersistenceState                                      persistence;
     exporting::ExportStatus                                      exportStatus;
