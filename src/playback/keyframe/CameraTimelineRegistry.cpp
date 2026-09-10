@@ -79,6 +79,11 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
     }
 }
 
+CameraTimelineHandle currentCameraTimeline(CameraTimelineSource source) noexcept {
+    auto const current = bindingFor(source).load(std::memory_order_acquire);
+    return current ? current->timeline : CameraTimelineHandle{};
+}
+
 std::optional<CameraTimelineSample> sampleCameraTimeline(
     CameraTimelineSource             source,
     visuals::ReplaySampleTime const& time,

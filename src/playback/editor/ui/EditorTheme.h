@@ -34,12 +34,14 @@ constexpr ImU32 kSectionHover    = IM_COL32(56, 56, 56, 255);
 constexpr ImU32 kFineDivider     = IM_COL32(66, 66, 66, 210);
 
 // Viewport and icon surfaces.
-constexpr ImU32 kViewportBg    = IM_COL32(0x0d, 0x0d, 0x0d, 0xff);
-constexpr ImU32 kIconActive    = IM_COL32(230, 232, 238, 255);
-constexpr ImU32 kIconInactive  = IM_COL32(170, 170, 170, 255);
-constexpr ImU32 kIconHighlight = IM_COL32(255, 255, 255, 255);
-constexpr ImU32 kOverlayBg     = IM_COL32(20, 20, 24, 210);
-constexpr ImU32 kOverlayHover  = IM_COL32(58, 90, 140, 235);
+constexpr ImU32 kViewportBg         = IM_COL32(0x0d, 0x0d, 0x0d, 0xff);
+constexpr ImU32 kIconActive         = IM_COL32(230, 232, 238, 255);
+constexpr ImU32 kIconInactive       = IM_COL32(170, 170, 170, 255);
+constexpr ImU32 kIconHighlight      = IM_COL32(255, 255, 255, 255);
+constexpr ImU32 kOverlayBg          = IM_COL32(20, 20, 24, 210);
+constexpr ImU32 kOverlayHover       = IM_COL32(58, 90, 140, 235);
+constexpr ImU32 kCameraPath         = IM_COL32(255, 255, 32, 235);
+constexpr ImU32 kCameraPathSelected = IM_COL32(255, 48, 48, 255);
 
 constexpr float kPanelPadding     = 8.0f;
 constexpr float kItemSpacing      = 4.0f;

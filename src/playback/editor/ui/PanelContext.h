@@ -1,5 +1,6 @@
 #pragma once
 
+#include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorState.h"
 #include "playback/state/editing/models/SelectionModel.h"
@@ -20,16 +21,19 @@ public:
     virtual void               seekRelative(int tickDelta) = 0;
     virtual void               toggleViewportMaximized()   = 0;
     [[nodiscard]] virtual bool isViewportMaximized() const = 0;
+    virtual void               toggleCameraPath()          = 0;
+    [[nodiscard]] virtual bool isCameraPathVisible() const = 0;
     virtual bool               deleteSelection()           = 0;
     virtual bool               addKeyframeAtPlayhead()     = 0;
 };
 
 // Everything a panel needs for one frame, so panels stay callable without the editor singleton.
 struct PanelContext {
-    playback::state::EditorState const&    state;
-    state::editing::model::SelectionModel& selection;
-    SubmitAction const&                    submit;
-    EditorCommands&                        commands;
+    playback::state::EditorState const&             state;
+    state::editing::model::SelectionModel&          selection;
+    SubmitAction const&                             submit;
+    EditorCommands&                                 commands;
+    std::optional<graphics::RenderCameraProjection> cameraProjection;
 
     void submitAction(playback::state::EditorAction action) const {
         if (submit) submit(std::move(action));

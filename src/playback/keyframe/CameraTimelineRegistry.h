@@ -48,6 +48,8 @@ private:
 void publishCameraTimeline(CameraTimelineSource source, CameraTimelineHandle timeline);
 void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const& expected = {});
 
+[[nodiscard]] CameraTimelineHandle currentCameraTimeline(CameraTimelineSource source) noexcept;
+
 [[nodiscard]] std::optional<CameraTimelineSample> sampleCameraTimeline(
     CameraTimelineSource             source,
     visuals::ReplaySampleTime const& time,
@@ -69,9 +71,9 @@ void                                           setLastPreviewPose(CameraRenderSt
 
 [[nodiscard]] CameraTimelineRenderContextHandle publishCameraTimelineRenderContext(CameraTimelineRenderContext context);
 void                                            clearCameraTimelineRenderContext(
-                                               CameraTimelineSource                     source,
-                                               CameraTimelineRenderContextHandle const& expected = {}
-                                           ) noexcept;
+    CameraTimelineSource                     source,
+    CameraTimelineRenderContextHandle const& expected = {}
+) noexcept;
 
 [[nodiscard]] CameraTimelineRenderContextHandle currentCameraTimelineRenderContext() noexcept;
 
