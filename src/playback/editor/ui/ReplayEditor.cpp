@@ -45,8 +45,9 @@ void ReplayEditor::shutdown() {
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
     mViewportMaximized = false;
-    mFrameState        = nullptr;
-    mSubmit            = nullptr;
+    mViewportPanel.clearCameraPath();
+    mFrameState = nullptr;
+    mSubmit     = nullptr;
     mSelection.clear();
     mLastExportState = exporting::ExportState::Idle;
     mExitHoldSeconds = 0.0f;
@@ -58,10 +59,16 @@ void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
     saveLayoutPreferences();
 }
 
+void ReplayEditor::toggleCameraPath() {
+    mCameraPathVisible = !mCameraPathVisible;
+    saveLayoutPreferences();
+}
+
 void ReplayEditor::loadLayoutPreferences() {
     mDetailsWidthRatio   = 0.28f;
     mTimelineHeightRatio = 0.35f;
     mVideoAspectRatio    = 16.0f / 9.0f;
+    mCameraPathVisible   = true;
     mTimelinePanel.setViewPreferences(0.30f, 1.0f, 0.0f);
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
@@ -70,6 +77,8 @@ void ReplayEditor::loadLayoutPreferences() {
     if (input) {
         auto const config = nlohmann::ordered_json::parse(input, nullptr, false);
         if (config.is_object()) {
+            auto const cameraPath = config.find("showCameraPath");
+            if (cameraPath != config.end() && cameraPath->is_boolean()) mCameraPathVisible = cameraPath->get<bool>();
             mDetailsWidthRatio =
                 std::clamp(readFiniteFloat(config, "detailsWidthRatio", mDetailsWidthRatio), 0.15f, 0.50f);
             mTimelineHeightRatio =
@@ -120,6 +129,7 @@ void ReplayEditor::saveLayoutPreferences() const {
         {"detailsWidthRatio",   mDetailsWidthRatio                  },
         {"timelineHeightRatio", mTimelineHeightRatio                },
         {"videoAspectRatio",    mVideoAspectRatio                   },
+        {"showCameraPath",      mCameraPathVisible                  },
         {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()},
         {"timelineViews",       std::move(timelineViews)            }
     };
@@ -131,6 +141,7 @@ void ReplayEditor::saveLayoutPreferences() const {
 
 void ReplayEditor::syncTimelineViewPreferences(std::string_view replayPath) {
     if (mActiveReplayPath == replayPath) return;
+    mViewportPanel.clearCameraPath();
     bool const enteringReplay = mActiveReplayPath.empty() && !replayPath.empty();
 
     if (!mActiveReplayPath.empty()) {
@@ -173,7 +184,7 @@ void ReplayEditor::openExportDialog() {
 
 PanelContext ReplayEditor::frameContext() {
     static SubmitAction const noSubmit{};
-    return {state(), mSelection, mSubmit ? *mSubmit : noSubmit, *this};
+    return {state(), mSelection, mSubmit ? *mSubmit : noSubmit, *this, graphics::currentRenderCameraProjection()};
 }
 
 void ReplayEditor::seekTo(int tick) { mTimelinePanel.seekTo(frameContext(), tick); }
