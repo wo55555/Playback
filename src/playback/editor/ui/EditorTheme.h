@@ -42,6 +42,7 @@ constexpr ImU32 kOverlayBg          = IM_COL32(20, 20, 24, 210);
 constexpr ImU32 kOverlayHover       = IM_COL32(58, 90, 140, 235);
 constexpr ImU32 kCameraPath         = IM_COL32(255, 255, 32, 235);
 constexpr ImU32 kCameraPathSelected = IM_COL32(255, 48, 48, 255);
+constexpr ImU32 kCameraPathPlayhead = IM_COL32(0x20, 0xFF, 0x20, 0xFF);
 
 constexpr float kPanelPadding     = 8.0f;
 constexpr float kItemSpacing      = 4.0f;
