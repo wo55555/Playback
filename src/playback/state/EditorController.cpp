@@ -387,6 +387,7 @@ void EditorController::publishState(bool hudVisible) {
     mProject.playing                 = !state.paused;
     mProject.playbackSpeed           = state.playbackSpeed;
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
+    state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
     state.canUndo                    = mCommandStack.canUndo();
     state.canRedo                    = mCommandStack.canRedo();
     state.persistence.dirty          = state.editorVisible && isProjectDirty();

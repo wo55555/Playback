@@ -44,6 +44,8 @@ public:
     void               seekRelative(int tickDelta) override;
     void               toggleViewportMaximized() override { mViewportMaximized = !mViewportMaximized; }
     [[nodiscard]] bool isViewportMaximized() const override { return mViewportMaximized; }
+    void               toggleCameraPath() override;
+    [[nodiscard]] bool isCameraPathVisible() const override { return mCameraPathVisible; }
     bool               deleteSelection() override;
     bool               addKeyframeAtPlayhead() override;
 
@@ -59,6 +61,7 @@ private:
     [[nodiscard]] PanelContext frameContext();
 
     bool mViewportMaximized{false};
+    bool mCameraPathVisible{true};
 
     ModeManager&  mModeManager{ModeManager::getInstance()};
     EditorMenuBar mMenuBar;

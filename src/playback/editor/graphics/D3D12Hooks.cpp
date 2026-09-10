@@ -1,6 +1,7 @@
 #include "D3D12Hooks.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
@@ -34,12 +35,30 @@ using ResizeBuffers1Fn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, UINT const*, IUnknown* const*);
 using CreateSwapChainFn =
     HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
-using CreateSwapChainForHwndFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, DXGI_SWAP_CHAIN_DESC1 const*, DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*, IDXGIOutput*, IDXGISwapChain1**);
-using CreateSwapChainForCoreWindowFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
-using CreateSwapChainForCompositionFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, DXGI_SWAP_CHAIN_DESC1 const*, IDXGIOutput*, IDXGISwapChain1**);
+using CreateSwapChainForHwndFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    HWND,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
+using CreateSwapChainForCoreWindowFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    IUnknown*,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
+using CreateSwapChainForCompositionFn = HRESULT(STDMETHODCALLTYPE*)(
+    IDXGIFactory2*,
+    IUnknown*,
+    DXGI_SWAP_CHAIN_DESC1 const*,
+    IDXGIOutput*,
+    IDXGISwapChain1**
+);
 
 constexpr size_t SwapChainPresentIndex                     = 8;
 constexpr size_t SwapChainPresent1Index                    = 22;
@@ -574,6 +593,7 @@ LL_TYPE_INSTANCE_HOOK(
                            && exporting::isOfflineRenderActivityActive()
                            && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
+    useSubmittedCameraProjection(render);
     if (carriesScene) exporting::markOfflineRenderSceneSubmitted();
 }
 
@@ -589,9 +609,10 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     ActiveDetour activeDetour;
     bool const   carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
-                           && exporting::isOfflineRenderActivityActive()
-                           && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
+                             && exporting::isOfflineRenderActivityActive()
+                             && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
+    useSubmittedCameraProjection(render);
     if (carriesScene) exporting::markOfflineRenderSceneSubmitted();
 }
 
