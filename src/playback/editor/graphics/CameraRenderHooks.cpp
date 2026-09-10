@@ -265,7 +265,7 @@ void writeLevelCameraPose(LevelRendererPlayer& level, ::glm::vec3 const& positio
 void logMissingSample(keyframe::CameraTimelineRenderContext const& context) noexcept {
     auto& logged = gMissingSampleLogged[sourceIndex(context.source)];
     if (logged.exchange(true, std::memory_order_acq_rel)) return;
-    Playback::getInstance().getSelf().getLogger().warn(
+    Playback::getInstance().getSelf().getLogger().debug(
         "Camera render context has no sample (source={}, token={}, frame={}, tick={}/{})",
         sourceName(context.source),
         context.renderToken,
@@ -443,8 +443,7 @@ float nearPlaneOf(mce::Camera const& camera) noexcept {
     return std::isfinite(camera.mZNear) && camera.mZNear > 0.0f ? camera.mZNear : 0.05f;
 }
 
-// The world-space camera owns the world view matrix, but its projection stack is not guaranteed to carry the
-// perspective Bedrock renders with; fall back to the client camera and finally to a synthesized perspective.
+// World camera owns the view; projection falls back to the client camera, then a synthesized perspective.
 void publishRenderCameraProjection(mce::Camera const& worldCamera, mce::Camera const* clientCamera) noexcept {
     auto const view = worldCamera.viewMatrixStack->top()._m.get();
 
