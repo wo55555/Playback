@@ -1,6 +1,7 @@
 #include "CameraPathOverlay.h"
 
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/visuals/ReplaySampleTime.h"
 
 #include <glm/geometric.hpp>
 #include <glm/mat4x4.hpp>
@@ -20,11 +21,13 @@ namespace playback::editor::ui {
 
 namespace {
 
-constexpr float   kRadiansPerDegree = std::numbers::pi_v<float> / 180.0f;
-constexpr float   kInactiveOpacity  = 0.6f;
-constexpr float   kPathThickness    = 2.0f;
-constexpr float   kGlyphThickness   = 2.0f;
-constexpr int64_t kMaxSegmentSteps  = 2000;
+constexpr float kRadiansPerDegree = std::numbers::pi_v<float> / 180.0f;
+constexpr float kInactiveOpacity  = 0.6f;
+constexpr float kPathThickness    = 2.0f;
+constexpr float kGlyphThickness   = 2.0f;
+// The window holds at most three segments, so this budget keeps playback rebuilds inside a single frame.
+constexpr int64_t kMaxSegmentSteps   = 512;
+constexpr size_t  kMaxSamplesPerCall = 2048;
 
 bool finite(::glm::vec3 const& point) {
     return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
@@ -286,12 +289,22 @@ bool holdAt(keyframe::CameraTimelineEvaluator const& timeline, int tick) {
 void CameraPathOverlay::clear() {
     mPolylines.clear();
     mMarkers.clear();
+    mPreviousPolylines.clear();
+    mPreviousMarkers.clear();
     mTimeline.reset();
     mWindow   = {};
     mNextLine = 0;
 }
 
 void CameraPathOverlay::rebuild(keyframe::CameraTimelineHandle const& timeline, PathWindow const& window) {
+    bool const sameTimeline = mTimeline == timeline;
+    if (sameTimeline && !isBuilding()) {
+        mPreviousPolylines = std::move(mPolylines);
+        mPreviousMarkers   = std::move(mMarkers);
+    } else if (!sameTimeline) {
+        mPreviousPolylines.clear();
+        mPreviousMarkers.clear();
+    }
     mPolylines.clear();
     mMarkers.clear();
     mNextLine = 0;
@@ -346,6 +359,10 @@ void CameraPathOverlay::advanceBuild() {
         auto const index = static_cast<int64_t>(line.points.size());
         if (index > line.steps) {
             ++mNextLine;
+            if (!isBuilding()) {
+                mPreviousPolylines.clear();
+                mPreviousMarkers.clear();
+            }
             continue;
         }
         int64_t const duration = static_cast<int64_t>(line.toTick) - line.fromTick;
@@ -355,7 +372,7 @@ void CameraPathOverlay::advanceBuild() {
             sample ? ::glm::vec3{sample->state.x, sample->state.y, sample->state.z}
                    : ::glm::vec3{std::numeric_limits<float>::quiet_NaN()}
         );
-        if (++sampled >= 512 || std::chrono::steady_clock::now() >= deadline) return;
+        if (++sampled >= kMaxSamplesPerCall || std::chrono::steady_clock::now() >= deadline) return;
     }
 }
 
@@ -379,8 +396,12 @@ void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImD
     float const  aspect    = videoRect.GetWidth() / videoRect.GetHeight();
     PathPainter  painter(drawList, ctx.cameraProjection->viewProjection, nearW, videoRect);
 
+    bool const  building = isBuilding() && !mPreviousPolylines.empty();
+    auto const& lines    = building ? mPreviousPolylines : mPolylines;
+    auto const& markers  = building ? mPreviousMarkers : mMarkers;
+
     drawList->PushClipRect(videoRect.min, videoRect.max, true);
-    for (auto const& line : mPolylines) {
+    for (auto const& line : lines) {
         if (line.dimensionSegment != dimension || line.points.size() < 2) continue;
         painter.style(fade(theme::kCameraPath, line.opacity), kPathThickness);
         for (size_t index = 1; index < line.points.size(); ++index) {
@@ -388,12 +409,15 @@ void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImD
         }
         painter.flush();
     }
-    for (auto const& marker : mMarkers) {
+    for (auto const& marker : markers) {
         if (marker.dimensionSegment != dimension) continue;
         drawCameraGlyph(painter, marker.pose, aspect, fade(theme::kCameraPath, marker.opacity), kGlyphThickness);
     }
     if (ctx.state.paused) {
-        if (auto const current = timeline->sample({ctx.state.currentTick, 1})) {
+        // Reuse the render frame's sample time so the glyph matches the pose the camera was drawn with.
+        auto const time =
+            ctx.cameraProjection->sampleTime.value_or(visuals::ReplaySampleTime{ctx.state.currentTick, 1});
+        if (auto const current = timeline->sample(time)) {
             drawCameraGlyph(painter, current->state, aspect, theme::kCameraPathPlayhead, kGlyphThickness);
         }
     }
