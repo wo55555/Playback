@@ -58,13 +58,11 @@ std::optional<keyframe::CameraRenderState>              gRendererCameraState;
 std::optional<RenderCameraProjection>                   gRenderCameraProjection;
 std::optional<RenderCameraProjection>                   gSubmittedCameraProjection;
 
-struct FrameProjection {
-    bgfx::Frame const*                    frame{};
-    std::optional<RenderCameraProjection> projection;
-};
-
-std::array<FrameProjection, 2> gFrameProjections;
-size_t                         gNextProjectionSlot{};
+// Ring of projections queued by Context::frame and consumed in order by $submit; Frame* cannot be
+// matched because bgfx::Context's generated member offsets do not resolve to the live double buffer.
+std::array<std::optional<RenderCameraProjection>, 4> gFrameProjections;
+size_t                                               gNextProjectionSlot{};
+size_t                                               gNextConsumeSlot{};
 
 size_t sourceIndex(keyframe::CameraTimelineSource source) noexcept {
     return source == keyframe::CameraTimelineSource::Export ? 1U : 0U;
@@ -350,6 +348,12 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
     return verified;
 }
 
+void publishRenderCameraProjection(
+    mce::Camera const&                              worldCamera,
+    mce::Camera const*                              clientCamera,
+    std::optional<visuals::ReplaySampleTime> const& sampleTime
+) noexcept;
+
 bool applyTimelineCamera(
     LevelRendererPlayer&                         level,
     mce::Camera&                                 setupCamera,
@@ -373,6 +377,10 @@ bool applyTimelineCamera(
 
     writeCameraSpaces({&setupCamera, clientCamera}, *worldCamera, position, basis);
     writeLevelCameraPose(level, position, basis);
+    // Publish here so the overlay's view matches the pose this frame is rendered with.
+    if (context.source == keyframe::CameraTimelineSource::Preview) {
+        publishRenderCameraProjection(*worldCamera, clientCamera, context.time);
+    }
 
     auto const localPosition  = ::glm::vec3{};
     auto const setupExpected  = &setupCamera == worldCamera ? position : localPosition;
@@ -444,7 +452,11 @@ float nearPlaneOf(mce::Camera const& camera) noexcept {
 }
 
 // World camera owns the view; projection falls back to the client camera, then a synthesized perspective.
-void publishRenderCameraProjection(mce::Camera const& worldCamera, mce::Camera const* clientCamera) noexcept {
+void publishRenderCameraProjection(
+    mce::Camera const&                              worldCamera,
+    mce::Camera const*                              clientCamera,
+    std::optional<visuals::ReplaySampleTime> const& sampleTime
+) noexcept {
     auto const view = worldCamera.viewMatrixStack->top()._m.get();
 
     std::optional<::glm::mat4x4> projection;
@@ -473,7 +485,7 @@ void publishRenderCameraProjection(mce::Camera const& worldCamera, mce::Camera c
     if (!finite(transform)) return;
 
     std::scoped_lock lock(gRendererCameraMutex);
-    gRenderCameraProjection = RenderCameraProjection{transform, nearW};
+    gRenderCameraProjection = RenderCameraProjection{transform, nearW, sampleTime};
 }
 
 keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept {
@@ -555,10 +567,10 @@ LL_TYPE_INSTANCE_HOOK(
     uint,
     uint flags
 ) {
+    // Queue the projection this frame was submitted with; $submit consumes it in the same order.
     {
         std::scoped_lock lock(gRendererCameraMutex);
-        auto&            slot = gFrameProjections[gNextProjectionSlot++ % gFrameProjections.size()];
-        slot                  = {static_cast<bgfx::Context*>(this)->m_submit, gRenderCameraProjection};
+        gFrameProjections[gNextProjectionSlot++ % gFrameProjections.size()] = gRenderCameraProjection;
     }
     return origin(flags);
 }
@@ -655,11 +667,13 @@ LL_TYPE_INSTANCE_HOOK(
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (!context || context->source != keyframe::CameraTimelineSource::Export) {
         auto result = origin(screenContext, clientSubId);
-        if (keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+        // Without a timeline camera the vanilla observer owns the view, so publish it here.
+        if (!context && keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
             auto client = ll::service::getClientInstance();
             publishRenderCameraProjection(
                 static_cast<LevelRendererPlayer*>(this)->mWorldSpaceCamera.get(),
-                client ? &client->getCamera() : nullptr
+                client ? &client->getCamera() : nullptr,
+                std::nullopt
             );
         }
         return result;
@@ -750,6 +764,7 @@ bool hookCameraRender(bool enable) {
             gSubmittedCameraProjection.reset();
             gFrameProjections   = {};
             gNextProjectionSlot = 0;
+            gNextConsumeSlot    = 0;
         }
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
         if (state.finalView && ReplayCameraViewRenderObjectHook::unhook()) state.finalView = false;
@@ -826,15 +841,16 @@ std::optional<RenderCameraProjection> currentRenderCameraProjection() {
     return gSubmittedCameraProjection ? gSubmittedCameraProjection : gRenderCameraProjection;
 }
 
-void useSubmittedCameraProjection(bgfx::Frame const* frame) {
+void useSubmittedCameraProjection(bgfx::Frame const*) {
     std::scoped_lock lock(gRendererCameraMutex);
-    gSubmittedCameraProjection.reset();
-    for (auto& slot : gFrameProjections) {
-        if (slot.frame != frame || !frame) continue;
-        gSubmittedCameraProjection = slot.projection;
-        slot                       = {};
-        break;
+    if (gNextConsumeSlot == gNextProjectionSlot) return;
+    // Skip whatever the producer already overwrote so the oldest live entry is consumed next.
+    if (gNextProjectionSlot - gNextConsumeSlot > gFrameProjections.size()) {
+        gNextConsumeSlot = gNextProjectionSlot - gFrameProjections.size();
     }
+    auto& slot = gFrameProjections[gNextConsumeSlot++ % gFrameProjections.size()];
+    if (slot) gSubmittedCameraProjection = slot;
+    slot.reset();
 }
 
 } // namespace playback::editor::graphics

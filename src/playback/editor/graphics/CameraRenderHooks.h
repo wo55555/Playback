@@ -1,9 +1,11 @@
 ﻿#pragma once
 
 #include "playback/keyframe/CameraRenderState.h"
+#include "playback/visuals/ReplaySampleTime.h"
 
 #include <glm/mat4x4.hpp>
 
+#include <cstdint>
 #include <optional>
 
 namespace bgfx {
@@ -15,6 +17,8 @@ namespace playback::editor::graphics {
 struct RenderCameraProjection {
     ::glm::dmat4 viewProjection{1.0};
     float        nearClipW{0.001f};
+    // Sample time this view was rendered at, so overlays sample the timeline at the same instant.
+    std::optional<visuals::ReplaySampleTime> sampleTime;
 };
 
 [[nodiscard]] bool                                       hookCameraRender(bool enable);
