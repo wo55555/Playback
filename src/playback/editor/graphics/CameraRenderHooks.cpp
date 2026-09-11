@@ -451,6 +451,18 @@ float nearPlaneOf(mce::Camera const& camera) noexcept {
     return std::isfinite(camera.mZNear) && camera.mZNear > 0.0f ? camera.mZNear : 0.05f;
 }
 
+// Recover the near plane from the matrix itself; mZNear is not a dependable member offset.
+float nearPlaneOfProjection(::glm::mat4x4 const& projection, float fallback) noexcept {
+    float const c = projection[2][2];
+    float const d = projection[3][2];
+    float const s = projection[2][3];
+    if (!std::isfinite(c) || !std::isfinite(d) || !std::isfinite(s) || std::abs(s) < 0.5f) return fallback;
+    // Reverse-Z and infinite-far projections leave c at 0 or -1, where d alone gives the near plane.
+    float const denom     = c + s;
+    float const nearPlane = std::abs(denom) > 1.0e-6f ? d / denom : (std::abs(c) > 1.0e-6f ? d / c : d);
+    return std::isfinite(nearPlane) && nearPlane > 1.0e-4f && nearPlane < 16.0f ? nearPlane : fallback;
+}
+
 // World camera owns the view; projection falls back to the client camera, then a synthesized perspective.
 void publishRenderCameraProjection(
     mce::Camera const&                              worldCamera,
@@ -480,8 +492,9 @@ void publishRenderCameraProjection(
     }
 
     if (!projection || !finite(view)) return;
-    auto const  transform = ::glm::dmat4{*projection} * ::glm::dmat4{view};
-    float const nearW     = std::max(0.001f, std::abs((*projection)[2][3]) * zNear);
+    auto const transform = ::glm::dmat4{*projection} * ::glm::dmat4{view};
+    // w equals view-space depth for a perspective projection, so the clip bound is the near plane itself.
+    float const nearW = std::max(0.001f, nearPlaneOfProjection(*projection, zNear));
     if (!finite(transform)) return;
 
     std::scoped_lock lock(gRendererCameraMutex);

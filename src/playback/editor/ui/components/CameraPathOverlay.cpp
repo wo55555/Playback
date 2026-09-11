@@ -48,23 +48,56 @@ ImU32 fade(ImU32 colour, float opacity) {
     return (colour & ~IM_COL32_A_MASK) | (alpha << IM_COL32_A_SHIFT);
 }
 
-// Clip to near/side planes; first/last are the kept range along from->to.
-bool clipLine(::glm::dvec4& from, ::glm::dvec4& to, double nearW, double& first, double& last) {
-    first = 0.0;
-    last  = 1.0;
+// Clip to the near plane first, then the sides: side distances are only meaningful once w >= nearW,
+// because a negative w flips their sign. nearClipped reports whether the start moved, which is the
+// only case that must break the polyline.
+bool clipLine(::glm::dvec4& from, ::glm::dvec4& to, double nearW, double& first, double& last, bool& nearClipped) {
+    first       = 0.0;
+    last        = 1.0;
+    nearClipped = false;
     if (!finite(from) || !finite(to)) return false;
-    std::array<double, 5> const
-        start{from.w - nearW, from.w + from.x, from.w - from.x, from.w + from.y, from.w - from.y};
-    std::array<double, 5> const end{to.w - nearW, to.w + to.x, to.w - to.x, to.w + to.y, to.w - to.y};
+
+    double const nearStart = from.w - nearW;
+    double const nearEnd   = to.w - nearW;
+    if (nearStart < 0.0 && nearEnd < 0.0) return false;
+    if (nearStart < 0.0) {
+        first       = nearStart / (nearStart - nearEnd);
+        nearClipped = true;
+    } else if (nearEnd < 0.0) {
+        last = nearStart / (nearStart - nearEnd);
+    }
+
+    auto const delta   = to - from;
+    auto const nearMin = from + delta * first;
+    auto const nearMax = from + delta * last;
+
+    std::array<double, 4> const start{
+        nearMin.w + nearMin.x,
+        nearMin.w - nearMin.x,
+        nearMin.w + nearMin.y,
+        nearMin.w - nearMin.y,
+    };
+    std::array<double, 4> const end{
+        nearMax.w + nearMax.x,
+        nearMax.w - nearMax.x,
+        nearMax.w + nearMax.y,
+        nearMax.w - nearMax.y,
+    };
+    double sideFirst = 0.0;
+    double sideLast  = 1.0;
     for (size_t plane = 0; plane < start.size(); ++plane) {
         if (start[plane] < 0.0 && end[plane] < 0.0) return false;
-        if (start[plane] < 0.0) first = std::max(first, start[plane] / (start[plane] - end[plane]));
-        else if (end[plane] < 0.0) last = std::min(last, start[plane] / (start[plane] - end[plane]));
-        if (first > last) return false;
+        if (start[plane] < 0.0) {
+            sideFirst = std::max(sideFirst, start[plane] / (start[plane] - end[plane]));
+        } else if (end[plane] < 0.0) {
+            sideLast = std::min(sideLast, start[plane] / (start[plane] - end[plane]));
+        }
+        if (sideFirst > sideLast) return false;
     }
-    auto const delta = to - from;
-    to               = from + delta * last;
-    from             = from + delta * first;
+
+    auto const nearDelta = nearMax - nearMin;
+    from                 = nearMin + nearDelta * sideFirst;
+    to                   = nearMin + nearDelta * sideLast;
     // Extreme endpoint magnitudes can round an intersection's w back to zero.
     from.w = std::max(from.w, nearW);
     to.w   = std::max(to.w, nearW);
@@ -139,18 +172,21 @@ public:
         auto   to   = project(b);
         double first{};
         double last{};
-        if (!clipLine(from, to, mNearW, first, last)) {
+        bool   nearClipped{};
+        if (!clipLine(from, to, mNearW, first, last, nearClipped)) {
             flush();
             return;
         }
         auto const start = screenPoint(from, mRect);
         auto const end   = screenPoint(to, mRect);
-        if (mPoints.empty() || first > 0.0 || distanceSquared(mPoints.back(), start) > 0.25f) {
+        // Side clipping keeps the run joined; only re-entering through the near plane starts a new one.
+        if (mPoints.empty() || nearClipped) {
             flush();
+            mPoints.push_back(start);
+        } else if (distanceSquared(mPoints.back(), start) > 0.25f) {
             mPoints.push_back(start);
         }
         if (distanceSquared(mPoints.back(), end) >= 0.01f) mPoints.push_back(end);
-        if (last < 1.0) flush();
     }
 
     void flush() {
