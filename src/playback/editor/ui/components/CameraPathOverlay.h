@@ -53,6 +53,9 @@ private:
     std::vector<Polyline>          mPolylines;
     std::vector<Marker>            mMarkers;
     size_t                         mNextLine{};
+    // Kept so a window change keeps drawing the previous geometry until the new one finishes sampling.
+    std::vector<Polyline> mPreviousPolylines;
+    std::vector<Marker>   mPreviousMarkers;
 };
 
 } // namespace playback::editor::ui
