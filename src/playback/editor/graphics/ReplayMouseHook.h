@@ -11,6 +11,8 @@ void setReplayUIActive(bool active);
 
 void beginReplayMouseFrame(float displayWidth, float displayHeight, bool blockGameMouseInput);
 void setReplayGameViewport(float left, float top, float right, float bottom);
+// UI drawn over the game viewport (floating transport); clicks inside stay with ImGui.
+void setReplayGameViewportExclusion(float left, float top, float right, float bottom);
 
 void endReplayMouseFrame();
 
