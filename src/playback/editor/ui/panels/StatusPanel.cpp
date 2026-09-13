@@ -1,5 +1,7 @@
 #include "StatusPanel.h"
 
+#include "playback/editor/ui/EditorTheme.h"
+
 #include "ll/api/i18n/I18n.h"
 
 #include "imgui.h"
@@ -40,13 +42,13 @@ std::string exportStateLabel(exporting::ExportState state) {
 ImVec4 exportStateColor(exporting::ExportState state) {
     switch (state) {
     case exporting::ExportState::Completed:
-        return {0.40f, 0.78f, 0.48f, 1.0f};
+        return ImGui::ColorConvertU32ToFloat4(theme::kSuccess);
     case exporting::ExportState::Faulted:
-        return {0.94f, 0.38f, 0.36f, 1.0f};
+        return ImGui::ColorConvertU32ToFloat4(theme::kError);
     case exporting::ExportState::Cancelled:
-        return {0.68f, 0.68f, 0.68f, 1.0f};
+        return ImGui::ColorConvertU32ToFloat4(theme::kTextDim);
     default:
-        return {0.35f, 0.67f, 0.96f, 1.0f};
+        return ImGui::ColorConvertU32ToFloat4(theme::kAccent);
     }
 }
 
@@ -65,7 +67,7 @@ void StatusPanel::draw(PanelContext const& ctx) {
     if (exportStatus.state == exporting::ExportState::Idle) {
         statusText = state.capabilities.videoExport ? "playback.refactorEditor.status.ready"_tr()
                                                     : "playback.refactorEditor.status.exportUnavailable"_tr();
-        color      = {0.62f, 0.62f, 0.62f, 1.0f};
+        color      = ImGui::ColorConvertU32ToFloat4(theme::kTextDim);
     } else {
         statusText = exportStateLabel(exportStatus.state);
         if (exporting::isExportActive(exportStatus.state) && exportStatus.totalFrames > 0) {
@@ -77,40 +79,31 @@ void StatusPanel::draw(PanelContext const& ctx) {
         color = exportStateColor(exportStatus.state);
     }
 
-    std::string const replayText = "playback.refactorEditor.status.replay"_tr();
-    std::string const tickText   = "playback.refactorEditor.status.tick"_tr(state.currentTick, state.totalTicks);
-    char              speedText[32]{};
-    std::snprintf(speedText, sizeof(speedText), "%.2fx", state.playbackSpeed);
-
-    auto const& style         = ImGui::GetStyle();
-    float const contentStart  = ImGui::GetWindowContentRegionMin().x;
-    float const rightEdge     = ImGui::GetWindowContentRegionMax().x;
-    float const contentWidth  = std::max(0.0f, rightEdge - contentStart);
-    float const statusWidth   = ImGui::CalcTextSize(statusText.c_str()).x;
-    float const playbackWidth = ImGui::CalcTextSize(replayText.c_str()).x + ImGui::CalcTextSize(tickText.c_str()).x
-                              + ImGui::CalcTextSize(speedText).x + style.ItemSpacing.x * 2.0f;
-    bool const showPlaybackSummary = playbackWidth + statusWidth + 12.0f <= contentWidth;
-
-    if (showPlaybackSummary) {
-        ImGui::TextUnformatted(replayText.c_str());
-        ImGui::SameLine();
-        ImGui::TextUnformatted(tickText.c_str());
-        ImGui::SameLine();
-        ImGui::TextUnformatted(speedText);
-        if (!state.persistence.projectFile.empty()) {
-            auto const projectText =
-                state.persistence.dirty
-                    ? "playback.refactorEditor.status.projectUnsaved"_tr(state.persistence.projectFile)
-                    : "playback.refactorEditor.status.projectSaved"_tr(state.persistence.projectFile);
-            if (ImGui::CalcTextSize(projectText.c_str()).x + playbackWidth + statusWidth + 24.0f <= contentWidth) {
-                ImGui::SameLine();
-                ImGui::TextUnformatted(projectText.c_str());
-            }
-        }
-        ImGui::SameLine(std::max(contentStart, rightEdge - statusWidth));
+    // Left is which file is being edited and whether it is saved; right is export state. Playback position
+    // is not repeated here because the timeline title row already carries the timecode.
+    std::string leftText;
+    if (!state.persistence.projectFile.empty()) {
+        leftText = state.persistence.dirty
+                     ? "playback.refactorEditor.status.projectUnsaved"_tr(state.persistence.projectFile)
+                     : "playback.refactorEditor.status.projectSaved"_tr(state.persistence.projectFile);
     } else {
-        ImGui::SetCursorPosX(std::max(contentStart, rightEdge - statusWidth));
+        leftText = "playback.refactorEditor.status.tick"_tr(state.currentTick, state.totalTicks);
     }
+
+    ImVec2 const origin   = ImGui::GetCursorScreenPos();
+    float const  width    = ImGui::GetContentRegionAvail().x;
+    float const  height   = std::max(ImGui::GetFontSize(), ImGui::GetContentRegionAvail().y);
+    auto*        drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, theme::kBgHeader);
+    drawList->AddLine(origin, {origin.x + width, origin.y}, theme::kBorder);
+
+    float const pad         = theme::kPanelPadding;
+    float const textY       = origin.y + (height - ImGui::GetFontSize()) * 0.5f;
+    float const statusWidth = ImGui::CalcTextSize(statusText.c_str()).x;
+    if (ImGui::CalcTextSize(leftText.c_str()).x + statusWidth + pad * 4.0f <= width) {
+        drawList->AddText({origin.x + pad, textY}, theme::kTextDim, leftText.c_str());
+    }
+    ImGui::SetCursorScreenPos({origin.x + std::max(pad, width - statusWidth - pad), textY});
     ImGui::TextColored(color, "%s", statusText.c_str());
     if (ImGui::IsItemHovered() && (!exportStatus.message.empty() || !exportStatus.outputPath.empty())) {
         ImGui::BeginTooltip();
