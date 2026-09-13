@@ -62,6 +62,8 @@ using Selection = std::variant<
     SelectedSubActor,
     SelectedCamera>;
 
+struct EditorStateExt;
+
 class SelectionModel {
 public:
     void                                   select(Selection sel);
@@ -69,6 +71,9 @@ public:
     [[nodiscard]] bool                     hasSelection() const;
     [[nodiscard]] const Selection*         getSelection() const;
     [[nodiscard]] std::vector<std::string> selectedIds() const;
+
+    // Drops the selection when the object it points at is gone, e.g. after reloading a project.
+    void pruneInvalid(EditorStateExt const& state);
 
     template <typename T>
     [[nodiscard]] const T* getAs() const {
