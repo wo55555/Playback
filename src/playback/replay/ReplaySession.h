@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -387,6 +388,10 @@ public:
     [[nodiscard]] float getPlaybackSpeed() const { return mPlaybackSpeed; }
 
     void adjustPlaybackSpeed(int direction);
+
+    // Snaps to the nearest supported speed; the UI offers exactly playbackSpeeds().
+    void                                        setPlaybackSpeed(float speed);
+    [[nodiscard]] static std::span<float const> playbackSpeeds() noexcept;
 
     [[nodiscard]] bool setPaused(bool paused);
 

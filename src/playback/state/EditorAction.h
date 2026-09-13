@@ -16,6 +16,7 @@ enum class EditorActionType {
     Seek,
     DecreaseSpeed,
     IncreaseSpeed,
+    SetPlaybackSpeed,
     StopReplay,
     StartExport,
     CancelExport,
