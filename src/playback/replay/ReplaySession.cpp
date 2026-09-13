@@ -954,6 +954,22 @@ void ReplaySession::adjustPlaybackSpeed(int direction) {
     getLogger().debug("Replay speed set to {:.2f}x", mPlaybackSpeed);
 }
 
+void ReplaySession::setPlaybackSpeed(float speed) {
+    if (!mActive || !std::isfinite(speed)) return;
+
+    // Snap to the same ladder the stepping shortcuts walk, so both entry points agree.
+    size_t nearest = 0;
+    for (size_t index = 1; index < PlaybackSpeeds.size(); ++index) {
+        if (std::abs(PlaybackSpeeds[index] - speed) < std::abs(PlaybackSpeeds[nearest] - speed)) nearest = index;
+    }
+    if (std::abs(PlaybackSpeeds[nearest] - mPlaybackSpeed) < 0.0001f) return;
+    mPlaybackSpeed           = PlaybackSpeeds[nearest];
+    mPlaybackTickAccumulator = 0.0f;
+    getLogger().debug("Replay speed set to {:.2f}x", mPlaybackSpeed);
+}
+
+std::span<float const> ReplaySession::playbackSpeeds() noexcept { return PlaybackSpeeds; }
+
 void ReplaySession::finishSeek() {
     mSeekTargetTick         = -1;
     mExportSeekRequested    = false;
