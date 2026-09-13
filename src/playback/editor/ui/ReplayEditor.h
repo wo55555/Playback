@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "playback/editor/graphics/ReplayUILayout.h"
 #include "playback/editor/ui/PanelContext.h"
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorState.h"
@@ -38,7 +39,6 @@ public:
     [[nodiscard]] state::editing::model::SelectionModel const& selection() const { return mSelection; }
     state::editing::model::SelectionModel&                     selection() { return mSelection; }
     void                                                       submitAction(playback::state::EditorAction action) const;
-    void                                                       openExportDialog();
 
     void               seekTo(int tick) override;
     void               seekRelative(int tickDelta) override;
@@ -49,11 +49,22 @@ public:
     bool               deleteSelection() override;
     bool               addKeyframeAtPlayhead() override;
 
+    [[nodiscard]] bool  isInfoOverlayVisible() const override { return mViewportPanel.isInfoOverlayVisible(); }
+    void                setInfoOverlayVisible(bool visible) override { mViewportPanel.setInfoOverlayVisible(visible); }
+    [[nodiscard]] bool  isAutoPreviewEnabled() const override { return mViewportPanel.isAutoPreviewEnabled(); }
+    void                setAutoPreviewEnabled(bool enabled) override { mViewportPanel.setAutoPreviewEnabled(enabled); }
+    [[nodiscard]] bool  isSnapEnabled() const override { return mTimelinePanel.isSnapEnabled(); }
+    void                setSnapEnabled(bool enabled) override { mTimelinePanel.setSnapEnabled(enabled); }
+    [[nodiscard]] float videoAspectRatio() const override { return mVideoAspectRatio; }
+    void                setVideoAspectRatio(float ratio) override;
+    void                openExportDialog() override;
+    [[nodiscard]] UiScaleTier uiScaleTier() const override { return mUiScaleTier; }
+    void                      setUiScaleTier(UiScaleTier tier) override;
+
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
-    void                      setVideoAspectRatio(float aspectRatio);
-    [[nodiscard]] float       videoAspectRatio() const { return mVideoAspectRatio; }
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
+    [[nodiscard]] Rect        viewportOverlayRect() const { return mViewportPanel.overlayRect(); }
 
 private:
     ReplayEditor() = default;
@@ -82,9 +93,10 @@ private:
 
     float mExitHoldSeconds{};
 
-    float mDetailsWidthRatio{0.28f};
-    float mTimelineHeightRatio{0.35f};
-    float mVideoAspectRatio{16.0f / 9.0f};
+    float       mDetailsWidthRatio{0.28f};
+    float       mTimelineHeightRatio{0.35f};
+    float       mVideoAspectRatio{16.0f / 9.0f};
+    UiScaleTier mUiScaleTier{UiScaleTier::Auto};
 
     struct TimelineViewPreferences {
         float zoomScale{1.0f};

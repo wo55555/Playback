@@ -4,6 +4,7 @@
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/ErrorDialog.h"
+#include "playback/editor/ui/components/Widgets.h"
 
 #include "imgui.h"
 #include "nlohmann/json.hpp"
@@ -64,11 +65,18 @@ void ReplayEditor::toggleCameraPath() {
     saveLayoutPreferences();
 }
 
+void ReplayEditor::setUiScaleTier(UiScaleTier tier) {
+    mUiScaleTier = tier;
+    setCurrentUiScaleTier(tier);
+    saveLayoutPreferences();
+}
+
 void ReplayEditor::loadLayoutPreferences() {
     mDetailsWidthRatio   = 0.28f;
     mTimelineHeightRatio = 0.35f;
     mVideoAspectRatio    = 16.0f / 9.0f;
     mCameraPathVisible   = true;
+    mUiScaleTier         = UiScaleTier::Auto;
     mTimelinePanel.setViewPreferences(0.30f, 1.0f, 0.0f);
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
@@ -79,6 +87,10 @@ void ReplayEditor::loadLayoutPreferences() {
         if (config.is_object()) {
             auto const cameraPath = config.find("showCameraPath");
             if (cameraPath != config.end() && cameraPath->is_boolean()) mCameraPathVisible = cameraPath->get<bool>();
+            auto const uiScale = config.find("uiScale");
+            if (uiScale != config.end() && uiScale->is_string()) {
+                mUiScaleTier = uiScaleTierFromName(uiScale->get<std::string>());
+            }
             mDetailsWidthRatio =
                 std::clamp(readFiniteFloat(config, "detailsWidthRatio", mDetailsWidthRatio), 0.15f, 0.50f);
             mTimelineHeightRatio =
@@ -107,6 +119,7 @@ void ReplayEditor::loadLayoutPreferences() {
         }
     }
     mViewportPanel.setVideoAspectRatio(mVideoAspectRatio);
+    setCurrentUiScaleTier(mUiScaleTier);
 }
 
 void ReplayEditor::saveLayoutPreferences() const {
@@ -126,12 +139,13 @@ void ReplayEditor::saveLayoutPreferences() const {
     }
 
     nlohmann::ordered_json const config{
-        {"detailsWidthRatio",   mDetailsWidthRatio                  },
-        {"timelineHeightRatio", mTimelineHeightRatio                },
-        {"videoAspectRatio",    mVideoAspectRatio                   },
-        {"showCameraPath",      mCameraPathVisible                  },
-        {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()},
-        {"timelineViews",       std::move(timelineViews)            }
+        {"detailsWidthRatio",   mDetailsWidthRatio                        },
+        {"timelineHeightRatio", mTimelineHeightRatio                      },
+        {"videoAspectRatio",    mVideoAspectRatio                         },
+        {"showCameraPath",      mCameraPathVisible                        },
+        {"uiScale",             std::string(uiScaleTierName(mUiScaleTier))},
+        {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()      },
+        {"timelineViews",       std::move(timelineViews)                  }
     };
     std::ofstream output(kLayoutPreferencesPath, std::ios::trunc);
     if (output) {
@@ -212,10 +226,9 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     syncTimelineViewPreferences(replayPath);
     mFrameState = &state;
     mSubmit     = &submit;
+    // A reloaded or edited project can drop the selected object; without this the inspector shows "missing".
+    if (state.project) mSelection.pruneInvalid(*state.project);
 
-    auto&       io             = ImGui::GetIO();
-    float const savedFontScale = io.FontGlobalScale;
-    io.FontGlobalScale         = savedFontScale * (18.0f / 14.0f);
     theme::apply();
 
     if (exportActive && mModeManager.current() != EditorMode::Render) {
@@ -237,9 +250,8 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     updateExitHold();
     if (!exportActive) handleKeyboardShortcuts();
 
-    io.FontGlobalScale = savedFontScale;
-    mFrameState        = nullptr;
-    mSubmit            = nullptr;
+    mFrameState = nullptr;
+    mSubmit     = nullptr;
 }
 
 void ReplayEditor::updateExitHold() {
