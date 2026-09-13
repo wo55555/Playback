@@ -1,7 +1,10 @@
 #include "DetailsPanel.h"
 
+#include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/PropertyControls.h"
 #include "playback/editor/ui/components/Widgets.h"
+#include "playback/editor/ui/iconfont.h"
+#include "playback/exporting/ExportPlanCompiler.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -99,12 +102,74 @@ bool vectorInput(
 } // namespace
 
 void DetailsPanel::draw(PanelContext const& ctx) {
-    auto const project = ctx.state.project;
-    if (!project) {
-        widgets::noActiveProjectPlaceholder();
-        return;
-    }
+    ImVec2 const origin = ImGui::GetCursorScreenPos();
+    ImVec2 const avail  = ImGui::GetContentRegionAvail();
+    float const  railW  = metrics::rail();
+    drawRail(ctx, railW, avail.y);
 
+    ImGui::SetCursorScreenPos({origin.x + railW, origin.y});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {theme::kPanelPadding, theme::kPanelPadding});
+    ImGui::BeginChild("##InspectorBody", {std::max(1.0f, avail.x - railW), avail.y}, false);
+    if (!ctx.state.project) {
+        widgets::noActiveProjectPlaceholder();
+    } else {
+        switch (mPage) {
+        case InspectorPage::Selection:
+            drawSelectionPage(ctx);
+            break;
+        case InspectorPage::Scene:
+            drawScenePage(ctx);
+            break;
+        case InspectorPage::Export:
+            drawExportPage(ctx);
+            break;
+        case InspectorPage::Settings:
+            drawSettingsPage(ctx);
+            break;
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+}
+
+void DetailsPanel::drawRail(PanelContext const& ctx, float width, float height) {
+    ImVec2 const origin   = ImGui::GetCursorScreenPos();
+    auto*        drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, theme::kRailBg);
+    drawList->AddLine({origin.x + width, origin.y}, {origin.x + width, origin.y + height}, theme::kBorder);
+
+    struct Entry {
+        InspectorPage page;
+        char const*   icon;
+        std::string   tooltip;
+        bool          enabled;
+    };
+    bool const       exportActive = exporting::isExportActive(ctx.state.exportStatus.state);
+    std::array const entries{
+        Entry{InspectorPage::Selection, ICON_PANEL_LEFT, "playback.refactorEditor.inspector.selection"_tr(), true},
+        Entry{InspectorPage::Scene,     ICON_LIST,       "playback.refactorEditor.inspector.scene"_tr(),     true},
+        Entry{InspectorPage::Export,    ICON_EXPORT,     "playback.refactorEditor.inspector.export"_tr(),    true},
+        Entry{InspectorPage::Settings,  ICON_SETTINGS,   "playback.refactorEditor.inspector.settings"_tr(),  true},
+    };
+
+    float const button = metrics::iconButton();
+    float       y      = origin.y + 4.0f;
+    for (auto const& entry : entries) {
+        bool const active = mPage == entry.page;
+        ImGui::SetCursorScreenPos({origin.x + (width - button) * 0.5f, y});
+        ImGui::PushID(static_cast<int>(entry.page));
+        if (widgets::iconToggle("rail", entry.icon, entry.tooltip.c_str(), active, entry.enabled)) mPage = entry.page;
+        ImGui::PopID();
+        if (active) {
+            drawList->AddRectFilled({origin.x, y + 3.0f}, {origin.x + 2.0f, y + button - 3.0f}, theme::kRailActive);
+        }
+        y += button + 2.0f;
+    }
+    (void)exportActive;
+}
+
+void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
+    auto const  project   = ctx.state.project;
     auto const& selection = ctx.selection;
     std::string subject   = "playback.refactorEditor.details.noSelection"_tr();
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
@@ -121,10 +186,13 @@ void DetailsPanel::draw(PanelContext const& ctx) {
     } else if (selection.getAs<state::editing::model::SelectedMarker>()) {
         subject = "playback.refactorEditor.details.marker"_tr();
     }
-    auto const inspectorTitle = "playback.refactorEditor.details.title"_tr();
-    auto const searchHint     = "playback.refactorEditor.details.searchProperties"_tr();
-    property::beginInspector(inspectorTitle, subject);
-    property::searchBar("##details-search", searchHint.c_str(), mSearch.data(), mSearch.size());
+    property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
+    property::searchBar(
+        "##details-search",
+        "playback.refactorEditor.details.searchProperties"_tr().c_str(),
+        mSearch.data(),
+        mSearch.size()
+    );
 
     if (drawWorldActor(ctx)) return;
     if (drawWorldActorSegment(ctx)) return;
@@ -406,21 +474,6 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                 action.tick = ctx.state.currentTick;
                 submit(std::move(action));
             }
-            for (auto const& [keyTick, _] : camera->keysByTick) {
-                auto const* selectedKey = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
-                bool const selected = selectedKey && selectedKey->trackId == camera->id && selectedKey->tick == keyTick;
-                ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(176, 128, 18, 255));
-                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(205, 157, 32, 255));
-                ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(232, 184, 45, 255));
-                if (ImGui::Selectable("playback.refactorEditor.details.tickValue"_tr(keyTick).c_str(), selected)) {
-                    ctx.selection.select(state::editing::model::SelectedKeyframe{camera->id, keyTick});
-                    EditorAction previewAction{EditorActionType::SetPreviewCamera};
-                    previewAction.id = camera->id;
-                    submit(std::move(previewAction));
-                    ctx.commands.seekTo(keyTick);
-                }
-                ImGui::PopStyleColor(3);
-            }
             property::separator();
             if (property::actionButton("playback.refactorEditor.details.deleteCamera"_tr().c_str())) {
                 EditorAction action{EditorActionType::DeleteCamera};
@@ -494,10 +547,10 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.position"_tr().c_str());
                 ImGui::TableNextColumn();
                 static constexpr std::array positionLabels{"X", "Y", "Z"};
-                static constexpr std::array positionColors{
-                    ImVec4{0.95f, 0.38f, 0.38f, 1.0f},
-                    ImVec4{0.42f, 0.82f, 0.45f, 1.0f},
-                    ImVec4{0.38f, 0.62f, 0.96f, 1.0f},
+                static std::array const     positionColors{
+                    ImGui::ColorConvertU32ToFloat4(theme::kAxisX),
+                    ImGui::ColorConvertU32ToFloat4(theme::kAxisY),
+                    ImGui::ColorConvertU32ToFloat4(theme::kAxisZ),
                 };
                 if (vectorInput("position", position, positionLabels, &positionColors, "%.3f")
                     && std::ranges::all_of(position, [](float value) { return std::isfinite(value); })) {
@@ -624,9 +677,250 @@ void DetailsPanel::drawOverview(PanelContext const& ctx) {
         );
         ImGui::Spacing();
         if (property::actionButton("playback.refactorEditor.details.addFreeCamera"_tr().c_str())) {
-            EditorAction action{EditorActionType::AddFreeCamera};
-            action.name = "playback.refactorEditor.defaults.camera"_tr(project->cameras.size() + 1);
-            submit(std::move(action));
+            submit({EditorActionType::AddFreeCamera});
+        }
+        property::endSection();
+    }
+}
+
+void DetailsPanel::drawScenePage(PanelContext const& ctx) {
+    auto const project = ctx.state.project;
+    auto const submit  = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
+
+    property::beginInspector(
+        "playback.refactorEditor.inspector.scene"_tr(),
+        project->worldActor.name.empty() ? "playback.refactorEditor.details.untitled"_tr() : project->worldActor.name
+    );
+
+    if (property::beginSection("playback.refactorEditor.details.worldActor"_tr().c_str())) {
+        property::textRow(
+            "playback.refactorEditor.details.tick"_tr().c_str(),
+            formatTick(project->worldActor.totalTicks).c_str()
+        );
+        for (auto const& segment : project->worldActor.segments) {
+            char label[96]{};
+            std::snprintf(
+                label,
+                sizeof(label),
+                "%s - %s   %.2gx",
+                formatTick(segment.startTick).c_str(),
+                formatTick(segment.endTick).c_str(),
+                static_cast<double>(segment.speed)
+            );
+            auto const* selected = ctx.selection.getAs<state::editing::model::SelectedWorldActorSegment>();
+            if (ImGui::Selectable(label, selected && selected->segmentId == segment.id)) {
+                ctx.selection.select(state::editing::model::SelectedWorldActorSegment{segment.id});
+                mPage = InspectorPage::Selection;
+            }
+        }
+        property::endSection();
+    }
+
+    if (property::beginSection("playback.refactorEditor.details.cameras"_tr(project->cameras.size()).c_str())) {
+        for (auto const& camera : project->cameras) {
+            auto const* selected = ctx.selection.getAs<state::editing::model::SelectedCamera>();
+            std::string label =
+                std::string(ICON_CAMERA) + "  " + camera.name + "   " + std::to_string(camera.keysByTick.size());
+            if (ImGui::Selectable(label.c_str(), selected && selected->cameraId == camera.id)) {
+                ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
+                EditorAction action{EditorActionType::SetPreviewCamera};
+                action.id = camera.id;
+                submit(std::move(action));
+                mPage = InspectorPage::Selection;
+            }
+        }
+        if (property::actionButton("playback.refactorEditor.details.addFreeCamera"_tr().c_str())) {
+            submit({EditorActionType::AddFreeCamera});
+        }
+        property::endSection();
+    }
+
+    if (property::beginSection("playback.refactorEditor.details.subActors"_tr().c_str(), false)) {
+        property::searchBar(
+            "##scene-entity-search",
+            "playback.refactorEditor.inspector.searchEntities"_tr().c_str(),
+            mEntitySearch.data(),
+            mEntitySearch.size()
+        );
+        std::string const                                                       query{mEntitySearch.data()};
+        static constexpr std::array<state::editing::model::SubActorCategory, 4> categories{
+            state::editing::model::SubActorCategory::Players,
+            state::editing::model::SubActorCategory::Creatures,
+            state::editing::model::SubActorCategory::Entities,
+            state::editing::model::SubActorCategory::Default,
+        };
+        for (auto category : categories) {
+            auto const&                                         actors = project->worldActor.subActors;
+            std::vector<state::editing::model::SubActor const*> matches;
+            for (auto const& actor : actors) {
+                if (actor.category != category) continue;
+                if (!query.empty() && actor.name.find(query) == std::string::npos) continue;
+                matches.push_back(&actor);
+            }
+            if (matches.empty()) continue;
+            std::string const header = categoryName(category) + " (" + std::to_string(matches.size()) + ")";
+            if (!ImGui::CollapsingHeader(header.c_str())) continue;
+            size_t shown = 0;
+            for (auto const* actor : matches) {
+                if (shown >= 100) {
+                    ImGui::TextDisabled(
+                        "%s",
+                        "playback.refactorEditor.details.moreActors"_tr(matches.size() - shown).c_str()
+                    );
+                    break;
+                }
+                ++shown;
+                auto const* selected = ctx.selection.getAs<state::editing::model::SelectedSubActor>();
+                if (ImGui::Selectable(
+                        (actor->name.empty() ? actor->id : actor->name).c_str(),
+                        selected && selected->subActorId == actor->id
+                    )) {
+                    ctx.selection.select(state::editing::model::SelectedSubActor{actor->id});
+                    mPage = InspectorPage::Selection;
+                }
+            }
+        }
+        property::endSection();
+    }
+
+    if (property::beginSection("playback.refactorEditor.timeline.markerLane"_tr().c_str(), false)) {
+        if (project->markers.empty()) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.noMarkers"_tr().c_str());
+        }
+        for (auto const& marker : project->markers) {
+            auto const* selected = ctx.selection.getAs<state::editing::model::SelectedMarker>();
+            std::string label    = formatTick(marker.tick) + "   " + marker.label;
+            if (ImGui::Selectable(label.c_str(), selected && selected->markerId == marker.id)) {
+                ctx.selection.select(state::editing::model::SelectedMarker{marker.id});
+                mPage = InspectorPage::Selection;
+            }
+        }
+        property::endSection();
+    }
+}
+
+void DetailsPanel::drawExportPage(PanelContext const& ctx) {
+    auto const& state        = ctx.state;
+    auto const& status       = state.exportStatus;
+    bool const  exportActive = exporting::isExportActive(status.state);
+
+    property::beginInspector(
+        "playback.refactorEditor.inspector.export"_tr(),
+        state.capabilities.ffmpegVideoExport ? "playback.refactorEditor.export.mp4"_tr()
+                                             : "playback.refactorEditor.export.pngSequence"_tr()
+    );
+
+    if (property::beginSection("playback.refactorEditor.export.output"_tr().c_str())) {
+        property::textRow(
+            "playback.refactorEditor.export.frameRate"_tr().c_str(),
+            (std::to_string(static_cast<int>(state.project->fps)) + " FPS").c_str()
+        );
+        property::textRow(
+            "playback.refactorEditor.export.timeline"_tr().c_str(),
+            (formatTick(0) + " - " + formatTick(state.totalTicks)).c_str()
+        );
+        if (!state.capabilities.ffmpegVideoExport) {
+            ImGui::TextDisabled("%s  %s", ICON_INFO, "playback.refactorEditor.export.ffmpegUnavailable"_tr().c_str());
+        }
+        if (property::actionButton(
+                "playback.refactorEditor.inspector.openExportDialog"_tr().c_str(),
+                state.capabilities.videoExport && !exportActive && state.totalTicks > 0
+            )) {
+            ctx.commands.openExportDialog();
+        }
+        property::endSection();
+    }
+
+    if (property::beginSection("playback.refactorEditor.inspector.exportStatus"_tr().c_str())) {
+        if (status.state == exporting::ExportState::Idle) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.export.state.idle"_tr().c_str());
+        } else {
+            if (status.totalFrames > 0) {
+                auto const completed =
+                    std::min(status.totalFrames, std::max(status.submittedFrames, status.writtenFrames));
+                float const fraction = static_cast<float>(completed) / static_cast<float>(status.totalFrames);
+                ImGui::ProgressBar(fraction, {-1.0f, ImGui::GetFontSize() + 4.0f});
+            }
+            if (!status.message.empty()) {
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(status.message.c_str());
+                ImGui::PopTextWrapPos();
+            }
+            if (property::actionButton("playback.refactorEditor.export.cancel"_tr().c_str(), exportActive)) {
+                ctx.submitAction({EditorActionType::CancelExport});
+            }
+        }
+        property::endSection();
+    }
+}
+
+void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {
+    property::beginInspector(
+        "playback.refactorEditor.inspector.settings"_tr(),
+        "playback.refactorEditor.inspector.settingsSubtitle"_tr()
+    );
+
+    if (property::beginSection("playback.refactorEditor.inspector.uiScale"_tr().c_str())) {
+        struct Tier {
+            UiScaleTier tier;
+            std::string label;
+        };
+        std::array const tiers{
+            Tier{UiScaleTier::Auto,   "playback.refactorEditor.inspector.uiScaleAuto"_tr()  },
+            Tier{UiScaleTier::Small,  "playback.refactorEditor.inspector.uiScaleSmall"_tr() },
+            Tier{UiScaleTier::Medium, "playback.refactorEditor.inspector.uiScaleMedium"_tr()},
+            Tier{UiScaleTier::Large,  "playback.refactorEditor.inspector.uiScaleLarge"_tr() },
+            Tier{UiScaleTier::Huge,   "playback.refactorEditor.inspector.uiScaleHuge"_tr()  },
+        };
+        UiScaleTier const current = ctx.commands.uiScaleTier();
+        for (auto const& entry : tiers) {
+            if (ImGui::RadioButton(entry.label.c_str(), current == entry.tier)) ctx.commands.setUiScaleTier(entry.tier);
+        }
+        if (current == UiScaleTier::Auto) {
+            ImGui::TextDisabled(
+                "%s",
+                "playback.refactorEditor.inspector.uiScaleAutoHint"_tr(
+                    static_cast<int>(calculateReplayUIScale(current, ImGui::GetIO().DisplaySize.y) * 100.0f)
+                )
+                    .c_str()
+            );
+        }
+        property::endSection();
+    }
+
+    if (property::beginSection("playback.refactorEditor.inspector.viewSettings"_tr().c_str())) {
+        bool infoOverlay = ctx.commands.isInfoOverlayVisible();
+        if (ImGui::Checkbox(("playback.refactorEditor.viewport.infoOverlay"_tr() + "##set-info").c_str(), &infoOverlay))
+            ctx.commands.setInfoOverlayVisible(infoOverlay);
+        bool autoPreview = ctx.commands.isAutoPreviewEnabled();
+        if (ImGui::Checkbox(("playback.refactorEditor.viewport.autoPreview"_tr() + "##set-auto").c_str(), &autoPreview))
+            ctx.commands.setAutoPreviewEnabled(autoPreview);
+        bool cameraPath = ctx.commands.isCameraPathVisible();
+        if (ImGui::Checkbox(("playback.refactorEditor.menu.cameraPath"_tr() + "##set-path").c_str(), &cameraPath))
+            ctx.commands.toggleCameraPath();
+        bool snap = ctx.commands.isSnapEnabled();
+        if (ImGui::Checkbox(("playback.refactorEditor.timeline.snap"_tr() + "##set-snap").c_str(), &snap))
+            ctx.commands.setSnapEnabled(snap);
+        property::endSection();
+    }
+
+    if (property::beginSection("playback.refactorEditor.viewport.aspectTooltip"_tr().c_str())) {
+        struct Preset {
+            char const* label;
+            float       ratio;
+        };
+        static constexpr std::array presets{
+            Preset{"16:9",   16.0f / 9.0f},
+            Preset{"21:9",   21.0f / 9.0f},
+            Preset{"4:3",    4.0f / 3.0f },
+            Preset{"1:1",    1.0f        },
+            Preset{"9:16",   9.0f / 16.0f},
+            Preset{"2.39:1", 2.39f       },
+        };
+        float const current = ctx.commands.videoAspectRatio();
+        for (auto const& preset : presets) {
+            if (ImGui::RadioButton(preset.label, std::abs(current - preset.ratio) < 0.01f))
+                ctx.commands.setVideoAspectRatio(preset.ratio);
         }
         property::endSection();
     }
