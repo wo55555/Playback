@@ -1,5 +1,7 @@
 #include "playback/editor/ui/components/Splitter.h"
 
+#include "playback/editor/ui/EditorTheme.h"
+
 #include "imgui.h"
 
 #include <algorithm>
@@ -9,6 +11,10 @@ namespace playback::editor::ui {
 namespace {
 
 constexpr float kSplitterThickness = 4.0f;
+
+ImU32 splitterColor(bool hovered, bool active) {
+    return active ? theme::kAccent : (hovered ? theme::withAlpha(theme::kAccent, 0xa0) : theme::kBorder);
+}
 
 } // namespace
 
@@ -29,9 +35,8 @@ float Splitter::drawVerticalSplit(float ratio, Rect area, float minR, float maxR
         splitX         = area.max.x - area.GetWidth() * ratio;
     }
 
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    ImU32       color =
-        active ? IM_COL32(240, 192, 32, 255) : (hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(60, 60, 60, 255));
+    ImDrawList* dl    = ImGui::GetForegroundDrawList();
+    ImU32       color = splitterColor(hovered, active);
     dl->AddRectFilled({splitX - 1, area.min.y}, {splitX + 1, area.max.y}, color);
 
     return ratio;
@@ -55,9 +60,8 @@ float Splitter::drawHorizontalSplit(float ratio, Rect area, float minR, float ma
         splitY         = area.min.y + area.GetHeight() * ratio;
     }
 
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    ImU32       color =
-        active ? IM_COL32(240, 192, 32, 255) : (hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(60, 60, 60, 255));
+    ImDrawList* dl    = ImGui::GetForegroundDrawList();
+    ImU32       color = splitterColor(hovered, active);
     dl->AddRectFilled({area.min.x, splitY - 1}, {area.max.x, splitY + 1}, color);
 
     return ratio;
