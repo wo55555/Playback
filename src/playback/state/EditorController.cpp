@@ -149,7 +149,7 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     mProject             = {};
     mProject.projectPath = std::string(replayPath);
     mProject.totalTicks  = totalTicks;
-    state::editing::CameraBindingOps::addFreeCamera(mProject, "Camera 1");
+    state::editing::CameraBindingOps::addFreeCamera(mProject, {});
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
     mPreviewCameraId.reset();
@@ -180,7 +180,7 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
     loaded.projectPath           = mProject.projectPath;
     loaded.totalTicks            = mProject.totalTicks;
     loaded.worldActor.totalTicks = mProject.totalTicks;
-    if (loaded.cameras.empty()) state::editing::CameraBindingOps::addFreeCamera(loaded, "Camera 1");
+    if (loaded.cameras.empty()) state::editing::CameraBindingOps::addFreeCamera(loaded, {});
     if (loaded.worldActor.segments.empty()) {
         loaded.worldActor.segments.push_back({"worldActor", 0, mProject.totalTicks, 0});
     }
@@ -452,6 +452,9 @@ void EditorController::tick(bool hudVisible) {
             break;
         case EditorActionType::IncreaseSpeed:
             session.adjustPlaybackSpeed(1);
+            break;
+        case EditorActionType::SetPlaybackSpeed:
+            session.setPlaybackSpeed(action.speed);
             break;
         case EditorActionType::StopReplay:
             if (mExportDriver) mExportDriver->cancel();

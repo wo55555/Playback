@@ -2,9 +2,14 @@
 
 #include "SequenceOps.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include <algorithm>
 
 namespace playback::state::editing::CameraBindingOps {
+
+using namespace ll::i18n_literals;
+
 namespace {
 
 std::string makeCameraId(model::EditorStateExt const& state) {
@@ -26,13 +31,25 @@ model::SubActor* findSubActor(model::EditorStateExt& state, std::string const& i
         });
     return it == state.worldActor.subActors.end() ? nullptr : &*it;
 }
+
+// Counting cameras would reuse a name after a delete, so probe upwards until the name is free.
+std::string defaultCameraName(model::EditorStateExt const& state) {
+    for (size_t next = state.cameras.size() + 1;; ++next) {
+        auto name = "playback.refactorEditor.defaults.camera"_tr(next);
+        if (std::none_of(state.cameras.begin(), state.cameras.end(), [&name](auto const& camera) {
+                return camera.name == name;
+            })) {
+            return name;
+        }
+    }
+}
 } // namespace
 
 
 std::string addFreeCamera(model::EditorStateExt& state, std::string const& name) {
     model::CameraEntity camera;
     camera.id   = makeCameraId(state);
-    camera.name = name.empty() ? "Camera " + std::to_string(state.cameras.size() + 1) : name;
+    camera.name = name.empty() ? defaultCameraName(state) : name;
     state.cameras.push_back(camera);
     return camera.id;
 }
