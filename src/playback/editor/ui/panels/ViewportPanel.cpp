@@ -69,8 +69,7 @@ void ViewportPanel::draw(PanelContext const& ctx, bool maximized) {
     // Neutral 1px frame: the accent blue is reserved for selection state elsewhere in the editor.
     drawList->AddRect(videoMin, videoMax, theme::kBorder);
     ImGui::SetCursorScreenPos(videoMin);
-    // The floating transport is submitted after this hit box and overlaps it; without overlap
-    // permission the earlier item keeps the hover id and the buttons never receive clicks.
+    // The floating transport overlaps this hit box; without this it would keep the hover id.
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##viewport-video", videoSize);
 
@@ -157,19 +156,9 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     );
     widgets::itemTooltip("playback.refactorEditor.viewport.autoPreviewTooltip"_tr().c_str());
 
-    // Maximize lives at the end of the transport row instead of here, next to the other playback controls.
-    float const buttons = metrics::iconButton() * 2.0f + 1.0f;
-    ImGui::SameLine(std::max(0.0f, width - buttons - metrics::gutter()));
+    // Maximize sits with the transport controls; the camera-path toggle stays in the View menu.
+    ImGui::SameLine(std::max(0.0f, width - metrics::iconButton() - metrics::gutter()));
     ImGui::SetCursorPosY((height - metrics::iconButton()) * 0.5f);
-    if (widgets::iconToggle(
-            "viewport-path",
-            ICON_KEYFRAME,
-            "playback.refactorEditor.menu.cameraPath"_tr().c_str(),
-            ctx.commands.isCameraPathVisible()
-        )) {
-        ctx.commands.toggleCameraPath();
-    }
-    ImGui::SameLine(0.0f, 1.0f);
     if (widgets::iconToggle(
             "viewport-info",
             ICON_INFO,

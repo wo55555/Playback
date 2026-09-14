@@ -59,6 +59,9 @@ private:
         int                  displayTick
     ); // Drawn after the track rows so the row bands do not cover it.
     void drawTrackGrid(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale);
+    // In/out markers for the export range, drawn over the canvas and draggable by their handles.
+    void drawExportRange(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale, bool allowInput);
+
     void drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput);
     void drawTitleLabel(PanelContext const& ctx, float height);
     void drawTransportGroup(PanelContext const& ctx, int displayTick, float width);
@@ -73,13 +76,14 @@ private:
     int            mRulerDragTick{-1};
     std::string    mTrackSearch;
     bool           mSnapEnabled{true};
-    bool           mCamerasExpanded{true};
     bool           mDraggingPlayhead{};
-    std::string    mDraggingKeyframeCameraId;
-    float          mDraggingKeyframeStartMouseX{};
-    int            mDraggingKeyframeStartTick{};
-    int            mDraggingKeyframeTick{};
-    bool           mDraggingKeyframeMoved{};
+    // 0 none, 1 in marker, 2 out marker.
+    int         mExportMarkerDrag{};
+    std::string mDraggingKeyframeCameraId;
+    float       mDraggingKeyframeStartMouseX{};
+    int         mDraggingKeyframeStartTick{};
+    int         mDraggingKeyframeTick{};
+    bool        mDraggingKeyframeMoved{};
     // Range-bar drag: 0 none, 1 left handle, 2 right handle, 3 whole window.
     int   mRangeDragMode{};
     float mRangeDragOriginX{};

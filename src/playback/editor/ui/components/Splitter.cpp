@@ -35,9 +35,12 @@ float Splitter::drawVerticalSplit(float ratio, Rect area, float minR, float maxR
         splitX         = area.max.x - area.GetWidth() * ratio;
     }
 
-    ImDrawList* dl    = ImGui::GetForegroundDrawList();
+    // Its own window already sits above the panels; the foreground list would cover tooltips instead.
+    ImDrawList* dl    = ImGui::GetWindowDrawList();
     ImU32       color = splitterColor(hovered, active);
+    dl->PushClipRect(area.min, area.max, false);
     dl->AddRectFilled({splitX - 1, area.min.y}, {splitX + 1, area.max.y}, color);
+    dl->PopClipRect();
 
     return ratio;
 }
@@ -60,9 +63,11 @@ float Splitter::drawHorizontalSplit(float ratio, Rect area, float minR, float ma
         splitY         = area.min.y + area.GetHeight() * ratio;
     }
 
-    ImDrawList* dl    = ImGui::GetForegroundDrawList();
+    ImDrawList* dl    = ImGui::GetWindowDrawList();
     ImU32       color = splitterColor(hovered, active);
+    dl->PushClipRect(area.min, area.max, false);
     dl->AddRectFilled({area.min.x, splitY - 1}, {area.max.x, splitY + 1}, color);
+    dl->PopClipRect();
 
     return ratio;
 }
