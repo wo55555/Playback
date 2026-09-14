@@ -2430,7 +2430,9 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         }
 
         auto covered = subChunkIndicesByColumn.find(pos);
-        if (covered == subChunkIndicesByColumn.end() || covered->second.size() != subChunkCount) {}
+        if (covered == subChunkIndicesByColumn.end() || covered->second.size() != subChunkCount) {
+            continue;
+        }
         bool const coversCompleteHeight =
             std::all_of(covered->second.begin(), covered->second.end(), [minimumSubChunk, subChunkCount](int index) {
                 return index >= minimumSubChunk && static_cast<size_t>(index - minimumSubChunk) < subChunkCount;
