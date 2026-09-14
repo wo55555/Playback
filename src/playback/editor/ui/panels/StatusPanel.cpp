@@ -79,8 +79,7 @@ void StatusPanel::draw(PanelContext const& ctx) {
         color = exportStateColor(exportStatus.state);
     }
 
-    // Left is which file is being edited and whether it is saved; right is export state. Playback position
-    // is not repeated here because the timeline title row already carries the timecode.
+    // Left is the edited file and its save state, right is export state; the timeline row carries the timecode.
     std::string leftText;
     if (!state.persistence.projectFile.empty()) {
         leftText = state.persistence.dirty
