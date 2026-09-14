@@ -26,6 +26,9 @@ enum class EditorKeybind : uint8_t {
     ZoomOutTimeline,
     ResetTimelineZoom,
     ToggleViewportMaximized,
+    MarkExportIn,
+    MarkExportOut,
+    TogglePlayback,
     NamedOnly,
 };
 
