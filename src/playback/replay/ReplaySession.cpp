@@ -401,12 +401,14 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             auto const height  = static_cast<int64_t>(maximum) - static_cast<int64_t>(minimum);
             if (minimum < std::numeric_limits<short>::min() || maximum > std::numeric_limits<short>::max()
                 || minimum % 16 != 0 || maximum <= minimum || height % 16 != 0) {
-                throw std::runtime_error(std::format(
-                    "Replay dimension {} has invalid recorded height range [{}, {})",
-                    snapshot.dimensionId,
-                    minimum,
-                    maximum
-                ));
+                throw std::runtime_error(
+                    std::format(
+                        "Replay dimension {} has invalid recorded height range [{}, {})",
+                        snapshot.dimensionId,
+                        minimum,
+                        maximum
+                    )
+                );
             }
 
             if (!snapshot.dimensionName.empty()) {
@@ -416,14 +418,16 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             RecordedDimensionHeightRange const range{minimum, maximum};
             auto const [it, inserted] = dimensionProfile->heightRanges.emplace(snapshot.dimensionId, range);
             if (!inserted && it->second != range) {
-                throw std::runtime_error(std::format(
-                    "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
-                    snapshot.dimensionId,
-                    it->second.minimum,
-                    it->second.maximum,
-                    minimum,
-                    maximum
-                ));
+                throw std::runtime_error(
+                    std::format(
+                        "Replay dimension {} has conflicting recorded height ranges [{}, {}) and [{}, {})",
+                        snapshot.dimensionId,
+                        it->second.minimum,
+                        it->second.maximum,
+                        minimum,
+                        maximum
+                    )
+                );
             }
         }
         mReplayDimensionProfile.store(std::move(dimensionProfile), std::memory_order_release);
@@ -720,9 +724,9 @@ void ReplaySession::updateObserverPreview() {
     Vec2 const     rotation{sample->state.pitch, sample->state.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    mLastObserverPreviewFeet     = feetPosition;
-    mLastObserverPreviewRotation = rotation;
+                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
+    mLastObserverPreviewFeet        = feetPosition;
+    mLastObserverPreviewRotation    = rotation;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -823,7 +827,7 @@ void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint)
     Vec2 const     rotation{viewpoint.pitch, viewpoint.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
+                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -1570,8 +1574,8 @@ size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::st
     return loaded;
 }
 
-size_t
-ReplaySession::injectRecordedBlockMaterialComponents(std::vector<std::pair<std::string, CompoundTag>> const& properties
+size_t ReplaySession::injectRecordedBlockMaterialComponents(
+    std::vector<std::pair<std::string, CompoundTag>> const& properties
 ) {
     auto level = ll::service::getLevel();
     if (!level) return 0;
@@ -2037,7 +2041,7 @@ void ReplaySession::processPendingDimensionTransition() {
     bool const loadingScreenVisible = client
                                    && (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
                                        || client->isShowingWorldProgressScreen());
-    bool const readyToRender = client && client->isReadyToRender();
+    bool const readyToRender        = client && client->isReadyToRender();
 
     if (elapsed >= DIMENSION_TRANSITION_TIMEOUT) {
         getLogger().error(
@@ -2704,12 +2708,12 @@ void ReplaySession::updateCenterChunkReadiness() {
     mCenterChunksReady = true;
     auto const elapsed =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - mChunkInjectionStartedAt);
-    size_t const queuedCenterColumns = static_cast<size_t>(std::count_if(
-        mCenterChunkPositions.begin(),
-        mCenterChunkPositions.end(),
-        [this](ChunkPos const& pos) { return !mReusableSnapshotColumns.contains(pos); }
-    ));
-    size_t const queuedOuterColumns  = mPendingLevelChunkIndices.size() - queuedCenterColumns;
+    size_t const queuedCenterColumns = static_cast<size_t>(
+        std::count_if(mCenterChunkPositions.begin(), mCenterChunkPositions.end(), [this](ChunkPos const& pos) {
+            return !mReusableSnapshotColumns.contains(pos);
+        })
+    );
+    size_t const queuedOuterColumns = mPendingLevelChunkIndices.size() - queuedCenterColumns;
     getLogger().debug(
         "Replay center ready with {} columns in {:.3f} ms after {} ticks; streaming {} outer columns",
         mCenterChunkPositions.size(),
