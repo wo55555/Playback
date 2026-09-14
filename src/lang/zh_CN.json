@@ -141,7 +141,6 @@
             "details": {
                 "title": "详细信息",
                 "noSelection": "未选择任何对象",
-                "searchProperties": "搜索属性",
                 "overview": "回放概览",
                 "selectionHint": "选择世界实体、相机、关键帧或标记。",
                 "untitled": "（未命名）",
@@ -318,8 +317,7 @@
                 "nextTick": "下一游戏刻",
                 "title": "时间轴",
                 "trackCount": "{} 个相机",
-                "speedTooltip": "播放速度",
-                "markerLane": "标记"
+                "speedTooltip": "播放速度"
             },
             "viewport": {
                 "freeCamera": "自由视角",
@@ -333,15 +331,12 @@
             },
             "inspector": {
                 "selection": "选择",
-                "scene": "场景",
                 "export": "导出",
                 "exportStatus": "状态",
                 "openExportDialog": "导出视频…",
                 "settings": "设置",
                 "settingsSubtitle": "编辑器偏好",
                 "viewSettings": "视图",
-                "searchEntities": "搜索实体",
-                "noMarkers": "暂无标记",
                 "uiScale": "界面缩放",
                 "uiScaleAuto": "自动",
                 "uiScaleSmall": "小 (100%)",
