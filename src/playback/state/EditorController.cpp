@@ -257,9 +257,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::TrimWorldActor:
         mCommandStack.push(CommandFactory::createTrimWorldActor(action.id, action.tick, action.kind), mProject);
         break;
-    case EditorActionType::SetWorldActorSpeed:
-        mCommandStack.push(CommandFactory::createSetWorldActorSpeed(action.id, action.speed), mProject);
-        break;
     case EditorActionType::RippleDeleteWorldActorSegment:
         mCommandStack.push(CommandFactory::createRippleDeleteWorldActorSegment(action.id), mProject);
         break;
