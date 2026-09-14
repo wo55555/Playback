@@ -158,7 +158,6 @@
                 "sourceTick": "源游戏刻：{}",
                 "start": "起点",
                 "end": "终点",
-                "speed": "速度",
                 "splitAtPlayhead": "在播放头处分割",
                 "rippleDelete": "波纹删除",
                 "segmentLocked": "片段已锁定。",
@@ -283,6 +282,7 @@
                 "playback": "播放",
                 "editing": "编辑",
                 "application": "应用",
+                "playPause": "播放 / 暂停",
                 "jumpEdges": "跳至开头 / 结尾",
                 "seekSeconds": "跳转 1 秒",
                 "seekTicks": "跳转 1 游戏刻",
@@ -292,6 +292,7 @@
                 "saveProject": "保存项目",
                 "keyframe": "添加相机关键帧",
                 "zoom": "缩放时间轴",
+                "exportRange": "标记导出头 / 尾",
                 "delete": "删除选中项",
                 "export": "打开导出设置",
                 "viewport": "最大化 / 还原视口",
@@ -318,8 +319,6 @@
                 "title": "时间轴",
                 "trackCount": "{} 个相机",
                 "speedTooltip": "播放速度",
-                "worldTrack": "世界",
-                "transformLane": "变换",
                 "markerLane": "标记"
             },
             "viewport": {

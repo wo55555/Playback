@@ -53,8 +53,7 @@ struct InkBounds {
     float y1;
 };
 
-// Union of glyph ink over a run at the current font size. CJK ideographs sit well below the Latin
-// cap height, so centring on 'H' alone leaves Chinese labels visibly low next to icons.
+// Union of glyph ink over a run; CJK ideographs sit below the Latin cap height that 'H' alone reports.
 [[nodiscard]] std::optional<InkBounds> textInkBounds(char const* text) {
     if (!text) return std::nullopt;
     ImFontBaked* baked = ImGui::GetFont()->GetFontBaked(ImGui::GetFontSize());
@@ -107,8 +106,7 @@ void itemTooltip(char const* text) {
 void hoverTooltip(char const* text) {
     if (!text) return;
 
-    // Panels are separate top-level windows, so a tooltip window can land behind a later one. The
-    // foreground draw list is always rendered last, which makes the layering deterministic.
+    // Panels are separate windows, so a real tooltip window can land behind one; this list draws last.
     ImVec2 const pad      = {6.0f * metrics::scale(), 4.0f * metrics::scale()};
     ImVec2 const textSize = ImGui::CalcTextSize(text);
     ImVec2 const display  = ImGui::GetIO().DisplaySize;
@@ -173,8 +171,7 @@ ButtonFrame squareButton(char const* id, bool enabled, bool active) {
     return frame;
 }
 
-// ImGui::Button centres by advance width, which drifts for monospaced icon glyphs; draw the glyph
-// ourselves at the exact centre so every icon button looks identically aligned.
+// ImGui::Button centres by advance width, which drifts for monospaced icon glyphs.
 bool iconButtonImpl(char const* id, char const* icon, char const* tooltip, bool enabled, bool active) {
     ButtonFrame const frame = squareButton(id, enabled, active);
     drawIconCentred(ImGui::GetWindowDrawList(), icon, frame.origin, frame.size, frame.color);
@@ -226,9 +223,20 @@ float textYForCentre(float centreY, char const* text) {
     return std::floor(centreY - ImGui::GetFontSize() * 0.5f + 0.5f);
 }
 
+float textInkCentre(float drawY, char const* text) {
+    // Optical centre is the middle of the x-height nudged down; ascenders pull the ink box too high.
+    if (ImFontBaked* baked = ImGui::GetFont()->GetFontBaked(ImGui::GetFontSize())) {
+        if (ImFontGlyph const* x = baked->FindGlyphNoFallback('x')) {
+            return drawY + (x->Y0 + x->Y1) * 0.5f + (x->Y1 - x->Y0) * 0.14f;
+        }
+    }
+    if (auto const ink = textInkBounds(text)) return drawY + (ink->y0 + ink->y1) * 0.5f;
+    return drawY + ImGui::GetFontSize() * 0.5f;
+}
+
 void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, ImU32 color, VectorIcon icon) {
-    // 0.26 puts these marks at roughly the same ink height as the Lucide glyphs beside them.
-    float const h      = boxSize * 0.26f;
+    // Tuned to land at the same ink height as the Lucide glyphs beside them.
+    float const h      = boxSize * 0.285f;
     float const stroke = std::max(1.5f, boxSize * 0.045f);
     switch (icon) {
     case VectorIcon::Play:
@@ -305,8 +313,7 @@ bool vectorIconButton(char const* id, VectorIcon icon, char const* tooltip, bool
 
 void drawIconCentred(ImDrawList* drawList, char const* icon, ImVec2 const& origin, float boxSize, ImU32 color) {
     float const iconSize = iconGlyphSize();
-    // CalcTextSize reports the line box, so centring on it leaves icons visibly high. The glyph's own
-    // X0/Y0/X1/Y1 are the real ink bounds, which is what should sit in the middle of the button.
+    // CalcTextSize reports the line box; the glyph's own X0/Y0/X1/Y1 are the ink bounds to centre on.
     ImFontGlyph const* glyph = nullptr;
     if (auto const codepoint = decodeUtf8(icon)) {
         if (ImFontBaked* baked = ImGui::GetFont()->GetFontBaked(iconSize)) {
@@ -383,12 +390,16 @@ bool dropdownChip(char const* id, char const* label, char const* tooltip, bool e
     ImU32 const textColor = enabled ? theme::kText : theme::kTextDim;
     ImU32 const iconColor = enabled ? (hovered ? theme::kIconHighlight : theme::kIconInactive) : theme::kTextDim;
 
+    // Icon aligns to the text's optical middle, not the chip's, so chips match timeline rows.
+    ImVec2 const textPos{
+        origin.x + padX + (icon ? iconBox + padX * 0.5f : 0.0f),
+        textYForCentre(origin.y + height * 0.5f, label)
+    };
     float x = origin.x + padX;
     if (icon) {
-        drawIconAtCentre(drawList, icon, {x + iconBox * 0.5f, origin.y + height * 0.5f}, iconColor);
+        drawIconAtCentre(drawList, icon, {x + iconBox * 0.5f, textInkCentre(textPos.y, label)}, iconColor);
         x += iconBox + padX * 0.5f;
     }
-    ImVec2 const textPos{x, textYForCentre(origin.y + height * 0.5f, label)};
     drawList->AddText(textPos, textColor, label);
     x += textWidth + padX * 0.5f;
 

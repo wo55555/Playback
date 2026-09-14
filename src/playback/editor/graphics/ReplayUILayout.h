@@ -6,8 +6,7 @@
 
 namespace playback::editor::ui {
 
-// Fonts are rasterised at this size; ImGui re-rasterises them when style.FontScaleMain changes, so the
-// whole editor scales without blurring (imgui 1.92 dynamic fonts + ImGuiBackendFlags_RendererHasTextures).
+// Base rasterisation size; ImGui re-rasterises on style.FontScaleMain changes, so scaling stays sharp.
 inline constexpr float kBaseFontSize = 14.0f;
 
 enum class UiScaleTier : uint8_t { Auto = 0, Small, Medium, Large, Huge };
@@ -49,15 +48,12 @@ enum class UiScaleTier : uint8_t { Auto = 0, Small, Medium, Large, Huge };
     }
 }
 
-// A 22px control is physically small on a short panel, so low screens scale up rather than down; tall
-// screens scale up because their pixels are dense. 1080p is the 1.0 reference.
+// Large is the size the editor was laid out against; Auto only departs from it for extreme displays.
 [[nodiscard]] constexpr UiScaleTier resolveAutoTier(float displayHeight) {
-    if (displayHeight <= 0.0f) return UiScaleTier::Small;
-    if (displayHeight < 800.0f) return UiScaleTier::Large;
+    if (displayHeight <= 0.0f) return UiScaleTier::Large;
     if (displayHeight < 900.0f) return UiScaleTier::Medium;
-    if (displayHeight < 1300.0f) return UiScaleTier::Small;
-    if (displayHeight < 1700.0f) return UiScaleTier::Medium;
-    return UiScaleTier::Large;
+    if (displayHeight < 2200.0f) return UiScaleTier::Large;
+    return UiScaleTier::Huge;
 }
 
 [[nodiscard]] constexpr float calculateReplayUIScale(UiScaleTier tier, float displayHeight) {

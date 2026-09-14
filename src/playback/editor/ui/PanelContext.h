@@ -38,6 +38,12 @@ public:
     virtual void                setVideoAspectRatio(float ratio)    = 0;
     virtual void                openExportDialog()                  = 0;
 
+    // The export range is owned by the export dialog but drawn on the timeline as in/out markers.
+    [[nodiscard]] virtual int exportStartTick() const      = 0;
+    [[nodiscard]] virtual int exportEndTick() const        = 0;
+    virtual void              setExportStartTick(int tick) = 0;
+    virtual void              setExportEndTick(int tick)   = 0;
+
     [[nodiscard]] virtual UiScaleTier uiScaleTier() const              = 0;
     virtual void                      setUiScaleTier(UiScaleTier tier) = 0;
 };
