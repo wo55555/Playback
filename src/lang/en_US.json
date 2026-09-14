@@ -158,7 +158,6 @@
                 "sourceTick": "Source Tick: {}",
                 "start": "Start",
                 "end": "End",
-                "speed": "Speed",
                 "splitAtPlayhead": "Split at Playhead",
                 "rippleDelete": "Ripple Delete",
                 "segmentLocked": "Segment is locked.",
@@ -283,6 +282,7 @@
                 "playback": "Playback",
                 "editing": "Editing",
                 "application": "Application",
+                "playPause": "Play / pause",
                 "jumpEdges": "Jump to start / end",
                 "seekSeconds": "Seek 1 second",
                 "seekTicks": "Seek 1 tick",
@@ -292,6 +292,7 @@
                 "saveProject": "Save project",
                 "keyframe": "Add camera keyframe",
                 "zoom": "Zoom timeline",
+                "exportRange": "Mark export in / out point",
                 "delete": "Delete selected item",
                 "export": "Open export settings",
                 "viewport": "Maximize / restore viewport",
@@ -318,8 +319,6 @@
                 "title": "Timeline",
                 "trackCount": "{} cameras",
                 "speedTooltip": "Playback speed",
-                "worldTrack": "World",
-                "transformLane": "Transform",
                 "markerLane": "Markers"
             },
             "viewport": {

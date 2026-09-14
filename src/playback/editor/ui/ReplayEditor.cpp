@@ -355,6 +355,18 @@ void ReplayEditor::handleKeyboardShortcuts() {
         mTimelinePanel.resetZoom();
         return;
     }
+    if (input::KeyMap::pressed(EditorKeybind::TogglePlayback)) {
+        submitAction({playback::state::EditorActionType::TogglePause});
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::MarkExportIn)) {
+        mMenuBar.markExportPoint(true, state().currentTick, state().totalTicks);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::MarkExportOut)) {
+        mMenuBar.markExportPoint(false, state().currentTick, state().totalTicks);
+        return;
+    }
     if (input::KeyMap::pressed(EditorKeybind::DecreaseSpeed, true)) {
         submitAction({playback::state::EditorActionType::DecreaseSpeed});
         return;

@@ -12,10 +12,12 @@ namespace playback::editor::ui {
 void EditMode::draw(PanelContext const& ctx) {
     auto& editor = ReplayEditor::getInstance();
 
-    float const fontSize           = ImGui::GetFontSize();
-    auto const& style              = ImGui::GetStyle();
-    float const kMenuHeight        = ImGui::GetFrameHeight() + style.WindowBorderSize * 2.0f;
-    float const kStatusHeight      = metrics::statusBar();
+    float const fontSize = ImGui::GetFontSize();
+    auto const& style    = ImGui::GetStyle();
+    // The menu bar is the only always-visible chrome, so it runs a size up from the rest of the editor.
+    float const kMenuFontScale = 1.25f;
+    float const kMenuHeight   = fontSize * kMenuFontScale + style.FramePadding.y * 2.0f + style.WindowBorderSize * 2.0f;
+    float const kStatusHeight = metrics::statusBar();
     float const kSplitterThickness = metrics::splitter();
     float const kDetailsMinWidth   = std::max(240.0f, fontSize * 14.0f + metrics::rail());
     float const kViewportMinWidth  = std::max(320.0f, fontSize * 22.0f);
@@ -47,7 +49,10 @@ void EditMode::draw(PanelContext const& ctx) {
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
                 | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_MenuBar
         );
+        // Only the bar itself scales up; the dropdowns it opens inherit the editor's normal size.
+        ImGui::SetWindowFontScale(kMenuFontScale);
         editor.mMenuBar.draw(ctx);
+        ImGui::SetWindowFontScale(1.0f);
         ImGui::End();
     };
 
