@@ -2,11 +2,9 @@
 
 #include "playback/editor/ui/PanelContext.h"
 
-#include <array>
-
 namespace playback::editor::ui {
 
-enum class InspectorPage { Selection, Scene, Export, Settings };
+enum class InspectorPage { Selection, Export, Settings };
 
 class DetailsPanel {
 public:
@@ -18,7 +16,6 @@ public:
 private:
     void drawRail(PanelContext const& ctx, float width, float height);
     void drawSelectionPage(PanelContext const& ctx);
-    void drawScenePage(PanelContext const& ctx);
     void drawExportPage(PanelContext const& ctx);
     void drawSettingsPage(PanelContext const& ctx);
 
@@ -31,9 +28,7 @@ private:
     bool drawMarker(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
 
-    InspectorPage         mPage{InspectorPage::Selection};
-    std::array<char, 128> mSearch{};
-    std::array<char, 128> mEntitySearch{};
+    InspectorPage mPage{InspectorPage::Selection};
 };
 
 } // namespace playback::editor::ui

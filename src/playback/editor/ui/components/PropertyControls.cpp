@@ -46,20 +46,6 @@ void beginInspector(std::string_view title, std::string_view objectName) {
     ImGui::SetCursorScreenPos({origin.x, origin.y + height + 6.0f * scale});
 }
 
-void searchBar(char const* id, char const* hint, char* buffer, size_t bufferSize) {
-    float const scale = uiScale();
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme::kFrameRounding * scale);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {6.0f * scale, 3.0f * scale});
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, theme::kInputBg);
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, theme::kInputBgHover);
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, theme::kInputBgActive);
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint(id, hint, buffer, bufferSize);
-    ImGui::PopStyleColor(3);
-    ImGui::PopStyleVar(2);
-    ImGui::Dummy({0.0f, 4.0f * scale});
-}
-
 bool beginSection(char const* label, bool defaultOpen) {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_SpanAvailWidth;
     if (defaultOpen) flags |= ImGuiTreeNodeFlags_DefaultOpen;
