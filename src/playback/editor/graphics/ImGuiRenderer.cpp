@@ -134,7 +134,6 @@ void loadReplayUIFonts() {
     ImFontConfig cfg;
     cfg.MergeMode = true;
     // Lucide glyphs sit above the text baseline; this aligns them for inline "icon + label" strings.
-    // Icon buttons do not rely on it, they centre on the glyph's ink box instead.
     cfg.GlyphOffset.y = 3.0f;
     // Monospacing the icons keeps inline label rows aligned regardless of which glyph is used.
     cfg.GlyphMinAdvanceX = ui::kBaseFontSize;
@@ -534,7 +533,8 @@ struct ImGuiRenderer::Impl {
             f.rtv = rtv;
             device->CreateRenderTargetView(f.backBuffer.Get(), nullptr, f.rtv);
             rtv.ptr += static_cast<SIZE_T>(rtvDescSize);
-            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
+            if (FAILED(
+                    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
                 )) {
                 initialized = true;
                 this->shutdown();
