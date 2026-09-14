@@ -349,8 +349,8 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
 }
 
 void publishRenderCameraProjection(
-    mce::Camera const&                              worldCamera,
-    mce::Camera const*                              clientCamera,
+    mce::Camera&                                    worldCamera,
+    mce::Camera*                                    clientCamera,
     std::optional<visuals::ReplaySampleTime> const& sampleTime
 ) noexcept;
 
@@ -463,20 +463,25 @@ float nearPlaneOfProjection(::glm::mat4x4 const& projection, float fallback) noe
     return std::isfinite(nearPlane) && nearPlane > 1.0e-4f && nearPlane < 16.0f ? nearPlane : fallback;
 }
 
+// The 26.10 SDK exposes no Camera::getProjectionMatrix, so read the stack top directly.
+::glm::mat4x4 projectionMatrixOf(mce::Camera& camera) noexcept {
+    return camera.projectionMatrixStack->getTop()._m.get();
+}
+
 // World camera owns the view; projection falls back to the client camera, then a synthesized perspective.
 void publishRenderCameraProjection(
-    mce::Camera const&                              worldCamera,
-    mce::Camera const*                              clientCamera,
+    mce::Camera&                                    worldCamera,
+    mce::Camera*                                    clientCamera,
     std::optional<visuals::ReplaySampleTime> const& sampleTime
 ) noexcept {
-    auto const view = worldCamera.viewMatrixStack->top()._m.get();
+    auto const view = worldCamera.viewMatrixStack->getTop()._m.get();
 
     std::optional<::glm::mat4x4> projection;
     float                        zNear = nearPlaneOf(worldCamera);
-    if (auto const world = worldCamera.getProjectionMatrix(); isPerspective(world)) {
+    if (auto const world = projectionMatrixOf(worldCamera); isPerspective(world)) {
         projection = world;
     } else if (clientCamera) {
-        if (auto const client = clientCamera->getProjectionMatrix(); isPerspective(client)) {
+        if (auto const client = projectionMatrixOf(*clientCamera); isPerspective(client)) {
             projection = client;
             zNear      = nearPlaneOf(*clientCamera);
         }
