@@ -42,7 +42,6 @@ enum class EditorActionType {
     BindSequenceCamera,
     SplitWorldActor,
     TrimWorldActor,
-    SetWorldActorSpeed,
     RippleDeleteWorldActorSegment,
     AddCameraKeyframe,
     MoveCameraKeyframe,
