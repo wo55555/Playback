@@ -141,7 +141,6 @@
             "details": {
                 "title": "Details",
                 "noSelection": "No selection",
-                "searchProperties": "Search properties",
                 "overview": "Replay Overview",
                 "selectionHint": "Select a world actor, camera, keyframe or marker.",
                 "untitled": "(untitled)",
@@ -318,8 +317,7 @@
                 "nextTick": "Next tick",
                 "title": "Timeline",
                 "trackCount": "{} cameras",
-                "speedTooltip": "Playback speed",
-                "markerLane": "Markers"
+                "speedTooltip": "Playback speed"
             },
             "viewport": {
                 "freeCamera": "Free camera",
@@ -333,15 +331,12 @@
             },
             "inspector": {
                 "selection": "Selection",
-                "scene": "Scene",
                 "export": "Export",
                 "exportStatus": "Status",
                 "openExportDialog": "Export video…",
                 "settings": "Settings",
                 "settingsSubtitle": "Editor preferences",
                 "viewSettings": "View",
-                "searchEntities": "Search entities",
-                "noMarkers": "No markers",
                 "uiScale": "Interface scale",
                 "uiScaleAuto": "Auto",
                 "uiScaleSmall": "Small (100%)",
