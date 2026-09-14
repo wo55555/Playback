@@ -13,6 +13,6 @@ bool        trimSegment(
            int                newEndTick,
            int                totalTicks
        );
-bool setSpeed(model::WorldActor& worldActor, const std::string& segmentId, float speed);
+
 bool rippleDelete(model::WorldActor& worldActor, const std::string& segmentId, int totalTicks);
 } // namespace playback::state::editing::WorldActorOps

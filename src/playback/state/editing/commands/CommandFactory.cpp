@@ -32,9 +32,7 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSplitWorldActor(int t
 std::unique_ptr<model::IEditCommand> CommandFactory::createTrimWorldActor(const std::string& id, int start, int end) {
     return std::make_unique<TrimWorldActorSegment>(id, start, end);
 }
-std::unique_ptr<model::IEditCommand> CommandFactory::createSetWorldActorSpeed(const std::string& id, float speed) {
-    return std::make_unique<SetWorldActorSegmentSpeed>(id, speed);
-}
+
 std::unique_ptr<model::IEditCommand> CommandFactory::createRippleDeleteWorldActorSegment(const std::string& id) {
     return std::make_unique<RippleDeleteWorldActorSeg>(id);
 }

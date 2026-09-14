@@ -36,20 +36,6 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class SetWorldActorSegmentSpeed final : public model::IEditCommand {
-public:
-    SetWorldActorSegmentSpeed(std::string id, float speed);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mId;
-    float                                mSpeed;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
 class RippleDeleteWorldActorSeg final : public model::IEditCommand {
 public:
     explicit RippleDeleteWorldActorSeg(std::string id);
