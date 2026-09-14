@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1-mc26.10] - 2026-09-14
+
+### Added
+
+- Added a camera-path overlay in the viewport. Camera tracks are drawn as splines with keyframe markers, clipped against the near plane so the path stays anchored to the rendered view.
+- Added selectable UI scale tiers for the editor, applied without re-rasterising glyphs.
+- Added direct playback-speed selection in the transport, snapped to the same speed ladder the keyboard shortcuts step through.
+- Added an export-range marker on the timeline, with `I` and `O` to set its bounds and `Space` to toggle play/pause.
+
+### Changed
+
+- Rebuilt the editor layout around a centred transport, with reworked timeline rows, details panel, status bar, and menu bar.
+- Aligned timeline and toolbar icons optically rather than on their glyph boxes.
+- Kept the configuration version, recording-file snapshot context version, and project format version at `1`; `v0.3.0-mc26.10` archives and projects remain compatible.
+
+### Removed
+
+- Removed the scene inspector page and the property search box; neither affected the replay or the export.
+- Removed the world-actor segment speed slider, command, and action. Segment speed had no export path, so it never changed playback; the serialised field stays because splitting a segment derives its source tick from it.
+
+### Fixed
+
+- Fixed replays losing a dimension boundary when the recorder rotated the chunk instead of leaving a packet on the timeline; boundaries are now derived from the snapshot contexts.
+- Fixed columns without complete subchunk coverage being injected, which could leave partially built terrain.
+- Fixed clicks on viewport overlays reaching the game camera.
+
 ## [0.3.0-mc26.10] - 2026-09-08
 
 ### Added
@@ -157,7 +183,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.10...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.10...HEAD
+[0.3.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.10...v0.3.1-mc26.10
 [0.3.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.10...v0.3.0-mc26.10
 [0.2.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.10...v0.2.1-mc26.10
 [0.2.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.1.2-mc26.10...v0.2.0-mc26.10
