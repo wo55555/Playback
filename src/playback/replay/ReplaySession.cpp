@@ -1261,9 +1261,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
                 mDimensionTransitionTicks.emplace_back(static_cast<int>(transitionTick));
             }
         };
-        // A recorded dimension change rotates the chunk and captures a forced snapshot instead of
-        // leaving a ChangeDimension packet on the timeline, so the snapshot contexts are the authority.
-        // The boundary tick is the last one still in the old dimension, matching the packet convention.
+        // A dimension change rotates the chunk instead of leaving a packet, so the contexts are the authority.
         if (!mSnapshotContexts.empty() && mSnapshotContexts.back().dimensionId != context.dimensionId) {
             recordTransition(chunkStartTick - 1);
         }

@@ -58,8 +58,7 @@ std::optional<keyframe::CameraRenderState>              gRendererCameraState;
 std::optional<RenderCameraProjection>                   gRenderCameraProjection;
 std::optional<RenderCameraProjection>                   gSubmittedCameraProjection;
 
-// Ring of projections queued by Context::frame and consumed in order by $submit; Frame* cannot be
-// matched because bgfx::Context's generated member offsets do not resolve to the live double buffer.
+// Frame* cannot be matched to a submission, so Context::frame queues projections and $submit consumes in order.
 std::array<std::optional<RenderCameraProjection>, 4> gFrameProjections;
 size_t                                               gNextProjectionSlot{};
 size_t                                               gNextConsumeSlot{};
