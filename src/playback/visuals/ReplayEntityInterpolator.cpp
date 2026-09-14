@@ -182,33 +182,35 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             if (!stateVector || !renderPosition || !actorRotation) return {};
 
             auto const sampled = samplePose(history->second, sample);
-            state->actors.emplace_back(ScopedReplayEntityPose::State::ActorState{
-                stateVector,
-                stateVector->mPos.get(),
-                stateVector->mPosPrev.get(),
-                stateVector->mPosDelta.get(),
-                renderPosition,
-                renderPosition->mValue.get(),
-                Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
-                movementInterpolator,
-                movementInterpolator ? movementInterpolator->mPos.get() : Vec3{},
-                movementInterpolator ? movementInterpolator->mRot.get() : Vec2{},
-                movementInterpolator ? movementInterpolator->mHeadYaw : 0.0f,
-                movementInterpolator ? movementInterpolator->mPositionSteps : 0,
-                movementInterpolator ? movementInterpolator->mRotationSteps : 0,
-                movementInterpolator ? movementInterpolator->mHeadYawSteps : 0,
-                renderRotation,
-                renderRotation ? renderRotation->mRot.get() : Vec2{},
-                actorRotation,
-                actorRotation->mRot.get(),
-                actorRotation->mRotPrev.get(),
-                headRotation,
-                headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
-                headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
-                bodyRotation,
-                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
-                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
-            });
+            state->actors.emplace_back(
+                ScopedReplayEntityPose::State::ActorState{
+                    stateVector,
+                    stateVector->mPos.get(),
+                    stateVector->mPosPrev.get(),
+                    stateVector->mPosDelta.get(),
+                    renderPosition,
+                    renderPosition->mValue.get(),
+                    Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
+                    movementInterpolator,
+                    movementInterpolator ? movementInterpolator->mPos.get() : Vec3{},
+                    movementInterpolator ? movementInterpolator->mRot.get() : Vec2{},
+                    movementInterpolator ? movementInterpolator->mHeadYaw : 0.0f,
+                    movementInterpolator ? movementInterpolator->mPositionSteps : 0,
+                    movementInterpolator ? movementInterpolator->mRotationSteps : 0,
+                    movementInterpolator ? movementInterpolator->mHeadYawSteps : 0,
+                    renderRotation,
+                    renderRotation ? renderRotation->mRot.get() : Vec2{},
+                    actorRotation,
+                    actorRotation->mRot.get(),
+                    actorRotation->mRotPrev.get(),
+                    headRotation,
+                    headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
+                    headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
+                    bodyRotation,
+                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
+                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
+            }
+            );
 
             auto& applied                  = state->actors.back();
             applied.stateVector->mPos      = applied.exportPosition;

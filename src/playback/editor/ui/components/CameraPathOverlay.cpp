@@ -48,9 +48,7 @@ ImU32 fade(ImU32 colour, float opacity) {
     return (colour & ~IM_COL32_A_MASK) | (alpha << IM_COL32_A_SHIFT);
 }
 
-// Clip to the near plane first, then the sides: side distances are only meaningful once w >= nearW,
-// because a negative w flips their sign. nearClipped reports whether the start moved, which is the
-// only case that must break the polyline.
+// Near plane first: a negative w flips the sign of the side distances. nearClipped means the start moved.
 bool clipLine(::glm::dvec4& from, ::glm::dvec4& to, double nearW, double& first, double& last, bool& nearClipped) {
     first       = 0.0;
     last        = 1.0;
