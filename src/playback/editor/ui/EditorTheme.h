@@ -31,6 +31,9 @@ constexpr ImU32 kButton        = IM_COL32(0x2a, 0x2a, 0x2a, 0xff);
 constexpr ImU32 kButtonHover   = IM_COL32(0x38, 0x38, 0x38, 0xff);
 constexpr ImU32 kButtonActive  = IM_COL32(0x44, 0x44, 0x44, 0xff);
 constexpr ImU32 kScrollThumb   = IM_COL32(0x50, 0x50, 0x50, 0xff);
+// Range bar zoom grips; the ring doubles as the rail outline that contains the accent fill.
+constexpr ImU32 kGripBody = IM_COL32(0xc8, 0xcc, 0xd4, 0xff);
+constexpr ImU32 kGripRing = IM_COL32(0x11, 0x11, 0x11, 0xff);
 
 // Timeline surfaces.
 constexpr ImU32 kTimelineBg        = IM_COL32(0x14, 0x14, 0x14, 0xff);
@@ -50,7 +53,10 @@ constexpr ImU32 kKeyframeOutline   = IM_COL32(0x10, 0x10, 0x10, 0xff);
 constexpr ImU32 kPlayhead          = IM_COL32(0xf2, 0xa3, 0x3c, 0xff);
 constexpr ImU32 kPlayheadLabel     = IM_COL32(0x11, 0x11, 0x11, 0xff);
 constexpr ImU32 kExportRange       = withAlpha(kAccent, 0x59);
-constexpr ImU32 kTrackDisabled     = IM_COL32(0x3a, 0x3a, 0x3a, 0xff);
+// In/out markers, drawn in the ruler band the way Flashback does it.
+constexpr ImU32 kExportBracket = IM_COL32(0xf0, 0xf2, 0xf5, 0xff);
+constexpr ImU32 kExportBand    = IM_COL32(0xff, 0xaa, 0x00, 0x60);
+constexpr ImU32 kTrackDisabled = IM_COL32(0x3a, 0x3a, 0x3a, 0xff);
 
 // Cameras take a colour from this palette by creation order; the row fill uses it at low alpha.
 constexpr ImU32 kTrackPalette[] = {
@@ -120,9 +126,8 @@ namespace playback::editor::ui::metrics {
 [[nodiscard]] inline float scale() { return std::max(1.0f, font() / 14.0f); }
 
 [[nodiscard]] inline float iconButton() { return font() + 16.0f * scale(); }
-// Icons read as controls rather than glyphs, so they are drawn above body-text size. Lucide fills its
-// em box, so 1.2x already produced 25px marks next to 18px vector ones; 1.1x evens the visual weight.
-[[nodiscard]] inline float iconGlyph() { return font() * 1.1f; }
+// Above body-text size so icons read as controls; Lucide fills its em box, so the margin stays small.
+[[nodiscard]] inline float iconGlyph() { return font() * 1.22f; }
 [[nodiscard]] inline float toolbarRow() { return iconButton() + 6.0f * scale(); }
 [[nodiscard]] inline float ruler() { return font() + 8.0f * scale(); }
 [[nodiscard]] inline float statusBar() { return font() + 6.0f * scale(); }

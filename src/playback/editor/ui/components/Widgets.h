@@ -27,16 +27,17 @@ bool iconToggle(char const* id, char const* icon, char const* tooltip, bool acti
 // Centres an icon glyph on its ink box inside a square of `boxSize`.
 void drawIconCentred(ImDrawList* drawList, char const* icon, ImVec2 const& origin, float boxSize, ImU32 color);
 
-// Y offset that puts the cap height of body text on the centre line of a box, so labels sit level
-// with icons that were centred on their ink box instead of floating above them.
+// Y offset that puts the cap height of body text on a box's centre line.
 [[nodiscard]] float textOffsetInBox(float boxHeight);
 
 // Same, but centres the run's real glyph ink: CJK ideographs sit well below the Latin cap height.
 [[nodiscard]] float textOffsetInBox(float boxHeight, char const* text);
 
-// Draw Y that puts the run's ink centre on `centreY`. Prefer this over textOffsetInBox when the box
-// origin is fractional: rounding the origin and the offset separately loses up to 1.5px.
+// Draw Y putting the run's ink centre on `centreY`; prefer it when the box origin is fractional.
 [[nodiscard]] float textYForCentre(float centreY, char const* text);
+
+// Optical centre of a run drawn at `drawY`; align icons to this rather than to the row.
+[[nodiscard]] float textInkCentre(float drawY, char const* text);
 
 // Icon whose ink centre lands on `centre`, for rows whose height is not a whole number of pixels.
 void drawIconAtCentre(ImDrawList* drawList, char const* icon, ImVec2 const& centre, ImU32 color);
@@ -54,8 +55,7 @@ void itemTooltip(char const* text);
 // Same, for hit regions tested manually rather than through an ImGui item.
 void hoverTooltip(char const* text);
 
-// Label + caret drawn as a flat combo-looking chip; returns true when clicked so the caller can open a popup.
-// The chip is exactly one icon button tall so it lines up with the buttons beside it.
+// Flat combo-looking chip, exactly one icon button tall; returns true when clicked so callers can open a popup.
 bool dropdownChip(
     char const* id,
     char const* label,

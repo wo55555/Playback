@@ -223,9 +223,7 @@ bool DetailsPanel::drawWorldActor(PanelContext const& ctx) {
                 "playback.refactorEditor.details.segments"_tr(project->worldActor.segments.size()).c_str()
             );
             for (auto const& segment : project->worldActor.segments) {
-                if (ImGui::Selectable((formatTick(segment.startTick) + " - " + formatTick(segment.endTick) + "  "
-                                       + std::to_string(segment.speed) + "x")
-                                          .c_str())) {
+                if (ImGui::Selectable((formatTick(segment.startTick) + " - " + formatTick(segment.endTick)).c_str())) {
                     ctx.selection.select(state::editing::model::SelectedWorldActorSegment{segment.id});
                 }
             }
@@ -316,15 +314,6 @@ bool DetailsPanel::drawWorldActorSegment(PanelContext const& ctx) {
                 submit(std::move(action));
             }
             ImGui::EndDisabled();
-            float      speed      = segment->speed;
-            auto const speedLabel = "playback.refactorEditor.details.speed"_tr();
-            if (ImGui::SliderFloat(speedLabel.c_str(), &speed, 0.1f, 10.0f, "%.2fx")
-                && ImGui::IsItemDeactivatedAfterEdit()) {
-                EditorAction action{EditorActionType::SetWorldActorSpeed};
-                action.id    = segment->id;
-                action.speed = speed;
-                submit(std::move(action));
-            }
             if (property::actionButton("playback.refactorEditor.details.splitAtPlayhead"_tr().c_str())) {
                 EditorAction action{EditorActionType::SplitWorldActor};
                 action.tick = ctx.state.currentTick;
@@ -702,10 +691,9 @@ void DetailsPanel::drawScenePage(PanelContext const& ctx) {
             std::snprintf(
                 label,
                 sizeof(label),
-                "%s - %s   %.2gx",
+                "%s - %s",
                 formatTick(segment.startTick).c_str(),
-                formatTick(segment.endTick).c_str(),
-                static_cast<double>(segment.speed)
+                formatTick(segment.endTick).c_str()
             );
             auto const* selected = ctx.selection.getAs<state::editing::model::SelectedWorldActorSegment>();
             if (ImGui::Selectable(label, selected && selected->segmentId == segment.id)) {
