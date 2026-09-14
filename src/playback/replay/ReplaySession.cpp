@@ -1256,14 +1256,22 @@ bool ReplaySession::init(std::filesystem::path filePath) {
             getLogger().error("Replay archive does not contain {}", chunkName);
             return false;
         }
-        auto reader  = std::make_unique<ReplayReader>(*chunk);
-        auto context = reader->readSnapshotContext();
-        for (int offset : reader->readDimensionTransitionTickOffsets()) {
-            int64_t const transitionTick = chunkStartTick + static_cast<int64_t>(offset);
+        auto reader           = std::make_unique<ReplayReader>(*chunk);
+        auto context          = reader->readSnapshotContext();
+        auto recordTransition = [&](int64_t transitionTick) {
             if (transitionTick >= 0 && transitionTick <= std::max(0, mMeta.totalTicks)
                 && transitionTick <= std::numeric_limits<int>::max()) {
                 mDimensionTransitionTicks.emplace_back(static_cast<int>(transitionTick));
             }
+        };
+        // A recorded dimension change rotates the chunk and captures a forced snapshot instead of
+        // leaving a ChangeDimension packet on the timeline, so the snapshot contexts are the authority.
+        // The boundary tick is the last one still in the old dimension, matching the packet convention.
+        if (!mSnapshotContexts.empty() && mSnapshotContexts.back().dimensionId != context.dimensionId) {
+            recordTransition(chunkStartTick - 1);
+        }
+        for (int offset : reader->readDimensionTransitionTickOffsets()) {
+            recordTransition(chunkStartTick + static_cast<int64_t>(offset));
         }
         mReaders.emplace_back(std::move(reader));
         mSnapshotContexts.emplace_back(context);
