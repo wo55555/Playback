@@ -48,6 +48,7 @@ public:
     [[nodiscard]] bool isCameraPathVisible() const override { return mCameraPathVisible; }
     bool               deleteSelection() override;
     bool               addKeyframeAtPlayhead() override;
+    bool               selectCameraByIndex(std::size_t index);
 
     [[nodiscard]] bool  isInfoOverlayVisible() const override { return mViewportPanel.isInfoOverlayVisible(); }
     void                setInfoOverlayVisible(bool visible) override { mViewportPanel.setInfoOverlayVisible(visible); }

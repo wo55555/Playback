@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <ranges>
 
 namespace playback::editor::ui {
 using namespace playback::state;
@@ -138,14 +139,43 @@ void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward)
 }
 
 bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
-    auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
-    if (!selectedCamera) return false;
+    std::string cameraId = resolveKeyframeTargetCamera(ctx);
+    if (cameraId.empty()) return false;
 
     EditorAction action{EditorActionType::AddCameraKeyframe};
-    action.id   = selectedCamera->cameraId;
+    action.id   = cameraId;
     action.tick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
     ctx.submitAction(std::move(action));
+    ctx.selection.select(state::editing::model::SelectedCamera{std::move(cameraId)});
     return true;
+}
+
+// Mirrors Flashback's find-or-create camera track so the shortcut works without a prior selection.
+std::string TimelinePanel::resolveKeyframeTargetCamera(PanelContext const& ctx) const {
+    auto const project = ctx.state.project;
+    if (!project) return {};
+
+    auto const isUsable = [&](std::string const& id) {
+        return std::ranges::any_of(project->cameras, [&](auto const& camera) {
+            return camera.id == id && !camera.locked;
+        });
+    };
+
+    if (auto const* selected = ctx.selection.getAs<state::editing::model::SelectedCamera>();
+        selected && isUsable(selected->cameraId)) {
+        return selected->cameraId;
+    }
+    if (auto const* selected = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
+        selected && isUsable(selected->trackId)) {
+        return selected->trackId;
+    }
+    for (auto const& camera : project->cameras) {
+        if (camera.enabled && !camera.locked) return camera.id;
+    }
+    for (auto const& camera : project->cameras) {
+        if (!camera.locked) return camera.id;
+    }
+    return {};
 }
 
 bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
@@ -1039,7 +1069,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                                && wheelMouse.y >= layout.bodyTop && wheelMouse.y < layout.bodyBottom;
     if (allowInput && (canvasHovered || trackListHovered) && ImGui::GetIO().MouseWheel != 0.0f) {
         float const wheel = ImGui::GetIO().MouseWheel;
-        if (ImGui::GetIO().KeyShift) {
+        if (ImGui::GetIO().KeyAlt) {
             float const anchorX    = std::clamp(wheelMouse.x - layout.canvasLeft, 0.0f, layout.canvasWidth);
             float const anchorTick = scale.tickAtExact(layout.canvasLeft + anchorX);
             mZoomScale =
