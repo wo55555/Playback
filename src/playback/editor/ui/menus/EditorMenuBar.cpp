@@ -383,12 +383,22 @@ void EditorMenuBar::drawShortcutDialog() {
                 "playback.refactorEditor.shortcuts.keyframe"_tr()
             );
             shortcutRow(
+                input::KeyMap::displayString(input::EditorKeybind::AddCameraTrack),
+                "playback.refactorEditor.shortcuts.addCamera"_tr()
+            );
+            shortcutRow("1 / 2 / 3", "playback.refactorEditor.shortcuts.selectCamera"_tr());
+            shortcutRow(
                 input::KeyMap::displayString(input::EditorKeybind::DeleteSelection),
                 "playback.refactorEditor.shortcuts.delete"_tr()
             );
             shortcutRow(
                 shortcutPair(input::EditorKeybind::ZoomOutTimeline, input::EditorKeybind::ZoomInTimeline),
                 "playback.refactorEditor.shortcuts.zoom"_tr()
+            );
+            shortcutRow("Alt+Wheel", "playback.refactorEditor.shortcuts.zoomWheel"_tr());
+            shortcutRow(
+                input::KeyMap::displayString(input::EditorKeybind::ResetTimelineZoom),
+                "playback.refactorEditor.shortcuts.zoomReset"_tr()
             );
             shortcutRow(
                 shortcutPair(input::EditorKeybind::MarkExportIn, input::EditorKeybind::MarkExportOut),
@@ -408,6 +418,14 @@ void EditorMenuBar::drawShortcutDialog() {
             shortcutRow(
                 input::KeyMap::displayString(input::EditorKeybind::ToggleViewportMaximized),
                 "playback.refactorEditor.shortcuts.viewport"_tr()
+            );
+            shortcutRow(
+                shortcutPair(input::EditorKeybind::DecreaseUiScale, input::EditorKeybind::IncreaseUiScale),
+                "playback.refactorEditor.shortcuts.uiScale"_tr()
+            );
+            shortcutRow(
+                input::KeyMap::displayString(input::EditorKeybind::ResetUiScale),
+                "playback.refactorEditor.shortcuts.uiScaleReset"_tr()
             );
             ImGui::EndTable();
         }

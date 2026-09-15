@@ -42,21 +42,24 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::SeekTickRight,           "playback.editor.stepRight",        VK_RIGHT,     true,  false, false},
     {EditorKeybind::PreviousEditPoint,       "playback.editor.previousPoint",    VK_DOWN,      false, false, false},
     {EditorKeybind::NextEditPoint,           "playback.editor.nextPoint",        VK_UP,        false, false, false},
-    {EditorKeybind::DecreaseSpeed,           "playback.editor.decreaseSpeed",    VK_OEM_MINUS, false, false, false},
-    {EditorKeybind::IncreaseSpeed,           "playback.editor.increaseSpeed",    VK_OEM_PLUS,  false, false, false},
+    {EditorKeybind::DecreaseSpeed,           "playback.editor.decreaseSpeed",    'J',          false, false, false},
+    {EditorKeybind::IncreaseSpeed,           "playback.editor.increaseSpeed",    'L',          false, false, false},
     {EditorKeybind::AddKeyframe,             "playback.editor.addKeyframe",      'K',          false, false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.addCameraTrack",   'N',          true,  true,  false},
-    {EditorKeybind::NamedOnly,               "playback.editor.camera1",          '1',          false, false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.camera2",          '2',          false, false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.camera3",          '3',          false, false, false},
+    {EditorKeybind::AddCameraTrack,          "playback.editor.addCameraTrack",   'N',          true,  true,  false},
+    {EditorKeybind::SelectCamera1,           "playback.editor.camera1",          '1',          false, false, false},
+    {EditorKeybind::SelectCamera2,           "playback.editor.camera2",          '2',          false, false, false},
+    {EditorKeybind::SelectCamera3,           "playback.editor.camera3",          '3',          false, false, false},
     {EditorKeybind::MarkExportIn,            "playback.editor.setInPoint",       'I',          false, false, false},
     {EditorKeybind::MarkExportOut,           "playback.editor.setOutPoint",      'O',          false, false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.insertMarker",     'M',          false, false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.jumpPrevMarker",   VK_OEM_4,     false, false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.jumpNextMarker",   VK_OEM_6,     false, false, false},
-    {EditorKeybind::ZoomInTimeline,          "playback.editor.zoomInTimeline",   VK_OEM_PLUS,  true,  false, false},
-    {EditorKeybind::ZoomOutTimeline,         "playback.editor.zoomOutTimeline",  VK_OEM_MINUS, true,  false, false},
-    {EditorKeybind::ResetTimelineZoom,       "playback.editor.resetZoom",        '0',          true,  false, false},
+    {EditorKeybind::ZoomInTimeline,          "playback.editor.zoomInTimeline",   VK_OEM_PLUS,  false, false, false},
+    {EditorKeybind::ZoomOutTimeline,         "playback.editor.zoomOutTimeline",  VK_OEM_MINUS, false, false, false},
+    {EditorKeybind::ResetTimelineZoom,       "playback.editor.resetZoom",        VK_OEM_5,     false, false, false},
+    {EditorKeybind::IncreaseUiScale,         "playback.editor.increaseUiScale",  VK_OEM_PLUS,  true,  true,  false},
+    {EditorKeybind::DecreaseUiScale,         "playback.editor.decreaseUiScale",  VK_OEM_MINUS, true,  true,  false},
+    {EditorKeybind::ResetUiScale,            "playback.editor.resetUiScale",     '0',          true,  true,  false},
     {EditorKeybind::ToggleViewportMaximized, "playback.editor.maximizeViewport", 'F',          true,  true,  false},
     {EditorKeybind::NamedOnly,               "playback.editor.toggleUI",         VK_F1,        false, false, false},
 };
@@ -99,6 +102,8 @@ constexpr KeyBinding kBindings[] = {
         return ImGuiKey_Minus;
     case VK_OEM_4:
         return ImGuiKey_LeftBracket;
+    case VK_OEM_5:
+        return ImGuiKey_Backslash;
     case VK_OEM_6:
         return ImGuiKey_RightBracket;
     case VK_F1:
@@ -139,6 +144,8 @@ constexpr KeyBinding kBindings[] = {
         return "-";
     case VK_OEM_4:
         return "[";
+    case VK_OEM_5:
+        return "\\";
     case VK_OEM_6:
         return "]";
     case VK_F1:

@@ -48,7 +48,8 @@ private:
         float  canvasWidth{};
     };
 
-    void submitSeek(PanelContext const& ctx, int tick);
+    void                      submitSeek(PanelContext const& ctx, int tick);
+    [[nodiscard]] std::string resolveKeyframeTargetCamera(PanelContext const& ctx) const;
 
     void drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick, bool allowInput);
     void drawTrackHeaders(PanelContext const& ctx, Layout const& layout, bool allowInput);
