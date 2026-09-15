@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `Ctrl+Shift+N` to create a camera track and `1`, `2`, `3` to switch to the first three cameras, which also drives the viewport preview.
+- Added `Ctrl+Shift+-`, `Ctrl+Shift+=`, and `Ctrl+Shift+0` to step and reset the interface scale.
+- Added `Alt+Wheel` to zoom the timeline around the cursor.
+- Added a keyboard shortcut reference to the getting-started guide.
+
+### Changed
+
+- Moved timeline zoom to `-` and `=`, zoom-to-fit to `\`, and playback speed to `J` and `L`, following Premiere Pro conventions. `Shift+Wheel` no longer zooms.
+- Made `K` add a keyframe to the first usable camera track when nothing is selected instead of doing nothing.
+
 ## [0.3.1-mc26.20] - 2026-09-14
 
 ### Added
