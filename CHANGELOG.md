@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Moved timeline zoom to `-` and `=`, zoom-to-fit to `\`, and playback speed to `J` and `L`, following Premiere Pro conventions. `Shift+Wheel` no longer zooms.
+- Moved timeline zoom to `-` and `=`, zoom-to-fit to `\`, and playback speed to `J` and `L`, matching common video editors. `Shift+Wheel` no longer zooms.
 - Made `K` add a keyframe to the first usable camera track when nothing is selected instead of doing nothing.
 
 ## [0.3.1-mc26.10] - 2026-09-14
