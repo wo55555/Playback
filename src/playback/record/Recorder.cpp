@@ -49,7 +49,11 @@
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/TakeItemActorPacket.h"
 #include "mc/network/packet/UpdateAttributesPacket.h"
+#include "mc/network/packet/UpdateBlockPacket.h"
+#include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdatePlayerGameTypePacket.h"
+#include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/network/packet/UpdateSubChunkNetworkBlockInfo.h"
 #include "mc/util/VarIntDataOutput.h"
 #include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
@@ -58,6 +62,7 @@
 #include "mc/world/actor/state/PropertyComponent.h"
 #include "mc/world/effect/MobEffectInstance.h"
 #include "mc/world/item/SaveContextFactory.h"
+#include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/block/BedrockBlockNames.h"
 #include "mc/world/level/block/Block.h"
@@ -138,6 +143,51 @@ bool remapUniqueId(ActorUniqueID& id, ActorUniqueID source, ActorUniqueID target
     if (id.rawID != source.rawID) return false;
     id = target;
     return true;
+}
+
+bool packetCarriesBlockNetworkIds(MinecraftPacketIds packetId) {
+    switch (packetId) {
+    case MinecraftPacketIds::UpdateBlock:
+    case MinecraftPacketIds::UpdateBlockSynced:
+    case MinecraftPacketIds::UpdateSubChunkBlocks:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Sequential palette indices only mean something on the recording server, so store the portable hash instead.
+bool portableBlockNetworkId(uint& runtimeId, BlockPalette const& palette) {
+    auto const& sequentialBlocks = *palette.mBlockFromNetworkId;
+    if (runtimeId >= sequentialBlocks.size()) return false;
+
+    auto const* block = sequentialBlocks[runtimeId];
+    if (!block || block->mSerializationIdHashForNetwork == 0) return false;
+    if (runtimeId == block->mSerializationIdHashForNetwork) return false;
+
+    runtimeId = block->mSerializationIdHashForNetwork;
+    return true;
+}
+
+bool makeBlockNetworkIdsPortable(Packet& packet, BlockPalette const& palette) {
+    switch (packet.getId()) {
+    case MinecraftPacketIds::UpdateBlock:
+        return portableBlockNetworkId(static_cast<UpdateBlockPacket&>(packet).mRuntimeId, palette);
+    case MinecraftPacketIds::UpdateBlockSynced:
+        return portableBlockNetworkId(static_cast<UpdateBlockSyncedPacket&>(packet).mRuntimeId, palette);
+    case MinecraftPacketIds::UpdateSubChunkBlocks: {
+        auto& changed = *static_cast<UpdateSubChunkBlocksPacket&>(packet).mBlocksChanged;
+        bool  updated = false;
+        for (auto* blocks : {&*changed.mStandards, &*changed.mExtras}) {
+            for (auto& info : *blocks) {
+                updated |= portableBlockNetworkId(info.mRuntimeId, palette);
+            }
+        }
+        return updated;
+    }
+    default:
+        return false;
+    }
 }
 
 bool packetMayReferenceRecordedPlayer(MinecraftPacketIds packetId) {
@@ -1800,6 +1850,22 @@ void Recorder::recordGamePacket(Packet const& packet) {
 
         auto  clientInstance = ll::service::getClientInstance();
         auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+
+        if (packetCarriesBlockNetworkIds(packetId)) {
+            auto level = ll::service::getMultiPlayerLevel();
+            if (level && !level->blockNetworkIdsAreHashes()) {
+                auto                 portablePacket = MinecraftPackets::createPacket(packetId);
+                ReadOnlyBinaryStream input(stream.mBuffer, false);
+                if (!portablePacket || !portablePacket->read(input) || !input.ensureReadCompleted()) {
+                    getLogger().warn("Unable to decode {} for block network ID normalization", packet.getName());
+                } else if (makeBlockNetworkIdsPortable(*portablePacket, level->getBlockPalette())) {
+                    PlaybackBuffer portableStream;
+                    portablePacket->write(portableStream);
+                    stream.mBuffer = std::move(portableStream.mBuffer);
+                }
+            }
+        }
+
         if (localPlayer && mRecordedLocalPlayerId && mRecordedLocalPlayerRuntimeId && mRecordedLocalPlayerUuid
             && packetMayReferenceRecordedPlayer(packetId)) {
             auto                 remappedPacket = MinecraftPackets::createPacket(packetId);
