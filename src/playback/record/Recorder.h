@@ -125,12 +125,14 @@ private:
     bool mOpenChunkHasData              = false;
     bool mCurrentChunkForcePlaySnapshot = false;
     bool mThumbnailCaptureRequested     = false;
+    bool mPendingDimensionSnapshot      = false;
 
 private:
     static constexpr int RECORD_CHUNK_TICKS      = 20 * 60 * 5;
     static constexpr int THUMBNAIL_CAPTURE_TICKS = 20;
 
-    [[nodiscard]] SnapshotCaptureResult captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait);
+    [[nodiscard]] SnapshotCaptureResult
+    captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait, std::chrono::milliseconds barrierTimeout);
 
     [[nodiscard]] bool commitChunkSnapshot(
         std::chrono::steady_clock::duration captureElapsed,
