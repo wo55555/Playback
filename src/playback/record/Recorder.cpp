@@ -135,6 +135,11 @@ namespace {
 constexpr ActorUniqueID  RecordedPlayerUniqueId{std::numeric_limits<int64_t>::max() - 1024};
 constexpr ActorRuntimeID RecordedPlayerRuntimeId{RecordedPlayerRuntimeIdValue};
 
+// A dimension change floods the engine task groups, and a missed snapshot there cancels the whole recording.
+constexpr auto DimensionChangeBarrierTimeout = std::chrono::milliseconds{15000};
+constexpr auto ChunkRotationBarrierTimeout   = std::chrono::milliseconds{8000};
+constexpr auto InitialSnapshotBarrierTimeout = std::chrono::milliseconds{2000};
+
 struct NetworkPacketFilter {
     [[nodiscard]] static constexpr bool shouldFilter(MinecraftPacketIds packetId) {
         switch (packetId) {
@@ -859,6 +864,7 @@ void Recorder::resetStateForNewRecording() {
     mCurrentChunkForcePlaySnapshot = false;
     mThumbnailCaptureRequested     = false;
     mThumbnailRequestTick          = 0;
+    mPendingDimensionSnapshot      = false;
     mNeedsInitialSnapshot          = true;
     mDimensionTransitionPending    = false;
     mDimensionTransitionTargetId   = 0;
@@ -945,27 +951,11 @@ void Recorder::endTick(bool close) {
         }
         if (close) return;
 
-        auto                                captureStart = std::chrono::steady_clock::now();
-        std::chrono::steady_clock::duration barrierWait{};
-        auto                                captureResult = captureChunkSnapshot(barrierWait);
-        auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
+        // The new dimension has no columns yet, so defer the snapshot to the retrying initial-snapshot path.
+        mRecordingDimension       = currentDimensionId;
+        mNeedsInitialSnapshot     = true;
+        mPendingDimensionSnapshot = true;
 
-        if (captureResult != SnapshotCaptureResult::Success) {
-            getLogger().error(
-                "New dimension replay snapshot capture failed after {:.3f} ms: {}",
-                std::chrono::duration<double, std::milli>(elapsed).count(),
-                mSnapshotFailure
-            );
-            failRecording(
-                mSnapshotFailure.empty() ? "Unable to prepare the new dimension replay snapshot" : mSnapshotFailure
-            );
-            return;
-        }
-
-        mCurrentChunkForcePlaySnapshot = true;
-        if (!writeSnapshot() || !commitChunkSnapshot(elapsed, barrierWait)) {
-            return;
-        }
         bool const reachedRequestedDimension =
             !mDimensionTransitionPending.load(std::memory_order_acquire)
             || currentDimensionId == mDimensionTransitionTargetId.load(std::memory_order_acquire);
@@ -982,8 +972,8 @@ void Recorder::endTick(bool close) {
     if (rotateChunk) {
         auto                                captureStart = std::chrono::steady_clock::now();
         std::chrono::steady_clock::duration barrierWait{};
-        auto                                captureResult = captureChunkSnapshot(barrierWait);
-        auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
+        auto captureResult = captureChunkSnapshot(barrierWait, ChunkRotationBarrierTimeout);
+        auto elapsed       = std::chrono::steady_clock::now() - captureStart;
 
         if (captureResult != SnapshotCaptureResult::Success) {
             getLogger().error(
@@ -1022,7 +1012,10 @@ void Recorder::resetChunkSnapshot() {
     mSnapshotFailure.clear();
 }
 
-Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait) {
+Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
+    std::chrono::steady_clock::duration& barrierWait,
+    std::chrono::milliseconds            barrierTimeout
+) {
     resetChunkSnapshot();
 
     auto  clientInstance = ll::service::getClientInstance();
@@ -1034,38 +1027,50 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
 
     auto const dimension = localPlayer->getDimensionId();
 
-    auto mutationGuard = ChunkMutationBarrier::capture();
-    barrierWait        = mutationGuard.waited();
-    if (!mutationGuard) {
-        mSnapshotFailure = "Unable to acquire the chunk mutation barrier";
-        return SnapshotCaptureResult::NotReady;
-    }
-
-    auto* guardedPlayer = clientInstance->getLocalPlayer();
-    if (guardedPlayer != localPlayer || !guardedPlayer || guardedPlayer->getDimensionId() != dimension) {
-        mSnapshotFailure = "The player or dimension changed while acquiring the chunk mutation barrier";
-        return SnapshotCaptureResult::NotReady;
-    }
-
-    auto& dimensionObject = guardedPlayer->getDimension();
-
     struct SnapshotColumn {
         ChunkPos                    pos;
         std::shared_ptr<LevelChunk> chunk;
     };
 
     std::vector<SnapshotColumn> columns;
-    auto const&                 storage = dimensionObject.getChunkSource().getStorage();
-    columns.reserve(storage.size());
+    Dimension*                  capturedDimension{};
 
-    for (auto const& [pos, weakChunk] : storage) {
-        auto chunk = weakChunk.lock();
-        if (!chunk || chunk->mIsEmptyClientChunk
-            || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
-            continue;
+    // The barrier only has to cover the storage walk; holding shared_ptrs keeps the columns alive for serialization.
+    {
+        auto mutationGuard = ChunkMutationBarrier::capture(barrierTimeout);
+        barrierWait        = mutationGuard.waited();
+        if (!mutationGuard) {
+            mSnapshotFailure = "Unable to acquire the chunk mutation barrier";
+            return SnapshotCaptureResult::NotReady;
         }
-        columns.push_back(SnapshotColumn{pos, std::move(chunk)});
+
+        auto* guardedPlayer = clientInstance->getLocalPlayer();
+        if (guardedPlayer != localPlayer || !guardedPlayer || guardedPlayer->getDimensionId() != dimension) {
+            mSnapshotFailure = "The player or dimension changed while acquiring the chunk mutation barrier";
+            return SnapshotCaptureResult::NotReady;
+        }
+
+        capturedDimension = &guardedPlayer->getDimension();
+
+        auto const& storage = capturedDimension->getChunkSource().getStorage();
+        columns.reserve(storage.size());
+        for (auto const& [pos, weakChunk] : storage) {
+            auto chunk = weakChunk.lock();
+            if (!chunk || chunk->mIsEmptyClientChunk
+                || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+                continue;
+            }
+            columns.push_back(SnapshotColumn{pos, std::move(chunk)});
+        }
     }
+
+    // A dimension change arrives before its columns load; retry instead of storing a snapshot with no terrain.
+    if (columns.empty()) {
+        mSnapshotFailure = "No loaded columns are available for a chunk snapshot yet";
+        return SnapshotCaptureResult::NotReady;
+    }
+
+    auto& dimensionObject = *capturedDimension;
 
     auto const& position = localPlayer->getPosition();
     auto const& rotation = localPlayer->getRotation();
@@ -1627,8 +1632,9 @@ bool Recorder::writeInitialSnapshotIfNeeded() {
 
     auto                                captureStart = std::chrono::steady_clock::now();
     std::chrono::steady_clock::duration barrierWait{};
-    auto                                captureResult = captureChunkSnapshot(barrierWait);
-    auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
+    // Retried every tick, so a short budget is fine here.
+    auto captureResult = captureChunkSnapshot(barrierWait, InitialSnapshotBarrierTimeout);
+    auto elapsed       = std::chrono::steady_clock::now() - captureStart;
 
     if (captureResult == SnapshotCaptureResult::NotReady) return false;
     if (captureResult == SnapshotCaptureResult::Failed) {
@@ -1641,6 +1647,11 @@ bool Recorder::writeInitialSnapshotIfNeeded() {
             mSnapshotFailure.empty() ? "Unable to prepare the initial replay chunk snapshot" : mSnapshotFailure
         );
         return false;
+    }
+
+    if (mPendingDimensionSnapshot) {
+        mCurrentChunkForcePlaySnapshot = true;
+        mPendingDimensionSnapshot      = false;
     }
 
     if (!writeSnapshot()) return false;
@@ -2596,6 +2607,7 @@ void Recorder::abortRecording() {
 
     mState                       = State::Idle;
     mNeedsInitialSnapshot        = true;
+    mPendingDimensionSnapshot    = false;
     mDimensionTransitionPending  = false;
     mDimensionTransitionTargetId = 0;
     resetChunkSnapshot();
