@@ -34,6 +34,7 @@
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
+#include "mc/network/packet/SetActorDataPacket.h"
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
@@ -81,6 +82,7 @@ struct NetworkHookState {
     bool playerList{};
     bool playerSkin{};
     bool removeActor{};
+    bool setActorData{};
     bool takeItemActor{};
     bool actorEvent{};
     bool levelEvent{};
@@ -104,13 +106,13 @@ struct NetworkHookState {
     }
 
     [[nodiscard]] bool fastPathHandlersInstalled() const {
-        return removeActor && takeItemActor && actorEvent && levelEvent && updateBlock && updateBlockSynced
-            && updateSubChunkBlocks && addPlayer && playerList && playerSkin;
+        return removeActor && setActorData && takeItemActor && actorEvent && levelEvent && updateBlock
+            && updateBlockSynced && updateSubChunkBlocks && addPlayer && playerList && playerSkin;
     }
 
     [[nodiscard]] bool fastPathHandlersRemoved() const {
-        return !removeActor && !takeItemActor && !actorEvent && !levelEvent && !updateBlock && !updateBlockSynced
-            && !updateSubChunkBlocks && !addPlayer && !playerList && !playerSkin;
+        return !removeActor && !setActorData && !takeItemActor && !actorEvent && !levelEvent && !updateBlock
+            && !updateBlockSynced && !updateSubChunkBlocks && !addPlayer && !playerList && !playerSkin;
     }
 
     [[nodiscard]] bool resourceHandlersInstalled() const {
@@ -296,6 +298,20 @@ PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(
 
 #undef PLAYBACK_DEFINE_SHARED_CLIENT_HANDLER_HOOK
 #undef PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK
+
+// Entity metadata (name tags, flags, scale) only reaches the replay through this handler.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackSetActorDataHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&  source,
+    SetActorDataPacket const& packet
+) {
+    Recorder::getInstance().recordGamePacket(packet);
+    origin(source, packet);
+}
 
 LL_TYPE_INSTANCE_HOOK(
     PlaybackLevelChunkHook,
@@ -638,6 +654,7 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackPlayerListHook>(state.playerList)
             && installNetworkHook<PlaybackPlayerSkinHook>(state.playerSkin)
             && installNetworkHook<PlaybackRemoveActorHook>(state.removeActor)
+            && installNetworkHook<PlaybackSetActorDataHook>(state.setActorData)
             && installNetworkHook<PlaybackTakeItemActorHook>(state.takeItemActor)
             && installNetworkHook<PlaybackActorEventHook>(state.actorEvent)
             && installNetworkHook<PlaybackLevelEventHook>(state.levelEvent)
@@ -666,6 +683,7 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackLevelEventHook>(state.levelEvent);
         removeNetworkHook<PlaybackActorEventHook>(state.actorEvent);
         removeNetworkHook<PlaybackTakeItemActorHook>(state.takeItemActor);
+        removeNetworkHook<PlaybackSetActorDataHook>(state.setActorData);
         removeNetworkHook<PlaybackRemoveActorHook>(state.removeActor);
         removeNetworkHook<PlaybackPlayerSkinHook>(state.playerSkin);
         removeNetworkHook<PlaybackPlayerListHook>(state.playerList);
