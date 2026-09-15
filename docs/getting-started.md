@@ -107,29 +107,29 @@ Camera interpolation is automatically split at every recorded dimension change. 
 
 **Help > Keyboard Shortcuts** lists the current bindings in the editor.
 
-| Shortcut                        | Action                              |
-| ------------------------------- | ----------------------------------- |
-| `Space`                         | Play / pause                        |
-| `Home` / `End`                  | Jump to start / end                 |
-| `Left` / `Right`                | Seek 1 second                       |
-| `Ctrl+Left` / `Ctrl+Right`      | Seek 1 tick                         |
-| `Up` / `Down`                   | Next / previous edit point          |
-| `J` / `L`                       | Slower / faster playback            |
-| `-` / `=`                       | Zoom timeline out / in              |
-| `Alt+Wheel`                     | Zoom timeline around the cursor     |
-| `\`                             | Zoom timeline to fit                |
-| `K`                             | Add a camera keyframe               |
-| `Ctrl+Shift+N`                  | Add a camera track                  |
-| `1` / `2` / `3`                 | Switch to camera 1 / 2 / 3          |
-| `I` / `O`                       | Mark the export in / out point      |
-| `Delete` / `Backspace`          | Delete the selected item            |
-| `Ctrl+Z` / `Ctrl+Y`             | Undo / redo                         |
-| `Ctrl+S`                        | Save the project                    |
-| `Ctrl+E`                        | Open the export settings            |
-| `Ctrl+Shift+F`                  | Maximize / restore the viewport     |
-| `Ctrl+Shift+-` / `Ctrl+Shift+=` | Smaller / larger interface          |
-| `Ctrl+Shift+0`                  | Reset the interface scale           |
-| `Esc` (hold 0.8 s)              | Exit the replay and save            |
+| Shortcut                        | Action                          |
+| ------------------------------- | ------------------------------- |
+| `Space`                         | Play / pause                    |
+| `Home` / `End`                  | Jump to start / end             |
+| `Left` / `Right`                | Seek 1 second                   |
+| `Ctrl+Left` / `Ctrl+Right`      | Seek 1 tick                     |
+| `Up` / `Down`                   | Next / previous edit point      |
+| `J` / `L`                       | Slower / faster playback        |
+| `-` / `=`                       | Zoom timeline out / in          |
+| `Alt+Wheel`                     | Zoom timeline around the cursor |
+| `\`                             | Zoom timeline to fit            |
+| `K`                             | Add a camera keyframe           |
+| `Ctrl+Shift+N`                  | Add a camera track              |
+| `1` / `2` / `3`                 | Switch to camera 1 / 2 / 3      |
+| `I` / `O`                       | Mark the export in / out point  |
+| `Delete` / `Backspace`          | Delete the selected item        |
+| `Ctrl+Z` / `Ctrl+Y`             | Undo / redo                     |
+| `Ctrl+S`                        | Save the project                |
+| `Ctrl+E`                        | Open the export settings        |
+| `Ctrl+Shift+F`                  | Maximize / restore the viewport |
+| `Ctrl+Shift+-` / `Ctrl+Shift+=` | Smaller / larger interface      |
+| `Ctrl+Shift+0`                  | Reset the interface scale       |
+| `Esc` (hold 0.8 s)              | Exit the replay and save        |
 
 Keyboard input belongs to the editor while it is open. Hold the left mouse button over the game viewport to drive the observer camera; shortcuts pause while it is held.
 
