@@ -105,7 +105,7 @@ Camera interpolation is automatically split at every recorded dimension change. 
 
 ## Keyboard Shortcuts
 
-Shortcuts largely follow Premiere Pro conventions. **Help > Keyboard Shortcuts** lists the current bindings in the editor.
+**Help > Keyboard Shortcuts** lists the current bindings in the editor.
 
 | Shortcut                        | Action                              |
 | ------------------------------- | ----------------------------------- |
