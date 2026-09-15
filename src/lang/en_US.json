@@ -290,11 +290,17 @@
                 "undoRedo": "Undo / Redo",
                 "saveProject": "Save project",
                 "keyframe": "Add camera keyframe",
+                "addCamera": "Add camera track",
+                "selectCamera": "Switch to camera 1 / 2 / 3",
                 "zoom": "Zoom timeline",
+                "zoomWheel": "Zoom timeline at cursor",
+                "zoomReset": "Zoom timeline to fit",
                 "exportRange": "Mark export in / out point",
                 "delete": "Delete selected item",
                 "export": "Open export settings",
                 "viewport": "Maximize / restore viewport",
+                "uiScale": "Smaller / larger interface",
+                "uiScaleReset": "Reset interface scale",
                 "close": "Close"
             },
             "timeline": {

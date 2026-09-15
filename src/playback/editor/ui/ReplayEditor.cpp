@@ -209,6 +209,19 @@ bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(fra
 
 bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(frameContext()); }
 
+bool ReplayEditor::selectCameraByIndex(std::size_t index) {
+    auto const project = state().project;
+    if (!project || index >= project->cameras.size()) return false;
+
+    auto const& camera = project->cameras[index];
+    mSelection.select(state::editing::model::SelectedCamera{camera.id});
+    // Matches the viewport dropdown: selecting a camera also previews through it.
+    playback::state::EditorAction action{playback::state::EditorActionType::SetPreviewCamera};
+    action.id = camera.id;
+    submitAction(std::move(action));
+    return true;
+}
+
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
     if (!state.editorVisible && !exportActive) {
@@ -311,6 +324,22 @@ void ReplayEditor::handleKeyboardShortcuts() {
         (void)addKeyframeAtPlayhead();
         return;
     }
+    if (input::KeyMap::pressed(EditorKeybind::AddCameraTrack)) {
+        submitAction({playback::state::EditorActionType::AddFreeCamera});
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SelectCamera1)) {
+        (void)selectCameraByIndex(0);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SelectCamera2)) {
+        (void)selectCameraByIndex(1);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SelectCamera3)) {
+        (void)selectCameraByIndex(2);
+        return;
+    }
     if (input::KeyMap::pressed(EditorKeybind::JumpStart)) {
         seekTo(0);
         return;
@@ -353,6 +382,18 @@ void ReplayEditor::handleKeyboardShortcuts() {
     }
     if (input::KeyMap::pressed(EditorKeybind::ResetTimelineZoom)) {
         mTimelinePanel.resetZoom();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::IncreaseUiScale)) {
+        setUiScaleTier(steppedUiScaleTier(mUiScaleTier, 1, ImGui::GetIO().DisplaySize.y));
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::DecreaseUiScale)) {
+        setUiScaleTier(steppedUiScaleTier(mUiScaleTier, -1, ImGui::GetIO().DisplaySize.y));
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ResetUiScale)) {
+        setUiScaleTier(UiScaleTier::Auto);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::TogglePlayback)) {

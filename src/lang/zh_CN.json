@@ -290,11 +290,17 @@
                 "undoRedo": "撤销 / 重做",
                 "saveProject": "保存项目",
                 "keyframe": "添加相机关键帧",
+                "addCamera": "新建相机轨",
+                "selectCamera": "切换到相机 1 / 2 / 3",
                 "zoom": "缩放时间轴",
+                "zoomWheel": "以光标为锚缩放时间轴",
+                "zoomReset": "缩放时间轴至全长",
                 "exportRange": "标记导出头 / 尾",
                 "delete": "删除选中项",
                 "export": "打开导出设置",
                 "viewport": "最大化 / 还原视口",
+                "uiScale": "缩小 / 放大界面",
+                "uiScaleReset": "重置界面缩放",
                 "close": "关闭"
             },
             "timeline": {

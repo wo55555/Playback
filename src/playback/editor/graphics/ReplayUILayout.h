@@ -60,6 +60,17 @@ enum class UiScaleTier : uint8_t { Auto = 0, Small, Medium, Large, Huge };
     return uiScaleTierFactor(tier == UiScaleTier::Auto ? resolveAutoTier(displayHeight) : tier);
 }
 
+// Auto resolves to its concrete tier first, so stepping from Auto moves relative to what is on screen.
+[[nodiscard]] constexpr UiScaleTier steppedUiScaleTier(UiScaleTier tier, int delta, float displayHeight) {
+    auto const concrete = tier == UiScaleTier::Auto ? resolveAutoTier(displayHeight) : tier;
+    int const  stepped  = std::clamp(
+        static_cast<int>(concrete) + delta,
+        static_cast<int>(UiScaleTier::Small),
+        static_cast<int>(UiScaleTier::Huge)
+    );
+    return static_cast<UiScaleTier>(stepped);
+}
+
 // Set by the editor from persisted preferences; read by whichever backend drives the frame.
 [[nodiscard]] UiScaleTier currentUiScaleTier() noexcept;
 void                      setCurrentUiScaleTier(UiScaleTier tier) noexcept;
