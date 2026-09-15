@@ -179,6 +179,7 @@ private:
     bool mOpenChunkHasData              = false;
     bool mCurrentChunkForcePlaySnapshot = false;
     bool mThumbnailCaptureRequested     = false;
+    bool mPendingDimensionSnapshot      = false;
 
     std::filesystem::path mPendingRecordPath;
     std::string           mPendingRecordingName;
@@ -194,7 +195,8 @@ private:
     // The armed capture takes the next presented frame; this leaves room for slow frames.
     static constexpr int THUMBNAIL_SETTLE_TICKS = 10;
 
-    [[nodiscard]] SnapshotCaptureResult captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait);
+    [[nodiscard]] SnapshotCaptureResult
+    captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait, std::chrono::milliseconds barrierTimeout);
 
     [[nodiscard]] bool commitChunkSnapshot(
         std::chrono::steady_clock::duration captureElapsed,
