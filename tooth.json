@@ -2,7 +2,7 @@
   "format_version": 3,
   "format_uuid": "289f771f-2c9a-4d73-9f3f-8492495a924d",
   "tooth": "github.com/wo55555/Playback",
-  "version": "0.3.1-mc26.20",
+  "version": "0.3.1-mc26.40",
   "info": {
     "name": "Playback",
     "description": "Open-source Minecraft Bedrock replay mod with recording, cinematic camera keyframes, and experimental video export.",
@@ -22,7 +22,7 @@
       "label": "client",
       "platform": "win-x64",
       "dependencies": {
-        "github.com/LiteLDev/LeviLamina#client": "26.20.*"
+        "github.com/LiteLDev/LeviLamina#client": ">=26.40.5 <26.50.0"
       },
       "assets": [
         {

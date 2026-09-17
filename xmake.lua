@@ -38,7 +38,7 @@ option("target_type")
     set_values("client")
 option_end()
 
-add_requires("levilamina e34e24253f8b64925e1a426c673ace4410958123", {configs = {target_type = get_config("target_type")}})
+add_requires("levilamina 26.40.*", {configs = {target_type = get_config("target_type")}})
 
 add_requires("levibuildscript")
 
