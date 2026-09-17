@@ -55,6 +55,7 @@
 #include "mc/network/packet/PlayerActionPacket.h"
 #include "mc/network/packet/PlayerActionType.h"
 #include "mc/network/packet/PlayerListPacket.h"
+#include "mc/network/packet/PlayerListPacketType.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/RemoveObjectivePacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
@@ -134,6 +135,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace playback::replay {
 using namespace playback::action;
@@ -3349,10 +3351,21 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     if (packetId == MinecraftPacketIds::PlayerList) {
         auto& playerList = static_cast<PlayerListPacket&>(*packet);
-        for (auto& entry : *playerList.mEntries) {
-            auto& skinOwner = entry.mSkin->mSkinImpl;
-            if (!skinOwner) return false;
-            skinOwner->mObject.mIsPrimaryUser = false;
+        if (playerList.mAction == PlayerListPacketType::Add) {
+            auto& entries = *playerList.mEntries;
+            // Servers may withhold a player's skin; drop only that entry so the rest of the list still spawns.
+            auto removed = std::erase_if(entries, [](PlayerListEntry const& entry) {
+                if (entry.mSkin->mSkinImpl) return false;
+                getLogger().debug("Skipping replay player-list entry '{}' without skin data", *entry.mName);
+                return true;
+            });
+            if (entries.empty()) {
+                if (removed != 0) getLogger().warn("Skipping a replay player-list packet with no usable entries");
+                return true;
+            }
+            for (auto& entry : entries) {
+                entry.mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
+            }
         }
     }
 
