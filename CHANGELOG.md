@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Moved timeline zoom to `-` and `=`, zoom-to-fit to `\`, and playback speed to `J` and `L`, matching common video editors. `Shift+Wheel` no longer zooms.
 - Made `K` add a keyframe to the first usable camera track when nothing is selected instead of doing nothing.
 
+### Fixed
+
+- Fixed entities jittering during preview playback. Recorded poses are now interpolated on preview frames as well as during export, and are sampled one tick behind the camera so the pose history is actually interpolated instead of snapping to its end.
+- Fixed one missing or incomplete entity cancelling pose interpolation for the whole frame, and left passenger positions to their vehicle so riders no longer fight the mount.
+- Fixed camera-path overlays being sampled across dimension boundaries, which spent work on points that were discarded at draw time.
+- Fixed a plain click on a timeline keyframe nudging it; any horizontal movement is now required before a drag begins, so a click only seeks.
+
 ## [0.3.1-mc26.10] - 2026-09-14
 
 ### Added
