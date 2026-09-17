@@ -183,7 +183,8 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             if (!stateVector || !renderPosition || !actorRotation) continue;
 
             // A passenger is positioned by its vehicle, so only its rotation may be interpolated.
-            bool const positioned = !target.actor->isRiding();
+            // 26.40 dropped the argument-less isRiding overload; any vehicle counts here.
+            bool const positioned = target.actor->getVehicle() == nullptr;
             auto const sampled    = samplePose(history->second, sample);
             state->actors.emplace_back(
                 ScopedReplayEntityPose::State::ActorState{
