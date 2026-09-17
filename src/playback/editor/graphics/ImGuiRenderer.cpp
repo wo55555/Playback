@@ -107,6 +107,51 @@ uint64_t getSwapChainArea(IDXGISwapChain* swapChain) {
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
+// Text + merged icon font. Rasterised once at kBaseFontSize; imgui 1.92 re-rasterises on demand when
+// style.FontScaleMain changes, so scaling the editor does not blur glyphs.
+void loadReplayUIFonts() {
+    auto& io = ImGui::GetIO();
+
+    std::array<wchar_t, MAX_PATH> windowsDirectory{};
+    auto const                    windowsDirectoryLength =
+        GetWindowsDirectoryW(windowsDirectory.data(), static_cast<UINT>(windowsDirectory.size()));
+    std::filesystem::path textPath;
+    if (windowsDirectoryLength > 0 && windowsDirectoryLength < static_cast<UINT>(windowsDirectory.size())) {
+        textPath = std::filesystem::path(windowsDirectory.data()) / "Fonts" / "msyh.ttc";
+    }
+    auto const textPathString = textPath.string();
+
+    ImFont* font = textPathString.empty() ? nullptr
+                                          : io.Fonts->AddFontFromFileTTF(
+                                                textPathString.c_str(),
+                                                ui::kBaseFontSize,
+                                                nullptr,
+                                                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+                                            );
+    if (font) io.FontDefault = font;
+    else io.Fonts->AddFontDefault();
+
+    ImFontConfig cfg;
+    cfg.MergeMode = true;
+    // Lucide glyphs sit above the text baseline; this aligns them for inline "icon + label" strings.
+    cfg.GlyphOffset.y = 3.0f;
+    // Monospacing the icons keeps inline label rows aligned regardless of which glyph is used.
+    cfg.GlyphMinAdvanceX = ui::kBaseFontSize;
+    cfg.GlyphMaxAdvanceX = ui::kBaseFontSize;
+    static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
+    auto const           iconPath = Playback::getInstance().getSelf().getModDir() / "fonts" / "lucide.ttf";
+    if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), ui::kBaseFontSize, &cfg, iconRange)) {
+        getLogger().warn("Unable to load replay icon font from {}", iconPath);
+    }
+}
+
+// Applied every frame: FontSizeBase stays at the rasterised size and FontScaleMain carries the tier.
+void applyReplayUIScale(float displayHeight) {
+    auto& style         = ImGui::GetStyle();
+    style.FontSizeBase  = ui::kBaseFontSize;
+    style.FontScaleMain = ui::calculateReplayUIScale(ui::currentUiScaleTier(), displayHeight);
+}
+
 constexpr auto SwapChainReplacementDelay = std::chrono::milliseconds(500);
 
 bool waitForFence(UINT64 val, ComPtr<ID3D12Fence> const& fence, HANDLE event) {
@@ -272,32 +317,7 @@ struct ImGuiRenderer::Impl {
         io.IniFilename         = nullptr;
         io.LogFilename         = nullptr;
         io.BackendPlatformName = "playback_d3d11_overlay";
-        std::array<wchar_t, MAX_PATH> windowsDirectory{};
-        auto const                    windowsDirectoryLength =
-            GetWindowsDirectoryW(windowsDirectory.data(), static_cast<UINT>(windowsDirectory.size()));
-        std::filesystem::path fontPath;
-        if (windowsDirectoryLength > 0 && windowsDirectoryLength < static_cast<UINT>(windowsDirectory.size())) {
-            fontPath = std::filesystem::path(windowsDirectory.data()) / "Fonts" / "msyh.ttc";
-        }
-        auto const fontPathString = fontPath.string();
-        ImFont*    font           = fontPathString.empty() ? nullptr
-                                                           : io.Fonts->AddFontFromFileTTF(
-                                                    fontPathString.c_str(),
-                                                    14.0f,
-                                                    nullptr,
-                                                    io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-                                                );
-        if (font) io.FontDefault = font;
-        else io.Fonts->AddFontDefault();
-        ImFontConfig cfg;
-        cfg.MergeMode     = true;
-        cfg.PixelSnapH    = true;
-        cfg.GlyphOffset.y = 1.0f;
-        static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
-        auto const           iconPath = Playback::getInstance().getSelf().getModDir() / "fonts" / "lucide.ttf";
-        if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 14.0f, &cfg, iconRange)) {
-            getLogger().warn("Unable to load replay icon font from {}", iconPath);
-        }
+        loadReplayUIFonts();
         ImGui::StyleColorsDark();
         auto& style            = ImGui::GetStyle();
         style.AntiAliasedLines = true;
@@ -394,8 +414,8 @@ struct ImGuiRenderer::Impl {
         auto&      io              = ImGui::GetIO();
         io.DisplaySize             = surfaceMetrics.displaySize;
         io.DisplayFramebufferScale = surfaceMetrics.framebufferScale;
-        io.FontGlobalScale         = std::max(1.0f, ui::calculateReplayUIScale(io.DisplaySize.y));
-        auto frameNow              = std::chrono::steady_clock::now();
+        applyReplayUIScale(io.DisplaySize.y);
+        auto frameNow = std::chrono::steady_clock::now();
         io.DeltaTime  = std::clamp(std::chrono::duration<float>(frameNow - lastFrameTime).count(), 1.f / 240.f, 0.25f);
         lastFrameTime = frameNow;
 
@@ -416,9 +436,12 @@ struct ImGuiRenderer::Impl {
             replayEditor.draw(state, submit);
             if (exporting::isExportActive(state.exportStatus.state)) {
                 setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
+                setReplayGameViewportExclusion(0.0f, 0.0f, 0.0f, 0.0f);
             } else {
                 auto viewport = replayEditor.viewportVideoRect();
                 setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+                auto overlay = replayEditor.viewportOverlayRect();
+                setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
         }
         endReplayMouseFrame();
@@ -510,7 +533,8 @@ struct ImGuiRenderer::Impl {
             f.rtv = rtv;
             device->CreateRenderTargetView(f.backBuffer.Get(), nullptr, f.rtv);
             rtv.ptr += static_cast<SIZE_T>(rtvDescSize);
-            if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
+            if (FAILED(
+                    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&f.commandAllocator))
                 )) {
                 initialized = true;
                 this->shutdown();
@@ -583,41 +607,8 @@ struct ImGuiRenderer::Impl {
         io.IniFilename         = nullptr;
         io.LogFilename         = nullptr;
         io.BackendPlatformName = "playback_d3d12_overlay";
-        std::array<wchar_t, MAX_PATH> windowsDirectory{};
-        auto const                    windowsDirectoryLength =
-            GetWindowsDirectoryW(windowsDirectory.data(), static_cast<UINT>(windowsDirectory.size()));
-        std::filesystem::path fontPath;
-        if (windowsDirectoryLength > 0 && windowsDirectoryLength < static_cast<UINT>(windowsDirectory.size())) {
-            fontPath = std::filesystem::path(windowsDirectory.data()) / "Fonts" / "msyh.ttc";
-        }
-        auto const fontPathString = fontPath.string();
-        ImFont*    font           = nullptr;
-        if (!fontPathString.empty()) {
-            font = io.Fonts->AddFontFromFileTTF(
-                fontPathString.c_str(),
-                14.0f,
-                nullptr,
-                io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-            );
-        }
-        if (font) {
-            io.FontDefault = font;
-        } else {
-            io.Fonts->AddFontDefault();
-        }
-
-        // Merge the bundled Lucide font before the DX12 backend creates its font texture.
-        {
-            ImFontConfig cfg;
-            cfg.MergeMode     = true;
-            cfg.PixelSnapH    = true;
-            cfg.GlyphOffset.y = 1.0f;
-            static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
-            auto const           iconPath = Playback::getInstance().getSelf().getModDir() / "fonts" / "lucide.ttf";
-            if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), 14.0f, &cfg, iconRange)) {
-                getLogger().warn("Unable to load replay icon font from {}", iconPath);
-            }
-        }
+        // Fonts must be merged before the DX12 backend creates its font texture.
+        loadReplayUIFonts();
 
         ImGui::StyleColorsDark();
         auto& style            = ImGui::GetStyle();
@@ -1149,8 +1140,8 @@ bool ImGuiRenderer::renderInternal(
         auto&      io              = ImGui::GetIO();
         io.DisplaySize             = surfaceMetrics.displaySize;
         io.DisplayFramebufferScale = surfaceMetrics.framebufferScale;
-        io.FontGlobalScale         = std::max(1.0f, ui::calculateReplayUIScale(io.DisplaySize.y));
-        auto fn                    = std::chrono::steady_clock::now();
+        applyReplayUIScale(io.DisplaySize.y);
+        auto fn         = std::chrono::steady_clock::now();
         io.DeltaTime    = std::clamp(std::chrono::duration<float>(fn - p.lastFrameTime).count(), 1.f / 240.f, 0.25f);
         p.lastFrameTime = fn;
 
@@ -1176,9 +1167,12 @@ bool ImGuiRenderer::renderInternal(
             replayEditor.draw(state, submit);
             if (exporting::isExportActive(state.exportStatus.state)) {
                 setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
+                setReplayGameViewportExclusion(0.0f, 0.0f, 0.0f, 0.0f);
             } else {
                 auto viewport = replayEditor.viewportVideoRect();
                 setReplayGameViewport(viewport.min.x, viewport.min.y, viewport.max.x, viewport.max.y);
+                auto overlay = replayEditor.viewportOverlayRect();
+                setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
         }
         endReplayMouseFrame();

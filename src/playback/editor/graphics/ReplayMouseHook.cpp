@@ -63,6 +63,7 @@ std::atomic<MouseOwner> gMouseOwner{MouseOwner::Inactive};
 
 std::mutex         gGameViewportMutex;
 GameViewportBounds gGameViewport{};
+GameViewportBounds gGameViewportExclusion{};
 std::atomic<float> gInputScaleX{1.0f};
 std::atomic<float> gInputScaleY{1.0f};
 std::atomic<float> gCaptureRequestX{};
@@ -151,7 +152,10 @@ bool isCurrentProcessForeground(HWND* window = nullptr) {
 
 bool isGameViewportPoint(float x, float y) {
     std::scoped_lock lock(gGameViewportMutex);
-    return x >= gGameViewport.left && x < gGameViewport.right && y >= gGameViewport.top && y < gGameViewport.bottom;
+    auto const       inside = [x, y](GameViewportBounds const& b) {
+        return x >= b.left && x < b.right && y >= b.top && y < b.bottom;
+    };
+    return inside(gGameViewport) && !inside(gGameViewportExclusion);
 }
 
 int getImGuiMouseButton(char action) {
@@ -453,6 +457,15 @@ void setReplayGameViewport(float left, float top, float right, float bottom) {
         gGameViewport = {};
     } else {
         gGameViewport = {left, top, right, bottom};
+    }
+}
+
+void setReplayGameViewportExclusion(float left, float top, float right, float bottom) {
+    std::scoped_lock lock(gGameViewportMutex);
+    if (right <= left || bottom <= top) {
+        gGameViewportExclusion = {};
+    } else {
+        gGameViewportExclusion = {left, top, right, bottom};
     }
 }
 

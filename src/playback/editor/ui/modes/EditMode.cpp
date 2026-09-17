@@ -1,5 +1,6 @@
 #include "EditMode.h"
 
+#include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/ReplayEditor.h"
 
 #include "imgui.h"
@@ -11,15 +12,18 @@ namespace playback::editor::ui {
 void EditMode::draw(PanelContext const& ctx) {
     auto& editor = ReplayEditor::getInstance();
 
-    float const fontSize           = ImGui::GetFontSize();
-    auto const& style              = ImGui::GetStyle();
-    float const kMenuHeight        = ImGui::GetFrameHeight() + style.WindowBorderSize * 2.0f;
-    float const kStatusHeight      = fontSize + style.WindowPadding.y * 2.0f;
-    float const kSplitterThickness = 4.0f;
-    float const kDetailsMinWidth   = std::max(260.0f, fontSize * 15.0f);
+    float const fontSize = ImGui::GetFontSize();
+    auto const& style    = ImGui::GetStyle();
+    // The menu bar is the only always-visible chrome, so it runs a size up from the rest of the editor.
+    float const kMenuFontScale = 1.25f;
+    float const kMenuHeight   = fontSize * kMenuFontScale + style.FramePadding.y * 2.0f + style.WindowBorderSize * 2.0f;
+    float const kStatusHeight = metrics::statusBar();
+    float const kSplitterThickness = metrics::splitter();
+    float const kDetailsMinWidth   = std::max(240.0f, fontSize * 14.0f + metrics::rail());
     float const kViewportMinWidth  = std::max(320.0f, fontSize * 22.0f);
     float const kViewportMinHeight = std::max(180.0f, fontSize * 12.0f);
-    float const kTimelineMinHeight = fontSize * 9.0f;
+    float const kTimelineMinHeight =
+        metrics::toolbarRow() + metrics::ruler() + metrics::cameraRow() * 2.0f + metrics::rangeBar();
 
     ImVec2 displaySize                    = ImGui::GetIO().DisplaySize;
     float  contentHeight                  = std::max(1.0f, displaySize.y - kMenuHeight - kStatusHeight);
@@ -45,9 +49,15 @@ void EditMode::draw(PanelContext const& ctx) {
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
                 | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_MenuBar
         );
+        // Only the bar itself scales up; the dropdowns it opens inherit the editor's normal size.
+        ImGui::SetWindowFontScale(kMenuFontScale);
         editor.mMenuBar.draw(ctx);
+        ImGui::SetWindowFontScale(1.0f);
         ImGui::End();
     };
+
+    // Panels paint their own toolbars and rails edge to edge, so their windows carry no padding.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
     if (editor.isViewportMaximized()) {
         ImGui::SetNextWindowPos(ImVec2(0, kMenuHeight));
@@ -71,6 +81,7 @@ void EditMode::draw(PanelContext const& ctx) {
         );
         editor.mStatusPanel.draw(ctx);
         ImGui::End();
+        ImGui::PopStyleVar();
         drawMenuBar();
         return;
     }
@@ -82,7 +93,11 @@ void EditMode::draw(PanelContext const& ctx) {
 
         ImGui::SetNextWindowPos(ImVec2(detailsX, detailsY));
         ImGui::SetNextWindowSize(ImVec2(detailsWidth, detailsH));
-        ImGui::Begin("##DetailsPanel", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | inputBlock);
+        ImGui::Begin(
+            "##DetailsPanel",
+            nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | inputBlock
+        );
         editor.mDetailsPanel.draw(ctx);
         ImGui::End();
     }
@@ -191,6 +206,7 @@ void EditMode::draw(PanelContext const& ctx) {
         ImGui::End();
     }
 
+    ImGui::PopStyleVar();
     drawMenuBar();
 }
 

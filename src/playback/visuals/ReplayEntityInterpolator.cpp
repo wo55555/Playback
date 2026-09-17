@@ -164,9 +164,10 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
         auto       state = std::make_unique<ScopedReplayEntityPose::State>();
         state->actors.reserve(targets.size());
 
+        if (!poses) return {};
         for (auto const& target : targets) {
-            if (!target.actor) return {};
-            if (!poses) continue;
+            // A despawned or unloaded entity must not cost the rest of the frame its interpolation.
+            if (!target.actor) continue;
 
             auto const history = poses->find(target.key);
             if (history == poses->end()) continue;
@@ -179,44 +180,50 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             auto* actorRotation        = target.actor->mBuiltInComponents->mActorRotationComponent.get();
             auto* headRotation         = context.tryGetComponent<ActorHeadRotationComponent>().as_ptr();
             auto* bodyRotation         = context.tryGetComponent<MobBodyRotationComponent>().as_ptr();
-            if (!stateVector || !renderPosition || !actorRotation) return {};
+            if (!stateVector || !renderPosition || !actorRotation) continue;
 
-            auto const sampled = samplePose(history->second, sample);
-            state->actors.emplace_back(ScopedReplayEntityPose::State::ActorState{
-                stateVector,
-                stateVector->mPos.get(),
-                stateVector->mPosPrev.get(),
-                stateVector->mPosDelta.get(),
-                renderPosition,
-                renderPosition->mValue.get(),
-                Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
-                movementInterpolator,
-                movementInterpolator ? movementInterpolator->mPos.get() : Vec3{},
-                movementInterpolator ? movementInterpolator->mRot.get() : Vec2{},
-                movementInterpolator ? movementInterpolator->mHeadYaw : 0.0f,
-                movementInterpolator ? movementInterpolator->mPositionSteps : 0,
-                movementInterpolator ? movementInterpolator->mRotationSteps : 0,
-                movementInterpolator ? movementInterpolator->mHeadYawSteps : 0,
-                renderRotation,
-                renderRotation ? renderRotation->mRot.get() : Vec2{},
-                actorRotation,
-                actorRotation->mRot.get(),
-                actorRotation->mRotPrev.get(),
-                headRotation,
-                headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
-                headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
-                bodyRotation,
-                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
-                bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
-            });
+            // A passenger is positioned by its vehicle, so only its rotation may be interpolated.
+            bool const positioned = !target.actor->isRiding();
+            auto const sampled    = samplePose(history->second, sample);
+            state->actors.emplace_back(
+                ScopedReplayEntityPose::State::ActorState{
+                    stateVector,
+                    stateVector->mPos.get(),
+                    stateVector->mPosPrev.get(),
+                    stateVector->mPosDelta.get(),
+                    renderPosition,
+                    renderPosition->mValue.get(),
+                    Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
+                    movementInterpolator,
+                    movementInterpolator ? movementInterpolator->mPos.get() : Vec3{},
+                    movementInterpolator ? movementInterpolator->mRot.get() : Vec2{},
+                    movementInterpolator ? movementInterpolator->mHeadYaw : 0.0f,
+                    movementInterpolator ? movementInterpolator->mPositionSteps : 0,
+                    movementInterpolator ? movementInterpolator->mRotationSteps : 0,
+                    movementInterpolator ? movementInterpolator->mHeadYawSteps : 0,
+                    renderRotation,
+                    renderRotation ? renderRotation->mRot.get() : Vec2{},
+                    actorRotation,
+                    actorRotation->mRot.get(),
+                    actorRotation->mRotPrev.get(),
+                    headRotation,
+                    headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
+                    headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
+                    bodyRotation,
+                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
+                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
+            }
+            );
 
-            auto& applied                  = state->actors.back();
-            applied.stateVector->mPos      = applied.exportPosition;
-            applied.stateVector->mPosPrev  = applied.stateVector->mPos;
-            applied.stateVector->mPosDelta = Vec3{};
-            applied.renderPosition->mValue = applied.exportPosition;
+            auto& applied = state->actors.back();
+            if (positioned) {
+                applied.stateVector->mPos      = applied.exportPosition;
+                applied.stateVector->mPosPrev  = applied.stateVector->mPos;
+                applied.stateVector->mPosDelta = Vec3{};
+                applied.renderPosition->mValue = applied.exportPosition;
+            }
             if (applied.movementInterpolator) {
-                *applied.movementInterpolator->mPos          = applied.exportPosition;
+                if (positioned) *applied.movementInterpolator->mPos = applied.exportPosition;
                 *applied.movementInterpolator->mRot          = Vec2{sampled.pitch, sampled.yaw};
                 applied.movementInterpolator->mHeadYaw       = sampled.headYaw;
                 applied.movementInterpolator->mPositionSteps = 0;

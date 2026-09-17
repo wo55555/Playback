@@ -149,7 +149,7 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     mProject             = {};
     mProject.projectPath = std::string(replayPath);
     mProject.totalTicks  = totalTicks;
-    state::editing::CameraBindingOps::addFreeCamera(mProject, "Camera 1");
+    state::editing::CameraBindingOps::addFreeCamera(mProject, {});
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
     mPreviewCameraId.reset();
@@ -180,7 +180,7 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
     loaded.projectPath           = mProject.projectPath;
     loaded.totalTicks            = mProject.totalTicks;
     loaded.worldActor.totalTicks = mProject.totalTicks;
-    if (loaded.cameras.empty()) state::editing::CameraBindingOps::addFreeCamera(loaded, "Camera 1");
+    if (loaded.cameras.empty()) state::editing::CameraBindingOps::addFreeCamera(loaded, {});
     if (loaded.worldActor.segments.empty()) {
         loaded.worldActor.segments.push_back({"worldActor", 0, mProject.totalTicks, 0});
     }
@@ -256,9 +256,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::TrimWorldActor:
         mCommandStack.push(CommandFactory::createTrimWorldActor(action.id, action.tick, action.kind), mProject);
-        break;
-    case EditorActionType::SetWorldActorSpeed:
-        mCommandStack.push(CommandFactory::createSetWorldActorSpeed(action.id, action.speed), mProject);
         break;
     case EditorActionType::RippleDeleteWorldActorSegment:
         mCommandStack.push(CommandFactory::createRippleDeleteWorldActorSegment(action.id), mProject);
@@ -387,6 +384,7 @@ void EditorController::publishState(bool hudVisible) {
     mProject.playing                 = !state.paused;
     mProject.playbackSpeed           = state.playbackSpeed;
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
+    state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
     state.canUndo                    = mCommandStack.canUndo();
     state.canRedo                    = mCommandStack.canRedo();
     state.persistence.dirty          = state.editorVisible && isProjectDirty();
@@ -451,6 +449,9 @@ void EditorController::tick(bool hudVisible) {
             break;
         case EditorActionType::IncreaseSpeed:
             session.adjustPlaybackSpeed(1);
+            break;
+        case EditorActionType::SetPlaybackSpeed:
+            session.setPlaybackSpeed(action.speed);
             break;
         case EditorActionType::StopReplay:
             if (mExportDriver) mExportDriver->cancel();

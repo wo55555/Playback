@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -10,12 +11,13 @@ struct EditorStateExt;
 
 namespace playback::editor::ui {
 
-enum class TrackRowKind { Camera, Marker };
+enum class TrackRowKind { Camera };
 
 struct TrackTreeRow {
     TrackRowKind kind;
     std::string  id;
     std::string  name;
+    std::string  cameraId;
     int          cameraIndex{-1};
     float        height{};
     bool         locked{};
@@ -24,18 +26,13 @@ struct TrackTreeRow {
 
 class TrackTreeModel {
 public:
-    static constexpr float kCameraRowHeight = 36.0f;
-    static constexpr float kMarkerRowHeight = 32.0f;
-
     void                                           setSearch(std::string_view query);
-    void                                           setCamerasExpanded(bool expanded);
     void                                           rebuild(state::editing::model::EditorStateExt const& state);
     [[nodiscard]] std::vector<TrackTreeRow> const& rows() const;
 
 private:
     std::string               mSearch;
     std::vector<TrackTreeRow> mRows;
-    bool                      mCamerasExpanded{true};
 };
 
 } // namespace playback::editor::ui

@@ -21,7 +21,7 @@ public:
     createBindSequenceToCamera(const std::string& id, const std::string& cameraId);
     static std::unique_ptr<model::IEditCommand> createSplitWorldActor(int tick);
     static std::unique_ptr<model::IEditCommand> createTrimWorldActor(const std::string& id, int start, int end);
-    static std::unique_ptr<model::IEditCommand> createSetWorldActorSpeed(const std::string& id, float speed);
+
     static std::unique_ptr<model::IEditCommand> createRippleDeleteWorldActorSegment(const std::string& id);
     static std::unique_ptr<model::IEditCommand> createAddFreeCamera(const std::string& name);
     static std::unique_ptr<model::IEditCommand> createDeleteCamera(const std::string& id);

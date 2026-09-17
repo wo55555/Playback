@@ -94,11 +94,13 @@ void ReplayWriter::finishAction(Action& action) {
         throw std::runtime_error("finishAction() called before startAction()");
     }
     if (mWritingAction != &action) {
-        throw std::runtime_error(std::format(
-            "finishAction() called with wrong action, expected {} got {}",
-            mWritingAction->name,
-            action.name
-        ));
+        throw std::runtime_error(
+            std::format(
+                "finishAction() called with wrong action, expected {} got {}",
+                mWritingAction->name,
+                action.name
+            )
+        );
     }
     mWritingAction = nullptr;
 

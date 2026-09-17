@@ -19,8 +19,10 @@
 #include "mc/deps/minecraft_camera/components/RenderCameraComponent.h"
 #include "mc/deps/minecraft_renderer/objects/ViewRenderObject.h"
 #include "mc/deps/renderer/Camera.h"
+#include "mc/external/bgfx/Context.h"
 #include "mc/world/actor/player/Player.h"
 
+#include <glm/ext/matrix_clip_space.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
@@ -53,6 +55,13 @@ std::array<std::atomic_bool, 2> gCameraEcsFailureLogged{};
 thread_local std::optional<keyframe::CameraRenderState> gParkedObserverCamera;
 std::mutex                                              gRendererCameraMutex;
 std::optional<keyframe::CameraRenderState>              gRendererCameraState;
+std::optional<RenderCameraProjection>                   gRenderCameraProjection;
+std::optional<RenderCameraProjection>                   gSubmittedCameraProjection;
+
+// Frame* cannot be matched to a submission, so Context::frame queues projections and $submit consumes in order.
+std::array<std::optional<RenderCameraProjection>, 4> gFrameProjections;
+size_t                                               gNextProjectionSlot{};
+size_t                                               gNextConsumeSlot{};
 
 size_t sourceIndex(keyframe::CameraTimelineSource source) noexcept {
     return source == keyframe::CameraTimelineSource::Export ? 1U : 0U;
@@ -93,6 +102,16 @@ float maxError(::glm::vec3 const& actual, ::glm::vec3 const& expected) noexcept 
 
 float maxError(Vec3 const& actual, ::glm::vec3 const& expected) noexcept {
     return maxError(::glm::vec3{actual.x, actual.y, actual.z}, expected);
+}
+
+template <typename T>
+bool finite(::glm::mat<4, 4, T> const& value) noexcept {
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            if (!std::isfinite(value[column][row])) return false;
+        }
+    }
+    return true;
 }
 
 struct CameraBasis {
@@ -243,7 +262,7 @@ void writeLevelCameraPose(LevelRendererPlayer& level, ::glm::vec3 const& positio
 void logMissingSample(keyframe::CameraTimelineRenderContext const& context) noexcept {
     auto& logged = gMissingSampleLogged[sourceIndex(context.source)];
     if (logged.exchange(true, std::memory_order_acq_rel)) return;
-    Playback::getInstance().getSelf().getLogger().warn(
+    Playback::getInstance().getSelf().getLogger().debug(
         "Camera render context has no sample (source={}, token={}, frame={}, tick={}/{})",
         sourceName(context.source),
         context.renderToken,
@@ -328,6 +347,12 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
     return verified;
 }
 
+void publishRenderCameraProjection(
+    mce::Camera&                                    worldCamera,
+    mce::Camera*                                    clientCamera,
+    std::optional<visuals::ReplaySampleTime> const& sampleTime
+) noexcept;
+
 bool applyTimelineCamera(
     LevelRendererPlayer&                         level,
     mce::Camera&                                 setupCamera,
@@ -351,6 +376,10 @@ bool applyTimelineCamera(
 
     writeCameraSpaces({&setupCamera, clientCamera}, *worldCamera, position, basis);
     writeLevelCameraPose(level, position, basis);
+    // Publish here so the overlay's view matches the pose this frame is rendered with.
+    if (context.source == keyframe::CameraTimelineSource::Preview) {
+        publishRenderCameraProjection(*worldCamera, clientCamera, context.time);
+    }
 
     auto const localPosition  = ::glm::vec3{};
     auto const setupExpected  = &setupCamera == worldCamera ? position : localPosition;
@@ -413,6 +442,69 @@ bool observerStillParked() noexcept {
     return replay::ReplaySession::getInstance().getReplayPlayer() != nullptr && !editor::input::isGameInputCaptured();
 }
 
+bool isPerspective(::glm::mat4x4 const& projection) noexcept {
+    return finite(projection) && std::abs(projection[2][3]) > 0.5f;
+}
+
+float nearPlaneOf(mce::Camera const& camera) noexcept {
+    return std::isfinite(camera.mZNear) && camera.mZNear > 0.0f ? camera.mZNear : 0.05f;
+}
+
+// Recover the near plane from the matrix itself; mZNear is not a dependable member offset.
+float nearPlaneOfProjection(::glm::mat4x4 const& projection, float fallback) noexcept {
+    float const c = projection[2][2];
+    float const d = projection[3][2];
+    float const s = projection[2][3];
+    if (!std::isfinite(c) || !std::isfinite(d) || !std::isfinite(s) || std::abs(s) < 0.5f) return fallback;
+    // Reverse-Z and infinite-far projections leave c at 0 or -1, where d alone gives the near plane.
+    float const denom     = c + s;
+    float const nearPlane = std::abs(denom) > 1.0e-6f ? d / denom : (std::abs(c) > 1.0e-6f ? d / c : d);
+    return std::isfinite(nearPlane) && nearPlane > 1.0e-4f && nearPlane < 16.0f ? nearPlane : fallback;
+}
+
+// The 26.10 SDK exposes no Camera::getProjectionMatrix, so read the stack top directly.
+::glm::mat4x4 projectionMatrixOf(mce::Camera& camera) noexcept {
+    return camera.projectionMatrixStack->getTop()._m.get();
+}
+
+// World camera owns the view; projection falls back to the client camera, then a synthesized perspective.
+void publishRenderCameraProjection(
+    mce::Camera&                                    worldCamera,
+    mce::Camera*                                    clientCamera,
+    std::optional<visuals::ReplaySampleTime> const& sampleTime
+) noexcept {
+    auto const view = worldCamera.viewMatrixStack->getTop()._m.get();
+
+    std::optional<::glm::mat4x4> projection;
+    float                        zNear = nearPlaneOf(worldCamera);
+    if (auto const world = projectionMatrixOf(worldCamera); isPerspective(world)) {
+        projection = world;
+    } else if (clientCamera) {
+        if (auto const client = projectionMatrixOf(*clientCamera); isPerspective(client)) {
+            projection = client;
+            zNear      = nearPlaneOf(*clientCamera);
+        }
+    }
+    if (!projection) {
+        auto const& reference = clientCamera ? *clientCamera : worldCamera;
+        float const fov       = reference.mFov;
+        float const aspect    = reference.mAspectRatio;
+        if (std::isfinite(fov) && fov > 1.0f && fov < 179.0f && std::isfinite(aspect) && aspect > 0.01f) {
+            zNear      = nearPlaneOf(reference);
+            projection = ::glm::perspective(fov * RadiansPerDegree, aspect, zNear, 4096.0f);
+        }
+    }
+
+    if (!projection || !finite(view)) return;
+    auto const transform = ::glm::dmat4{*projection} * ::glm::dmat4{view};
+    // w equals view-space depth for a perspective projection, so the clip bound is the near plane itself.
+    float const nearW = std::max(0.001f, nearPlaneOfProjection(*projection, zNear));
+    if (!finite(transform)) return;
+
+    std::scoped_lock lock(gRendererCameraMutex);
+    gRenderCameraProjection = RenderCameraProjection{transform, nearW, sampleTime};
+}
+
 keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept {
     auto& replay = replay::ReplaySession::getInstance();
 
@@ -442,14 +534,16 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept 
     keyframe::setPreviewCameraApplied(true);
     keyframe::setLastPreviewPose(sample->state);
     gParkedObserverCamera = sample->state;
-    return keyframe::publishCameraTimelineRenderContext(keyframe::CameraTimelineRenderContext{
-        *time,
-        keyframe::CameraTimelineSource::Preview,
-        0,
-        std::move(sample),
-        {},
-        serial,
-    });
+    return keyframe::publishCameraTimelineRenderContext(
+        keyframe::CameraTimelineRenderContext{
+            *time,
+            keyframe::CameraTimelineSource::Preview,
+            0,
+            std::move(sample),
+            {},
+            serial,
+        }
+    );
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -467,6 +561,13 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
 
+    // Vanilla interpolates on the client tick, which only matches the replay tick at 1x; drive the pose ourselves.
+    auto& replay = replay::ReplaySession::getInstance();
+    auto  pose   = [&]() -> std::unique_ptr<visuals::ScopedReplayEntityPose> {
+        auto const time = replay.getEntityRenderSampleTime();
+        return time ? replay.createReplayEntityRenderScope(*time) : nullptr;
+    }();
+
     auto const context = makePreviewRenderContext();
     if (!context) {
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
@@ -480,6 +581,22 @@ LL_TYPE_INSTANCE_HOOK(
         origin(partialTick);
     }
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview, context);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    ReplayCameraSubmitFrameHook,
+    ll::memory::HookPriority::Lowest,
+    bgfx::Context,
+    &bgfx::Context::frame,
+    uint,
+    uint flags
+) {
+    // Queue the projection this frame was submitted with; $submit consumes it in the same order.
+    {
+        std::scoped_lock lock(gRendererCameraMutex);
+        gFrameProjections[gNextProjectionSlot++ % gFrameProjections.size()] = gRenderCameraProjection;
+    }
+    return origin(flags);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -572,8 +689,19 @@ LL_TYPE_INSTANCE_HOOK(
     ::SubClientId    clientSubId
 ) {
     auto const context = keyframe::currentCameraTimelineRenderContext();
-    if (!context || context->source != keyframe::CameraTimelineSource::Export)
-        return origin(screenContext, clientSubId);
+    if (!context || context->source != keyframe::CameraTimelineSource::Export) {
+        auto result = origin(screenContext, clientSubId);
+        // Without a timeline camera the vanilla observer owns the view, so publish it here.
+        if (!context && keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+            auto client = ll::service::getClientInstance();
+            publishRenderCameraProjection(
+                static_cast<LevelRendererPlayer*>(this)->mWorldSpaceCamera.get(),
+                client ? &client->getCamera() : nullptr,
+                std::nullopt
+            );
+        }
+        return result;
+    }
     if (!context->sample) {
         logMissingSample(*context);
         return origin(screenContext, clientSubId);
@@ -643,6 +771,7 @@ LL_TYPE_INSTANCE_HOOK(
 bool hookCameraRender(bool enable) {
     struct HookState {
         bool frameScope{};
+        bool submitFrame{};
         bool fov{};
         bool fovWithoutGameplay{};
         bool setupCamera{};
@@ -653,6 +782,14 @@ bool hookCameraRender(bool enable) {
     auto removeAll = [&] {
         gInstalled.store(false, std::memory_order_release);
         gParkedObserverCamera.reset();
+        {
+            std::scoped_lock lock(gRendererCameraMutex);
+            gRenderCameraProjection.reset();
+            gSubmittedCameraProjection.reset();
+            gFrameProjections   = {};
+            gNextProjectionSlot = 0;
+            gNextConsumeSlot    = 0;
+        }
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
         if (state.finalView && ReplayCameraViewRenderObjectHook::unhook()) state.finalView = false;
         if (state.setupCamera && ReplayCameraSetupHook::unhook()) state.setupCamera = false;
@@ -660,8 +797,10 @@ bool hookCameraRender(bool enable) {
             state.fovWithoutGameplay = false;
         }
         if (state.fov && ReplayCameraFovHook::unhook()) state.fov = false;
+        if (state.submitFrame && ReplayCameraSubmitFrameHook::unhook()) state.submitFrame = false;
         if (state.frameScope && ReplayCameraFrameScopeHook::unhook()) state.frameScope = false;
-        return !state.frameScope && !state.fov && !state.fovWithoutGameplay && !state.setupCamera && !state.finalView;
+        return !state.frameScope && !state.submitFrame && !state.fov && !state.fovWithoutGameplay && !state.setupCamera
+            && !state.finalView;
     };
 
     if (!enable) return removeAll();
@@ -676,6 +815,7 @@ bool hookCameraRender(bool enable) {
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
 
     if (!state.frameScope) state.frameScope = ReplayCameraFrameScopeHook::hook() == 0;
+    if (!state.submitFrame) state.submitFrame = ReplayCameraSubmitFrameHook::hook() == 0;
     if (!state.fov) state.fov = ReplayCameraFovHook::hook() == 0;
     if (!state.fovWithoutGameplay) {
         state.fovWithoutGameplay = ReplayCameraFovWithoutGameplayHook::hook() == 0;
@@ -683,11 +823,12 @@ bool hookCameraRender(bool enable) {
     if (!state.setupCamera) state.setupCamera = ReplayCameraSetupHook::hook() == 0;
     if (!state.finalView) state.finalView = ReplayCameraViewRenderObjectHook::hook() == 0;
 
-    bool const installed =
-        state.frameScope && state.fov && state.fovWithoutGameplay && state.setupCamera && state.finalView;
+    bool const installed = state.frameScope && state.submitFrame && state.fov && state.fovWithoutGameplay
+                        && state.setupCamera && state.finalView;
     gInstalled.store(installed, std::memory_order_release);
     if (!installed) {
         bool const frameScope         = state.frameScope;
+        bool const submitFrame        = state.submitFrame;
         bool const fov                = state.fov;
         bool const fovWithoutGameplay = state.fovWithoutGameplay;
         bool const setupCamera        = state.setupCamera;
@@ -695,12 +836,13 @@ bool hookCameraRender(bool enable) {
         bool const rolledBack         = removeAll();
         Playback::getInstance().getSelf().getLogger().error(
             "Unable to install camera render hooks (frameScope={}, fov={}, fovWithoutGameplay={}, setupCamera={}, "
-            "finalView={}, rollback={})",
+            "finalView={}, submitFrame={}, rollback={})",
             frameScope,
             fov,
             fovWithoutGameplay,
             setupCamera,
             finalView,
+            submitFrame,
             rolledBack
         );
         return false;
@@ -714,6 +856,25 @@ bool isCameraRenderInstalled() { return gInstalled.load(std::memory_order_acquir
 std::optional<keyframe::CameraRenderState> currentRendererCameraState() {
     std::scoped_lock lock(gRendererCameraMutex);
     return gRendererCameraState;
+}
+
+std::optional<RenderCameraProjection> currentRenderCameraProjection() {
+    std::scoped_lock lock(gRendererCameraMutex);
+    if (!gInstalled.load(std::memory_order_acquire)) return std::nullopt;
+    // Prefer the projection tagged to the presented frame; otherwise the latest published one is at most a frame old.
+    return gSubmittedCameraProjection ? gSubmittedCameraProjection : gRenderCameraProjection;
+}
+
+void useSubmittedCameraProjection(bgfx::Frame const*) {
+    std::scoped_lock lock(gRendererCameraMutex);
+    if (gNextConsumeSlot == gNextProjectionSlot) return;
+    // Skip whatever the producer already overwrote so the oldest live entry is consumed next.
+    if (gNextProjectionSlot - gNextConsumeSlot > gFrameProjections.size()) {
+        gNextConsumeSlot = gNextProjectionSlot - gFrameProjections.size();
+    }
+    auto& slot = gFrameProjections[gNextConsumeSlot++ % gFrameProjections.size()];
+    if (slot) gSubmittedCameraProjection = slot;
+    slot.reset();
 }
 
 } // namespace playback::editor::graphics
