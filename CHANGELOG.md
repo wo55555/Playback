@@ -7,27 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Added `Ctrl+Shift+N` to create a camera track and `1`, `2`, `3` to switch to the first three cameras, which also drives the viewport preview.
-- Added `Ctrl+Shift+-`, `Ctrl+Shift+=`, and `Ctrl+Shift+0` to step and reset the interface scale.
-- Added `Alt+Wheel` to zoom the timeline around the cursor.
-- Added a keyboard shortcut reference to the getting-started guide.
-
-### Changed
-
-- Moved timeline zoom to `-` and `=`, zoom-to-fit to `\`, and playback speed to `J` and `L`, matching common video editors. `Shift+Wheel` no longer zooms.
-- Made `K` add a keyframe to the first usable camera track when nothing is selected instead of doing nothing.
-
-### Fixed
-
-- Fixed entities jittering during preview playback. Recorded poses are now interpolated on preview frames as well as during export, and are sampled one tick behind the camera so the pose history is actually interpolated instead of snapping to its end.
-- Fixed one missing or incomplete entity cancelling pose interpolation for the whole frame, and left passenger positions to their vehicle so riders no longer fight the mount.
-- Fixed camera-path overlays being sampled across dimension boundaries, which spent work on points that were discarded at draw time.
-- Fixed a plain click on a timeline keyframe nudging it; any horizontal movement is now required before a drag begins, so a click only seeks.
-- Fixed players not loading in the replay when a server withheld skin data for any one of them. A single entry without a skin discarded the whole player list; that entry is now skipped and the rest of the list still spawns.
-
-## [0.3.1-mc26.10] - 2026-09-14
+## [0.3.1-mc26.10] - 2026-09-17
 
 ### Added
 
@@ -35,11 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added selectable UI scale tiers for the editor, applied without re-rasterising glyphs.
 - Added direct playback-speed selection in the transport, snapped to the same speed ladder the keyboard shortcuts step through.
 - Added an export-range marker on the timeline, with `I` and `O` to set its bounds and `Space` to toggle play/pause.
+- Added `Ctrl+Shift+N` to create a camera track and `1`, `2`, `3` to switch to the first three cameras, which also drives the viewport preview.
+- Added `Ctrl+Shift+-`, `Ctrl+Shift+=`, and `Ctrl+Shift+0` to step and reset the interface scale.
+- Added `Alt+Wheel` to zoom the timeline around the cursor.
+- Added a keyboard shortcut reference to the getting-started guide.
 
 ### Changed
 
 - Rebuilt the editor layout around a centred transport, with reworked timeline rows, details panel, status bar, and menu bar.
 - Aligned timeline and toolbar icons optically rather than on their glyph boxes.
+- Moved timeline zoom to `-` and `=`, zoom-to-fit to `\`, and playback speed to `J` and `L`, matching common video editors. `Shift+Wheel` no longer zooms.
+- Made `K` add a keyframe to the first usable camera track when nothing is selected instead of doing nothing.
 - Kept the configuration version, recording-file snapshot context version, and project format version at `1`; `v0.3.0-mc26.10` archives and projects remain compatible.
 
 ### Removed
@@ -52,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed replays losing a dimension boundary when the recorder rotated the chunk instead of leaving a packet on the timeline; boundaries are now derived from the snapshot contexts.
 - Fixed columns without complete subchunk coverage being injected, which could leave partially built terrain.
 - Fixed clicks on viewport overlays reaching the game camera.
+- Fixed entities jittering during preview playback. Recorded poses are now interpolated on preview frames as well as during export, and are sampled one tick behind the camera so the pose history is actually interpolated instead of snapping to its end.
+- Fixed one missing or incomplete entity cancelling pose interpolation for the whole frame, and left passenger positions to their vehicle so riders no longer fight the mount.
+- Fixed camera-path overlays being sampled across dimension boundaries, which spent work on points that were discarded at draw time.
+- Fixed a plain click on a timeline keyframe nudging it; any horizontal movement is now required before a drag begins, so a click only seeks.
+- Fixed players not loading in the replay when a server withheld skin data for any one of them. A single entry without a skin discarded the whole player list; that entry is now skipped and the rest of the list still spawns.
 
 ## [0.3.0-mc26.10] - 2026-09-08
 
