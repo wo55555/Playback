@@ -256,19 +256,22 @@ struct NeighborTicks {
 
 NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, int currentTick) {
     NeighborTicks window;
-    bool          hasLast = false;
-    bool          hasNext = false;
+    // Segments are monotonic in tick, so rejecting the nearest out-of-segment key rejects every further one.
+    auto const segment   = timeline.dimensionSegmentForTick(currentTick);
+    auto const inSegment = [&](int tick) { return timeline.dimensionSegmentForTick(tick) == segment; };
+    bool       hasLast   = false;
+    bool       hasNext   = false;
     for (auto const& camera : timeline.cameras()) {
         if (!camera.enabled || camera.keysByTick.empty()) continue;
         auto const nextIt = camera.keysByTick.upper_bound(currentTick);
         if (nextIt != camera.keysByTick.begin()) {
             int const tick = std::prev(nextIt)->first;
-            if (tick >= 0 && (!hasLast || tick > window.last)) {
+            if (tick >= 0 && inSegment(tick) && (!hasLast || tick > window.last)) {
                 window.last = tick;
                 hasLast     = true;
             }
         }
-        if (nextIt != camera.keysByTick.end() && nextIt->first >= 0) {
+        if (nextIt != camera.keysByTick.end() && nextIt->first >= 0 && inSegment(nextIt->first)) {
             if (!hasNext || nextIt->first < window.next) {
                 window.next = nextIt->first;
                 hasNext     = true;
@@ -286,7 +289,7 @@ NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, i
             auto const it = camera.keysByTick.lower_bound(window.last);
             if (it != camera.keysByTick.begin()) {
                 int const tick = std::prev(it)->first;
-                if (tick >= 0 && (!hasLastLast || tick > window.lastLast)) {
+                if (tick >= 0 && inSegment(tick) && (!hasLastLast || tick > window.lastLast)) {
                     window.lastLast = tick;
                     hasLastLast     = true;
                 }
@@ -294,7 +297,7 @@ NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, i
         }
         if (hasNext) {
             auto const it = camera.keysByTick.upper_bound(window.next);
-            if (it != camera.keysByTick.end() && it->first >= 0) {
+            if (it != camera.keysByTick.end() && it->first >= 0 && inSegment(it->first)) {
                 if (!hasNextNext || it->first < window.nextNext) {
                     window.nextNext = it->first;
                     hasNextNext     = true;
