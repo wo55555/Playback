@@ -375,6 +375,7 @@ public:
 
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
     [[nodiscard]] std::optional<visuals::ReplaySampleTime> getCameraRenderSampleTime() const noexcept;
+    [[nodiscard]] std::optional<visuals::ReplaySampleTime> getEntityRenderSampleTime() const noexcept;
     void                                                   markReplayTickAdvanced() noexcept;
     [[nodiscard]] float                                    previewPartialTick() const noexcept;
     void                                                   resumePreviewClockFromFrozenPartial() noexcept;
