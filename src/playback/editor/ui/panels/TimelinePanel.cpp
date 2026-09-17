@@ -150,7 +150,7 @@ bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
     return true;
 }
 
-// Mirrors Flashback's find-or-create camera track so the shortcut works without a prior selection.
+// Resolves a target track so the shortcut works without a prior selection.
 std::string TimelinePanel::resolveKeyframeTargetCamera(PanelContext const& ctx) const {
     auto const project = ctx.state.project;
     if (!project) return {};
@@ -581,7 +581,7 @@ void TimelinePanel::drawExportRange(
 ) {
     int const total = ctx.state.totalTicks;
     if (total <= 0) return;
-    // Unset means "whole replay", so nothing is drawn until the user marks a point (Flashback's rule).
+    // Unset means "whole replay", so nothing is drawn until the user marks a point.
     int const inTick  = ctx.commands.exportStartTick();
     int const outTick = ctx.commands.exportEndTick();
     if (inTick < 0 || outTick < 0) return;
@@ -984,7 +984,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     drawExportRange(ctx, layout, scale, allowInput);
 
     if (allowInput && !mDraggingKeyframeCameraId.empty()) {
-        if (std::abs(ImGui::GetMousePos().x - mDraggingKeyframeStartMouseX) > 2.0f) mDraggingKeyframeMoved = true;
+        // Any horizontal movement latches into a drag, so a plain click only seeks.
+        if (ImGui::GetMousePos().x != mDraggingKeyframeStartMouseX) mDraggingKeyframeMoved = true;
         int const candidateTick =
             mDraggingKeyframeMoved ? boundedKeyframeTick(snapTick(tickFromMouse())) : mDraggingKeyframeStartTick;
         mDraggingKeyframeTick = candidateTick;

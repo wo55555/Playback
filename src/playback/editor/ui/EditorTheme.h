@@ -53,7 +53,7 @@ constexpr ImU32 kKeyframeOutline   = IM_COL32(0x10, 0x10, 0x10, 0xff);
 constexpr ImU32 kPlayhead          = IM_COL32(0xf2, 0xa3, 0x3c, 0xff);
 constexpr ImU32 kPlayheadLabel     = IM_COL32(0x11, 0x11, 0x11, 0xff);
 constexpr ImU32 kExportRange       = withAlpha(kAccent, 0x59);
-// In/out markers, drawn in the ruler band the way Flashback does it.
+// In/out markers, drawn in the ruler band.
 constexpr ImU32 kExportBracket = IM_COL32(0xf0, 0xf2, 0xf5, 0xff);
 constexpr ImU32 kExportBand    = IM_COL32(0xff, 0xaa, 0x00, 0x60);
 constexpr ImU32 kTrackDisabled = IM_COL32(0x3a, 0x3a, 0x3a, 0xff);
