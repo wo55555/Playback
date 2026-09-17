@@ -556,6 +556,13 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
 
+    // Vanilla interpolates on the client tick, which only matches the replay tick at 1x; drive the pose ourselves.
+    auto& replay = replay::ReplaySession::getInstance();
+    auto  pose   = [&]() -> std::unique_ptr<visuals::ScopedReplayEntityPose> {
+        auto const time = replay.getEntityRenderSampleTime();
+        return time ? replay.createReplayEntityRenderScope(*time) : nullptr;
+    }();
+
     auto const context = makePreviewRenderContext();
     if (!context) {
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);

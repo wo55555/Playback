@@ -769,6 +769,15 @@ std::optional<visuals::ReplaySampleTime> ReplaySession::getCameraRenderSampleTim
     return visuals::ReplaySampleTime::fromPreview(appliedTick, previewPartialTick());
 }
 
+// Pose history spans [appliedTick - 1, appliedTick], so entity sampling trails the camera by one tick.
+std::optional<visuals::ReplaySampleTime> ReplaySession::getEntityRenderSampleTime() const noexcept {
+    if (!mActive || !mReplayWorldJoined) return std::nullopt;
+
+    auto const appliedTick = std::max(0, mCurrentTick);
+    if (appliedTick == 0) return std::nullopt;
+    return visuals::ReplaySampleTime::fromPreview(appliedTick - 1, previewPartialTick());
+}
+
 bool ReplaySession::beginExportTimeline(int startTick) {
     if (!mActive || mReplayFailed || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return false;
 
