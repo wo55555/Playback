@@ -2,7 +2,7 @@
 
 #include <chrono>
 
-class MultiPlayerLevel;
+class ClientLevel;
 
 namespace playback::record {
 
@@ -20,9 +20,9 @@ public:
     private:
         friend class ChunkMutationBarrier;
 
-        explicit TickBoundaryGuard(MultiPlayerLevel& level) noexcept;
+        explicit TickBoundaryGuard(ClientLevel& level) noexcept;
 
-        MultiPlayerLevel* mPreviousLevel{};
+        ClientLevel* mPreviousLevel{};
     };
 
     class CaptureGuard {
@@ -49,11 +49,11 @@ public:
         std::chrono::steady_clock::duration mWaited{};
     };
 
-    [[nodiscard]] static TickBoundaryGuard enterTickBoundary(MultiPlayerLevel& level) noexcept;
+    [[nodiscard]] static TickBoundaryGuard enterTickBoundary(ClientLevel& level) noexcept;
 
     [[nodiscard]] static CaptureGuard capture(std::chrono::milliseconds timeout = std::chrono::milliseconds{2000});
 
-    static void setActiveLevel(MultiPlayerLevel* level);
+    static void setActiveLevel(ClientLevel* level);
 };
 
 [[nodiscard]] bool hookChunkMutationBarrier(bool enable);

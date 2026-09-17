@@ -37,6 +37,7 @@ class ResourcePackStackPacket;
 class StartGamePacket;
 struct DimensionArguments;
 enum class MinecraftPacketIds : int;
+class ServerBlockProperty;
 
 namespace playback::replay {
 using playback::io::AsyncReplaySaver;
@@ -287,9 +288,9 @@ private:
 
     void prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
 
-    size_t preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties);
+    size_t preloadRecordedBlockGeometry(std::vector<ServerBlockProperty> const& properties);
 
-    size_t injectRecordedBlockMaterialComponents(std::vector<std::pair<std::string, CompoundTag>> const& properties);
+    size_t injectRecordedBlockMaterialComponents(std::vector<ServerBlockProperty> const& properties);
 
     [[nodiscard]] bool applyPendingSnapshotLocalPlayer();
 

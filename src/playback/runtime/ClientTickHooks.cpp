@@ -11,7 +11,7 @@
 
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/SceneType.h"
-#include "mc/client/multiplayer/MultiPlayerLevel.h"
+#include "mc/client/multiplayer/ClientLevel.h"
 
 #include <atomic>
 #include <mutex>
@@ -115,8 +115,8 @@ LL_TYPE_INSTANCE_HOOK(
 LL_TYPE_INSTANCE_HOOK(
     PlaybackClientLevelTickHook,
     ll::memory::HookPriority::High,
-    MultiPlayerLevel,
-    &MultiPlayerLevel::$_subTick,
+    ClientLevel,
+    &ClientLevel::$_subTick,
     void
 ) {
     ChunkMutationBarrier::setActiveLevel(this);

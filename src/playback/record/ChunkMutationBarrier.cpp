@@ -3,7 +3,7 @@
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
 
-#include "mc/client/multiplayer/MultiPlayerLevel.h"
+#include "mc/client/multiplayer/ClientLevel.h"
 #include "mc/deps/core/threading/TaskGroup.h"
 #include "mc/world/level/chunk/ChunkSource.h"
 #include "mc/world/level/chunk/LevelChunk.h"
@@ -24,10 +24,10 @@ namespace {
 constexpr std::string_view InsertTaskGroupName = "SubChunk Insert Task Group";
 
 struct InsertGroupBinding {
-    MultiPlayerLevel* level{};
-    SubChunkManager*  manager{};
-    TaskGroup*        group{};
-    std::thread::id   clientThread{};
+    ClientLevel*     level{};
+    SubChunkManager* manager{};
+    TaskGroup*       group{};
+    std::thread::id  clientThread{};
 
     bool operator==(InsertGroupBinding const&) const = default;
 };
@@ -36,9 +36,9 @@ struct BarrierState {
     std::timed_mutex   captureMutex;
     std::mutex         bindingMutex;
     InsertGroupBinding binding;
-    MultiPlayerLevel*  activeLevel{};
+    ClientLevel*       activeLevel{};
     TaskGroup*         pendingInsertGroup{};
-    MultiPlayerLevel*  pendingInsertGroupLevel{};
+    ClientLevel*       pendingInsertGroupLevel{};
     bool               discoveryHookInstalled{};
 };
 
@@ -47,16 +47,16 @@ BarrierState& barrierState() {
     return state;
 }
 
-thread_local MultiPlayerLevel* tickBoundaryLevel{};
+thread_local ClientLevel* tickBoundaryLevel{};
 
-MultiPlayerLevel* getCurrentLevel() {
+ClientLevel* getCurrentLevel() {
     auto level = ll::service::getMultiPlayerLevel();
-    return level ? level->asMultiPlayerLevel() : nullptr;
+    return level ? level->asClientLevel() : nullptr;
 }
 
 void** vtableOf(IBackgroundTaskOwner* owner) noexcept { return *reinterpret_cast<void***>(owner); }
 
-void** findTaskGroupVtable(MultiPlayerLevel& level) {
+void** findTaskGroupVtable(ClientLevel& level) {
     void** vtable{};
     level.forEachDimension([&vtable](Dimension& dimension) {
         for (auto* group : {dimension.mChunkGenTaskGroup.get(), dimension.mTaskGroup.get()}) {
@@ -67,7 +67,7 @@ void** findTaskGroupVtable(MultiPlayerLevel& level) {
     return vtable;
 }
 
-TaskGroup* findCurrentInsertGroup(MultiPlayerLevel& level) {
+TaskGroup* findCurrentInsertGroup(ClientLevel& level) {
     auto* owner = TaskGroup::getCurrentTaskGroup();
     if (!owner) return nullptr;
 
@@ -79,7 +79,7 @@ TaskGroup* findCurrentInsertGroup(MultiPlayerLevel& level) {
     return group;
 }
 
-void publishInsertGroup(MultiPlayerLevel& level, SubChunkManager& manager, TaskGroup& group) {
+void publishInsertGroup(ClientLevel& level, SubChunkManager& manager, TaskGroup& group) {
     auto&           state = barrierState();
     std::lock_guard lock(state.bindingMutex);
     if (!state.discoveryHookInstalled || state.activeLevel != &level) return;
@@ -106,7 +106,7 @@ void recordTaskGroupConstruction(TaskGroup& group, bool insertGroupName) {
     state.pendingInsertGroupLevel = currentLevel ? currentLevel : state.activeLevel;
 }
 
-bool publishPendingInsertGroup(BarrierState& state, MultiPlayerLevel& level, SubChunkManager* manager) {
+bool publishPendingInsertGroup(BarrierState& state, ClientLevel& level, SubChunkManager* manager) {
     auto* group = state.pendingInsertGroup;
     if (!group) return false;
     if (state.pendingInsertGroupLevel && state.pendingInsertGroupLevel != &level) {
@@ -154,7 +154,7 @@ bool captureContextMatches(InsertGroupBinding const& binding) {
     return manager && manager.get() == binding.manager;
 }
 
-bool collectTargetGroups(MultiPlayerLevel& level, TaskGroup& insertGroup, std::vector<TaskGroup*>& groups) {
+bool collectTargetGroups(ClientLevel& level, TaskGroup& insertGroup, std::vector<TaskGroup*>& groups) {
     groups.clear();
     void** taskGroupVtable{};
     bool   valid = true;
@@ -241,8 +241,8 @@ bool drainTargetGroups(InsertGroupBinding const& binding, std::chrono::steady_cl
 LL_TYPE_INSTANCE_HOOK(
     ChunkMutationBarrierDiscoveryHook,
     ll::memory::HookPriority::Normal,
-    MultiPlayerLevel,
-    &MultiPlayerLevel::_onSubChunkLoaded,
+    ClientLevel,
+    &ClientLevel::_onSubChunkLoaded,
     void,
     ChunkSource& source,
     LevelChunk&  chunk,
@@ -272,12 +272,12 @@ LL_TYPE_INSTANCE_HOOK(
 
 } // namespace
 
-ChunkMutationBarrier::TickBoundaryGuard::TickBoundaryGuard(MultiPlayerLevel& level) noexcept
+ChunkMutationBarrier::TickBoundaryGuard::TickBoundaryGuard(ClientLevel& level) noexcept
 : mPreviousLevel(std::exchange(tickBoundaryLevel, &level)) {}
 
 ChunkMutationBarrier::TickBoundaryGuard::~TickBoundaryGuard() noexcept { tickBoundaryLevel = mPreviousLevel; }
 
-ChunkMutationBarrier::TickBoundaryGuard ChunkMutationBarrier::enterTickBoundary(MultiPlayerLevel& level) noexcept {
+ChunkMutationBarrier::TickBoundaryGuard ChunkMutationBarrier::enterTickBoundary(ClientLevel& level) noexcept {
     return TickBoundaryGuard(level);
 }
 
@@ -313,7 +313,7 @@ ChunkMutationBarrier::CaptureGuard ChunkMutationBarrier::capture(std::chrono::mi
     return {true, std::chrono::steady_clock::now() - started};
 }
 
-void ChunkMutationBarrier::setActiveLevel(MultiPlayerLevel* level) {
+void ChunkMutationBarrier::setActiveLevel(ClientLevel* level) {
     auto&            state = barrierState();
     SubChunkManager* manager{};
     if (level) {
@@ -407,9 +407,9 @@ bool hookChunkMutationBarrier(bool enable) {
     }
 
     InsertGroupBinding previousBinding;
-    MultiPlayerLevel*  previousActiveLevel{};
+    ClientLevel*       previousActiveLevel{};
     TaskGroup*         previousPendingInsertGroup{};
-    MultiPlayerLevel*  previousPendingInsertGroupLevel{};
+    ClientLevel*       previousPendingInsertGroupLevel{};
     {
         std::lock_guard bindingLock(state.bindingMutex);
         if (noneInstalled() && !state.discoveryHookInstalled) return true;

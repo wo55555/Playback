@@ -27,7 +27,7 @@
 #include "ll/api/mod/RegisterHelper.h"
 #include "ll/api/service/Bedrock.h"
 
-#include "mc/client/multiplayer/MultiPlayerLevel.h"
+#include "mc/client/multiplayer/ClientLevel.h"
 #include "mc/world/level/Level.h"
 
 #include <atomic>
@@ -124,7 +124,7 @@ bool Playback::hook() {
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientJoinLevelEvent>(
             [this](ll::event::ClientJoinLevelEvent& event) {
-                record::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asMultiPlayerLevel());
+                record::ChunkMutationBarrier::setActiveLevel(event.player().getLevel().asClientLevel());
                 replay::ReplaySession::getInstance().onLevelJoined(event.player());
                 refreshMode(event.player().getLevel());
             }
