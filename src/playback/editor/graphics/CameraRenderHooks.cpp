@@ -19,6 +19,7 @@
 #include "mc/deps/minecraft_camera/components/RenderCameraComponent.h"
 #include "mc/deps/minecraft_renderer/objects/ViewRenderObject.h"
 #include "mc/deps/renderer/Camera.h"
+#include "mc/deps/vanilla_camera/CameraAPI.h"
 #include "mc/external/bgfx/Context.h"
 #include "mc/world/actor/player/Player.h"
 
@@ -609,17 +610,26 @@ LL_TYPE_INSTANCE_HOOK(
     return gParkedObserverCamera && observerStillParked() ? gParkedObserverCamera->fov : native;
 }
 
+// 26.40 inlined getFovWithoutGameplay into CameraAPI::tryGetFOV, which reports radians rather than degrees.
 LL_TYPE_INSTANCE_HOOK(
-    ReplayCameraFovWithoutGameplayHook,
+    ReplayCameraApiFovHook,
     ll::memory::HookPriority::Lowest,
-    LevelRendererPlayer,
-    &LevelRendererPlayer::getFovWithoutGameplay,
-    float
+    ::CameraAPI,
+    &::CameraAPI::$tryGetFOV,
+    ::std::optional<float>
 ) {
-    float const native  = origin();
-    auto const  context = keyframe::currentCameraTimelineRenderContext();
-    if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
-    return gParkedObserverCamera && observerStillParked() ? gParkedObserverCamera->fov : native;
+    auto const native = origin();
+    // Keep "no FOV available" intact so callers never see a camera the game does not have.
+    if (!native) return native;
+
+    auto const context = keyframe::currentCameraTimelineRenderContext();
+    if (context && context->sample && finite(context->sample->state)) {
+        return ::std::optional<float>{context->sample->state.fov * RadiansPerDegree};
+    }
+    if (gParkedObserverCamera && observerStillParked()) {
+        return ::std::optional<float>{gParkedObserverCamera->fov * RadiansPerDegree};
+    }
+    return native;
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -768,7 +778,7 @@ bool hookCameraRender(bool enable) {
         bool frameScope{};
         bool submitFrame{};
         bool fov{};
-        bool fovWithoutGameplay{};
+        bool fovApi{};
         bool setupCamera{};
         bool finalView{};
     };
@@ -788,13 +798,11 @@ bool hookCameraRender(bool enable) {
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
         if (state.finalView && ReplayCameraViewRenderObjectHook::unhook()) state.finalView = false;
         if (state.setupCamera && ReplayCameraSetupHook::unhook()) state.setupCamera = false;
-        if (state.fovWithoutGameplay && ReplayCameraFovWithoutGameplayHook::unhook()) {
-            state.fovWithoutGameplay = false;
-        }
+        if (state.fovApi && ReplayCameraApiFovHook::unhook()) state.fovApi = false;
         if (state.fov && ReplayCameraFovHook::unhook()) state.fov = false;
         if (state.submitFrame && ReplayCameraSubmitFrameHook::unhook()) state.submitFrame = false;
         if (state.frameScope && ReplayCameraFrameScopeHook::unhook()) state.frameScope = false;
-        return !state.frameScope && !state.submitFrame && !state.fov && !state.fovWithoutGameplay && !state.setupCamera
+        return !state.frameScope && !state.submitFrame && !state.fov && !state.fovApi && !state.setupCamera
             && !state.finalView;
     };
 
@@ -812,29 +820,27 @@ bool hookCameraRender(bool enable) {
     if (!state.frameScope) state.frameScope = ReplayCameraFrameScopeHook::hook() == 0;
     if (!state.submitFrame) state.submitFrame = ReplayCameraSubmitFrameHook::hook() == 0;
     if (!state.fov) state.fov = ReplayCameraFovHook::hook() == 0;
-    if (!state.fovWithoutGameplay) {
-        state.fovWithoutGameplay = ReplayCameraFovWithoutGameplayHook::hook() == 0;
-    }
+    if (!state.fovApi) state.fovApi = ReplayCameraApiFovHook::hook() == 0;
     if (!state.setupCamera) state.setupCamera = ReplayCameraSetupHook::hook() == 0;
     if (!state.finalView) state.finalView = ReplayCameraViewRenderObjectHook::hook() == 0;
 
-    bool const installed = state.frameScope && state.submitFrame && state.fov && state.fovWithoutGameplay
-                        && state.setupCamera && state.finalView;
+    bool const installed =
+        state.frameScope && state.submitFrame && state.fov && state.fovApi && state.setupCamera && state.finalView;
     gInstalled.store(installed, std::memory_order_release);
     if (!installed) {
-        bool const frameScope         = state.frameScope;
-        bool const submitFrame        = state.submitFrame;
-        bool const fov                = state.fov;
-        bool const fovWithoutGameplay = state.fovWithoutGameplay;
-        bool const setupCamera        = state.setupCamera;
-        bool const finalView          = state.finalView;
-        bool const rolledBack         = removeAll();
+        bool const frameScope  = state.frameScope;
+        bool const submitFrame = state.submitFrame;
+        bool const fov         = state.fov;
+        bool const fovApi      = state.fovApi;
+        bool const setupCamera = state.setupCamera;
+        bool const finalView   = state.finalView;
+        bool const rolledBack  = removeAll();
         Playback::getInstance().getSelf().getLogger().error(
-            "Unable to install camera render hooks (frameScope={}, fov={}, fovWithoutGameplay={}, setupCamera={}, "
+            "Unable to install camera render hooks (frameScope={}, fov={}, fovApi={}, setupCamera={}, "
             "finalView={}, submitFrame={}, rollback={})",
             frameScope,
             fov,
-            fovWithoutGameplay,
+            fovApi,
             setupCamera,
             finalView,
             submitFrame,

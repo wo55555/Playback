@@ -48,11 +48,13 @@ LL_TYPE_INSTANCE_HOOK(
     ensureEvents(*this);
 }
 
+// 26.40 inlined _registerEventHandlers into StartMenuScreenController's constructor, so the handler
+// has to be installed from onCreation, the first callback that runs once construction has finished.
 LL_TYPE_INSTANCE_HOOK(
     StartMenuEventsHook,
     ll::memory::HookPriority::Normal,
     StartMenuScreenController,
-    &StartMenuScreenController::_registerEventHandlers,
+    &StartMenuScreenController::$onCreation,
     void
 ) {
     origin();

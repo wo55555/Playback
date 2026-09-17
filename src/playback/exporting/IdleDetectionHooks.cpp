@@ -5,7 +5,8 @@
 
 #include "ll/api/memory/Hook.h"
 
-#include "mc/client/game/MinecraftGame.h"
+#include "mc/client/game/IMinecraftGame.h"
+#include "mc/client/gui/SceneStackNavigation.h"
 #include "mc/client/gui/oreui/Idle.h"
 #include "mc/client/gui/oreui/routing/Router.h"
 #include "mc/deps/application/AppPlatform.h"
@@ -37,15 +38,17 @@ LL_TYPE_INSTANCE_HOOK(
     return origin();
 }
 
-LL_TYPE_INSTANCE_HOOK(
+// 26.40 moved pause navigation out of the MinecraftGame virtual into a SceneStackNavigation free
+// function, so this becomes a static hook. Suppression never needed the instance anyway.
+LL_STATIC_HOOK(
     PlaybackPauseHook,
     ll::memory::HookPriority::Highest,
-    MinecraftGame,
-    &MinecraftGame::$openPauseMenu,
-    void
+    &SceneStackNavigation::openPauseMenu,
+    void,
+    ::IMinecraftGame& minecraftGame
 ) {
     if (shouldSuppressGameInterruptions()) return;
-    origin();
+    origin(minecraftGame);
 }
 
 // The idle screen is an HBUI route, not a native screen, so it has to be blocked at the router.

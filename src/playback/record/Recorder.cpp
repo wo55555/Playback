@@ -27,6 +27,7 @@
 #include "mc/network/packet/AddPlayerPacket.h"
 #include "mc/network/packet/AnimatePacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
+#include "mc/network/packet/ChangeEntityScore.h"
 #include "mc/network/packet/DimensionDataPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
@@ -38,7 +39,6 @@
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/PlayerListPacketType.h"
 #include "mc/network/packet/RemoveActorPacket.h"
-#include "mc/network/packet/ScorePacketInfo.h"
 #include "mc/network/packet/SetActorDataPacket.h"
 #include "mc/network/packet/SetActorLinkPacket.h"
 #include "mc/network/packet/SetActorMotionPacket.h"
@@ -100,6 +100,7 @@
 #include <thread>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 PlayerInputTick::PlayerInputTick() { mValue = 0; }
@@ -231,15 +232,13 @@ bool remapRecordedPlayerReferences(
     switch (packet.getId()) {
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
-        bool  changed   = addPlayer.mEntityId->rawID == sourceUniqueId.rawID
-                       || addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
+        bool  changed   = addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
         for (auto& link : *addPlayer.mLinks) {
             changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
             changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
         }
         if (!changed) return false;
         addPlayer.mUuid      = targetUuid;
-        addPlayer.mEntityId  = targetUniqueId;
         addPlayer.mRuntimeId = targetRuntimeId;
         addPlayer.mPlatformOnlineId->clear();
         addPlayer.mDeviceId->clear();
@@ -249,12 +248,14 @@ bool remapRecordedPlayerReferences(
         bool  changed    = false;
         auto& playerList = static_cast<PlayerListPacket&>(packet);
         for (auto& entry : *playerList.mEntries) {
-            if (entry.mId->rawID != sourceUniqueId.rawID && *entry.mUUID != sourceUuid) continue;
-            entry.mId   = targetUniqueId;
-            entry.mUUID = targetUuid;
-            entry.mXUID->clear();
-            entry.mPlatformOnlineId->clear();
-            changed = true;
+            if (auto entryP = std::get_if<PlayerListPacketPayload::AddEntry>(&entry)) {
+                if (entryP->mId->rawID != sourceUniqueId.rawID && *entryP->mUUID != sourceUuid) continue;
+                entryP->mId   = targetUniqueId;
+                entryP->mUUID = targetUuid;
+                entryP->mXUID->clear();
+                entryP->mPlatformOnlineId->clear();
+                changed = true;
+            }
         }
         return changed;
     }
@@ -893,12 +894,11 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
                             }
                             auto level = std::static_pointer_cast<LevelChunkPacket>(std::move(levelBase));
 
-                            level->mPos                           = pos;
-                            level->mDimensionId                   = dimension;
-                            level->mCacheEnabled                  = false;
-                            level->mSubChunksCount                = 0;
-                            level->mClientNeedsToRequestSubchunks = true;
-                            level->mClientRequestSubChunkLimit    = -1;
+                            level->mPos                        = pos;
+                            level->mDimensionId                = dimension;
+                            level->mCacheEnabled               = false;
+                            level->mSubChunksCount             = 0;
+                            level->mClientRequestSubChunkLimit = -1;
                             level->mCacheMetadata->clear();
 
                             stage = "serializing biome and border data";
@@ -1109,7 +1109,6 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
 
             auto&       playerListPacket = static_cast<PlayerListPacket&>(*packet);
             auto const& playerList       = level.getPlayerList();
-            playerListPacket.mAction     = PlayerListPacketType::Add;
             playerListPacket.mEntries->reserve(snapshotPlayers.size());
             for (auto const* player : snapshotPlayers) {
                 auto            entry = playerList.find(player->getUuid());
@@ -1159,7 +1158,6 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         // The recorded local player is required snapshot state, independent of the transient runtime actor list.
         AddPlayerPacket recordedPlayer(*finalPlayer);
         recordedPlayer.mUuid           = *mRecordedLocalPlayerUuid;
-        recordedPlayer.mEntityId       = *mRecordedLocalPlayerId;
         recordedPlayer.mRuntimeId      = *mRecordedLocalPlayerRuntimeId;
         recordedPlayer.mPlayerGameType = finalPlayer->getPlayerGameType();
         recordedPlayer.mPlatformOnlineId->clear();
@@ -1205,13 +1203,17 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         auto const localPlayerId = finalPlayer->getOrCreateUniqueID();
         for (auto const* objective : displayedObjectives) {
             for (auto const& [scoreboardId, score] : *objective->mScores) {
-                SetScorePacket packet(ScorePacketType::Change, scoreboardId, *objective);
+                SetScorePacket packet(SetScorePacketPayload::change(scoreboardId, *objective));
                 for (auto& info : *packet.mScoreInfo) {
-                    info.mScoreValue = score;
-                    if (info.mPlayerId->mActorUniqueId == localPlayerId.rawID) {
-                        info.mPlayerId->mActorUniqueId = mRecordedLocalPlayerId->rawID;
+                    if (auto infoP = std::get_if<ChangePlayerScore>(&info)) {
+                        infoP->mScoreValue = score;
+                        if (infoP->mPlayerId->mActorUniqueId == localPlayerId.rawID) {
+                            infoP->mPlayerId->mActorUniqueId = mRecordedLocalPlayerId->rawID;
+                        }
                     }
-                    if (info.mEntityId == localPlayerId) info.mEntityId = *mRecordedLocalPlayerId;
+                    if (auto infoP = std::get_if<ChangeEntityScore>(&info)) {
+                        if (infoP->mEntityId == localPlayerId) infoP->mEntityId = *mRecordedLocalPlayerId;
+                    }
                 }
                 appendEntityPacket(packet);
             }
@@ -1706,13 +1708,12 @@ void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimens
         return;
     }
 
-    auto level                            = std::static_pointer_cast<LevelChunkPacket>(std::move(levelBase));
-    level->mPos                           = pos;
-    level->mDimensionId                   = dimension.getDimensionId();
-    level->mCacheEnabled                  = false;
-    level->mSubChunksCount                = 0;
-    level->mClientNeedsToRequestSubchunks = true;
-    level->mClientRequestSubChunkLimit    = -1;
+    auto level                         = std::static_pointer_cast<LevelChunkPacket>(std::move(levelBase));
+    level->mPos                        = pos;
+    level->mDimensionId                = dimension.getDimensionId();
+    level->mCacheEnabled               = false;
+    level->mSubChunksCount             = 0;
+    level->mClientRequestSubChunkLimit = -1;
     level->mCacheMetadata->clear();
 
     BinaryStream     levelPayload;
@@ -1781,9 +1782,8 @@ void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet) {
 
     auto const& pos          = *packet.mPos;
     auto const  dimensionId  = *packet.mDimensionId;
-    bool const  requestMode  = static_cast<bool>(packet.mClientNeedsToRequestSubchunks);
     bool const  cacheEnabled = static_cast<bool>(packet.mCacheEnabled);
-    if (requestMode && !cacheEnabled) {
+    if (!cacheEnabled) {
         {
             std::scoped_lock lock(mPendingPortableChunksMutex);
             auto const       byDimension = mPendingPortableChunks.find(dimensionId);
@@ -1820,14 +1820,6 @@ void Recorder::recordGamePacket(Packet const& packet) {
     if (!recordingTimeline) return;
 
     try {
-        if (packetId == MinecraftPacketIds::AddActor
-            && static_cast<AddActorPacket const&>(packet).mEntityData == nullptr) {
-            return;
-        }
-        if (packetId == MinecraftPacketIds::AddItemActor
-            && static_cast<AddItemActorPacket const&>(packet).mEntityData == nullptr) {
-            return;
-        }
         if (packetId == MinecraftPacketIds::FullChunkData
             && static_cast<bool>(static_cast<LevelChunkPacket const&>(packet).mCacheEnabled)) {
             return;

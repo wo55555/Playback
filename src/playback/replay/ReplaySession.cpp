@@ -10,12 +10,12 @@
 #include "ll/api/service/TargetedBedrock.h"
 #include "ll/api/thread/ServerThreadExecutor.h"
 
-#include "mc-external/IOptionRegistry.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
 #include "mc/client/model/GeometryGroup.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
+#include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/particle/ParticleEngine.h"
 #include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 #include "mc/client/player/LocalPlayer.h"
@@ -51,10 +51,11 @@
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
 #include "mc/network/packet/PackInfoData.h"
+#include "mc/network/packet/PacksInfoData.h"
 #include "mc/network/packet/PlayerActionPacket.h"
 #include "mc/network/packet/PlayerActionType.h"
 #include "mc/network/packet/PlayerListPacket.h"
-#include "mc/network/packet/PlayerListPacketType.h"
+#include "mc/network/packet/PlayerListPacketPayload.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/RemoveObjectivePacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
@@ -74,6 +75,7 @@
 #include "mc/util/VarIntDataInput.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/player/LayeredAbilities.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
@@ -96,6 +98,7 @@
 #include "mc/world/level/block/definition/BlockDefinition.h"
 #include "mc/world/level/block/definition/BlockDefinitionGroup.h"
 #include "mc/world/level/block/definition/BlockDescription.h"
+#include "mc/world/level/block/definition/ServerBlockProperty.h"
 #include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/chunk/ChunkSource.h"
 #include "mc/world/level/chunk/ChunkViewSource.h"
@@ -105,7 +108,6 @@
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
-
 
 #include "snappy.h"
 #include "uuid.h"
@@ -1405,7 +1407,7 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
     std::shared_ptr<ResourcePacksInfoPacket> info;
     if (serializedInfo) {
         info      = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
-        auto keys = info->mData->collectKeys();
+        auto keys = info->toPacksInfoData().collectKeys();
         mReplayCachedResourcePacksLoaded = true;
         repository.addCachedResourcePacks(&keys);
     }
@@ -1537,13 +1539,13 @@ void ReplaySession::applyRecordedBlockRegistry() {
     }
 }
 
-size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties) {
+size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<ServerBlockProperty> const& properties) {
     auto client = ll::service::getClientInstance();
     if (!client) return 0;
 
-    auto                            geometry        = client->getGeometryGroup();
-    auto&                           resourceManager = client->getResourcePackManager();
-    MinEngineVersion                minEngineVersion;
+    auto                            geometry         = client->getGeometryGroup();
+    auto&                           resourceManager  = client->getResourcePackManager();
+    auto                            minEngineVersion = MinEngineVersion::fromString("0.0.0");
     std::unordered_set<std::string> geometryPaths;
 
     std::function<void(CompoundTagVariant const&)> collectGeometryNames;
@@ -1570,7 +1572,7 @@ size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::st
     };
 
     for (auto const& [name, tag] : properties) {
-        for (auto const& [key, value] : tag) collectGeometryNames(value);
+        for (auto const& [key, value] : *tag) collectGeometryNames(value);
     }
 
     size_t loaded = 0;
@@ -1583,9 +1585,7 @@ size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::st
     return loaded;
 }
 
-size_t ReplaySession::injectRecordedBlockMaterialComponents(
-    std::vector<std::pair<std::string, CompoundTag>> const& properties
-) {
+size_t ReplaySession::injectRecordedBlockMaterialComponents(std::vector<ServerBlockProperty> const& properties) {
     auto level = ll::service::getLevel();
     if (!level) return 0;
 
@@ -2254,17 +2254,11 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
                 return existing.pos == pos;
             });
             if (duplicate != levelChunks.end()) duplicate->index = index;
-            if (static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)) {
-                requestModeLevelChunks.emplace(pos);
-            } else {
-                requestModeLevelChunks.erase(pos);
-            }
+            requestModeLevelChunks.emplace(pos);
             targetColumns[pos].levelChunkIndex = index;
             continue;
         }
-        if (static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)) {
-            requestModeLevelChunks.emplace(pos);
-        }
+        requestModeLevelChunks.emplace(pos);
         targetColumns[pos].levelChunkIndex = index;
         levelChunks.push_back(PrioritizedLevelChunk{pos, distanceSquared(pos), index});
     }
@@ -3126,7 +3120,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 visuals::queueReplayEntityPose(*renderKey, previousPose, currentPose);
             }
 
-            if (actor->isRiding()) {
+            if (actor->isRiding(nullptr)) {
                 actor->mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
                 actor->mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
                 pinReplayEntityHeadRotation(*actor, headYaw, bodyYaw);
@@ -3318,20 +3312,21 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     if (packetId == MinecraftPacketIds::PlayerList) {
         auto& playerList = static_cast<PlayerListPacket&>(*packet);
-        if (playerList.mAction == PlayerListPacketType::Add) {
-            auto& entries = *playerList.mEntries;
-            // Servers may withhold a player's skin; drop only that entry so the rest of the list still spawns.
-            auto removed = std::erase_if(entries, [](PlayerListEntry const& entry) {
-                if (entry.mSkin->mSkinImpl) return false;
-                getLogger().debug("Skipping replay player-list entry '{}' without skin data", *entry.mName);
-                return true;
-            });
-            if (entries.empty()) {
-                if (removed != 0) getLogger().warn("Skipping a replay player-list packet with no usable entries");
-                return true;
-            }
-            for (auto& entry : entries) {
-                entry.mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
+        auto& entries    = *playerList.mEntries;
+        // Servers may withhold a player's skin; drop only that entry so the rest of the list still spawns.
+        auto removed = std::erase_if(entries, [](auto const& entry) {
+            auto const* addEntry = std::get_if<PlayerListPacketPayload::AddEntry>(&entry);
+            if (!addEntry || addEntry->mSkin->mSkinImpl) return false;
+            getLogger().debug("Skipping replay player-list entry '{}' without skin data", *addEntry->mName);
+            return true;
+        });
+        if (entries.empty()) {
+            if (removed != 0) getLogger().warn("Skipping a replay player-list packet with no usable entries");
+            return true;
+        }
+        for (auto& entry : entries) {
+            if (auto* addEntry = std::get_if<PlayerListPacketPayload::AddEntry>(&entry)) {
+                addEntry->mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
             }
         }
     }
@@ -3371,7 +3366,8 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
         if (addPlayer.mPlayerGameType == GameType::Default || addPlayer.mPlayerGameType == GameType::Undefined) {
-            auto const& abilities = *addPlayer.mAbilities;
+            LayeredAbilities abilities;
+            addPlayer.mAbilitiesData->fillIn(abilities);
             if (abilities.getBool(AbilitiesIndex::NoClip)) {
                 addPlayer.mPlayerGameType = GameType::Spectator;
             } else if (abilities.getBool(AbilitiesIndex::Instabuild)) {
@@ -3382,7 +3378,6 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 addPlayer.mPlayerGameType = GameType::Adventure;
             }
         }
-        entityId  = *addPlayer.mEntityId;
         runtimeId = *addPlayer.mRuntimeId;
         break;
     }
@@ -3542,7 +3537,7 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
     }
 
     auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
-    if (static_cast<bool>(levelChunk.mCacheEnabled) || !static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)
+    if (static_cast<bool>(levelChunk.mCacheEnabled)
         || static_cast<DimensionType const&>(levelChunk.mDimensionId) != replayDimension->getDimensionId()) {
         return false;
     }
