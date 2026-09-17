@@ -28,6 +28,8 @@
 #include "mc/network/packet/AnimatePacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
 #include "mc/network/packet/ChangeEntityScore.h"
+#include "mc/network/packet/ChangeFakePlayerScore.h"
+#include "mc/network/packet/ChangePlayerScore.h"
 #include "mc/network/packet/DimensionDataPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
@@ -39,6 +41,7 @@
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/PlayerListPacketType.h"
 #include "mc/network/packet/RemoveActorPacket.h"
+#include "mc/network/packet/RemoveScore.h"
 #include "mc/network/packet/SetActorDataPacket.h"
 #include "mc/network/packet/SetActorLinkPacket.h"
 #include "mc/network/packet/SetActorMotionPacket.h"
@@ -98,6 +101,7 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -1205,15 +1209,25 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
             for (auto const& [scoreboardId, score] : *objective->mScores) {
                 SetScorePacket packet(SetScorePacketPayload::change(scoreboardId, *objective));
                 for (auto& info : *packet.mScoreInfo) {
-                    if (auto infoP = std::get_if<ChangePlayerScore>(&info)) {
-                        infoP->mScoreValue = score;
-                        if (infoP->mPlayerId->mActorUniqueId == localPlayerId.rawID) {
-                            infoP->mPlayerId->mActorUniqueId = mRecordedLocalPlayerId->rawID;
-                        }
-                    }
-                    if (auto infoP = std::get_if<ChangeEntityScore>(&info)) {
-                        if (infoP->mEntityId == localPlayerId) infoP->mEntityId = *mRecordedLocalPlayerId;
-                    }
+                    // Every "change" variant carries a score; only the owner reference differs.
+                    std::visit(
+                        [&](auto& entry) {
+                            using Entry = std::decay_t<decltype(entry)>;
+                            if constexpr (std::is_same_v<Entry, RemoveScore>) {
+                                return;
+                            } else {
+                                entry.mScoreValue = score;
+                                if constexpr (std::is_same_v<Entry, ChangePlayerScore>) {
+                                    if (entry.mPlayerId->mActorUniqueId == localPlayerId.rawID) {
+                                        entry.mPlayerId->mActorUniqueId = mRecordedLocalPlayerId->rawID;
+                                    }
+                                } else if constexpr (std::is_same_v<Entry, ChangeEntityScore>) {
+                                    if (entry.mEntityId == localPlayerId) entry.mEntityId = *mRecordedLocalPlayerId;
+                                }
+                            }
+                        },
+                        info
+                    );
                 }
                 appendEntityPacket(packet);
             }
@@ -1780,10 +1794,12 @@ void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet) {
     auto const state = mState.load(std::memory_order_acquire);
     if (state != State::Recording && state != State::Closing) return;
 
-    auto const& pos          = *packet.mPos;
-    auto const  dimensionId  = *packet.mDimensionId;
-    bool const  cacheEnabled = static_cast<bool>(packet.mCacheEnabled);
-    if (!cacheEnabled) {
+    auto const& pos         = *packet.mPos;
+    auto const  dimensionId = *packet.mDimensionId;
+    // 26.40 folded the request-mode flag into the limit: a value means the client must request subchunks.
+    bool const requestMode  = packet.mClientRequestSubChunkLimit->has_value();
+    bool const cacheEnabled = static_cast<bool>(packet.mCacheEnabled);
+    if (requestMode && !cacheEnabled) {
         {
             std::scoped_lock lock(mPendingPortableChunksMutex);
             auto const       byDimension = mPendingPortableChunks.find(dimensionId);

@@ -36,8 +36,8 @@ class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
 class StartGamePacket;
 struct DimensionArguments;
+struct ServerBlockProperty;
 enum class MinecraftPacketIds : int;
-class ServerBlockProperty;
 
 namespace playback::replay {
 using playback::io::AsyncReplaySaver;

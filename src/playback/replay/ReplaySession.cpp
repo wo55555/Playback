@@ -3537,7 +3537,8 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
     }
 
     auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
-    if (static_cast<bool>(levelChunk.mCacheEnabled)
+    // 26.40 folded the request-mode flag into the limit: a value means the client must request subchunks.
+    if (static_cast<bool>(levelChunk.mCacheEnabled) || !levelChunk.mClientRequestSubChunkLimit->has_value()
         || static_cast<DimensionType const&>(levelChunk.mDimensionId) != replayDimension->getDimensionId()) {
         return false;
     }
