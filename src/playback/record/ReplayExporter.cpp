@@ -85,7 +85,7 @@ bool ReplayExporter::exportReplay(
     std::string_view             name
 ) {
     auto& logger = getLogger();
-    logger.info("Exporting {} to {}", recordDir, outputFile);
+    logger.debug("Exporting {} to {}", recordDir, outputFile);
 
     auto meta = tryReadMeta(recordDir / "metadata.json");
 

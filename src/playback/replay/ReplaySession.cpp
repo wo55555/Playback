@@ -444,7 +444,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         mCleanupState = CleanupState::None;
         mActive       = true;
         screenModel->startLocalServerAsync(mReplayLevelId, "Playback Replay", settings);
-        getLogger().info("Starting replay from {} in {}", mReplayFilePath, mReplayLevelId);
+        getLogger().debug("Starting replay from {} in {}", mReplayFilePath, mReplayLevelId);
         return true;
     } catch (std::exception const& e) {
         getLogger().error("Unable to start replay: {}", e.what());
