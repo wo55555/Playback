@@ -150,7 +150,7 @@ bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
     return true;
 }
 
-// Find or create a camera track so the shortcut works without a prior selection.
+// Resolves a target track so the shortcut works without a prior selection.
 std::string TimelinePanel::resolveKeyframeTargetCamera(PanelContext const& ctx) const {
     auto const project = ctx.state.project;
     if (!project) return {};
@@ -984,7 +984,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     drawExportRange(ctx, layout, scale, allowInput);
 
     if (allowInput && !mDraggingKeyframeCameraId.empty()) {
-        if (std::abs(ImGui::GetMousePos().x - mDraggingKeyframeStartMouseX) > 2.0f) mDraggingKeyframeMoved = true;
+        // Any horizontal movement latches into a drag, so a plain click only seeks.
+        if (ImGui::GetMousePos().x != mDraggingKeyframeStartMouseX) mDraggingKeyframeMoved = true;
         int const candidateTick =
             mDraggingKeyframeMoved ? boundedKeyframeTick(snapTick(tickFromMouse())) : mDraggingKeyframeStartTick;
         mDraggingKeyframeTick = candidateTick;
