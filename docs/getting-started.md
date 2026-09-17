@@ -8,8 +8,8 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 
 | Minecraft / LeviLamina | Playback release                                                                    |
 | ---------------------- | ----------------------------------------------------------------------------------- |
-| `26.10.*`              | [`v0.3.0-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.0-mc26.10) |
-| `26.20.*`              | [`v0.3.0-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.0-mc26.20) |
+| `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) |
+| `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) |
 
 > [!IMPORTANT]
 > Use a clean LeviLamina instance without other third-party mods whenever possible. Broad mod compatibility is not currently guaranteed.
@@ -18,7 +18,7 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 > Vibrant Visuals is not supported yet. Turn it off in the video settings before recording, replaying, or exporting; leaving it on is untested and can break rendering and capture.
 
 > [!CAUTION]
-> `v0.3.0-mc26.10` is a test release. Replay archives created before `v0.2.0-mc26.10` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.x-mc26.10` archives are compatible with `v0.3.0-mc26.10` and require no conversion. The configuration version, recording-file snapshot context version, and editor project format version are all `1`; no migration is provided.
+> `v0.3.1-mc26.10` is a test release. Replay archives created before `v0.2.0-mc26.10` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.x-mc26.10` and `v0.3.0-mc26.10` archives are compatible with `v0.3.1-mc26.10` and require no conversion. The configuration version, recording-file snapshot context version, and editor project format version are all `1`; no migration is provided.
 
 ## Install with LeviLauncher and Lip
 
@@ -62,10 +62,10 @@ Run the matching command from the root directory of the target LeviLamina instan
 
 ```powershell
 # Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.3.0-mc26.10#client
+lip install github.com/wo55555/Playback@0.3.1-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
-lip install github.com/wo55555/Playback@0.3.0-mc26.20#client
+lip install github.com/wo55555/Playback@0.3.1-mc26.20#client
 ```
 
 > [!NOTE]
@@ -102,6 +102,36 @@ record stop
 4. Add more keyframes and play the replay to preview the interpolated camera. Pausing returns control to the freely movable observer camera.
 
 Camera interpolation is automatically split at every recorded dimension change. Keyframes in different dimension segments never interpolate through each other, including when an intermediate dimension contains no camera keyframes.
+
+## Keyboard Shortcuts
+
+**Help > Keyboard Shortcuts** lists the current bindings in the editor.
+
+| Shortcut                        | Action                          |
+| ------------------------------- | ------------------------------- |
+| `Space`                         | Play / pause                    |
+| `Home` / `End`                  | Jump to start / end             |
+| `Left` / `Right`                | Seek 1 second                   |
+| `Ctrl+Left` / `Ctrl+Right`      | Seek 1 tick                     |
+| `Up` / `Down`                   | Next / previous edit point      |
+| `J` / `L`                       | Slower / faster playback        |
+| `-` / `=`                       | Zoom timeline out / in          |
+| `Alt+Wheel`                     | Zoom timeline around the cursor |
+| `\`                             | Zoom timeline to fit            |
+| `K`                             | Add a camera keyframe           |
+| `Ctrl+Shift+N`                  | Add a camera track              |
+| `1` / `2` / `3`                 | Switch to camera 1 / 2 / 3      |
+| `I` / `O`                       | Mark the export in / out point  |
+| `Delete` / `Backspace`          | Delete the selected item        |
+| `Ctrl+Z` / `Ctrl+Y`             | Undo / redo                     |
+| `Ctrl+S`                        | Save the project                |
+| `Ctrl+E`                        | Open the export settings        |
+| `Ctrl+Shift+F`                  | Maximize / restore the viewport |
+| `Ctrl+Shift+-` / `Ctrl+Shift+=` | Smaller / larger interface      |
+| `Ctrl+Shift+0`                  | Reset the interface scale       |
+| `Esc` (hold 0.8 s)              | Exit the replay and save        |
+
+Keyboard input belongs to the editor while it is open. Hold the left mouse button over the game viewport to drive the observer camera; shortcuts pause while it is held.
 
 ## Experimental Video Export
 

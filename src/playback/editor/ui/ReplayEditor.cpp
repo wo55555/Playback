@@ -4,6 +4,7 @@
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/ErrorDialog.h"
+#include "playback/editor/ui/components/Widgets.h"
 
 #include "imgui.h"
 #include "nlohmann/json.hpp"
@@ -45,8 +46,9 @@ void ReplayEditor::shutdown() {
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
     mViewportMaximized = false;
-    mFrameState        = nullptr;
-    mSubmit            = nullptr;
+    mViewportPanel.clearCameraPath();
+    mFrameState = nullptr;
+    mSubmit     = nullptr;
     mSelection.clear();
     mLastExportState = exporting::ExportState::Idle;
     mExitHoldSeconds = 0.0f;
@@ -58,10 +60,23 @@ void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
     saveLayoutPreferences();
 }
 
+void ReplayEditor::toggleCameraPath() {
+    mCameraPathVisible = !mCameraPathVisible;
+    saveLayoutPreferences();
+}
+
+void ReplayEditor::setUiScaleTier(UiScaleTier tier) {
+    mUiScaleTier = tier;
+    setCurrentUiScaleTier(tier);
+    saveLayoutPreferences();
+}
+
 void ReplayEditor::loadLayoutPreferences() {
     mDetailsWidthRatio   = 0.28f;
     mTimelineHeightRatio = 0.35f;
     mVideoAspectRatio    = 16.0f / 9.0f;
+    mCameraPathVisible   = true;
+    mUiScaleTier         = UiScaleTier::Auto;
     mTimelinePanel.setViewPreferences(0.30f, 1.0f, 0.0f);
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
@@ -70,6 +85,12 @@ void ReplayEditor::loadLayoutPreferences() {
     if (input) {
         auto const config = nlohmann::ordered_json::parse(input, nullptr, false);
         if (config.is_object()) {
+            auto const cameraPath = config.find("showCameraPath");
+            if (cameraPath != config.end() && cameraPath->is_boolean()) mCameraPathVisible = cameraPath->get<bool>();
+            auto const uiScale = config.find("uiScale");
+            if (uiScale != config.end() && uiScale->is_string()) {
+                mUiScaleTier = uiScaleTierFromName(uiScale->get<std::string>());
+            }
             mDetailsWidthRatio =
                 std::clamp(readFiniteFloat(config, "detailsWidthRatio", mDetailsWidthRatio), 0.15f, 0.50f);
             mTimelineHeightRatio =
@@ -98,6 +119,7 @@ void ReplayEditor::loadLayoutPreferences() {
         }
     }
     mViewportPanel.setVideoAspectRatio(mVideoAspectRatio);
+    setCurrentUiScaleTier(mUiScaleTier);
 }
 
 void ReplayEditor::saveLayoutPreferences() const {
@@ -117,11 +139,13 @@ void ReplayEditor::saveLayoutPreferences() const {
     }
 
     nlohmann::ordered_json const config{
-        {"detailsWidthRatio",   mDetailsWidthRatio                  },
-        {"timelineHeightRatio", mTimelineHeightRatio                },
-        {"videoAspectRatio",    mVideoAspectRatio                   },
-        {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()},
-        {"timelineViews",       std::move(timelineViews)            }
+        {"detailsWidthRatio",   mDetailsWidthRatio                        },
+        {"timelineHeightRatio", mTimelineHeightRatio                      },
+        {"videoAspectRatio",    mVideoAspectRatio                         },
+        {"showCameraPath",      mCameraPathVisible                        },
+        {"uiScale",             std::string(uiScaleTierName(mUiScaleTier))},
+        {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()      },
+        {"timelineViews",       std::move(timelineViews)                  }
     };
     std::ofstream output(kLayoutPreferencesPath, std::ios::trunc);
     if (output) {
@@ -131,6 +155,7 @@ void ReplayEditor::saveLayoutPreferences() const {
 
 void ReplayEditor::syncTimelineViewPreferences(std::string_view replayPath) {
     if (mActiveReplayPath == replayPath) return;
+    mViewportPanel.clearCameraPath();
     bool const enteringReplay = mActiveReplayPath.empty() && !replayPath.empty();
 
     if (!mActiveReplayPath.empty()) {
@@ -173,7 +198,7 @@ void ReplayEditor::openExportDialog() {
 
 PanelContext ReplayEditor::frameContext() {
     static SubmitAction const noSubmit{};
-    return {state(), mSelection, mSubmit ? *mSubmit : noSubmit, *this};
+    return {state(), mSelection, mSubmit ? *mSubmit : noSubmit, *this, graphics::currentRenderCameraProjection()};
 }
 
 void ReplayEditor::seekTo(int tick) { mTimelinePanel.seekTo(frameContext(), tick); }
@@ -183,6 +208,19 @@ void ReplayEditor::seekRelative(int tickDelta) { mTimelinePanel.seekRelative(fra
 bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(frameContext()); }
 
 bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(frameContext()); }
+
+bool ReplayEditor::selectCameraByIndex(std::size_t index) {
+    auto const project = state().project;
+    if (!project || index >= project->cameras.size()) return false;
+
+    auto const& camera = project->cameras[index];
+    mSelection.select(state::editing::model::SelectedCamera{camera.id});
+    // Matches the viewport dropdown: selecting a camera also previews through it.
+    playback::state::EditorAction action{playback::state::EditorActionType::SetPreviewCamera};
+    action.id = camera.id;
+    submitAction(std::move(action));
+    return true;
+}
 
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
@@ -201,10 +239,9 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     syncTimelineViewPreferences(replayPath);
     mFrameState = &state;
     mSubmit     = &submit;
+    // A reloaded or edited project can drop the selected object; without this the inspector shows "missing".
+    if (state.project) mSelection.pruneInvalid(*state.project);
 
-    auto&       io             = ImGui::GetIO();
-    float const savedFontScale = io.FontGlobalScale;
-    io.FontGlobalScale         = savedFontScale * (18.0f / 14.0f);
     theme::apply();
 
     if (exportActive && mModeManager.current() != EditorMode::Render) {
@@ -226,9 +263,8 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     updateExitHold();
     if (!exportActive) handleKeyboardShortcuts();
 
-    io.FontGlobalScale = savedFontScale;
-    mFrameState        = nullptr;
-    mSubmit            = nullptr;
+    mFrameState = nullptr;
+    mSubmit     = nullptr;
 }
 
 void ReplayEditor::updateExitHold() {
@@ -288,6 +324,22 @@ void ReplayEditor::handleKeyboardShortcuts() {
         (void)addKeyframeAtPlayhead();
         return;
     }
+    if (input::KeyMap::pressed(EditorKeybind::AddCameraTrack)) {
+        submitAction({playback::state::EditorActionType::AddFreeCamera});
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SelectCamera1)) {
+        (void)selectCameraByIndex(0);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SelectCamera2)) {
+        (void)selectCameraByIndex(1);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SelectCamera3)) {
+        (void)selectCameraByIndex(2);
+        return;
+    }
     if (input::KeyMap::pressed(EditorKeybind::JumpStart)) {
         seekTo(0);
         return;
@@ -330,6 +382,30 @@ void ReplayEditor::handleKeyboardShortcuts() {
     }
     if (input::KeyMap::pressed(EditorKeybind::ResetTimelineZoom)) {
         mTimelinePanel.resetZoom();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::IncreaseUiScale)) {
+        setUiScaleTier(steppedUiScaleTier(mUiScaleTier, 1, ImGui::GetIO().DisplaySize.y));
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::DecreaseUiScale)) {
+        setUiScaleTier(steppedUiScaleTier(mUiScaleTier, -1, ImGui::GetIO().DisplaySize.y));
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ResetUiScale)) {
+        setUiScaleTier(UiScaleTier::Auto);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::TogglePlayback)) {
+        submitAction({playback::state::EditorActionType::TogglePause});
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::MarkExportIn)) {
+        mMenuBar.markExportPoint(true, state().currentTick, state().totalTicks);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::MarkExportOut)) {
+        mMenuBar.markExportPoint(false, state().currentTick, state().totalTicks);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::DecreaseSpeed, true)) {

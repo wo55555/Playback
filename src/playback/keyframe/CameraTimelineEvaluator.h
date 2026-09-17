@@ -6,6 +6,7 @@
 #include "playback/visuals/ReplaySampleTime.h"
 
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -34,8 +35,6 @@ private:
     std::unordered_map<std::string, std::vector<CameraTrackSegment>> mKeyframeTracks;
 
 private:
-    [[nodiscard]] size_t dimensionSegmentForTick(long double tick) const noexcept;
-
     [[nodiscard]] state::editing::model::CameraEntity const* cameraForTick(int64_t tick) const;
 
     [[nodiscard]] std::optional<CameraRenderState>
@@ -43,6 +42,11 @@ private:
     sampleCamera(state::editing::model::CameraEntity const& camera, long double tick) const;
 
 public:
+    [[nodiscard]] size_t dimensionSegmentForTick(long double tick) const noexcept;
+    [[nodiscard]] std::span<state::editing::model::CameraEntity const> cameras() const noexcept {
+        return mProject.cameras;
+    }
+
     explicit CameraTimelineEvaluator(
         state::editing::model::EditorStateExt project,
         std::optional<std::string>            cameraOverride           = std::nullopt,

@@ -33,15 +33,6 @@ bool trimSegment(model::WorldActor& worldActor, const std::string& id, int start
     it->endTick   = end;
     return true;
 }
-bool setSpeed(model::WorldActor& worldActor, const std::string& id, float speed) {
-    auto it = std::find_if(worldActor.segments.begin(), worldActor.segments.end(), [&](const auto& segment) {
-        return segment.id == id;
-    });
-    if (it == worldActor.segments.end() || it->locked || !std::isfinite(speed) || speed <= 0.0f || it->speed == speed)
-        return false;
-    it->speed = speed;
-    return true;
-}
 bool rippleDelete(model::WorldActor& worldActor, const std::string& id, int totalTicks) {
     auto& segments = worldActor.segments;
     auto  it = std::find_if(segments.begin(), segments.end(), [&](const auto& segment) { return segment.id == id; });

@@ -2,8 +2,11 @@
 
 #include "playback/editor/ui/PanelContext.h"
 #include "playback/editor/ui/components/Animator.h"
+#include "playback/editor/ui/components/TimelineScale.h"
 #include "playback/editor/ui/components/TrackTreeModel.h"
 #include "playback/state/EditorAction.h"
+
+#include "imgui.h"
 
 #include <string>
 
@@ -27,8 +30,42 @@ public:
     [[nodiscard]] float horizontalScroll() const { return mScrollX; }
     void                setViewPreferences(float trackListWidthRatio, float zoomScale, float horizontalScroll);
 
+    [[nodiscard]] bool isSnapEnabled() const { return mSnapEnabled; }
+    void               setSnapEnabled(bool enabled) { mSnapEnabled = enabled; }
+    void               toggleSnap() { mSnapEnabled = !mSnapEnabled; }
+
 private:
-    void submitSeek(PanelContext const& ctx, int tick);
+    struct Layout {
+        ImVec2 fullMin{};
+        ImVec2 fullMax{};
+        float  titleBottom{};
+        float  rulerTop{};
+        float  headerHeight{};
+        float  bodyTop{};
+        float  bodyBottom{};
+        float  listWidth{};
+        float  canvasLeft{};
+        float  canvasWidth{};
+    };
+
+    void                      submitSeek(PanelContext const& ctx, int tick);
+    [[nodiscard]] std::string resolveKeyframeTargetCamera(PanelContext const& ctx) const;
+
+    void drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick, bool allowInput);
+    void drawTrackHeaders(PanelContext const& ctx, Layout const& layout, bool allowInput);
+    void drawRuler(
+        PanelContext const&  ctx,
+        Layout const&        layout,
+        TimelineScale const& scale,
+        int                  displayTick
+    ); // Drawn after the track rows so the row bands do not cover it.
+    void drawTrackGrid(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale);
+    // In/out markers for the export range, drawn over the canvas and draggable by their handles.
+    void drawExportRange(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale, bool allowInput);
+
+    void drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput);
+    void drawTitleLabel(PanelContext const& ctx, float height);
+    void drawTransportGroup(PanelContext const& ctx, int displayTick, float width);
 
     TrackTreeModel mTrackTree;
     Animator       mAnimator;
@@ -40,13 +77,19 @@ private:
     int            mRulerDragTick{-1};
     std::string    mTrackSearch;
     bool           mSnapEnabled{true};
-    bool           mCamerasExpanded{true};
     bool           mDraggingPlayhead{};
-    std::string    mDraggingKeyframeCameraId;
-    float          mDraggingKeyframeStartMouseX{};
-    int            mDraggingKeyframeStartTick{};
-    int            mDraggingKeyframeTick{};
-    bool           mDraggingKeyframeMoved{};
+    // 0 none, 1 in marker, 2 out marker.
+    int         mExportMarkerDrag{};
+    std::string mDraggingKeyframeCameraId;
+    float       mDraggingKeyframeStartMouseX{};
+    int         mDraggingKeyframeStartTick{};
+    int         mDraggingKeyframeTick{};
+    bool        mDraggingKeyframeMoved{};
+    // Range-bar drag: 0 none, 1 left handle, 2 right handle, 3 whole window.
+    int   mRangeDragMode{};
+    float mRangeDragOriginX{};
+    float mRangeDragOriginScroll{};
+    float mRangeDragOriginZoom{1.0f};
 };
 
 } // namespace playback::editor::ui

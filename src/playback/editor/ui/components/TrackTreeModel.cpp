@@ -1,5 +1,6 @@
 #include "TrackTreeModel.h"
 
+#include "playback/editor/ui/EditorTheme.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 
 #include <algorithm>
@@ -39,26 +40,26 @@ bool cameraMatchesSearch(const CameraEntity& camera, const WorldActor& worldActo
 
 void TrackTreeModel::setSearch(std::string_view query) { mSearch = query; }
 
-void TrackTreeModel::setCamerasExpanded(bool expanded) { mCamerasExpanded = expanded; }
-
 void TrackTreeModel::rebuild(const EditorStateExt& state) {
     mRows.clear();
     mRows.reserve(state.cameras.size());
 
-    if (mCamerasExpanded) {
-        for (int index = 0; index < static_cast<int>(state.cameras.size()); ++index) {
-            const auto& camera = state.cameras[index];
-            if (!cameraMatchesSearch(camera, state.worldActor, mSearch)) continue;
-            mRows.push_back(
-                {TrackRowKind::Camera,
-                 "camera:" + camera.id,
-                 camera.name,
-                 index,
-                 kCameraRowHeight,
-                 camera.locked,
-                 camera.enabled}
-            );
-        }
+    float const cameraHeight = metrics::cameraRow();
+
+    // Cameras are the only editable tracks; the world and marker rows had nothing to show.
+    for (int index = 0; index < static_cast<int>(state.cameras.size()); ++index) {
+        const auto& camera = state.cameras[index];
+        if (!cameraMatchesSearch(camera, state.worldActor, mSearch)) continue;
+        mRows.push_back(
+            {TrackRowKind::Camera,
+             "camera:" + camera.id,
+             camera.name,
+             camera.id,
+             index,
+             cameraHeight,
+             camera.locked,
+             camera.enabled}
+        );
     }
 }
 

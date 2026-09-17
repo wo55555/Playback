@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -374,6 +375,7 @@ public:
 
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
     [[nodiscard]] std::optional<visuals::ReplaySampleTime> getCameraRenderSampleTime() const noexcept;
+    [[nodiscard]] std::optional<visuals::ReplaySampleTime> getEntityRenderSampleTime() const noexcept;
     void                                                   markReplayTickAdvanced() noexcept;
     [[nodiscard]] float                                    previewPartialTick() const noexcept;
     void                                                   resumePreviewClockFromFrozenPartial() noexcept;
@@ -387,6 +389,10 @@ public:
     [[nodiscard]] float getPlaybackSpeed() const { return mPlaybackSpeed; }
 
     void adjustPlaybackSpeed(int direction);
+
+    // Snaps to the nearest supported speed; the UI offers exactly playbackSpeeds().
+    void                                        setPlaybackSpeed(float speed);
+    [[nodiscard]] static std::span<float const> playbackSpeeds() noexcept;
 
     [[nodiscard]] bool setPaused(bool paused);
 
