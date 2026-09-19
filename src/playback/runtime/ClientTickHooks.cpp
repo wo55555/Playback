@@ -12,8 +12,10 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/SceneType.h"
 #include "mc/client/multiplayer/ClientLevel.h"
+#include "mc/client/player/LocalPlayer.h"
 
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 
@@ -95,17 +97,22 @@ LL_TYPE_INSTANCE_HOOK(
     bool isInitFinished
 ) {
     editor::tickReplayExportBeforeClientUpdate();
+
     auto result = origin(isInitFinished);
+
     editor::graphics::updateReplayMouseOwnership(*this);
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
     // Gates the editor overlay, so loading, progress and sign-in screens must clear first.
     bool hudVisible = false;
     if (isInitFinished && replay.isActive() && replay.hasJoinedReplayWorld()) {
-        auto const topScene = static_cast<unsigned int>(getTopSceneType());
-        auto const hudScene = static_cast<unsigned int>(ui::SceneType::HudScene);
-        hudVisible = (topScene & hudScene) != 0 && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
-                  && !isShowingProgressScreen();
+        auto const topScene       = static_cast<unsigned int>(getTopSceneType());
+        auto const hudScene       = static_cast<unsigned int>(ui::SceneType::HudScene);
+        bool const sceneHasHud    = (topScene & hudScene) != 0;
+        bool const inWorldNoMenu  = isInWorldAndNotShowingAnyMenuScreens();
+        bool const loadingScreen  = isShowingLoadingScreen();
+        bool const progressScreen = isShowingProgressScreen();
+        hudVisible                = sceneHasHud && inWorldNoMenu && !loadingScreen && !progressScreen;
     }
     editor::tickReplayUI(hudVisible);
     replay.tryFinalizeWorldCleanup();

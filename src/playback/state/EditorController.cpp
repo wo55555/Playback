@@ -355,9 +355,9 @@ void EditorController::publishState(bool hudVisible) {
 
     EditorState state;
     state.replayVisible = sessionActive && session.hasJoinedReplayWorld();
-    // Latched, so opening a menu does not flicker the editor away once it is up.
+    // Like Flashback, gate only on the loading/progress screen clearing and let chunks stream in natively.
     if (!sessionActive) mEditorReadyLatched = false;
-    else if (hudVisible && session.isReplayWorldReady()) mEditorReadyLatched = true;
+    else if (hudVisible) mEditorReadyLatched = true;
     state.editorVisible = mEditorReadyLatched;
     state.hudVisible    = hudVisible;
     state.paused        = session.isPaused();
