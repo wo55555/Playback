@@ -1,9 +1,10 @@
-﻿#include "ReplaySession.h"
+#include "ReplaySession.h"
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
+#include "playback/record/Recorder.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
 #include "ll/api/service/Bedrock.h"
@@ -67,6 +68,7 @@
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/network/packet/cerealize/core/SerializationMode.h"
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/resources/MinEngineVersion.h"
 #include "mc/resources/PackInstance.h"
@@ -108,6 +110,7 @@
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
+
 
 #include "snappy.h"
 #include "uuid.h"
@@ -1083,7 +1086,8 @@ void ReplaySession::beginSeek(int targetTick) {
 void ReplaySession::tick() {
     if (!mActive) return;
     try {
-        if (!mReplayWorldJoined || !mNetworkHandler || !refreshReplayPlayer()) return;
+        if (!mReplayWorldJoined || !mNetworkHandler) return;
+        if (!refreshReplayPlayer()) return;
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
@@ -1711,9 +1715,11 @@ void ReplaySession::onWorldReady() {
         return;
     }
 
-    if (mChunkInjectionPending && !tryFinishChunkInjection()) {
-        if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
-        return;
+    if (mChunkInjectionPending) {
+        if (!tryFinishChunkInjection()) {
+            if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
+            return;
+        }
     }
     if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
 
@@ -2189,7 +2195,11 @@ void ReplaySession::resetDimensionScopedReplayState() {
 bool ReplaySession::refreshReplayPlayer() {
     auto  client = ll::service::getClientInstance();
     auto* player = client ? client->getLocalPlayer() : nullptr;
-    if (!player || !isReplayLevel(player->getLevel())) return false;
+    if (!player || !isReplayLevel(player->getLevel())) {
+        // Stale on failure: callers must not act on a player object the engine may have already destroyed.
+        mReplayPlayer = nullptr;
+        return false;
+    }
 
     mReplayPlayer = player;
     if (mPendingReplayDimension && player->getDimensionId() != *mPendingReplayDimension) {
@@ -2514,6 +2524,7 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
     if (!mChunkInjectionPlanPrepared) {
         auto* player = mReplayPlayer;
         if (!player) {
+            getLogger().error("Unable to finish replay chunk injection: replay player is unavailable");
             mReplayFailed = true;
             return false;
         }
@@ -2525,6 +2536,7 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
         PlaybackView view{position.x, position.y, position.z, rotation.y, rotation.x};
         mChunkInjectionStartedAt = std::chrono::steady_clock::now();
         if (!prepareChunkInjectionPlan(view)) {
+            getLogger().error("Unable to prepare the replay chunk injection plan");
             mReplayFailed = true;
             return false;
         }
@@ -2584,6 +2596,7 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
             mPendingSubChunkCursor,
             mPendingSubChunkPackets.size()
         );
+        getLogger().flush();
     }
     if (mChunkInjectionIdleTicks >= CHUNK_INJECTION_STALL_TIMEOUT_TICKS) {
         getLogger().error(
@@ -3301,10 +3314,24 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     if (shouldIgnoreReplayPacket(packetId)) return true;
 
     auto packet = MinecraftPackets::createPacket(packetId);
-    if (!packet || !mNetworkHandler || !packet->mHandler) return false;
+    if (!packet || !mNetworkHandler || !packet->mHandler) {
+        getLogger().error("Unable to create or bind replay game packet {}", static_cast<int>(packetId));
+        return false;
+    }
+
+    // MobArmorEquipmentPacket has no custom ctor initializing mSerializationMode, so the factory's
+    // default (network-context dependent) can disagree with the mode the recorder used to write it.
+    if (packetId == MinecraftPacketIds::MobArmorEquipment) {
+        packet->setSerializationMode(SerializationMode::SemanticSideBySideLogOnMismatch);
+    }
 
     ReadOnlyBinaryStream stream(payload, false);
-    if (!packet->read(stream) || !stream.ensureReadCompleted()) return false;
+    bool const           readOk    = static_cast<bool>(packet->read(stream));
+    bool const           completed = readOk && static_cast<bool>(stream.ensureReadCompleted());
+    if (!readOk || !completed) {
+        getLogger().error("Unable to read or deserialize replay game packet {}", static_cast<int>(packetId));
+        return false;
+    }
 
     if (packetId == MinecraftPacketIds::SetTime) {
         mReplayTime = static_cast<SetTimePacket const&>(*packet).mTime;
@@ -3365,6 +3392,18 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
+        // AddPlayerPacketPayload(Player&) copies mAbilitiesData/mLinks verbatim, which still carry the
+        // real local player's ActorUniqueID; left unmapped, native ability application later destroys it.
+        if (auto client = ll::service::getClientInstance(); client && client->getLocalPlayer()) {
+            auto const realId = client->getLocalPlayer()->getOrCreateUniqueID();
+            if (addPlayer.mAbilitiesData->mTargetPlayer->rawID == realId.rawID) {
+                addPlayer.mAbilitiesData->mTargetPlayer = playback::record::RecordedPlayerUniqueId;
+            }
+            for (auto& link : *addPlayer.mLinks) {
+                if (link.A->rawID == realId.rawID) link.A = playback::record::RecordedPlayerUniqueId;
+                if (link.B->rawID == realId.rawID) link.B = playback::record::RecordedPlayerUniqueId;
+            }
+        }
         if (addPlayer.mPlayerGameType == GameType::Default || addPlayer.mPlayerGameType == GameType::Undefined) {
             LayeredAbilities abilities;
             addPlayer.mAbilitiesData->fillIn(abilities);
@@ -3400,10 +3439,9 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             return true;
         }
 
-        auto runtimeIdManager = level.getActorRuntimeIDManager();
-        if (runtimeIdManager->mLastRuntimeID->rawID < runtimeId.rawID) {
-            runtimeIdManager->mLastRuntimeID = runtimeId;
-        }
+        // Must not raise the engine's global runtime-id allocator to our synthetic sentinel values
+        // (e.g. 1<<62 for the recorded local player): doing so made native code treat the real
+        // local player's (much smaller) runtime id as stale, destroying it a moment later.
     }
 
     // Must also run while chunks are streaming: a seek keeps applying block updates between batches.
@@ -3489,7 +3527,14 @@ bool ReplaySession::flushPendingSnapshotGamePackets(
             continue;
         }
 
-        if (!applyGamePacket(packetId, payload)) return false;
+        if (!applyGamePacket(packetId, payload)) {
+            getLogger().error(
+                "Unable to apply replay snapshot game packet {} (playerListOnly={})",
+                static_cast<int>(packetId),
+                playerListOnly
+            );
+            return false;
+        }
         ++applied;
     }
     if (applied != 0) {
@@ -3661,16 +3706,14 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
             || static_cast<DimensionType const&>(subChunk.mDimensionType) != replayDimension->getDimensionId()) {
             return false;
         }
-        std::vector<SubChunkPacket::SubChunkPacketData> successfulEntries;
-        successfulEntries.reserve(subChunk.mSubChunkData->size());
-        for (auto const& entry : *subChunk.mSubChunkData) {
-            if (isSuccessfulSubChunkResult(static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult))) {
-                successfulEntries.emplace_back(entry);
-            }
-        }
-        *subChunk.mSubChunkData = std::move(successfulEntries);
-        subChunkEntries         = subChunk.mSubChunkData->size();
+        auto& entries      = *subChunk.mSubChunkData;
+        auto  isSuccessful = [](SubChunkPacket::SubChunkPacketData const& entry) {
+            return isSuccessfulSubChunkResult(static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult));
+        };
+        std::erase_if(entries, [&isSuccessful](auto const& entry) { return !isSuccessful(entry); });
+        subChunkEntries = entries.size();
         if (subChunkEntries == 0) return true;
+
     } else {
         return false;
     }
@@ -3751,14 +3794,21 @@ void ReplaySession::setMinecraftScreenModel(std::shared_ptr<MinecraftScreenModel
 void ReplaySession::onLevelJoined(Player& player) {
     if (!mActive) return;
     if (!isReplayLevel(player.getLevel())) {
-        getLogger().error("The replay world did not open; replay cancelled");
+        getLogger().error(
+            "The replay world did not open; replay cancelled (joinedLevelId={}, expectedLevelId={})",
+            player.getLevel().getLevelId(),
+            mReplayLevelId
+        );
+        getLogger().flush();
         stop();
         return;
     }
 
     mReplayWorldJoined = true;
     mReplayPlayer      = &player;
-    (void)refreshReplayPlayer();
+    if (!refreshReplayPlayer()) {
+        getLogger().error("Replay player is unavailable immediately after joining the replay world");
+    }
 }
 
 void ReplaySession::onLevelStartJoin() {

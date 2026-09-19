@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "playback/record/Recorder.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
@@ -68,14 +68,14 @@ struct ReplayCameraViewpoint {
 
 class ReplaySession {
 private:
-    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT          = 64;
-    static constexpr size_t MAX_SUB_CHUNK_ENTRIES_PER_PACKET    = 1536;
-    static constexpr size_t SNAPSHOT_GAME_PACKETS_PER_TICK      = 16;
-    static constexpr int    CHUNK_INJECTION_STALL_TIMEOUT_TICKS = 20 * 30;
-    static constexpr int    DIMENSION_TRANSITION_SETTLE_UPDATES = 2;
-    static constexpr int    REPLAY_WORLD_DELETE_TIMEOUT_TICKS   = 20 * 30;
-    static constexpr auto   DIMENSION_ACK_FALLBACK_DELAY        = std::chrono::seconds{1};
-    static constexpr auto   DIMENSION_TRANSITION_TIMEOUT        = std::chrono::seconds{30};
+    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT       = 64;
+    static constexpr size_t MAX_SUB_CHUNK_ENTRIES_PER_PACKET = 1536;
+    static constexpr size_t SNAPSHOT_GAME_PACKETS_PER_TICK       = 16;
+    static constexpr int    CHUNK_INJECTION_STALL_TIMEOUT_TICKS  = 20 * 30;
+    static constexpr int    DIMENSION_TRANSITION_SETTLE_UPDATES  = 2;
+    static constexpr int    REPLAY_WORLD_DELETE_TIMEOUT_TICKS    = 20 * 30;
+    static constexpr auto   DIMENSION_ACK_FALLBACK_DELAY         = std::chrono::seconds{1};
+    static constexpr auto   DIMENSION_TRANSITION_TIMEOUT         = std::chrono::seconds{30};
 
     enum class CleanupState { None, WaitingForExit, ReadyToDelete, DeleteIssued };
     enum class SnapshotGamePacketPhase { StreamingChunks, WaitingAfterPlayerList, WaitingAfterEntities };
