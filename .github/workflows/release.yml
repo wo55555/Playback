@@ -51,6 +51,11 @@ jobs:
           path: ~/AppData/Local/.xmake/packages
           key: xmake-packages-source-${{ runner.os }}-${{ steps.package-repositories.outputs.revisions }}-${{ hashFiles('xmake.lua') }}
 
+      - name: Setup LLVM
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: 22
+
       - run: |
           xmake f -a x64 -m release -p windows --target_type=client -y
         env:
