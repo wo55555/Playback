@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -70,6 +71,10 @@ struct PlaybackMeta {
     [[nodiscard]] static std::string currentGameVersion();
     [[nodiscard]] bool               isCompatibleWithRuntime() const;
 };
+
+// Identity assigned to the synthetic recorded-local-player entity, shared with ReplaySession so
+// packet fields referencing the real local player's ActorUniqueID can be remapped consistently.
+inline constexpr ActorUniqueID RecordedPlayerUniqueId{std::numeric_limits<int64_t>::max() - 1024};
 
 class Recorder {
 private:

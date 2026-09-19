@@ -1,4 +1,4 @@
-﻿#include "Recorder.h"
+#include "Recorder.h"
 
 #include "playback/Playback.h"
 #include "playback/record/ChunkMutationBarrier.h"
@@ -8,6 +8,8 @@
 #include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/game/IClientInstance.h"
+#include "mc/client/game/MinecraftGame.h"
 #include "mc/client/network/ClientNetworkHandler.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
 #include "mc/client/player/LocalPlayer.h"
@@ -36,6 +38,8 @@
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/BlockType.h"
 #include "mc/world/level/block/registry/BlockTypeRegistry.h"
+#include "mc/world/level/chunk/ChunkSource.h"
+#include "mc/world/level/chunk/LevelChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 
@@ -427,17 +431,21 @@ LL_TYPE_INSTANCE_HOOK(
     origin(finalizer);
 }
 
+// 26.40 turned ClientNetworkHandler::onChunkHandleCompleted into an LLAPI wrapper the game never calls,
+// so column completion is observed here instead.
 LL_TYPE_INSTANCE_HOOK(
     PlaybackChunkHandleCompletedHook,
     ll::memory::HookPriority::Normal,
-    ClientNetworkHandler,
-    &ClientNetworkHandler::onChunkHandleCompleted,
+    Dimension,
+    &Dimension::$onChunkLoaded,
     void,
-    NetworkIdentifier const& source,
-    ChunkPos const&          pos,
-    Dimension const&         dimension
+    ChunkSource& source,
+    LevelChunk&  levelChunk
 ) {
-    origin(source, pos, dimension);
+    origin(source, levelChunk);
+    auto const& pos = *levelChunk.mPosition;
+    // `this` points at the LevelListener base here, so the chunk's own back-reference is the usable Dimension.
+    Dimension const& dimension = levelChunk.mDimension;
     try {
         Recorder::getInstance().recordCompletedChunk(pos, dimension);
     } catch (std::exception const& exception) {
