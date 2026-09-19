@@ -3392,8 +3392,8 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
-        // AddPlayerPacketPayload(Player&) copies mAbilitiesData/mLinks verbatim, which still carry the
-        // real local player's ActorUniqueID; left unmapped, native ability application later destroys it.
+        // Defense in depth: Recorder::remapRecordedPlayerReferences already scrubs mTargetPlayer/mLinks
+        // at record time, but re-check here in case an older recording predates that fix.
         if (auto client = ll::service::getClientInstance(); client && client->getLocalPlayer()) {
             auto const realId = client->getLocalPlayer()->getOrCreateUniqueID();
             if (addPlayer.mAbilitiesData->mTargetPlayer->rawID == realId.rawID) {
