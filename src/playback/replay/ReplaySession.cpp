@@ -2222,7 +2222,11 @@ void ReplaySession::resetDimensionScopedReplayState() {
 bool ReplaySession::refreshReplayPlayer() {
     auto  client = ll::service::getClientInstance();
     auto* player = client ? client->getLocalPlayer() : nullptr;
-    if (!player || !isReplayLevel(player->getLevel())) return false;
+    if (!player || !isReplayLevel(player->getLevel())) {
+        // Stale on failure: callers must not act on a player object the engine may have already destroyed.
+        mReplayPlayer = nullptr;
+        return false;
+    }
 
     mReplayPlayer = player;
     if (mPendingReplayDimension && player->getDimensionId() != *mPendingReplayDimension) {
