@@ -1,12 +1,15 @@
 ﻿#include "PlaybackSetEquipmentPacket.h"
 
+#include "mc/network/MinecraftPackets.h"
 #include "mc/network/Packet.h"
 #include "mc/network/packet/MobArmorEquipmentPacket.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
+#include "mc/network/packet/cerealize/core/SerializationMode.h"
 #include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/item/NetworkItemStackDescriptor.h"
 
+#include <stdexcept>
 #include <utility>
 
 NetworkItemStackDescriptor& NetworkItemStackDescriptor::operator=(class NetworkItemStackDescriptor const&) = default;
@@ -73,7 +76,14 @@ PlaybackSetEquipmentPacket::createPackets(PlaybackSetEquipmentPacket const* prev
         || changed(SharedTypes::Legacy::EquipmentSlot::Legs) || changed(SharedTypes::Legacy::EquipmentSlot::Feet)
         || changed(SharedTypes::Legacy::EquipmentSlot::Body);
     if (armorChanged) {
-        auto armor        = std::make_shared<MobArmorEquipmentPacket>();
+        auto armor = std::static_pointer_cast<MobArmorEquipmentPacket>(
+            MinecraftPackets::createPacket(MinecraftPacketIds::MobArmorEquipment)
+        );
+        if (!armor) throw std::runtime_error("Unable to create a MobArmorEquipment packet");
+
+        // The factory's default mode depends on the current network context (0 offline vs 3 online),
+        // so pin it explicitly to keep record and replay reading with the same layout.
+        armor->setSerializationMode(SerializationMode::SemanticSideBySideLogOnMismatch);
         armor->mRuntimeId = mRuntimeId;
         armor->mHead      = NetworkItemStackDescriptor(item(SharedTypes::Legacy::EquipmentSlot::Head));
         armor->mTorso     = NetworkItemStackDescriptor(item(SharedTypes::Legacy::EquipmentSlot::Torso));

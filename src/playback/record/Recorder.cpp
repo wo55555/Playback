@@ -1,4 +1,4 @@
-﻿#include "Recorder.h"
+#include "Recorder.h"
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
@@ -85,10 +85,12 @@
 #include <uuid.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <ctime>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <future>
 #include <iomanip>
@@ -116,7 +118,6 @@ using namespace playback::io;
 
 namespace {
 
-constexpr ActorUniqueID  RecordedPlayerUniqueId{std::numeric_limits<int64_t>::max() - 1024};
 constexpr ActorRuntimeID RecordedPlayerRuntimeId{uint64_t{1} << 62};
 
 // A dimension change floods the engine task groups, and a missed snapshot there cancels the whole recording.
@@ -959,9 +960,10 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
                                     return results;
                                 }
 
+                                // 26.40's SubChunkPacket::isValid rejects entries without payload bytes, and genuine
+                                // servers only ever send Success, so air subchunks are serialized like any other.
                                 BinaryStream serializedSubChunk;
-                                bool const   allAir = subChunk.isUniform(*air);
-                                if (!allAir) {
+                                {
                                     stage = "serializing subchunk";
                                     VarIntDataOutput subChunkOutput(serializedSubChunk);
                                     subChunk.serialize(subChunkOutput, false);
@@ -978,20 +980,21 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
                                 }
 
                                 SubChunkPacket::SubChunkPosOffset offset{};
-                                offset.mX             = 0;
-                                offset.mY             = static_cast<schar>(relativeY);
-                                offset.mZ             = 0;
-                                auto const resultFlag = allAir ? SubChunkPacket::SubChunkRequestResult::SuccessAllAir
-                                                               : SubChunkPacket::SubChunkRequestResult::Success;
-                                subChunkPacket->mSubChunkData->emplace_back(offset, resultFlag);
+                                offset.mX = 0;
+                                offset.mY = static_cast<schar>(relativeY);
+                                offset.mZ = 0;
+                                subChunkPacket->mSubChunkData->emplace_back(
+                                    offset,
+                                    SubChunkPacket::SubChunkRequestResult::Success
+                                );
                                 auto& data               = subChunkPacket->mSubChunkData->back();
                                 data.mSerializedSubChunk = std::move(serializedSubChunk.mBuffer);
-                                data.mBlobId             = 0;
+                                // 26.40 routes any engaged mBlobId through the blob cache, which these packets skip.
+                                data.mBlobId = std::nullopt;
 
                                 stage = "populating heightmaps";
                                 chunk.populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
                             }
-
                             result.levelChunk = std::move(level);
                             if (!subChunkPacket->mSubChunkData->empty()) {
                                 result.subChunk = std::move(subChunkPacket);
@@ -1166,6 +1169,9 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         recordedPlayer.mPlayerGameType = finalPlayer->getPlayerGameType();
         recordedPlayer.mPlatformOnlineId->clear();
         recordedPlayer.mDeviceId->clear();
+        // Must not keep the real username: replaying it alongside the live account of the same name
+        // makes the client treat this synthetic entity as a duplicate and destroy the real local player.
+        *recordedPlayer.mName = "__playback_" + mRecordedLocalPlayerUuid->asString();
         PlaybackBuffer recordedPlayerStream;
         recordedPlayer.write(recordedPlayerStream);
         mSnapshotLocalPlayerPayload = std::move(recordedPlayerStream.mBuffer);
@@ -1756,9 +1762,10 @@ void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimens
         int const relativeY       = actualAbsoluteY - minimumSubChunkY;
         if (relativeY < std::numeric_limits<schar>::min() || relativeY > std::numeric_limits<schar>::max()) continue;
 
+        // 26.40's SubChunkPacket::isValid rejects entries without payload bytes, and genuine servers only ever send
+        // Success, so air subchunks are serialized like any other.
         BinaryStream serializedSubChunk;
-        bool const   allAir = subChunk.isUniform(*air);
-        if (!allAir) {
+        {
             VarIntDataOutput subChunkOutput(serializedSubChunk);
             subChunk.serialize(subChunkOutput, false);
         }
@@ -1770,13 +1777,12 @@ void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimens
         );
 
         SubChunkPacket::SubChunkPosOffset offset{};
-        offset.mY         = static_cast<schar>(relativeY);
-        auto const result = allAir ? SubChunkPacket::SubChunkRequestResult::SuccessAllAir
-                                   : SubChunkPacket::SubChunkRequestResult::Success;
-        subChunkPacket->mSubChunkData->emplace_back(offset, result);
+        offset.mY = static_cast<schar>(relativeY);
+        subChunkPacket->mSubChunkData->emplace_back(offset, SubChunkPacket::SubChunkRequestResult::Success);
         auto& data               = subChunkPacket->mSubChunkData->back();
         data.mSerializedSubChunk = std::move(serializedSubChunk.mBuffer);
-        data.mBlobId             = 0;
+        // 26.40 made mBlobId optional and routes any engaged value through the blob cache, which these packets skip.
+        data.mBlobId = std::nullopt;
         chunk->populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
     }
 
@@ -1889,7 +1895,10 @@ void Recorder::recordGamePacket(Packet const& packet) {
             && packetMayReferenceRecordedPlayer(packetId)) {
             auto                 remappedPacket = MinecraftPackets::createPacket(packetId);
             ReadOnlyBinaryStream input(stream.mBuffer, false);
-            if (!remappedPacket || !remappedPacket->read(input) || !input.ensureReadCompleted()) {
+            bool                 readOk = false;
+            if (remappedPacket) readOk = static_cast<bool>(remappedPacket->read(input));
+            bool const completed = static_cast<bool>(input.ensureReadCompleted());
+            if (!remappedPacket || !readOk || !completed) {
                 getLogger().warn("Unable to decode {} for recorded-player ID remapping", packet.getName());
             } else {
                 if (remapRecordedPlayerReferences(
