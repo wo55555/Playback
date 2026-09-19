@@ -7,13 +7,14 @@
   <p>
     <img src="https://img.shields.io/badge/release-v0.3.1-4c8bf5?style=flat-square" alt="Playback v0.3.1">
     <img src="https://img.shields.io/badge/Minecraft%20Bedrock-Windows%20x64-62b47a?style=flat-square" alt="Minecraft Bedrock for Windows x64">
-    <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
+    <img src="https://img.shields.io/badge/LeviLamina-26.40.*-7b68ee?style=flat-square" alt="LeviLamina 26.40">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 license"></a>
   </p>
 
   <p>
     <img src="https://img.shields.io/badge/LeviLamina-26.10.*-7b68ee?style=flat-square" alt="LeviLamina 26.10">
     <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
+    <img src="https://img.shields.io/badge/LeviLamina-26.40.*-7b68ee?style=flat-square" alt="LeviLamina 26.40">
   </p>
 
   <p>
@@ -99,7 +100,7 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 
 ## Latest Changes
 
-`v0.3.1` is an editor release published for both MC 26.10 and MC 26.20. Camera tracks are now drawn as a path overlay in the viewport, the editor layout is rebuilt around a centred transport with an export-range marker on the timeline, playback speed and UI scale can be chosen directly, and dimension boundaries and partially covered chunk columns are handled correctly during replay.
+`v0.3.1` is an editor release published for MC 26.10, MC 26.20, and now MC 26.40. Camera tracks are now drawn as a path overlay in the viewport, the editor layout is rebuilt around a centred transport with an export-range marker on the timeline, playback speed and UI scale can be chosen directly, and dimension boundaries and partially covered chunk columns are handled correctly during replay. The MC 26.40 line additionally fixes a recorded-identity leak in the `AddPlayer` packet, grows the imgui SRV descriptor heap, drops an unnecessary wait before showing the editor UI, remaps stale replay-player references, and fixes passenger detection after an upstream API removal.
 
 > [!CAUTION]
 > Playback releases are still test builds and may make destructive format or configuration changes. Replay archives from releases before `v0.2.0-mc26.20` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.1-mc26.20` and `v0.3.0-mc26.20` archives are compatible with `v0.3.1-mc26.20` and require no conversion. The configuration version, recording-file snapshot context version, and editor project format version are all `1`; no migration layer is provided.
@@ -111,14 +112,15 @@ See the full [changelog](CHANGELOG.md) for release history and detailed changes.
 
 ## Compatibility
 
-Playback maintains separate release lines for Minecraft and LeviLamina versions. Product version `0.3.1` is published for this branch as `v0.3.1-mc26.20`; use the listed MC 26.10 release for that runtime.
+Playback maintains separate release lines for Minecraft and LeviLamina versions. Product version `0.3.1` is published for this branch as `v0.3.1-mc26.40`; use the listed releases for other runtimes.
 
 | Minecraft / LeviLamina | Playback release                                                                    | Status               |
 | ---------------------- | ----------------------------------------------------------------------------------- | -------------------- |
 | `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) | Maintained           |
-| `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) | Current test release |
+| `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) | Maintained           |
+| `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) | Current test release |
 
-Both release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
+All release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
 
 > [!NOTE]
 > `0.2.0` was deliberately skipped on MC 26.20. Video export did not work on that runtime: the 26.20 headers mis-declare a struct alignment, so the capture path read a render-item count from padding, classified every submission as overlay-only, and stalled every export on frame 0. The 26.20 line therefore goes from `v0.1.2-mc26.20` straight to `v0.2.1-mc26.20`, which carries the fix. The MC 26.10 line is unaffected and did publish `v0.2.0-mc26.10`.
@@ -155,7 +157,7 @@ Yes. Playback is client-only and can record the chunks, entities, and selected p
 
 ### Can Playback export a replay to video?
 
-Experimental H.264 MP4 and PNG-sequence export is available in `v0.3.1-mc26.20`. It currently has known limitations and does not include audio.
+Experimental H.264 MP4 and PNG-sequence export is available in `v0.3.1`. It currently has known limitations and does not include audio.
 
 ### Do camera keyframes interpolate across dimensions?
 
@@ -163,7 +165,7 @@ No. Every recorded dimension change splits the camera timeline, including transi
 
 ### Which Playback build should I install?
 
-Use `v0.3.1-mc26.20` for LeviLamina `26.20.*`. Minecraft/LeviLamina `26.10.*` uses its separately maintained release line.
+Use `v0.3.1-mc26.40` for LeviLamina `26.40.*`. Minecraft/LeviLamina `26.10.*` and `26.20.*` each use their own separately maintained release line; see [Compatibility](#compatibility).
 
 ## Development Status and Roadmap
 
