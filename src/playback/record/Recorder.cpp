@@ -1164,6 +1164,9 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         recordedPlayer.mPlayerGameType = finalPlayer->getPlayerGameType();
         recordedPlayer.mPlatformOnlineId->clear();
         recordedPlayer.mDeviceId->clear();
+        // Must not keep the real username: replaying it alongside the live account of the same name
+        // makes the client treat this synthetic entity as a duplicate and destroy the real local player.
+        *recordedPlayer.mName = "__playback_" + mRecordedLocalPlayerUuid->asString();
         PlaybackBuffer recordedPlayerStream;
         recordedPlayer.write(recordedPlayerStream);
         mSnapshotLocalPlayerPayload = std::move(recordedPlayerStream.mBuffer);
