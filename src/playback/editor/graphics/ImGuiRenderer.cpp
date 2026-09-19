@@ -627,6 +627,14 @@ struct ImGuiRenderer::Impl {
             [](ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE* cpu, D3D12_GPU_DESCRIPTOR_HANDLE* gpu) {
                 auto& impl = *static_cast<Impl*>(info->UserData);
                 allocateSrv(impl.srvUsed, impl.srvHeap.Get(), impl.srvDescSize, *cpu, *gpu);
+                // imgui has no failure channel here, and handing it a null descriptor crashes the driver inside
+                // UpdateTexture, so report exhaustion loudly instead of leaving it to surface as a GPU fault.
+                if (cpu->ptr == 0) {
+                    getLogger().error(
+                        "ImGui SRV descriptor heap is exhausted ({} descriptors); UI textures cannot be created",
+                        SrvDescriptorCount
+                    );
+                }
             };
         ii.SrvDescriptorFreeFn =
             [](ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE cpu, D3D12_GPU_DESCRIPTOR_HANDLE) {
