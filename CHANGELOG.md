@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1-mc26.40] - 2026-09-19
+
+> **First release on the MC 26.40 line, branched from `v0.3.1-mc26.20`.**
+
 ### Added
 
 - Added `Ctrl+Shift+N` to create a camera track and `1`, `2`, `3` to switch to the first three cameras, which also drives the viewport preview.
@@ -26,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed camera-path overlays being sampled across dimension boundaries, which spent work on points that were discarded at draw time.
 - Fixed a plain click on a timeline keyframe nudging it; any horizontal movement is now required before a drag begins, so a click only seeks.
 - Fixed players not loading in the replay when a server withheld skin data for any one of them. A single entry without a skin discarded the whole player list; that entry is now skipped and the rest of the list still spawns.
+- Fixed the real local player's identity leaking into recorded `AddPlayer` packets through the abilities payload's target-player field, which is where MC 26.40 moved that field.
+- Fixed the imgui SRV descriptor heap running out once the font atlas and per-replay browser thumbnails were added; the heap is now larger and logs instead of handing imgui a null descriptor when it is still exhausted.
+- Fixed the editor UI waiting on full chunk streaming before it appeared; it now shows as soon as the loading and progress screens clear.
+- Fixed stale replay-player references after a failed refresh, remapped `AddPlayer` abilities and link references from the real local player to the recorded sentinel id, and stopped raising the global runtime-id allocator to the synthetic recorded-player id.
+- Fixed passenger detection after the `isRiding` overload it relied on was removed upstream.
 
 ## [0.3.1-mc26.20] - 2026-09-14
 
@@ -204,7 +213,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.20...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.40...HEAD
+[0.3.1-mc26.40]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.20...v0.3.1-mc26.40
 [0.3.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.20...v0.3.1-mc26.20
 [0.3.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.20...v0.3.0-mc26.20
 [0.2.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.20...v0.2.1-mc26.20
