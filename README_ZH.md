@@ -7,13 +7,14 @@
   <p>
     <img src="https://img.shields.io/badge/release-v0.3.1-4c8bf5?style=flat-square" alt="Playback v0.3.1">
     <img src="https://img.shields.io/badge/Minecraft%20Bedrock-Windows%20x64-62b47a?style=flat-square" alt="Windows x64 Minecraft 基岩版">
-    <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
+    <img src="https://img.shields.io/badge/LeviLamina-26.40.*-7b68ee?style=flat-square" alt="LeviLamina 26.40">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 许可证"></a>
   </p>
 
   <p>
     <img src="https://img.shields.io/badge/LeviLamina-26.10.*-7b68ee?style=flat-square" alt="LeviLamina 26.10">
     <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
+    <img src="https://img.shields.io/badge/LeviLamina-26.40.*-7b68ee?style=flat-square" alt="LeviLamina 26.40">
   </p>
 
   <p>
@@ -99,7 +100,7 @@ Playback 将客户端可见的 Minecraft 基岩版游戏过程录制为便携回
 
 ## 本版更新
 
-`v0.3.1` 是同时面向 MC 26.10 和 MC 26.20 的编辑器版本。相机轨道以路径叠层的形式绘制在视口中；编辑器布局围绕居中的播放控制条重建，时间轴上标出导出区间；播放速度与界面缩放可直接选择；回放中的维度边界与覆盖不完整的区块列也得到修正。
+`v0.3.1` 是面向 MC 26.10、MC 26.20 以及现在的 MC 26.40 的编辑器版本。相机轨道以路径叠层的形式绘制在视口中；编辑器布局围绕居中的播放控制条重建，时间轴上标出导出区间；播放速度与界面缩放可直接选择；回放中的维度边界与覆盖不完整的区块列也得到修正。MC 26.40 发行线还额外修复了 `AddPlayer` 数据包中的录制身份泄漏问题，扩容了 imgui 的 SRV 描述符堆，去掉了显示编辑器界面前一处不必要的等待，修正了失效的回放玩家引用，并修复了上游接口移除后的乘客检测逻辑。
 
 > [!CAUTION]
 > Playback 当前发布的仍是测试版本，可能直接进行破坏性的格式或配置更新。早于 `v0.2.0-mc26.20` 的版本创建的回放不兼容，必须重新录制。受影响服务器在 2026 年 8 月 20 日热更新前录制的回放可能已经缺少可移植区块或自定义实体注册数据，这类归档无法修复，也必须重新录制；数据完整的 `v0.2.1-mc26.20` 和 `v0.3.0-mc26.20` 回放与 `v0.3.1-mc26.20` 兼容，无需转换。配置版本、录制文件的快照上下文版本和编辑器工程格式版本均为 `1`，不提供迁移层。
@@ -111,14 +112,15 @@ Playback 将客户端可见的 Minecraft 基岩版游戏过程录制为便携回
 
 ## 兼容性
 
-Playback 针对不同 Minecraft 与 LeviLamina 版本维护独立发行线。 产品版本 `0.3.1` 在当前分支发布为 `v0.3.1-mc26.20`；`26.10.*` 请使用下表对应的 MC 26.10 发行版本。
+Playback 针对不同 Minecraft 与 LeviLamina 版本维护独立发行线。 产品版本 `0.3.1` 在当前分支发布为 `v0.3.1-mc26.40`；其他运行时请使用下表对应的发行版本。
 
 | Minecraft / LeviLamina | Playback 版本                                                                       | 状态       |
 | ---------------------- | ----------------------------------------------------------------------------------- | ---------- |
 | `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) | 维护中     |
-| `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) | 当前测试版 |
+| `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) | 维护中     |
+| `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) | 当前测试版 |
 
-两个版本均面向 Windows x64 平台的 Minecraft 基岩版，并以纯客户端模组形式发布。
+所有发行线均面向 Windows x64 平台的 Minecraft 基岩版，并以纯客户端模组形式发布。
 
 > [!NOTE]
 > MC 26.20 有意跳过 `0.2.0` 版本。该运行时上的视频导出无法工作：26.20 头文件错误声明了结构体对齐，导致采集路径从填充字节读取渲染项数量，把所有提交都判定为纯覆盖层，每次导出都卡在第 0 帧。因此 26.20 发行线从 `v0.1.2-mc26.20` 直接进入包含该修复的 `v0.2.1-mc26.20`。MC 26.10 发行线不受影响，已正常发布 `v0.2.0-mc26.10`。
@@ -155,7 +157,7 @@ Playback 是面向 Windows x64 LeviLamina 客户端的 Minecraft 基岩版回放
 
 ### Playback 可以将回放导出为视频吗？
 
-`v0.3.1-mc26.20` 提供实验性的 H.264 MP4 和 PNG 序列导出。目前仍存在已知限制，并且不包含音频。
+`v0.3.1` 提供实验性的 H.264 MP4 和 PNG 序列导出。目前仍存在已知限制，并且不包含音频。
 
 ### 相机关键帧会跨维度插值吗？
 
@@ -163,7 +165,7 @@ Playback 是面向 Windows x64 LeviLamina 客户端的 Minecraft 基岩版回放
 
 ### 应该安装哪个 Playback 版本？
 
-LeviLamina `26.20.*` 使用 `v0.3.1-mc26.20`。Minecraft/LeviLamina `26.10.*` 使用单独维护的对应发行线。
+LeviLamina `26.40.*` 使用 `v0.3.1-mc26.40`。Minecraft/LeviLamina `26.10.*` 与 `26.20.*` 各自使用单独维护的对应发行线，参见[兼容性](#兼容性)。
 
 ## 开发状态与计划
 

@@ -10,6 +10,7 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 | ---------------------- | ----------------------------------------------------------------------------------- |
 | `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) |
 | `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) |
+| `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) |
 
 > [!IMPORTANT]
 > Use a clean LeviLamina instance without other third-party mods whenever possible. Broad mod compatibility is not currently guaranteed.
@@ -18,11 +19,11 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 > Vibrant Visuals is not supported yet. Turn it off in the video settings before recording, replaying, or exporting; leaving it on is untested and can break rendering and capture.
 
 > [!CAUTION]
-> `v0.3.1-mc26.20` is a test release. Replay archives created before `v0.2.0-mc26.20` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.1-mc26.20` and `v0.3.0-mc26.20` archives are compatible with `v0.3.1-mc26.20` and require no conversion. The configuration version, recording-file snapshot context version, and editor project format version are all `1`; no migration is provided.
+> `v0.3.1-mc26.40` is a test release. Replay archives created before `v0.2.0-mc26.20` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.1-mc26.20` and `v0.3.0-mc26.20` archives are compatible with `v0.3.1-mc26.20` and require no conversion. The configuration version, recording-file snapshot context version, and editor project format version are all `1`; no migration is provided.
 
 ## Install with LeviLauncher and Lip
 
-The screenshots below use a `26.10` instance and are illustrative. For `26.20`, follow the same steps with the matching Minecraft, LeviLamina, and Playback release.
+The screenshots below use a `26.10` instance and are illustrative. For `26.20` or `26.40`, follow the same steps with the matching Minecraft, LeviLamina, and Playback release.
 
 1. Select **Download** in the left sidebar, find the Minecraft version you want, and use its install menu to create an instance with the **LeviLamina** loader.
 
@@ -66,6 +67,9 @@ lip install github.com/wo55555/Playback@0.3.1-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
 lip install github.com/wo55555/Playback@0.3.1-mc26.20#client
+
+# Minecraft / LeviLamina 26.40
+lip install github.com/wo55555/Playback@0.3.1-mc26.40#client
 ```
 
 > [!NOTE]
