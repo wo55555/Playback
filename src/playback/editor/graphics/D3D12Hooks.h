@@ -12,7 +12,9 @@ namespace playback::editor::graphics {
 
 using Microsoft::WRL::ComPtr;
 
-inline constexpr UINT  SrvDescriptorCount  = 32;
+// imgui 1.92 creates font textures on demand and the browser adds one thumbnail per replay, so the heap has to
+// hold far more than the per-frame game textures.
+inline constexpr UINT  SrvDescriptorCount  = 512;
 inline constexpr DWORD GpuWaitTimeoutMs    = 2000;
 inline constexpr DWORD DetourWaitTimeoutMs = 2000;
 inline constexpr GUID  SwapChainQueueGuid{
