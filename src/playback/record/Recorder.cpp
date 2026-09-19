@@ -237,14 +237,16 @@ bool remapRecordedPlayerReferences(
     switch (packet.getId()) {
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
-        bool  changed   = addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
+        bool  changed   = addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid
+                       || addPlayer.mAbilitiesData->mTargetPlayer->rawID == sourceUniqueId.rawID;
         for (auto& link : *addPlayer.mLinks) {
             changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
             changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
         }
         if (!changed) return false;
-        addPlayer.mUuid      = targetUuid;
-        addPlayer.mRuntimeId = targetRuntimeId;
+        addPlayer.mUuid                         = targetUuid;
+        addPlayer.mRuntimeId                    = targetRuntimeId;
+        addPlayer.mAbilitiesData->mTargetPlayer = targetUniqueId;
         addPlayer.mPlatformOnlineId->clear();
         addPlayer.mDeviceId->clear();
         return true;
