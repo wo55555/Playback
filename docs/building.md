@@ -10,6 +10,8 @@
 
 Playback currently targets the Windows x64 LeviLamina client runtime. The dependency versions declared in `xmake.lua` must remain aligned with the target Minecraft and LeviLamina release line.
 
+The current Playback releases for MC 26.10, MC 26.20, and MC 26.40 are all prereleases.
+
 ## Release Build
 
 The packaged mod version comes from the nearest Git release tag. Set `PLAYBACK_VERSION` explicitly when validating a release before its tag exists.
