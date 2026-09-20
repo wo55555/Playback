@@ -419,8 +419,8 @@ void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImD
         clear();
         return;
     }
-    if (!ctx.cameraProjection || exporting::isExportActive(ctx.state.exportStatus.state) || videoRect.GetWidth() <= 0.0f
-        || videoRect.GetHeight() <= 0.0f) {
+    if (!ctx.state.hudVisible || !ctx.cameraProjection || exporting::isExportActive(ctx.state.exportStatus.state)
+        || videoRect.GetWidth() <= 0.0f || videoRect.GetHeight() <= 0.0f) {
         return;
     }
     auto const       ticks = neighborTicks(*timeline, ctx.state.currentTick);

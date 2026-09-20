@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Hide camera paths and markers while the game HUD is covered by loading, progress, or menu screens, and restore them when the HUD returns.
+
 ## [0.3.1-mc26.51] - 2026-09-23
 
 > **First release on the MC 26.51 line, branched from `v0.3.1-mc26.40`.**
