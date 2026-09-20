@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1-mc26.40] - 2026-09-19
+
+> Separate MC 26.40 prerelease; hotfix updated September 20, 2026. These notes apply only to that release line and do not describe code changes in `main`. Reinstall the same release to receive these fixes; no re-recording or format conversion is required for these fixes. Existing MC 26.10 and MC 26.20 release assets are unchanged.
+
+### Fixed
+
+- Restored recorded player `entityId`, abilities, and entity-link mappings to fix players standing still during replay.
+- Preserved required teleport data to fix replay disconnections when processing teleport packets.
+- Used native chunk replacement to fix backward seeks stalling on previously loaded terrain.
+- Preserved original player names and restored affected names in existing recordings from the recorded player list.
+
 ## [0.3.1-mc26.10] - 2026-09-17
 
 ### Added
@@ -195,6 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
 [Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.10...HEAD
+[0.3.1-mc26.40]: https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40
 [0.3.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.10...v0.3.1-mc26.10
 [0.3.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.10...v0.3.0-mc26.10
 [0.2.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.10...v0.2.1-mc26.10
