@@ -431,8 +431,7 @@ LL_TYPE_INSTANCE_HOOK(
     origin(finalizer);
 }
 
-// 26.40 turned ClientNetworkHandler::onChunkHandleCompleted into an LLAPI wrapper the game never calls,
-// so column completion is observed here instead.
+// MC 26.40 inlines network completion; observe the dimension's loaded-column lifecycle instead.
 LL_TYPE_INSTANCE_HOOK(
     PlaybackChunkHandleCompletedHook,
     ll::memory::HookPriority::Normal,

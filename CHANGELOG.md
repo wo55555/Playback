@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **First release on the MC 26.40 line, branched from `v0.3.1-mc26.20`.**
 
+> **Hotfix updated September 20, 2026.** Reinstall `v0.3.1-mc26.40` to receive the fixes below. Existing MC 26.40 recordings remain compatible; no re-recording or format conversion is required for these fixes.
+
 ### Added
 
 - Added `Ctrl+Shift+N` to create a camera track and `1`, `2`, `3` to switch to the first three cameras, which also drives the viewport preview.
@@ -25,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed recorded players standing still on MC 26.40 by restoring their entity-id registration and remapping the local-player snapshot's abilities and entity links.
+- Fixed replay disconnections caused by teleport movement packets missing their required teleport data.
+- Fixed backward seeks stalling and closing the replay when previously loaded request-mode chunk columns were not replaced with the recorded data.
+- Preserved recorded player names instead of forcing synthetic names, and restored names from the recorded player list for affected existing recordings.
 - Fixed entities jittering during preview playback. Recorded poses are now interpolated on preview frames as well as during export, and are sampled one tick behind the camera so the pose history is actually interpolated instead of snapping to its end.
 - Fixed one missing or incomplete entity cancelling pose interpolation for the whole frame, and left passenger positions to their vehicle so riders no longer fight the mount.
 - Fixed camera-path overlays being sampled across dimension boundaries, which spent work on points that were discarded at draw time.
