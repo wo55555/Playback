@@ -647,6 +647,7 @@ void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& r
     move.mRot           = rotation;
     move.mYHeadRot      = rotation.y;
     move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
+    move.mTeleportData  = MovePlayerTeleportData{0, -1};
     move.mOnGround      = true;
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
@@ -2901,7 +2902,7 @@ void ReplaySession::handleCreateLocalPlayer(PlaybackBuffer& data) {
         return;
     }
 
-    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload)) mReplayFailed = true;
+    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload, true)) mReplayFailed = true;
 }
 
 bool ReplaySession::sendRecordedTickPacket() {
@@ -3160,6 +3161,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                     move.mRot           = rotation;
                     move.mYHeadRot      = headYaw;
                     move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
+                    move.mTeleportData  = MovePlayerTeleportData{0, -1};
                     move.mOnGround      = onGround;
                 }
             } else {
@@ -3242,6 +3244,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             move.mRot           = rotation;
             move.mYHeadRot      = headYaw;
             move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
+            move.mTeleportData  = MovePlayerTeleportData{0, -1};
             move.mOnGround      = onGround;
         } else {
             auto const header   = data.getByte().value();
@@ -3302,14 +3305,14 @@ bool ReplaySession::applyPendingSnapshotLocalPlayer() {
 
     auto payload = std::move(*mPendingSnapshotLocalPlayer);
     mPendingSnapshotLocalPlayer.reset();
-    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload)) {
+    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload, true)) {
         getLogger().error("Unable to apply the CreateLocalPlayer action for replay snapshot {}", mReaderIndex);
         return false;
     }
     return true;
 }
 
-bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload) {
+bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
     // Keep UI packets for a future first-person handler and let the replay world own client chunk publishing.
     if (shouldIgnoreReplayPacket(packetId)) return true;
 
@@ -3392,16 +3395,28 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
-        // Defense in depth: Recorder::remapRecordedPlayerReferences already scrubs mTargetPlayer/mLinks
-        // at record time, but re-check here in case an older recording predates that fix.
-        if (auto client = ll::service::getClientInstance(); client && client->getLocalPlayer()) {
-            auto const realId = client->getLocalPlayer()->getOrCreateUniqueID();
-            if (addPlayer.mAbilitiesData->mTargetPlayer->rawID == realId.rawID) {
-                addPlayer.mAbilitiesData->mTargetPlayer = playback::record::RecordedPlayerUniqueId;
+        // Older CreateLocalPlayer snapshots retained the recording world's live player ID.
+        std::optional<ActorUniqueID> sourceId;
+        if (recordedLocalPlayer) {
+            sourceId = *addPlayer.mAbilitiesData->mTargetPlayer;
+        } else if (auto client = ll::service::getClientInstance(); client && client->getLocalPlayer()) {
+            sourceId = client->getLocalPlayer()->getOrCreateUniqueID();
+        }
+        if (sourceId) {
+            if (addPlayer.mAbilitiesData->mTargetPlayer->rawID == sourceId->rawID) {
+                addPlayer.mAbilitiesData->mTargetPlayer = RecordedPlayerUniqueId;
             }
             for (auto& link : *addPlayer.mLinks) {
-                if (link.A->rawID == realId.rawID) link.A = playback::record::RecordedPlayerUniqueId;
-                if (link.B->rawID == realId.rawID) link.B = playback::record::RecordedPlayerUniqueId;
+                if (link.A->rawID == sourceId->rawID) link.A = RecordedPlayerUniqueId;
+                if (link.B->rawID == sourceId->rawID) link.B = RecordedPlayerUniqueId;
+            }
+        }
+        if (recordedLocalPlayer && mReplayPlayer && *addPlayer.mName == "__playback_" + addPlayer.mUuid->asString()) {
+            // Older snapshots kept the original name in the player list under the synthetic UUID.
+            auto const& entries = mReplayPlayer->getLevel().getPlayerList();
+            auto const  entry   = entries.find(*addPlayer.mUuid);
+            if (entry != entries.end() && !entry->second.mName->empty()) {
+                *addPlayer.mName = *entry->second.mName;
             }
         }
         if (addPlayer.mPlayerGameType == GameType::Default || addPlayer.mPlayerGameType == GameType::Undefined) {
@@ -3417,6 +3432,8 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 addPlayer.mPlayerGameType = GameType::Adventure;
             }
         }
+        // 26.40 carries the player's unique ID inside the abilities payload.
+        entityId  = *addPlayer.mAbilitiesData->mTargetPlayer;
         runtimeId = *addPlayer.mRuntimeId;
         break;
     }
@@ -3698,6 +3715,12 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
             std::scoped_lock lock(mPendingLevelChunksMutex);
             mRetainedReplayChunks.insert_or_assign(pos, replayChunk);
             mPendingLevelChunks.emplace(pos);
+        }
+        if (levelChunk.mClientRequestSubChunkLimit->has_value() && !replayChunk->mIsEmptyClientChunk
+            && replayChunk->mLoadState->load(std::memory_order_acquire) == ChunkState::Loaded
+            && replayChunk->mClientNeedsToRequestSubChunks) {
+            // Recorded columns must replace old data rather than enter the native re-request-only branch.
+            replayChunk->mClientNeedsToRequestSubChunks = false;
         }
         mChunkInjectionPending = true;
     } else if (packetId == MinecraftPacketIds::SubChunkPacket) {
