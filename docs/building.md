@@ -10,7 +10,7 @@
 
 Playback currently targets the Windows x64 LeviLamina client runtime. The dependency versions declared in `xmake.lua` must remain aligned with the target Minecraft and LeviLamina release line.
 
-Use the branch that matches the target Minecraft / LeviLamina runtime: `main` and `develop` target `26.10`, `feat/26.20` targets `26.20`, and `feat/26.40` targets `26.40` (prerelease). `PLAYBACK_VERSION` changes only the packaged version identifier; it does not switch the SDK target. The commands and manifest checks below remain for this branch's `26.10` target.
+Use the branch that matches the target Minecraft / LeviLamina runtime: `main` and `develop` target `26.10`, `feat/26.20` targets `26.20`, and `feat/26.40` targets `26.40`. The current Playback releases for all three runtimes are prereleases. `PLAYBACK_VERSION` changes only the packaged version identifier; it does not switch the SDK target. The commands and manifest checks below remain for this branch's `26.10` target.
 
 ## Release Build
 
