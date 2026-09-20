@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve the recorded local player's original name; recover legacy synthetic names from the matching player-list entry when available.
+- Remap local-player snapshot links along with the player's unique ID, runtime ID, and UUID.
+
 ## [0.3.1-mc26.20] - 2026-09-17
 
 ### Added

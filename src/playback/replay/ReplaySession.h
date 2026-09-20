@@ -279,7 +279,8 @@ private:
 
     [[nodiscard]] bool applySubChunkDirect(std::string_view payload);
 
-    [[nodiscard]] bool applyGamePacket(MinecraftPacketIds packetId, std::string_view payload);
+    [[nodiscard]] bool
+    applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer = false);
 
     [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
 
