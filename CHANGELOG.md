@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve the recorded local player's original name; recover legacy synthetic names from the matching player-list entry when available.
 - Remap local-player snapshot links along with the player's unique ID, runtime ID, and UUID.
 
+## [0.3.1-mc26.40] - 2026-09-19
+
+> Separate MC 26.40 prerelease; hotfix updated September 20, 2026. These notes describe that release line, not code changes in this branch. Reinstall the same release to update; existing MC 26.40 recordings need no re-recording or format conversion for these fixes.
+
+### Fixed
+
+- Fixed recorded players standing still by restoring entity-id registration and remapping the local-player snapshot's abilities and entity links.
+- Fixed replay disconnections caused by teleport movement packets missing required teleport data.
+- Fixed backward seeks stalling on previously loaded terrain by allowing native chunk replacement with recorded data.
+- Preserved original player names and restored affected existing names from the recorded player list when available.
+
 ## [0.3.1-mc26.20] - 2026-09-17
 
 ### Added
@@ -204,6 +215,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
 [Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.20...HEAD
+[0.3.1-mc26.40]: https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40
 [0.3.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.20...v0.3.1-mc26.20
 [0.3.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.20...v0.3.0-mc26.20
 [0.2.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.20...v0.2.1-mc26.20
