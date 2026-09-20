@@ -12,7 +12,7 @@ Playback currently targets the Windows x64 LeviLamina client runtime. The depend
 
 ## Release Build
 
-Choose the source branch for the target runtime: `main` and `develop` target MC/LeviLamina 26.10, `feat/26.20` targets 26.20, and `feat/26.40` targets the 26.40 prerelease line. Setting `PLAYBACK_VERSION` changes only the packaged version identifier, not the source branch or SDK target.
+Choose the source branch for the target runtime: `main` and `develop` target MC/LeviLamina 26.10, `feat/26.20` targets 26.20, and `feat/26.40` targets 26.40. The current Playback releases for all three runtimes are prereleases. Setting `PLAYBACK_VERSION` changes only the packaged version identifier, not the source branch or SDK target.
 
 The packaged mod version comes from the nearest Git release tag. Set `PLAYBACK_VERSION` explicitly when validating a release before its tag exists.
 
