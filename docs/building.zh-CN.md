@@ -10,7 +10,7 @@
 
 Playback 目前面向 Windows x64 的 LeviLamina 客户端运行环境。`xmake.lua` 声明的依赖版本必须与目标 Minecraft 和 LeviLamina 发行分支保持一致。
 
-请使用与目标运行时对应的分支：`main` / `develop` 对应 MC 26.10，`feat/26.20` 对应 MC 26.20，`feat/26.40` 对应 MC 26.40（预发布）。`PLAYBACK_VERSION` 只修改打包版本标识，不会切换 SDK。下方命令与清单核验仍针对本分支的 MC 26.10 构建。
+请使用与目标运行时对应的分支：`main` / `develop` 对应 MC 26.10，`feat/26.20` 对应 MC 26.20，`feat/26.40` 对应 MC 26.40。当前面向这三个运行时的 Playback 版本均为预发布版本。`PLAYBACK_VERSION` 只修改打包版本标识，不会切换 SDK。下方命令与清单核验仍针对本分支的 MC 26.10 构建。
 
 ## Release 构建
 
