@@ -2898,7 +2898,7 @@ void ReplaySession::handleCreateLocalPlayer(PlaybackBuffer& data) {
         return;
     }
 
-    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload)) mReplayFailed = true;
+    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload, true)) mReplayFailed = true;
 }
 
 bool ReplaySession::sendRecordedTickPacket() {
@@ -3299,14 +3299,14 @@ bool ReplaySession::applyPendingSnapshotLocalPlayer() {
 
     auto payload = std::move(*mPendingSnapshotLocalPlayer);
     mPendingSnapshotLocalPlayer.reset();
-    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload)) {
+    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload, true)) {
         getLogger().error("Unable to apply the CreateLocalPlayer action for replay snapshot {}", mReaderIndex);
         return false;
     }
     return true;
 }
 
-bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload) {
+bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
     // Keep UI packets for a future first-person handler and let the replay world own client chunk publishing.
     if (shouldIgnoreReplayPacket(packetId)) return true;
 
@@ -3374,6 +3374,14 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
+        if (recordedLocalPlayer && mReplayPlayer && *addPlayer.mName == "__playback_" + addPlayer.mUuid->asString()) {
+            // Older snapshots kept the original name in the player list under the synthetic UUID.
+            auto const& entries = mReplayPlayer->getLevel().getPlayerList();
+            auto const  entry   = entries.find(*addPlayer.mUuid);
+            if (entry != entries.end() && !entry->second.mName->empty()) {
+                *addPlayer.mName = *entry->second.mName;
+            }
+        }
         if (addPlayer.mPlayerGameType == GameType::Default || addPlayer.mPlayerGameType == GameType::Undefined) {
             auto const& abilities = *addPlayer.mAbilities;
             if (abilities.getBool(AbilitiesIndex::NoClip)) {
