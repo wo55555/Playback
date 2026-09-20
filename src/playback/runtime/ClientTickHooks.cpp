@@ -110,13 +110,10 @@ LL_TYPE_INSTANCE_HOOK(
     // Gates the editor overlay, so loading, progress and sign-in screens must clear first.
     bool hudVisible = false;
     if (isInitFinished && replay.isActive() && replay.hasJoinedReplayWorld()) {
-        auto const topScene       = static_cast<unsigned int>(getTopSceneType());
-        auto const hudScene       = static_cast<unsigned int>(ui::SceneType::HudScene);
-        bool const sceneHasHud    = (topScene & hudScene) != 0;
-        bool const inWorldNoMenu  = isInWorldAndNotShowingAnyMenuScreens();
-        bool const loadingScreen  = isShowingLoadingScreen();
-        bool const progressScreen = isShowingProgressScreen();
-        hudVisible                = sceneHasHud && inWorldNoMenu && !loadingScreen && !progressScreen;
+        auto const topScene = static_cast<unsigned int>(getTopSceneType());
+        auto const hudScene = static_cast<unsigned int>(ui::SceneType::HudScene);
+        hudVisible = (topScene & hudScene) != 0 && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
+                  && !isShowingProgressScreen() && !isShowingWorldProgressScreen();
     }
     editor::tickReplayUI(hudVisible);
     replay.tryFinalizeWorldCleanup();
