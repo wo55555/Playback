@@ -10,6 +10,9 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 | ---------------------- | ----------------------------------------------------------------------------------- |
 | `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) |
 | `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) |
+| `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) |
+
+MC 26.40 版本为预发布。三条发行线独立维护，请勿跨运行时混装。
 
 > [!IMPORTANT]
 > 建议尽量使用未安装其他第三方模组的独立 LeviLamina 实例。目前暂不保证与其他模组广泛兼容。
@@ -22,7 +25,7 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 ## 使用 LeviLauncher 和 Lip 安装
 
-以下截图以 `26.10` 实例为例，仅作安装流程示意。使用 `26.20` 时，请选择相互匹配的 Minecraft、LeviLamina 和 Playback 发行线。
+以下截图以 `26.10` 实例为例，仅作安装流程示意。使用 `26.20` 或 `26.40` 时，请选择相互匹配的 Minecraft、LeviLamina 和 Playback 发行线。
 
 1. 在左侧边栏选择 **Download（下载）**，找到需要的 Minecraft 版本，通过安装菜单创建使用 **LeviLamina** 加载器的实例。
 
@@ -66,6 +69,9 @@ lip install github.com/wo55555/Playback@0.3.1-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
 lip install github.com/wo55555/Playback@0.3.1-mc26.20#client
+
+# Minecraft / LeviLamina 26.40
+lip install github.com/wo55555/Playback@0.3.1-mc26.40#client
 ```
 
 > [!NOTE]

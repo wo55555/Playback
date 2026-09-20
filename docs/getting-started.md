@@ -10,6 +10,9 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 | ---------------------- | ----------------------------------------------------------------------------------- |
 | `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) |
 | `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) |
+| `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) |
+
+The MC 26.40 release is a prerelease. The three release lines are maintained separately; do not mix builds between runtimes.
 
 > [!IMPORTANT]
 > Use a clean LeviLamina instance without other third-party mods whenever possible. Broad mod compatibility is not currently guaranteed.
@@ -22,7 +25,7 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 
 ## Install with LeviLauncher and Lip
 
-The screenshots below use a `26.10` instance and are illustrative. For `26.20`, follow the same steps with the matching Minecraft, LeviLamina, and Playback release.
+The screenshots below use a `26.10` instance and are illustrative. For `26.20` or `26.40`, follow the same steps with the matching Minecraft, LeviLamina, and Playback release.
 
 1. Select **Download** in the left sidebar, find the Minecraft version you want, and use its install menu to create an instance with the **LeviLamina** loader.
 
@@ -66,6 +69,9 @@ lip install github.com/wo55555/Playback@0.3.1-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
 lip install github.com/wo55555/Playback@0.3.1-mc26.20#client
+
+# Minecraft / LeviLamina 26.40
+lip install github.com/wo55555/Playback@0.3.1-mc26.40#client
 ```
 
 > [!NOTE]
