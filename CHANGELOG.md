@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Preserve the recorded local player's original name; recover legacy synthetic names from the matching player-list entry when available.
 - Remap local-player snapshot links along with the player's unique ID, runtime ID, and UUID.
+- Hide camera paths and markers while the game HUD is covered by loading, progress, or menu screens, and restore them when the HUD returns.
 
 ## [0.3.1-mc26.40] - 2026-09-19
 
