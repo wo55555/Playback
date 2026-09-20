@@ -9,7 +9,9 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 | Minecraft / LeviLamina | Playback 版本                                                                       |
 | ---------------------- | ----------------------------------------------------------------------------------- |
 | `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) |
-| `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) || `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) |
+| `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) |
+| `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) |
+
 > [!IMPORTANT]
 > 建议尽量使用未安装其他第三方模组的独立 LeviLamina 实例。目前暂不保证与其他模组广泛兼容。
 
