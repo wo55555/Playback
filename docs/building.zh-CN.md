@@ -12,6 +12,8 @@ Playback 目前面向 Windows x64 的 LeviLamina 客户端运行环境。`xmake.
 
 ## Release 构建
 
+请按目标运行时选择源码分支：`main` 和 `develop` 面向 MC/LeviLamina 26.10，`feat/26.20` 面向 26.20，`feat/26.40` 面向 26.40 预发布发行线。设置 `PLAYBACK_VERSION` 只会改变打包版本标识，不会切换源码分支或 SDK 目标。
+
 打包后的模组版本默认来自最近的 Git 发行标签。在标签创建前验证发行构建时，请显式设置 `PLAYBACK_VERSION`。
 
 发布前请同步以下声明：

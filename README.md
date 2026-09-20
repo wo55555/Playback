@@ -100,7 +100,9 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 
 ## Latest Changes
 
-`v0.3.1` is an editor release published for both MC 26.10 and MC 26.20. Camera tracks are now drawn as a path overlay in the viewport, the editor layout is rebuilt around a centred transport with an export-range marker on the timeline, and playback speed and UI scale can be chosen directly. The release also expands keyboard editing and camera switching, smooths entity poses during preview, keeps riders attached to their vehicles, and fixes dimension-boundary, incomplete-column, keyframe-click, and player-list replay issues. On MC 26.20, recording now also survives dimension changes and preserves portable block updates and entity name-tag metadata.
+`v0.3.1` is an editor release published for MC 26.10, MC 26.20, and MC 26.40. Camera tracks are now drawn as a path overlay in the viewport, the editor layout is rebuilt around a centred transport with an export-range marker on the timeline, and playback speed and UI scale can be chosen directly. The release also expands keyboard editing and camera switching, smooths entity poses during preview, keeps riders attached to their vehicles, and fixes dimension-boundary, incomplete-column, keyframe-click, and player-list replay issues. On MC 26.20, recording now also survives dimension changes and preserves portable block updates and entity name-tag metadata.
+
+The **September 20, 2026 hotfix for `v0.3.1-mc26.40`** fixes recorded players standing still, replay disconnections from teleport packets, and backward seeks stalling on previously loaded terrain. It preserves original player names and restores affected names from the recorded player list when available. Reinstall the same release to update; these fixes do not require re-recording or format conversion. This hotfix applies only to MC 26.40; the published MC 26.10 and MC 26.20 release assets are unchanged.
 
 > [!CAUTION]
 > Playback releases are still test builds and may make destructive format or configuration changes. Replay archives from releases before `v0.2.0-mc26.20` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.1-mc26.20` and `v0.3.0-mc26.20` archives are compatible with `v0.3.1-mc26.20` and require no conversion. The configuration version, recording-file snapshot context version, and editor project format version are all `1`; no migration layer is provided.
@@ -112,14 +114,15 @@ See the full [changelog](CHANGELOG.md) for release history and detailed changes.
 
 ## Compatibility
 
-Playback maintains separate release lines for Minecraft and LeviLamina versions. Product version `0.3.1` is published for this branch as `v0.3.1-mc26.20`; use the listed MC 26.10 release for that runtime.
+Playback maintains separate release lines for Minecraft and LeviLamina versions. Product version `0.3.1` is published for this branch as `v0.3.1-mc26.20`; use the listed releases for MC 26.10 and MC 26.40.
 
 | Minecraft / LeviLamina | Playback release                                                                    | Status               |
 | ---------------------- | ----------------------------------------------------------------------------------- | -------------------- |
 | `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) | Maintained           |
 | `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) | Current test release |
+| `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) | Prerelease           |
 
-Both release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
+All release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
 
 > [!NOTE]
 > `0.2.0` was deliberately skipped on MC 26.20. Video export did not work on that runtime: the 26.20 headers mis-declare a struct alignment, so the capture path read a render-item count from padding, classified every submission as overlay-only, and stalled every export on frame 0. The 26.20 line therefore goes from `v0.1.2-mc26.20` straight to `v0.2.1-mc26.20`, which carries the fix. The MC 26.10 line is unaffected and did publish `v0.2.0-mc26.10`.
@@ -164,7 +167,7 @@ No. Every recorded dimension change splits the camera timeline, including transi
 
 ### Which Playback build should I install?
 
-Use `v0.3.1-mc26.20` for LeviLamina `26.20.*`. Minecraft/LeviLamina `26.10.*` uses its separately maintained release line.
+Use `v0.3.1-mc26.10` for Minecraft/LeviLamina `26.10.*`, `v0.3.1-mc26.20` for `26.20.*`, and the `v0.3.1-mc26.40` prerelease for `26.40.*`. Do not mix release lines; see [Compatibility](#compatibility).
 
 ## Development Status and Roadmap
 
