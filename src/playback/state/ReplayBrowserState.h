@@ -31,7 +31,6 @@ struct ReplayBrowserEntry {
     std::filesystem::file_time_type lastModified{};
     bool                            canOpen{};
     std::string                     problem;
-    std::string                     thumbnailPng;
 
     [[nodiscard]] std::string displayName() const {
         return replayName.empty() || replayName == "Unnamed" ? path.stem().string() : replayName;

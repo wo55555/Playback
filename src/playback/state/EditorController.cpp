@@ -34,7 +34,6 @@ ReplayBrowserEntry makeBrowserEntry(io::ReplaySummary summary) {
     entry.lastModified  = summary.lastModified;
     entry.canOpen       = summary.canOpen;
     entry.problem       = std::move(summary.problem);
-    entry.thumbnailPng  = std::move(summary.thumbnailPng);
     return entry;
 }
 
