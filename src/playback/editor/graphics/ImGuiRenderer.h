@@ -36,7 +36,7 @@ public:
     [[nodiscard]] bool                                  armExportCapture(visuals::FrameTicket const& ticket);
     [[nodiscard]] std::optional<visuals::CapturedFrame> collectExportFrame();
     [[nodiscard]] visuals::FrameTapStatus               exportCaptureStatus() const;
-    [[nodiscard]] void* acquireReplayThumbnailTexture(std::string_view key, std::string_view png);
+    [[nodiscard]] void* acquireReplayThumbnailTexture(std::filesystem::path const& path);
 
     bool               render(IDXGISwapChain* swapChain, bool allowFrameCapture = true);
     bool               renderExportOverlay(IDXGISwapChain* swapChain);
