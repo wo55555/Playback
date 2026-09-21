@@ -4,6 +4,17 @@ title: "[Feature] "
 labels: ["enhancement"]
 
 body:
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      description: Please search existing issues first. By submitting this issue, you agree to follow the project's Code of Conduct.
+      options:
+        - label: I have searched the existing issues to ensure this is not a duplicate
+          required: true
+        - label: I have read and agree to follow the Code of Conduct
+          required: true
+
   - type: textarea
     id: problem
     attributes:
