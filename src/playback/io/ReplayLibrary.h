@@ -28,7 +28,6 @@ struct ReplaySummary {
     std::filesystem::file_time_type lastModified{};
     bool                            canOpen = false;
     std::string                     problem;
-    std::string                     thumbnailPng;
 
     [[nodiscard]] std::string displayName() const;
     [[nodiscard]] bool        matches(std::string_view filter) const;
@@ -38,6 +37,7 @@ class ReplayLibrary {
 public:
     [[nodiscard]] static std::vector<ReplaySummary> loadReplays();
     [[nodiscard]] static std::vector<ReplaySummary> loadReplays(std::filesystem::path const& replayDir);
+    [[nodiscard]] static std::string                readThumbnailPng(std::filesystem::path const& path);
 
     static void sortReplays(
         std::vector<ReplaySummary>& replays,

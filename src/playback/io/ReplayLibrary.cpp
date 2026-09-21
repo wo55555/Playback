@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -49,9 +50,12 @@ bool hasReplayExtension(std::filesystem::path const& path) {
 
 std::optional<std::string>
 readZipEntry(std::filesystem::path const& archivePath, std::string const& entryName, zip_uint64_t maxBytes) {
-    auto archivePathString = archivePath.string();
-    int  zipError          = 0;
-    auto archive           = zip_open(archivePathString.c_str(), ZIP_RDONLY, &zipError);
+    auto                                           archivePathString = archivePath.string();
+    int                                            zipError          = 0;
+    std::unique_ptr<zip_t, decltype(&zip_discard)> archive(
+        zip_open(archivePathString.c_str(), ZIP_RDONLY, &zipError),
+        &zip_discard
+    );
     if (archive == nullptr) {
         zip_error_t error;
         zip_error_init_with_code(&error, zipError);
@@ -62,28 +66,27 @@ readZipEntry(std::filesystem::path const& archivePath, std::string const& entryN
 
     zip_stat_t stat;
     zip_stat_init(&stat);
-    if (zip_stat(archive, entryName.c_str(), 0, &stat) != 0) {
+    if (zip_stat(archive.get(), entryName.c_str(), 0, &stat) != 0) {
         getLogger().warn("Replay archive {} does not contain {}", archivePath, entryName);
-        zip_close(archive);
         return std::nullopt;
     }
     if ((stat.valid & ZIP_STAT_SIZE) == 0 || stat.size > maxBytes) {
         getLogger().warn("Replay archive entry {} in {} exceeds the allowed size", entryName, archivePath);
-        zip_close(archive);
         return std::nullopt;
     }
 
-    auto* file = zip_fopen(archive, entryName.c_str(), 0);
+    std::unique_ptr<zip_file_t, decltype(&zip_fclose)> file(
+        zip_fopen(archive.get(), entryName.c_str(), 0),
+        &zip_fclose
+    );
     if (file == nullptr) {
-        getLogger().warn("Unable to read {} from replay archive {}: {}", entryName, archivePath, zip_strerror(archive));
-        zip_close(archive);
+        getLogger()
+            .warn("Unable to read {} from replay archive {}: {}", entryName, archivePath, zip_strerror(archive.get()));
         return std::nullopt;
     }
 
     std::string data(static_cast<size_t>(stat.size), '\0');
-    auto        readBytes = zip_fread(file, data.data(), data.size());
-    zip_fclose(file);
-    zip_close(archive);
+    auto        readBytes = zip_fread(file.get(), data.data(), data.size());
 
     if (readBytes < 0 || static_cast<zip_uint64_t>(readBytes) != stat.size) {
         getLogger().warn("Unable to fully read {} from replay archive {}", entryName, archivePath);
@@ -133,9 +136,6 @@ ReplaySummary readReplaySummary(std::filesystem::directory_entry const& entry) {
                 meta.gameVersion,
                 record::PlaybackMeta::currentGameVersion()
             );
-        }
-        if (auto thumbnail = readZipEntry(summary.path, "icon.png", MaxReplayThumbnailBytes)) {
-            summary.thumbnailPng = std::move(*thumbnail);
         }
     } catch (std::exception const& e) {
         summary.replayName = fileStem;
@@ -261,6 +261,11 @@ bool ReplaySummary::matches(std::string_view filter) const {
 }
 
 std::vector<ReplaySummary> ReplayLibrary::loadReplays() { return loadReplays(utils::PathUtils::getReplaysDir()); }
+
+std::string ReplayLibrary::readThumbnailPng(std::filesystem::path const& path) {
+    auto png = readZipEntry(path, "icon.png", MaxReplayThumbnailBytes);
+    return png ? std::move(*png) : std::string{};
+}
 
 std::vector<ReplaySummary> ReplayLibrary::loadReplays(std::filesystem::path const& replayDir) {
     std::vector<ReplaySummary> replays;
