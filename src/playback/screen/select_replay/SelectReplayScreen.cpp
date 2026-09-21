@@ -908,15 +908,16 @@ void SelectReplayScreen::drawNavigation() {
 }
 
 void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& replay, ImVec2 size, float rounding) {
-    auto        start    = ImGui::GetCursorScreenPos();
-    auto        end      = ImVec2(start.x + size.x, start.y + size.y);
+    auto start = ImGui::GetCursorScreenPos();
+    auto end   = ImVec2(start.x + size.x, start.y + size.y);
+    if (!ImGui::IsRectVisible(start, end)) {
+        ImGui::Dummy(size);
+        return;
+    }
     auto* const drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(start, end, kColorPreviewBg, rounding);
 
-    auto texture = playback::editor::graphics::gImGuiRenderer.acquireReplayThumbnailTexture(
-        replay.path.string(),
-        replay.thumbnailPng
-    );
+    auto texture = playback::editor::graphics::gImGuiRenderer.acquireReplayThumbnailTexture(replay.path);
     if (texture) {
         // Thumbnail sources are 16:9; center-crop to the target aspect ratio without stretching.
         constexpr float sourceAspect = 16.0f / 9.0f;
@@ -1187,14 +1188,21 @@ void SelectReplayScreen::drawGrid() {
     int const       columns        = std::min(capacity, std::max(defaultColumns, static_cast<int>(mVisible.size())));
     float const     width          = (gridWidth - (columns - 1) * kCardGap) / columns;
     float const     height         = cardHeight(width);
-    for (int item = 0; item < static_cast<int>(mVisible.size()); ++item) {
-        int const column = item % columns;
-        int const row    = item / columns;
-        ImGui::SetCursorPos({column * (width + kCardGap), row * (height + kCardGap)});
-        drawCard(replays()[mVisible[static_cast<size_t>(item)]], static_cast<std::size_t>(item), width);
+    int const       rows           = (static_cast<int>(mVisible.size()) + columns - 1) / columns;
+    ImGui::SetCursorPos({0.0f, 0.0f});
+    ImGuiListClipper clipper;
+    clipper.Begin(rows, height + kCardGap);
+    while (clipper.Step()) {
+        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+            for (int column = 0; column < columns; ++column) {
+                auto const item = static_cast<std::size_t>(row) * columns + column;
+                if (item >= mVisible.size()) break;
+                ImGui::SetCursorPos({column * (width + kCardGap), row * (height + kCardGap)});
+                drawCard(replays()[mVisible[item]], item, width);
+            }
+        }
     }
 
-    int const   rows       = (static_cast<int>(mVisible.size()) + columns - 1) / columns;
     float const gridHeight = rows * height + std::max(0, rows - 1) * kCardGap;
     ImGui::SetCursorPos({0.0f, gridHeight + kContentLayout.bottomMargin});
     ImGui::Dummy({gridWidth, 1.0f});
@@ -1413,6 +1421,12 @@ void SelectReplayScreen::drawDetails() {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
     ImGui::BeginChild("##details-list", {listWidth, listHeight}, true, ImGuiWindowFlags_NoScrollbar);
 
+    float const itemStride =
+        kDetailsLayout.listItemHeight + kDetailsLayout.listItemGap + ImGui::GetStyle().ItemSpacing.y * 2.0f;
+    if (!mVisible.empty()) {
+        // Clipper's trailing stride must not add a gap after the last item.
+        ImGui::SetNextWindowContentSize({0.0f, (mVisible.size() - 1) * itemStride + kDetailsLayout.listItemHeight});
+    }
     ImGui::BeginChild(
         "##details-list-scroll",
         {0.0f, -kDetailsLayout.listFooterHeight},
@@ -1423,10 +1437,15 @@ void SelectReplayScreen::drawDetails() {
         ImGui::SetWindowFontScale(kFontScaleSmall);
         ImGui::TextDisabled("%s", "playback.replayBrowser.empty"_tr().c_str());
     } else {
-        for (std::size_t visibleIndex = 0; visibleIndex < mVisible.size(); ++visibleIndex) {
-            float const itemWidth = ImGui::GetContentRegionAvail().x;
-            drawDetailsListItem(replays()[mVisible[visibleIndex]], visibleIndex, itemWidth);
-            if (visibleIndex + 1 < mVisible.size()) ImGui::Dummy({0.0f, kDetailsLayout.listItemGap});
+        float const      itemWidth = ImGui::GetContentRegionAvail().x;
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(mVisible.size()), itemStride);
+        while (clipper.Step()) {
+            for (int item = clipper.DisplayStart; item < clipper.DisplayEnd; ++item) {
+                auto const visibleIndex = static_cast<std::size_t>(item);
+                drawDetailsListItem(replays()[mVisible[visibleIndex]], visibleIndex, itemWidth);
+                if (visibleIndex + 1 < mVisible.size()) ImGui::Dummy({0.0f, kDetailsLayout.listItemGap});
+            }
         }
     }
     if (!mSelectedIds.empty() && ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
