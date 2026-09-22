@@ -59,6 +59,7 @@ private:
     void                           fail(ExportError error, std::string message);
     void                           restoreReplayState();
     void                           closeCapture(bool cancelled);
+    void                           recordWait(OfflineRenderWaitReason reason) const noexcept;
 
     ExportCoordinator&                     mCoordinator;
     replay::ReplaySession&                 mReplay;

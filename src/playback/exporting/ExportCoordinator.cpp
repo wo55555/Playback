@@ -12,7 +12,9 @@ namespace playback::exporting {
 namespace {
 
 [[nodiscard]] std::unique_ptr<IFrameWriter> makeDefaultWriter(ExportFormat format) {
-    if (format == ExportFormat::Mp4Video) return std::make_unique<FfmpegVideoWriter>();
+    if (format == ExportFormat::Mp4Video) {
+        return std::make_unique<FfmpegVideoWriter>();
+    }
     return std::make_unique<PngSequenceWriter>();
 }
 

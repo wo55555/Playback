@@ -3,6 +3,7 @@
 #include "ExportTypes.h"
 #include "OfflineRenderClockHooks.h"
 #include "OfflineRenderFrameExecutor.h"
+#include "OfflineRenderTrace.h"
 
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/visuals/FrameTap.h"
@@ -78,16 +79,19 @@ public:
     [[nodiscard]] std::optional<visuals::CapturedFrame> finishDownload();
 
     [[nodiscard]] OfflineRenderBoundaryStatus status();
+    [[nodiscard]] OfflineRenderWaitReason     lastWaitReason() const noexcept { return mLastWaitReason; }
 
 private:
+    [[nodiscard]] OfflineRenderStepResult
+    waiting(OfflineRenderWaitReason reason, OfflineRenderStepResult result = OfflineRenderStepResult::Waiting) noexcept;
     [[nodiscard]] int                                     targetTick(ExportFramePlan const& frame) const;
     [[nodiscard]] std::optional<OfflineRenderClockSample> clockSample(ExportFramePlan const& frame) const;
     void                                                  updateExportCamera(ExportFramePlan const& frame);
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
     [[nodiscard]] bool                                    warmupComplete() const;
-    [[nodiscard]] bool                                    publishClockSample(ExportFramePlan const& frame);
-    void                                                  clearClockSample();
-    void                                                  fault(OfflineRenderBoundaryError error, std::string message);
+    [[nodiscard]] bool publishClockSample(ExportFramePlan const& frame, bool captureSample);
+    void               clearClockSample();
+    void               fault(OfflineRenderBoundaryError error, std::string message);
 
     replay::ReplaySession&                         mReplay;
     uint32_t                                       mCaptureCapacity{};
@@ -112,6 +116,7 @@ private:
     bool                                           mInitializationTickObserved{};
     OfflineRenderBoundaryState                     mState{OfflineRenderBoundaryState::Closed};
     OfflineRenderBoundaryError                     mError{OfflineRenderBoundaryError::None};
+    OfflineRenderWaitReason                        mLastWaitReason{OfflineRenderWaitReason::Unknown};
     std::string                                    mMessage;
 };
 

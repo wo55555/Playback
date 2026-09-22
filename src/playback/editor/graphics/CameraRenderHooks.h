@@ -21,8 +21,14 @@ struct RenderCameraProjection {
     std::optional<visuals::ReplaySampleTime> sampleTime;
 };
 
+struct CameraRenderHookInventory {
+    bool renderFrame{};
+    bool upscaling{};
+};
+
 [[nodiscard]] bool                                       hookCameraRender(bool enable);
 [[nodiscard]] bool                                       isCameraRenderInstalled();
+[[nodiscard]] CameraRenderHookInventory                  cameraRenderHookInventory();
 [[nodiscard]] std::optional<keyframe::CameraRenderState> currentRendererCameraState();
 [[nodiscard]] std::optional<RenderCameraProjection>      currentRenderCameraProjection();
 void                                                     useSubmittedCameraProjection(bgfx::Frame const* frame);
