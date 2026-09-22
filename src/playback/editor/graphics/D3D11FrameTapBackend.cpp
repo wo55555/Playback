@@ -1,6 +1,7 @@
 ﻿#include "D3D11FrameTapBackend.h"
 
 #include "playback/Playback.h"
+#include "playback/exporting/OfflineRenderTrace.h"
 
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -13,6 +14,9 @@
 #include <vector>
 
 namespace playback::editor::graphics {
+
+using playback::exporting::OfflineRenderTraceEvent;
+using playback::exporting::recordOfflineRenderTrace;
 
 using Microsoft::WRL::ComPtr;
 using visuals::CapturedFrame;
@@ -152,9 +156,18 @@ void D3D11FrameTapBackend::poll(ID3D11DeviceContext* context) {
             std::memcpy(target, source, frame.rowPitch);
         }
         context->Unmap(slot->staging.Get(), 0);
-        auto capture = *slot->capture;
+        auto       capture    = *slot->capture;
+        auto const captureId  = capture.captureId;
+        auto const frameIndex = capture.ticket.frameIndex;
         slot->capture.reset();
         mImpl->frameTap.complete(capture, std::move(frame));
+        recordOfflineRenderTrace(
+            OfflineRenderTraceEvent::ReadbackReady,
+            slot->staging.Get(),
+            nullptr,
+            frameIndex,
+            captureId
+        );
     }
 }
 

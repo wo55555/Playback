@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
+#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/replay/ReplaySession.h"
 
 #include "ll/api/service/TargetedBedrock.h"
@@ -185,6 +186,7 @@ bool OfflineRenderFrameExecutor::configureRenderSize(ExportSettings const& setti
     mRenderWidth             = static_cast<uint32_t>(renderWidth);
     mRenderHeight            = static_cast<uint32_t>(renderHeight);
     auto& game               = client->getMinecraftGame_DEPRECATED();
+    recordRenderDiagnostics(RenderDiagnosticStage::ResizeBefore, client.operator->());
     game.setRenderingSize(static_cast<int>(mRenderWidth), static_cast<int>(mRenderHeight));
     game.setUISizeAndScale(static_cast<int>(mRenderWidth), static_cast<int>(mRenderHeight), 0.0f);
 
@@ -194,6 +196,7 @@ bool OfflineRenderFrameExecutor::configureRenderSize(ExportSettings const& setti
     exportViewport.offset->x = 0.0f;
     exportViewport.offset->y = 0.0f;
     client->setViewportInfo(exportViewport);
+    recordRenderDiagnostics(RenderDiagnosticStage::ResizeAfter, client.operator->());
 
     mRenderSizeChanged = true;
     getLogger().debug(
@@ -212,6 +215,7 @@ void OfflineRenderFrameExecutor::restoreRenderSize() {
     if (client && mRestoreRenderWidth != 0 && mRestoreRenderHeight != 0 && mRestoreUiWidth != 0
         && mRestoreUiHeight != 0) {
         auto& game = client->getMinecraftGame_DEPRECATED();
+        recordRenderDiagnostics(RenderDiagnosticStage::RestoreBefore, client.operator->());
         game.setRenderingSize(static_cast<int>(mRestoreRenderWidth), static_cast<int>(mRestoreRenderHeight));
         game.setUISizeAndScale(static_cast<int>(mRestoreUiWidth), static_cast<int>(mRestoreUiHeight), mRestoreGuiScale);
 
@@ -223,6 +227,7 @@ void OfflineRenderFrameExecutor::restoreRenderSize() {
         viewport.minDepth  = mRestoreViewportMinDepth;
         viewport.maxDepth  = mRestoreViewportMaxDepth;
         client->setViewportInfo(viewport);
+        recordRenderDiagnostics(RenderDiagnosticStage::RestoreAfter, client.operator->());
     }
     mRenderSizeChanged       = false;
     mRestoreRenderWidth      = 0;

@@ -3,6 +3,7 @@
 #include "playback/editor/graphics/D3D12Compat.h"
 
 #include "playback/Playback.h"
+#include "playback/exporting/OfflineRenderTrace.h"
 
 #include <Windows.h>
 #include <wrl/client.h>
@@ -22,6 +23,10 @@
 #include <vector>
 
 namespace playback::editor::graphics {
+
+using playback::exporting::offlineRenderTraceEpoch;
+using playback::exporting::OfflineRenderTraceEvent;
+using playback::exporting::recordOfflineRenderTraceForEpoch;
 
 using Microsoft::WRL::ComPtr;
 using visuals::CapturedFrame;
@@ -58,6 +63,7 @@ struct D3D12FrameTapBackend::Impl {
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT    footprint{};
         uint64_t                              byteCount{};
         uint64_t                              fenceValue{};
+        uint64_t                              traceEpoch{};
         uint32_t                              width{};
         uint32_t                              height{};
         DXGI_FORMAT                           format{DXGI_FORMAT_UNKNOWN};
@@ -296,6 +302,7 @@ struct D3D12FrameTapBackend::Impl {
             FrameTapBackendCapture             capture;
             uint64_t                           byteCount{};
             uint64_t                           fenceValue{};
+            uint64_t                           traceEpoch{};
             uint32_t                           width{};
             uint32_t                           height{};
             DXGI_FORMAT                        format{DXGI_FORMAT_UNKNOWN};
@@ -324,6 +331,7 @@ struct D3D12FrameTapBackend::Impl {
                 capture         = *selected->capture;
                 byteCount       = selected->byteCount;
                 fenceValue      = selected->fenceValue;
+                traceEpoch      = selected->traceEpoch;
                 width           = selected->width;
                 height          = selected->height;
                 format          = selected->format;
@@ -414,7 +422,18 @@ struct D3D12FrameTapBackend::Impl {
                             auto*       target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
                             std::memcpy(target, source, frame.rowPitch);
                         }
+                        auto const captureId  = capture.captureId;
+                        auto const frameIndex = capture.ticket.frameIndex;
                         frameTap.complete(capture, std::move(frame));
+                        recordOfflineRenderTraceForEpoch(
+                            traceEpoch,
+                            OfflineRenderTraceEvent::ReadbackReady,
+                            readback.Get(),
+                            fence.Get(),
+                            frameIndex,
+                            captureId,
+                            fenceValue
+                        );
                     }
                     D3D12_RANGE const writtenRange{0, 0};
                     readback->Unmap(0, &writtenRange);
@@ -550,6 +569,8 @@ bool D3D12FrameTapBackend::capture(
     auto capture = mImpl->frameTap.beginCapture();
     if (!capture) return false;
 
+    slot->traceEpoch = offlineRenderTraceEpoch();
+
     capture->submission = {
         static_cast<uint32_t>(sourceDesc.Width),
         sourceDesc.Height,
@@ -572,6 +593,16 @@ bool D3D12FrameTapBackend::capture(
     sourceLocation.SubresourceIndex = 0;
     commandList->CopyTextureRegion(&destination, 0, 0, 0, &sourceLocation, nullptr);
 
+    recordOfflineRenderTraceForEpoch(
+        slot->traceEpoch,
+        OfflineRenderTraceEvent::ReadbackCopy,
+        source,
+        slot->readback.Get(),
+        capture->ticket.frameIndex,
+        capture->captureId,
+        reinterpret_cast<uintptr_t>(commandList),
+        reinterpret_cast<uintptr_t>(queue)
+    );
     slot->capture            = *capture;
     slot->state              = Impl::SlotState::AwaitingFence;
     auto const slotIndex     = static_cast<size_t>(std::distance(mImpl->slots.begin(), slot));
@@ -648,6 +679,8 @@ bool D3D12FrameTapBackend::captureSubmitted(
 
     auto capture = mImpl->frameTap.beginCapture();
     if (!capture) return false;
+
+    slot->traceEpoch = offlineRenderTraceEpoch();
 
     capture->submission = {
         static_cast<uint32_t>(sourceDesc.Width),

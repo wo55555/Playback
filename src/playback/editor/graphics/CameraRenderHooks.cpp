@@ -2,6 +2,8 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
+#include "playback/exporting/OfflineRenderTrace.h"
+#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 
@@ -20,6 +22,7 @@
 #include "mc/deps/minecraft_renderer/objects/ViewRenderObject.h"
 #include "mc/deps/renderer/Camera.h"
 #include "mc/external/bgfx/Context.h"
+#include "mc/external/render_dragon/rendering/UpscalingData.h"
 #include "mc/world/actor/player/Player.h"
 
 #include <glm/ext/matrix_clip_space.hpp>
@@ -28,6 +31,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -39,6 +43,9 @@
 
 namespace playback::editor::graphics {
 
+using playback::exporting::OfflineRenderTraceEvent;
+using playback::exporting::OfflineRenderTraceScope;
+
 namespace {
 
 constexpr float PositionTolerance  = 0.02f;
@@ -46,6 +53,8 @@ constexpr float DirectionTolerance = 0.002f;
 constexpr float RadiansPerDegree   = std::numbers::pi_v<float> / 180.0f;
 
 std::atomic_bool                gInstalled{};
+std::atomic_bool                gRenderFrameHooked{};
+std::atomic_bool                gUpscalingHooked{};
 std::atomic<uint64_t>           gPreviewFrameSerial{};
 std::array<std::atomic_bool, 2> gMissingSampleLogged{};
 std::array<std::atomic_bool, 2> gApplicationFailureLogged{};
@@ -549,10 +558,21 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     float partialTick
 ) {
+    auto const renderFrame = [&] {
+        bool const diagnostics =
+            playback::exporting::renderDiagnosticsEnabled() && !playback::exporting::isOfflineRenderTraceActive();
+        if (diagnostics) {
+            playback::exporting::recordRenderDiagnostics(playback::exporting::RenderDiagnosticStage::GraphicsBefore);
+        }
+        origin(partialTick);
+        if (diagnostics) {
+            playback::exporting::recordRenderDiagnostics(playback::exporting::RenderDiagnosticStage::GraphicsAfter);
+        }
+    };
     auto const existing = keyframe::currentCameraTimelineRenderContext();
     if (existing && existing->source == keyframe::CameraTimelineSource::Export) {
         (void)applyCameraEcs(*existing);
-        origin(partialTick);
+        renderFrame();
         return;
     }
 
@@ -567,13 +587,13 @@ LL_TYPE_INSTANCE_HOOK(
     if (!context) {
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
         if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) gParkedObserverCamera.reset();
-        origin(partialTick);
+        renderFrame();
         return;
     }
 
     {
         keyframe::ScopedCameraTimelineRenderContext scope(context);
-        origin(partialTick);
+        renderFrame();
     }
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview, context);
 }
@@ -586,12 +606,75 @@ LL_TYPE_INSTANCE_HOOK(
     uint,
     uint flags
 ) {
+    OfflineRenderTraceScope
+        trace(OfflineRenderTraceEvent::ApiFrameEnter, OfflineRenderTraceEvent::ApiFrameExit, this, nullptr, flags);
     // Queue the projection this frame was submitted with; $submit consumes it in the same order.
     {
         std::scoped_lock lock(gRendererCameraMutex);
         gFrameProjections[gNextProjectionSlot++ % gFrameProjections.size()] = gRenderCameraProjection;
     }
-    return origin(flags);
+    auto const result = origin(flags);
+    trace.result(result);
+    return result;
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    ReplayCameraRenderFrameHook,
+    ll::memory::HookPriority::Lowest,
+    bgfx::Context,
+    &bgfx::Context::renderFrame,
+    bgfx::RenderFrame::Enum,
+    int milliseconds
+) {
+    OfflineRenderTraceScope trace(
+        OfflineRenderTraceEvent::RenderFrameEnter,
+        OfflineRenderTraceEvent::RenderFrameExit,
+        this,
+        nullptr,
+        static_cast<uint64_t>(static_cast<int64_t>(milliseconds))
+    );
+    auto const result = origin(milliseconds);
+    trace.result(static_cast<uint64_t>(static_cast<int>(result)));
+    return result;
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    ReplayUpscalingFrameTickHook,
+    ll::memory::HookPriority::Lowest,
+    dragon::rendering::UpscalingData,
+    &dragon::rendering::UpscalingData::updateFrameTick,
+    void,
+    float dynamicResolutionScale
+) {
+    OfflineRenderTraceScope trace(
+        OfflineRenderTraceEvent::UpscalingEnter,
+        OfflineRenderTraceEvent::UpscalingExit,
+        this,
+        nullptr,
+        std::bit_cast<uint32_t>(dynamicResolutionScale)
+    );
+    origin(dynamicResolutionScale);
+    if (playback::exporting::renderDiagnosticsEnabled()) {
+        playback::exporting::recordOfflineRenderTrace(
+            OfflineRenderTraceEvent::UpscalingConfig,
+            this,
+            nullptr,
+            static_cast<uint64_t>(getUpscalingMode()),
+            isDynamicResolutionEnabled() ? 1 : 0,
+            std::bit_cast<uint32_t>(getDynamicResolutionScale()),
+            std::bit_cast<uint32_t>(getUpscalingFactor())
+        );
+    }
+    auto const& jitter = getSubPixelJitterOffset();
+    playback::exporting::recordOfflineRenderTrace(
+        OfflineRenderTraceEvent::UpscalingState,
+        this,
+        nullptr,
+        mCurrentJitterIdx,
+        std::bit_cast<uint32_t>(jitter.x),
+        std::bit_cast<uint32_t>(jitter.y),
+        isUpscalingEnabled() ? 1 : 0
+    );
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -633,7 +716,36 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     origin(camera, partialTick);
 
-    auto&      level    = *static_cast<LevelRendererPlayer*>(this);
+    auto&      level       = *static_cast<LevelRendererPlayer*>(this);
+    auto const recordBasis = [&](uint64_t phase) {
+        if (!playback::exporting::renderDiagnosticsEnabled() || !playback::exporting::isOfflineRenderTraceActive())
+            return;
+        auto recordVector = [&](OfflineRenderTraceEvent event, ::glm::vec3 const& value) {
+            playback::exporting::recordOfflineRenderTrace(
+                event,
+                &camera,
+                &level,
+                phase,
+                std::bit_cast<uint32_t>(value.x),
+                std::bit_cast<uint32_t>(value.y),
+                std::bit_cast<uint32_t>(value.z)
+            );
+        };
+        auto const& inverse = camera.mInverseViewMatrix.get();
+        recordVector(OfflineRenderTraceEvent::CameraForward, camera.mForward.get());
+        recordVector(OfflineRenderTraceEvent::CameraUp, camera.mUp.get());
+        recordVector(OfflineRenderTraceEvent::CameraViewForward, {-inverse[2].x, -inverse[2].y, -inverse[2].z});
+        recordVector(OfflineRenderTraceEvent::CameraViewUp, {inverse[1].x, inverse[1].y, inverse[1].z});
+    };
+    recordBasis(0);
+    if (playback::exporting::renderDiagnosticsEnabled() && playback::exporting::isOfflineRenderTraceActive()) {
+        playback::exporting::recordWorldEnvironment(
+            playback::exporting::WorldDiagnosticStage::CameraSetup,
+            &level.mLevel,
+            level.mDimension,
+            partialTick
+        );
+    }
     auto const position = ::glm::vec3{level.mCameraPos->x, level.mCameraPos->y, level.mCameraPos->z};
     auto const target   = ::glm::vec3{
         level.mCameraTargetPos->x,
@@ -655,13 +767,54 @@ LL_TYPE_INSTANCE_HOOK(
         gRendererCameraState = nativeState;
     }
 
-    auto const context = keyframe::currentCameraTimelineRenderContext();
+    auto const context      = keyframe::currentCameraTimelineRenderContext();
+    auto const recordCamera = [&](uint64_t sourceMarker) {
+        if (!playback::exporting::renderDiagnosticsEnabled()) return;
+        recordBasis(sourceMarker + 1);
+        float const x      = level.mCameraPos->x;
+        float const y      = level.mCameraPos->y;
+        float const z      = level.mCameraPos->z;
+        float const fov    = camera.mFov;
+        float const aspect = camera.mAspectRatio;
+        auto const  serial = context ? context->frameIndex : 0;
+        playback::exporting::recordOfflineRenderTrace(
+            OfflineRenderTraceEvent::CameraState,
+            &camera,
+            &level,
+            std::bit_cast<uint32_t>(x),
+            std::bit_cast<uint32_t>(y),
+            std::bit_cast<uint32_t>(z),
+            serial
+        );
+        playback::exporting::recordOfflineRenderTrace(
+            OfflineRenderTraceEvent::CameraLens,
+            &camera,
+            &level,
+            std::bit_cast<uint32_t>(fov),
+            std::bit_cast<uint32_t>(aspect),
+            std::bit_cast<uint32_t>(partialTick),
+            sourceMarker
+        );
+        if (context && context->sample && context->time.isValid()) {
+            auto const sampleTime = static_cast<double>(context->time.value());
+            playback::exporting::recordOfflineRenderTrace(
+                OfflineRenderTraceEvent::CameraSample,
+                &camera,
+                &level,
+                std::bit_cast<uint64_t>(sampleTime),
+                serial,
+                sourceMarker,
+                0
+            );
+        }
+    };
     if (context) {
         // Timeline cameras bypass vanilla observer interpolation.
         if (context->source == keyframe::CameraTimelineSource::Export) {
             (void)applyCameraEcs(*context);
         }
         (void)applyTimelineCamera(*static_cast<LevelRendererPlayer*>(this), camera, *context);
+        recordCamera(context->source == keyframe::CameraTimelineSource::Export ? 2 : 1);
         return;
     }
 
@@ -672,6 +825,7 @@ LL_TYPE_INSTANCE_HOOK(
             gParkedObserverCamera.reset();
         }
     }
+    recordCamera(gParkedObserverCamera ? 3 : 0);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -767,6 +921,8 @@ bool hookCameraRender(bool enable) {
     struct HookState {
         bool frameScope{};
         bool submitFrame{};
+        bool renderFrame{};
+        bool upscaling{};
         bool fov{};
         bool fovWithoutGameplay{};
         bool setupCamera{};
@@ -793,9 +949,13 @@ bool hookCameraRender(bool enable) {
         }
         if (state.fov && ReplayCameraFovHook::unhook()) state.fov = false;
         if (state.submitFrame && ReplayCameraSubmitFrameHook::unhook()) state.submitFrame = false;
+        if (state.renderFrame && ReplayCameraRenderFrameHook::unhook()) state.renderFrame = false;
+        if (state.upscaling && ReplayUpscalingFrameTickHook::unhook()) state.upscaling = false;
+        gRenderFrameHooked.store(state.renderFrame, std::memory_order_release);
+        gUpscalingHooked.store(state.upscaling, std::memory_order_release);
         if (state.frameScope && ReplayCameraFrameScopeHook::unhook()) state.frameScope = false;
         return !state.frameScope && !state.submitFrame && !state.fov && !state.fovWithoutGameplay && !state.setupCamera
-            && !state.finalView;
+            && !state.finalView && !state.renderFrame && !state.upscaling;
     };
 
     if (!enable) return removeAll();
@@ -811,6 +971,10 @@ bool hookCameraRender(bool enable) {
 
     if (!state.frameScope) state.frameScope = ReplayCameraFrameScopeHook::hook() == 0;
     if (!state.submitFrame) state.submitFrame = ReplayCameraSubmitFrameHook::hook() == 0;
+    if (!state.renderFrame) state.renderFrame = ReplayCameraRenderFrameHook::hook() == 0;
+    if (!state.upscaling) state.upscaling = ReplayUpscalingFrameTickHook::hook() == 0;
+    gRenderFrameHooked.store(state.renderFrame, std::memory_order_release);
+    gUpscalingHooked.store(state.upscaling, std::memory_order_release);
     if (!state.fov) state.fov = ReplayCameraFovHook::hook() == 0;
     if (!state.fovWithoutGameplay) {
         state.fovWithoutGameplay = ReplayCameraFovWithoutGameplayHook::hook() == 0;
@@ -824,6 +988,7 @@ bool hookCameraRender(bool enable) {
     if (!installed) {
         bool const frameScope         = state.frameScope;
         bool const submitFrame        = state.submitFrame;
+        bool const renderFrame        = state.renderFrame;
         bool const fov                = state.fov;
         bool const fovWithoutGameplay = state.fovWithoutGameplay;
         bool const setupCamera        = state.setupCamera;
@@ -831,13 +996,14 @@ bool hookCameraRender(bool enable) {
         bool const rolledBack         = removeAll();
         Playback::getInstance().getSelf().getLogger().error(
             "Unable to install camera render hooks (frameScope={}, fov={}, fovWithoutGameplay={}, setupCamera={}, "
-            "finalView={}, submitFrame={}, rollback={})",
+            "finalView={}, submitFrame={}, renderFrame={}, rollback={})",
             frameScope,
             fov,
             fovWithoutGameplay,
             setupCamera,
             finalView,
             submitFrame,
+            renderFrame,
             rolledBack
         );
         return false;
@@ -847,6 +1013,13 @@ bool hookCameraRender(bool enable) {
 }
 
 bool isCameraRenderInstalled() { return gInstalled.load(std::memory_order_acquire); }
+
+CameraRenderHookInventory cameraRenderHookInventory() {
+    return {
+        gRenderFrameHooked.load(std::memory_order_acquire),
+        gUpscalingHooked.load(std::memory_order_acquire),
+    };
+}
 
 std::optional<keyframe::CameraRenderState> currentRendererCameraState() {
     std::scoped_lock lock(gRendererCameraMutex);
