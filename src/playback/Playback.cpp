@@ -15,6 +15,7 @@
 #include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
 
+#include "ll/api/Config.h"
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
 #include "ll/api/event/client/ClientCancelJoinLevelEvent.h"
@@ -32,8 +33,10 @@
 #include "mc/world/level/Level.h"
 
 #include <atomic>
+#include <exception>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace playback {
 
@@ -257,7 +260,17 @@ void configurationLog() {
 bool Playback::load() {
     configurationLog();
 
-    const auto& logger = getSelf().getLogger();
+    auto& logger = getSelf().getLogger();
+    try {
+        auto config = impl->mConfig;
+        if (!ll::config::loadConfig(config, getSelf().getConfigDir() / "config.json")) {
+            logger.warn("Playback configuration required migration; the original file was preserved");
+        }
+        impl->mConfig = std::move(config);
+    } catch (std::exception const& error) {
+        logger.error("Unable to load Playback configuration; using defaults: {}", error.what());
+    }
+    if (impl->mConfig.renderDiagnostics) logger.setFlushLevel(ll::io::LogLevel::Info);
 
     if (auto result = ll::i18n::getInstance().load(getSelf().getLangDir()); !result) {
         logger.error("Failed to load I18n");

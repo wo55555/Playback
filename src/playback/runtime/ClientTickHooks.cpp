@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
+#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
@@ -103,6 +104,9 @@ LL_TYPE_INSTANCE_HOOK(
     editor::graphics::updateReplayMouseOwnership(*this);
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
+    if (replay.isActive()) {
+        exporting::recordRenderDiagnostics(exporting::RenderDiagnosticStage::ClientPulse, this);
+    }
     // Gates the editor overlay, so loading, progress and sign-in screens must clear first.
     bool hudVisible = false;
     if (isInitFinished && replay.isActive() && replay.hasJoinedReplayWorld()) {
@@ -134,8 +138,29 @@ LL_TYPE_INSTANCE_HOOK(
 
         auto&     replay           = ReplaySession::getInstance();
         int const beforeReplayTick = replay.getAppliedReplayTick();
+        exporting::recordWorldEnvironment(
+            exporting::WorldDiagnosticStage::ReplayTickBefore,
+            this,
+            nullptr,
+            0.0f,
+            *offlineTick.token
+        );
         tickPlayback();
+        exporting::recordWorldEnvironment(
+            exporting::WorldDiagnosticStage::NativeTickBefore,
+            this,
+            nullptr,
+            0.0f,
+            *offlineTick.token
+        );
         origin();
+        exporting::recordWorldEnvironment(
+            exporting::WorldDiagnosticStage::NativeTickAfter,
+            this,
+            nullptr,
+            0.0f,
+            *offlineTick.token
+        );
         [[maybe_unused]] auto tickBoundary    = ChunkMutationBarrier::enterTickBoundary(*this);
         int const             afterReplayTick = replay.getAppliedReplayTick();
         completeOfflineTick(*offlineTick.token, beforeReplayTick, afterReplayTick);
