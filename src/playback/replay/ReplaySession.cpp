@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
+#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
@@ -369,6 +370,8 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         return false;
     }
 
+    exporting::recordRenderDiagnostics(exporting::RenderDiagnosticStage::ReplayStart, &*client);
+    exporting::recordReplayRequestedGraphicsMode(*screenModel);
     forceFirstPersonCamera();
 
     try {
@@ -381,6 +384,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         if (!prepareReplayResourcePacks(configurationPackets)) {
             throw std::runtime_error("Unable to prepare the recorded resource-pack configuration");
         }
+        exporting::recordRenderDiagnostics(exporting::RenderDiagnosticStage::ReplayPacksPrepared, &*client);
         prepareRecordedBlockRegistry(configurationPackets);
         auto const& context = mSnapshotContexts.front();
 
@@ -434,9 +438,12 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         }
         mReplayDimensionProfile.store(std::move(dimensionProfile), std::memory_order_release);
 
-        mCleanupState = CleanupState::None;
-        mActive       = true;
+        mCleanupState        = CleanupState::None;
+        mActive              = true;
+        auto const startSpan = exporting::recordReplayAdmissionBoundary("LocalServer.start.enter");
+        exporting::recordReplayWorldSettings("local.creation", settings, startSpan);
         screenModel->startLocalServerAsync(mReplayLevelId, "Playback Replay", settings);
+        exporting::recordReplayAdmissionBoundary("LocalServer.start.return", startSpan);
         getLogger().debug("Starting replay from {} in {}", mReplayFilePath, mReplayLevelId);
         return true;
     } catch (std::exception const& e) {
@@ -1398,24 +1405,32 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
         return packet;
     };
 
-    auto&       repository      = client->getResourcePackRepository();
-    auto const* serializedInfo  = findPacket(MinecraftPacketIds::ResourcePacksInfo);
-    auto const* serializedStack = findPacket(MinecraftPacketIds::ResourcePackStack);
-
+    auto&                                    repository      = client->getResourcePackRepository();
+    auto const*                              serializedInfo  = findPacket(MinecraftPacketIds::ResourcePacksInfo);
+    auto const*                              serializedStack = findPacket(MinecraftPacketIds::ResourcePackStack);
     std::shared_ptr<ResourcePacksInfoPacket> info;
     if (serializedInfo) {
         info      = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
         auto keys = info->mData->collectKeys();
         mReplayCachedResourcePacksLoaded = true;
+        auto const cacheSpan             = exporting::recordReplayAdmissionBoundary("Packs.cache.enter");
         repository.addCachedResourcePacks(&keys);
+        exporting::recordReplayAdmissionBoundary("Packs.cache.return", cacheSpan);
     }
 
-    if (!serializedStack) return true;
+    if (!serializedStack) {
+        exporting::recordReplayAdmissionBoundary("Packs.replacement.unavailable.missingStack");
+        return true;
+    }
 
     auto stack = std::static_pointer_cast<ResourcePackStackPacket>(decodePacket(*serializedStack));
-    if (!info) return true;
+    if (!info) {
+        exporting::recordReplayAdmissionBoundary("Packs.replacement.unavailable.missingInfo");
+        return true;
+    }
     mReplayResourcePacksInfo.store(std::move(info), std::memory_order_release);
     mReplayResourcePackStack.store(std::move(stack), std::memory_order_release);
+    exporting::recordReplayAdmissionBoundary("Packs.replacement.published");
     return true;
 }
 
@@ -1431,6 +1446,7 @@ void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedG
         }
     }
     if (!serialized) {
+        exporting::recordReplayAdmissionBoundary("RecordedStartGame.missing");
         getLogger().debug("Replay contains no recorded StartGame packet; custom blocks stay unregistered");
         return;
     }
@@ -1444,7 +1460,9 @@ void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedG
             throw std::runtime_error("Unable to decode the recorded StartGame packet");
         }
 
-        auto startGame = std::static_pointer_cast<StartGamePacket>(packet);
+        auto       startGame   = std::static_pointer_cast<StartGamePacket>(packet);
+        auto const decodedSpan = exporting::recordReplayAdmissionBoundary("RecordedStartGame.decoded");
+        exporting::recordReplayWorldSettings("recorded.StartGame.referenceOnly", *startGame->mSettings, decodedSpan);
         getLogger().debug("Replay carries {} recorded block properties", startGame->mBlockProperties->size());
         mReplayStartGame = std::move(startGame);
     } catch (std::exception const& exception) {
@@ -1718,6 +1736,7 @@ void ReplaySession::onWorldReady() {
     if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
 
     mWorldReady = true;
+    exporting::recordRenderDiagnostics(exporting::RenderDiagnosticStage::ReplayWorldReady);
     getLogger().info("Replay ready at tick {} ({})", mCurrentTick, mIsPaused ? "paused" : "playing");
 }
 
@@ -3775,6 +3794,7 @@ void ReplaySession::onLevelJoined(Player& player) {
     mReplayWorldJoined = true;
     mReplayPlayer      = &player;
     (void)refreshReplayPlayer();
+    exporting::recordRenderDiagnostics(exporting::RenderDiagnosticStage::ReplayWorldJoined);
 }
 
 void ReplaySession::onLevelStartJoin() {

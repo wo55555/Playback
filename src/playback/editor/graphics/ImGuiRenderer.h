@@ -43,6 +43,9 @@ public:
     void               pollFrameCapture();
     [[nodiscard]] bool isD3D12RendererActive() const;
     [[nodiscard]] bool ownsSwapChain(IDXGISwapChain* swapChain) const;
+    void               recordGraphicsSwitchResources(uint64_t transition, std::string_view event) const noexcept;
+    [[nodiscard]] bool beforeRendererReset(bool shuttingDown = false);
+    void               afterRendererReset();
     bool               beforeResize(IDXGISwapChain* swapChain);
     void               afterPresent(IDXGISwapChain* swapChain, long result);
     bool               shutdown();

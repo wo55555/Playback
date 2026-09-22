@@ -1,6 +1,7 @@
 #include "EditorController.h"
 
 #include "playback/Playback.h"
+#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/io/ReplayLibrary.h"
 #include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
@@ -365,6 +366,10 @@ void EditorController::publishState(bool hudVisible) {
     state.totalTicks    = std::max(0, session.getTotalTicks());
     if (state.editorVisible != mEditorVisibleLogged) {
         mEditorVisibleLogged = state.editorVisible;
+        exporting::recordRenderDiagnostics(
+            state.editorVisible ? exporting::RenderDiagnosticStage::EditorShown
+                                : exporting::RenderDiagnosticStage::EditorHidden
+        );
         logger().debug(
             "Replay editor {} (joined={}, worldReady={}, hud={}, totalTicks={})",
             state.editorVisible ? "shown" : "hidden",

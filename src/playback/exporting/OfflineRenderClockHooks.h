@@ -22,13 +22,18 @@ struct OfflineRenderClockToken {
 
 enum class OfflineRenderClockPublishResult : uint8_t { Published, Unavailable, Busy, InvalidSample };
 
-[[nodiscard]] bool hookOfflineRenderClock(bool enable);
-[[nodiscard]] bool isOfflineRenderClockInstalled();
+[[nodiscard]] bool     hookOfflineRenderClock(bool enable);
+[[nodiscard]] bool     isOfflineRenderClockInstalled();
+[[nodiscard]] uint32_t offlineRenderClockDiagnosticHookMask() noexcept;
 
 // clang-format off
-[[nodiscard]] OfflineRenderClockPublishResult
-publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
+[[nodiscard]] OfflineRenderClockPublishResult publishOfflineRenderClockSample(
+    OfflineRenderClockSample sample,
+    OfflineRenderClockToken& token,
+    bool captureSample
+);
 // clang-format on
+void               markOfflineRenderClockCaptureArmed(OfflineRenderClockToken token);
 [[nodiscard]] bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token);
 // Overlay-only BGFX submissions carry no world geometry and must never satisfy an armed capture.
 enum class SceneSubmissionKind : uint8_t { OverlayOnly, Scene };
