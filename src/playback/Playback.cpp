@@ -5,6 +5,7 @@
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
+#include "playback/exporting/GuiScaleHooks.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
 #include "playback/record/ChunkMutationBarrier.h"
@@ -42,6 +43,7 @@ struct Playback::Impl {
     std::atomic<PlaybackMode>        mMode{PlaybackMode::Unknown};
     std::string                      mLevelId;
     bool                             mCameraRenderInstalled{};
+    bool                             mGuiScaleInstalled{};
     bool                             mRuntimeInstalled{};
 };
 
@@ -102,6 +104,12 @@ bool Playback::hook() {
     if (!impl->mCameraRenderInstalled) {
         getSelf().getLogger().warn("Unable to install camera render hooks; camera timelines are disabled");
     }
+    impl->mGuiScaleInstalled = exporting::hookGuiScale(true);
+    if (!impl->mGuiScaleInstalled) {
+        getSelf().getLogger().warn(
+            "Unable to install the GUI scale override; exports will leave the UI scale to the game"
+        );
+    }
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -147,6 +155,7 @@ bool Playback::hook() {
 
 bool Playback::unhook() {
     if (!impl->mRuntimeInstalled) return true;
+    if (impl->mGuiScaleInstalled && !exporting::hookGuiScale(false)) return false;
     if (impl->mCameraRenderInstalled && !editor::graphics::hookCameraRender(false)) return false;
     if (!runtime::hookClientTick(false)) {
         if (impl->mCameraRenderInstalled) (void)editor::graphics::hookCameraRender(true);
@@ -202,6 +211,7 @@ bool Playback::unhook() {
     impl->mLevelId.clear();
     impl->mMode.store(PlaybackMode::Unknown);
     impl->mCameraRenderInstalled = false;
+    impl->mGuiScaleInstalled     = false;
     impl->mRuntimeInstalled      = false;
     return true;
 }

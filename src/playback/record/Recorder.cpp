@@ -13,6 +13,7 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/common/Common.h"
+#include "mc/common/StringConstants.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/shared_types/legacy/LevelEvent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
@@ -449,7 +450,7 @@ PlaybackMeta PlaybackMeta::fromJson(std::string_view json) {
     return metaFromJson(j);
 }
 
-std::string PlaybackMeta::currentGameVersion() { return Common::getGameVersionString(); }
+std::string PlaybackMeta::currentGameVersion() { return Common::_buildStringConstants().mGameVersionString; }
 
 bool PlaybackMeta::isCompatibleWithRuntime() const {
     // Files recorded before the field existed cannot be verified; let them through.

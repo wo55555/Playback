@@ -1,6 +1,7 @@
 ﻿#include "OfflineRenderFrameExecutor.h"
 
 #include "playback/Playback.h"
+#include "playback/exporting/GuiScaleHooks.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/replay/ReplaySession.h"
 
@@ -186,7 +187,9 @@ bool OfflineRenderFrameExecutor::configureRenderSize(ExportSettings const& setti
     mRenderHeight            = static_cast<uint32_t>(renderHeight);
     auto& game               = client->getMinecraftGame_DEPRECATED();
     game.setRenderingSize(static_cast<int>(mRenderWidth), static_cast<int>(mRenderHeight));
-    game.setUISizeAndScale(static_cast<int>(mRenderWidth), static_cast<int>(mRenderHeight), 0.0f);
+    // 26.40 passed 0.0f here, meaning "derive the GUI scale for the export surface".
+    clearForcedGuiScale();
+    game.setUISize(static_cast<int>(mRenderWidth), static_cast<int>(mRenderHeight));
 
     auto exportViewport      = viewport;
     exportViewport.size->x   = static_cast<float>(mRenderWidth);
@@ -213,7 +216,9 @@ void OfflineRenderFrameExecutor::restoreRenderSize() {
         && mRestoreUiHeight != 0) {
         auto& game = client->getMinecraftGame_DEPRECATED();
         game.setRenderingSize(static_cast<int>(mRestoreRenderWidth), static_cast<int>(mRestoreRenderHeight));
-        game.setUISizeAndScale(static_cast<int>(mRestoreUiWidth), static_cast<int>(mRestoreUiHeight), mRestoreGuiScale);
+        // 26.40 pinned the pre-export GUI scale here so the restored UI did not get rescaled.
+        forceGuiScale(mRestoreGuiScale);
+        game.setUISize(static_cast<int>(mRestoreUiWidth), static_cast<int>(mRestoreUiHeight));
 
         auto viewport      = client->getViewportInfo();
         viewport.size->x   = mRestoreViewportWidth;
