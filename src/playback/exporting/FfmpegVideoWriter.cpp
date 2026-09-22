@@ -1,6 +1,7 @@
 ﻿#include "FfmpegVideoWriter.h"
 
 #include "FrameWriterUtils.h"
+#include "OfflineRenderTrace.h"
 #include "playback/Playback.h"
 
 #include <windows.h>
@@ -140,29 +141,33 @@ struct FfmpegVideoWriter::Impl {
         wait();
     }
 
-    uint32_t                           capacity;
-    mutable std::mutex                 mutex;
-    std::condition_variable            changed;
-    std::deque<visuals::CapturedFrame> queue;
-    std::filesystem::path              output;
-    std::filesystem::path              temporary;
-    std::filesystem::path              log;
-    std::filesystem::path              executable;
-    FrameWriterState                   state{FrameWriterState::Idle};
-    uint64_t                           submitted{};
-    uint64_t                           written{};
-    uint64_t                           nextFrameIndex{};
-    uint32_t                           frameWidth{};
-    uint32_t                           frameHeight{};
-    uint32_t                           targetWidth{};
-    uint32_t                           targetHeight{};
-    uint32_t                           sourceWidth{};
-    uint32_t                           sourceHeight{};
-    ExportError                        error{ExportError::None};
-    std::string                        message;
-    HANDLE                             process{};
-    HANDLE                             stdinWrite{};
-    std::thread                        worker;
+    uint32_t                capacity;
+    mutable std::mutex      mutex;
+    std::condition_variable changed;
+    struct QueuedFrame {
+        visuals::CapturedFrame frame;
+        uint64_t               traceEpoch{};
+    };
+    std::deque<QueuedFrame> queue;
+    std::filesystem::path   output;
+    std::filesystem::path   temporary;
+    std::filesystem::path   log;
+    std::filesystem::path   executable;
+    FrameWriterState        state{FrameWriterState::Idle};
+    uint64_t                submitted{};
+    uint64_t                written{};
+    uint64_t                nextFrameIndex{};
+    uint32_t                frameWidth{};
+    uint32_t                frameHeight{};
+    uint32_t                targetWidth{};
+    uint32_t                targetHeight{};
+    uint32_t                sourceWidth{};
+    uint32_t                sourceHeight{};
+    ExportError             error{ExportError::None};
+    std::string             message;
+    HANDLE                  process{};
+    HANDLE                  stdinWrite{};
+    std::thread             worker;
 
     void setFailureLocked(ExportError failure, std::string text) {
         if (error == ExportError::None) {
@@ -302,10 +307,12 @@ struct FfmpegVideoWriter::Impl {
             }
             DWORD const remaining = static_cast<DWORD>(std::min<size_t>(size - offset, 1u << 20));
             DWORD       writtenBytes{};
-            if (!WriteFile(pipe, bytes + offset, remaining, &writtenBytes, nullptr) || writtenBytes == 0) {
+            BOOL const  writeResult = WriteFile(pipe, bytes + offset, remaining, &writtenBytes, nullptr);
+            DWORD const writeError  = GetLastError();
+            if (!writeResult || writtenBytes == 0) {
                 std::scoped_lock lock(mutex);
                 if (state == FrameWriterState::Cancelling) return false;
-                failure = windowsErrorMessage("Unable to write a frame to FFmpeg", GetLastError());
+                failure = windowsErrorMessage("Unable to write a frame to FFmpeg", writeError);
                 return false;
             }
             offset += writtenBytes;
@@ -363,6 +370,8 @@ struct FfmpegVideoWriter::Impl {
         bool                 processStarted = false;
         while (true) {
             visuals::CapturedFrame item;
+            size_t                 queuedAfterPop{};
+            uint64_t               traceEpoch{};
             {
                 std::unique_lock lock(mutex);
                 changed.wait(lock, [this] {
@@ -374,11 +383,22 @@ struct FfmpegVideoWriter::Impl {
                     break;
                 }
                 if (queue.empty()) break;
-                item = std::move(queue.front());
+                traceEpoch = queue.front().traceEpoch;
+                item       = std::move(queue.front().frame);
                 queue.pop_front();
+                queuedAfterPop = queue.size();
+                recordOfflineRenderTraceForEpoch(
+                    traceEpoch,
+                    OfflineRenderTraceEvent::WriterQueue,
+                    this,
+                    nullptr,
+                    item.ticket.frameIndex,
+                    queuedAfterPop,
+                    capacity,
+                    3
+                );
                 changed.notify_all();
             }
-
             if (!processStarted) {
                 std::string launchFailure;
                 if (!launchProcess(launchFailure)) {
@@ -590,8 +610,30 @@ FrameWriterSubmitResult FfmpegVideoWriter::trySubmit(visuals::CapturedFrame& fra
         mImpl->setFailureLocked(ExportError::InvalidFrame, "Captured frame dimensions changed during export");
         return FrameWriterSubmitResult::Failed;
     }
-    if (mImpl->queue.size() >= mImpl->capacity) return FrameWriterSubmitResult::Backpressured;
-    mImpl->queue.push_back(std::move(frame));
+    if (mImpl->queue.size() >= mImpl->capacity) {
+        recordOfflineRenderTrace(
+            OfflineRenderTraceEvent::WriterQueue,
+            mImpl.get(),
+            nullptr,
+            frame.ticket.frameIndex,
+            mImpl->queue.size(),
+            mImpl->capacity,
+            2
+        );
+        return FrameWriterSubmitResult::Backpressured;
+    }
+    auto const traceEpoch = offlineRenderTraceEpoch();
+    mImpl->queue.push_back({std::move(frame), traceEpoch});
+    recordOfflineRenderTraceForEpoch(
+        traceEpoch,
+        OfflineRenderTraceEvent::WriterQueue,
+        mImpl.get(),
+        nullptr,
+        mImpl->queue.back().frame.ticket.frameIndex,
+        mImpl->queue.size(),
+        mImpl->capacity,
+        1
+    );
     ++mImpl->nextFrameIndex;
     ++mImpl->submitted;
     mImpl->changed.notify_all();
