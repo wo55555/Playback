@@ -212,11 +212,14 @@ bool drainTargetGroups(InsertGroupBinding const& binding, std::chrono::steady_cl
             if (group->getState() != TaskGroupState::Running) return false;
             if (!group->isEmpty()) {
                 performedSync = true;
-                // The engine keeps calling waitFn while it drains, so pump coroutines instead of only yielding.
-                group->sync_DEPRECATED_ASK_TOMMO([group] {
+                // 26.51 dropped TaskGroup::sync_DEPRECATED_ASK_TOMMO. The engine now drains a running group by
+                // repeatedly pumping the virtual TaskGroup::processCoroutines() until mTasks empties out (see
+                // ResourceLoadManager::sync), so do the same here and keep the caller's deadline as the bound.
+                while (group->getState() == TaskGroupState::Running && !group->isEmpty()
+                       && std::chrono::steady_clock::now() < deadline) {
                     group->processCoroutines();
                     std::this_thread::yield();
-                });
+                }
             }
             if (group->getState() != TaskGroupState::Running) return false;
         }

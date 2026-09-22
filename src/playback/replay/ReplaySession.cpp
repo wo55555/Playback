@@ -36,7 +36,6 @@
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
-#include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/PacketSender.h"
@@ -93,13 +92,11 @@
 #include "mc/world/level/block/components/BlockComponentDescription.h"
 #include "mc/world/level/block/components/BlockComponentStorageFinalizer.h"
 #include "mc/world/level/block/components/BlockGeometryDescription.h"
-#include "mc/world/level/block/components/BlockMaterialInstance.h"
 #include "mc/world/level/block/components/BlockMaterialInstancesDescription.h"
 #include "mc/world/level/block/components/BlockTypeComponentStorageFinalizer.h"
 #include "mc/world/level/block/definition/BlockComponentGroupDescription.h"
 #include "mc/world/level/block/definition/BlockDefinition.h"
 #include "mc/world/level/block/definition/BlockDefinitionGroup.h"
-#include "mc/world/level/block/definition/BlockDescription.h"
 #include "mc/world/level/block/definition/ServerBlockProperty.h"
 #include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/chunk/ChunkSource.h"
@@ -247,7 +244,11 @@ void applyReplayEntityMovement(
         position.z - previousPosition.z,
     };
     if (auto walk = actor.mBuiltInComponents->mWalkAnimationComponent.get()) {
-        HardcodedAnimationSystem::computeMovementThisTick(state, *walk);
+        // 26.51 dropped the HardcodedAnimationSystem.h helper, which only ever existed as a header inline; the engine
+        // still folds this same horizontal-distance formula into its own tick, so compute it here.
+        float const dx          = state.mPos->x - state.mPosPrev->x;
+        float const dz          = state.mPos->z - state.mPosPrev->z;
+        walk->mMovementThisTick = std::sqrt(dx * dx + dz * dz);
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
@@ -1516,7 +1517,9 @@ void ReplaySession::applyRecordedBlockRegistry() {
 
         auto const injectedVisuals = injectRecordedBlockMaterialComponents(properties);
 
-        registry.setupDirectAccessBlocks();
+        // 26.51 no longer exports BlockTypeRegistry::setupDirectAccessBlocks; it is inlined into
+        // VanillaWorldSystems::init, which already ran when this replay world was created, and it is the only
+        // writer of mDirectAccessBlocks, so there is nothing left to refresh here.
         registry.finalizeBlockComponentStorage();
         definitions->initializeBlocks(*level);
 
@@ -1644,12 +1647,12 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(std::vector<ServerBl
 
         auto blockType = registry.lookupByName(HashedString{name}, false);
         if (!blockType) continue;
-        auto& type = *blockType;
+        auto& type = const_cast<BlockType&>(*blockType);
 
         // Init layer only: the engine's rendering pass skips blocks whose Rendering layer is already marked.
         auto inject = [&type](auto const& description) {
             type.mComponents->allowComponentReplacement();
-            description.$initializeComponent(*type.mComponents);
+            description.initializeComponent(*type.mComponents);
             BlockTypeComponentStorageFinalizer{}.finalizeComponentData(type);
 
             for (auto const& permutation : *type.mBlockPermutations) {

@@ -3,7 +3,6 @@
 #include "playback/visuals/ReplaySampleTime.h"
 
 #include <cstdint>
-#include <optional>
 
 namespace playback::exporting {
 

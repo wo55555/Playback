@@ -12,7 +12,6 @@
 #include "mc/client/game/IClientInstance.h"
 #include "mc/client/game/MinecraftGame.h"
 #include "mc/client/renderer/game/GameRenderer.h"
-#include "mc/platform/threading/Mutex.h"
 #include "mc/util/Timer.h"
 
 #include <atomic>
@@ -88,18 +87,17 @@ public:
       mTimeScale(mTimer.mTimeScale),
       mPassedTime(mTimer.mPassedTime),
       mFrameStepAlignmentRemainder(mTimer.mFrameStepAlignmentRemainder),
-      mLastTimeSeconds(mTimer.mLastTimeSeconds),
+      mLastTimeMs(mTimer.mLastTimeMs),
       mLastTimestep(mTimer.mLastTimestep),
       mOverflowTime(mTimer.mOverflowTime),
       mLastMs(mTimer.mLastMs),
       mLastMsSysTime(mTimer.mLastMsSysTime),
       mAdjustTime(mTimer.mAdjustTime),
       mSteppingTick(mTimer.mSteppingTick) {
-        constexpr float ticksPerSecond = 20.0f;
-        auto const      absoluteTick   = sample.replayTime.value();
-        auto const      partialTick    = sample.replayTime.partialTick();
-        auto const      absoluteMilliseconds =
-            static_cast<int64>(std::llround(absoluteTick * 1000.0L / static_cast<long double>(ticksPerSecond)));
+        constexpr int ticksPerSecond       = 20.0f;
+        auto const    absoluteTick         = sample.replayTime.value();
+        auto const    partialTick          = sample.replayTime.partialTick();
+        auto const    absoluteMilliseconds = static_cast<int64>(absoluteTick * 1000 / ticksPerSecond);
 
         mTimer.mTicksPerSecond              = ticksPerSecond;
         mTimer.mTicks                       = sample.wholeTicks;
@@ -107,7 +105,7 @@ public:
         mTimer.mTimeScale                   = 1.0f;
         mTimer.mPassedTime                  = sample.deltaTicks;
         mTimer.mFrameStepAlignmentRemainder = 0.0f;
-        mTimer.mLastTimeSeconds             = static_cast<float>(absoluteTick / ticksPerSecond);
+        mTimer.mLastTimeMs                  = absoluteTick / ticksPerSecond * 1000;
         mTimer.mLastTimestep                = sample.deltaTicks / ticksPerSecond;
         mTimer.mOverflowTime                = 0.0f;
         mTimer.mLastMs                      = absoluteMilliseconds;
@@ -123,7 +121,7 @@ public:
         mTimer.mTimeScale                   = mTimeScale;
         mTimer.mPassedTime                  = mPassedTime;
         mTimer.mFrameStepAlignmentRemainder = mFrameStepAlignmentRemainder;
-        mTimer.mLastTimeSeconds             = mLastTimeSeconds;
+        mTimer.mLastTimeMs                  = mLastTimeMs;
         mTimer.mLastTimestep                = mLastTimestep;
         mTimer.mOverflowTime                = mOverflowTime;
         mTimer.mLastMs                      = mLastMs;
@@ -143,7 +141,7 @@ private:
     float  mTimeScale;
     float  mPassedTime;
     float  mFrameStepAlignmentRemainder;
-    float  mLastTimeSeconds;
+    int64  mLastTimeMs;
     float  mLastTimestep;
     float  mOverflowTime;
     int64  mLastMs;

@@ -32,9 +32,7 @@ struct ReplaySampleTime {
         return result;
     }
 
-    [[nodiscard]] long double value() const noexcept {
-        return isValid() ? static_cast<long double>(numerator) / static_cast<long double>(denominator) : 0.0L;
-    }
+    [[nodiscard]] int64_t value() const noexcept { return isValid() ? numerator / denominator : 0; }
 
     [[nodiscard]] static std::optional<ReplaySampleTime>
     fromRational(int64_t tickNumerator, int64_t tickDenominator) noexcept {
