@@ -151,6 +151,7 @@ enum class OfflineRenderWaitReason : uint8_t {
     CollectPending,
     Draining,
     Failed,
+    Convergence,
     Unknown,
 };
 
