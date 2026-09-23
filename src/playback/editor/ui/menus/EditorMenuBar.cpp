@@ -611,6 +611,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
             propertyLabel("playback.refactorEditor.export.warmupFrames"_tr().c_str());
             inputClampedInt("##export-warmup", mExportWarmupFrames, 0, 3600, fieldWidth);
+
+            propertyLabel("playback.refactorEditor.export.convergenceFrames"_tr().c_str());
+            inputClampedInt("##export-convergence", mExportConvergenceFrames, 0, 240, fieldWidth);
             ImGui::EndTable();
         }
 
@@ -626,22 +629,24 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             && static_cast<uint64_t>(mExportHeight) * ssaaValue <= 16384
             && static_cast<uint64_t>(mExportWidth) * mExportHeight <= 134217728ull
             && static_cast<uint64_t>(mExportWidth) * mExportHeight * ssaaValue * ssaaValue <= 134217728ull;
-        bool const validCapture =
-            mExportSsaa >= 0 && mExportSsaa <= 1 && mExportWarmupFrames >= 0 && mExportWarmupFrames <= 3600;
+        bool const validCapture     = mExportSsaa >= 0 && mExportSsaa <= 1 && mExportWarmupFrames >= 0
+                                   && mExportWarmupFrames <= 3600 && mExportConvergenceFrames >= 0
+                                   && mExportConvergenceFrames <= 240;
         bool const formatAvailable  = mExportFormat != 0 || capabilities.ffmpegVideoExport;
         bool const rawSettingsValid = validOutput && validTimeline && validFps && validResolution && validCapture
                                    && formatAvailable && state.project != nullptr;
 
         exporting::ExportSettings previewSettings;
-        previewSettings.outputDirectory = utf8Path(mExportDirectory.data());
-        previewSettings.outputName      = mExportName.data();
-        previewSettings.startTick       = mExportStartTick;
-        previewSettings.endTick         = mExportEndTick;
-        previewSettings.frameRate       = {mFps, 1};
-        previewSettings.resolutionX     = static_cast<uint32_t>(std::max(0, mExportWidth));
-        previewSettings.resolutionY     = static_cast<uint32_t>(std::max(0, mExportHeight));
-        previewSettings.ssaa            = ssaaValue;
-        previewSettings.warmupFrames    = static_cast<uint32_t>(std::max(0, mExportWarmupFrames));
+        previewSettings.outputDirectory   = utf8Path(mExportDirectory.data());
+        previewSettings.outputName        = mExportName.data();
+        previewSettings.startTick         = mExportStartTick;
+        previewSettings.endTick           = mExportEndTick;
+        previewSettings.frameRate         = {mFps, 1};
+        previewSettings.resolutionX       = static_cast<uint32_t>(std::max(0, mExportWidth));
+        previewSettings.resolutionY       = static_cast<uint32_t>(std::max(0, mExportHeight));
+        previewSettings.ssaa              = ssaaValue;
+        previewSettings.warmupFrames      = static_cast<uint32_t>(std::max(0, mExportWarmupFrames));
+        previewSettings.convergenceFrames = static_cast<uint32_t>(std::max(0, mExportConvergenceFrames));
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
 
