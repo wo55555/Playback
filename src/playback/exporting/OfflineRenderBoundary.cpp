@@ -54,6 +54,7 @@ bool OfflineRenderBoundary::open(
         return false;
     }
     mCaptureCapacity          = capacity;
+    mTraceEpoch               = offlineRenderTraceEpoch();
     mMaximumReplayTick        = std::max<int64_t>(0, settings.endTick);
     auto const maximumIntTick = std::min<int64_t>(mMaximumReplayTick, std::numeric_limits<int>::max());
     auto const startTick      = std::clamp<int64_t>(settings.startTick, 0, maximumIntTick);
@@ -105,6 +106,8 @@ bool OfflineRenderBoundary::open(
     gWarmupFramesRendered          = 0;
     gConfiguredWarmupFrames        = settings.warmupFrames;
     mWarmupStableFrames            = 0;
+    mConvergenceRendersDone        = 0;
+    mConvergenceComplete           = false;
     mWarmupStartedAt               = {};
     mWarmupLastLoggedAt            = {};
     mReplayTickRequestedAt         = {};
@@ -216,9 +219,11 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         if (capture.bufferedFrames + capture.inFlightFrames >= mCaptureCapacity) {
             return waiting(OfflineRenderWaitReason::CaptureCapacity, OfflineRenderStepResult::Backpressured);
         }
-        mPendingFrame = frame;
-        mState        = !mTimelineInitialized ? OfflineRenderBoundaryState::InitializingReplay
-                                              : OfflineRenderBoundaryState::WarmingUp;
+        mPendingFrame           = frame;
+        mConvergenceRendersDone = 0;
+        mConvergenceComplete    = false;
+        mState                  = !mTimelineInitialized ? OfflineRenderBoundaryState::InitializingReplay
+                                                        : OfflineRenderBoundaryState::WarmingUp;
     }
 
     if (mTickGateOpen && mReplay.isDimensionTransitionPending()
@@ -403,6 +408,11 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
             return advanceWarmup(*mPendingFrame);
         }
 
+        if (!mConvergenceComplete) {
+            if (!advanceConvergence(*mPendingFrame)) return OfflineRenderStepResult::Failed;
+            if (!mConvergenceComplete) return waiting(OfflineRenderWaitReason::Convergence);
+        }
+
         if (!mClockToken && !publishClockSample(*mPendingFrame, true)) return OfflineRenderStepResult::Failed;
         mState                  = OfflineRenderBoundaryState::AwaitingDownload;
         mRenderWaitStartedAt    = std::chrono::steady_clock::now();
@@ -527,7 +537,19 @@ std::optional<visuals::CapturedFrame> OfflineRenderBoundary::finishDownload() {
     mExecutor.pollCapture();
     auto frame = editor::graphics::gImGuiRenderer.collectExportFrame();
     if (!frame) return std::nullopt;
-    recordOfflineRenderTrace(
+    recordCaptureLineage(
+        renderDiagnosticProfile(),
+        mTraceEpoch,
+        OfflineRenderTraceEvent::CaptureCollectedLink,
+        frame->submission.exportResource,
+        frame->submission.completionFence,
+        frame->ticket.frameIndex,
+        frame->submission.completionFenceValue,
+        reinterpret_cast<uintptr_t>(frame->submission.commandQueue),
+        0
+    );
+    recordOfflineRenderTraceForEpoch(
+        mTraceEpoch,
         OfflineRenderTraceEvent::CaptureCollected,
         nullptr,
         nullptr,
@@ -768,6 +790,7 @@ bool OfflineRenderBoundary::warmupComplete() const {
 }
 
 bool OfflineRenderBoundary::publishClockSample(ExportFramePlan const& frame, bool captureSample) {
+    releaseHeldRender();
     auto const sample = clockSample(frame);
     if (!sample) {
         fault(OfflineRenderBoundaryError::InvalidFrame, "The offline render clock sample is invalid");
@@ -802,11 +825,81 @@ bool OfflineRenderBoundary::publishClockSample(ExportFramePlan const& frame, boo
     return false;
 }
 
+// Samples without a capture are re-rendered every frame, which is what lets the denoiser accumulate on this instant.
+bool OfflineRenderBoundary::advanceConvergence(ExportFramePlan const& frame) {
+    if (mConvergenceRendersDone >= mExecutor.convergenceFrames()) {
+        if (mConvergenceToken) {
+            clearOfflineRenderClockSample(*mConvergenceToken);
+            mConvergenceToken.reset();
+        }
+        mConvergenceComplete = true;
+        return true;
+    }
+    releaseHeldRender();
+    if (!mConvergenceToken) {
+        auto const sample = clockSample(frame);
+        if (!sample) {
+            fault(OfflineRenderBoundaryError::InvalidFrame, "The offline render clock sample is invalid");
+            return false;
+        }
+        OfflineRenderClockToken token;
+        if (publishOfflineRenderClockSample(*sample, token, false) != OfflineRenderClockPublishResult::Published) {
+            fault(OfflineRenderBoundaryError::ClockUnavailable, "The convergence render clock is unavailable");
+            return false;
+        }
+        mConvergenceToken = token;
+    }
+    mExecutor.pollCapture();
+    // One token per render, so a sample that stays published cannot be counted twice.
+    if (wasOfflineRenderClockSampleApplied(*mConvergenceToken)) {
+        clearOfflineRenderClockSample(*mConvergenceToken);
+        mConvergenceToken.reset();
+        ++mConvergenceRendersDone;
+        if (mConvergenceRendersDone >= mExecutor.convergenceFrames()) mConvergenceComplete = true;
+    }
+    return true;
+}
+
 void OfflineRenderBoundary::clearClockSample() {
+    releaseHeldRender();
+    if (mConvergenceToken) {
+        clearOfflineRenderClockSample(*mConvergenceToken);
+        mConvergenceToken.reset();
+    }
     if (!mClockToken) return;
     recordOfflineRenderTrace(OfflineRenderTraceEvent::ClockCleared, nullptr, nullptr, mClockToken->id);
     clearOfflineRenderClockSample(*mClockToken);
     mClockToken.reset();
+}
+
+// Only rendering advances the renderer's clock, so a stall with no published sample freezes the temporal state.
+void OfflineRenderBoundary::holdRenderAlive(uint64_t waitedMicros) {
+    if (mHoldToken || mClockToken || !mLastSubmittedFrame) return;
+    // Ready is the state a driver stall leaves behind, so that is when the hold has to engage.
+    if (mState != OfflineRenderBoundaryState::Ready && mState != OfflineRenderBoundaryState::AwaitingDownload
+        && mState != OfflineRenderBoundaryState::PreparingReplay
+        && mState != OfflineRenderBoundaryState::InitializingReplay) {
+        return;
+    }
+    auto const sample = clockSample(*mLastSubmittedFrame);
+    if (!sample) return;
+    OfflineRenderClockToken token;
+    if (publishOfflineRenderClockSample(*sample, token, false) != OfflineRenderClockPublishResult::Published) return;
+    mHoldToken = token;
+    recordOfflineRenderTrace(
+        OfflineRenderTraceEvent::RenderKeepAlive,
+        nullptr,
+        nullptr,
+        mLastSubmittedFrame->ticket.frameIndex,
+        token.id,
+        waitedMicros
+    );
+}
+
+void OfflineRenderBoundary::releaseHeldRender() {
+    if (!mHoldToken) return;
+    clearOfflineRenderClockSample(*mHoldToken);
+    mHoldToken.reset();
 }
 
 void OfflineRenderBoundary::fault(OfflineRenderBoundaryError error, std::string message) {
