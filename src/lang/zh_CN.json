@@ -245,6 +245,7 @@
                 "resolution": "输出分辨率",
                 "ssaa": "SSAA",
                 "warmupFrames": "预热帧数",
+                "convergenceFrames": "收敛帧数",
                 "summary": "输出摘要",
                 "timelineSummary": "时间范围",
                 "captureSummary": "采集设置",

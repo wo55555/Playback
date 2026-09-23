@@ -79,7 +79,8 @@ bool OfflineRenderFrameExecutor::open(
         mKeyframes.reset();
         return false;
     }
-    mOpen = true;
+    mConvergenceFrames = settings.convergenceFrames;
+    mOpen              = true;
     return true;
 }
 
@@ -94,6 +95,7 @@ void OfflineRenderFrameExecutor::close() {
     mOpen                = false;
     mSampleRenderInvoked = false;
     mWarmupRenderInvoked = false;
+    mConvergenceFrames   = 0;
     mMessage.clear();
 }
 
@@ -267,6 +269,8 @@ OfflineRenderFrameExecutor::executeSample(ExportFramePlan const& frame, OfflineR
     if (!wasOfflineRenderClockSampleApplied(clockToken)) return OfflineRenderFrameExecutionResult::Waiting;
     return OfflineRenderFrameExecutionResult::Executed;
 }
+
+uint32_t OfflineRenderFrameExecutor::convergenceFrames() const { return mConvergenceFrames; }
 
 OfflineRenderFrameExecutionResult OfflineRenderFrameExecutor::executeWarmup(OfflineRenderClockToken clockToken) {
     if (!mOpen || !clockToken || mPendingTicket) {
