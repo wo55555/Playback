@@ -1388,6 +1388,8 @@ bool ImGuiRenderer::renderInternal(
     if (fi >= static_cast<UINT>(p.frames.size())) return false;
     auto&       f             = p.frames[fi];
     auto* const captureSource = f.backBuffer.Get();
+    auto const  traceProfile  = exporting::renderDiagnosticProfile();
+    auto const  captureEpoch  = exporting::offlineRenderTraceEpoch();
     if (!waitForFence(f.fenceValue, p.fence, p.fenceEvent)) return false;
     if (p.frameFences.empty()) return false;
     size_t slot = p.frameCursor % p.frameFences.size();
@@ -1502,6 +1504,18 @@ bool ImGuiRenderer::renderInternal(
                                     captureSource,
                                     static_cast<uint32_t>(D3D12_RESOURCE_STATE_COPY_SOURCE)
                                 );
+    if (frameTapSubmitted)
+        exporting::recordCaptureLineage(
+            traceProfile,
+            captureEpoch,
+            OfflineRenderTraceEvent::CaptureSourceLink,
+            captureSource,
+            f.commandList.Get(),
+            sourceSerial,
+            fi,
+            reinterpret_cast<uintptr_t>(p.commandQueue.Get()),
+            12
+        );
     if (captureActive) {
         recordOfflineRenderTrace(
             OfflineRenderTraceEvent::CaptureRecorded,
@@ -1514,7 +1528,22 @@ bool ImGuiRenderer::renderInternal(
         );
     }
     // Consume the marker so the next armed frame waits for its own scene submission.
-    if (frameTapSubmitted) exporting::clearOfflineRenderSceneSubmitted();
+    if (frameTapSubmitted) {
+        auto const captureGeneration = exporting::offlineRenderSceneGeneration();
+        auto const marker            = exporting::consumeOfflineRenderSceneCorrespondence(captureGeneration);
+        exporting::recordSceneCorrespondence(
+            traceProfile,
+            captureEpoch,
+            OfflineRenderTraceEvent::SceneMarkerCapture,
+            captureSource,
+            f.commandList.Get(),
+            marker.commitSerial,
+            captureGeneration,
+            exporting::offlineRenderNativePresentSerial(),
+            sourceSerial
+        );
+        exporting::clearOfflineRenderSceneSubmitted();
+    }
     if (copyGameTexture) {
         f.commandList->CopyResource(f.gameTexture.Get(), f.backBuffer.Get());
         if (diagnostics) {
@@ -1612,10 +1641,35 @@ bool ImGuiRenderer::renderInternal(
     }
     ID3D12CommandList* cl[]{f.commandList.Get()};
     p.commandQueue->ExecuteCommandLists(1, cl);
+    if (frameTapSubmitted)
+        exporting::recordCaptureLineage(
+            traceProfile,
+            captureEpoch,
+            OfflineRenderTraceEvent::CaptureQueueExecute,
+            f.commandList.Get(),
+            p.commandQueue.Get(),
+            sourceSerial,
+            fi,
+            1,
+            1
+        );
     if (copyGameTexture) f.copySerial = sourceSerial;
-    p.unfenced = true;
-    UINT64 fv  = p.lastFenceValue + 1;
-    if (FAILED(p.commandQueue->Signal(p.fence.Get(), fv))) {
+    p.unfenced              = true;
+    UINT64     fv           = p.lastFenceValue + 1;
+    auto const signalResult = p.commandQueue->Signal(p.fence.Get(), fv);
+    if (frameTapSubmitted)
+        exporting::recordCaptureLineage(
+            traceProfile,
+            captureEpoch,
+            OfflineRenderTraceEvent::CaptureQueueSignal,
+            p.fence.Get(),
+            p.commandQueue.Get(),
+            sourceSerial,
+            fi,
+            fv,
+            static_cast<uint32_t>(signalResult)
+        );
+    if (FAILED(signalResult)) {
         if (frameTapSubmitted) {
             p.d3d12FrameTap.submissionFailed(
                 visuals::FrameTapError::FenceFailed,

@@ -261,6 +261,11 @@ bool Playback::load() {
         logger.error("Unable to load Playback configuration; using defaults: {}", error.what());
     }
     if (impl->mConfig.renderDiagnostics) logger.setFlushLevel(ll::io::LogLevel::Info);
+    logger.debug(
+        "Render diagnostics configured={} experiment={}",
+        impl->mConfig.renderDiagnostics,
+        impl->mConfig.renderDiagnosticExperiment
+    );
 
     if (auto result = ll::i18n::getInstance().load(getSelf().getLangDir()); !result) {
         logger.error("Failed to load I18n");
