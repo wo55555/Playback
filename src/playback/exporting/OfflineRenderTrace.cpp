@@ -593,7 +593,7 @@ bool writeCsv(
             "# Wait reasons: 0=None,1=WriterBackpressure,2=CaptureCapacity,3=ReplayPreparation,"
             "4=DimensionTransition,5=UiStable,6=NativeTick,7=WarmupCpu,8=WarmupBudget,9=WarmupUi,"
             "10=CaptureArm,11=CpuSample,12=CapturePending,13=CollectPending,14=Draining,"
-            "15=Failed,16=Unknown; one branch per observation, not exclusive root causes.\n"
+            "15=Failed,16=Convergence,17=Unknown; one branch per observation, not exclusive root causes.\n"
             "# GraphicsDecision: a=1 SampleExecuted/2 ExportSkipped/3 NativeExecuted,b=explicit sample token,"
             "c=explicit sample frame,d=render serial; zero outside sample. Exceptions have no success decision.\n"
             "# RendererClock: object=GameRenderer,a=1 RenderBefore/2 RenderAfter/3 ExtractBefore/4 ExtractAfter/"
