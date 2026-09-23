@@ -562,18 +562,12 @@ constexpr size_t RenderItemStride = 8388608u / 65536u;
 constexpr uint32_t SharedVertexDeclIndex  = 4;
 constexpr uint32_t InvalidVertexDeclIndex = 0xFFFFu;
 
-// The 26.20 headers mis-align m_blitKeys/m_blitItem/m_frameCache, so walk from m_renderItem by declared sizes.
-constexpr size_t FrameCounterOffsetFromRenderItem = 8388608u  // m_renderItem
-                                                  + 88080384u // m_renderItemBind
-                                                  + 524288u   // m_rangedRenderItemBind
-                                                  + 4160u     // m_blitKeys
-                                                  + 65600u    // m_blitItem
-                                                  + 4718624u  // m_frameCache
-                                                  + 8u;       // m_uniformBuffer
-
+// 26.40 shipped bgfx::Frame as an empty stub, so this used to walk to the counter by hand-computed 26.20 offsets.
+// 26.51 declares the whole layout, so read the real member instead: the stale offsets pointed ~98 MB past the end
+// of a ~32 MB frame and faulted on uncommitted memory.
 uint32_t readRenderItemCount(bgfx::Frame const* render) {
-    auto const* base = reinterpret_cast<std::byte const*>(&render->m_renderItem[0].get());
-    return *reinterpret_cast<uint32_t const*>(base + FrameCounterOffsetFromRenderItem);
+    if (!render) return 0;
+    return static_cast<uint32_t>(render->m_numRenderItems);
 }
 
 // Only world geometry brings its own vertex formats; measured overlay submissions never do.
