@@ -32,6 +32,8 @@ struct ExportSettings {
     uint32_t resolutionY{};
     uint32_t ssaa{1};
     uint32_t warmupFrames{60};
+    // Ray-traced denoisers accumulate across frames, so one render per output frame leaves streaks in the sky.
+    uint32_t convergenceFrames{8};
 };
 
 enum class ExportError : uint8_t {

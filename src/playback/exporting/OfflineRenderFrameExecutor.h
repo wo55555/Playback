@@ -42,6 +42,7 @@ public:
     void                                            completeWarmup();
     void                                            completeSample(visuals::FrameTicket const& ticket);
     void                                            pollCapture();
+    [[nodiscard]] uint32_t                          convergenceFrames() const;
 
     [[nodiscard]] OfflineRenderFrameExecutorStatus status() const;
     [[nodiscard]] bool                             isUiStable() const;
@@ -79,6 +80,7 @@ private:
     bool                                mClientThrottlingConfigured{};
     bool                                mSampleRenderInvoked{};
     bool                                mWarmupRenderInvoked{};
+    uint32_t                            mConvergenceFrames{};
     std::string                         mMessage;
 };
 
