@@ -76,6 +76,9 @@ public:
     [[nodiscard]] bool                    beginDrain();
     [[nodiscard]] bool                    isDrained();
 
+    // Republishes the last submitted frame without a capture so the game keeps drawing through a driver stall.
+    void holdRenderAlive(uint64_t waitedMicros);
+
     [[nodiscard]] std::optional<visuals::CapturedFrame> finishDownload();
 
     [[nodiscard]] OfflineRenderBoundaryStatus status();
@@ -90,11 +93,15 @@ private:
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
     [[nodiscard]] bool                                    warmupComplete() const;
     [[nodiscard]] bool publishClockSample(ExportFramePlan const& frame, bool captureSample);
+    // Renders the frame's own time without a capture until the ray-traced denoiser has settled on it.
+    [[nodiscard]] bool advanceConvergence(ExportFramePlan const& frame);
+    void               releaseHeldRender();
     void               clearClockSample();
     void               fault(OfflineRenderBoundaryError error, std::string message);
 
     replay::ReplaySession&                         mReplay;
     uint32_t                                       mCaptureCapacity{};
+    uint64_t                                       mTraceEpoch{};
     bool                                           mCaptureArmed{};
     OfflineRenderFrameExecutor                     mExecutor;
     std::optional<ExportFramePlan>                 mPendingFrame;
@@ -102,9 +109,13 @@ private:
     std::optional<visuals::FrameTicket>            mCompletedFrameTicket;
     std::optional<runtime::OfflineReplayTickToken> mReplayTickToken;
     std::optional<OfflineRenderClockToken>         mClockToken;
+    std::optional<OfflineRenderClockToken>         mHoldToken;
     int64_t                                        mMaximumReplayTick{};
     uint32_t                                       mWarmupFramesRemaining{};
     uint32_t                                       mWarmupStableFrames{};
+    uint32_t                                       mConvergenceRendersDone{};
+    bool                                           mConvergenceComplete{};
+    std::optional<OfflineRenderClockToken>         mConvergenceToken{};
     std::chrono::steady_clock::time_point          mRenderWaitStartedAt{};
     std::chrono::steady_clock::time_point          mRenderWaitLastLoggedAt{};
     std::chrono::steady_clock::time_point          mReplayTickRequestedAt{};

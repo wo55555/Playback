@@ -3,6 +3,7 @@
 #include "ExportCoordinator.h"
 #include "OfflineRenderBoundary.h"
 
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -54,12 +55,14 @@ private:
 
     [[nodiscard]] SubmissionResult submitReadyFrames();
     [[nodiscard]] SubmissionResult collectDownloads();
-    [[nodiscard]] ExportError      mapBoundaryError(OfflineRenderBoundaryError error) const;
-    void                           finish();
-    void                           fail(ExportError error, std::string message);
-    void                           restoreReplayState();
-    void                           closeCapture(bool cancelled);
-    void                           recordWait(OfflineRenderWaitReason reason) const noexcept;
+    // Records a wait and keeps the renderer drawing for its duration, so a waiting frame is never a render-free frame.
+    void                      waitFor(OfflineRenderTraceScope& trace, OfflineRenderWaitReason reason, uint64_t result);
+    [[nodiscard]] ExportError mapBoundaryError(OfflineRenderBoundaryError error) const;
+    void                      finish();
+    void                      fail(ExportError error, std::string message);
+    void                      restoreReplayState();
+    void                      closeCapture(bool cancelled);
+    void                      recordWait(OfflineRenderWaitReason reason) const noexcept;
 
     ExportCoordinator&                     mCoordinator;
     replay::ReplaySession&                 mReplay;
@@ -68,6 +71,8 @@ private:
     std::deque<visuals::CapturedFrame>     mReadyFrames;
     std::optional<bool>                    mPreviousPaused;
     uint64_t                               mNextFrameIndex{};
+    std::chrono::steady_clock::time_point  mWaitStartedAt{};
+    std::optional<OfflineRenderWaitReason> mWaitReason;
     Phase                                  mPhase{Phase::Idle};
 };
 
