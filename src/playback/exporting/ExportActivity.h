@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 
 namespace playback::exporting {
 
@@ -10,6 +11,9 @@ namespace detail {
 inline std::atomic_bool      gExportActivityActive{false};
 inline std::atomic_bool      gOfflineRenderActivityActive{false};
 inline std::atomic<uint64_t> gOfflineRenderSceneState{4};
+
+// Native Present ordinals restart with every export activity and are not frame IDs.
+inline std::atomic<uint64_t> gOfflineRenderNativePresentSerial{0};
 
 inline constexpr uint64_t OfflineRenderSceneReadyBit   = 1;
 inline constexpr uint64_t OfflineRenderCpuReadyBit     = 2;
@@ -20,7 +24,57 @@ struct OfflineRenderSceneSubmissionTicket {
     bool     cpuReady{};
 };
 
+struct OfflineRenderSceneMarker {
+    uint64_t commitSerial{};
+    uint64_t generation{};
+    uint64_t presentSerial{};
+    bool     valid{};
+};
+
+inline std::mutex               gOfflineRenderSceneMarkerMutex;
+inline OfflineRenderSceneMarker gOfflineRenderSceneMarker;
+
 } // namespace detail
+
+// A native Present ordinal scoped to one export activity; zero before the first Present.
+[[nodiscard]] inline uint64_t offlineRenderNativePresentSerial() noexcept {
+    return detail::gOfflineRenderNativePresentSerial.load(std::memory_order_acquire);
+}
+
+[[nodiscard]] inline uint64_t advanceOfflineRenderNativePresentSerial() noexcept {
+    return detail::gOfflineRenderNativePresentSerial.fetch_add(1, std::memory_order_acq_rel) + 1;
+}
+
+inline void resetOfflineRenderNativePresentSerial() noexcept {
+    detail::gOfflineRenderNativePresentSerial.store(0, std::memory_order_release);
+}
+
+struct OfflineRenderSceneCorrespondence {
+    uint64_t commitSerial{};
+    uint64_t generation{};
+    uint64_t presentSerial{};
+};
+
+inline void clearOfflineRenderSceneMarker() noexcept {
+    std::scoped_lock lock(detail::gOfflineRenderSceneMarkerMutex);
+    detail::gOfflineRenderSceneMarker = {};
+}
+
+// Records which native submission produced the scene the current generation is waiting for.
+inline void setOfflineRenderSceneMarker(uint64_t commitSerial, uint64_t generation, uint64_t presentSerial) noexcept {
+    std::scoped_lock lock(detail::gOfflineRenderSceneMarkerMutex);
+    detail::gOfflineRenderSceneMarker = {commitSerial, generation, presentSerial, true};
+}
+
+// Consumes the marker, so a missing or older generation reports zero instead of a stale ordinal.
+[[nodiscard]] inline OfflineRenderSceneCorrespondence
+consumeOfflineRenderSceneCorrespondence(uint64_t generation) noexcept {
+    std::scoped_lock lock(detail::gOfflineRenderSceneMarkerMutex);
+    auto const       marker           = detail::gOfflineRenderSceneMarker;
+    detail::gOfflineRenderSceneMarker = {};
+    if (!marker.valid || marker.generation != generation) return {};
+    return {marker.commitSerial, marker.generation, marker.presentSerial};
+}
 
 inline uint64_t nextOfflineRenderSceneGeneration(uint64_t state) noexcept {
     auto generation =
@@ -30,6 +84,7 @@ inline uint64_t nextOfflineRenderSceneGeneration(uint64_t state) noexcept {
 }
 
 inline uint64_t invalidateOfflineRenderSceneSample() noexcept {
+    clearOfflineRenderSceneMarker();
     auto state = detail::gOfflineRenderSceneState.load(std::memory_order_acquire);
     for (;;) {
         auto const generation = nextOfflineRenderSceneGeneration(state);
@@ -117,7 +172,11 @@ inline void setExportActivityActive(bool active) noexcept {
 
 inline void setOfflineRenderActivityActive(bool active) noexcept {
     detail::gOfflineRenderActivityActive.store(active, std::memory_order_release);
-    if (!active) clearOfflineRenderSceneSubmitted();
+    if (active) {
+        resetOfflineRenderNativePresentSerial();
+    } else {
+        clearOfflineRenderSceneSubmitted();
+    }
 }
 
 [[nodiscard]] inline bool isOfflineRenderActivityActive() noexcept {
