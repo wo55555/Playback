@@ -86,9 +86,10 @@ ll::memory::FuncPtr gOriginalCreateSwapChainForHwnd{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForCoreWindow{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForComposition{};
 
-std::atomic<bool> gTimelineHooksStopping{true};
-std::atomic<bool> gRendererInitHookStopping{true};
-std::atomic<bool> gD3D12RendererActive{false};
+std::atomic<bool>     gTimelineHooksStopping{true};
+std::atomic<bool>     gRendererInitHookStopping{true};
+std::atomic<bool>     gD3D12RendererActive{false};
+std::atomic<uint32_t> gSubmitHookMask{};
 
 std::atomic<uint32_t>   gActiveDetours{};
 std::mutex              gActiveDetoursMutex;
@@ -183,7 +184,9 @@ bool noneInstalled(HookState const& state) {
     RET WINAPI NAME##Detour(__VA_ARGS__)
 
 DECLARE_DETOUR_FN(present, HRESULT, IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
-    ActiveDetour            activeDetour;
+    ActiveDetour activeDetour;
+    // Counted before the capture inside renderPresentFrame so that capture sees its own ordinal.
+    if (exporting::isOfflineRenderActivityActive()) (void)exporting::advanceOfflineRenderNativePresentSerial();
     OfflineRenderTraceScope trace(
         OfflineRenderTraceEvent::PresentEnter,
         OfflineRenderTraceEvent::PresentExit,
@@ -623,19 +626,42 @@ uint32_t readRenderItemCount(bgfx::Frame const* render) {
 }
 
 // Only world geometry brings its own vertex formats; measured overlay submissions never do.
-exporting::SceneSubmissionKind classifySubmission(bgfx::Frame const* render) {
+using SubmissionSummary = exporting::OfflineNativeSubmissionSummary;
+
+exporting::SceneSubmissionKind classifySubmission(bgfx::Frame const* render, SubmissionSummary* summary = nullptr) {
     if (!render) return exporting::SceneSubmissionKind::OverlayOnly;
     auto const items = readRenderItemCount(render);
+    if (summary) summary->items = items;
     if (items == 0 || items > 65536u) return exporting::SceneSubmissionKind::OverlayOnly;
     auto const* base = reinterpret_cast<std::byte const*>(&render->m_renderItem[0].get());
     for (uint32_t i = 0; i < items; ++i) {
         auto const& draw = *reinterpret_cast<bgfx::RenderDraw const*>(base + i * RenderItemStride);
         auto const  decl = static_cast<uint32_t>(draw.m_stream[0].get().m_decl.get().idx);
+        if (summary) {
+            summary->inspected       = i + 1;
+            summary->lastDeclaration = (uint64_t{i} << 32) | decl;
+        }
         if (decl != InvalidVertexDeclIndex && decl != SharedVertexDeclIndex) {
             return exporting::SceneSubmissionKind::Scene;
         }
     }
     return exporting::SceneSubmissionKind::OverlayOnly;
+}
+
+void recordSubmissionSummary(
+    exporting::RenderDiagnosticProfile         profile,
+    exporting::OfflineRenderSubmitScope const& scope,
+    bgfx::Frame const*                         frame,
+    SubmissionSummary                          summary,
+    bool                                       returned = false
+) noexcept {
+    if (!profile.nativeSubmit() || !scope.serial()) return;
+    static_assert(sizeof(bgfx::Frame::m_viewRemap) == 512);
+    if (frame) {
+        summary.hasViews = true;
+        for (size_t i = 0; i < 4; ++i) summary.viewRemap |= uint64_t{frame->m_viewRemap[i]} << (16 * i);
+    }
+    exporting::recordNativeSubmissionSummary(profile, scope, frame, summary, returned);
 }
 
 void recordNativeSwitchState(
@@ -697,21 +723,55 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::ClearQuad&           clearQuad,
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
-    ActiveDetour activeDetour;
-    auto const   entry = exporting::offlineRenderSceneSubmissionTicket();
-    OfflineRenderTraceScope
-        trace(OfflineRenderTraceEvent::SubmitD3D12Enter, OfflineRenderTraceEvent::SubmitD3D12Exit, this, render);
+    ActiveDetour            activeDetour;
+    auto const              entry      = exporting::offlineRenderSceneSubmissionTicket();
+    auto const              entryEpoch = exporting::offlineRenderTraceEpoch();
+    OfflineRenderTraceScope trace(
+        OfflineRenderTraceEvent::SubmitD3D12Enter,
+        OfflineRenderTraceEvent::SubmitD3D12Exit,
+        this,
+        render,
+        0,
+        0,
+        0,
+        0,
+        entryEpoch
+    );
     // Only this hook sees the BGFX render thread submit world geometry; updateGraphics returning does not.
-    bool const carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
-                           && exporting::isOfflineRenderActivityActive()
-                           && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
+    auto const        profile = exporting::renderDiagnosticProfile();
+    SubmissionSummary summary;
+    bool const        carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
+                                  && exporting::isOfflineRenderActivityActive()
+                                  && classifySubmission(render, profile.nativeSubmit() ? &summary : nullptr)
+                                         == exporting::SceneSubmissionKind::Scene;
+    exporting::OfflineRenderSubmitScope
+        submit(profile, render, this, entry.generation, entry.cpuReady, carriesScene, 12, entryEpoch);
+    recordSubmissionSummary(profile, submit, render, summary);
     auto const switchTicket = claimGraphicsSwitchSubmitTrace();
     recordNativeSwitchState(switchTicket.transition, "Submit.enter", this, render, switchTicket.ordinal);
     origin(render, clearQuad, textVideoMemBlitter);
+    recordSubmissionSummary(profile, submit, render, summary, true);
     recordNativeSwitchState(switchTicket.transition, "Submit.return", this, render, switchTicket.ordinal);
     useSubmittedCameraProjection(render);
     bool const accepted = exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
-    recordOfflineRenderTrace(
+    submit.returned(accepted);
+    if (accepted) {
+        auto const presentSerial = exporting::offlineRenderNativePresentSerial();
+        exporting::setOfflineRenderSceneMarker(submit.serial(), entry.generation, presentSerial);
+        exporting::recordSceneCorrespondence(
+            profile,
+            entryEpoch,
+            OfflineRenderTraceEvent::SceneMarkerSet,
+            render,
+            nullptr,
+            submit.serial(),
+            entry.generation,
+            presentSerial,
+            1
+        );
+    }
+    exporting::recordOfflineRenderTraceForEpoch(
+        entryEpoch,
         OfflineRenderTraceEvent::SubmissionGate,
         render,
         this,
@@ -733,17 +793,51 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::ClearQuad&           clearQuad,
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
-    ActiveDetour activeDetour;
-    auto const   entry = exporting::offlineRenderSceneSubmissionTicket();
-    OfflineRenderTraceScope
-               trace(OfflineRenderTraceEvent::SubmitD3D11Enter, OfflineRenderTraceEvent::SubmitD3D11Exit, this, render);
-    bool const carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
-                           && exporting::isOfflineRenderActivityActive()
-                           && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
+    ActiveDetour            activeDetour;
+    auto const              entry      = exporting::offlineRenderSceneSubmissionTicket();
+    auto const              entryEpoch = exporting::offlineRenderTraceEpoch();
+    OfflineRenderTraceScope trace(
+        OfflineRenderTraceEvent::SubmitD3D11Enter,
+        OfflineRenderTraceEvent::SubmitD3D11Exit,
+        this,
+        render,
+        0,
+        0,
+        0,
+        0,
+        entryEpoch
+    );
+    auto const        profile = exporting::renderDiagnosticProfile();
+    SubmissionSummary summary;
+    bool const        carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
+                                  && exporting::isOfflineRenderActivityActive()
+                                  && classifySubmission(render, profile.nativeSubmit() ? &summary : nullptr)
+                                         == exporting::SceneSubmissionKind::Scene;
+    exporting::OfflineRenderSubmitScope
+        submit(profile, render, this, entry.generation, entry.cpuReady, carriesScene, 11, entryEpoch);
+    recordSubmissionSummary(profile, submit, render, summary);
     origin(render, clearQuad, textVideoMemBlitter);
+    recordSubmissionSummary(profile, submit, render, summary, true);
     useSubmittedCameraProjection(render);
     bool const accepted = exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
-    recordOfflineRenderTrace(
+    submit.returned(accepted);
+    if (accepted) {
+        auto const presentSerial = exporting::offlineRenderNativePresentSerial();
+        exporting::setOfflineRenderSceneMarker(submit.serial(), entry.generation, presentSerial);
+        exporting::recordSceneCorrespondence(
+            profile,
+            entryEpoch,
+            OfflineRenderTraceEvent::SceneMarkerSet,
+            render,
+            nullptr,
+            submit.serial(),
+            entry.generation,
+            presentSerial,
+            1
+        );
+    }
+    exporting::recordOfflineRenderTraceForEpoch(
+        entryEpoch,
         OfflineRenderTraceEvent::SubmissionGate,
         render,
         this,
@@ -1029,6 +1123,8 @@ bool resolveHookTargets(
     return resolved;
 }
 
+uint32_t offlineSubmitHookMask() noexcept { return gSubmitHookMask.load(std::memory_order_acquire); }
+
 bool hookRendererInit(bool enable) {
     std::scoped_lock lock(gRendererInitHookMutex);
     static bool      initInstalled{};
@@ -1062,20 +1158,38 @@ bool hookRendererInit(bool enable) {
         // Both backend hooks are installed up front; only the backend BGFX actually selected will run.
         if (!submitInstalled) {
             if (OfflineRenderSubmitHook::hook() != 0) {
-                getLogger().error("Unable to install the BGFX D3D12 scene submission capture hook");
+                getLogger().error(
+                    "Unable to install the BGFX D3D12 scene submission capture hook; requestedMask={}, actualMask={}",
+                    exporting::renderDiagnosticProfile().submitHookMask(),
+                    offlineSubmitHookMask()
+                );
                 return false;
             }
             submitInstalled = true;
+            gSubmitHookMask.fetch_or(1u, std::memory_order_release);
         }
         if (!submitD3D11Installed) {
             if (OfflineRenderSubmitD3D11Hook::hook() != 0) {
-                getLogger().error("Unable to install the BGFX D3D11 scene submission capture hook");
+                getLogger().error(
+                    "Unable to install the BGFX D3D11 scene submission capture hook; requestedMask={}, actualMask={}",
+                    exporting::renderDiagnosticProfile().submitHookMask(),
+                    offlineSubmitHookMask()
+                );
                 return false;
             }
             submitD3D11Installed = true;
+            gSubmitHookMask.fetch_or(2u, std::memory_order_release);
         }
 
-        if (exporting::renderDiagnosticsEnabled()) {
+        auto const profile = exporting::renderDiagnosticProfile();
+        if (profile.submitScope())
+            getLogger().info(
+                "[RenderDiag] submit hooks requestedMask={} actualMask={}; actual callback hits require game "
+                "validation",
+                profile.submitHookMask(),
+                offlineSubmitHookMask()
+            );
+        if (profile.enabled) {
             if (!switchTraceOpened) {
                 auto const path   = Playback::getInstance().getSelf().getModDir()
                                   / fmt::format("graphics-switch-{}-{}.log", GetCurrentProcessId(), GetTickCount64());
@@ -1127,10 +1241,12 @@ bool hookRendererInit(bool enable) {
     if (submitD3D11Installed) {
         if (OfflineRenderSubmitD3D11Hook::unhook()) submitD3D11Installed = false;
         else return false;
+        gSubmitHookMask.fetch_and(~2u, std::memory_order_release);
     }
     if (submitInstalled) {
         if (OfflineRenderSubmitHook::unhook()) submitInstalled = false;
         else return false;
+        gSubmitHookMask.fetch_and(~1u, std::memory_order_release);
     }
     if (initInstalled) {
         if (RendererInitHook::unhook()) initInstalled = false;

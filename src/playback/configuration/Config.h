@@ -14,9 +14,10 @@ struct CommandStruct {
 };
 
 struct Config {
-    int         version           = 1;
-    std::string locateName        = "zh_CN";
-    bool        renderDiagnostics = false;
+    int         version                    = 1;
+    std::string locateName                 = "zh_CN";
+    bool        renderDiagnostics          = false;
+    std::string renderDiagnosticExperiment = "off";
 
     CommandStruct command;
 };

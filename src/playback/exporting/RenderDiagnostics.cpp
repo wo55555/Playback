@@ -103,7 +103,12 @@ std::string experimentBits(std::vector<bool> const& values) {
 
 } // namespace
 
-bool renderDiagnosticsEnabled() noexcept { return Playback::getInstance().getConfig().renderDiagnostics; }
+bool renderDiagnosticsEnabled() noexcept { return renderDiagnosticProfile().enabled; }
+
+RenderDiagnosticProfile renderDiagnosticProfile() noexcept {
+    auto const& config = Playback::getInstance().getConfig();
+    return selectRenderDiagnosticProfile(config.renderDiagnostics, config.renderDiagnosticExperiment);
+}
 
 void recordWorldEnvironment(
     WorldDiagnosticStage stage,
