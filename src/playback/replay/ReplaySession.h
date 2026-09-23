@@ -237,7 +237,9 @@ private:
     bool                                                        mReplayCachedResourcePacksLoaded{};
 
     std::shared_ptr<StartGamePacket const> mReplayStartGame;
-    bool                                   mRecordedBlockRegistryApplied{};
+    // applyRecordedBlockRegistry runs from two hooks that can fire concurrently while the replay world loads.
+    std::recursive_mutex mRecordedBlockRegistryMutex;
+    bool                 mRecordedBlockRegistryApplied{};
 
 public:
     bool mIsProcessingSnapshot = false;

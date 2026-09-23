@@ -97,6 +97,7 @@
 #include "mc/world/level/block/definition/BlockComponentGroupDescription.h"
 #include "mc/world/level/block/definition/BlockDefinition.h"
 #include "mc/world/level/block/definition/BlockDefinitionGroup.h"
+#include "mc/world/level/block/definition/BlockStateDefinition.h"
 #include "mc/world/level/block/definition/ServerBlockProperty.h"
 #include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/chunk/ChunkSource.h"
@@ -107,7 +108,6 @@
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
-
 
 #include "snappy.h"
 #include "uuid.h"
@@ -129,6 +129,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1463,9 +1464,19 @@ void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedG
 }
 
 void ReplaySession::applyRecordedBlockRegistry() {
-    if (mRecordedBlockRegistryApplied) return;
+    // Two hooks land here while the replay world loads: the StartGame handler and the LevelRenderer constructor
+    // (the only caller of finalizeBlockComponentStorageForRendering). The bare flag below is a check-then-act race
+    // that lets both run the registration concurrently, so serialize them and re-check under the lock.
+    std::lock_guard lock(mRecordedBlockRegistryMutex);
+
+    auto const threadId = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    if (mRecordedBlockRegistryApplied) {
+        getLogger().debug("Recorded block registry already applied (t{})", threadId);
+        return;
+    }
     auto startGame = mReplayStartGame;
     if (!startGame) return;
+    getLogger().debug("Applying recorded block registry (t{})", threadId);
     mRecordedBlockRegistryApplied = true;
 
     auto& properties = *startGame->mBlockProperties;
@@ -1504,6 +1515,9 @@ void ReplaySession::applyRecordedBlockRegistry() {
 
         size_t registered = 0;
         for (auto const& [name, tag] : properties) {
+            // 原版方块本地已经注册过了；只有录制资源包带来的自定义方块才需要在这里注册。
+            if (registry.lookupByName(HashedString{name}, false)) continue;
+
             auto const* definition = definitions->tryGetBlockDefinition(name);
             if (!definition) continue;
 
