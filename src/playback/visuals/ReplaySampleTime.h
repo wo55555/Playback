@@ -32,7 +32,11 @@ struct ReplaySampleTime {
         return result;
     }
 
-    [[nodiscard]] int64_t value() const noexcept { return isValid() ? numerator / denominator : 0; }
+    // Fractional on purpose: the camera timeline evaluator and the entity interpolator take this as `long double`
+    // and lerp within a tick with it. Returning an integer silently pins both to tick boundaries (20 Hz).
+    [[nodiscard]] long double value() const noexcept {
+        return isValid() ? static_cast<long double>(numerator) / static_cast<long double>(denominator) : 0.0L;
+    }
 
     [[nodiscard]] static std::optional<ReplaySampleTime>
     fromRational(int64_t tickNumerator, int64_t tickDenominator) noexcept {
