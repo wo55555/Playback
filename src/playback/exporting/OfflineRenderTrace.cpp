@@ -119,7 +119,6 @@ constexpr std::array EventNames{
     "DriverWait",
     "GraphicsDecision",
     "RendererClock",
-    "DiagnosticWindow",
     "ReadbackFenceObserved",
     "ReadbackMapEnter",
     "ReadbackMapExit",
@@ -130,6 +129,21 @@ constexpr std::array EventNames{
     "ExtractedViewInputs",
     "RendererClockIdentity",
     "FrameBuilderTiming",
+    "GraphicsHookEnter",
+    "NativeSubmitEnter",
+    "NativeSubmitExit",
+    "NativeSubmitClassify",
+    "NativeSubmitViews",
+    "CaptureSubmitObserved",
+    "CaptureSourceLink",
+    "CaptureQueueExecute",
+    "CaptureQueueSignal",
+    "CaptureFenceLink",
+    "CaptureReadyBeforeComplete",
+    "CaptureCollectedLink",
+    "SceneMarkerSet",
+    "SceneMarkerCapture",
+    "RenderKeepAlive",
 };
 static_assert(EventNames.size() == EventCount);
 
@@ -215,7 +229,6 @@ constexpr bool isSignificant(OfflineRenderTraceEvent event) noexcept {
     case OfflineRenderTraceEvent::DriverWait:
     case OfflineRenderTraceEvent::GraphicsDecision:
     case OfflineRenderTraceEvent::RendererClock:
-    case OfflineRenderTraceEvent::DiagnosticWindow:
     case OfflineRenderTraceEvent::ReadbackFenceObserved:
     case OfflineRenderTraceEvent::ReadbackMapEnter:
     case OfflineRenderTraceEvent::ReadbackMapExit:
@@ -226,6 +239,20 @@ constexpr bool isSignificant(OfflineRenderTraceEvent event) noexcept {
     case OfflineRenderTraceEvent::ExtractedViewInputs:
     case OfflineRenderTraceEvent::RendererClockIdentity:
     case OfflineRenderTraceEvent::FrameBuilderTiming:
+    case OfflineRenderTraceEvent::NativeSubmitEnter:
+    case OfflineRenderTraceEvent::NativeSubmitExit:
+    case OfflineRenderTraceEvent::NativeSubmitClassify:
+    case OfflineRenderTraceEvent::NativeSubmitViews:
+    case OfflineRenderTraceEvent::CaptureSubmitObserved:
+    case OfflineRenderTraceEvent::CaptureSourceLink:
+    case OfflineRenderTraceEvent::CaptureQueueExecute:
+    case OfflineRenderTraceEvent::CaptureQueueSignal:
+    case OfflineRenderTraceEvent::CaptureFenceLink:
+    case OfflineRenderTraceEvent::CaptureReadyBeforeComplete:
+    case OfflineRenderTraceEvent::CaptureCollectedLink:
+    case OfflineRenderTraceEvent::SceneMarkerSet:
+    case OfflineRenderTraceEvent::SceneMarkerCapture:
+    case OfflineRenderTraceEvent::RenderKeepAlive:
         return true;
     default:
         return false;
@@ -257,6 +284,7 @@ struct ThreadContext {
     uint64_t                               token{};
     uint64_t                               frame{};
     uint64_t                               renderSerial{};
+    uint64_t                               activeSubmit{};
     std::array<std::array<uint64_t, 7>, 3> lastObservation{};
     std::array<bool, 3>                    hasObservation{};
 };
@@ -277,6 +305,7 @@ struct TraceState {
     uint64_t                              observedFrame{};
     uint32_t                              hotBudget{};
     uint64_t                              thinned{};
+    uint64_t                              lastReturnedSubmit{};
 };
 
 TraceState                 gTrace;
@@ -351,7 +380,7 @@ uint64_t appendEvent(
     }
     if (event == OfflineRenderTraceEvent::ClockPublished || event == OfflineRenderTraceEvent::CaptureArm
         || event == OfflineRenderTraceEvent::CpuSubmissionPermit || event == OfflineRenderTraceEvent::SessionBegin
-        || event == OfflineRenderTraceEvent::BoundaryFault || event == OfflineRenderTraceEvent::DiagnosticWindow) {
+        || event == OfflineRenderTraceEvent::BoundaryFault) {
         gTrace.hotBudget = HotBudget;
     } else if (!isSignificant(event) && storage == TraceStorage::Sample && !verboseSampled) {
         if (gTrace.hotBudget != 0) {
@@ -408,6 +437,47 @@ bool writeCsv(
             "# parent is the nearest stored enclosing enter; an exit references its own enter; zero means none.\n"
             "# us is steady-clock microseconds since begin; session is a process-local epoch.\n"
             "# count totals are exact; repeated decisions/states and verbose preview/polls are thinned.\n"
+            "# GraphicsHookEnter counts all updateGraphics detour entries; GraphicsEnter counts sampled origin calls.\n"
+            "# These are observed CPU hook boundaries, not GPU pass/source/history evidence.\n"
+            "# NativeSubmitEnter/Exit: object=BGFX Frame,related=renderer,a=CPU invocation serial (logical ordinal),"
+            "b=entry generation,c=flags (1=cpuReady,2=carriesScene,4=accepted,8=normal return; backend<<8),"
+            "d=native frame ID UINT64_MAX unknown. Entry accepted is unknown until normal exit.\n"
+            "# CPU invocation serials are epoch-bound, not native frame IDs; pointer values are not frame IDs.\n"
+            "# NativeSubmitClassify: a=invocation,b=existing classifier item count,c=items inspected,"
+            "d=last inspected index<<32|vertex declaration; UINT64_MAX unknown. Entry-time observations only.\n"
+            "# NativeSubmitViews: a=invocation,b=first four typed viewRemap ushort values packed low to high,"
+            "c=4 entries|return snapshot bit32,d=native frame ID UINT64_MAX unknown; callback-lifetime prefix only, "
+            "not active view count.\n"
+            "# SDK 26.20.7 declares m_frameNum/counts after mis-sized TypedStorage arrays; unsafe offsets are not "
+            "read.\n"
+            "# CaptureSubmitObserved: object=source,related=queue,a=frame,b=capture ID,c=same-thread active submit,"
+            "d=last normal returned submit observed under trace lock; zero unknown, neither proves GPU source.\n"
+            "# CaptureSourceLink: object=source,related=list,a=source serial,b=backbuffer index,c=queue address,d=12.\n"
+            "# Submitted-copy fallback uses source serial 0 and backbuffer index UINT64_MAX (unknown);"
+            "ReadbackCopy may use its resolved export texture, not the original source resource.\n"
+            "# CaptureQueueExecute: object=list,related=queue,a=source serial,b=backbuffer index,c=list count,"
+            "d=1 after ExecuteCommandLists returned; queued API call, not GPU executed.\n"
+            "# CaptureQueueSignal: object=fence,related=queue,a=source serial,b=backbuffer index,c=value,"
+            "d=HRESULT uint32 bits; after Signal returned, not completion.\n"
+            "# CaptureFenceLink: object=source,related=fence,a=frame,b=capture ID,c=value,d=queue address;"
+            "recorded before worker publication after successful Signal.\n"
+            "# CaptureReadyBeforeComplete: object=readback,related=fence,a=frame,b=capture ID,c=value,d=0;"
+            "after existing fence wait and CPU copy, before frameTap.complete, not yet published.\n"
+            "# ReadbackReady: same payload after frameTap.complete returns; CaptureCollected can precede this row.\n"
+            "# CaptureCollectedLink: object=source,related=fence,a=frame,b=fence value,c=queue address,d=0 GPU-source "
+            "unknown;"
+            "join capture ID via same-session frame plus source/fence/value, never observed_token.\n"
+            "# SceneMarkerSet: object=BGFX frame,related=nullptr,a=CPU invocation serial of the accepted scene submit,"
+            "b=accepted generation,c=Present ordinal when the scene was accepted,d=1; same ordinal space as "
+            "NativeSubmitEnter.a, only the first accepted submit of a generation is kept.\n"
+            "# SceneMarkerCapture: object=backbuffer,related=command list,a=consumed marker invocation serial,"
+            "b=generation observed at capture,c=Present ordinal at capture,d=preview source serial; a=0 means no "
+            "marker was awaiting capture for that generation. Matching SceneMarkerSet.a to NativeSubmitEnter.a "
+            "identifies the producing submit without observed_token; c differences count native Present detour "
+            "entries between acceptance and capture and are Present ordinals, not GPU frame identity or completion.\n"
+            "# RenderKeepAlive: object=nullptr,related=nullptr,a=frame index of the re-rendered last submitted frame,"
+            "b=clock token,c=elapsed wait us,d=0; published once per stalled wait and then re-rendered by every "
+            "frame until the boundary releases it, so the renderer is never idle long enough to lose its history.\n"
             "# DriverWait/GraphicsDecision keep changes per thread; graphics RenderState keeps changed payloads.\n"
             "# A retained wait is the last observed branch, not proof it remains blocked between driver calls.\n"
             "# Scope exits inherit entry sampling; buffer exhaustion or session end can still truncate scopes.\n"
@@ -523,7 +593,7 @@ bool writeCsv(
             "# Wait reasons: 0=None,1=WriterBackpressure,2=CaptureCapacity,3=ReplayPreparation,"
             "4=DimensionTransition,5=UiStable,6=NativeTick,7=WarmupCpu,8=WarmupBudget,9=WarmupUi,"
             "10=CaptureArm,11=CpuSample,12=CapturePending,13=CollectPending,14=Draining,"
-            "15=DiagnosticGap,16=Failed,17=Unknown; one branch per observation, not exclusive root causes.\n"
+            "15=Failed,16=Unknown; one branch per observation, not exclusive root causes.\n"
             "# GraphicsDecision: a=1 SampleExecuted/2 ExportSkipped/3 NativeExecuted,b=explicit sample token,"
             "c=explicit sample frame,d=render serial; zero outside sample. Exceptions have no success decision.\n"
             "# RendererClock: object=GameRenderer,a=1 RenderBefore/2 RenderAfter/3 ExtractBefore/4 ExtractAfter/"
@@ -536,9 +606,6 @@ bool writeCsv(
             "# FrameBuilderTiming: object=FrameBuilder,related=GameRenderer,a=stage,b/c/d=double bit patterns for "
             "render-thread duration,wait-until-completed duration,flip timestamp; units follow FrameBuilder "
             "declaration.\n"
-            "# DiagnosticWindow: a=0 planned/1 begin/2 released/3 aborted/4 not reached/5 ineligible,"
-            "b=next frame,c=target gap us,d=actual elapsed us on release only; synthetic gap, not writer "
-            "backpressure.\n"
             "# ReadbackFenceObserved: object=readback,related=fence,a=frame,b=capture ID,c=fence value,"
             "d=wait API used; CPU observation after existing wait, not a GPU timestamp.\n"
             "# ReadbackMapEnter/Exit,ReadbackCpuCopyEnter/Exit: object=readback,related=fence,b=frame,"
@@ -625,16 +692,17 @@ bool beginOfflineRenderTrace(std::filesystem::path const& path) noexcept {
 
         std::lock_guard recordLock(gTrace.recordMutex);
         gTrace.events.swap(events);
-        gTrace.stored        = 0;
-        gTrace.dropped       = 0;
-        gTrace.thinned       = 0;
-        gTrace.totals        = {};
-        gTrace.idleSeen      = {};
-        gTrace.hotBudget     = 0;
-        gTrace.observedToken = 0;
-        gTrace.observedFrame = 0;
-        gTrace.started       = std::chrono::steady_clock::now();
-        gTrace.file          = file.release();
+        gTrace.stored             = 0;
+        gTrace.dropped            = 0;
+        gTrace.thinned            = 0;
+        gTrace.totals             = {};
+        gTrace.idleSeen           = {};
+        gTrace.hotBudget          = 0;
+        gTrace.observedToken      = 0;
+        gTrace.observedFrame      = 0;
+        gTrace.lastReturnedSubmit = 0;
+        gTrace.started            = std::chrono::steady_clock::now();
+        gTrace.file               = file.release();
         gTrace.activeEpoch.store(++gTrace.lastEpoch, std::memory_order_release);
         return true;
     } catch (...) {
@@ -955,5 +1023,149 @@ OfflineRenderTraceScope::~OfflineRenderTraceScope() noexcept {
 }
 
 void OfflineRenderTraceScope::result(uint64_t value) noexcept { mResult = value; }
+
+OfflineRenderSubmitScope::OfflineRenderSubmitScope(
+    RenderDiagnosticProfile profile,
+    void const*             frame,
+    void const*             renderer,
+    uint64_t                generation,
+    bool                    cpuReady,
+    bool                    carriesScene,
+    uint32_t                backend,
+    uint64_t                expectedEpoch
+) noexcept {
+    if (!profile.submitScope()) return;
+    auto const epoch = offlineRenderTraceEpoch();
+    if (!epoch || (expectedEpoch != UINT64_MAX && expectedEpoch != epoch)) return;
+    try {
+        std::scoped_lock lock(gTrace.recordMutex);
+        if (offlineRenderTraceEpoch() != epoch) return;
+        synchronizeThread(epoch);
+        mEpoch      = epoch;
+        mPrevious   = gThread.activeSubmit;
+        mGeneration = generation;
+        mFlags      = (cpuReady ? 1u : 0u) | (carriesScene ? 2u : 0u) | (uint64_t{backend} << 8);
+        mFrame      = frame;
+        mRenderer   = renderer;
+        mSerial     = gTrace.totals[static_cast<size_t>(OfflineRenderTraceEvent::NativeSubmitEnter)] + 1;
+        appendEvent(
+            OfflineRenderTraceEvent::NativeSubmitEnter,
+            frame,
+            renderer,
+            mSerial,
+            generation,
+            mFlags,
+            UINT64_MAX,
+            TraceStorage::Keep
+        );
+        gThread.activeSubmit = mSerial;
+    } catch (...) {}
+}
+
+void OfflineRenderSubmitScope::returned(bool accepted) noexcept {
+    if (!mEpoch || mReturned) return;
+    try {
+        std::scoped_lock lock(gTrace.recordMutex);
+        if (offlineRenderTraceEpoch() != mEpoch || gThread.epoch != mEpoch) return;
+        mReturned                 = true;
+        mAccepted                 = accepted;
+        gTrace.lastReturnedSubmit = mSerial;
+    } catch (...) {}
+}
+
+OfflineRenderSubmitScope::~OfflineRenderSubmitScope() noexcept {
+    if (!mEpoch) return;
+    try {
+        std::scoped_lock lock(gTrace.recordMutex);
+        if (offlineRenderTraceEpoch() == mEpoch && gThread.epoch == mEpoch && mSerial) {
+            appendEvent(
+                OfflineRenderTraceEvent::NativeSubmitExit,
+                mFrame,
+                mRenderer,
+                mSerial,
+                mGeneration,
+                mFlags | (mReturned ? 8u : 0u) | (mAccepted ? 4u : 0u),
+                UINT64_MAX,
+                TraceStorage::Keep
+            );
+        }
+    } catch (...) {}
+    if (gThread.epoch == mEpoch) {
+        gThread.activeSubmit = mPrevious;
+    }
+}
+
+OfflineSubmitObservation offlineSubmitObservation(uint64_t epoch) noexcept {
+    if (!epoch) return {};
+    try {
+        std::scoped_lock lock(gTrace.recordMutex);
+        if (offlineRenderTraceEpoch() != epoch) return {};
+        synchronizeThread(epoch);
+        return {gThread.activeSubmit, gTrace.lastReturnedSubmit};
+    } catch (...) {}
+    return {};
+}
+
+void recordNativeSubmissionSummary(
+    RenderDiagnosticProfile               profile,
+    OfflineRenderSubmitScope const&       scope,
+    void const*                           frame,
+    OfflineNativeSubmissionSummary const& summary,
+    bool                                  returned
+) noexcept {
+    if (!profile.nativeSubmit() || !scope.serial()) return;
+    if (!returned)
+        recordOfflineRenderTraceForEpoch(
+            scope.epoch(),
+            OfflineRenderTraceEvent::NativeSubmitClassify,
+            frame,
+            nullptr,
+            scope.serial(),
+            summary.items,
+            summary.inspected,
+            summary.lastDeclaration
+        );
+    if (summary.hasViews)
+        recordOfflineRenderTraceForEpoch(
+            scope.epoch(),
+            OfflineRenderTraceEvent::NativeSubmitViews,
+            frame,
+            nullptr,
+            scope.serial(),
+            summary.viewRemap,
+            4 | (uint64_t{returned} << 32),
+            UINT64_MAX
+        );
+}
+
+void recordCaptureLineage(
+    RenderDiagnosticProfile profile,
+    uint64_t                epoch,
+    OfflineRenderTraceEvent event,
+    void const*             object,
+    void const*             related,
+    uint64_t                a,
+    uint64_t                b,
+    uint64_t                c,
+    uint64_t                d
+) noexcept {
+    if (!profile.captureLineage()) return;
+    recordOfflineRenderTraceForEpoch(epoch, event, object, related, a, b, c, d);
+}
+
+void recordSceneCorrespondence(
+    RenderDiagnosticProfile profile,
+    uint64_t                epoch,
+    OfflineRenderTraceEvent event,
+    void const*             object,
+    void const*             related,
+    uint64_t                a,
+    uint64_t                b,
+    uint64_t                c,
+    uint64_t                d
+) noexcept {
+    if (!profile.sceneCorrespondence()) return;
+    recordOfflineRenderTraceForEpoch(epoch, event, object, related, a, b, c, d);
+}
 
 } // namespace playback::exporting

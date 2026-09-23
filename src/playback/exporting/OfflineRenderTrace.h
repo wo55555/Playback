@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <filesystem>
 
+#include "RenderDiagnostics.h"
+
 namespace playback::visuals {
 struct CapturedFrame;
 }
@@ -104,7 +106,6 @@ enum class OfflineRenderTraceEvent : uint8_t {
     DriverWait,
     GraphicsDecision,
     RendererClock,
-    DiagnosticWindow,
     ReadbackFenceObserved,
     ReadbackMapEnter,
     ReadbackMapExit,
@@ -115,6 +116,21 @@ enum class OfflineRenderTraceEvent : uint8_t {
     ExtractedViewInputs,
     RendererClockIdentity,
     FrameBuilderTiming,
+    GraphicsHookEnter,
+    NativeSubmitEnter,
+    NativeSubmitExit,
+    NativeSubmitClassify,
+    NativeSubmitViews,
+    CaptureSubmitObserved,
+    CaptureSourceLink,
+    CaptureQueueExecute,
+    CaptureQueueSignal,
+    CaptureFenceLink,
+    CaptureReadyBeforeComplete,
+    CaptureCollectedLink,
+    SceneMarkerSet,
+    SceneMarkerCapture,
+    RenderKeepAlive,
     Count,
 };
 
@@ -134,7 +150,6 @@ enum class OfflineRenderWaitReason : uint8_t {
     CapturePending,
     CollectPending,
     Draining,
-    DiagnosticGap,
     Failed,
     Unknown,
 };
@@ -143,6 +158,80 @@ enum class OfflineRenderWaitReason : uint8_t {
 [[nodiscard]] bool     finishOfflineRenderTrace() noexcept;
 [[nodiscard]] bool     isOfflineRenderTraceActive() noexcept;
 [[nodiscard]] uint64_t offlineRenderTraceEpoch() noexcept;
+
+struct OfflineSubmitObservation {
+    uint64_t active{};
+    uint64_t lastReturned{};
+};
+
+[[nodiscard]] OfflineSubmitObservation offlineSubmitObservation(uint64_t epoch) noexcept;
+
+class OfflineRenderSubmitScope {
+public:
+    OfflineRenderSubmitScope(
+        RenderDiagnosticProfile profile,
+        void const*             frame,
+        void const*             renderer,
+        uint64_t                generation,
+        bool                    cpuReady,
+        bool                    carriesScene,
+        uint32_t                backend,
+        uint64_t                expectedEpoch = UINT64_MAX
+    ) noexcept;
+    ~OfflineRenderSubmitScope() noexcept;
+    void                   returned(bool accepted) noexcept;
+    [[nodiscard]] uint64_t serial() const noexcept { return mSerial; }
+    [[nodiscard]] uint64_t epoch() const noexcept { return mEpoch; }
+    OfflineRenderSubmitScope(OfflineRenderSubmitScope const&)            = delete;
+    OfflineRenderSubmitScope& operator=(OfflineRenderSubmitScope const&) = delete;
+
+private:
+    uint64_t    mEpoch{}, mSerial{}, mPrevious{}, mGeneration{}, mFlags{};
+    void const* mFrame{};
+    void const* mRenderer{};
+    bool        mReturned{};
+    bool        mAccepted{};
+};
+
+struct OfflineNativeSubmissionSummary {
+    uint64_t items{UINT64_MAX};
+    uint64_t inspected{};
+    uint64_t lastDeclaration{UINT64_MAX};
+    uint64_t viewRemap{};
+    bool     hasViews{};
+};
+
+void recordNativeSubmissionSummary(
+    RenderDiagnosticProfile               profile,
+    OfflineRenderSubmitScope const&       scope,
+    void const*                           frame,
+    OfflineNativeSubmissionSummary const& summary,
+    bool                                  returned = false
+) noexcept;
+
+void recordCaptureLineage(
+    RenderDiagnosticProfile profile,
+    uint64_t                epoch,
+    OfflineRenderTraceEvent event,
+    void const*             object  = nullptr,
+    void const*             related = nullptr,
+    uint64_t                a       = 0,
+    uint64_t                b       = 0,
+    uint64_t                c       = 0,
+    uint64_t                d       = 0
+) noexcept;
+
+void recordSceneCorrespondence(
+    RenderDiagnosticProfile profile,
+    uint64_t                epoch,
+    OfflineRenderTraceEvent event,
+    void const*             object  = nullptr,
+    void const*             related = nullptr,
+    uint64_t                a       = 0,
+    uint64_t                b       = 0,
+    uint64_t                c       = 0,
+    uint64_t                d       = 0
+) noexcept;
 
 void recordOfflineRenderTraceForEpoch(
     uint64_t                epoch,

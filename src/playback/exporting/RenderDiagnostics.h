@@ -33,6 +33,49 @@ enum class RenderDiagnosticStage : uint64_t {
 };
 
 [[nodiscard]] bool renderDiagnosticsEnabled() noexcept;
+enum class RenderDiagnosticProbe { None, ViewInputs, Clock, NativeSubmit, CaptureLineage, SceneCorrespondence };
+
+struct RenderDiagnosticProfile {
+    bool                         enabled{};
+    bool                         known{};
+    RenderDiagnosticProbe        probe{};
+    [[nodiscard]] constexpr bool nativeSubmit() const noexcept {
+        return enabled && probe == RenderDiagnosticProbe::NativeSubmit;
+    }
+    [[nodiscard]] constexpr bool captureLineage() const noexcept {
+        return enabled && probe == RenderDiagnosticProbe::CaptureLineage;
+    }
+    [[nodiscard]] constexpr bool sceneCorrespondence() const noexcept {
+        return enabled && probe == RenderDiagnosticProbe::SceneCorrespondence;
+    }
+    [[nodiscard]] constexpr bool submitScope() const noexcept {
+        return nativeSubmit() || captureLineage() || sceneCorrespondence();
+    }
+    [[nodiscard]] constexpr bool extractFrame() const noexcept { return enabled; }
+    [[nodiscard]] constexpr bool endFrame() const noexcept { return enabled && probe == RenderDiagnosticProbe::Clock; }
+    [[nodiscard]] constexpr uint32_t hookMask() const noexcept {
+        return (extractFrame() ? 1u : 0u) | (endFrame() ? 2u : 0u);
+    }
+    [[nodiscard]] constexpr uint32_t submitHookMask() const noexcept { return submitScope() ? 3u : 0u; }
+};
+
+[[nodiscard]] constexpr RenderDiagnosticProfile
+selectRenderDiagnosticProfile(bool enabled, std::string_view name) noexcept {
+    auto const probe = name == "view-inputs"          ? RenderDiagnosticProbe::ViewInputs
+                     : name == "clock"                ? RenderDiagnosticProbe::Clock
+                     : name == "native-submit"        ? RenderDiagnosticProbe::NativeSubmit
+                     : name == "capture-lineage"      ? RenderDiagnosticProbe::CaptureLineage
+                     : name == "scene-correspondence" ? RenderDiagnosticProbe::SceneCorrespondence
+                                                      : RenderDiagnosticProbe::None;
+    enabled          = enabled && name != "off";
+    return {
+        enabled,
+        name == "off" || name == "observe" || probe != RenderDiagnosticProbe::None,
+        enabled ? probe : RenderDiagnosticProbe::None
+    };
+}
+
+[[nodiscard]] RenderDiagnosticProfile renderDiagnosticProfile() noexcept;
 enum class WorldDiagnosticStage : uint64_t {
     ReplayTickBefore = 1,
     NativeTickBefore,
