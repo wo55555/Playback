@@ -7,11 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1-mc26.40] - 2026-09-19
+## [0.3.1-mc26.51] - 2026-09-23
 
-> **First release on the MC 26.40 line, branched from `v0.3.1-mc26.20`.**
-
-> **Hotfix updated September 20, 2026.** Reinstall `v0.3.1-mc26.40` to receive the fixes below. Existing MC 26.40 recordings remain compatible; no re-recording or format conversion is required for these fixes.
+> **First release on the MC 26.51 line, branched from `v0.3.1-mc26.40`.**
 
 ### Added
 
@@ -219,8 +217,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.40...HEAD
-[0.3.1-mc26.40]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.20...v0.3.1-mc26.40
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.51...HEAD
+[0.3.1-mc26.51]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.20...v0.3.1-mc26.51
 [0.3.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.20...v0.3.1-mc26.20
 [0.3.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.20...v0.3.0-mc26.20
 [0.2.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.20...v0.2.1-mc26.20
