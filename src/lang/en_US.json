@@ -245,6 +245,7 @@
                 "resolution": "Resolution",
                 "ssaa": "SSAA",
                 "warmupFrames": "Warm-up frames",
+                "convergenceFrames": "Convergence frames",
                 "summary": "OUTPUT SUMMARY",
                 "timelineSummary": "Timeline",
                 "captureSummary": "Capture",
