@@ -3,6 +3,7 @@
 #include "playback/editor/graphics/D3D12Compat.h"
 
 #include <Windows.h>
+#include <cstdint>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
@@ -23,8 +24,9 @@ inline constexpr GUID  SwapChainQueueGuid{
     {0xa4, 0x4b, 0x86, 0x73, 0xd1, 0x5d, 0x7b, 0x2f}
 };
 
-[[nodiscard]] bool isTimelineRenderingEnabled();
-[[nodiscard]] bool isD3D12RendererActive();
+[[nodiscard]] bool     isTimelineRenderingEnabled();
+[[nodiscard]] bool     isD3D12RendererActive();
+[[nodiscard]] uint32_t offlineSubmitHookMask() noexcept;
 
 [[nodiscard]] bool hookD3D12(bool enable);
 
