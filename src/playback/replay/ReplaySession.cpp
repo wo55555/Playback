@@ -1515,7 +1515,8 @@ void ReplaySession::applyRecordedBlockRegistry() {
 
         size_t registered = 0;
         for (auto const& [name, tag] : properties) {
-            // 原版方块本地已经注册过了；只有录制资源包带来的自定义方块才需要在这里注册。
+            // The vanilla blocks have already been registered locally; only custom blocks from recorded resource packs
+            // need to be registered here.
             if (registry.lookupByName(HashedString{name}, false)) continue;
 
             auto const* definition = definitions->tryGetBlockDefinition(name);
