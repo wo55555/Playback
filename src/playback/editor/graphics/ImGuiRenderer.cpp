@@ -229,6 +229,7 @@ struct ImGuiRenderer::Impl {
     std::mutex                              captureMutex;
     std::optional<visuals::FrameTapSession> captureSession;
     uint32_t                                exportCaptureCapacity{};
+    uint32_t                                exportCaptureDownsample{1};
     uint32_t                                exportCaptureReopenCapacity{};
     EditorContext*                          editorContext{};
     IDXGISwapChain*                         swapChain{};
@@ -852,7 +853,8 @@ struct ImGuiRenderer::Impl {
         std::scoped_lock lock(captureMutex);
         if (exportCaptureReopenCapacity == 0 || captureSession) return;
         visuals::FrameTapSession session;
-        if (frameTap.open({exportCaptureReopenCapacity, false}, session) != visuals::FrameTapOpenResult::Opened) {
+        if (frameTap.open({exportCaptureReopenCapacity, exportCaptureDownsample, false}, session)
+            != visuals::FrameTapOpenResult::Opened) {
             return;
         }
         captureSession              = session;
@@ -1123,7 +1125,7 @@ void ImGuiRenderer::requestReplayThumbnailCapture() {
         mImpl->captureSession.reset();
     }
     visuals::FrameTapSession session;
-    auto const               opened = mImpl->frameTap.open({1, true}, session);
+    auto const               opened = mImpl->frameTap.open({1, 1, true}, session);
     if (opened != visuals::FrameTapOpenResult::Opened) return;
     visuals::FrameTicket const ticket{0, 0, 1};
     if (mImpl->frameTap.tryArm(session, ticket) != visuals::FrameTapArmResult::Armed) {
@@ -1152,8 +1154,8 @@ bool ImGuiRenderer::saveReplayThumbnail(std::filesystem::path const& output) {
     return saved;
 }
 
-bool ImGuiRenderer::openExportCapture(uint32_t capacity) {
-    if (capacity == 0) return false;
+bool ImGuiRenderer::openExportCapture(uint32_t capacity, uint32_t downsample) {
+    if (capacity == 0 || downsample == 0) return false;
     std::scoped_lock lock(mImpl->captureMutex);
     if (mImpl->captureSession) {
         mImpl->frameTap.cancel(*mImpl->captureSession);
@@ -1161,9 +1163,11 @@ bool ImGuiRenderer::openExportCapture(uint32_t capacity) {
         mImpl->captureSession.reset();
     }
     visuals::FrameTapSession session;
-    if (mImpl->frameTap.open({capacity, false}, session) != visuals::FrameTapOpenResult::Opened) return false;
-    mImpl->captureSession        = session;
-    mImpl->exportCaptureCapacity = capacity;
+    if (mImpl->frameTap.open({capacity, downsample, false}, session) != visuals::FrameTapOpenResult::Opened)
+        return false;
+    mImpl->captureSession          = session;
+    mImpl->exportCaptureCapacity   = capacity;
+    mImpl->exportCaptureDownsample = downsample;
     return true;
 }
 
@@ -1171,6 +1175,7 @@ void ImGuiRenderer::closeExportCapture() {
     std::scoped_lock lock(mImpl->captureMutex);
     mImpl->exportCaptureReopenCapacity = 0;
     mImpl->exportCaptureCapacity       = 0;
+    mImpl->exportCaptureDownsample     = 1;
     if (!mImpl->captureSession) return;
     mImpl->frameTap.cancel(*mImpl->captureSession);
     mImpl->frameTap.close(*mImpl->captureSession);
