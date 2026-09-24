@@ -27,7 +27,9 @@ public:
 private:
     void workerLoop();
 
-    std::vector<std::thread>                       mThreads;
+    std::vector<std::thread> mThreads;
+    // One body pointer is shared with the pool, so concurrent callers have to take turns.
+    std::mutex                                     mRunMutex;
     std::mutex                                     mMutex;
     std::condition_variable                        mWake;
     std::condition_variable                        mDone;

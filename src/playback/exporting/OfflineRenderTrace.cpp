@@ -144,6 +144,8 @@ constexpr std::array EventNames{
     "SceneMarkerSet",
     "SceneMarkerCapture",
     "RenderKeepAlive",
+    "WriterStageStarve",
+    "WriterStageDepth",
 };
 static_assert(EventNames.size() == EventCount);
 
@@ -253,6 +255,8 @@ constexpr bool isSignificant(OfflineRenderTraceEvent event) noexcept {
     case OfflineRenderTraceEvent::SceneMarkerSet:
     case OfflineRenderTraceEvent::SceneMarkerCapture:
     case OfflineRenderTraceEvent::RenderKeepAlive:
+    case OfflineRenderTraceEvent::WriterStageStarve:
+    case OfflineRenderTraceEvent::WriterStageDepth:
         return true;
     default:
         return false;
@@ -582,7 +586,13 @@ bool writeCsv(
             "locks.\n"
             "# DriverCollect/DriverAdvance/WriterSubmit exit a=UINT64_MAX means no normal result (unwinding).\n"
             "# WriterQueue: object=FFmpeg impl,a=frame,b=queue size,c=capacity,d=action "
-            "(1=accepted after enqueue,2=backpressured,3=dequeued); size excludes the worker's current item.\n"
+            "(1=accepted after enqueue,2=backpressured,3=dequeued for normalize,4=enqueued for encode,"
+            "5=dequeued for encode); size excludes the current item of the stage that logged it. "
+            "Actions 1-3 report the submit queue, 4-5 the normalized queue.\n"
+            "# WriterStageStarve: object=FFmpeg impl,a=stage (1=normalize),b=frame,c=waited us,"
+            "d=1 when the wait was the encode queue being full rather than no input.\n"
+            "# WriterStageDepth: object=FFmpeg impl,a=frame,b=submit queue depth,c=encode queue depth,"
+            "d=submit capacity<<32|encode capacity; both depths are read under one lock at encode dequeue.\n"
             "# WriterWorkEnter/Exit: object=FFmpeg impl,b=frame,c=queue size at dequeue,d=capacity; "
             "exit a=1 only after successful pipe write and written-count increment, otherwise 0.\n"
             "# WriterNormalizeEnter/Exit,WriterPipeEnter/Exit,WriterLaunchEnter/Exit: object=FFmpeg impl,b=frame; "
