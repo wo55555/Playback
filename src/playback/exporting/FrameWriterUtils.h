@@ -3,6 +3,7 @@
 #include "FrameWorkerPool.h"
 
 #include "playback/visuals/FrameCaptureTypes.h"
+#include "playback/visuals/FramePixelBufferPool.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -85,7 +86,7 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
         !sameSize && !integerDownsample && frame.width >= targetWidth && frame.height >= targetHeight;
     if (!sameSize && !integerDownsample && !boxDownsample) return false;
 
-    std::vector<std::byte> output(static_cast<size_t>(targetBytes));
+    auto output = visuals::framePixelBufferPool().acquire(static_cast<size_t>(targetBytes));
     if (integerDownsample) {
         // Folding the swizzle into the box filter leaves the later packed copy as a plain memcpy per row.
         uint32_t const scale       = frame.width / targetWidth;
@@ -204,7 +205,8 @@ inline void copyPackedRgba(visuals::CapturedFrame const& frame, std::vector<uint
     frame.height      = targetHeight;
     frame.rowPitch    = static_cast<uint32_t>(targetRowPitch);
     frame.pixelFormat = visuals::FramePixelFormat::Rgba8;
-    frame.pixels      = std::move(output);
+    visuals::framePixelBufferPool().release(std::move(frame.pixels));
+    frame.pixels = std::move(output);
     return true;
 }
 
