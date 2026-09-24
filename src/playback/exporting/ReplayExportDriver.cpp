@@ -20,7 +20,8 @@ namespace playback::exporting {
 
 namespace {
 
-constexpr uint32_t ExportCaptureCapacity = 4;
+// Deeper than the in-flight capture count so a full writer queue does not stall the next arm.
+constexpr uint32_t ExportCaptureCapacity = 6;
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
@@ -152,6 +153,11 @@ bool ReplayExportDriver::start(
     mNextFrameIndex = 0;
     mWaitStartedAt  = {};
     mWaitReason.reset();
+    mWaitMicros.fill(0);
+    mWaitHits.fill(0);
+    mWaitChargedAt = {};
+    mWaitCharged.reset();
+    mDriverTicks          = 0;
     auto const profile    = renderDiagnosticProfile();
     auto const submitMask = editor::graphics::offlineSubmitHookMask();
     getLogger().info(
@@ -172,7 +178,8 @@ bool ReplayExportDriver::start(
     setExportActivityActive(true);
     mPhase = Phase::Rendering;
     getLogger().info(
-        "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}",
+        "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
+        "warmup={}, convergence={}",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -181,13 +188,16 @@ bool ReplayExportDriver::start(
         mPlan->settings.frameRate.denominator,
         mPlan->settings.resolutionX,
         mPlan->settings.resolutionY,
-        mPlan->settings.ssaa
+        mPlan->settings.ssaa,
+        mPlan->settings.warmupFrames,
+        mPlan->settings.convergenceFrames
     );
     return true;
 }
 
 void ReplayExportDriver::tick() {
     if (!isActive()) return;
+    ++mDriverTicks;
     OfflineRenderTraceScope tickTrace(
         OfflineRenderTraceEvent::DriverTickEnter,
         OfflineRenderTraceEvent::DriverTickExit,
@@ -307,6 +317,9 @@ void ReplayExportDriver::tick() {
         }
         case OfflineRenderStepResult::FrameSubmitted:
             recordWait(OfflineRenderWaitReason::None);
+            accumulateWait(std::chrono::steady_clock::now());
+            mWaitCharged = OfflineRenderWaitReason::None;
+            ++mWaitHits[static_cast<size_t>(OfflineRenderWaitReason::None)];
             mWaitStartedAt = {};
             mWaitReason.reset();
             ++mNextFrameIndex;
@@ -404,6 +417,9 @@ ReplayExportDriver::SubmissionResult ReplayExportDriver::collectDownloads() {
 
 void ReplayExportDriver::waitFor(OfflineRenderTraceScope& trace, OfflineRenderWaitReason reason, uint64_t result) {
     auto const now = std::chrono::steady_clock::now();
+    accumulateWait(now);
+    mWaitCharged = reason;
+    ++mWaitHits[static_cast<size_t>(reason)];
     // Holds from the first waiting frame, so the renderer keeps drawing for the whole wait.
     if (!mWaitReason || *mWaitReason != reason) {
         mWaitReason    = reason;
@@ -416,6 +432,63 @@ void ReplayExportDriver::waitFor(OfflineRenderTraceScope& trace, OfflineRenderWa
     }
     recordWait(reason);
     trace.result(result);
+}
+
+void ReplayExportDriver::reportWaitProfile() const {
+    if (mDriverTicks == 0) return;
+    static constexpr std::array<char const*, WaitReasonCount> names{
+        "None",
+        "WriterBackpressure",
+        "CaptureCapacity",
+        "ReplayPreparation",
+        "DimensionTransition",
+        "UiStable",
+        "NativeTick",
+        "WarmupCpu",
+        "WarmupBudget",
+        "WarmupUi",
+        "CaptureArm",
+        "CpuSample",
+        "CapturePending",
+        "CollectPending",
+        "Draining",
+        "Failed",
+        "Convergence",
+        "Unknown",
+    };
+    uint64_t total = 0;
+    for (auto const micros : mWaitMicros) total += micros;
+    auto const frames = std::max<uint64_t>(mNextFrameIndex, 1);
+
+    std::string breakdown;
+    for (size_t index = 0; index < WaitReasonCount; ++index) {
+        if (mWaitMicros[index] == 0 && mWaitHits[index] == 0) continue;
+        if (!breakdown.empty()) breakdown += ", ";
+        breakdown += fmt::format(
+            "{}={:.1f}ms ({:.2f}/frame, {} hits)",
+            names[index],
+            static_cast<double>(mWaitMicros[index]) / 1000.0,
+            static_cast<double>(mWaitMicros[index]) / 1000.0 / static_cast<double>(frames),
+            mWaitHits[index]
+        );
+    }
+    getLogger().info(
+        "Export wait profile: frames={}, driverTicks={} ({:.2f}/frame), totalMs={:.0f} ({:.2f}/frame); {}",
+        mNextFrameIndex,
+        mDriverTicks,
+        static_cast<double>(mDriverTicks) / static_cast<double>(frames),
+        static_cast<double>(total) / 1000.0,
+        static_cast<double>(total) / 1000.0 / static_cast<double>(frames),
+        breakdown
+    );
+}
+
+void ReplayExportDriver::accumulateWait(std::chrono::steady_clock::time_point now) {
+    if (mWaitCharged && mWaitChargedAt != std::chrono::steady_clock::time_point{}) {
+        mWaitMicros[static_cast<size_t>(*mWaitCharged)] +=
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - mWaitChargedAt).count());
+    }
+    mWaitChargedAt = now;
 }
 
 void ReplayExportDriver::recordWait(OfflineRenderWaitReason reason) const noexcept {
@@ -484,6 +557,7 @@ void ReplayExportDriver::restoreReplayState() {
 }
 
 void ReplayExportDriver::closeCapture(bool cancelled) {
+    reportWaitProfile();
     setOfflineRenderActivityActive(false);
     if (mRenderBoundary) {
         if (cancelled) mRenderBoundary->cancel();
