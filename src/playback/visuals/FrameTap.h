@@ -31,6 +31,8 @@ enum class FrameTapArmResult : uint8_t { Armed, Busy, Backpressured, Inactive, I
 
 struct FrameTapConfig {
     uint32_t capacity{4};
+    // Downscaling on the GPU keeps the readback at output size instead of the supersampled size.
+    uint32_t downsample{1};
     bool     oneShot{};
 };
 
@@ -75,6 +77,7 @@ public:
     [[nodiscard]] bool     hasArmedCapture() const;
     [[nodiscard]] bool     requiresRenderPass() const;
     [[nodiscard]] uint32_t captureCapacity() const;
+    [[nodiscard]] uint32_t captureDownsample() const;
 
     // Graphics backends call these methods; they never block the Present thread.
     [[nodiscard]] std::optional<FrameTapBackendCapture> beginCapture();
