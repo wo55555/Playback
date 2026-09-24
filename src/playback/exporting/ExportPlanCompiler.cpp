@@ -12,11 +12,11 @@ namespace {
 constexpr int64_t  ReplayTicksPerSecond = 20;
 constexpr int64_t  MaxFrameRateValue    = 1'000'000;
 constexpr uint64_t MaxExportFrames      = 1'000'000;
-constexpr uint32_t MaxResolution        = 16'384;
-constexpr uint32_t MaxSsaa              = 2;
+constexpr uint32_t MaxResolution        = MaxExportResolution;
+constexpr uint32_t MaxSsaa              = MaxExportSsaa;
 constexpr uint32_t MaxWarmupFrames      = 3'600;
 constexpr uint32_t MaxConvergenceFrames = 240;
-constexpr uint64_t MaxFramePixels       = (512ull * 1024 * 1024) / 4;
+constexpr uint64_t MaxFramePixels       = MaxExportPixels;
 
 [[nodiscard]] int64_t gcd(int64_t left, int64_t right) {
     while (right != 0) {

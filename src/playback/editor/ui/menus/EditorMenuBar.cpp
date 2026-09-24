@@ -472,11 +472,11 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         std::string const custom          = "playback.refactorEditor.export.custom"_tr();
         char const*       fpsOptions[]    = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
         constexpr int     fpsValues[]     = {30, 60, 120};
-        char const*       ssaaOptions[]   = {"1x", "2x"};
+        char const*       ssaaOptions[]   = {"1x", "2x", "4x"};
         std::string const mp4Format       = "playback.refactorEditor.export.mp4"_tr();
         std::string const pngFormat       = "playback.refactorEditor.export.pngSequence"_tr();
         char const*       formatOptions[] = {mp4Format.c_str(), pngFormat.c_str()};
-        mExportSsaa                       = std::clamp(mExportSsaa, 0, 1);
+        mExportSsaa                       = std::clamp(mExportSsaa, 0, 2);
         int const maximumReplayTick       = std::max(state.totalTicks, 0);
         // Fixed label column aligns every value; the capped value column stops inputs spanning the dialog.
         float const labelWidth = std::clamp(exportDialogSize.x * 0.26f, 96.0f * uiScale, 150.0f * uiScale);
@@ -600,14 +600,26 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             inputClampedInt("##export-height", mExportHeight, 16, 16384, fieldWidth);
 
             propertyLabel("playback.refactorEditor.export.ssaa"_tr().c_str());
+            int ssaaDisabledMask = 0;
+            for (int i = 0; i < IM_ARRAYSIZE(ssaaOptions); ++i) {
+                if (!exporting::supersampleFits(
+                        static_cast<uint32_t>(mExportWidth),
+                        static_cast<uint32_t>(mExportHeight),
+                        1u << i
+                    ))
+                    ssaaDisabledMask |= 1 << i;
+            }
+            // Shrinking the output can strand the selection on a level that no longer fits.
+            while (mExportSsaa > 0 && ((ssaaDisabledMask >> mExportSsaa) & 1) != 0) --mExportSsaa;
             if (segmented(
                     "##export-ssaa",
                     ssaaOptions,
                     IM_ARRAYSIZE(ssaaOptions),
                     mExportSsaa,
-                    fieldWidth * 2.0f + style.ItemSpacing.x
+                    fieldWidth * 2.0f + style.ItemSpacing.x,
+                    ssaaDisabledMask
                 ))
-                mExportSsaa = std::clamp(mExportSsaa, 0, 1);
+                mExportSsaa = std::clamp(mExportSsaa, 0, 2);
 
             propertyLabel("playback.refactorEditor.export.warmupFrames"_tr().c_str());
             inputClampedInt("##export-warmup", mExportWarmupFrames, 0, 3600, fieldWidth);
@@ -617,19 +629,22 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             ImGui::EndTable();
         }
 
-        int const      safeSsaaIndex = std::clamp(mExportSsaa, 0, 1);
+        int const      safeSsaaIndex = std::clamp(mExportSsaa, 0, 2);
         uint32_t const ssaaValue     = 1u << safeSsaaIndex;
         bool const     validOutput   = mExportName.front() != '\0' && mExportDirectory.front() != '\0';
         bool const     validTimeline =
             mExportStartTick >= 0 && mExportEndTick > mExportStartTick && mExportEndTick <= maximumReplayTick;
-        bool const validFps = mFps >= 1 && mFps <= 240;
-        bool const validResolution =
-            mExportWidth >= 16 && mExportHeight >= 16 && mExportWidth <= 16384 && mExportHeight <= 16384
-            && static_cast<uint64_t>(mExportWidth) * ssaaValue <= 16384
-            && static_cast<uint64_t>(mExportHeight) * ssaaValue <= 16384
-            && static_cast<uint64_t>(mExportWidth) * mExportHeight <= 134217728ull
-            && static_cast<uint64_t>(mExportWidth) * mExportHeight * ssaaValue * ssaaValue <= 134217728ull;
-        bool const validCapture     = mExportSsaa >= 0 && mExportSsaa <= 1 && mExportWarmupFrames >= 0
+        bool const validFps         = mFps >= 1 && mFps <= 240;
+        bool const validResolution  = mExportWidth >= 16 && mExportHeight >= 16
+                                   && static_cast<uint32_t>(mExportWidth) <= exporting::MaxExportResolution
+                                   && static_cast<uint32_t>(mExportHeight) <= exporting::MaxExportResolution
+                                   && static_cast<uint64_t>(mExportWidth) * mExportHeight <= exporting::MaxExportPixels
+                                   && exporting::supersampleFits(
+                                          static_cast<uint32_t>(mExportWidth),
+                                          static_cast<uint32_t>(mExportHeight),
+                                          ssaaValue
+                                  );
+        bool const validCapture     = mExportSsaa >= 0 && mExportSsaa <= 2 && mExportWarmupFrames >= 0
                                    && mExportWarmupFrames <= 3600 && mExportConvergenceFrames >= 0
                                    && mExportConvergenceFrames <= 240;
         bool const formatAvailable  = mExportFormat != 0 || capabilities.ffmpegVideoExport;

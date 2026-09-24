@@ -20,6 +20,19 @@ struct FrameRate {
 
 enum class ExportFormat : uint8_t { Mp4Video, PngSequence };
 
+constexpr uint32_t MaxExportResolution = 16'384;
+constexpr uint32_t MaxExportSsaa       = 4;
+constexpr uint64_t MaxExportPixels     = (512ull * 1024 * 1024) / 4;
+
+// The supersampled surface, not the output, is what the renderer and the capture path have to hold.
+[[nodiscard]] constexpr bool supersampleFits(uint32_t width, uint32_t height, uint32_t ssaa) {
+    if (ssaa == 0 || width == 0 || height == 0) return false;
+    auto const scaledWidth  = static_cast<uint64_t>(width) * ssaa;
+    auto const scaledHeight = static_cast<uint64_t>(height) * ssaa;
+    return scaledWidth <= MaxExportResolution && scaledHeight <= MaxExportResolution
+        && scaledWidth * scaledHeight <= MaxExportPixels;
+}
+
 struct ExportSettings {
     std::filesystem::path outputDirectory{"mods/playback/exports"};
     std::string           outputName{"replay-export"};
