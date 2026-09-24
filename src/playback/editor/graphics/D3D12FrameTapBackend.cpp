@@ -547,7 +547,7 @@ struct D3D12FrameTapBackend::Impl {
         auto const bytes  = copiedBytes.exchange(0);
         if (frames == 0) return;
         double const copyMs = static_cast<double>(copyUs) / 1000.0;
-        getLogger().info(
+        getLogger().debug(
             "Capture readback profile: frames={}, bytesPerFrame={}, gpuDownsample={}x, fallbacks={}, "
             "copyMs={:.1f} ({:.2f}/frame, {:.2f} GB/s), fenceWaitMs={:.1f}",
             frames,

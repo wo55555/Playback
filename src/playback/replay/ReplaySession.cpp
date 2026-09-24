@@ -2936,7 +2936,7 @@ bool ReplaySession::advanceReplayReader(bool stopAtEnd) {
         if (stopAtEnd) {
             mIsPaused                = true;
             mPlaybackTickAccumulator = 0.0f;
-            getLogger().info("Replay finished and paused at tick {}", mCurrentTick);
+            getLogger().debug("Replay finished and paused at tick {}", mCurrentTick);
         }
         return false;
     }
@@ -2961,7 +2961,7 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
             if (stopAtEnd) {
                 mIsPaused                = true;
                 mPlaybackTickAccumulator = 0.0f;
-                getLogger().info("Replay finished and paused at tick {}", mCurrentTick);
+                getLogger().debug("Replay finished and paused at tick {}", mCurrentTick);
             }
             return false;
         }
