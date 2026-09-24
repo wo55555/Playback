@@ -105,6 +105,13 @@ std::string experimentBits(std::vector<bool> const& values) {
 
 bool renderDiagnosticsEnabled() noexcept { return renderDiagnosticProfile().enabled; }
 
+bool rayTracingActive() noexcept try {
+    auto* const builder = renderDragonFrameBuilder();
+    return builder && builder->initialized() && builder->isRayTracingEnabled();
+} catch (...) {
+    return false;
+}
+
 RenderDiagnosticProfile renderDiagnosticProfile() noexcept {
     auto const& config = Playback::getInstance().getConfig();
     return selectRenderDiagnosticProfile(config.renderDiagnostics, config.renderDiagnosticExperiment);
