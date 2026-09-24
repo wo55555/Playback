@@ -33,6 +33,10 @@ enum class RenderDiagnosticStage : uint64_t {
 };
 
 [[nodiscard]] bool renderDiagnosticsEnabled() noexcept;
+
+// Only a ray-traced pipeline accumulates across frames, so raster shaders need no convergence passes at all.
+[[nodiscard]] bool rayTracingActive() noexcept;
+
 enum class RenderDiagnosticProbe { None, ViewInputs, Clock, NativeSubmit, CaptureLineage, SceneCorrespondence };
 
 struct RenderDiagnosticProfile {
