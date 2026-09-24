@@ -131,6 +131,8 @@ enum class OfflineRenderTraceEvent : uint8_t {
     SceneMarkerSet,
     SceneMarkerCapture,
     RenderKeepAlive,
+    WriterStageStarve,
+    WriterStageDepth,
     Count,
 };
 
@@ -153,6 +155,7 @@ enum class OfflineRenderWaitReason : uint8_t {
     Failed,
     Convergence,
     Unknown,
+    Count,
 };
 
 [[nodiscard]] bool     beginOfflineRenderTrace(std::filesystem::path const& path) noexcept;
