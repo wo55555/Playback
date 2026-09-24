@@ -679,7 +679,7 @@ struct FfmpegVideoWriter::Impl {
                 state = FrameWriterState::Cancelled;
             }
             auto const samples = std::max<uint64_t>(1, depthSamples);
-            getLogger().info(
+            getLogger().debug(
                 "Export writer stage profile: frames={}, submitQueue(cap={}, avg={:.2f}, peak={}), "
                 "encodeQueue(cap={}, avg={:.2f}, peak={}), normalizeStarvedMs={}, normalizeBlockedMs={}, "
                 "encodeStarvedMs={}",
