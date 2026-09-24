@@ -3,6 +3,7 @@
 #include "ExportCoordinator.h"
 #include "OfflineRenderBoundary.h"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -63,6 +64,9 @@ private:
     void                      restoreReplayState();
     void                      closeCapture(bool cancelled);
     void                      recordWait(OfflineRenderWaitReason reason) const noexcept;
+    // Charges elapsed time to whichever reason the driver was parked on, so a frame's cost splits by cause.
+    void accumulateWait(std::chrono::steady_clock::time_point now);
+    void reportWaitProfile() const;
 
     ExportCoordinator&                     mCoordinator;
     replay::ReplaySession&                 mReplay;
@@ -73,6 +77,12 @@ private:
     uint64_t                               mNextFrameIndex{};
     std::chrono::steady_clock::time_point  mWaitStartedAt{};
     std::optional<OfflineRenderWaitReason> mWaitReason;
+    static constexpr size_t                WaitReasonCount = static_cast<size_t>(OfflineRenderWaitReason::Count);
+    std::array<uint64_t, WaitReasonCount>  mWaitMicros{};
+    std::array<uint64_t, WaitReasonCount>  mWaitHits{};
+    std::chrono::steady_clock::time_point  mWaitChargedAt{};
+    std::optional<OfflineRenderWaitReason> mWaitCharged;
+    uint64_t                               mDriverTicks{};
     Phase                                  mPhase{Phase::Idle};
 };
 
