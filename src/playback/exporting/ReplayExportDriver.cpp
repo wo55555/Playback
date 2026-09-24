@@ -130,7 +130,7 @@ bool ReplayExportDriver::start(
                 mPlan->settings.warmupFrames,
                 offlineRenderClockDiagnosticHookMask()
             );
-            getLogger().info("Export render trace enabled: {}", tracePath);
+            getLogger().info("[RenderDiag] export render trace={}", tracePath);
         } else {
             getLogger().warn("Export render trace could not be opened: {}", tracePath);
         }
@@ -157,24 +157,23 @@ bool ReplayExportDriver::start(
     mWaitHits.fill(0);
     mWaitChargedAt = {};
     mWaitCharged.reset();
-    mDriverTicks          = 0;
-    auto const profile    = renderDiagnosticProfile();
-    auto const submitMask = editor::graphics::offlineSubmitHookMask();
-    getLogger().info(
-        "Render diagnostic profile: configured={}, known={}, enabled={}, probe={}, actualMask={}, "
-        "expectedMask={}, traceOpen={}, submitRequestedMask={}, submitActualMask={}; callback hits unverified",
-        Playback::getInstance().getConfig().renderDiagnosticExperiment,
-        profile.known,
-        profile.enabled,
-        static_cast<int>(profile.probe),
-        offlineRenderClockDiagnosticHookMask(),
-        profile.hookMask(),
-        isOfflineRenderTraceActive(),
-        profile.submitHookMask(),
-        submitMask
-    );
-    if (profile.enabled && !profile.known)
-        getLogger().warn("Unknown render diagnostic experiment; using observation only");
+    mDriverTicks       = 0;
+    auto const profile = renderDiagnosticProfile();
+    if (profile.enabled) {
+        getLogger().info(
+            "[RenderDiag] profile configured={}, known={}, probe={}, actualMask={}, expectedMask={}, traceOpen={}, "
+            "submitRequestedMask={}, submitActualMask={}",
+            Playback::getInstance().getConfig().renderDiagnosticExperiment,
+            profile.known,
+            static_cast<int>(profile.probe),
+            offlineRenderClockDiagnosticHookMask(),
+            profile.hookMask(),
+            isOfflineRenderTraceActive(),
+            profile.submitHookMask(),
+            editor::graphics::offlineSubmitHookMask()
+        );
+        if (!profile.known) getLogger().warn("Unknown render diagnostic experiment; using observation only");
+    }
     setExportActivityActive(true);
     mPhase = Phase::Rendering;
     getLogger().info(
@@ -223,6 +222,7 @@ void ReplayExportDriver::tick() {
             restoreReplayState();
             setExportActivityActive(false);
             mPhase = Phase::Completed;
+            getLogger().info("Video export completed: {} frames written to {}", mNextFrameIndex, mPlan->outputPath);
         } else if (coordinatorStatus.state == ExportState::Cancelled) {
             restoreReplayState();
             setExportActivityActive(false);
@@ -472,7 +472,7 @@ void ReplayExportDriver::reportWaitProfile() const {
             mWaitHits[index]
         );
     }
-    getLogger().info(
+    getLogger().debug(
         "Export wait profile: frames={}, driverTicks={} ({:.2f}/frame), totalMs={:.0f} ({:.2f}/frame); {}",
         mNextFrameIndex,
         mDriverTicks,
@@ -523,7 +523,6 @@ ExportError ReplayExportDriver::mapBoundaryError(OfflineRenderBoundaryError erro
 }
 
 void ReplayExportDriver::finish() {
-    getLogger().info("Captured {} video export frames; finalizing output", mNextFrameIndex);
     closeCapture(false);
     if (!mCoordinator.finish()) {
         auto const status = mCoordinator.status();

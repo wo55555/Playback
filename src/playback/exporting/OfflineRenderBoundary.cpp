@@ -124,7 +124,7 @@ void OfflineRenderBoundary::close() {
         double const prepareMs  = static_cast<double>(mPrepareMicros) / 1000.0;
         double const convergeMs = static_cast<double>(mConvergenceMicros) / 1000.0;
         double const captureMs  = static_cast<double>(mCaptureMicros) / 1000.0;
-        Playback::getInstance().getSelf().getLogger().info(
+        Playback::getInstance().getSelf().getLogger().debug(
             "Offline render frame profile: frames={}, convergencePasses={} ({:.2f}/frame), "
             "prepareMs={:.0f} ({:.2f}/frame), convergenceMs={:.0f} ({:.2f}/frame), captureMs={:.0f} ({:.2f}/frame)",
             frames,

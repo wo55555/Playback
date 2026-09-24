@@ -174,7 +174,6 @@ struct D3D12Downsampler::Impl {
             return false;
         }
         descriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        getLogger().info("Downsample compute pipeline ready");
         return true;
     }
 };
