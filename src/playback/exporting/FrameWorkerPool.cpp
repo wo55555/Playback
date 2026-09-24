@@ -82,6 +82,13 @@ void FrameWorkerPool::runRows(uint32_t rows, std::function<void(uint32_t, uint32
         return;
     }
 
+    // A second caller runs its own rows rather than waiting, so the two pipeline stages never serialize.
+    std::unique_lock runLock(mRunMutex, std::try_to_lock);
+    if (!runLock.owns_lock()) {
+        body(0, rows);
+        return;
+    }
+
     {
         std::scoped_lock lock(mMutex);
         mBody      = &body;
