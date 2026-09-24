@@ -31,7 +31,7 @@ public:
     [[nodiscard]] bool saveReplayThumbnail(std::filesystem::path const& output) override;
 
     // Present-time export capture; the back buffer holds the overlay-free world, so no MSAA or resize is needed.
-    [[nodiscard]] bool                                  openExportCapture(uint32_t capacity);
+    [[nodiscard]] bool                                  openExportCapture(uint32_t capacity, uint32_t downsample);
     void                                                closeExportCapture();
     [[nodiscard]] bool                                  armExportCapture(visuals::FrameTicket const& ticket);
     [[nodiscard]] std::optional<visuals::CapturedFrame> collectExportFrame();
