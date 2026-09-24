@@ -3,13 +3,18 @@
 #include "playback/editor/graphics/D3D12Compat.h"
 
 #include "playback/Playback.h"
+#include "playback/editor/graphics/D3D12Downsampler.h"
+#include "playback/exporting/FrameWorkerPool.h"
 #include "playback/exporting/OfflineRenderTrace.h"
+#include "playback/visuals/FramePixelBufferPool.h"
 
 #include <Windows.h>
 #include <wrl/client.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <exception>
@@ -59,6 +64,7 @@ struct D3D12FrameTapBackend::Impl {
         ComPtr<ID3D12GraphicsCommandList>     commandList;
         ComPtr<ID3D12Resource>                readback;
         ComPtr<ID3D12Resource>                exportTexture;
+        ComPtr<ID3D12Resource>                downsampleTexture;
         ComPtr<ID3D12Fence>                   fence;
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT    footprint{};
         uint64_t                              byteCount{};
@@ -89,6 +95,14 @@ struct D3D12FrameTapBackend::Impl {
     HANDLE                  fenceEvent{};
     HANDLE                  stopEvent{};
     bool                    stopping{};
+    D3D12Downsampler        downsampler;
+    std::atomic_uint32_t    downsampleFactorUsed{1};
+    std::atomic_uint32_t    downsampleFallbacks{};
+    // Readback cost is invisible to the writer stage profile because it happens before submission.
+    std::atomic_uint64_t fenceWaitMicros{};
+    std::atomic_uint64_t copyMicros{};
+    std::atomic_uint64_t copiedBytes{};
+    std::atomic_uint32_t copiedFrames{};
 
     bool startWorker() {
         if (worker.joinable()) return true;
@@ -263,6 +277,40 @@ struct D3D12FrameTapBackend::Impl {
         return true;
     }
 
+    bool prepareDownsampleTexture(Slot& slot, ID3D12Device* device, D3D12_RESOURCE_DESC const& targetDesc) {
+        auto const existing = slot.downsampleTexture ? slot.downsampleTexture->GetDesc() : D3D12_RESOURCE_DESC{};
+        if (slot.downsampleTexture && existing.Width == targetDesc.Width && existing.Height == targetDesc.Height
+            && existing.Format == targetDesc.Format)
+            return true;
+        slot.downsampleTexture.Reset();
+
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type             = D3D12_HEAP_TYPE_DEFAULT;
+        heap.CreationNodeMask = 1;
+        heap.VisibleNodeMask  = 1;
+
+        auto desc                  = targetDesc;
+        desc.Flags                 = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        HRESULT const createResult = device->CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            nullptr,
+            IID_PPV_ARGS(&slot.downsampleTexture)
+        );
+        if (FAILED(createResult)) {
+            getLogger().error(
+                "Downsample texture allocation failed (hr=0x{:08X}, size={}x{})",
+                static_cast<uint32_t>(createResult),
+                targetDesc.Width,
+                targetDesc.Height
+            );
+            return false;
+        }
+        return true;
+    }
+
     bool ensureSubmissionFence(ID3D12Device* device) {
         if (submissionFence && submissionDevice.Get() == device) return true;
         if (std::ranges::any_of(slots, [](Slot const& slot) { return slot.state != SlotState::Free; })) return false;
@@ -350,7 +398,14 @@ struct D3D12FrameTapBackend::Impl {
                     reusable = false;
                 } else {
                     HANDLE const events[]{fenceEvent, stopEvent};
-                    DWORD const  wait = WaitForMultipleObjects(2, events, FALSE, ReadbackWaitTimeoutMs);
+                    auto const   waitStart = std::chrono::steady_clock::now();
+                    DWORD const  wait      = WaitForMultipleObjects(2, events, FALSE, ReadbackWaitTimeoutMs);
+                    fenceWaitMicros.fetch_add(
+                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                  std::chrono::steady_clock::now() - waitStart
+                        )
+                                                  .count())
+                    );
                     if (wait == WAIT_OBJECT_0 + 1) return;
                     if (wait != WAIT_OBJECT_0) {
                         frameTap.fail(capture, FrameTapError::FenceFailed, "Timed out waiting for a D3D12 frame fence");
@@ -418,13 +473,31 @@ struct D3D12FrameTapBackend::Impl {
                         frameTap.fail(capture, FrameTapError::MapFailed, "D3D12 captured frame is too large");
                         reusable = false;
                     } else {
-                        frame.pixels.resize(static_cast<size_t>(packedBytes));
-                        for (uint32_t y = 0; y < height; ++y) {
-                            auto const* source = static_cast<std::byte const*>(mapped) + footprint.Offset
-                                               + static_cast<size_t>(y) * footprint.Footprint.RowPitch;
-                            auto*       target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;
-                            std::memcpy(target, source, frame.rowPitch);
-                        }
+                        frame.pixels = visuals::framePixelBufferPool().acquire(static_cast<size_t>(packedBytes));
+                        // Reading back from uncached GPU-visible memory is bandwidth bound, so the rows are split.
+                        auto const*                                   base = static_cast<std::byte const*>(mapped);
+                        auto* const                                   destination = frame.pixels.data();
+                        auto const                                    rowBytes    = frame.rowPitch;
+                        auto const                                    sourcePitch = footprint.Footprint.RowPitch;
+                        auto const                                    sourceBase  = footprint.Offset;
+                        std::function<void(uint32_t, uint32_t)> const copyRows    = [&](uint32_t firstRow,
+                                                                                        uint32_t lastRow) {
+                            for (uint32_t y = firstRow; y < lastRow; ++y) {
+                                auto const* source = base + sourceBase + static_cast<size_t>(y) * sourcePitch;
+                                auto*       target = destination + static_cast<size_t>(y) * rowBytes;
+                                std::memcpy(target, source, rowBytes);
+                            }
+                        };
+                        auto const copyStart = std::chrono::steady_clock::now();
+                        exporting::frameWorkerPool().runRows(height, copyRows);
+                        copyMicros.fetch_add(
+                            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                      std::chrono::steady_clock::now() - copyStart
+                            )
+                                                      .count())
+                        );
+                        copiedBytes.fetch_add(static_cast<uint64_t>(packedBytes));
+                        copiedFrames.fetch_add(1);
                         auto const captureId  = capture.captureId;
                         auto const frameIndex = capture.ticket.frameIndex;
                         exporting::recordCaptureLineage(
@@ -467,7 +540,29 @@ struct D3D12FrameTapBackend::Impl {
         }
     }
 
+    void reportReadbackProfile() {
+        auto const frames = copiedFrames.exchange(0);
+        auto const copyUs = copyMicros.exchange(0);
+        auto const waitUs = fenceWaitMicros.exchange(0);
+        auto const bytes  = copiedBytes.exchange(0);
+        if (frames == 0) return;
+        double const copyMs = static_cast<double>(copyUs) / 1000.0;
+        getLogger().info(
+            "Capture readback profile: frames={}, bytesPerFrame={}, gpuDownsample={}x, fallbacks={}, "
+            "copyMs={:.1f} ({:.2f}/frame, {:.2f} GB/s), fenceWaitMs={:.1f}",
+            frames,
+            bytes / frames,
+            downsampleFactorUsed.exchange(1),
+            downsampleFallbacks.exchange(0),
+            copyMs,
+            copyMs / frames,
+            copyUs == 0 ? 0.0 : static_cast<double>(bytes) / static_cast<double>(copyUs) / 1000.0,
+            static_cast<double>(waitUs) / 1000.0
+        );
+    }
+
     void reset(FrameTapError error, std::string message) {
+        reportReadbackProfile();
         std::vector<std::pair<ComPtr<ID3D12Fence>, uint64_t>> outstanding;
         {
             std::scoped_lock lock(mutex);
@@ -573,7 +668,24 @@ bool D3D12FrameTapBackend::capture(
         });
     }
     if (slot == mImpl->slots.end()) return false;
-    if (!mImpl->prepareSlot(*slot, device, sourceDesc)) {
+
+    uint32_t const requested    = mImpl->frameTap.captureDownsample();
+    auto           readbackDesc = sourceDesc;
+    uint32_t       factor       = 1;
+    if (requested >= 2 && sourceDesc.Width % requested == 0 && sourceDesc.Height % requested == 0
+        && mImpl->downsampler.ready(device)) {
+        readbackDesc.Width  = sourceDesc.Width / requested;
+        readbackDesc.Height = sourceDesc.Height / requested;
+        if (mImpl->prepareDownsampleTexture(*slot, device, readbackDesc)) {
+            factor = requested;
+        } else {
+            readbackDesc = sourceDesc;
+        }
+    }
+    if (requested >= 2 && factor == 1) mImpl->downsampleFallbacks.fetch_add(1);
+    mImpl->downsampleFactorUsed.store(factor);
+
+    if (!mImpl->prepareSlot(*slot, device, readbackDesc)) {
         mImpl->frameTap.failActive(
             FrameTapError::BackendUnavailable,
             "Unable to allocate D3D12 frame readback resources"
@@ -598,15 +710,60 @@ bool D3D12FrameTapBackend::capture(
         sourceState,
     };
 
+    auto transition =
+        [commandList](ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
+            if (before == after) return;
+            D3D12_RESOURCE_BARRIER barrier{};
+            barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Transition.pResource   = resource;
+            barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore = before;
+            barrier.Transition.StateAfter  = after;
+            commandList->ResourceBarrier(1, &barrier);
+        };
+
+    ID3D12Resource* copySource = source;
+    if (factor >= 2) {
+        auto const incoming = static_cast<D3D12_RESOURCE_STATES>(sourceState);
+        transition(source, incoming, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        bool const dispatched = mImpl->downsampler.dispatch(
+            commandList,
+            source,
+            slot->downsampleTexture.Get(),
+            static_cast<uint32_t>(slot->width),
+            slot->height,
+            factor
+        );
+        transition(source, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, incoming);
+        if (!dispatched) {
+            mImpl->frameTap.fail(*capture, FrameTapError::BackendUnavailable, "D3D12 downsample dispatch failed");
+            slot->state = Impl::SlotState::Retired;
+            return false;
+        }
+        transition(
+            slot->downsampleTexture.Get(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COPY_SOURCE
+        );
+        copySource = slot->downsampleTexture.Get();
+    }
+
     D3D12_TEXTURE_COPY_LOCATION destination{};
     destination.pResource       = slot->readback.Get();
     destination.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
     destination.PlacedFootprint = slot->footprint;
     D3D12_TEXTURE_COPY_LOCATION sourceLocation{};
-    sourceLocation.pResource        = source;
+    sourceLocation.pResource        = copySource;
     sourceLocation.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     sourceLocation.SubresourceIndex = 0;
     commandList->CopyTextureRegion(&destination, 0, 0, 0, &sourceLocation, nullptr);
+    if (factor >= 2) {
+        transition(
+            slot->downsampleTexture.Get(),
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+        );
+    }
 
     recordOfflineRenderTraceForEpoch(
         slot->traceEpoch,
@@ -692,6 +849,7 @@ bool D3D12FrameTapBackend::captureSubmitted(
             candidate.commandListClosed = false;
             candidate.readback.Reset();
             candidate.exportTexture.Reset();
+            candidate.downsampleTexture.Reset();
             candidate.fence.Reset();
             candidate.fenceValue = 0;
             candidate.state      = Impl::SlotState::Free;

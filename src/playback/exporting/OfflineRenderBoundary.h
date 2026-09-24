@@ -116,19 +116,28 @@ private:
     uint32_t                                       mConvergenceRendersDone{};
     bool                                           mConvergenceComplete{};
     std::optional<OfflineRenderClockToken>         mConvergenceToken{};
-    std::chrono::steady_clock::time_point          mRenderWaitStartedAt{};
-    std::chrono::steady_clock::time_point          mRenderWaitLastLoggedAt{};
-    std::chrono::steady_clock::time_point          mReplayTickRequestedAt{};
-    std::chrono::steady_clock::time_point          mWarmupStartedAt{};
-    std::chrono::steady_clock::time_point          mWarmupLastLoggedAt{};
-    bool                                           mTickGateOpen{};
-    bool                                           mTickGateSuspendedForDimension{};
-    bool                                           mTimelineInitialized{};
-    bool                                           mInitializationTickObserved{};
-    OfflineRenderBoundaryState                     mState{OfflineRenderBoundaryState::Closed};
-    OfflineRenderBoundaryError                     mError{OfflineRenderBoundaryError::None};
-    OfflineRenderWaitReason                        mLastWaitReason{OfflineRenderWaitReason::Unknown};
-    std::string                                    mMessage;
+    // Per-frame wall clock split three ways, because tick gating before the first convergence poll is neither.
+    std::chrono::steady_clock::time_point mFrameStartedAt{};
+    std::chrono::steady_clock::time_point mConvergenceStartedAt{};
+    std::chrono::steady_clock::time_point mConvergenceEndedAt{};
+    uint64_t                              mPrepareMicros{};
+    uint64_t                              mConvergenceMicros{};
+    uint64_t                              mCaptureMicros{};
+    uint64_t                              mConvergencePasses{};
+    uint64_t                              mProfiledFrames{};
+    std::chrono::steady_clock::time_point mRenderWaitStartedAt{};
+    std::chrono::steady_clock::time_point mRenderWaitLastLoggedAt{};
+    std::chrono::steady_clock::time_point mReplayTickRequestedAt{};
+    std::chrono::steady_clock::time_point mWarmupStartedAt{};
+    std::chrono::steady_clock::time_point mWarmupLastLoggedAt{};
+    bool                                  mTickGateOpen{};
+    bool                                  mTickGateSuspendedForDimension{};
+    bool                                  mTimelineInitialized{};
+    bool                                  mInitializationTickObserved{};
+    OfflineRenderBoundaryState            mState{OfflineRenderBoundaryState::Closed};
+    OfflineRenderBoundaryError            mError{OfflineRenderBoundaryError::None};
+    OfflineRenderWaitReason               mLastWaitReason{OfflineRenderWaitReason::Unknown};
+    std::string                           mMessage;
 };
 
 } // namespace playback::exporting

@@ -48,7 +48,7 @@ bool OfflineRenderBoundary::open(
     setOfflineRenderActivityActive(false);
     if (!isOfflineRenderClockInstalled()) return false;
     if (!mExecutor.open(settings, project, std::move(cameraFallback))) return false;
-    if (!editor::graphics::gImGuiRenderer.openExportCapture(capacity)) {
+    if (!editor::graphics::gImGuiRenderer.openExportCapture(capacity, settings.ssaa)) {
         editor::graphics::gImGuiRenderer.closeExportCapture();
         mExecutor.close();
         return false;
@@ -119,6 +119,33 @@ bool OfflineRenderBoundary::open(
 }
 
 void OfflineRenderBoundary::close() {
+    if (mProfiledFrames != 0) {
+        auto const   frames     = mProfiledFrames;
+        double const prepareMs  = static_cast<double>(mPrepareMicros) / 1000.0;
+        double const convergeMs = static_cast<double>(mConvergenceMicros) / 1000.0;
+        double const captureMs  = static_cast<double>(mCaptureMicros) / 1000.0;
+        Playback::getInstance().getSelf().getLogger().info(
+            "Offline render frame profile: frames={}, convergencePasses={} ({:.2f}/frame), "
+            "prepareMs={:.0f} ({:.2f}/frame), convergenceMs={:.0f} ({:.2f}/frame), captureMs={:.0f} ({:.2f}/frame)",
+            frames,
+            mConvergencePasses,
+            static_cast<double>(mConvergencePasses) / static_cast<double>(frames),
+            prepareMs,
+            prepareMs / static_cast<double>(frames),
+            convergeMs,
+            convergeMs / static_cast<double>(frames),
+            captureMs,
+            captureMs / static_cast<double>(frames)
+        );
+    }
+    mPrepareMicros        = 0;
+    mConvergenceMicros    = 0;
+    mCaptureMicros        = 0;
+    mConvergencePasses    = 0;
+    mProfiledFrames       = 0;
+    mFrameStartedAt       = {};
+    mConvergenceStartedAt = {};
+    mConvergenceEndedAt   = {};
     setOfflineRenderActivityActive(false);
     clearClockSample();
     mReplayTickToken.reset();
@@ -203,6 +230,22 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         }
         mCompletedFrameTicket.reset();
         mLastWaitReason = OfflineRenderWaitReason::None;
+        if (mFrameStartedAt != std::chrono::steady_clock::time_point{}) {
+            auto const now = std::chrono::steady_clock::now();
+            auto const begin =
+                mConvergenceStartedAt == std::chrono::steady_clock::time_point{} ? now : mConvergenceStartedAt;
+            auto const end =
+                mConvergenceEndedAt == std::chrono::steady_clock::time_point{} ? begin : mConvergenceEndedAt;
+            mPrepareMicros += static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(begin - mFrameStartedAt).count()
+            );
+            mConvergenceMicros +=
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count());
+            mCaptureMicros +=
+                static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - end).count());
+            ++mProfiledFrames;
+            mFrameStartedAt = {};
+        }
         return OfflineRenderStepResult::FrameSubmitted;
     }
 
@@ -222,6 +265,9 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         mPendingFrame           = frame;
         mConvergenceRendersDone = 0;
         mConvergenceComplete    = false;
+        mFrameStartedAt         = std::chrono::steady_clock::now();
+        mConvergenceStartedAt   = {};
+        mConvergenceEndedAt     = {};
         mState                  = !mTimelineInitialized ? OfflineRenderBoundaryState::InitializingReplay
                                                         : OfflineRenderBoundaryState::WarmingUp;
     }
@@ -827,12 +873,16 @@ bool OfflineRenderBoundary::publishClockSample(ExportFramePlan const& frame, boo
 
 // Samples without a capture are re-rendered every frame, which is what lets the denoiser accumulate on this instant.
 bool OfflineRenderBoundary::advanceConvergence(ExportFramePlan const& frame) {
+    if (mConvergenceStartedAt == std::chrono::steady_clock::time_point{})
+        mConvergenceStartedAt = std::chrono::steady_clock::now();
     if (mConvergenceRendersDone >= mExecutor.convergenceFrames()) {
         if (mConvergenceToken) {
             clearOfflineRenderClockSample(*mConvergenceToken);
             mConvergenceToken.reset();
         }
         mConvergenceComplete = true;
+        if (mConvergenceEndedAt == std::chrono::steady_clock::time_point{})
+            mConvergenceEndedAt = std::chrono::steady_clock::now();
         return true;
     }
     releaseHeldRender();
@@ -855,7 +905,11 @@ bool OfflineRenderBoundary::advanceConvergence(ExportFramePlan const& frame) {
         clearOfflineRenderClockSample(*mConvergenceToken);
         mConvergenceToken.reset();
         ++mConvergenceRendersDone;
-        if (mConvergenceRendersDone >= mExecutor.convergenceFrames()) mConvergenceComplete = true;
+        ++mConvergencePasses;
+        if (mConvergenceRendersDone >= mExecutor.convergenceFrames()) {
+            mConvergenceComplete = true;
+            mConvergenceEndedAt  = std::chrono::steady_clock::now();
+        }
     }
     return true;
 }
