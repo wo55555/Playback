@@ -251,8 +251,6 @@
                 "captureSummary": "Capture",
                 "summaryValue": "{} FPS | {:.2f} s | {} frames",
                 "captureValue": "{} x {} | {}x SSAA | {} warm-up frames",
-                "destinationLabel": "Destination",
-                "destination": "Destination: {}",
                 "fullRange": "Full replay",
                 "usePlayhead": "Use current playhead tick",
                 "export": "Start Export",
