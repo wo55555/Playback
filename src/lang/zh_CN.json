@@ -251,8 +251,6 @@
                 "captureSummary": "采集设置",
                 "summaryValue": "{} FPS | {:.2f} 秒 | {} 帧",
                 "captureValue": "{} x {} | {}x SSAA | {} 个预热帧",
-                "destinationLabel": "目标",
-                "destination": "目标：{}",
                 "fullRange": "完整回放",
                 "usePlayhead": "使用当前播放头游戏刻",
                 "export": "开始导出",

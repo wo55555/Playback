@@ -5,12 +5,17 @@
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
+#include "playback/exporting/RenderDiagnostics.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -22,14 +27,21 @@ using namespace ll::i18n_literals;
 
 namespace {
 
+constexpr int DefaultRayTracedConvergenceFrames = 8;
+
+// Matches the recorder's replay naming so exports and recordings sort together.
+[[nodiscard]] std::string timestampName() {
+    auto const now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm    local{};
+    if (localtime_s(&local, &now) != 0) return "export";
+    std::array<char, 32> buffer{};
+    if (std::strftime(buffer.data(), buffer.size(), "%Y-%m-%dT%H-%M-%S", &local) == 0) return "export";
+    return buffer.data();
+}
+
 [[nodiscard]] std::filesystem::path utf8Path(std::string const& value) {
     auto const* begin = reinterpret_cast<char8_t const*>(value.data());
     return std::filesystem::path(std::u8string{begin, begin + value.size()});
-}
-
-[[nodiscard]] std::string utf8String(std::filesystem::path const& value) {
-    auto const text = value.generic_u8string();
-    return {reinterpret_cast<char const*>(text.data()), text.size()};
 }
 
 bool inputClampedInt(char const* id, int& value, int minimum, int maximum, float width) {
@@ -161,6 +173,11 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
             mExportStartTick = 0;
             mExportEndTick   = totalTicks;
         }
+    }
+    if (!mExportSettingsInitialized) {
+        mExportConvergenceFrames = exporting::rayTracingActive() ? DefaultRayTracedConvergenceFrames : 0;
+        auto const stamp         = timestampName();
+        std::snprintf(mExportName.data(), mExportName.size(), "%s", stamp.c_str());
     }
     mExportSettingsInitialized = true;
     if (!ffmpegAvailable && mExportFormat == 0) mExportFormat = 1;
@@ -667,9 +684,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
         exporting::ExportPlanCompileResult compiled;
         if (rawSettingsValid) compiled = exporting::ExportPlanCompiler::compile(previewSettings, *state.project);
-        bool const validSettings = rawSettingsValid && static_cast<bool>(compiled);
-        auto       outputPath =
-            utf8String(compiled.plan ? compiled.plan->outputPath : exporting::buildExportOutputPath(previewSettings));
+        bool const     validSettings   = rawSettingsValid && static_cast<bool>(compiled);
         double const   durationSeconds = validTimeline ? (mExportEndTick - mExportStartTick) / 20.0 : 0.0;
         uint64_t const frameCount      = compiled.plan ? compiled.plan->frameCount : 0;
 
@@ -686,7 +701,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             );
             float const  pad     = style.WindowPadding.x;
             float const  lineH   = ImGui::GetFontSize() + style.ItemSpacing.y;
-            float const  cardH   = pad * 2.0f + lineH * 2.0f + frameH;
+            float const  cardH   = pad * 2.0f + lineH * 2.0f;
             float const  cardW   = ImGui::GetContentRegionAvail().x;
             ImVec2 const cardMin = ImGui::GetCursorScreenPos();
             ImVec2 const cardMax{cardMin.x + cardW, cardMin.y + cardH};
@@ -705,20 +720,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 "playback.refactorEditor.export.captureSummary"_tr().c_str()
             );
             dl->AddText({valueX, row0.y + lineH}, theme::kText, captureValue.c_str());
-            float const destY = row0.y + lineH * 2.0f;
-            dl->AddText(
-                {row0.x, destY + widgets::textOffsetInBox(frameH)},
-                theme::kTextDim,
-                "playback.refactorEditor.export.destinationLabel"_tr().c_str()
-            );
-            ImGui::SetCursorScreenPos({valueX, destY});
-            ImGui::SetNextItemWidth(cardMax.x - pad - valueX);
-            ImGui::InputText(
-                "##export-destination",
-                outputPath.data(),
-                outputPath.size() + 1,
-                ImGuiInputTextFlags_ReadOnly
-            );
             ImGui::SetCursorScreenPos({cardMin.x, cardMax.y});
             ImGui::Dummy({cardW, style.ItemSpacing.y});
         }
