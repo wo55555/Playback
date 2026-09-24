@@ -120,6 +120,11 @@ uint32_t FrameTap::captureCapacity() const {
     return mActive ? mActive->config.capacity : 0;
 }
 
+uint32_t FrameTap::captureDownsample() const {
+    std::scoped_lock lock(mMutex);
+    return mActive && mActive->config.downsample != 0 ? mActive->config.downsample : 1;
+}
+
 std::optional<FrameTapBackendCapture> FrameTap::beginCapture() {
     FrameTapBackendCapture capture;
     {
