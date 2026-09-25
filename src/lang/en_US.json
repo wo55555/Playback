@@ -116,6 +116,8 @@
                 "edit": "Edit",
                 "view": "View",
                 "cameraPath": "Camera Path Preview",
+                "smoothPiston": "Smooth Piston Animation",
+                "pistonDiagnostics": "Piston Animation Diagnostics",
                 "help": "Help",
                 "openReplay": "Open Replay",
                 "saveProject": "Save Project",

@@ -8,6 +8,7 @@
 #include "playback/exporting/RenderDiagnostics.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/visuals/PistonRenderHooks.h"
 #include "playback/visuals/ReplaySampleTime.h"
 
 #include <algorithm>
@@ -119,6 +120,7 @@ bool OfflineRenderBoundary::open(
 }
 
 void OfflineRenderBoundary::close() {
+    visuals::clearPistonDiagnosticsFrameIndex();
     if (mProfiledFrames != 0) {
         auto const   frames     = mProfiledFrames;
         double const prepareMs  = static_cast<double>(mPrepareMicros) / 1000.0;
@@ -178,6 +180,7 @@ void OfflineRenderBoundary::close() {
 
 void OfflineRenderBoundary::cancel() {
     setOfflineRenderActivityActive(false);
+    visuals::clearPistonDiagnosticsFrameIndex();
     clearClockSample();
     mReplayTickToken.reset();
     if (mTickGateOpen) {
@@ -848,6 +851,7 @@ bool OfflineRenderBoundary::publishClockSample(ExportFramePlan const& frame, boo
     case OfflineRenderClockPublishResult::Published:
         mClockToken = token;
         setOfflineRenderTraceSample(token.id, frame.ticket.frameIndex);
+        visuals::setPistonDiagnosticsFrameIndex(frame.ticket.frameIndex);
         recordOfflineRenderTrace(
             OfflineRenderTraceEvent::ClockPublished,
             nullptr,
