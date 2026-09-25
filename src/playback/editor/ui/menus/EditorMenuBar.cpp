@@ -1,5 +1,6 @@
 #include "EditorMenuBar.h"
 
+#include "playback/Playback.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/Widgets.h"
@@ -324,6 +325,25 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                     viewEnabled
                 )) {
                 ctx.commands.toggleViewportMaximized();
+            }
+            ImGui::Separator();
+            // Stays enabled during export so the piston control group can be switched from the export path.
+            auto& pistonConfig = Playback::getInstance().getConfig();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.smoothPiston"_tr().c_str(),
+                    nullptr,
+                    pistonConfig.smoothPistonRender,
+                    state.editorVisible
+                )) {
+                pistonConfig.smoothPistonRender = !pistonConfig.smoothPistonRender;
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.pistonDiagnostics"_tr().c_str(),
+                    nullptr,
+                    pistonConfig.pistonRenderDiagnostics,
+                    state.editorVisible
+                )) {
+                pistonConfig.pistonRenderDiagnostics = !pistonConfig.pistonRenderDiagnostics;
             }
             ImGui::EndMenu();
         }

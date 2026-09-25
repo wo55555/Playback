@@ -116,6 +116,8 @@
                 "edit": "编辑",
                 "view": "视图",
                 "cameraPath": "摄影机路径预览",
+                "smoothPiston": "活塞动画优化",
+                "pistonDiagnostics": "活塞动画诊断日志",
                 "help": "帮助",
                 "openReplay": "打开回放",
                 "saveProject": "保存项目",
