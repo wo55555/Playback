@@ -35,11 +35,6 @@ void registerPlaybackCommand() {
         Playback::getInstance().getConfig().smoothPistonRender = false;
         output.success("smoothPistonRender = false");
     });
-    command.overload().text("piston").text("diag").execute([](CommandOrigin const&, CommandOutput& output) {
-        auto& enabled = Playback::getInstance().getConfig().pistonRenderDiagnostics;
-        enabled       = !enabled;
-        output.success("pistonRenderDiagnostics = {}", enabled);
-    });
 }
 
 } // namespace playback::runtime::command

@@ -337,14 +337,6 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                 )) {
                 pistonConfig.smoothPistonRender = !pistonConfig.smoothPistonRender;
             }
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.menu.pistonDiagnostics"_tr().c_str(),
-                    nullptr,
-                    pistonConfig.pistonRenderDiagnostics,
-                    state.editorVisible
-                )) {
-                pistonConfig.pistonRenderDiagnostics = !pistonConfig.pistonRenderDiagnostics;
-            }
             ImGui::EndMenu();
         }
 

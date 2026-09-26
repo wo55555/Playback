@@ -19,7 +19,6 @@ struct Config {
     bool        renderDiagnostics          = false;
     std::string renderDiagnosticExperiment = "off";
     bool        smoothPistonRender         = true;
-    bool        pistonRenderDiagnostics    = false;
 
     CommandStruct command;
 };
