@@ -85,9 +85,9 @@ struct HeadOwner {
 std::mutex                                              gHeadOwnerMutex;
 std::unordered_map<::BlockPos, HeadOwner, BlockPosHash> gHeadOwners;
 
-// ---- Render-only 3gt animation on the replay clock; native progress, state and world blocks stay untouched ----
+// ---- Render-only 4gt animation on the replay clock; native progress, state and world blocks stay untouched ----
 
-constexpr int VisualTicks = 3;
+constexpr int VisualTicks = 4;
 
 // Non-zero while a piston or moving-block renderer is on this thread's stack; logic callers keep native values.
 thread_local int tRenderDepth = 0;
@@ -105,16 +105,24 @@ struct VisualSegment {
     float to{};
 };
 
+struct ActionVisual {
+    VisualSegment segment;
+    ::BlockPos    facing;
+};
+
 struct PistonVisual {
     uint64_t      action{};
     VisualSegment current;
     // A truncated predecessor keeps drawing the arm until the new action's start tick.
     std::optional<VisualSegment> previous;
+    // Tail of the push that carried this piston's body here, still playing when its own action starts.
+    std::optional<ActionVisual> bodyCarry;
 };
 
-struct ActionVisual {
-    VisualSegment segment;
-    ::BlockPos    facing;
+// Tail of the action that carried a block into the cell a newer action picks it up from.
+struct CarryVisual {
+    uint64_t     action{};
+    ActionVisual visual;
 };
 
 // One MovingBlock target cell owned by an action.
@@ -133,7 +141,18 @@ int        gLastSweepTick{-1};
 // Keyed by position: replay rebuilds piston instances mid-action.
 std::unordered_map<::BlockPos, PistonVisual, BlockPosHash> gPistonVisuals;
 std::unordered_map<uint64_t, ActionVisual>                 gActionVisuals;
-std::unordered_map<::MovingBlockActor const*, uint64_t>    gMovingAction;
+struct MovingEntry {
+    uint64_t     action{};
+    ::BlockPos   cell;
+    ActionVisual visual; // copied, so a successor can still replay its tail after the action ends
+    // A newer action already draws this block, so this copy is never drawn again.
+    bool handedOff{};
+    // Its cell is re-meshed with the real block, so drawing it again would double it.
+    bool                       released{};
+    std::optional<CarryVisual> carry;
+};
+
+std::unordered_map<::MovingBlockActor const*, MovingEntry> gMovingAction;
 std::unordered_map<::BlockPos, CellClaim, BlockPosHash>    gCellClaims;
 std::atomic_bool                                           gMeshWatch{false};
 std::atomic<uint64_t>                                      gFrameLt{0};
@@ -150,9 +169,21 @@ float segmentValue(VisualSegment const& segment, double time) {
     return segment.from + (segment.to - segment.from) * static_cast<float>(f);
 }
 
+// An interrupted predecessor keeps playing its remaining tail on top of the new action.
 float armValue(PistonVisual const& visual, double time) {
-    if (visual.previous && time < visual.current.startTick) return segmentValue(*visual.previous, time);
-    return segmentValue(visual.current, time);
+    auto value = segmentValue(visual.current, time);
+    if (visual.previous) value += segmentValue(*visual.previous, time) - visual.previous->to;
+    return std::clamp(value, 0.0f, 1.0f);
+}
+
+// Relative to the target cell, same convention as native getDrawPos.
+::Vec3 actionOffset(ActionVisual const& visual, double time) {
+    auto const rel = segmentValue(visual.segment, time) - visual.segment.to;
+    return ::Vec3{
+        static_cast<float>(visual.facing.x) * rel,
+        static_cast<float>(visual.facing.y) * rel,
+        static_cast<float>(visual.facing.z) * rel
+    };
 }
 
 void updateMeshWatchLocked() {
@@ -204,8 +235,13 @@ std::vector<::BlockPos> endActionLocked(uint64_t action) {
     return cells;
 }
 
+// Set while our own re-mesh requests pass through the level listeners.
+thread_local bool tImmediateRebuild = false;
+
 void rebuildCells(::BlockSource& region, std::vector<::BlockPos> const& cells) {
+    tImmediateRebuild = true;
     for (auto const& pos : cells) region.fireAreaChanged(pos, pos);
+    tImmediateRebuild = false;
 }
 
 // Ends visuals past their duration, or ahead of the clock after a backward seek.
@@ -275,6 +311,7 @@ void startAction(::BlockSource& region, ::BlockPos const& pistonPos, ::BlockPos 
         PistonVisual          visual{
             gNextAction++,
             {tick, 1.0f - to, to},
+            std::nullopt,
             std::nullopt
         };
         if (auto it = gPistonVisuals.find(pistonPos); it != gPistonVisuals.end()) {
@@ -282,12 +319,16 @@ void startAction(::BlockSource& region, ::BlockPos const& pistonPos, ::BlockPos 
             bool const  running = tick >= old.current.startTick && tick <= old.current.startTick + VisualTicks;
             // A piston cannot start the same direction twice, so this is a resent packet, not a new action.
             if (running && old.current.to == to) return;
-            // Chain policy: truncate the old action and continue from where the arm is drawn.
-            if (running) {
-                visual.current.from = armValue(old, tick);
-                visual.previous     = old.current;
-            }
+            // Chain policy: the old action's remaining tail plays on top of the new one.
+            if (running) visual.previous = old.current;
             cells = endActionLocked(old.action);
+        }
+        // This piston's body may still be arriving from a push; its arm must follow that motion until it ends.
+        for (auto const& [moving, entry] : gMovingAction) {
+            if (entry.cell != pistonPos || entry.handedOff) continue;
+            // A finished tail contributes zero offset, so only the newest carrier matters.
+            if (!visual.bodyCarry || entry.visual.segment.startTick > visual.bodyCarry->segment.startTick)
+                visual.bodyCarry = entry.visual;
         }
         gActionVisuals[visual.action] = {visual.current, facing};
         gPistonVisuals[pistonPos]     = visual;
@@ -308,43 +349,61 @@ std::optional<::Vec3> visualDrawOffset(::MovingBlockActor const& moving, float a
     std::lock_guard const guard(gAnimMutex);
     auto const            owned = gMovingAction.find(&moving);
     if (owned == gMovingAction.end()) return std::nullopt;
-    auto const it = gActionVisuals.find(owned->second);
-    if (it == gActionVisuals.end()) {
+    auto const& entry = owned->second;
+    if (!gActionVisuals.contains(entry.action)) {
         // Visual ended but still held for the re-mesh: stay exactly on the cell.
-        auto const claim = gCellClaims.find(moving.mPosition.get());
-        if (claim != gCellClaims.end() && claim->second.action == owned->second) return ::Vec3{0.0f, 0.0f, 0.0f};
+        auto const claim = gCellClaims.find(entry.cell);
+        if (claim != gCellClaims.end() && claim->second.action == entry.action) return ::Vec3{0.0f, 0.0f, 0.0f};
         return std::nullopt;
     }
-    auto const& segment = it->second.segment;
-    auto const& facing  = it->second.facing;
-    auto const  rel     = segmentValue(segment, visualTime(alpha)) - segment.to;
-    return ::Vec3{
-        static_cast<float>(facing.x) * rel,
-        static_cast<float>(facing.y) * rel,
-        static_cast<float>(facing.z) * rel
-    };
+    auto const time   = visualTime(alpha);
+    auto       offset = actionOffset(entry.visual, time);
+    if (entry.carry) {
+        auto const tail  = actionOffset(entry.carry->visual, time);
+        offset.x        += tail.x;
+        offset.y        += tail.y;
+        offset.z        += tail.z;
+    }
+    return offset;
+}
+
+// Extra offset for the arm of a piston whose body is still finishing the push that carried it here.
+std::optional<::Vec3> visualBodyOffset(::BlockPos const& pistonPos, float alpha) {
+    std::lock_guard const guard(gAnimMutex);
+    auto const            it = gPistonVisuals.find(pistonPos);
+    if (it == gPistonVisuals.end() || !it->second.bodyCarry) return std::nullopt;
+    return actionOffset(*it->second.bodyCarry, visualTime(alpha));
 }
 
 void registerMoving(::MovingBlockActor const& moving) {
     std::lock_guard const guard(gAnimMutex);
     if (gMovingAction.contains(&moving)) return;
     auto const it = gPistonVisuals.find(moving.mPistonBlockPos.get());
-    if (it == gPistonVisuals.end() || !gActionVisuals.contains(it->second.action)) return;
-    auto const action      = it->second.action;
-    gMovingAction[&moving] = action;
-    auto const cell        = moving.mPosition.get();
-    auto const claim       = gCellClaims.find(cell);
-    // The block now moves out of its source cell, so an older claim there would keep drawing a stale copy.
-    if (auto const visual = gActionVisuals.find(action); visual != gActionVisuals.end()) {
-        auto const&      facing = visual->second.facing;
-        int const        dir    = visual->second.segment.to > visual->second.segment.from ? 1 : -1;
-        ::BlockPos const source{cell.x - facing.x * dir, cell.y - facing.y * dir, cell.z - facing.z * dir};
-        auto const       old = source == moving.mPistonBlockPos.get() ? gCellClaims.end() : gCellClaims.find(source);
-        if (old != gCellClaims.end() && old->second.action != action) {
+    if (it == gPistonVisuals.end()) return;
+    auto const visual = gActionVisuals.find(it->second.action);
+    if (visual == gActionVisuals.end()) return;
+    auto const  action = it->second.action;
+    auto const  cell   = moving.mPosition.get();
+    MovingEntry entry{action, cell, visual->second};
+    // The block now leaves its source cell; an older MovingBlock there still playing its tail hands it over.
+    auto const&      facing = visual->second.facing;
+    int const        dir    = visual->second.segment.to > visual->second.segment.from ? 1 : -1;
+    ::BlockPos const source{cell.x - facing.x * dir, cell.y - facing.y * dir, cell.z - facing.z * dir};
+    if (source != moving.mPistonBlockPos.get()) {
+        for (auto& [other, old] : gMovingAction) {
+            if (old.cell != source || old.action == action || old.handedOff) continue;
+            old.handedOff = true;
+            if (!entry.carry || old.visual.segment.startTick > entry.carry->visual.segment.startTick)
+                entry.carry = CarryVisual{old.action, old.visual};
+        }
+        // The old claim would keep its stale copy held in a cell the block already left.
+        if (auto const old = gCellClaims.find(source); old != gCellClaims.end() && old->second.action != action) {
             gCellClaims.erase(old);
             updateMeshWatchLocked();
         }
     }
+    gMovingAction[&moving] = entry;
+    auto const claim       = gCellClaims.find(cell);
     // An older claim still hiding its landed block keeps the cell until it is re-meshed.
     if (claim != gCellClaims.end() && claim->second.landed && !claim->second.released) return;
     if (claim != gCellClaims.end() && claim->second.action == action) return;
@@ -357,15 +416,24 @@ bool movingHeld(::MovingBlockActor const& moving) {
     std::lock_guard const guard(gAnimMutex);
     auto const            owned = gMovingAction.find(&moving);
     if (owned == gMovingAction.end()) return false;
-    if (gActionVisuals.contains(owned->second)) return true;
-    auto const claim = gCellClaims.find(moving.mPosition.get());
-    if (claim == gCellClaims.end() || claim->second.action != owned->second) return false;
+    if (gActionVisuals.contains(owned->second.action)) return true;
+    auto const claim = gCellClaims.find(owned->second.cell);
+    if (claim == gCellClaims.end() || claim->second.action != owned->second.action) return false;
     if (!claim->second.rebuilt) return true;
     // Tessellation finishes on a worker; the new mesh is uploaded on a later frame.
     if (gFrameLt.load(std::memory_order_relaxed) <= claim->second.rebuiltLt + 2) return true;
+    // Every MovingBlock sharing this claim is covered by the same rebuilt mesh.
+    for (auto& [other, entry] : gMovingAction)
+        if (entry.action == claim->second.action && entry.cell == claim->first) entry.released = true;
     gCellClaims.erase(claim);
     updateMeshWatchLocked();
     return false;
+}
+
+bool movingRetired(::MovingBlockActor const& moving) {
+    std::lock_guard const guard(gAnimMutex);
+    auto const            owned = gMovingAction.find(&moving);
+    return owned != gMovingAction.end() && (owned->second.handedOff || owned->second.released);
 }
 
 bool hasClaims() {
@@ -496,8 +564,21 @@ LL_TYPE_INSTANCE_HOOK(
     if (skipZombieHead) return;
 
     if (enabled) gFrameLt.store(blockEntityRenderData.renderSource.getLevel().getCurrentTick().tickID);
-    RenderScope const scope;
+    RenderScope const     scope;
+    std::optional<::Vec3> bodyOffset;
+    if (isArm && animationActive()) bodyOffset = visualBodyOffset(entity.mPosition.get(), renderContext.mFrameAlpha);
+    if (!bodyOffset || (bodyOffset->x == 0.0f && bodyOffset->y == 0.0f && bodyOffset->z == 0.0f)) {
+        origin(renderContext, blockEntityRenderData);
+        return;
+    }
+    // The dispatcher owns this position for the current draw only; shift the arm with its still-moving body.
+    auto&      position  = const_cast<::Vec3&>(blockEntityRenderData.renderPosition);
+    auto const saved     = position;
+    position.x          += bodyOffset->x;
+    position.y          += bodyOffset->y;
+    position.z          += bodyOffset->z;
     origin(renderContext, blockEntityRenderData);
+    position = saved;
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -533,6 +614,8 @@ LL_TYPE_INSTANCE_HOOK(
 
     if (replayActive()) {
         registerMoving(*movingPtr);
+        // A successor or the rebuilt mesh already shows this block; a second copy would be a ghost.
+        if (animationActive() && movingRetired(*movingPtr)) return;
         // The visual owns this block until the real block is re-meshed; native retirement would cut it short.
         if (movingHeld(*movingPtr)) {
             interlock.mRenderVisibilityState = VisibilityState::Visible;
@@ -687,6 +770,22 @@ LL_TYPE_INSTANCE_HOOK(
     return origin(tessellator, block, pos, faces, airAndSimpleBlocks);
 }
 
+// A plain area change can sit in the render queue for many frames at high framerates; the hidden block needs it now.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackImmediateRebuildHook,
+    ll::memory::HookPriority::Normal,
+    RenderChunkCoordinator,
+    &RenderChunkCoordinator::$onAreaChanged,
+    void,
+    ::BlockSource&    source,
+    ::BlockPos const& min,
+    ::BlockPos const& max
+) {
+    origin(source, min, max);
+    if (!tImmediateRebuild) return;
+    _setDirty(min, max, true, false, false);
+}
+
 } // namespace
 
 bool hookPistonRender(bool enable) {
@@ -702,6 +801,7 @@ bool hookPistonRender(bool enable) {
         bool landed{};
         bool meshInWorld{};
         bool meshBlockInWorld{};
+        bool immediateRebuild{};
     };
     static HookState state;
 
@@ -720,6 +820,8 @@ bool hookPistonRender(bool enable) {
         if (!state.meshInWorld) return false;
         if (!state.meshBlockInWorld) state.meshBlockInWorld = PlaybackMeshBlockInWorldHook::hook() == 0;
         if (!state.meshBlockInWorld) return false;
+        if (!state.immediateRebuild) state.immediateRebuild = PlaybackImmediateRebuildHook::hook() == 0;
+        if (!state.immediateRebuild) return false;
         if (!state.landed) state.landed = PlaybackLandedBlockHook::hook() == 0;
         if (!state.landed) return false;
         if (!state.progress) state.progress = PlaybackPistonProgressHook::hook() == 0;
@@ -755,6 +857,10 @@ bool hookPistonRender(bool enable) {
     if (state.landed) {
         PlaybackLandedBlockHook::unhook();
         state.landed = false;
+    }
+    if (state.immediateRebuild) {
+        PlaybackImmediateRebuildHook::unhook();
+        state.immediateRebuild = false;
     }
     if (state.meshBlockInWorld) {
         PlaybackMeshBlockInWorldHook::unhook();
