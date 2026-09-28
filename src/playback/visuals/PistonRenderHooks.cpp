@@ -10,17 +10,23 @@
 #include "mc/client/network/ClientNetworkHandler.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
+#include "mc/client/renderer/block/BlockOccluder.h"
 #include "mc/client/renderer/block/BlockTessellator.h"
 #include "mc/client/renderer/blockactor/BlockActorRenderData.h"
 #include "mc/client/renderer/blockactor/MovingBlockActorRenderer.h"
 #include "mc/client/renderer/blockactor/PistonBlockActorRenderer.h"
 #include "mc/client/renderer/chunks/RenderChunkCoordinator.h"
+#include "mc/client/renderer/chunks/RenderChunkGeometry.h"
+#include "mc/client/renderer/game/LevelRenderer.h"
+#include "mc/client/renderer/game/LevelRendererCamera.h"
+#include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/deps/core/math/Vec3.h"
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/network/NetworkIdentifier.h"
 #include "mc/network/packet/UpdateSubChunkBlocksChangedInfo.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/network/packet/UpdateSubChunkNetworkBlockInfo.h"
+#include "mc/platform/threading/Mutex.h"
 #include "mc/world/actor/ActorTerrainInterlockData.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/BlockPos.h"
@@ -32,6 +38,9 @@
 #include "mc/world/level/block/actor/MovingBlockActor.h"
 #include "mc/world/level/block/actor/PistonBlockActor.h"
 #include "mc/world/level/block/actor/PistonState.h"
+#include "mc/world/level/chunk/LevelChunk.h"
+#include "mc/world/level/chunk/LevelChunkBlockActorStorage.h"
+#include "mc/world/phys/AABB.h"
 
 #include <algorithm>
 #include <atomic>
@@ -129,15 +138,16 @@ struct CarryVisual {
 struct CellClaim {
     uint64_t    action{};
     std::string wrapped;
-    bool        landed{};   // the real block arrived and its chunk mesh is suppressed
-    bool        released{}; // visual ended, the real block is being re-meshed
-    bool        rebuilt{};
-    uint64_t    rebuiltLt{};
+    bool        landed{};    // the real block arrived and its chunk mesh is suppressed
+    bool        released{};  // visual ended, the real block is being re-meshed
+    bool        rebuilt{};   // a build containing the real block has committed
+    uint64_t    liveFrame{}; // frame of that commit; the mesh is on screen from the next frame
 };
 
 std::mutex gAnimMutex;
 uint64_t   gNextAction = 1;
 int        gLastSweepTick{-1};
+bool       gSweepReplay{}; // clock the current visuals are timed on
 // Keyed by position: replay rebuilds piston instances mid-action.
 std::unordered_map<::BlockPos, PistonVisual, BlockPosHash> gPistonVisuals;
 std::unordered_map<uint64_t, ActionVisual>                 gActionVisuals;
@@ -150,19 +160,40 @@ struct MovingEntry {
     // Its cell is re-meshed with the real block, so drawing it again would double it.
     bool                       released{};
     std::optional<CarryVisual> carry;
+    // The chunk may destroy a detached instance before its cell is re-meshed.
+    std::shared_ptr<::BlockActor> keep;
 };
+// Released outside gAnimMutex because the dtor hook locks it.
+std::vector<std::shared_ptr<::BlockActor>> gDropKeep;
 
 std::unordered_map<::MovingBlockActor const*, MovingEntry> gMovingAction;
 std::unordered_map<::BlockPos, CellClaim, BlockPosHash>    gCellClaims;
 std::atomic_bool                                           gMeshWatch{false};
+std::atomic_bool                                           gFaceWatch{false}; // any unreleased claim
 std::atomic<uint64_t>                                      gFrameLt{0};
+// Counts frames that drew block actors; export also renders passes without them.
+std::atomic<uint64_t> gFrame{1};
+std::atomic_bool      gFrameDrewActors{false};
+// Chunk geometry being tessellated on this thread.
+thread_local ::RenderChunkGeometry const* tMeshGeometry = nullptr;
+// Released cells tessellated as real blocks, per build that has not been uploaded yet.
+std::unordered_map<::RenderChunkGeometry const*, std::vector<::BlockPos>> gReleasedMesh;
 
 bool replayActive() { return ReplaySession::getInstance().isIsolatingReplayWorld(); }
 
-bool animationActive() { return smoothPistonRenderEnabled() && replayActive(); }
+// Replay ticks on its own clock; in a live world the client level tick runs 1:1 with redstone.
+std::optional<int> visualClockTick() {
+    if (replayActive()) return ReplaySession::getInstance().getAppliedReplayTick();
+    auto  client = ll::service::getClientInstance();
+    auto* player = client ? client->getLocalPlayer() : nullptr;
+    if (!player) return std::nullopt;
+    return static_cast<int>(player->getLevel().getCurrentTick().tickID);
+}
 
-// Native interpolation at applied tick rt draws time rt - 1 + a.
-double visualTime(float alpha) { return ReplaySession::getInstance().getAppliedReplayTick() - 1.0 + alpha; }
+bool animationActive() { return smoothPistonRenderEnabled() && visualClockTick().has_value(); }
+
+// Native interpolation at tick t draws time t - 1 + a.
+double visualTime(float alpha) { return visualClockTick().value_or(0) - 1.0 + alpha; }
 
 float segmentValue(VisualSegment const& segment, double time) {
     auto const f = std::clamp((time - segment.startTick) / VisualTicks, 0.0, 1.0);
@@ -195,6 +226,10 @@ void updateMeshWatchLocked() {
         ),
         std::memory_order_relaxed
     );
+    gFaceWatch.store(
+        std::any_of(gCellClaims.begin(), gCellClaims.end(), [](auto const& entry) { return !entry.second.released; }),
+        std::memory_order_relaxed
+    );
 }
 
 // Returns cells whose mesh is still missing the landed block.
@@ -204,8 +239,11 @@ std::vector<::BlockPos> clearAnimationStateLocked() {
         if (claim.landed && !claim.rebuilt) cells.push_back(pos);
     gPistonVisuals.clear();
     gActionVisuals.clear();
+    for (auto& [moving, entry] : gMovingAction)
+        if (entry.keep) gDropKeep.push_back(std::move(entry.keep));
     gMovingAction.clear();
     gCellClaims.clear();
+    gReleasedMesh.clear();
     gLastSweepTick = -1;
     updateMeshWatchLocked();
     return cells;
@@ -240,8 +278,18 @@ thread_local bool tImmediateRebuild = false;
 
 void rebuildCells(::BlockSource& region, std::vector<::BlockPos> const& cells) {
     tImmediateRebuild = true;
-    for (auto const& pos : cells) region.fireAreaChanged(pos, pos);
+    // Neighbours kept faces against the hidden block and may sit in another subchunk.
+    for (auto const& pos : cells) region.fireAreaChanged(pos - ::BlockPos{1, 1, 1}, pos + ::BlockPos{1, 1, 1});
     tImmediateRebuild = false;
+}
+
+// Caller holds gAnimMutex. Visual ticks mean nothing after a switch between replay and live clocks or a backward seek.
+bool clockInvalidatedLocked() {
+    bool const replay = replayActive();
+    bool const stale =
+        gLastSweepTick != -1 && (replay != gSweepReplay || visualClockTick().value_or(0) < gLastSweepTick);
+    gSweepReplay = replay;
+    return stale;
 }
 
 // Ends visuals past their duration, or ahead of the clock after a backward seek.
@@ -249,8 +297,9 @@ void sweepActions(::BlockSource& region) {
     std::vector<::BlockPos> cells;
     {
         std::lock_guard const guard(gAnimMutex);
-        if (!animationActive()) {
-            if (gLastSweepTick != -1 || !gCellClaims.empty()) cells = clearAnimationStateLocked();
+        if (!animationActive() || clockInvalidatedLocked()) {
+            if (gLastSweepTick != -1 || !gCellClaims.empty() || !gMovingAction.empty())
+                cells = clearAnimationStateLocked();
         }
     }
     if (!cells.empty()) {
@@ -260,7 +309,7 @@ void sweepActions(::BlockSource& region) {
     {
         std::lock_guard const guard(gAnimMutex);
         if (!animationActive()) return;
-        auto const tick = ReplaySession::getInstance().getAppliedReplayTick();
+        auto const tick = visualClockTick().value_or(0);
         if (tick == gLastSweepTick) return;
         gLastSweepTick     = tick;
         auto const expired = [tick](VisualSegment const& segment) {
@@ -287,12 +336,31 @@ bool meshSuppressed(::BlockPos const& pos) {
     if (it == gCellClaims.end() || !it->second.landed) return false;
     auto& claim = it->second;
     if (!claim.released) return true;
-    if (!claim.rebuilt) {
-        claim.rebuilt   = true;
-        claim.rebuiltLt = gFrameLt.load(std::memory_order_relaxed);
-        updateMeshWatchLocked();
-    }
+    // Counts only once this build is uploaded; a superseded build never reaches endRebuild.
+    if (!claim.rebuilt && tMeshGeometry) gReleasedMesh[tMeshGeometry].push_back(pos);
     return false;
+}
+
+// A newer build of the same geometry replaces the pending one.
+void meshBuildStarted(::RenderChunkGeometry const* geometry) {
+    std::lock_guard const guard(gAnimMutex);
+    gReleasedMesh.erase(geometry);
+}
+
+// Runs on the frame thread once the rebuilt geometry is live.
+void meshBuildCommitted(::RenderChunkGeometry const* geometry) {
+    std::lock_guard const guard(gAnimMutex);
+    auto const            it = gReleasedMesh.find(geometry);
+    if (it == gReleasedMesh.end()) return;
+    auto const frame = gFrame.load(std::memory_order_relaxed);
+    for (auto const& pos : it->second) {
+        auto const claim = gCellClaims.find(pos);
+        if (claim == gCellClaims.end() || !claim->second.released || claim->second.rebuilt) continue;
+        claim->second.rebuilt   = true;
+        claim->second.liveFrame = frame;
+    }
+    gReleasedMesh.erase(it);
+    updateMeshWatchLocked();
 }
 
 std::string blockNameOf(uint runtimeId) {
@@ -306,9 +374,11 @@ void startAction(::BlockSource& region, ::BlockPos const& pistonPos, ::BlockPos 
     std::vector<::BlockPos> cells;
     {
         std::lock_guard const guard(gAnimMutex);
-        auto const            tick = ReplaySession::getInstance().getAppliedReplayTick();
-        float const           to   = extending ? 1.0f : 0.0f;
-        PistonVisual          visual{
+        // A packet can arrive before the first sweep on the new clock.
+        if (clockInvalidatedLocked()) cells = clearAnimationStateLocked();
+        auto const   tick = visualClockTick().value_or(0);
+        float const  to   = extending ? 1.0f : 0.0f;
+        PistonVisual visual{
             gNextAction++,
             {tick, 1.0f - to, to},
             std::nullopt,
@@ -375,7 +445,21 @@ std::optional<::Vec3> visualBodyOffset(::BlockPos const& pistonPos, float alpha)
     return actionOffset(*it->second.bodyCarry, visualTime(alpha));
 }
 
-void registerMoving(::MovingBlockActor const& moving) {
+// Caller holds gAnimMutex; the dtor hook takes it under the chunk lock, so the chunk lock is only tried.
+std::shared_ptr<::BlockActor> findOwner(::BlockSource& region, ::MovingBlockActor const& moving) {
+    auto* const chunk = region.getChunkAt(moving.mPosition.get());
+    if (chunk == nullptr) return {};
+    std::unique_lock<std::mutex> const lock(chunk->mBlockEntityAccessLock.get(), std::try_to_lock);
+    if (!lock.owns_lock()) return {};
+    auto const* const actor = static_cast<::BlockActor const*>(&moving);
+    for (auto const& [pos, owned] : chunk->mBlockEntities.get().mMap.get())
+        if (owned.get() == actor) return owned;
+    for (auto const& owned : chunk->mPreservedBlockEntities.get())
+        if (owned.get() == actor) return owned;
+    return {};
+}
+
+void registerMoving(::MovingBlockActor const& moving, ::BlockSource& region) {
     std::lock_guard const guard(gAnimMutex);
     if (gMovingAction.contains(&moving)) return;
     auto const it = gPistonVisuals.find(moving.mPistonBlockPos.get());
@@ -402,6 +486,7 @@ void registerMoving(::MovingBlockActor const& moving) {
             updateMeshWatchLocked();
         }
     }
+    entry.keep             = findOwner(region, moving);
     gMovingAction[&moving] = entry;
     auto const claim       = gCellClaims.find(cell);
     // An older claim still hiding its landed block keeps the cell until it is re-meshed.
@@ -419,9 +504,8 @@ bool movingHeld(::MovingBlockActor const& moving) {
     if (gActionVisuals.contains(owned->second.action)) return true;
     auto const claim = gCellClaims.find(owned->second.cell);
     if (claim == gCellClaims.end() || claim->second.action != owned->second.action) return false;
-    if (!claim->second.rebuilt) return true;
-    // Tessellation finishes on a worker; the new mesh is uploaded on a later frame.
-    if (gFrameLt.load(std::memory_order_relaxed) <= claim->second.rebuiltLt + 2) return true;
+    // The real block is on screen only from the frame after its mesh was uploaded.
+    if (!claim->second.rebuilt || gFrame.load(std::memory_order_relaxed) <= claim->second.liveFrame) return true;
     // Every MovingBlock sharing this claim is covered by the same rebuilt mesh.
     for (auto& [other, entry] : gMovingAction)
         if (entry.action == claim->second.action && entry.cell == claim->first) entry.released = true;
@@ -453,7 +537,116 @@ void holdLandedCell(::BlockPos const& cell, std::string const& block) {
 
 void forgetMoving(::MovingBlockActor const* moving) {
     std::lock_guard const guard(gAnimMutex);
-    gMovingAction.erase(moving);
+    auto const            it = gMovingAction.find(moving);
+    if (it == gMovingAction.end()) return;
+    if (it->second.keep) gDropKeep.push_back(std::move(it->second.keep));
+    gMovingAction.erase(it);
+}
+
+// Chunk meshes skip faces against the target cell, but it stays empty on screen while the MovingBlock is still
+// gliding in. Returns 0 if shown, 1 landed, 2 still a moving_block.
+int neighborHidden(::BlockPos const& pos) {
+    if (tRenderDepth > 0 || !gFaceWatch.load(std::memory_order_relaxed)) return 0;
+    std::lock_guard const guard(gAnimMutex);
+    auto const            it = gCellClaims.find(pos);
+    if (it == gCellClaims.end() || it->second.released) return 0;
+    return it->second.landed ? 1 : 2;
+}
+
+// Full cubes cull against simple neighbours through the chunk's bitset, never asking the occluder.
+bool touchesLanded(::BlockPos const& pos) {
+    if (tRenderDepth > 0 || !gFaceWatch.load(std::memory_order_relaxed)) return false;
+    static ::BlockPos const dirs[6]{
+        {0,  -1, 0 },
+        {0,  1,  0 },
+        {0,  0,  -1},
+        {0,  0,  1 },
+        {-1, 0,  0 },
+        {1,  0,  0 }
+    };
+    for (auto const& dir : dirs)
+        if (neighborHidden(pos + dir) == 1) return true;
+    return false;
+}
+
+// Caller holds gAnimMutex. Same rule as movingHeld, without its unhold side effect.
+bool heldLocked(MovingEntry const& entry) {
+    if (entry.handedOff || entry.released) return false;
+    if (gActionVisuals.contains(entry.action)) return true;
+    auto const claim = gCellClaims.find(entry.cell);
+    return claim != gCellClaims.end() && claim->second.action == entry.action;
+}
+
+// A MovingBlock created in a cell pushed again right after landing can miss the camera's collection for several
+// ticks.
+void queueFreshMoving(::LevelRendererCamera& camera) {
+    auto  client = ll::service::getClientInstance();
+    auto* player = client ? client->getLocalPlayer() : nullptr;
+    if (!player) return;
+    auto&                   region = player->getDimensionBlockSource();
+    std::vector<::BlockPos> cells;
+    {
+        std::lock_guard const   guard(gAnimMutex);
+        static ::BlockPos const dirs[7]{
+            {0,  0,  0 },
+            {0,  -1, 0 },
+            {0,  1,  0 },
+            {0,  0,  -1},
+            {0,  0,  1 },
+            {-1, 0,  0 },
+            {1,  0,  0 }
+        };
+        std::unordered_set<::BlockPos, BlockPosHash> seen;
+        for (auto const& [pos, claim] : gCellClaims)
+            for (auto const& dir : dirs)
+                if (seen.insert(pos + dir).second) cells.push_back(pos + dir);
+    }
+    auto& queue = camera.mBlockActorRenderQueue.get();
+    auto& alpha = camera.mBlockActorRenderAlphaQueue.get();
+    for (auto const& pos : cells) {
+        auto* actor = region.getBlockEntity(pos);
+        if (!actor || actor->mType != ::BlockActorType::MovingBlock) continue;
+        auto const same = [actor](auto const& item) { return item.get() == actor; };
+        if (std::any_of(queue.begin(), queue.end(), same) || std::any_of(alpha.begin(), alpha.end(), same)) continue;
+        queue.emplace_back(actor);
+    }
+}
+
+// Runs right after the camera re-collects its queues, the only point where a kept instance can be let go
+// safely.
+void requeueHeldMoving(::LevelRendererCamera& camera) {
+    std::vector<std::shared_ptr<::BlockActor>> drop;
+    {
+        std::lock_guard const guard(gAnimMutex);
+        auto&                 queue  = camera.mBlockActorRenderQueue.get();
+        auto&                 alpha  = camera.mBlockActorRenderAlphaQueue.get();
+        auto&                 shadow = camera.mBlockActorShadowQueue.get();
+        auto const            queued = [](auto const& list, ::BlockActor const* actor) {
+            return std::any_of(list.begin(), list.end(), [actor](auto const& item) { return item.get() == actor; });
+        };
+        for (auto& [moving, entry] : gMovingAction) {
+            auto* actor = static_cast<::BlockActor*>(const_cast<::MovingBlockActor*>(moving));
+            if (!heldLocked(entry)) {
+                if (entry.keep) drop.push_back(std::move(entry.keep));
+                continue;
+            }
+            if (queued(queue, actor) || queued(alpha, actor)) continue;
+            queue.emplace_back(actor);
+        }
+        drop.insert(drop.end(), std::make_move_iterator(gDropKeep.begin()), std::make_move_iterator(gDropKeep.end()));
+        gDropKeep.clear();
+        // Only this reference keeps it alive, so only our requeue put it here.
+        for (auto const& ref : drop) {
+            if (ref.use_count() != 1) continue;
+            auto const same = [actor = ref.get()](auto const& item) { return item.get() == actor; };
+            std::erase_if(queue, same);
+            std::erase_if(alpha, same);
+            std::erase_if(shadow, same);
+        }
+    }
+    // The dtor hook locks gAnimMutex.
+    drop.clear();
+    queueFreshMoving(camera);
 }
 
 void markPistonStepped(::BlockActor const* piston) {
@@ -476,13 +669,14 @@ LL_TYPE_INSTANCE_HOOK(
     bool              isSticky
 ) {
     auto* result = origin(pos, isSticky);
-    // Piston NBT carries no interlock data, so a client-side piston rebuilt from a block-actor packet would stay
-    // InitialNotVisible until the engine's timeout and drop the arm for about three ticks.
+    // Piston NBT carries no interlock data, so a client-side piston rebuilt from a block-actor packet would
+    // stay InitialNotVisible until the engine's timeout and drop the arm for about three ticks.
     if (smoothPistonRenderEnabled()) mTerrainInterlockData->mRenderVisibilityState = VisibilityState::Visible;
     return result;
 }
 
-// The round counter has to advance somewhere that runs once per game tick and independently of the render framerate.
+// The round counter has to advance somewhere that runs once per game tick and independently of the render
+// framerate.
 LL_TYPE_INSTANCE_HOOK(
     PlaybackPistonStepHook,
     ll::memory::HookPriority::Lowest,
@@ -503,8 +697,9 @@ LL_TYPE_INSTANCE_HOOK(
     if (client) sweepActions(region);
     if (!smoothPistonRenderEnabled()) return;
 
-    // Unconditional, because a hidden piston is never handed to the renderer: a fix that lives in the render hook
-    // cannot run for the very frames the arm is missing. Tick is the only path that still executes while hidden.
+    // Unconditional, because a hidden piston is never handed to the renderer: a fix that lives in the render
+    // hook cannot run for the very frames the arm is missing. Tick is the only path that still executes while
+    // hidden.
     auto& interlock = mTerrainInterlockData.get();
     if (interlock.mRenderVisibilityState != VisibilityState::Visible || interlock.mHasBeenDelayedDeleted) {
         interlock.mRenderVisibilityState = VisibilityState::Visible;
@@ -531,8 +726,8 @@ LL_TYPE_INSTANCE_HOOK(
     bool const enabled = smoothPistonRenderEnabled();
     bool const hidden  = interlock.mRenderVisibilityState == VisibilityState::InitialNotVisible;
 
-    // Same-cell pistons cannot be found by walking the chunk collections - each instance only ever sees itself there -
-    // so one head per cell is elected here instead, fresh every round.
+    // Same-cell pistons cannot be found by walking the chunk collections - each instance only ever sees itself
+    // there - so one head per cell is elected here instead, fresh every round.
     bool const isArm       = entity.mType == ::BlockActorType::PistonArm;
     bool const selfStepped = isArm && hasPistonStepped(&entity);
     // A piston in a moving_block cell is cargo being pushed by another piston rather than the one driving the
@@ -540,8 +735,8 @@ LL_TYPE_INSTANCE_HOOK(
     bool const isCargo =
         isArm
         && blockEntityRenderData.renderSource.getBlock(entity.mPosition).getTypeName() == "minecraft:moving_block";
-    // Driving heads outrank cargo, and within either role a piston that advanced mProgress outranks an untouched
-    // leftover. Equal rank falls back to first-come so exactly one head survives.
+    // Driving heads outrank cargo, and within either role a piston that advanced mProgress outranks an
+    // untouched leftover. Equal rank falls back to first-come so exactly one head survives.
     int const selfRank       = (isCargo ? 0 : 2) + (selfStepped ? 1 : 0);
     bool      skipZombieHead = false;
     if (enabled && isArm) {
@@ -563,7 +758,10 @@ LL_TYPE_INSTANCE_HOOK(
 
     if (skipZombieHead) return;
 
-    if (enabled) gFrameLt.store(blockEntityRenderData.renderSource.getLevel().getCurrentTick().tickID);
+    if (enabled) {
+        gFrameLt.store(blockEntityRenderData.renderSource.getLevel().getCurrentTick().tickID);
+        gFrameDrewActors.store(true, std::memory_order_relaxed);
+    }
     RenderScope const     scope;
     std::optional<::Vec3> bodyOffset;
     if (isArm && animationActive()) bodyOffset = visualBodyOffset(entity.mPosition.get(), renderContext.mFrameAlpha);
@@ -605,17 +803,18 @@ LL_TYPE_INSTANCE_HOOK(
     auto&      source    = blockEntityRenderData.renderSource;
     auto const nowTick   = source.getLevel().getCurrentTick().tickID;
     gFrameLt.store(nowTick);
+    gFrameDrewActors.store(true, std::memory_order_relaxed);
 
-    // A MovingBlock rebuilt mid-animation starts hidden just like the piston does. Only lift that initial state: the
-    // retirement logic below owns DelayedDestructionNotVisible and must not be overridden.
+    // A MovingBlock rebuilt mid-animation starts hidden just like the piston does. Only lift that initial
+    // state: the retirement logic below owns DelayedDestructionNotVisible and must not be overridden.
     if (interlock.mRenderVisibilityState == VisibilityState::InitialNotVisible) {
         interlock.mRenderVisibilityState = VisibilityState::Visible;
     }
 
-    if (replayActive()) {
-        registerMoving(*movingPtr);
+    if (animationActive()) {
+        registerMoving(*movingPtr, source);
         // A successor or the rebuilt mesh already shows this block; a second copy would be a ghost.
-        if (animationActive() && movingRetired(*movingPtr)) return;
+        if (movingRetired(*movingPtr)) return;
         // The visual owns this block until the real block is re-meshed; native retirement would cut it short.
         if (movingHeld(*movingPtr)) {
             interlock.mRenderVisibilityState = VisibilityState::Visible;
@@ -627,23 +826,23 @@ LL_TYPE_INSTANCE_HOOK(
 
     auto const& cellBlock = source.getBlock(entity.mPosition);
 
-    // An air-wrapped MovingBlock has no replacement block of its own coming, so hiding it while its cell is still
-    // empty would open a hole. Once a real block occupies the cell there is nothing left for it to cover.
+    // An air-wrapped MovingBlock has no replacement block of its own coming, so hiding it while its cell is
+    // still empty would open a hole. Once a real block occupies the cell there is nothing left for it to cover.
     bool const coversNothing = movingPtr->getWrappedBlock().isAir() && cellBlock.isAir();
 
-    // getDrawPos collapses as soon as mProgress reaches 1, but the renderer keeps lerping mLastProgress towards it for
-    // another tick. Both fields at 1 is the only state where no interpolation is left.
+    // getDrawPos collapses as soon as mProgress reaches 1, but the renderer keeps lerping mLastProgress towards
+    // it for another tick. Both fields at 1 is the only state where no interpolation is left.
     auto* const owner   = movingPtr->getOwningPiston(source);
     bool const  arrived = owner != nullptr && owner->mProgress >= 1.0f && owner->mLastProgress >= 1.0f;
 
     // Detached means the block entity no longer belongs to this cell: the block has been handed to the next
-    // MovingBlock one cell along, so this cell is meant to be empty and keeping it drawn only redraws the block at the
-    // position it already left.
+    // MovingBlock one cell along, so this cell is meant to be empty and keeping it drawn only redraws the block
+    // at the position it already left.
     bool const detached = source.getBlockEntity(entity.mPosition) != &entity;
 
-    // A piston body never hands its block to a neighbour, so for it detachment only means the cell re-registered a
-    // fresh instance. Retiring it left the cell with neither entity nor replacement block for several frames, which is
-    // the piston vanishing mid-extension.
+    // A piston body never hands its block to a neighbour, so for it detachment only means the cell
+    // re-registered a fresh instance. Retiring it left the cell with neither entity nor replacement block for
+    // several frames, which is the piston vanishing mid-extension.
     bool const isPistonBody = movingPtr->getWrappedBlock().getTypeName().find("piston") != std::string::npos;
 
     if (coversNothing || isPistonBody) {
@@ -673,6 +872,123 @@ LL_TYPE_INSTANCE_HOOK(
     gTailAnchors.erase(static_cast<::MovingBlockActor const*>(this));
     forgetMoving(this);
     return result;
+}
+
+// A destroyed MovingBlock must leave the tables before its address can be re-queued or reused.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackBlockActorDtorHook,
+    ll::memory::HookPriority::Normal,
+    BlockActor,
+    &BlockActor::$dtor,
+    void
+) {
+    if (mType == ::BlockActorType::MovingBlock)
+        forgetMoving(static_cast<::MovingBlockActor const*>(static_cast<::BlockActor const*>(this)));
+    origin();
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackStartRebuildHook,
+    ll::memory::HookPriority::Normal,
+    RenderChunkGeometry,
+    &RenderChunkGeometry::startRebuild,
+    void,
+    ::RenderChunkBuilder& builder,
+    ::Vec3 const&         origin_
+) {
+    meshBuildStarted(this);
+    tMeshGeometry = this;
+    origin(builder, origin_);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackRebuildHook,
+    ll::memory::HookPriority::Normal,
+    RenderChunkGeometry,
+    &RenderChunkGeometry::rebuild,
+    void,
+    ::RenderChunkBuilder&                                      builder,
+    bool                                                       lightingType,
+    ::BakedBlockLightType                                      forExport,
+    bool                                                       lightingModelCapabilities,
+    ::mce::framebuilder::FrameLightingModelCapabilities const& caps
+) {
+    auto const saved = tMeshGeometry;
+    tMeshGeometry    = this;
+    origin(builder, lightingType, forExport, lightingModelCapabilities, caps);
+    tMeshGeometry = saved;
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackEndRebuildHook,
+    ll::memory::HookPriority::Normal,
+    RenderChunkGeometry,
+    &RenderChunkGeometry::endRebuild,
+    void,
+    ::RenderChunkBuilder&           builder,
+    ::mce::BufferResourceService&   bufferResourceService,
+    bool                            isBuilding,
+    ::dragon::RenderMetadata const& renderMetadata,
+    bool                            useSplitStream
+) {
+    origin(builder, bufferResourceService, isBuilding, renderMetadata, useSplitStream);
+    tMeshGeometry = nullptr;
+    meshBuildCommitted(this);
+}
+
+// Passes without block actors (export) do not count, so "next frame" always means a frame that drew them.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackFrameHook,
+    ll::memory::HookPriority::Normal,
+    LevelRenderer,
+    &LevelRenderer::endFrame,
+    void,
+    ::mce::TextureResourceService& textureResourceService
+) {
+    origin(textureResourceService);
+    if (gFrameDrewActors.exchange(false, std::memory_order_relaxed)) gFrame.fetch_add(1, std::memory_order_relaxed);
+}
+
+// A subchunk re-collect drops a detached MovingBlock from the queue; the main camera overrides the base
+// collection.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackPlayerQueueEntitiesHook,
+    ll::memory::HookPriority::Normal,
+    LevelRendererPlayer,
+    &LevelRendererPlayer::$queueRenderEntities,
+    void,
+    ::LevelRenderPreRenderUpdateParameters const& parameters
+) {
+    origin(parameters);
+    requeueHeldMoving(*this);
+}
+
+// The camera dispatches by the cell's block; once the real block lands there, a held MovingBlock gets no
+// renderer.
+std::atomic<::Block const*> gMovingBlockBlock{nullptr};
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackBlockForEntityHook,
+    ll::memory::HookPriority::Normal,
+    LevelRendererCamera,
+    &LevelRendererCamera::$_getBlockForBlockEnity,
+    ::Block const*,
+    ::BlockActor const& blockActor
+) {
+    auto const* block = origin(blockActor);
+    if (blockActor.mType != ::BlockActorType::MovingBlock || !animationActive()) return block;
+    if (block && block->getTypeName() == "minecraft:moving_block") {
+        gMovingBlockBlock.store(block, std::memory_order_relaxed);
+        return block;
+    }
+    auto const* moving = static_cast<::MovingBlockActor const*>(&blockActor);
+    {
+        std::lock_guard const guard(gAnimMutex);
+        auto const            it = gMovingAction.find(moving);
+        if (it == gMovingAction.end() || !heldLocked(it->second)) return block;
+    }
+    auto const* override_ = gMovingBlockBlock.load(std::memory_order_relaxed);
+    return override_ ? override_ : block;
 }
 
 // Starts the visual when replay flips a piston into motion; the native state change itself is untouched.
@@ -767,10 +1083,27 @@ LL_TYPE_INSTANCE_HOOK(
     ::AirAndSimpleBlockBits const* airAndSimpleBlocks
 ) {
     if (meshSuppressed(pos)) return false;
+    if (airAndSimpleBlocks && touchesLanded(pos)) return origin(tessellator, block, pos, faces, nullptr);
     return origin(tessellator, block, pos, faces, airAndSimpleBlocks);
 }
 
-// A plain area change can sit in the render queue for many frames at high framerates; the hidden block needs it now.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackFaceOcclusionHook,
+    ll::memory::HookPriority::Normal,
+    BlockOccluder,
+    &BlockOccluder::_shouldRenderFace,
+    bool,
+    ::BlockPos const& neighborPos,
+    uchar             face,
+    ::AABB const&     shape,
+    ::BlockPos const& pos
+) {
+    if (origin(neighborPos, face, shape, pos)) return true;
+    return neighborHidden(neighborPos) != 0;
+}
+
+// A plain area change can sit in the render queue for many frames at high framerates; the hidden block needs it
+// now.
 LL_TYPE_INSTANCE_HOOK(
     PlaybackImmediateRebuildHook,
     ll::memory::HookPriority::Normal,
@@ -801,7 +1134,15 @@ bool hookPistonRender(bool enable) {
         bool landed{};
         bool meshInWorld{};
         bool meshBlockInWorld{};
+        bool faceOcclusion{};
         bool immediateRebuild{};
+        bool actorDtor{};
+        bool startRebuild{};
+        bool rebuild{};
+        bool endRebuild{};
+        bool frame{};
+        bool playerQueueEntities{};
+        bool blockFor{};
     };
     static HookState state;
 
@@ -820,8 +1161,24 @@ bool hookPistonRender(bool enable) {
         if (!state.meshInWorld) return false;
         if (!state.meshBlockInWorld) state.meshBlockInWorld = PlaybackMeshBlockInWorldHook::hook() == 0;
         if (!state.meshBlockInWorld) return false;
+        if (!state.faceOcclusion) state.faceOcclusion = PlaybackFaceOcclusionHook::hook() == 0;
+        if (!state.faceOcclusion) return false;
         if (!state.immediateRebuild) state.immediateRebuild = PlaybackImmediateRebuildHook::hook() == 0;
         if (!state.immediateRebuild) return false;
+        if (!state.actorDtor) state.actorDtor = PlaybackBlockActorDtorHook::hook() == 0;
+        if (!state.actorDtor) return false;
+        if (!state.startRebuild) state.startRebuild = PlaybackStartRebuildHook::hook() == 0;
+        if (!state.startRebuild) return false;
+        if (!state.rebuild) state.rebuild = PlaybackRebuildHook::hook() == 0;
+        if (!state.rebuild) return false;
+        if (!state.endRebuild) state.endRebuild = PlaybackEndRebuildHook::hook() == 0;
+        if (!state.endRebuild) return false;
+        if (!state.frame) state.frame = PlaybackFrameHook::hook() == 0;
+        if (!state.frame) return false;
+        if (!state.playerQueueEntities) state.playerQueueEntities = PlaybackPlayerQueueEntitiesHook::hook() == 0;
+        if (!state.playerQueueEntities) return false;
+        if (!state.blockFor) state.blockFor = PlaybackBlockForEntityHook::hook() == 0;
+        if (!state.blockFor) return false;
         if (!state.landed) state.landed = PlaybackLandedBlockHook::hook() == 0;
         if (!state.landed) return false;
         if (!state.progress) state.progress = PlaybackPistonProgressHook::hook() == 0;
@@ -858,9 +1215,41 @@ bool hookPistonRender(bool enable) {
         PlaybackLandedBlockHook::unhook();
         state.landed = false;
     }
+    if (state.blockFor) {
+        PlaybackBlockForEntityHook::unhook();
+        state.blockFor = false;
+    }
+    if (state.playerQueueEntities) {
+        PlaybackPlayerQueueEntitiesHook::unhook();
+        state.playerQueueEntities = false;
+    }
+    if (state.frame) {
+        PlaybackFrameHook::unhook();
+        state.frame = false;
+    }
+    if (state.endRebuild) {
+        PlaybackEndRebuildHook::unhook();
+        state.endRebuild = false;
+    }
+    if (state.rebuild) {
+        PlaybackRebuildHook::unhook();
+        state.rebuild = false;
+    }
+    if (state.startRebuild) {
+        PlaybackStartRebuildHook::unhook();
+        state.startRebuild = false;
+    }
+    if (state.actorDtor) {
+        PlaybackBlockActorDtorHook::unhook();
+        state.actorDtor = false;
+    }
     if (state.immediateRebuild) {
         PlaybackImmediateRebuildHook::unhook();
         state.immediateRebuild = false;
+    }
+    if (state.faceOcclusion) {
+        PlaybackFaceOcclusionHook::unhook();
+        state.faceOcclusion = false;
     }
     if (state.meshBlockInWorld) {
         PlaybackMeshBlockInWorldHook::unhook();
