@@ -424,7 +424,8 @@ void beginReplayMouseFrame(float displayWidth, float displayHeight, bool blockGa
         }
     }
 
-    if (focused && !exportActive && gMouseOwner.load(std::memory_order_acquire) != MouseOwner::GameCaptured) {
+    // Export still needs the cursor: the progress dialog's cancel button is hit-tested against it.
+    if (focused && gMouseOwner.load(std::memory_order_acquire) != MouseOwner::GameCaptured) {
         float x{};
         float y{};
         if (queryUiCursorPosition(x, y)) io.AddMousePosEvent(x, y);
