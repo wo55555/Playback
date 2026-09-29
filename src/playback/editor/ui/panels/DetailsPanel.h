@@ -2,6 +2,8 @@
 
 #include "playback/editor/ui/PanelContext.h"
 
+#include <optional>
+
 namespace playback::editor::ui {
 
 enum class InspectorPage { Selection, Export, Settings };
@@ -18,6 +20,7 @@ private:
     void drawSelectionPage(PanelContext const& ctx);
     void drawExportPage(PanelContext const& ctx);
     void drawSettingsPage(PanelContext const& ctx);
+    void drawOptiPistonSection();
 
     // Each returns true when it owns the current selection and has drawn it.
     bool drawWorldActor(PanelContext const& ctx);
@@ -28,7 +31,8 @@ private:
     bool drawMarker(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
 
-    InspectorPage mPage{InspectorPage::Selection};
+    InspectorPage        mPage{InspectorPage::Selection};
+    std::optional<float> mPistonDurationDraft;
 };
 
 } // namespace playback::editor::ui

@@ -26,15 +26,6 @@ void registerPlaybackCommand() {
         }
         output.success("v{}", version->to_string());
     });
-
-    command.overload().text("piston").text("on").execute([](CommandOrigin const&, CommandOutput& output) {
-        Playback::getInstance().getConfig().smoothPistonRender = true;
-        output.success("smoothPistonRender = true");
-    });
-    command.overload().text("piston").text("off").execute([](CommandOrigin const&, CommandOutput& output) {
-        Playback::getInstance().getConfig().smoothPistonRender = false;
-        output.success("smoothPistonRender = false");
-    });
 }
 
 } // namespace playback::runtime::command

@@ -13,7 +13,6 @@
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
-#include "playback/visuals/PistonRenderHooks.h"
 
 #include "ll/api/Config.h"
 #include "ll/api/event/EventBus.h"
@@ -46,7 +45,6 @@ struct Playback::Impl {
     std::atomic<PlaybackMode>        mMode{PlaybackMode::Unknown};
     std::string                      mLevelId;
     bool                             mCameraRenderInstalled{};
-    bool                             mPistonRenderInstalled{};
     bool                             mRuntimeInstalled{};
 };
 
@@ -107,12 +105,6 @@ bool Playback::hook() {
     if (!impl->mCameraRenderInstalled) {
         getSelf().getLogger().warn("Unable to install camera render hooks; camera timelines are disabled");
     }
-    impl->mPistonRenderInstalled = visuals::hookPistonRender(true);
-    if (!impl->mPistonRenderInstalled) {
-        getSelf().getLogger().warn(
-            "Unable to install piston render hooks; piston animations keep their native ghosting"
-        );
-    }
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -158,8 +150,6 @@ bool Playback::hook() {
 
 bool Playback::unhook() {
     if (!impl->mRuntimeInstalled) return true;
-    if (impl->mPistonRenderInstalled && !visuals::hookPistonRender(false)) return false;
-    impl->mPistonRenderInstalled = false;
     if (impl->mCameraRenderInstalled && !editor::graphics::hookCameraRender(false)) return false;
     if (!runtime::hookClientTick(false)) {
         if (impl->mCameraRenderInstalled) (void)editor::graphics::hookCameraRender(true);

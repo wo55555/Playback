@@ -18,7 +18,6 @@ struct Config {
     std::string locateName                 = "zh_CN";
     bool        renderDiagnostics          = false;
     std::string renderDiagnosticExperiment = "off";
-    bool        smoothPistonRender         = true;
 
     CommandStruct command;
 };

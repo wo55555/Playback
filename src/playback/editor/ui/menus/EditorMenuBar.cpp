@@ -326,17 +326,6 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                 )) {
                 ctx.commands.toggleViewportMaximized();
             }
-            ImGui::Separator();
-            // Stays enabled during export so the piston control group can be switched from the export path.
-            auto& pistonConfig = Playback::getInstance().getConfig();
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.menu.smoothPiston"_tr().c_str(),
-                    nullptr,
-                    pistonConfig.smoothPistonRender,
-                    state.editorVisible
-                )) {
-                pistonConfig.smoothPistonRender = !pistonConfig.smoothPistonRender;
-            }
             ImGui::EndMenu();
         }
 
