@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Drive the separate OptiPiston mod's piston animation from the replay clock when it is installed, with its settings in the inspector.
+
 ### Fixed
 
 - Preserve the recorded local player's original name; recover legacy synthetic names from the matching player-list entry when available.
