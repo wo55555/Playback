@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
 #include "playback/exporting/RenderDiagnostics.h"
+#include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
@@ -445,8 +446,9 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         }
         mReplayDimensionProfile.store(std::move(dimensionProfile), std::memory_order_release);
 
-        mCleanupState        = CleanupState::None;
-        mActive              = true;
+        mCleanupState = CleanupState::None;
+        mActive       = true;
+        integration::pushReplayClock(mCurrentTick, true);
         auto const startSpan = exporting::recordReplayAdmissionBoundary("LocalServer.start.enter");
         exporting::recordReplayWorldSettings("local.creation", settings, startSpan);
         screenModel->startLocalServerAsync(mReplayLevelId, "Playback Replay", settings);
@@ -464,6 +466,7 @@ void ReplaySession::clearReplayData() {
     mReplayDimensionProfile.store({}, std::memory_order_release);
     mStopRequested.store(false, std::memory_order_release);
     mRequestedSeekTick.store(-1, std::memory_order_release);
+    integration::clearReplayClock();
     mActive       = false;
     mIsPaused     = false;
     mWorldReady   = false;
@@ -1087,6 +1090,7 @@ void ReplaySession::beginSeek(int targetTick) {
 
     mReaderIndex = selectedReader;
     mCurrentTick = selectedStart;
+    integration::pushReplayClock(mCurrentTick, true);
     applySnapshot(*mReaders[mReaderIndex], followRecordedPlayer);
     getLogger()
         .debug("Seeking replay to tick {} from snapshot {} at tick {}", targetTick, selectedReader, selectedStart);
@@ -2920,6 +2924,7 @@ void ReplaySession::handleNextTick() {
     }
     visuals::commitReplayEntityPoses(static_cast<int64_t>(mCurrentTick) + 1);
     mCurrentTick += 1;
+    integration::pushReplayClock(mCurrentTick, false);
     if (mReplayTime) {
         ++*mReplayTime;
         if (mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
