@@ -246,6 +246,7 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
 
     if (exportActive && mModeManager.current() != EditorMode::Render) {
         mModeManager.switchTo(EditorMode::Render);
+        mRenderMode.reset();
     } else if (!exportActive && mModeManager.current() != EditorMode::Edit) {
         mModeManager.switchTo(EditorMode::Edit);
     }
