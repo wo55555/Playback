@@ -116,7 +116,6 @@
                 "edit": "Edit",
                 "view": "View",
                 "cameraPath": "Camera Path Preview",
-                "smoothPiston": "Smooth Piston Animation",
                 "help": "Help",
                 "openReplay": "Open Replay",
                 "saveProject": "Save Project",
@@ -349,7 +348,11 @@
                 "uiScaleMedium": "Medium (125%)",
                 "uiScaleLarge": "Large (150%)",
                 "uiScaleHuge": "Huge (175%)",
-                "uiScaleAutoHint": "Resolved to {}% for this resolution"
+                "uiScaleAutoHint": "Resolved to {}% for this resolution",
+                "optiPiston": "OptiPiston",
+                "pistonEnabled": "Smooth piston animation",
+                "pistonDuration": "Animation duration",
+                "optiPistonHint": "Saved to OptiPiston's config; also applies outside replays."
             },
             "defaults": {
                 "camera": "Camera {}"

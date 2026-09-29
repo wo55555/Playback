@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Moved smooth piston animation into the separate OptiPiston mod; Playback drives it from the replay clock when OptiPiston is installed, and removed `/playback piston on|off`.
+
 ### Fixed
 
 - Preserve the recorded local player's original name; recover legacy synthetic names from the matching player-list entry when available.

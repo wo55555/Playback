@@ -116,7 +116,6 @@
                 "edit": "编辑",
                 "view": "视图",
                 "cameraPath": "摄影机路径预览",
-                "smoothPiston": "活塞动画优化",
                 "help": "帮助",
                 "openReplay": "打开回放",
                 "saveProject": "保存项目",
@@ -349,7 +348,11 @@
                 "uiScaleMedium": "中 (125%)",
                 "uiScaleLarge": "大 (150%)",
                 "uiScaleHuge": "特大 (175%)",
-                "uiScaleAutoHint": "当前分辨率下为 {}%"
+                "uiScaleAutoHint": "当前分辨率下为 {}%",
+                "optiPiston": "OptiPiston",
+                "pistonEnabled": "活塞动画优化",
+                "pistonDuration": "动画时长",
+                "optiPistonHint": "保存到 OptiPiston 配置，回放外同样生效。"
             },
             "defaults": {
                 "camera": "相机 {}"
