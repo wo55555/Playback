@@ -61,7 +61,7 @@ bool inputClampedInt(char const* id, int& value, int minimum, int maximum, float
 
 // Dim caption with a hairline underneath, used for every group in the export dialog.
 void sectionHeader(char const* label) {
-    ImGui::Spacing();
+    ImGui::Dummy({0.0f, 8.0f * metrics::scale()});
     ImGui::TextDisabled("%s", label);
     ImVec2 const min   = ImGui::GetItemRectMin();
     float const  y     = ImGui::GetItemRectMax().y + 3.0f * metrics::scale();
@@ -495,15 +495,19 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     if (mExportDialogOpen) ImGui::OpenPopup("##ExportVideo");
     ImVec2 const exportWorkSize = ImGui::GetMainViewport()->WorkSize;
     float const  uiScale        = metrics::scale();
-    ImVec2 const exportDialogSize{std::max(1.0f, std::min(560.0f * uiScale, exportWorkSize.x - 24.0f)), 0.0f};
+    ImVec2 const exportDialogSize{std::max(1.0f, std::min(580.0f * uiScale, exportWorkSize.x - 24.0f)), 0.0f};
+    ImVec2 const dialogPadding{22.0f * uiScale, 18.0f * uiScale};
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    // Zero height auto-fits the rows, so optional notes grow the dialog instead of scrolling it.
+    // Height fits the body; every row and the note slot are always laid out, so the height never changes.
     ImGui::SetNextWindowSize(exportDialogSize, ImGuiCond_Always);
     ImGui::SetNextWindowSizeConstraints(
         {exportDialogSize.x, 0.0f},
         {exportDialogSize.x, std::max(1.0f, exportWorkSize.y - 24.0f)}
     );
-    if (ImGui::BeginPopupModal("##ExportVideo", &mExportDialogOpen, ImGuiWindowFlags_NoResize)) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, dialogPadding);
+    bool const dialogVisible = ImGui::BeginPopupModal("##ExportVideo", &mExportDialogOpen, ImGuiWindowFlags_NoResize);
+    ImGui::PopStyleVar();
+    if (dialogVisible) {
         std::string const custom                   = "playback.refactorEditor.export.custom"_tr();
         char const*       fpsOptions[]             = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
         constexpr int     fpsValues[]              = {30, 60, 120};
@@ -516,7 +520,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         mExportSsaa                       = std::clamp(mExportSsaa, 0, 2);
         int const maximumReplayTick       = std::max(state.totalTicks, 0);
         // Fixed label column aligns every value; the capped value column stops inputs spanning the dialog.
-        auto const& style            = ImGui::GetStyle();
+        auto const& style = ImGui::GetStyle();
         // The label column must fit the longest label that carries a "(?)" hint.
         float hintedLabelWidth = 0.0f;
         for (std::string const& label :
@@ -532,8 +536,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         );
         float const fieldWidth = 92.0f * uiScale;
         float const frameH     = ImGui::GetFrameHeight();
-        float const valueWidth =
-            std::min(300.0f * uiScale, exportDialogSize.x - labelWidth - style.WindowPadding.x * 4.0f);
+        float const valueWidth = std::min(
+            320.0f * uiScale,
+            exportDialogSize.x - dialogPadding.x * 2.0f - labelWidth - style.CellPadding.x * 4.0f
+        );
 
         // Header: accent-tinted icon tile with title and subtitle stacked beside it.
         {
@@ -557,13 +563,13 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             dl->AddText({textX, topY + lineH + gap}, theme::kTextDim, subtitle.c_str());
             ImGui::Dummy({0.0f, box});
         }
-        ImGui::Spacing();
+        ImGui::Dummy({0.0f, 6.0f * uiScale});
         ImGui::Separator();
 
-        float const buttonH = frameH + 4.0f * uiScale;
-        // Rows are indented from the dialog edge so the labels do not sit flush against the border.
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {style.WindowPadding.x, style.ItemSpacing.y});
+        float const buttonH = frameH + 6.0f * uiScale;
         ImGui::BeginChild("##ExportSettingsBody", {0.0f, 0.0f}, ImGuiChildFlags_AutoResizeY);
+        // Taller cells give the rows room to breathe without widening the label column.
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, 3.0f * uiScale});
 
         sectionHeader("playback.refactorEditor.export.output"_tr().c_str());
         if (beginPropertyTable("##export-output", labelWidth)) {
@@ -585,9 +591,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 capabilities.ffmpegVideoExport ? 0 : 1
             );
             ImGui::EndTable();
-        }
-        if (!capabilities.ffmpegVideoExport) {
-            ImGui::TextDisabled("%s  %s", ICON_INFO, "playback.refactorEditor.export.ffmpegUnavailable"_tr().c_str());
         }
 
         sectionHeader("playback.refactorEditor.export.timeline"_tr().c_str());
@@ -766,9 +769,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 auto const u8 = compiled.plan->outputPath.filename().u8string();
                 outputValue.assign(reinterpret_cast<char const*>(u8.data()), u8.size());
             }
-            float const  pad     = style.WindowPadding.x;
-            float const  lineH   = ImGui::GetFontSize() + style.ItemSpacing.y;
-            float const  cardH   = pad * 2.0f + lineH * 3.0f;
+            float const  pad     = 12.0f * uiScale;
+            float const  lineH   = ImGui::GetFontSize() + 6.0f * uiScale;
+            float const  cardH   = pad * 2.0f + lineH * 3.0f - 6.0f * uiScale;
             float const  cardW   = ImGui::GetContentRegionAvail().x;
             ImVec2 const cardMin = ImGui::GetCursorScreenPos();
             ImVec2 const cardMax{cardMin.x + cardW, cardMin.y + cardH};
@@ -777,7 +780,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             dl->AddRect(cardMin, cardMax, theme::kBorder, theme::kFrameRounding * 2.0f);
 
             // The label column matches the tables above so the card reads as one continuous grid.
-            float const  valueX = cardMin.x + pad + labelWidth - style.WindowPadding.x;
+            float const  valueX = cardMin.x + labelWidth + style.CellPadding.x * 2.0f;
             ImVec2 const row0{cardMin.x + pad, cardMin.y + pad};
             dl->AddText(row0, theme::kTextDim, "playback.refactorEditor.export.timelineSummary"_tr().c_str());
             dl->AddText({valueX, row0.y}, theme::kText, timelineValue.c_str());
@@ -808,48 +811,62 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             ImGui::Dummy({cardW, style.ItemSpacing.y});
         }
 
-        if (!validSettings) {
-            std::string validationMessage;
-            if (!validOutput) validationMessage = "playback.refactorEditor.export.invalidOutput"_tr();
-            else if (!validTimeline) validationMessage = "playback.refactorEditor.export.invalidTimeline"_tr();
-            else if (!validFps) validationMessage = "playback.refactorEditor.export.invalidFps"_tr();
-            else if (!validResolution || !validCapture)
-                validationMessage = "playback.refactorEditor.export.invalidCapture"_tr();
-            else if (!formatAvailable) validationMessage = "playback.refactorEditor.export.ffmpegUnavailable"_tr();
-            else validationMessage = "playback.refactorEditor.export.invalidSettings"_tr();
-            // Warning strip: tinted band with a left accent bar so it is read as a status, not body text.
-            float const  pad    = style.WindowPadding.x;
-            float const  stripH = frameH + 4.0f * uiScale;
+        // Note slot: always reserved, so a validation warning or the FFmpeg note never changes the dialog height.
+        {
+            std::string note;
+            char const* noteIcon = ICON_WARNING;
+            ImU32       noteTone = theme::kWarning;
+            if (!validSettings) {
+                if (!validOutput) note = "playback.refactorEditor.export.invalidOutput"_tr();
+                else if (!validTimeline) note = "playback.refactorEditor.export.invalidTimeline"_tr();
+                else if (!validFps) note = "playback.refactorEditor.export.invalidFps"_tr();
+                else if (!validResolution || !validCapture) note = "playback.refactorEditor.export.invalidCapture"_tr();
+                else if (!formatAvailable) note = "playback.refactorEditor.export.ffmpegUnavailable"_tr();
+                else note = "playback.refactorEditor.export.invalidSettings"_tr();
+            } else if (!capabilities.ffmpegVideoExport) {
+                note     = "playback.refactorEditor.export.ffmpegUnavailable"_tr();
+                noteIcon = ICON_INFO;
+                noteTone = theme::kTextDim;
+            }
+            ImGui::Dummy({0.0f, 4.0f * uiScale});
+            float const  pad    = 10.0f * uiScale;
+            float const  stripH = frameH + 6.0f * uiScale;
             float const  stripW = ImGui::GetContentRegionAvail().x;
             ImVec2 const min    = ImGui::GetCursorScreenPos();
             ImVec2 const max{min.x + stripW, min.y + stripH};
-            auto*        dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(min, max, theme::withAlpha(theme::kWarning, 0x22), theme::kFrameRounding);
-            dl->AddRectFilled(min, {min.x + 3.0f * uiScale, max.y}, theme::kWarning, theme::kFrameRounding);
-            float const iconBox = metrics::iconGlyph();
-            widgets::drawIconCentred(
-                dl,
-                ICON_WARNING,
-                {min.x + pad, min.y + (stripH - iconBox) * 0.5f},
-                iconBox,
-                theme::kWarning
-            );
-            dl->AddText(
-                {min.x + pad + iconBox + pad * 0.75f,
-                 min.y + widgets::textOffsetInBox(stripH, validationMessage.c_str())},
-                theme::kText,
-                validationMessage.c_str()
-            );
             ImGui::Dummy({stripW, stripH});
-            if (!compiled.message.empty()) widgets::itemTooltip(compiled.message.c_str());
-        } else if (!capabilities.ffmpegVideoExport) {
-            ImGui::TextDisabled("%s  %s", ICON_INFO, "playback.refactorEditor.export.ffmpegUnavailable"_tr().c_str());
+            if (!note.empty()) {
+                auto* dl = ImGui::GetWindowDrawList();
+                dl->AddRectFilled(min, max, theme::withAlpha(noteTone, 0x22), theme::kFrameRounding);
+                dl->AddRectFilled(min, {min.x + 3.0f * uiScale, max.y}, noteTone, theme::kFrameRounding);
+                float const iconBox = metrics::iconGlyph();
+                widgets::drawIconCentred(
+                    dl,
+                    noteIcon,
+                    {min.x + pad, min.y + (stripH - iconBox) * 0.5f},
+                    iconBox,
+                    noteTone
+                );
+                ImVec4 const clip{min.x, min.y, max.x - pad, max.y};
+                dl->AddText(
+                    nullptr,
+                    0.0f,
+                    {min.x + pad + iconBox + pad * 0.75f, min.y + widgets::textOffsetInBox(stripH, note.c_str())},
+                    theme::kText,
+                    note.c_str(),
+                    nullptr,
+                    0.0f,
+                    &clip
+                );
+                widgets::itemTooltip(!compiled.message.empty() ? compiled.message.c_str() : note.c_str());
+            }
         }
 
-        ImGui::EndChild();
         ImGui::PopStyleVar();
+        ImGui::EndChild();
+        ImGui::Dummy({0.0f, 2.0f * uiScale});
         ImGui::Separator();
-        ImGui::Spacing();
+        ImGui::Dummy({0.0f, 6.0f * uiScale});
 
         // Footer: quiet cancel on the left of an accent-filled primary action, both one button height tall.
         std::string const cancelLabel = "playback.refactorEditor.export.cancel"_tr();
@@ -858,9 +875,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         float const cancelWidth = std::max(96.0f * uiScale, ImGui::CalcTextSize(cancelLabel.c_str()).x + labelPad);
         float const startWidth  = std::max(150.0f * uiScale, ImGui::CalcTextSize(startLabel.c_str()).x + labelPad);
         float const footerWidth = cancelWidth + style.ItemSpacing.x + startWidth;
-        ImGui::SetCursorPosX(
-            std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - footerWidth - style.WindowPadding.x)
-        );
+        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - footerWidth - dialogPadding.x));
         ImGui::PushStyleColor(ImGuiCol_Button, theme::withAlpha(theme::kButton, 0x00));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kButtonHover);
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kButtonActive);
