@@ -105,10 +105,10 @@ void RenderMode::draw(PanelContext const& ctx) {
 
     float const  uiScale = metrics::scale();
     auto const&  style   = ImGui::GetStyle();
-    ImVec2 const padding{16.0f * uiScale, 14.0f * uiScale};
-    float const  modalWidth = std::max(1.0f, std::min(460.0f * uiScale, displaySize.x - 24.0f));
+    ImVec2 const padding{24.0f * uiScale, 22.0f * uiScale};
+    float const  modalWidth = std::max(1.0f, std::min(480.0f * uiScale, displaySize.x - 24.0f));
     ImGui::SetNextWindowPos({displaySize.x * 0.5f, displaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
-    // Zero height auto-fits the rows, so the dialog carries no dead space below the cancel button.
+    // Height fits the rows; every row is laid out in every state, so the height never changes.
     ImGui::SetNextWindowSize({modalWidth, 0.0f}, ImGuiCond_Always);
     ImGui::SetNextWindowSizeConstraints({modalWidth, 0.0f}, {modalWidth, std::max(1.0f, displaySize.y - 24.0f)});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f * uiScale);
@@ -182,7 +182,7 @@ void RenderMode::draw(PanelContext const& ctx) {
             dl->PopClipRect();
             ImGui::Dummy({0.0f, box});
         }
-        ImGui::Dummy({0.0f, 4.0f * uiScale});
+        ImGui::Dummy({0.0f, 10.0f * uiScale});
 
         // Progress bar with the percentage inside and the frame count and estimate on the line below.
         {
@@ -211,7 +211,7 @@ void RenderMode::draw(PanelContext const& ctx) {
                 ImGui::TextDisabled("%s", estimate.c_str());
             }
         }
-        ImGui::Dummy({0.0f, 4.0f * uiScale});
+        ImGui::Dummy({0.0f, 8.0f * uiScale});
 
         float const labelWidth = std::clamp(modalWidth * 0.3f, 90.0f * uiScale, 140.0f * uiScale);
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * uiScale, 4.0f * uiScale});
@@ -237,31 +237,28 @@ void RenderMode::draw(PanelContext const& ctx) {
             row("playback.refactorEditor.render.speedLabel"_tr(),
                 speed > 0.0 ? "playback.refactorEditor.render.speedValue"_tr(speed) : std::string("-"));
             row("playback.refactorEditor.render.formatLabel"_tr(), format);
-            if (!outputPath.empty()) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("%s", "playback.refactorEditor.render.outputLabel"_tr().c_str());
-                ImGui::TableSetColumnIndex(1);
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                ImGui::InputText(
-                    "##render-output-path",
-                    outputPath.data(),
-                    outputPath.size() + 1,
-                    ImGuiInputTextFlags_ReadOnly
-                );
-                widgets::itemTooltip(outputPath.c_str());
-            }
+            // Drawn even before the path is known, so the row count stays fixed.
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.render.outputLabel"_tr().c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::InputText(
+                "##render-output-path",
+                outputPath.data(),
+                outputPath.size() + 1,
+                ImGuiInputTextFlags_ReadOnly
+            );
+            if (!outputPath.empty()) widgets::itemTooltip(outputPath.c_str());
             ImGui::EndTable();
         }
         ImGui::PopStyleVar();
 
         // No status.message line: while active it only repeats the title, and it would shift the button.
-        ImGui::Dummy({0.0f, 6.0f * uiScale});
-        std::string const cancelLabel =
-            cancelling ? "playback.refactorEditor.render.cancelling"_tr()
-                       : std::string(ICON_CLOSE) + "  " + "playback.refactorEditor.render.cancel"_tr();
-        float const buttonWidth = std::min(
+        ImGui::Dummy({0.0f, 14.0f * uiScale});
+        std::string const cancelLabel = std::string(ICON_CLOSE) + "  " + "playback.refactorEditor.render.cancel"_tr();
+        float const       buttonWidth = std::min(
             ImGui::GetContentRegionAvail().x,
             std::max(160.0f * uiScale, ImGui::CalcTextSize(cancelLabel.c_str()).x + style.FramePadding.x * 4.0f)
         );
@@ -269,15 +266,29 @@ void RenderMode::draw(PanelContext const& ctx) {
         ImGui::SetCursorPosX(
             ImGui::GetCursorPosX() + std::max(0.0f, (ImGui::GetContentRegionAvail().x - buttonWidth) * 0.5f)
         );
-        ImGui::BeginDisabled(cancelling);
-        ImGui::PushStyleColor(ImGuiCol_Button, theme::kButton);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::withAlpha(theme::kError, 0x80));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::withAlpha(theme::kError, 0xb0));
-        if (ImGui::Button(cancelLabel.c_str(), {buttonWidth, buttonHeight})) {
-            ctx.submitAction({EditorActionType::CancelExport});
+        if (cancelling) {
+            // Same footprint as the button, holding only a spinner while the writer winds down.
+            ImVec2 const min = ImGui::GetCursorScreenPos();
+            ImVec2 const max{min.x + buttonWidth, min.y + buttonHeight};
+            ImGui::Dummy({buttonWidth, buttonHeight});
+            auto* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(min, max, theme::withAlpha(theme::kButton, 0x99), style.FrameRounding);
+            drawSpinner(
+                dl,
+                {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f},
+                ImGui::GetFontSize() * 0.45f,
+                2.0f * uiScale,
+                theme::kWarning
+            );
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, theme::kButton);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::withAlpha(theme::kError, 0x80));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::withAlpha(theme::kError, 0xb0));
+            if (ImGui::Button(cancelLabel.c_str(), {buttonWidth, buttonHeight})) {
+                ctx.submitAction({EditorActionType::CancelExport});
+            }
+            ImGui::PopStyleColor(3);
         }
-        ImGui::PopStyleColor(3);
-        ImGui::EndDisabled();
     }
     ImGui::End();
 }
