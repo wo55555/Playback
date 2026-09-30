@@ -224,8 +224,7 @@
                 "speedValue": "{:.2f} frames/s",
                 "remainingValue": "About {} remaining",
                 "estimating": "Estimating time remaining...",
-                "cancel": "Cancel Export",
-                "cancelling": "Cancelling..."
+                "cancel": "Cancel Export"
             },
             "status": {
                 "replay": "[Replay]",
