@@ -17,6 +17,7 @@
 #include "mc/resources/PackInstance.h"
 #include "mc/resources/PackManifest.h"
 #include "mc/resources/ResourcePackManager.h"
+#include "mc/world/level/PackInstanceId.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
 #include "mc/world/level/Weather.h"
@@ -27,6 +28,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -105,12 +107,8 @@ std::string experimentBits(std::vector<bool> const& values) {
 
 bool renderDiagnosticsEnabled() noexcept { return renderDiagnosticProfile().enabled; }
 
-bool rayTracingActive() noexcept try {
-    auto* const builder = renderDragonFrameBuilder();
-    return builder && builder->initialized() && builder->isRayTracingEnabled();
-} catch (...) {
-    return false;
-}
+// The 26.10 SDK declares FrameBuilder without any state accessors, so ray tracing cannot be detected here.
+bool rayTracingActive() noexcept { return false; }
 
 RenderDiagnosticProfile renderDiagnosticProfile() noexcept {
     auto const& config = Playback::getInstance().getConfig();
@@ -171,9 +169,18 @@ void recordWorldEnvironment(
         weather,
         dimension,
         phase,
-        std::bit_cast<uint32_t>(weather->getRainLevel(partialTick)),
-        std::bit_cast<uint32_t>(weather->getLightningLevel(partialTick)),
-        static_cast<uint64_t>(static_cast<int64_t>(weather->getSkyFlashTime()))
+        // The 26.10 SDK lacks the Weather sample getters; interpolate the stored levels the same way.
+        std::bit_cast<uint32_t>(std::lerp(
+            static_cast<float>(weather->mOldRainLevel),
+            static_cast<float>(weather->mRainLevel),
+            partialTick
+        )),
+        std::bit_cast<uint32_t>(std::lerp(
+            static_cast<float>(weather->mOldLightningLevel),
+            static_cast<float>(weather->mLightningLevel),
+            partialTick
+        )),
+        static_cast<uint64_t>(static_cast<int64_t>(static_cast<int>(weather->mSkyFlashTime)))
     );
 } catch (...) {
     reportDiagnosticFailure();
@@ -208,23 +215,8 @@ void recordRenderDiagnostics(RenderDiagnosticStage stage, ClientInstance* client
     RendererSnapshot snapshot;
     auto*            builder = renderDragonFrameBuilder();
     snapshot.builder         = builder;
-    if (builder) {
-        snapshot.flags = 1;
-        if (builder->initialized()) {
-            snapshot.flags |= 2;
-            if (builder->enabled()) snapshot.flags |= 4;
-            if (builder->isDeferredCapable()) snapshot.flags |= 8;
-            if (builder->isDeferredEnabled()) snapshot.flags |= 16;
-            if (builder->isRayTracingCapable()) snapshot.flags |= 32;
-            if (builder->isRayTracingEnabled()) snapshot.flags |= 64;
-            if (builder->isUpscalingAvailable()) snapshot.flags |= 128;
-            if (builder->isUpscalingEnabled()) snapshot.flags |= 256;
-            auto const resolution  = builder->getRenderResolution();
-            snapshot.width         = resolution.x;
-            snapshot.height        = resolution.y;
-            snapshot.upscaleFactor = builder->getUpscalingFactor();
-        }
-    }
+    // The 26.10 FrameBuilder has no state accessors; only its presence is recorded.
+    if (builder) snapshot.flags = 1;
     recordOfflineRenderTrace(
         OfflineRenderTraceEvent::RenderState,
         builder,
@@ -279,29 +271,13 @@ void recordRenderDiagnostics(RenderDiagnosticStage stage, ClientInstance* client
         static_cast<uint64_t>(replay.getCurrentTick())
     );
     auto&                    packs       = client->getResourcePackManager();
-    bool const               vvSupported = packs.supportsVibrantVisuals();
+    // The 26.10 SDK has no Vibrant Visuals or resources-loaded query on ResourcePackManager; both report false.
+    bool const               vvSupported = false;
     bool const               pbr         = packs.hasCapability("pbr");
     bool const               raytraced   = packs.hasCapability("raytraced");
-    bool const               loaded      = packs.areGameplayResourcesLoaded();
+    bool const               loaded      = false;
+    // ResourcePackManager::iteratePacks is not exported on 26.10 and its stacks are untyped, so packs are not listed.
     std::vector<std::string> entries;
-    packs.iteratePacks([&](PackInstance const& pack) {
-        auto const  id       = pack.getPackId();
-        auto const& manifest = pack.getManifest();
-        entries.push_back(
-            fmt::format(
-                "id={:016x}:{:016x} version={:?} origin={} subpack={:?} name={:?} pbr={} raytraced={} slice={}",
-                id.a,
-                id.b,
-                std::string_view(pack.getVersion().asString()).substr(0, 128),
-                static_cast<int>(pack.getPackOrigin()),
-                std::string_view(pack.getSubpackFolderName()).substr(0, 128),
-                std::string_view(manifest.getName()).substr(0, 128),
-                manifest.hasPackCapability("pbr"),
-                manifest.hasPackCapability("raytraced"),
-                pack.isSlicePack()
-            )
-        );
-    });
     auto const packCount = entries.size();
     recordOfflineRenderTrace(
         OfflineRenderTraceEvent::ResourceState,
@@ -513,11 +489,12 @@ void recordReplayWorldSettings(std::string_view source, LevelSettings const& set
 
 void recordReplayRequestedGraphicsMode(MinecraftScreenModel const& model) noexcept try {
     if (!renderDiagnosticsEnabled()) return;
+    // The 26.10 MinecraftScreenModel exposes no graphics-mode getter, so the mode is not reported here.
     diagnosticLogger().info(
-        "[ReplayAdmission] session={} thread={} requestedGraphicsMode={} source=MinecraftScreenModel",
+        "[ReplayAdmission] session={} thread={} model={} requestedGraphicsMode=unavailable",
         gAdmissionSession.load(),
         GetCurrentThreadId(),
-        model.getGraphicsMode()
+        static_cast<void const*>(&model)
     );
 } catch (...) {
     reportDiagnosticFailure();

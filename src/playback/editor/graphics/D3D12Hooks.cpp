@@ -676,28 +676,7 @@ void recordNativeSwitchState(
     });
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    GraphicsModeDiagnosticHook,
-    ll::memory::HookPriority::Highest,
-    MinecraftScreenModel,
-    &MinecraftScreenModel::setGraphicsMode,
-    void,
-    int mode
-) {
-    ActiveRendererInitDetour activeDetour;
-    uint64_t                 transition{};
-    if (!gRendererInitHookStopping.load(std::memory_order_acquire) && exporting::renderDiagnosticsEnabled()) {
-        runDetourInstrumentation([&] { transition = beginGraphicsSwitchTrace(getGraphicsMode(), mode); });
-        gImGuiRenderer.recordGraphicsSwitchResources(transition, "Overlay.atModeSetterEnter");
-    }
-    origin(mode);
-    if (transition) {
-        runDetourInstrumentation([&] {
-            recordGraphicsSwitchTrace(transition, "ModeSetter.return", fmt::format("selected={}", getGraphicsMode()));
-        });
-        gImGuiRenderer.recordGraphicsSwitchResources(transition, "Overlay.atModeSetterReturn");
-    }
-}
+// The 26.10 SDK has no MinecraftScreenModel::setGraphicsMode, so the graphics mode setter is not traced.
 
 LL_TYPE_INSTANCE_HOOK(
     OfflineRenderSubmitHook,
@@ -1119,7 +1098,6 @@ bool hookRendererInit(bool enable) {
     static bool      shutdownInstalled{};
     static bool      submitInstalled{};
     static bool      submitD3D11Installed{};
-    static bool      modeDiagnosticInstalled{};
     static bool      suspendDiagnosticInstalled{};
     static bool      switchTraceOpened{};
 
@@ -1183,20 +1161,12 @@ bool hookRendererInit(bool enable) {
                 if (switchTraceOpened) getLogger().info("[RenderDiag] graphics switch journal={}", path);
                 else getLogger().warn("Unable to open the graphics switch diagnostic journal");
             }
-            if (switchTraceOpened && !modeDiagnosticInstalled) {
-                modeDiagnosticInstalled = GraphicsModeDiagnosticHook::hook() == 0;
-                if (!modeDiagnosticInstalled) getLogger().warn("Unable to install the graphics mode diagnostic hook");
-            }
             if (switchTraceOpened && !suspendDiagnosticInstalled) {
                 suspendDiagnosticInstalled = RendererSuspendDiagnosticHook::hook() == 0;
                 if (!suspendDiagnosticInstalled)
                     getLogger().warn("Unable to install the renderer suspend diagnostic hook");
             }
-            getLogger().info(
-                "[RenderDiag] graphics switch hooks mode={} suspend={}",
-                modeDiagnosticInstalled,
-                suspendDiagnosticInstalled
-            );
+            getLogger().info("[RenderDiag] graphics switch hooks mode=false suspend={}", suspendDiagnosticInstalled);
         }
         gRendererInitHookStopping.store(false, std::memory_order_release);
         return true;
@@ -1204,10 +1174,6 @@ bool hookRendererInit(bool enable) {
 
     gRendererInitHookStopping.store(true, std::memory_order_release);
     gD3D12RendererActive.store(false, std::memory_order_release);
-    if (modeDiagnosticInstalled) {
-        if (GraphicsModeDiagnosticHook::unhook()) modeDiagnosticInstalled = false;
-        else return false;
-    }
     if (suspendDiagnosticInstalled) {
         if (RendererSuspendDiagnosticHook::unhook()) suspendDiagnosticInstalled = false;
         else return false;
