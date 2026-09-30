@@ -62,12 +62,4 @@ void apply() {
     colors[ImGuiCol_ModalWindowDimBg]     = ImColor(static_cast<int>(kModalDim));
 }
 
-namespace {
-ImFont* gBoldFont = nullptr;
-} // namespace
-
-ImFont* boldFont() { return gBoldFont; }
-
-void setBoldFont(ImFont* font) { gBoldFont = font; }
-
 } // namespace playback::editor::ui::theme
