@@ -13,9 +13,8 @@
 
 #include "mc/client/game/IClientInstance.h"
 #include "mc/client/game/MinecraftGame.h"
-#include "mc/client/multiplayer/MultiPlayerLevel.h"
+#include "mc/client/multiplayer/ClientLevel.h"
 #include "mc/client/renderer/game/GameRenderer.h"
-#include "mc/deps/minecraft_renderer/objects/FrameRenderObject.h"
 #include "mc/deps/minecraft_renderer/objects/ViewRenderObject.h"
 #include "mc/util/Timer.h"
 
@@ -76,23 +75,6 @@ void recordRendererClock(GameRenderer const& renderer, uint64_t stage) noexcept 
     );
 }
 
-void recordRendererClockIdentity(
-    GameRenderer const&  renderer,
-    ScreenContext const& screenContext,
-    uint64_t             stage
-) noexcept {
-    if (renderDiagnosticProfile().probe != RenderDiagnosticProbe::Clock || !isOfflineRenderTraceActive()) return;
-    auto const* rendererClock = std::addressof(renderer.mClock.get());
-    auto const* contextClock  = std::addressof(static_cast<mce::Clock const&>(screenContext.clock));
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::RendererClockIdentity,
-        rendererClock,
-        contextClock,
-        stage,
-        rendererClock == contextClock
-    );
-}
-
 void recordGraphicsClock(uint64_t phase, Timer const& timer, IClientInstance& client) noexcept try {
     if (!renderDiagnosticsEnabled() || !isOfflineRenderTraceActive()) return;
     recordOfflineRenderTrace(
@@ -110,7 +92,8 @@ void recordGraphicsClock(uint64_t phase, Timer const& timer, IClientInstance& cl
         &client,
         phase,
         static_cast<uint64_t>(static_cast<int64_t>(timer.mTicks)),
-        std::bit_cast<uint32_t>(static_cast<float>(timer.mLastTimeSeconds)),
+        // 26.51 stores the last time in milliseconds; the trace keeps reporting seconds.
+        std::bit_cast<uint32_t>(static_cast<float>(static_cast<double>(timer.mLastTimeMs) / 1000.0)),
         std::bit_cast<uint32_t>(static_cast<float>(timer.mTimeScale))
     );
     if (phase == 2 || phase == 3) {
@@ -401,119 +384,8 @@ LL_TYPE_INSTANCE_HOOK(
     trace.result(sample->gameRenderCalls);
 }
 
-using ExtractedFramePtr = std::unique_ptr<FrameRenderObject, std::function<void(FrameRenderObject*)>>;
-
-LL_TYPE_INSTANCE_HOOK(
-    OfflineRenderExtractFrameHook,
-    ll::memory::HookPriority::Highest,
-    GameRenderer,
-    &GameRenderer::_extractFrame,
-    ExtractedFramePtr,
-    ScreenContext& screenContext,
-    bool           renderGraphContainsPlayScreen
-) {
-    if (!isOfflineRenderTraceActive()) return origin(screenContext, renderGraphContainsPlayScreen);
-    static std::atomic<uint64_t> serial{1};
-    auto const                   extraction = serial.fetch_add(1, std::memory_order_relaxed);
-    OfflineRenderTraceScope      trace(
-        OfflineRenderTraceEvent::ExtractFrameEnter,
-        OfflineRenderTraceEvent::ExtractFrameExit,
-        this,
-        &screenContext,
-        0,
-        extraction,
-        renderGraphContainsPlayScreen ? 1 : 0
-    );
-    recordRendererClock(*this, 3);
-    recordRendererClockIdentity(*this, screenContext, 1);
-    auto frame = origin(screenContext, renderGraphContainsPlayScreen);
-    recordRendererClock(*this, 4);
-    recordRendererClockIdentity(*this, screenContext, 2);
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::ExtractedFrame,
-        frame.get(),
-        this,
-        extraction,
-        frame ? frame->mViews->size() : 0,
-        renderGraphContainsPlayScreen ? 1 : 0,
-        frame ? 1 : 0
-    );
-    if (frame) {
-        auto const& views   = *frame->mViews;
-        auto const  profile = renderDiagnosticProfile();
-        for (size_t index = 0; index < views.size() && index < 4; ++index) {
-            auto const& view   = views[index];
-            auto const& data   = *view.mViewData;
-            auto const& camera = *data.mCameraPos;
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::ExtractedView,
-                &view,
-                frame.get(),
-                (static_cast<uint64_t>(index) << 1) | (data.mIsShadowPass ? 1 : 0),
-                std::bit_cast<uint32_t>(camera.x),
-                std::bit_cast<uint32_t>(camera.y),
-                std::bit_cast<uint32_t>(camera.z)
-            );
-            if (profile.probe != RenderDiagnosticProbe::ViewInputs) continue;
-            auto const& fog   = data.mFogColor.get();
-            auto const& sky   = data.mSkyColor.get();
-            auto const  flags = (static_cast<uint64_t>(static_cast<bool>(data.mIsEndDimension)) << 0)
-                              | (static_cast<uint64_t>(static_cast<bool>(data.mCameraAboveClouds)) << 1)
-                              | (static_cast<uint64_t>(static_cast<bool>(data.mCameraUnderLiquid)) << 2)
-                              | (static_cast<uint64_t>(static_cast<bool>(data.mDrawSky)) << 3)
-                              | (static_cast<uint64_t>(static_cast<bool>(data.mDrawWeather)) << 4)
-                              | (static_cast<uint64_t>(static_cast<bool>(data.mIsShadowPass)) << 5);
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::ExtractedViewInputs,
-                &view,
-                frame.get(),
-                (static_cast<uint64_t>(index) << 8) | 0,
-                std::bit_cast<uint32_t>(static_cast<float>(data.mFakeHDR)),
-                std::bit_cast<uint32_t>(static_cast<float>(data.mSkyBrightnessScalar)),
-                flags
-            );
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::ExtractedViewInputs,
-                &view,
-                frame.get(),
-                (static_cast<uint64_t>(index) << 8) | 1,
-                std::bit_cast<uint32_t>(fog.r),
-                std::bit_cast<uint32_t>(fog.g),
-                std::bit_cast<uint32_t>(fog.b)
-            );
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::ExtractedViewInputs,
-                &view,
-                frame.get(),
-                (static_cast<uint64_t>(index) << 8) | 2,
-                std::bit_cast<uint32_t>(sky.r),
-                std::bit_cast<uint32_t>(sky.g),
-                std::bit_cast<uint32_t>(sky.b)
-            );
-        }
-    }
-    trace.result(frame ? 1 : 0);
-    return frame;
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    OfflineRenderGameEndFrameHook,
-    ll::memory::HookPriority::Highest,
-    GameRenderer,
-    &GameRenderer::endFrame,
-    void,
-    mce::RenderContext& renderContext
-) {
-    OfflineRenderTraceScope trace(
-        OfflineRenderTraceEvent::GameEndFrameEnter,
-        OfflineRenderTraceEvent::GameEndFrameExit,
-        this,
-        &renderContext
-    );
-    recordRendererClock(*this, 5);
-    origin(renderContext);
-    recordRendererClock(*this, 6);
-}
+// The 26.51 SDK no longer declares GameRenderer::_extractFrame or GameRenderer::endFrame, so the
+// extract-frame and end-frame diagnostic hooks are unavailable on this line.
 
 } // namespace
 
@@ -521,20 +393,16 @@ bool hookOfflineRenderClock(bool enable) {
     struct HookState {
         bool clock{};
         bool gameFrame{};
-        bool extractFrame{};
-        bool endFrame{};
     };
     static HookState state;
 
     auto removeAll = [&] {
         gHookInstalled.store(false, std::memory_order_release);
         resetOfflineRenderClock();
-        if (state.endFrame && OfflineRenderGameEndFrameHook::unhook()) state.endFrame = false;
-        if (state.extractFrame && OfflineRenderExtractFrameHook::unhook()) state.extractFrame = false;
         if (state.gameFrame && OfflineRenderGameFrameHook::unhook()) state.gameFrame = false;
         if (state.clock && OfflineRenderClockUpdateGraphicsHook::unhook()) state.clock = false;
-        gDiagnosticHookMask.store((state.extractFrame ? 1u : 0u) | (state.endFrame ? 2u : 0u));
-        return !state.clock && !state.gameFrame && !state.extractFrame && !state.endFrame;
+        gDiagnosticHookMask.store(0);
+        return !state.clock && !state.gameFrame;
     };
 
     if (enable) {
@@ -544,14 +412,7 @@ bool hookOfflineRenderClock(bool enable) {
         gHookInstalled.store(ready, std::memory_order_release);
         if (ready) {
             auto const profile = renderDiagnosticProfile();
-            if (!profile.endFrame() && state.endFrame && OfflineRenderGameEndFrameHook::unhook())
-                state.endFrame = false;
-            if (!profile.extractFrame() && state.extractFrame && OfflineRenderExtractFrameHook::unhook())
-                state.extractFrame = false;
-            if (profile.extractFrame() && !state.extractFrame)
-                state.extractFrame = OfflineRenderExtractFrameHook::hook() == 0;
-            if (profile.endFrame() && !state.endFrame) state.endFrame = OfflineRenderGameEndFrameHook::hook() == 0;
-            gDiagnosticHookMask.store((state.extractFrame ? 1u : 0u) | (state.endFrame ? 2u : 0u));
+            gDiagnosticHookMask.store(0);
             if (gDiagnosticHookMask.load() != profile.hookMask()) {
                 Playback::getInstance().getSelf().getLogger().warn(
                     "CPU diagnostic hooks incomplete: expectedMask={}, actualMask={}; controlled gap disabled",
