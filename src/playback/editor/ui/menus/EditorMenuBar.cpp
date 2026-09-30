@@ -62,13 +62,13 @@ bool inputClampedInt(char const* id, int& value, int minimum, int maximum, float
 
 // Dim caption with a hairline underneath, used for every group in the export dialog.
 void sectionHeader(char const* label) {
-    ImGui::Dummy({0.0f, 8.0f * metrics::scale()});
+    ImGui::Dummy({0.0f, 5.0f * metrics::scale()});
     ImGui::TextDisabled("%s", label);
     ImVec2 const min   = ImGui::GetItemRectMin();
     float const  y     = ImGui::GetItemRectMax().y + 3.0f * metrics::scale();
     float const  right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
     ImGui::GetWindowDrawList()->AddLine({min.x, y}, {right, y}, theme::kBorder);
-    ImGui::Dummy({0.0f, 5.0f * metrics::scale()});
+    ImGui::Dummy({0.0f, 3.0f * metrics::scale()});
 }
 
 bool beginPropertyTable(char const* id, float labelWidth) {
@@ -497,9 +497,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     ImVec2 const exportWorkSize = ImGui::GetMainViewport()->WorkSize;
     float const  uiScale        = metrics::scale();
     ImVec2 const exportDialogSize{std::max(1.0f, std::min(580.0f * uiScale, exportWorkSize.x - 24.0f)), 0.0f};
-    ImVec2 const dialogPadding{22.0f * uiScale, 18.0f * uiScale};
+    ImVec2 const dialogPadding{22.0f * uiScale, 14.0f * uiScale};
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    // Height fits the body; every row and the note slot are always laid out, so the height never changes.
+    // Height fits the content and never changes; the dialog only scrolls when the viewport is shorter than that.
     ImGui::SetNextWindowSize(exportDialogSize, ImGuiCond_Always);
     ImGui::SetNextWindowSizeConstraints(
         {exportDialogSize.x, 0.0f},
@@ -564,13 +564,12 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             dl->AddText({textX, topY + lineH + gap}, theme::kTextDim, subtitle.c_str());
             ImGui::Dummy({0.0f, box});
         }
-        ImGui::Dummy({0.0f, 6.0f * uiScale});
+        ImGui::Dummy({0.0f, 4.0f * uiScale});
         ImGui::Separator();
 
         float const buttonH = frameH + 6.0f * uiScale;
-        ImGui::BeginChild("##ExportSettingsBody", {0.0f, 0.0f}, ImGuiChildFlags_AutoResizeY);
         // Taller cells give the rows room to breathe without widening the label column.
-        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, 3.0f * uiScale});
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, 2.0f * uiScale});
 
         sectionHeader("playback.refactorEditor.export.output"_tr().c_str());
         if (beginPropertyTable("##export-output", labelWidth)) {
@@ -770,9 +769,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 auto const u8 = compiled.plan->outputPath.filename().u8string();
                 outputValue.assign(reinterpret_cast<char const*>(u8.data()), u8.size());
             }
-            float const  pad     = 12.0f * uiScale;
-            float const  lineH   = ImGui::GetFontSize() + 6.0f * uiScale;
-            float const  cardH   = pad * 2.0f + lineH * 3.0f - 6.0f * uiScale;
+            float const  pad     = 10.0f * uiScale;
+            float const  lineH   = ImGui::GetFontSize() + 4.0f * uiScale;
+            float const  cardH   = pad * 2.0f + lineH * 3.0f - 4.0f * uiScale;
             float const  cardW   = ImGui::GetContentRegionAvail().x;
             ImVec2 const cardMin = ImGui::GetCursorScreenPos();
             ImVec2 const cardMax{cardMin.x + cardW, cardMin.y + cardH};
@@ -829,7 +828,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 noteIcon = ICON_INFO;
                 noteTone = theme::kTextDim;
             }
-            ImGui::Dummy({0.0f, 4.0f * uiScale});
             float const  pad    = 10.0f * uiScale;
             float const  stripH = frameH + 6.0f * uiScale;
             float const  stripW = ImGui::GetContentRegionAvail().x;
@@ -864,10 +862,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         }
 
         ImGui::PopStyleVar();
-        ImGui::EndChild();
-        ImGui::Dummy({0.0f, 2.0f * uiScale});
         ImGui::Separator();
-        ImGui::Dummy({0.0f, 6.0f * uiScale});
+        ImGui::Dummy({0.0f, 4.0f * uiScale});
 
         // Footer: quiet cancel on the left of an accent-filled primary action, both one button height tall.
         std::string const cancelLabel = "playback.refactorEditor.export.cancel"_tr();
