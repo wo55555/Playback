@@ -15,18 +15,21 @@
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/platform/UUID.h"
 #include "mc/resources/PackInstance.h"
-#include "mc/resources/PackManifest.h"
+#include "mc/resources/ResourcePack.h"
 #include "mc/resources/ResourcePackManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
+#include "mc/world/level/PackInstanceId.h"
 #include "mc/world/level/Weather.h"
 #include "mc/world/level/dimension/Dimension.h"
+
 
 
 #include <Windows.h>
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -171,9 +174,16 @@ void recordWorldEnvironment(
         weather,
         dimension,
         phase,
-        std::bit_cast<uint32_t>(weather->getRainLevel(partialTick)),
-        std::bit_cast<uint32_t>(weather->getLightningLevel(partialTick)),
-        static_cast<uint64_t>(static_cast<int64_t>(weather->getSkyFlashTime()))
+        // The 26.40 SDK lacks the Weather sample getters; interpolate the stored levels the same way.
+        std::bit_cast<uint32_t>(
+            std::lerp(static_cast<float>(weather->mOldRainLevel), static_cast<float>(weather->mRainLevel), partialTick)
+        ),
+        std::bit_cast<uint32_t>(std::lerp(
+            static_cast<float>(weather->mOldLightningLevel),
+            static_cast<float>(weather->mLightningLevel),
+            partialTick
+        )),
+        static_cast<uint64_t>(static_cast<int64_t>(static_cast<int>(weather->mSkyFlashTime)))
     );
 } catch (...) {
     reportDiagnosticFailure();
@@ -213,7 +223,7 @@ void recordRenderDiagnostics(RenderDiagnosticStage stage, ClientInstance* client
         if (builder->initialized()) {
             snapshot.flags |= 2;
             if (builder->enabled()) snapshot.flags |= 4;
-            if (builder->isDeferredCapable()) snapshot.flags |= 8;
+            // The 26.40 FrameBuilder has no isDeferredCapable, so flag 8 stays clear.
             if (builder->isDeferredEnabled()) snapshot.flags |= 16;
             if (builder->isRayTracingCapable()) snapshot.flags |= 32;
             if (builder->isRayTracingEnabled()) snapshot.flags |= 64;
@@ -278,27 +288,23 @@ void recordRenderDiagnostics(RenderDiagnosticStage stage, ClientInstance* client
         std::bit_cast<uint32_t>(size.y),
         static_cast<uint64_t>(replay.getCurrentTick())
     );
-    auto&                    packs       = client->getResourcePackManager();
-    bool const               vvSupported = packs.supportsVibrantVisuals();
+    auto& packs = client->getResourcePackManager();
+    // The 26.40 SDK has no Vibrant Visuals or resources-loaded query on ResourcePackManager; both report false.
+    bool const               vvSupported = false;
     bool const               pbr         = packs.hasCapability("pbr");
     bool const               raytraced   = packs.hasCapability("raytraced");
-    bool const               loaded      = packs.areGameplayResourcesLoaded();
+    bool const               loaded      = false;
     std::vector<std::string> entries;
+    // PackInstance has no getters and PackManifest is only forward-declared on 26.40, so list pack identities.
     packs.iteratePacks([&](PackInstance const& pack) {
-        auto const  id       = pack.getPackId();
-        auto const& manifest = pack.getManifest();
+        auto const& resource = pack.mPack;
         entries.push_back(
             fmt::format(
-                "id={:016x}:{:016x} version={:?} origin={} subpack={:?} name={:?} pbr={} raytraced={} slice={}",
-                id.a,
-                id.b,
-                std::string_view(pack.getVersion().asString()).substr(0, 128),
-                static_cast<int>(pack.getPackOrigin()),
-                std::string_view(pack.getSubpackFolderName()).substr(0, 128),
-                std::string_view(manifest.getName()).substr(0, 128),
-                manifest.hasPackCapability("pbr"),
-                manifest.hasPackCapability("raytraced"),
-                pack.isSlicePack()
+                "pack={} subpackIndex={} base={} slice={}",
+                static_cast<void const*>(std::addressof(*resource)),
+                static_cast<int>(pack.mSubpackIndex),
+                static_cast<bool>(resource->mIsBaseGamePack),
+                static_cast<bool>(resource->mIsSlicePack)
             )
         );
     });
@@ -396,7 +402,8 @@ void recordReplayPacksInfo(
     uint64_t                       span
 ) noexcept try {
     if (!renderDiagnosticsEnabled()) return;
-    auto const& data   = *packet.mData;
+    // On 26.40 the packet derives from its payload instead of holding it in mData.
+    auto const& data   = static_cast<ResourcePacksInfoPacketPayload const&>(packet);
     auto&       logger = diagnosticLogger();
     logger.info(
         "[ReplayAdmission] session={} span={} thread={} packet=Info source={} selected={} "
@@ -455,7 +462,7 @@ void recordReplayPackStack(
         packet.mTexturePackRequired,
         packet.mIncludeEditorPacks,
         packet.mTexturePackIdsAndVersions->size(),
-        packet.mBaseGameVersion->asString(),
+        packet.mBaseGameVersion->mSemVersion->asString(),
         experimentBits(*experiments.mExperimentData),
         experimentBits(*experiments.mDeprecatedData),
         experiments.mExperimentsEverToggled
@@ -502,7 +509,7 @@ void recordReplayWorldSettings(std::string_view source, LevelSettings const& set
         settings.mOverrideSettings,
         settings.mNewWorldResourcePackIdentities->size(),
         settings.mNewWorldBehaviorPackIdentities->size(),
-        settings.mBaseGameVersion->asString(),
+        settings.mBaseGameVersion->mSemVersion->asString(),
         experimentBits(*experiments.mExperimentData),
         experimentBits(*experiments.mDeprecatedData),
         experiments.mExperimentsEverToggled
@@ -513,11 +520,12 @@ void recordReplayWorldSettings(std::string_view source, LevelSettings const& set
 
 void recordReplayRequestedGraphicsMode(MinecraftScreenModel const& model) noexcept try {
     if (!renderDiagnosticsEnabled()) return;
+    // The 26.40 MinecraftScreenModel exposes no graphics-mode getter, so the mode is not reported here.
     diagnosticLogger().info(
-        "[ReplayAdmission] session={} thread={} requestedGraphicsMode={} source=MinecraftScreenModel",
+        "[ReplayAdmission] session={} thread={} model={} requestedGraphicsMode=unavailable",
         gAdmissionSession.load(),
         GetCurrentThreadId(),
-        model.getGraphicsMode()
+        static_cast<void const*>(&model)
     );
 } catch (...) {
     reportDiagnosticFailure();

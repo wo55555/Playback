@@ -644,44 +644,7 @@ LL_TYPE_INSTANCE_HOOK(
     return result;
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    ReplayUpscalingFrameTickHook,
-    ll::memory::HookPriority::Lowest,
-    dragon::rendering::UpscalingData,
-    &dragon::rendering::UpscalingData::updateFrameTick,
-    void,
-    float dynamicResolutionScale
-) {
-    OfflineRenderTraceScope trace(
-        OfflineRenderTraceEvent::UpscalingEnter,
-        OfflineRenderTraceEvent::UpscalingExit,
-        this,
-        nullptr,
-        std::bit_cast<uint32_t>(dynamicResolutionScale)
-    );
-    origin(dynamicResolutionScale);
-    if (playback::exporting::renderDiagnosticsEnabled()) {
-        playback::exporting::recordOfflineRenderTrace(
-            OfflineRenderTraceEvent::UpscalingConfig,
-            this,
-            nullptr,
-            static_cast<uint64_t>(getUpscalingMode()),
-            isDynamicResolutionEnabled() ? 1 : 0,
-            std::bit_cast<uint32_t>(getDynamicResolutionScale()),
-            std::bit_cast<uint32_t>(getUpscalingFactor())
-        );
-    }
-    auto const& jitter = getSubPixelJitterOffset();
-    playback::exporting::recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::UpscalingState,
-        this,
-        nullptr,
-        mCurrentJitterIdx,
-        std::bit_cast<uint32_t>(jitter.x),
-        std::bit_cast<uint32_t>(jitter.y),
-        isUpscalingEnabled() ? 1 : 0
-    );
-}
+// The 26.40 SDK declares no UpscalingData member functions, so the upscaling frame-tick trace is unavailable.
 
 LL_TYPE_INSTANCE_HOOK(
     ReplayCameraFovHook,
@@ -963,7 +926,6 @@ bool hookCameraRender(bool enable) {
         if (state.fov && ReplayCameraFovHook::unhook()) state.fov = false;
         if (state.submitFrame && ReplayCameraSubmitFrameHook::unhook()) state.submitFrame = false;
         if (state.renderFrame && ReplayCameraRenderFrameHook::unhook()) state.renderFrame = false;
-        if (state.upscaling && ReplayUpscalingFrameTickHook::unhook()) state.upscaling = false;
         gRenderFrameHooked.store(state.renderFrame, std::memory_order_release);
         gUpscalingHooked.store(state.upscaling, std::memory_order_release);
         if (state.frameScope && ReplayCameraFrameScopeHook::unhook()) state.frameScope = false;
@@ -985,7 +947,6 @@ bool hookCameraRender(bool enable) {
     if (!state.frameScope) state.frameScope = ReplayCameraFrameScopeHook::hook() == 0;
     if (!state.submitFrame) state.submitFrame = ReplayCameraSubmitFrameHook::hook() == 0;
     if (!state.renderFrame) state.renderFrame = ReplayCameraRenderFrameHook::hook() == 0;
-    if (!state.upscaling) state.upscaling = ReplayUpscalingFrameTickHook::hook() == 0;
     gRenderFrameHooked.store(state.renderFrame, std::memory_order_release);
     gUpscalingHooked.store(state.upscaling, std::memory_order_release);
     if (!state.fov) state.fov = ReplayCameraFovHook::hook() == 0;

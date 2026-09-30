@@ -700,14 +700,15 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     ActiveRendererInitDetour activeDetour;
     uint64_t                 transition{};
+    // The 26.40 SDK has no MinecraftScreenModel::getGraphicsMode, so the previous mode is reported as -1.
     if (!gRendererInitHookStopping.load(std::memory_order_acquire) && exporting::renderDiagnosticsEnabled()) {
-        runDetourInstrumentation([&] { transition = beginGraphicsSwitchTrace(getGraphicsMode(), mode); });
+        runDetourInstrumentation([&] { transition = beginGraphicsSwitchTrace(-1, mode); });
         gImGuiRenderer.recordGraphicsSwitchResources(transition, "Overlay.atModeSetterEnter");
     }
     origin(mode);
     if (transition) {
         runDetourInstrumentation([&] {
-            recordGraphicsSwitchTrace(transition, "ModeSetter.return", fmt::format("selected={}", getGraphicsMode()));
+            recordGraphicsSwitchTrace(transition, "ModeSetter.return", "selected=unknown");
         });
         gImGuiRenderer.recordGraphicsSwitchResources(transition, "Overlay.atModeSetterReturn");
     }
