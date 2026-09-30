@@ -113,7 +113,7 @@ void RenderMode::draw(PanelContext const& ctx) {
     ImGui::SetNextWindowSize({modalWidth, 0.0f}, ImGuiCond_Always);
     ImGui::SetNextWindowSizeConstraints({modalWidth, 0.0f}, {modalWidth, std::max(1.0f, displaySize.y - 24.0f)});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f * uiScale);
-    ImGui::SetNextWindowBgAlpha(0.72f);
+    ImGui::SetNextWindowBgAlpha(0.84f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
     bool const progressVisible = ImGui::Begin(
         "##ExportProgress",
@@ -123,6 +123,10 @@ void RenderMode::draw(PanelContext const& ctx) {
     );
     ImGui::PopStyleVar(2);
     if (progressVisible) {
+        // Regular weight and the usual dim grey wash out over a bright scene.
+        constexpr ImU32 SecondaryText = IM_COL32(0xb4, 0xb4, 0xb4, 0xff);
+        ImGui::PushFont(theme::boldFont(), 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_TextDisabled, SecondaryText);
         bool const  cancelling = status.state == exporting::ExportState::Cancelling;
         ImU32 const tone       = cancelling ? theme::kWarning : theme::kAccent;
 
@@ -180,7 +184,7 @@ void RenderMode::draw(PanelContext const& ctx) {
             float const       right = origin.x + ImGui::GetContentRegionAvail().x;
             dl->AddText({textX, topY}, cancelling ? theme::kWarning : theme::kText, title.c_str());
             dl->PushClipRect({textX, origin.y}, {right, origin.y + box}, true);
-            dl->AddText({textX, topY + lineH + gap}, theme::kTextDim, fileName.c_str());
+            dl->AddText({textX, topY + lineH + gap}, SecondaryText, fileName.c_str());
             dl->PopClipRect();
             ImGui::Dummy({0.0f, box});
         }
@@ -261,12 +265,14 @@ void RenderMode::draw(PanelContext const& ctx) {
 
         // No status.message line: while active it only repeats the title, and it would shift the button.
         ImGui::Dummy({0.0f, 14.0f * uiScale});
-        std::string const cancelLabel = std::string(ICON_CLOSE) + "  " + "playback.refactorEditor.render.cancel"_tr();
-        float const       buttonWidth = std::min(
+        // Pill sized to the icon and label, so it reads as one compact control rather than a wide bar.
+        std::string const cancelLabel  = std::string(ICON_CLOSE) + " " + "playback.refactorEditor.render.cancel"_tr();
+        float const       buttonHeight = ImGui::GetFontSize() + 16.0f * uiScale;
+        float const       buttonWidth  = std::min(
             ImGui::GetContentRegionAvail().x,
-            std::max(160.0f * uiScale, ImGui::CalcTextSize(cancelLabel.c_str()).x + style.FramePadding.x * 4.0f)
+            ImGui::CalcTextSize(cancelLabel.c_str()).x + buttonHeight * 1.2f
         );
-        float const buttonHeight = ImGui::GetFrameHeight() + 6.0f * uiScale;
+        float const buttonRounding = buttonHeight * 0.5f;
         ImGui::SetCursorPosX(
             ImGui::GetCursorPosX() + std::max(0.0f, (ImGui::GetContentRegionAvail().x - buttonWidth) * 0.5f)
         );
@@ -276,7 +282,7 @@ void RenderMode::draw(PanelContext const& ctx) {
             ImVec2 const max{min.x + buttonWidth, min.y + buttonHeight};
             ImGui::Dummy({buttonWidth, buttonHeight});
             auto* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(min, max, theme::withAlpha(theme::kButton, 0x99), style.FrameRounding);
+            dl->AddRectFilled(min, max, theme::withAlpha(theme::kButton, 0xcc), buttonRounding);
             drawSpinner(
                 dl,
                 {(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f},
@@ -285,6 +291,7 @@ void RenderMode::draw(PanelContext const& ctx) {
                 theme::kWarning
             );
         } else {
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, buttonRounding);
             ImGui::PushStyleColor(ImGuiCol_Button, theme::kButton);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::withAlpha(theme::kError, 0x80));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::withAlpha(theme::kError, 0xb0));
@@ -292,7 +299,10 @@ void RenderMode::draw(PanelContext const& ctx) {
                 ctx.submitAction({EditorActionType::CancelExport});
             }
             ImGui::PopStyleColor(3);
+            ImGui::PopStyleVar();
         }
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
     }
     ImGui::End();
 }
