@@ -664,27 +664,21 @@ LL_TYPE_INSTANCE_HOOK(
         std::bit_cast<uint32_t>(dynamicResolutionScale)
     );
     origin(dynamicResolutionScale);
+    // The 26.10 SDK has no upscaling getters, so read the parameter fields directly.
+    auto const& params = mUpscalingParameters.get();
     if (playback::exporting::renderDiagnosticsEnabled()) {
         playback::exporting::recordOfflineRenderTrace(
             OfflineRenderTraceEvent::UpscalingConfig,
             this,
             nullptr,
-            static_cast<uint64_t>(getUpscalingMode()),
-            isDynamicResolutionEnabled() ? 1 : 0,
+            static_cast<uint64_t>(params.mUpscalingMode),
+            params.mEnableDynamicResolution ? 1 : 0,
             std::bit_cast<uint32_t>(getDynamicResolutionScale()),
-            std::bit_cast<uint32_t>(getUpscalingFactor())
+            std::bit_cast<uint32_t>(static_cast<float>(params.mUpscalingFactor))
         );
     }
-    auto const& jitter = getSubPixelJitterOffset();
-    playback::exporting::recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::UpscalingState,
-        this,
-        nullptr,
-        mCurrentJitterIdx,
-        std::bit_cast<uint32_t>(jitter.x),
-        std::bit_cast<uint32_t>(jitter.y),
-        isUpscalingEnabled() ? 1 : 0
-    );
+    // No jitter-offset or upscaling-enabled getter exists on 26.10; only the jitter index is recorded.
+    playback::exporting::recordOfflineRenderTrace(OfflineRenderTraceEvent::UpscalingState, this, nullptr, mCurrentJitterIdx);
 }
 
 LL_TYPE_INSTANCE_HOOK(
