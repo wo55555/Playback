@@ -224,8 +224,7 @@
                 "speedValue": "{:.2f} 帧/秒",
                 "remainingValue": "预计剩余 {}",
                 "estimating": "正在估算剩余时间…",
-                "cancel": "取消导出",
-                "cancelling": "正在取消…"
+                "cancel": "取消导出"
             },
             "status": {
                 "replay": "[回放]",
