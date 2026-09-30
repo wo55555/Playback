@@ -121,12 +121,12 @@ void RenderMode::draw(PanelContext const& ctx) {
     );
     ImGui::PopStyleVar(2);
     if (progressVisible) {
-        bool const cancelling = status.state == exporting::ExportState::Cancelling;
-        ImU32 const tone      = cancelling ? theme::kWarning : theme::kAccent;
+        bool const  cancelling = status.state == exporting::ExportState::Cancelling;
+        ImU32 const tone       = cancelling ? theme::kWarning : theme::kAccent;
 
-        auto const capturedFrames = std::min(status.submittedFrames, status.totalFrames);
-        auto const writtenFrames  = std::min(status.writtenFrames, status.totalFrames);
-        auto const progressFrames = std::max(capturedFrames, writtenFrames);
+        auto const  capturedFrames = std::min(status.submittedFrames, status.totalFrames);
+        auto const  writtenFrames  = std::min(status.writtenFrames, status.totalFrames);
+        auto const  progressFrames = std::max(capturedFrames, writtenFrames);
         float const progress =
             status.totalFrames > 0 ? static_cast<float>(progressFrames) / static_cast<float>(status.totalFrames) : 0.0f;
 
@@ -146,11 +146,11 @@ void RenderMode::draw(PanelContext const& ctx) {
         bool const   running   = status.state == exporting::ExportState::Running;
         double const remaining = speed > 0.0 ? static_cast<double>(status.totalFrames - progressFrames) / speed : 0.0;
 
-        std::string const format = status.format == exporting::ExportFormat::Mp4Video
-                                     ? "playback.refactorEditor.export.mp4"_tr()
-                                     : "playback.refactorEditor.export.pngSequence"_tr();
-        std::string outputPath = pathUtf8(status.outputPath);
-        std::string const fileName = status.outputPath.empty() ? format : pathUtf8(status.outputPath.filename());
+        std::string const format     = status.format == exporting::ExportFormat::Mp4Video
+                                         ? "playback.refactorEditor.export.mp4"_tr()
+                                         : "playback.refactorEditor.export.pngSequence"_tr();
+        std::string       outputPath = pathUtf8(status.outputPath);
+        std::string const fileName   = status.outputPath.empty() ? format : pathUtf8(status.outputPath.filename());
 
         // Header: tinted tile with the activity spinner, state as the title and the output file beneath it.
         {
@@ -198,9 +198,9 @@ void RenderMode::draw(PanelContext const& ctx) {
             std::string const frames =
                 "playback.refactorEditor.render.frameCount"_tr(progressFrames, status.totalFrames);
             std::string const estimate =
-                !running        ? std::string{}
-                : speed > 0.0   ? "playback.refactorEditor.render.remainingValue"_tr(formatDuration(remaining))
-                                : "playback.refactorEditor.render.estimating"_tr();
+                !running      ? std::string{}
+                : speed > 0.0 ? "playback.refactorEditor.render.remainingValue"_tr(formatDuration(remaining))
+                              : "playback.refactorEditor.render.estimating"_tr();
             ImGui::TextDisabled("%s", frames.c_str());
             if (!estimate.empty()) {
                 float const estimateWidth = ImGui::CalcTextSize(estimate.c_str()).x;
@@ -256,13 +256,7 @@ void RenderMode::draw(PanelContext const& ctx) {
         }
         ImGui::PopStyleVar();
 
-        if (!status.message.empty()) {
-            ImGui::Spacing();
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-            ImGui::TextDisabled("%s", status.message.c_str());
-            ImGui::PopTextWrapPos();
-        }
-
+        // No status.message line: while active it only repeats the title, and it would shift the button.
         ImGui::Dummy({0.0f, 6.0f * uiScale});
         std::string const cancelLabel =
             cancelling ? "playback.refactorEditor.render.cancelling"_tr()
