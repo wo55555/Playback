@@ -77,11 +77,16 @@ bool beginPropertyTable(char const* id, float labelWidth) {
     return true;
 }
 
-void propertyLabel(char const* label) {
+void propertyLabel(char const* label, char const* hint = nullptr) {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
+    if (hint != nullptr) {
+        ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+        ImGui::TextDisabled("(?)");
+        widgets::itemTooltip(hint);
+    }
     ImGui::TableSetColumnIndex(1);
 }
 
@@ -137,19 +142,13 @@ constexpr ResolutionPreset kResolutionPresets[] = {
     {3840, 2160}
 };
 
-// Dim note after the previous item on the same row, e.g. the timecode of a tick field.
-void dimTrailingText(char const* text) {
+// Dim note on the same row, right-aligned to `rightEdge` (screen x) so it lines up with the full-width fields.
+void trailingText(char const* text, float rightEdge) {
     ImGui::SameLine();
+    float const x = rightEdge - ImGui::GetStyle().FramePadding.x - ImGui::CalcTextSize(text).x;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, x - ImGui::GetCursorScreenPos().x));
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("%s", text);
-}
-
-// "(?)" after the previous item; the explanation shows on hover.
-void helpMarker(char const* text) {
-    ImGui::SameLine();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("(?)");
-    widgets::itemTooltip(text);
 }
 
 // Slim bar showing the chosen range against the whole replay, with the playhead marked.
@@ -505,10 +504,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         {exportDialogSize.x, std::max(1.0f, exportWorkSize.y - 24.0f)}
     );
     if (ImGui::BeginPopupModal("##ExportVideo", &mExportDialogOpen, ImGuiWindowFlags_NoResize)) {
-        std::string const custom          = "playback.refactorEditor.export.custom"_tr();
-        char const*       fpsOptions[]    = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
-        constexpr int     fpsValues[]     = {30, 60, 120};
-        char const*       ssaaOptions[]   = {"1x", "2x", "4x"};
+        std::string const custom                   = "playback.refactorEditor.export.custom"_tr();
+        char const*       fpsOptions[]             = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
+        constexpr int     fpsValues[]              = {30, 60, 120};
+        char const*       ssaaOptions[]            = {"1x", "2x", "4x"};
         char const*       resolutionPresetLabels[] = {"720p", "1080p", "1440p", "4K"};
         static_assert(IM_ARRAYSIZE(resolutionPresetLabels) == IM_ARRAYSIZE(kResolutionPresets));
         std::string const mp4Format       = "playback.refactorEditor.export.mp4"_tr();
@@ -517,10 +516,22 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         mExportSsaa                       = std::clamp(mExportSsaa, 0, 2);
         int const maximumReplayTick       = std::max(state.totalTicks, 0);
         // Fixed label column aligns every value; the capped value column stops inputs spanning the dialog.
-        float const labelWidth = std::clamp(exportDialogSize.x * 0.26f, 96.0f * uiScale, 150.0f * uiScale);
+        auto const& style            = ImGui::GetStyle();
+        // The label column must fit the longest label that carries a "(?)" hint.
+        float hintedLabelWidth = 0.0f;
+        for (std::string const& label :
+             {"playback.refactorEditor.export.ssaa"_tr(),
+              "playback.refactorEditor.export.warmupFrames"_tr(),
+              "playback.refactorEditor.export.convergenceFrames"_tr()}) {
+            hintedLabelWidth = std::max(hintedLabelWidth, ImGui::CalcTextSize(label.c_str()).x);
+        }
+        hintedLabelWidth       += style.ItemInnerSpacing.x + ImGui::CalcTextSize("(?)").x + style.CellPadding.x * 2.0f;
+        float const labelWidth  = std::min(
+            std::max(std::clamp(exportDialogSize.x * 0.26f, 96.0f * uiScale, 150.0f * uiScale), hintedLabelWidth),
+            exportDialogSize.x * 0.4f
+        );
         float const fieldWidth = 92.0f * uiScale;
         float const frameH     = ImGui::GetFrameHeight();
-        auto const& style      = ImGui::GetStyle();
         float const valueWidth =
             std::min(300.0f * uiScale, exportDialogSize.x - labelWidth - style.WindowPadding.x * 4.0f);
 
@@ -593,18 +604,19 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
             std::string const usePlayhead = "playback.refactorEditor.export.usePlayhead"_tr();
             propertyLabel("playback.refactorEditor.export.startTick"_tr().c_str());
+            float const tickRowRight = ImGui::GetCursorScreenPos().x + valueWidth;
             inputClampedInt("##export-start-tick", mExportStartTick, 0, maximumReplayTick, fieldWidth);
             ImGui::SameLine();
             if (frameIconButton("##export-start-current", ICON_CLOCK, usePlayhead.c_str()))
                 mExportStartTick = std::clamp(state.currentTick, 0, maximumReplayTick);
-            dimTrailingText(widgets::formatTick(mExportStartTick).c_str());
+            trailingText(widgets::formatTick(mExportStartTick).c_str(), tickRowRight);
 
             propertyLabel("playback.refactorEditor.export.endTick"_tr().c_str());
             inputClampedInt("##export-end-tick", mExportEndTick, 0, maximumReplayTick, fieldWidth);
             ImGui::SameLine();
             if (frameIconButton("##export-end-current", ICON_CLOCK, usePlayhead.c_str()))
                 mExportEndTick = std::clamp(state.currentTick, 0, maximumReplayTick);
-            dimTrailingText(widgets::formatTick(mExportEndTick).c_str());
+            trailingText(widgets::formatTick(mExportEndTick).c_str(), tickRowRight);
 
             // Range bar under the tick fields, with the reset-to-full-replay button at its end.
             ImGui::TableNextRow();
@@ -656,7 +668,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 mExportHeight = kResolutionPresets[resolutionPreset].height;
             }
 
-            propertyLabel("playback.refactorEditor.export.ssaa"_tr().c_str());
+            propertyLabel(
+                "playback.refactorEditor.export.ssaa"_tr().c_str(),
+                "playback.refactorEditor.export.ssaaHint"_tr().c_str()
+            );
             int ssaaDisabledMask = 0;
             for (int i = 0; i < IM_ARRAYSIZE(ssaaOptions); ++i) {
                 if (!exporting::supersampleFits(
@@ -677,15 +692,18 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     ssaaDisabledMask
                 ))
                 mExportSsaa = std::clamp(mExportSsaa, 0, 2);
-            helpMarker("playback.refactorEditor.export.ssaaHint"_tr().c_str());
 
-            propertyLabel("playback.refactorEditor.export.warmupFrames"_tr().c_str());
+            propertyLabel(
+                "playback.refactorEditor.export.warmupFrames"_tr().c_str(),
+                "playback.refactorEditor.export.warmupHint"_tr().c_str()
+            );
             inputClampedInt("##export-warmup", mExportWarmupFrames, 0, 3600, fieldWidth);
-            helpMarker("playback.refactorEditor.export.warmupHint"_tr().c_str());
 
-            propertyLabel("playback.refactorEditor.export.convergenceFrames"_tr().c_str());
+            propertyLabel(
+                "playback.refactorEditor.export.convergenceFrames"_tr().c_str(),
+                "playback.refactorEditor.export.convergenceHint"_tr().c_str()
+            );
             inputClampedInt("##export-convergence", mExportConvergenceFrames, 0, 240, fieldWidth);
-            helpMarker("playback.refactorEditor.export.convergenceHint"_tr().c_str());
             ImGui::EndTable();
         }
 
