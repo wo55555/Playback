@@ -123,9 +123,8 @@ void RenderMode::draw(PanelContext const& ctx) {
     );
     ImGui::PopStyleVar(2);
     if (progressVisible) {
-        // Regular weight and the usual dim grey wash out over a bright scene.
+        // The usual dim grey washes out over a bright scene.
         constexpr ImU32 SecondaryText = IM_COL32(0xb4, 0xb4, 0xb4, 0xff);
-        ImGui::PushFont(theme::boldFont(), 0.0f);
         ImGui::PushStyleColor(ImGuiCol_TextDisabled, SecondaryText);
         bool const  cancelling = status.state == exporting::ExportState::Cancelling;
         ImU32 const tone       = cancelling ? theme::kWarning : theme::kAccent;
@@ -302,7 +301,6 @@ void RenderMode::draw(PanelContext const& ctx) {
             ImGui::PopStyleVar();
         }
         ImGui::PopStyleColor();
-        ImGui::PopFont();
     }
     ImGui::End();
 }

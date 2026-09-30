@@ -115,10 +115,6 @@ constexpr float kFineDividerWidth = 0.75f;
 
 void apply();
 
-// Bold face with icons merged in; null if unavailable, which PushFont treats as "keep current".
-[[nodiscard]] ImFont* boldFont();
-void                  setBoldFont(ImFont* font);
-
 } // namespace playback::editor::ui::theme
 
 // Every editor dimension derives from the font size, so raising theme::kEditorFontScale rescales the whole editor.

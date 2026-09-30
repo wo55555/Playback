@@ -10,7 +10,6 @@
 #include "playback/Playback.h"
 #include "playback/editor/graphics/ReplayUILayout.h"
 #include "playback/editor/input/EditorInput.h"
-#include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
@@ -124,13 +123,10 @@ void loadReplayUIFonts() {
     auto const                    windowsDirectoryLength =
         GetWindowsDirectoryW(windowsDirectory.data(), static_cast<UINT>(windowsDirectory.size()));
     std::filesystem::path textPath;
-    std::filesystem::path boldPath;
     if (windowsDirectoryLength > 0 && windowsDirectoryLength < static_cast<UINT>(windowsDirectory.size())) {
         textPath = std::filesystem::path(windowsDirectory.data()) / "Fonts" / "msyh.ttc";
-        boldPath = std::filesystem::path(windowsDirectory.data()) / "Fonts" / "msyhbd.ttc";
     }
     auto const textPathString = textPath.string();
-    ui::theme::setBoldFont(nullptr);
 
     ImFont* font = textPathString.empty() ? nullptr
                                           : io.Fonts->AddFontFromFileTTF(
@@ -150,23 +146,10 @@ void loadReplayUIFonts() {
     cfg.GlyphMinAdvanceX = ui::kBaseFontSize;
     cfg.GlyphMaxAdvanceX = ui::kBaseFontSize;
     static const ImWchar iconRange[]{0xe000, 0xe6ff, 0};
-    auto const           iconPath       = Playback::getInstance().getSelf().getModDir() / "fonts" / "lucide.ttf";
-    auto const           iconPathString = iconPath.string();
-    if (!io.Fonts->AddFontFromFileTTF(iconPathString.c_str(), ui::kBaseFontSize, &cfg, iconRange)) {
+    auto const           iconPath = Playback::getInstance().getSelf().getModDir() / "fonts" / "lucide.ttf";
+    if (!io.Fonts->AddFontFromFileTTF(iconPath.string().c_str(), ui::kBaseFontSize, &cfg, iconRange)) {
         getLogger().warn("Unable to load replay icon font from {}", iconPath);
     }
-
-    // Only overlays drawn over the game scene use it, so a missing file just falls back to the regular face.
-    if (!font || boldPath.empty() || !std::filesystem::exists(boldPath)) return;
-    ImFont* bold = io.Fonts->AddFontFromFileTTF(
-        boldPath.string().c_str(),
-        ui::kBaseFontSize,
-        nullptr,
-        io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
-    );
-    if (!bold) return;
-    io.Fonts->AddFontFromFileTTF(iconPathString.c_str(), ui::kBaseFontSize, &cfg, iconRange);
-    ui::theme::setBoldFont(bold);
 }
 
 // Applied every frame: FontSizeBase stays at the rasterised size and FontScaleMain carries the tier.
