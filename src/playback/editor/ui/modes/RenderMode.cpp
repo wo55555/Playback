@@ -92,7 +92,8 @@ void RenderMode::draw(PanelContext const& ctx) {
 
     ImGui::SetNextWindowPos({0.0f, 0.0f});
     ImGui::SetNextWindowSize(displaySize);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.32f));
+    // Only a light dim: the frame being rendered should stay readable behind the dialog.
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.10f));
     ImGui::Begin(
         "##ExportModalShield",
         nullptr,
@@ -112,6 +113,7 @@ void RenderMode::draw(PanelContext const& ctx) {
     ImGui::SetNextWindowSize({modalWidth, 0.0f}, ImGuiCond_Always);
     ImGui::SetNextWindowSizeConstraints({modalWidth, 0.0f}, {modalWidth, std::max(1.0f, displaySize.y - 24.0f)});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f * uiScale);
+    ImGui::SetNextWindowBgAlpha(0.72f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
     bool const progressVisible = ImGui::Begin(
         "##ExportProgress",
@@ -189,7 +191,7 @@ void RenderMode::draw(PanelContext const& ctx) {
             char percent[16];
             std::snprintf(percent, sizeof(percent), "%d%%", static_cast<int>(progress * 100.0f));
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, tone);
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, theme::kInputBg);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, theme::withAlpha(theme::kInputBg, 0xb0));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme::kFrameRounding * 2.0f);
             ImGui::ProgressBar(progress, {-FLT_MIN, ImGui::GetFrameHeight()}, percent);
             ImGui::PopStyleVar();
@@ -244,12 +246,14 @@ void RenderMode::draw(PanelContext const& ctx) {
             ImGui::TextDisabled("%s", "playback.refactorEditor.render.outputLabel"_tr().c_str());
             ImGui::TableSetColumnIndex(1);
             ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, theme::withAlpha(theme::kInputBg, 0xb0));
             ImGui::InputText(
                 "##render-output-path",
                 outputPath.data(),
                 outputPath.size() + 1,
                 ImGuiInputTextFlags_ReadOnly
             );
+            ImGui::PopStyleColor();
             if (!outputPath.empty()) widgets::itemTooltip(outputPath.c_str());
             ImGui::EndTable();
         }
