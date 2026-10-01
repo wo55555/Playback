@@ -1,7 +1,6 @@
 ﻿#include "FfmpegVideoWriter.h"
 
 #include "FrameWriterUtils.h"
-#include "OfflineRenderTrace.h"
 #include "playback/Playback.h"
 
 #include <windows.h>
@@ -150,7 +149,6 @@ struct FfmpegVideoWriter::Impl {
     std::condition_variable changed;
     struct QueuedFrame {
         visuals::CapturedFrame frame;
-        uint64_t               traceEpoch{};
     };
     std::deque<QueuedFrame> queue;
     std::deque<QueuedFrame> encodeQueue;
@@ -419,45 +417,10 @@ struct FfmpegVideoWriter::Impl {
                 if (queue.empty()) break;
                 item = std::move(queue.front());
                 queue.pop_front();
-                recordOfflineRenderTraceForEpoch(
-                    item.traceEpoch,
-                    OfflineRenderTraceEvent::WriterQueue,
-                    this,
-                    nullptr,
-                    item.frame.ticket.frameIndex,
-                    queue.size(),
-                    capacity,
-                    3
-                );
-                recordOfflineRenderTraceForEpoch(
-                    item.traceEpoch,
-                    OfflineRenderTraceEvent::WriterStageStarve,
-                    this,
-                    nullptr,
-                    1,
-                    item.frame.ticket.frameIndex,
-                    waited,
-                    blocked ? 1 : 0
-                );
                 changed.notify_all();
             }
 
-            bool normalized{};
-            {
-                OfflineRenderTraceScope normalizeTrace(
-                    OfflineRenderTraceEvent::WriterNormalizeEnter,
-                    OfflineRenderTraceEvent::WriterNormalizeExit,
-                    this,
-                    nullptr,
-                    0,
-                    item.frame.ticket.frameIndex,
-                    0,
-                    0,
-                    item.traceEpoch
-                );
-                normalized = detail::normalizeFrame(item.frame, targetWidth, targetHeight);
-                normalizeTrace.result(normalized ? 1 : 0);
-            }
+            bool const normalized = detail::normalizeFrame(item.frame, targetWidth, targetHeight);
             if (!normalized) {
                 std::scoped_lock lock(mutex);
                 visuals::framePixelBufferPool().release(std::move(item.frame.pixels));
@@ -476,19 +439,7 @@ struct FfmpegVideoWriter::Impl {
                     visuals::framePixelBufferPool().release(std::move(item.frame.pixels));
                     break;
                 }
-                auto const frameIndex = item.frame.ticket.frameIndex;
-                auto const traceEpoch = item.traceEpoch;
                 encodeQueue.emplace_back(std::move(item));
-                recordOfflineRenderTraceForEpoch(
-                    traceEpoch,
-                    OfflineRenderTraceEvent::WriterQueue,
-                    this,
-                    nullptr,
-                    frameIndex,
-                    encodeQueue.size(),
-                    EncodeCapacity,
-                    4
-                );
                 changed.notify_all();
             }
         }
@@ -503,7 +454,6 @@ struct FfmpegVideoWriter::Impl {
         bool                 processStarted = false;
         while (true) {
             visuals::CapturedFrame item;
-            uint64_t               traceEpoch{};
             {
                 std::unique_lock lock(mutex);
                 auto const       waitStart = std::chrono::steady_clock::now();
@@ -522,55 +472,20 @@ struct FfmpegVideoWriter::Impl {
                     if (normalizeFinished) break;
                     continue;
                 }
-                traceEpoch = encodeQueue.front().traceEpoch;
-                item       = std::move(encodeQueue.front().frame);
+                item = std::move(encodeQueue.front().frame);
                 encodeQueue.pop_front();
-                recordOfflineRenderTraceForEpoch(
-                    traceEpoch,
-                    OfflineRenderTraceEvent::WriterQueue,
-                    this,
-                    nullptr,
-                    item.ticket.frameIndex,
-                    encodeQueue.size(),
-                    EncodeCapacity,
-                    5
-                );
                 // Sampled where both depths are known under one lock, so the two levels stay comparable.
                 normalizeDepthSum  += queue.size();
                 encodeDepthSum     += encodeQueue.size();
                 normalizeDepthPeak  = std::max<uint64_t>(normalizeDepthPeak, queue.size());
                 encodeDepthPeak     = std::max<uint64_t>(encodeDepthPeak, encodeQueue.size());
                 ++depthSamples;
-                recordOfflineRenderTraceForEpoch(
-                    traceEpoch,
-                    OfflineRenderTraceEvent::WriterStageDepth,
-                    this,
-                    nullptr,
-                    item.ticket.frameIndex,
-                    queue.size(),
-                    encodeQueue.size(),
-                    (static_cast<uint64_t>(capacity) << 32) | EncodeCapacity
-                );
                 changed.notify_all();
             }
+
             if (!processStarted) {
                 std::string launchFailure;
-                bool        launched{};
-                {
-                    OfflineRenderTraceScope launchTrace(
-                        OfflineRenderTraceEvent::WriterLaunchEnter,
-                        OfflineRenderTraceEvent::WriterLaunchExit,
-                        this,
-                        nullptr,
-                        0,
-                        item.ticket.frameIndex,
-                        0,
-                        0,
-                        traceEpoch
-                    );
-                    launched = launchProcess(launchFailure);
-                    launchTrace.result(launched ? 1 : 0);
-                }
+                bool const  launched = launchProcess(launchFailure);
                 if (!launched) {
                     std::scoped_lock lock(mutex);
                     visuals::framePixelBufferPool().release(std::move(item.pixels));
@@ -595,22 +510,7 @@ struct FfmpegVideoWriter::Impl {
                 frameSize  = rgba.size();
             }
             std::string writeFailure;
-            bool        piped{};
-            {
-                OfflineRenderTraceScope pipeTrace(
-                    OfflineRenderTraceEvent::WriterPipeEnter,
-                    OfflineRenderTraceEvent::WriterPipeExit,
-                    this,
-                    nullptr,
-                    0,
-                    item.ticket.frameIndex,
-                    frameSize,
-                    0,
-                    traceEpoch
-                );
-                piped = writeBytes(frameBytes, frameSize, writeFailure);
-                pipeTrace.result(piped ? 1 : 0);
-            }
+            bool const  piped = writeBytes(frameBytes, frameSize, writeFailure);
             {
                 std::scoped_lock lock(mutex);
                 visuals::framePixelBufferPool().release(std::move(item.pixels));
@@ -807,30 +707,8 @@ FrameWriterSubmitResult FfmpegVideoWriter::trySubmit(visuals::CapturedFrame& fra
         mImpl->setFailureLocked(ExportError::InvalidFrame, "Captured frame dimensions changed during export");
         return FrameWriterSubmitResult::Failed;
     }
-    if (mImpl->queue.size() >= mImpl->capacity) {
-        recordOfflineRenderTrace(
-            OfflineRenderTraceEvent::WriterQueue,
-            mImpl.get(),
-            nullptr,
-            frame.ticket.frameIndex,
-            mImpl->queue.size(),
-            mImpl->capacity,
-            2
-        );
-        return FrameWriterSubmitResult::Backpressured;
-    }
-    auto const traceEpoch = offlineRenderTraceEpoch();
-    mImpl->queue.push_back({std::move(frame), traceEpoch});
-    recordOfflineRenderTraceForEpoch(
-        traceEpoch,
-        OfflineRenderTraceEvent::WriterQueue,
-        mImpl.get(),
-        nullptr,
-        mImpl->queue.back().frame.ticket.frameIndex,
-        mImpl->queue.size(),
-        mImpl->capacity,
-        1
-    );
+    if (mImpl->queue.size() >= mImpl->capacity) return FrameWriterSubmitResult::Backpressured;
+    mImpl->queue.push_back({std::move(frame)});
     ++mImpl->nextFrameIndex;
     ++mImpl->submitted;
     mImpl->changed.notify_all();
