@@ -97,10 +97,11 @@ public:
       mLastMsSysTime(mTimer.mLastMsSysTime),
       mAdjustTime(mTimer.mAdjustTime),
       mSteppingTick(mTimer.mSteppingTick) {
-        constexpr int ticksPerSecond       = 20.0f;
-        auto const    absoluteTick         = sample.replayTime.value();
-        auto const    partialTick          = sample.replayTime.partialTick();
-        auto const    absoluteMilliseconds = static_cast<int64>(absoluteTick * 1000 / ticksPerSecond);
+        constexpr float ticksPerSecond = 20.0f;
+        auto const      absoluteTick   = sample.replayTime.value();
+        auto const      partialTick    = sample.replayTime.partialTick();
+        auto const      absoluteMilliseconds =
+            static_cast<int64>(std::llround(absoluteTick * 1000.0L / static_cast<long double>(ticksPerSecond)));
 
         mTimer.mTicksPerSecond              = ticksPerSecond;
         mTimer.mTicks                       = sample.wholeTicks;
@@ -108,7 +109,7 @@ public:
         mTimer.mTimeScale                   = 1.0f;
         mTimer.mPassedTime                  = sample.deltaTicks;
         mTimer.mFrameStepAlignmentRemainder = 0.0f;
-        mTimer.mLastTimeMs                  = absoluteTick / ticksPerSecond * 1000;
+        mTimer.mLastTimeMs                  = absoluteMilliseconds;
         mTimer.mLastTimestep                = sample.deltaTicks / ticksPerSecond;
         mTimer.mOverflowTime                = 0.0f;
         mTimer.mLastMs                      = absoluteMilliseconds;
