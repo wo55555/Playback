@@ -8,11 +8,12 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 | Minecraft / LeviLamina | Playback 版本                                                                       |
 | ---------------------- | ----------------------------------------------------------------------------------- |
-| `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) |
-| `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) |
-| `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) |
+| `26.10.*`              | [`v0.3.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.10) |
+| `26.20.*`              | [`v0.3.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.20) |
+| `26.40.*`              | [`v0.3.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.40) |
+| `26.51.*`              | [`v0.3.2-mc26.51`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.51) |
 
-上表中的三个 Playback 发行版本均为预发布版本。
+上表四个 Playback 版本均为预发布版本；请仅安装与当前实例匹配的版本。
 
 > [!IMPORTANT]
 > 建议尽量使用未安装其他第三方模组的独立 LeviLamina 实例。目前暂不保证与其他模组广泛兼容。
@@ -21,11 +22,11 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 > 暂不支持灵动视效（Vibrant Visuals）。录制、回放和导出前请在视频设置中关闭该选项；保持开启的情况未经测试，可能导致渲染和采集异常。
 
 > [!CAUTION]
-> `v0.3.1-mc26.40` 仍是预发布版本。早于 `v0.2.0-mc26.20` 的版本创建的回放不兼容，必须重新录制。受影响服务器在 2026 年 8 月 20 日热更新前录制的回放可能已经缺少可移植区块或自定义实体注册数据，这类归档无法修复，也必须重新录制；数据完整的 `v0.2.1-mc26.20` 和 `v0.3.0-mc26.20` 回放与 `v0.3.1-mc26.20` 兼容，无需转换。配置版本、录制文件的快照上下文版本和编辑器工程格式版本均为 `1`，不提供迁移。
+> `v0.3.2` 在各发行线上仍是预发布版本。早于 `v0.2.0` 的版本创建的回放不兼容，必须重新录制。受影响服务器在 2026 年 8 月 20 日热更新前录制的回放可能已经缺少可移植区块或自定义实体注册数据，这类归档无法修复，也必须重新录制；同一发行线上 `v0.2.0` 及之后版本录制的完整回放与 `v0.3.2` 兼容，无需转换。配置版本、录制文件的快照上下文版本和编辑器工程格式版本均为 `1`，不提供迁移。
 
 ## 使用 LeviLauncher 和 Lip 安装
 
-以下截图以 `26.10` 实例为例，仅作安装流程示意。使用 `26.20` 或 `26.40` 时，请选择相互匹配的 Minecraft、LeviLamina 和 Playback 发行线。
+以下截图以 `26.10` 实例为例，仅作安装流程示意。使用 `26.20`、`26.40` 或 `26.51` 时，请选择相互匹配的 Minecraft、LeviLamina 和 Playback 发行线。
 
 1. 在左侧边栏选择 **Download（下载）**，找到需要的 Minecraft 版本，通过安装菜单创建使用 **LeviLamina** 加载器的实例。
 
@@ -65,13 +66,16 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 ```powershell
 # Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.3.1-mc26.10#client
+lip install github.com/wo55555/Playback@0.3.2-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
-lip install github.com/wo55555/Playback@0.3.1-mc26.20#client
+lip install github.com/wo55555/Playback@0.3.2-mc26.20#client
 
 # Minecraft / LeviLamina 26.40
-lip install github.com/wo55555/Playback@0.3.1-mc26.40#client
+lip install github.com/wo55555/Playback@0.3.2-mc26.40#client
+
+# Minecraft / LeviLamina 26.51
+lip install github.com/wo55555/Playback@0.3.2-mc26.51#client
 ```
 
 > [!NOTE]
@@ -143,18 +147,18 @@ record stop
 
 在回放编辑器中打开**文件 > 导出…**，可配置：
 
-- 输出目录和文件名。
+- 输出名称，原样用作文件名；同名文件已存在时追加编号，不会覆盖。
 - MP4 视频或 PNG 图像序列。
 - 开始和结束 tick。
 - 帧率与输出分辨率。
-- SSAA 与预热帧。
+- SSAA、预热帧与收敛帧。收敛帧会在采集前重复渲染当前帧而不采集，让光追降噪器收敛。
 
 实验性导出器根据回放时间逐帧渲染，而不是实时录屏。MP4 使用模组内置的 FFmpeg/libx264；如果 FFmpeg 无法启动，仍可使用 PNG 序列。默认输出目录为 `mods/playback/exports`。
 
-| 渲染后端 | 格式                | 稳定 SSAA |
-| -------- | ------------------- | --------- |
-| D3D12    | H.264 MP4、PNG 序列 | 1x、2x    |
-| D3D11    | H.264 MP4、PNG 序列 | 1x        |
+| 渲染后端 | 格式                | 稳定 SSAA  |
+| -------- | ------------------- | ---------- |
+| D3D12    | H.264 MP4、PNG 序列 | 1x、2x、4x |
+| D3D11    | H.264 MP4、PNG 序列 | 1x         |
 
 > [!IMPORTANT]
 > 视频导出仍为实验性功能，当前不包含音频，且暂不支持灵动视效。相机区域必须真实存在于已录制的回放数据中，Playback 无法重建从未录制的区块。跨维度加载、回放状态准备、UI 稳定和导出预热均有超时保护。Playback 不再要求固定相机邻域内的每个区块都存在，但回放数据缺失时仍可能无法渲染预期场景。
