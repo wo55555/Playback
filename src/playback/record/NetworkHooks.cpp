@@ -1,7 +1,6 @@
 ﻿#include "Recorder.h"
 
 #include "playback/Playback.h"
-#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/replay/ReplaySession.h"
 
@@ -146,13 +145,11 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto& replaySession = ReplaySession::getInstance();
     if (replaySession.isIsolatingReplayWorld()) {
-        auto       recordedInfo = replaySession.getReplayResourcePacksInfo();
-        auto const span         = exporting::recordReplayAdmissionBoundary("Info.handle.enter");
-        exporting::recordReplayPacksInfo("local", packet, !recordedInfo, span);
-        if (recordedInfo) exporting::recordReplayPacksInfo("recorded", *recordedInfo, true, span);
-        origin(source, recordedInfo ? *recordedInfo : packet);
-        exporting::recordReplayAdmissionBoundary("Info.handle.return", span);
-        return;
+        auto recordedInfo = replaySession.getReplayResourcePacksInfo();
+        if (recordedInfo) {
+            origin(source, *recordedInfo);
+            return;
+        }
     } else {
         Recorder::getInstance().recordGamePacket(packet);
     }
@@ -368,13 +365,11 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto& replaySession = ReplaySession::getInstance();
     if (replaySession.isIsolatingReplayWorld()) {
-        auto       recordedStack = replaySession.getReplayResourcePackStack();
-        auto const span          = exporting::recordReplayAdmissionBoundary("Stack.handle.enter");
-        exporting::recordReplayPackStack("local", packet, !recordedStack, span);
-        if (recordedStack) exporting::recordReplayPackStack("recorded", *recordedStack, true, span);
-        origin(source, recordedStack ? *recordedStack : packet);
-        exporting::recordReplayAdmissionBoundary("Stack.handle.return", span);
-        return;
+        auto recordedStack = replaySession.getReplayResourcePackStack();
+        if (recordedStack) {
+            origin(source, *recordedStack);
+            return;
+        }
     } else {
         Recorder::getInstance().recordGamePacket(packet);
     }
@@ -398,12 +393,8 @@ LL_TYPE_INSTANCE_HOOK(
     }
 
     // The local world keeps its own StartGame; the recorded block properties are digested afterwards.
-    auto const span = exporting::recordReplayAdmissionBoundary("StartGame.handle.enter");
-    exporting::recordReplayWorldSettings("local.StartGame.input", *packet.mSettings, span);
     origin(source, packet);
-    exporting::recordReplayAdmissionBoundary("StartGame.native.return", span);
     replaySession.applyRecordedBlockRegistry();
-    exporting::recordReplayAdmissionBoundary("StartGame.registry.return", span);
 }
 
 // Materials are only baked inside this pass, so the recorded blocks must be registered before it runs.
@@ -415,12 +406,9 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     brstd::function_ref<void(BlockType&)> finalizer
 ) {
-    auto&      replaySession = ReplaySession::getInstance();
-    bool const replay        = replaySession.isIsolatingReplayWorld();
-    auto const span          = replay ? exporting::recordReplayAdmissionBoundary("RenderFinalizer.enter") : 0;
-    if (replay) replaySession.applyRecordedBlockRegistry();
+    auto& replaySession = ReplaySession::getInstance();
+    if (replaySession.isIsolatingReplayWorld()) replaySession.applyRecordedBlockRegistry();
     origin(finalizer);
-    if (replay) exporting::recordReplayAdmissionBoundary("RenderFinalizer.return", span);
 }
 
 LL_TYPE_INSTANCE_HOOK(

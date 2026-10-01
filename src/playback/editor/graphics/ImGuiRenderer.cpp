@@ -4,7 +4,6 @@
 #include "playback/editor/graphics/D3D12Compat.h"
 #include "playback/editor/graphics/D3D12FrameTapBackend.h"
 #include "playback/editor/graphics/D3D12Hooks.h"
-#include "playback/editor/graphics/GraphicsSwitchTrace.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
 
 #include "playback/Playback.h"
@@ -13,8 +12,6 @@
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
-#include "playback/exporting/OfflineRenderTrace.h"
-#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/screen/select_replay/SelectReplayScreen.h"
 #include "playback/state/EditorContext.h"
 #include "playback/visuals/ReplayThumbnail.h"
@@ -41,12 +38,8 @@
 
 namespace playback::editor::graphics {
 using namespace playback::state;
-using playback::exporting::OfflineRenderTraceEvent;
-using playback::exporting::recordOfflineRenderTrace;
 
 namespace {
-
-std::atomic<uint64_t> gPreviewSourceSerial{};
 
 class ImGuiContextRestore {
 public:
@@ -180,7 +173,6 @@ struct FrameResources {
     D3D12_CPU_DESCRIPTOR_HANDLE       gameSrvCpu{};
     D3D12_GPU_DESCRIPTOR_HANDLE       gameSrvGpu{};
     UINT64                            fenceValue{};
-    uint64_t                          copySerial{};
 };
 
 void allocateSrv(
@@ -269,8 +261,6 @@ struct ImGuiRenderer::Impl {
     ComPtr<ID3D11RenderTargetView>   d3d11Rtv;
     ComPtr<ID3D11Texture2D>          d3d11GameTexture;
     ComPtr<ID3D11ShaderResourceView> d3d11GameSrv;
-    uint64_t                         d3d11CopySerial{};
-    ID3D11Texture2D*                 d3d11CopySource{};
     IDXGISwapChain*                  d3d11SwapChain{};
     ImGuiContext*                    d3d11ImguiCtx{};
     bool                             d3d11BackendInit{};
@@ -472,8 +462,6 @@ struct ImGuiRenderer::Impl {
         d3d11ThumbnailTextures.clear();
         d3d11GameTexture.Reset();
         d3d11Rtv.Reset();
-        d3d11CopySerial = 0;
-        d3d11CopySource = nullptr;
         d3d11BackBuffer.Reset();
         d3d11Context.Reset();
         d3d11Device.Reset();
@@ -511,58 +499,12 @@ struct ImGuiRenderer::Impl {
             }
             source->GetDesc(&desc);
         }
-        bool const diagnostics  = exporting::renderDiagnosticsEnabled();
-        auto const sourceSerial = diagnostics ? gPreviewSourceSerial.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
-        if (diagnostics) {
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::PreviewSource,
-                source.Get(),
-                sc,
-                sourceSerial,
-                desc.Width,
-                desc.Height,
-                static_cast<uint64_t>(desc.Format)
-            );
-        }
         if (captureFrame) {
-            if (diagnostics) {
-                recordOfflineRenderTrace(
-                    OfflineRenderTraceEvent::CaptureSource,
-                    source.Get(),
-                    d3d11Context.Get(),
-                    sourceSerial,
-                    backBufferIndex.value_or(0),
-                    11,
-                    static_cast<uint64_t>(desc.Format)
-                );
-            }
-            bool const captured = d3d11FrameTap.capture(d3d11Device.Get(), d3d11Context.Get(), source.Get());
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::CaptureRecorded,
-                source.Get(),
-                nullptr,
-                captured ? 1 : 0,
-                desc.Width,
-                desc.Height,
-                static_cast<uint64_t>(desc.Format)
-            );
+            (void)d3d11FrameTap.capture(d3d11Device.Get(), d3d11Context.Get(), source.Get());
         }
         // The export preview reuses this copy: at Present the back buffer already holds the clean world frame.
         if (!exporting::isExportActive(state.exportStatus.state) || captureFrame) {
             d3d11Context->CopyResource(d3d11GameTexture.Get(), source.Get());
-            d3d11CopySerial = sourceSerial;
-            d3d11CopySource = source.Get();
-            if (diagnostics) {
-                recordOfflineRenderTrace(
-                    OfflineRenderTraceEvent::PreviewCopy,
-                    source.Get(),
-                    d3d11GameTexture.Get(),
-                    sourceSerial,
-                    0,
-                    11,
-                    captureFrame ? 1 : 0
-                );
-            }
         }
 
         // Capture-only passes must not modify the swap-chain buffer.
@@ -629,18 +571,6 @@ struct ImGuiRenderer::Impl {
             d3d11Context->ClearRenderTargetView(rtv, clearColor);
         }
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        if (diagnostics && !state.browser.visible && (state.editorVisible || exportFrame)) {
-            bool const exportOverlay = exporting::isExportActive(state.exportStatus.state);
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::PreviewDisplay,
-                d3d11GameTexture.Get(),
-                d3d11CopySource,
-                d3d11CopySerial,
-                0,
-                11,
-                exportOverlay ? 1 : 0
-            );
-        }
         if (thumbnailQuery) {
             d3d11Context->End(thumbnailQuery.Get());
             for (auto& [_, texture] : d3d11ThumbnailTextures) {
@@ -845,7 +775,6 @@ struct ImGuiRenderer::Impl {
             scDesc.BufferCount
         );
         reopenExportCaptureAfterRebuild();
-        traceGraphicsSwitchResources(currentGraphicsSwitchTrace(), "Overlay.init.return");
         return true;
     }
 
@@ -863,51 +792,18 @@ struct ImGuiRenderer::Impl {
         getLogger().debug("Export frame capture reopened after the renderer rebuild");
     }
 
-    void traceGraphicsSwitchResources(uint64_t transition, std::string_view event) const noexcept try {
-        if (!transition) return;
-        recordGraphicsSwitchTrace(
-            transition,
-            event,
-            fmt::format(
-                "owner={} initialized={} d3d11={} device={} queue={} rtvHeap={} srvHeap={} frames={} "
-                "fence={} lastFence={} unfenced={} resetting={} resetReady={}",
-                static_cast<void*>(swapChain),
-                initialized,
-                d3d11Initialized,
-                static_cast<void*>(device.Get()),
-                static_cast<void*>(commandQueue.Get()),
-                static_cast<void*>(rtvHeap.Get()),
-                static_cast<void*>(srvHeap.Get()),
-                frames.size(),
-                static_cast<void*>(fence.Get()),
-                lastFenceValue,
-                unfenced,
-                nativeD3D12Resetting,
-                nativeD3D12ResetReady
-            )
-        );
-    } catch (...) {}
-
     bool shutdown(
         visuals::FrameTapError frameTapError   = visuals::FrameTapError::BackendUnavailable,
         std::string            frameTapMessage = "D3D12 frame capture backend was released"
     ) {
-        auto const transition = currentGraphicsSwitchTrace();
-        traceGraphicsSwitchResources(transition, "Overlay.shutdown.enter");
         setReplayMouseInputActive(false);
         if (device && SUCCEEDED(device->GetDeviceRemovedReason())) {
             if (unfenced) {
                 UINT64 const fv = lastFenceValue + 1;
-                if (!fence || !commandQueue || FAILED(commandQueue->Signal(fence.Get(), fv))) {
-                    traceGraphicsSwitchResources(transition, "Overlay.shutdown.signalFailed");
-                    return false;
-                }
+                if (!fence || !commandQueue || FAILED(commandQueue->Signal(fence.Get(), fv))) return false;
                 lastFenceValue = fv;
             }
-            if (!waitForFence(lastFenceValue, fence, fenceEvent)) {
-                traceGraphicsSwitchResources(transition, "Overlay.shutdown.waitFailed");
-                return false;
-            }
+            if (!waitForFence(lastFenceValue, fence, fenceEvent)) return false;
             unfenced = false;
         }
         thumbnailLoader.reset();
@@ -961,7 +857,6 @@ struct ImGuiRenderer::Impl {
         missingQueue      = false;
         srvUsed.fill(false);
         d3d12ThumbnailTextures.clear();
-        traceGraphicsSwitchResources(transition, "Overlay.shutdown.return");
         return true;
     }
 
@@ -1306,15 +1201,6 @@ bool ImGuiRenderer::renderInternal(
     // Capturing before the native render returns yields a sky-only frame.
     bool const sceneReady = !exporting::isOfflineRenderActivityActive() || exporting::isOfflineRenderSceneSubmitted();
     bool const captureActive = allowFrameCapture && sceneReady && p.frameTap.hasArmedCapture();
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::CaptureGate,
-        swapChain,
-        nullptr,
-        sceneReady ? 1 : 0,
-        captureActive ? 1 : 0,
-        allowFrameCapture ? 1 : 0,
-        exporting::isOfflineRenderSceneSubmitted() ? 1 : 0
-    );
     if (!uiActive && !captureActive && !forceExportOverlay) {
         if (allowUi) {
             setReplayMouseInputActive(false);
@@ -1393,8 +1279,6 @@ bool ImGuiRenderer::renderInternal(
     if (fi >= static_cast<UINT>(p.frames.size())) return false;
     auto&       f             = p.frames[fi];
     auto* const captureSource = f.backBuffer.Get();
-    auto const  traceProfile  = exporting::renderDiagnosticProfile();
-    auto const  captureEpoch  = exporting::offlineRenderTraceEpoch();
     if (!waitForFence(f.fenceValue, p.fence, p.fenceEvent)) return false;
     if (p.frameFences.empty()) return false;
     size_t slot = p.frameCursor % p.frameFences.size();
@@ -1404,20 +1288,6 @@ bool ImGuiRenderer::renderInternal(
     if (bd.Width == 0 || bd.Height == 0) return false;
     // The export preview reuses the editor viewport copy, since Present already holds the clean world frame.
     bool const copyGameTexture = !exportOverlay || captureActive;
-    bool const diagnostics     = exporting::renderDiagnosticsEnabled();
-    auto const sourceSerial    = diagnostics ? gPreviewSourceSerial.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
-    std::optional<UINT> diagnosticTextureIndex;
-    if (diagnostics) {
-        recordOfflineRenderTrace(
-            OfflineRenderTraceEvent::PreviewSource,
-            f.backBuffer.Get(),
-            swapChain,
-            sourceSerial,
-            bd.Width,
-            bd.Height,
-            static_cast<uint64_t>(bd.Format)
-        );
-    }
 
     ImGuiContextRestore cr;
     if (uiActive) {
@@ -1448,7 +1318,6 @@ bool ImGuiRenderer::renderInternal(
         } else if (state.editorVisible || exportOverlay) {
             // During export only captured frames refresh the copy, so show the latest one instead of this slot.
             auto const textureIndex = exportOverlay ? p.lastGameTextureIndex : std::optional<UINT>{fi};
-            if (diagnostics) diagnosticTextureIndex = textureIndex;
             replayEditor.setGameTexture(
                 textureIndex ? static_cast<ImTextureID>(p.frames[*textureIndex].gameSrvGpu.ptr) : ImTextureID{}
             );
@@ -1490,17 +1359,6 @@ bool ImGuiRenderer::renderInternal(
         addCopyBarrier(f.gameTexture.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
     }
     if (copyBarrierCount != 0) f.commandList->ResourceBarrier(copyBarrierCount, toCopy.data());
-    if (diagnostics && captureActive) {
-        recordOfflineRenderTrace(
-            OfflineRenderTraceEvent::CaptureSource,
-            captureSource,
-            p.commandQueue.Get(),
-            sourceSerial,
-            fi,
-            12,
-            static_cast<uint64_t>(bd.Format)
-        );
-    }
     bool const frameTapSubmitted = captureActive
                                 && p.d3d12FrameTap.capture(
                                     p.device.Get(),
@@ -1509,59 +1367,10 @@ bool ImGuiRenderer::renderInternal(
                                     captureSource,
                                     static_cast<uint32_t>(D3D12_RESOURCE_STATE_COPY_SOURCE)
                                 );
-    if (frameTapSubmitted)
-        exporting::recordCaptureLineage(
-            traceProfile,
-            captureEpoch,
-            OfflineRenderTraceEvent::CaptureSourceLink,
-            captureSource,
-            f.commandList.Get(),
-            sourceSerial,
-            fi,
-            reinterpret_cast<uintptr_t>(p.commandQueue.Get()),
-            12
-        );
-    if (captureActive) {
-        recordOfflineRenderTrace(
-            OfflineRenderTraceEvent::CaptureRecorded,
-            captureSource,
-            nullptr,
-            frameTapSubmitted ? 1 : 0,
-            static_cast<uint64_t>(bd.Width),
-            static_cast<uint64_t>(bd.Height),
-            static_cast<uint64_t>(bd.Format)
-        );
-    }
     // Consume the marker so the next armed frame waits for its own scene submission.
-    if (frameTapSubmitted) {
-        auto const captureGeneration = exporting::offlineRenderSceneGeneration();
-        auto const marker            = exporting::consumeOfflineRenderSceneCorrespondence(captureGeneration);
-        exporting::recordSceneCorrespondence(
-            traceProfile,
-            captureEpoch,
-            OfflineRenderTraceEvent::SceneMarkerCapture,
-            captureSource,
-            f.commandList.Get(),
-            marker.commitSerial,
-            captureGeneration,
-            exporting::offlineRenderNativePresentSerial(),
-            sourceSerial
-        );
-        exporting::clearOfflineRenderSceneSubmitted();
-    }
+    if (frameTapSubmitted) exporting::clearOfflineRenderSceneSubmitted();
     if (copyGameTexture) {
         f.commandList->CopyResource(f.gameTexture.Get(), f.backBuffer.Get());
-        if (diagnostics) {
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::PreviewCopy,
-                f.backBuffer.Get(),
-                f.gameTexture.Get(),
-                sourceSerial,
-                fi,
-                12,
-                captureActive ? 1 : 0
-            );
-        }
         p.lastGameTextureIndex = fi;
     }
 
@@ -1608,21 +1417,6 @@ bool ImGuiRenderer::renderInternal(
         ID3D12DescriptorHeap* dh[]{p.srvHeap.Get()};
         f.commandList->SetDescriptorHeaps(1, dh);
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), f.commandList.Get());
-        if (diagnostics && diagnosticTextureIndex) {
-            auto const& displayed = p.frames[*diagnosticTextureIndex];
-            // CopyResource precedes this draw, even though draw data selected its texture earlier.
-            auto const contentSerial =
-                *diagnosticTextureIndex == fi && copyGameTexture ? sourceSerial : displayed.copySerial;
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::PreviewDisplay,
-                displayed.gameTexture.Get(),
-                displayed.backBuffer.Get(),
-                contentSerial,
-                *diagnosticTextureIndex,
-                12,
-                exportOverlay ? 1 : 0
-            );
-        }
     }
     ++p.frameCursor;
 
@@ -1646,35 +1440,9 @@ bool ImGuiRenderer::renderInternal(
     }
     ID3D12CommandList* cl[]{f.commandList.Get()};
     p.commandQueue->ExecuteCommandLists(1, cl);
-    if (frameTapSubmitted)
-        exporting::recordCaptureLineage(
-            traceProfile,
-            captureEpoch,
-            OfflineRenderTraceEvent::CaptureQueueExecute,
-            f.commandList.Get(),
-            p.commandQueue.Get(),
-            sourceSerial,
-            fi,
-            1,
-            1
-        );
-    if (copyGameTexture) f.copySerial = sourceSerial;
-    p.unfenced              = true;
-    UINT64     fv           = p.lastFenceValue + 1;
-    auto const signalResult = p.commandQueue->Signal(p.fence.Get(), fv);
-    if (frameTapSubmitted)
-        exporting::recordCaptureLineage(
-            traceProfile,
-            captureEpoch,
-            OfflineRenderTraceEvent::CaptureQueueSignal,
-            p.fence.Get(),
-            p.commandQueue.Get(),
-            sourceSerial,
-            fi,
-            fv,
-            static_cast<uint32_t>(signalResult)
-        );
-    if (FAILED(signalResult)) {
+    p.unfenced = true;
+    UINT64 fv  = p.lastFenceValue + 1;
+    if (FAILED(p.commandQueue->Signal(p.fence.Get(), fv))) {
         if (frameTapSubmitted) {
             p.d3d12FrameTap.submissionFailed(
                 visuals::FrameTapError::FenceFailed,
@@ -1692,10 +1460,7 @@ bool ImGuiRenderer::renderInternal(
     for (auto& [_, texture] : p.d3d12ThumbnailTextures) {
         if (texture.lastUsedFrame == p.thumbnailFrame) texture.lastUseFence = fv;
     }
-    if (frameTapSubmitted) {
-        p.d3d12FrameTap.submitted(p.fence.Get(), fv);
-        recordOfflineRenderTrace(OfflineRenderTraceEvent::CaptureFence, f.backBuffer.Get(), p.fence.Get(), fv);
-    }
+    if (frameTapSubmitted) p.d3d12FrameTap.submitted(p.fence.Get(), fv);
     ia.commit();
     return true;
 }
@@ -1705,30 +1470,10 @@ bool ImGuiRenderer::ownsSwapChain(IDXGISwapChain* swapChain) const {
     return swapChain && (swapChain == mImpl->swapChain || swapChain == mImpl->d3d11SwapChain);
 }
 
-void ImGuiRenderer::recordGraphicsSwitchResources(uint64_t transition, std::string_view event) const noexcept try {
-    if (!transition) return;
-    std::unique_lock lock(mImpl->mutex, std::try_to_lock);
-    if (!lock.owns_lock()) {
-        recordGraphicsSwitchTrace(transition, event, "snapshot=busy");
-        return;
-    }
-    mImpl->traceGraphicsSwitchResources(transition, event);
-} catch (...) {}
-
 bool ImGuiRenderer::beforeRendererReset(bool shuttingDown) {
     std::scoped_lock lock(mImpl->mutex);
     auto* const      swapChain  = mImpl->swapChain;
     mImpl->nativeD3D12Resetting = true;
-    if (exporting::renderDiagnosticsEnabled()) {
-        getLogger().info(
-            "[RenderDiag] D3D12 overlay reset owner={} initialized={} fence={} unfenced={} shuttingDown={}",
-            static_cast<void*>(swapChain),
-            mImpl->initialized,
-            mImpl->lastFenceValue,
-            mImpl->unfenced,
-            shuttingDown
-        );
-    }
     // Release our back-buffer references before BGFX tears down its render targets, not just at ResizeBuffers.
     mImpl->nativeD3D12ResetReady =
         mImpl->shutdown(visuals::FrameTapError::Resize, "Native D3D12 renderer reset during frame capture");
