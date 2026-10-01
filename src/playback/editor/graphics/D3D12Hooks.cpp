@@ -2,16 +2,12 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
-#include "playback/editor/graphics/GraphicsSwitchTrace.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
-#include "playback/exporting/OfflineRenderTrace.h"
-#include "playback/exporting/RenderDiagnostics.h"
 
 #include "ll/api/memory/Hook.h"
 
-#include "mc/client/gui/screens/models/MinecraftScreenModel.h"
 #include "mc/external/bgfx/Frame.h"
 #include "mc/external/bgfx/RenderDraw.h"
 #include "mc/external/bgfx/RendererContextD3D11.h"
@@ -29,9 +25,6 @@
 #include <utility>
 
 namespace playback::editor::graphics {
-
-using playback::exporting::OfflineRenderTraceEvent;
-using playback::exporting::OfflineRenderTraceScope;
 
 namespace {
 
@@ -86,10 +79,9 @@ ll::memory::FuncPtr gOriginalCreateSwapChainForHwnd{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForCoreWindow{};
 ll::memory::FuncPtr gOriginalCreateSwapChainForComposition{};
 
-std::atomic<bool>     gTimelineHooksStopping{true};
-std::atomic<bool>     gRendererInitHookStopping{true};
-std::atomic<bool>     gD3D12RendererActive{false};
-std::atomic<uint32_t> gSubmitHookMask{};
+std::atomic<bool> gTimelineHooksStopping{true};
+std::atomic<bool> gRendererInitHookStopping{true};
+std::atomic<bool> gD3D12RendererActive{false};
 
 std::atomic<uint32_t>   gActiveDetours{};
 std::mutex              gActiveDetoursMutex;
@@ -185,17 +177,7 @@ bool noneInstalled(HookState const& state) {
 
 DECLARE_DETOUR_FN(present, HRESULT, IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
     ActiveDetour activeDetour;
-    // Counted before the capture inside renderPresentFrame so that capture sees its own ordinal.
-    if (exporting::isOfflineRenderActivityActive()) (void)exporting::advanceOfflineRenderNativePresentSerial();
-    OfflineRenderTraceScope trace(
-        OfflineRenderTraceEvent::PresentEnter,
-        OfflineRenderTraceEvent::PresentExit,
-        swapChain,
-        nullptr,
-        syncInterval,
-        flags
-    );
-    UINT effectiveSyncInterval = syncInterval;
+    UINT         effectiveSyncInterval = syncInterval;
     runDetourInstrumentation([&] {
         if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
             (void)renderPresentFrame(swapChain);
@@ -206,7 +188,6 @@ DECLARE_DETOUR_FN(present, HRESULT, IDXGISwapChain* swapChain, UINT syncInterval
     });
     HRESULT const result = reinterpret_cast<PresentFn>(gOriginalPresent)(swapChain, effectiveSyncInterval, flags);
     runDetourInstrumentation([&] { gImGuiRenderer.afterPresent(swapChain, result); });
-    trace.result(static_cast<uint64_t>(static_cast<int64_t>(result)));
     return result;
 }
 
@@ -218,17 +199,9 @@ DECLARE_DETOUR_FN(
     UINT                           flags,
     DXGI_PRESENT_PARAMETERS const* parameters
 ) {
-    ActiveDetour            activeDetour;
-    OfflineRenderTraceScope trace(
-        OfflineRenderTraceEvent::Present1Enter,
-        OfflineRenderTraceEvent::Present1Exit,
-        swapChain,
-        nullptr,
-        syncInterval,
-        flags
-    );
-    auto* const baseSwapChain         = static_cast<IDXGISwapChain*>(swapChain);
-    UINT        effectiveSyncInterval = syncInterval;
+    ActiveDetour activeDetour;
+    auto* const  baseSwapChain         = static_cast<IDXGISwapChain*>(swapChain);
+    UINT         effectiveSyncInterval = syncInterval;
 
     DXGI_PRESENT_PARAMETERS fullSurfacePresent{};
     auto const*             effectiveParameters = parameters;
@@ -252,7 +225,6 @@ DECLARE_DETOUR_FN(
     HRESULT const result =
         reinterpret_cast<Present1Fn>(gOriginalPresent1)(swapChain, effectiveSyncInterval, flags, effectiveParameters);
     runDetourInstrumentation([&] { gImGuiRenderer.afterPresent(swapChain, result); });
-    trace.result(static_cast<uint64_t>(static_cast<int64_t>(result)));
     return result;
 }
 
@@ -626,91 +598,19 @@ uint32_t readRenderItemCount(bgfx::Frame const* render) {
 }
 
 // Only world geometry brings its own vertex formats; measured overlay submissions never do.
-using SubmissionSummary = exporting::OfflineNativeSubmissionSummary;
-
-exporting::SceneSubmissionKind classifySubmission(bgfx::Frame const* render, SubmissionSummary* summary = nullptr) {
+exporting::SceneSubmissionKind classifySubmission(bgfx::Frame const* render) {
     if (!render) return exporting::SceneSubmissionKind::OverlayOnly;
     auto const items = readRenderItemCount(render);
-    if (summary) summary->items = items;
     if (items == 0 || items > 65536u) return exporting::SceneSubmissionKind::OverlayOnly;
     auto const* base = reinterpret_cast<std::byte const*>(&render->m_renderItem[0].get());
     for (uint32_t i = 0; i < items; ++i) {
         auto const& draw = *reinterpret_cast<bgfx::RenderDraw const*>(base + i * RenderItemStride);
         auto const  decl = static_cast<uint32_t>(draw.m_stream[0].get().m_decl.get().idx);
-        if (summary) {
-            summary->inspected       = i + 1;
-            summary->lastDeclaration = (uint64_t{i} << 32) | decl;
-        }
         if (decl != InvalidVertexDeclIndex && decl != SharedVertexDeclIndex) {
             return exporting::SceneSubmissionKind::Scene;
         }
     }
     return exporting::SceneSubmissionKind::OverlayOnly;
-}
-
-void recordSubmissionSummary(
-    exporting::RenderDiagnosticProfile         profile,
-    exporting::OfflineRenderSubmitScope const& scope,
-    bgfx::Frame const*                         frame,
-    SubmissionSummary                          summary,
-    bool                                       returned = false
-) noexcept {
-    if (!profile.nativeSubmit() || !scope.serial()) return;
-    static_assert(sizeof(bgfx::Frame::m_viewRemap) == 512);
-    if (frame) {
-        summary.hasViews = true;
-        for (size_t i = 0; i < 4; ++i) summary.viewRemap |= uint64_t{frame->m_viewRemap[i]} << (16 * i);
-    }
-    exporting::recordNativeSubmissionSummary(profile, scope, frame, summary, returned);
-}
-
-void recordNativeSwitchState(
-    uint64_t                                 transition,
-    std::string_view                         event,
-    bgfx::d3d12::RendererContextD3D12 const* renderer,
-    void const*                              frame   = nullptr,
-    uint32_t                                 ordinal = 0
-) noexcept {
-    if (!transition) return;
-    runDetourInstrumentation([&] {
-        recordGraphicsSwitchTrace(
-            transition,
-            event,
-            fmt::format(
-                "renderer={} frame={} submit={} rtvHeap={} dsvHeap={} depth={} offline={}",
-                static_cast<void const*>(renderer),
-                frame,
-                ordinal,
-                static_cast<void*>(renderer->m_rtvDescriptorHeap),
-                static_cast<void*>(renderer->m_dsvDescriptorHeap),
-                static_cast<void*>(renderer->m_backBufferDepthStencil),
-                exporting::isOfflineRenderActivityActive()
-            )
-        );
-    });
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    GraphicsModeDiagnosticHook,
-    ll::memory::HookPriority::Highest,
-    MinecraftScreenModel,
-    &MinecraftScreenModel::setGraphicsMode,
-    void,
-    int mode
-) {
-    ActiveRendererInitDetour activeDetour;
-    uint64_t                 transition{};
-    if (!gRendererInitHookStopping.load(std::memory_order_acquire) && exporting::renderDiagnosticsEnabled()) {
-        runDetourInstrumentation([&] { transition = beginGraphicsSwitchTrace(getGraphicsMode(), mode); });
-        gImGuiRenderer.recordGraphicsSwitchResources(transition, "Overlay.atModeSetterEnter");
-    }
-    origin(mode);
-    if (transition) {
-        runDetourInstrumentation([&] {
-            recordGraphicsSwitchTrace(transition, "ModeSetter.return", fmt::format("selected={}", getGraphicsMode()));
-        });
-        gImGuiRenderer.recordGraphicsSwitchResources(transition, "Overlay.atModeSetterReturn");
-    }
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -723,64 +623,15 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::ClearQuad&           clearQuad,
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
-    ActiveDetour            activeDetour;
-    auto const              entry      = exporting::offlineRenderSceneSubmissionTicket();
-    auto const              entryEpoch = exporting::offlineRenderTraceEpoch();
-    OfflineRenderTraceScope trace(
-        OfflineRenderTraceEvent::SubmitD3D12Enter,
-        OfflineRenderTraceEvent::SubmitD3D12Exit,
-        this,
-        render,
-        0,
-        0,
-        0,
-        0,
-        entryEpoch
-    );
+    ActiveDetour activeDetour;
+    auto const   entry = exporting::offlineRenderSceneSubmissionTicket();
     // Only this hook sees the BGFX render thread submit world geometry; updateGraphics returning does not.
-    auto const        profile = exporting::renderDiagnosticProfile();
-    SubmissionSummary summary;
-    bool const        carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
-                                  && exporting::isOfflineRenderActivityActive()
-                                  && classifySubmission(render, profile.nativeSubmit() ? &summary : nullptr)
-                                         == exporting::SceneSubmissionKind::Scene;
-    exporting::OfflineRenderSubmitScope
-        submit(profile, render, this, entry.generation, entry.cpuReady, carriesScene, 12, entryEpoch);
-    recordSubmissionSummary(profile, submit, render, summary);
-    auto const switchTicket = claimGraphicsSwitchSubmitTrace();
-    recordNativeSwitchState(switchTicket.transition, "Submit.enter", this, render, switchTicket.ordinal);
+    bool const carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
+                           && exporting::isOfflineRenderActivityActive()
+                           && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
-    recordSubmissionSummary(profile, submit, render, summary, true);
-    recordNativeSwitchState(switchTicket.transition, "Submit.return", this, render, switchTicket.ordinal);
     useSubmittedCameraProjection(render);
-    bool const accepted = exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
-    submit.returned(accepted);
-    if (accepted) {
-        auto const presentSerial = exporting::offlineRenderNativePresentSerial();
-        exporting::setOfflineRenderSceneMarker(submit.serial(), entry.generation, presentSerial);
-        exporting::recordSceneCorrespondence(
-            profile,
-            entryEpoch,
-            OfflineRenderTraceEvent::SceneMarkerSet,
-            render,
-            nullptr,
-            submit.serial(),
-            entry.generation,
-            presentSerial,
-            1
-        );
-    }
-    exporting::recordOfflineRenderTraceForEpoch(
-        entryEpoch,
-        OfflineRenderTraceEvent::SubmissionGate,
-        render,
-        this,
-        entry.generation,
-        exporting::offlineRenderSceneGeneration(),
-        (carriesScene ? 1u : 0u) | (entry.cpuReady ? 2u : 0u),
-        accepted ? 1 : 0
-    );
-    trace.result(carriesScene ? 1 : 0);
+    (void)exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -793,60 +644,14 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::ClearQuad&           clearQuad,
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
-    ActiveDetour            activeDetour;
-    auto const              entry      = exporting::offlineRenderSceneSubmissionTicket();
-    auto const              entryEpoch = exporting::offlineRenderTraceEpoch();
-    OfflineRenderTraceScope trace(
-        OfflineRenderTraceEvent::SubmitD3D11Enter,
-        OfflineRenderTraceEvent::SubmitD3D11Exit,
-        this,
-        render,
-        0,
-        0,
-        0,
-        0,
-        entryEpoch
-    );
-    auto const        profile = exporting::renderDiagnosticProfile();
-    SubmissionSummary summary;
-    bool const        carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
-                                  && exporting::isOfflineRenderActivityActive()
-                                  && classifySubmission(render, profile.nativeSubmit() ? &summary : nullptr)
-                                         == exporting::SceneSubmissionKind::Scene;
-    exporting::OfflineRenderSubmitScope
-        submit(profile, render, this, entry.generation, entry.cpuReady, carriesScene, 11, entryEpoch);
-    recordSubmissionSummary(profile, submit, render, summary);
+    ActiveDetour activeDetour;
+    auto const   entry        = exporting::offlineRenderSceneSubmissionTicket();
+    bool const   carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
+                             && exporting::isOfflineRenderActivityActive()
+                             && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
-    recordSubmissionSummary(profile, submit, render, summary, true);
     useSubmittedCameraProjection(render);
-    bool const accepted = exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
-    submit.returned(accepted);
-    if (accepted) {
-        auto const presentSerial = exporting::offlineRenderNativePresentSerial();
-        exporting::setOfflineRenderSceneMarker(submit.serial(), entry.generation, presentSerial);
-        exporting::recordSceneCorrespondence(
-            profile,
-            entryEpoch,
-            OfflineRenderTraceEvent::SceneMarkerSet,
-            render,
-            nullptr,
-            submit.serial(),
-            entry.generation,
-            presentSerial,
-            1
-        );
-    }
-    exporting::recordOfflineRenderTraceForEpoch(
-        entryEpoch,
-        OfflineRenderTraceEvent::SubmissionGate,
-        render,
-        this,
-        entry.generation,
-        exporting::offlineRenderSceneGeneration(),
-        (carriesScene ? 1u : 0u) | (entry.cpuReady ? 2u : 0u),
-        accepted ? 1 : 0
-    );
-    trace.result(carriesScene ? 1 : 0);
+    (void)exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -858,25 +663,10 @@ LL_TYPE_INSTANCE_HOOK(
     bool swapChainReset
 ) {
     ActiveRendererInitDetour activeDetour;
-    auto const               transition = currentGraphicsSwitchTrace();
-    rearmGraphicsSwitchSubmitTrace(transition);
-    recordNativeSwitchState(transition, "PreReset.enter", this);
-    runDetourInstrumentation([&] {
-        recordGraphicsSwitchTrace(transition, "PreReset.arguments", fmt::format("swapChainReset={}", swapChainReset));
-    });
-    if (!gRendererInitHookStopping.load(std::memory_order_acquire)) {
-        if (exporting::renderDiagnosticsEnabled()) {
-            getLogger().info("[RenderDiag] D3D12 preReset begin swapChainReset={}", swapChainReset);
-        }
-        bool const released = gImGuiRenderer.beforeRendererReset();
-        if (!released) {
-            getLogger().error("D3D12 reset: overlay GPU work did not drain; preview/capture remain suspended");
-        } else if (exporting::renderDiagnosticsEnabled()) {
-            getLogger().info("[RenderDiag] D3D12 preReset overlayReleased=true");
-        }
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire) && !gImGuiRenderer.beforeRendererReset()) {
+        getLogger().error("D3D12 reset: overlay GPU work did not drain; preview/capture remain suspended");
     }
     origin(swapChainReset);
-    recordNativeSwitchState(transition, "PreReset.return", this);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -888,17 +678,8 @@ LL_TYPE_INSTANCE_HOOK(
     bool swapChainReset
 ) {
     ActiveRendererInitDetour activeDetour;
-    auto const               transition = currentGraphicsSwitchTrace();
-    recordNativeSwitchState(transition, "PostReset.enter", this);
     origin(swapChainReset);
-    recordNativeSwitchState(transition, "PostReset.return", this);
-    rearmGraphicsSwitchSubmitTrace(transition);
-    if (!gRendererInitHookStopping.load(std::memory_order_acquire)) {
-        gImGuiRenderer.afterRendererReset();
-        if (exporting::renderDiagnosticsEnabled()) {
-            getLogger().info("[RenderDiag] D3D12 postReset complete swapChainReset={}", swapChainReset);
-        }
-    }
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire)) gImGuiRenderer.afterRendererReset();
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -909,33 +690,11 @@ LL_TYPE_INSTANCE_HOOK(
     void
 ) {
     ActiveRendererInitDetour activeDetour;
-    auto const               transition = currentGraphicsSwitchTrace();
-    recordNativeSwitchState(transition, "Shutdown.enter", this);
     gD3D12RendererActive.store(false, std::memory_order_release);
-    if (!gRendererInitHookStopping.load(std::memory_order_acquire)) {
-        bool const released = gImGuiRenderer.beforeRendererReset(true);
-        if (!released) getLogger().error("D3D12 shutdown: overlay GPU work did not drain");
-        if (exporting::renderDiagnosticsEnabled()) {
-            getLogger().info("[RenderDiag] D3D12 shutdown overlayReleased={}", released);
-        }
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire) && !gImGuiRenderer.beforeRendererReset(true)) {
+        getLogger().error("D3D12 shutdown: overlay GPU work did not drain");
     }
     origin();
-    recordGraphicsSwitchTrace(transition, "Shutdown.return");
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    RendererSuspendDiagnosticHook,
-    ll::memory::HookPriority::Highest,
-    bgfx::d3d12::RendererContextD3D12,
-    &bgfx::d3d12::RendererContextD3D12::$suspend,
-    void
-) {
-    ActiveRendererInitDetour activeDetour;
-    auto const               transition = currentGraphicsSwitchTrace();
-    rearmGraphicsSwitchSubmitTrace(transition);
-    recordNativeSwitchState(transition, "Suspend.enter", this);
-    origin();
-    recordNativeSwitchState(transition, "Suspend.return", this);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -1123,8 +882,6 @@ bool resolveHookTargets(
     return resolved;
 }
 
-uint32_t offlineSubmitHookMask() noexcept { return gSubmitHookMask.load(std::memory_order_acquire); }
-
 bool hookRendererInit(bool enable) {
     std::scoped_lock lock(gRendererInitHookMutex);
     static bool      initInstalled{};
@@ -1133,9 +890,6 @@ bool hookRendererInit(bool enable) {
     static bool      shutdownInstalled{};
     static bool      submitInstalled{};
     static bool      submitD3D11Installed{};
-    static bool      modeDiagnosticInstalled{};
-    static bool      suspendDiagnosticInstalled{};
-    static bool      switchTraceOpened{};
 
     if (enable) {
         if (!initInstalled) {
@@ -1158,74 +912,25 @@ bool hookRendererInit(bool enable) {
         // Both backend hooks are installed up front; only the backend BGFX actually selected will run.
         if (!submitInstalled) {
             if (OfflineRenderSubmitHook::hook() != 0) {
-                getLogger().error(
-                    "Unable to install the BGFX D3D12 scene submission capture hook; requestedMask={}, actualMask={}",
-                    exporting::renderDiagnosticProfile().submitHookMask(),
-                    offlineSubmitHookMask()
-                );
+                getLogger().error("Unable to install the BGFX D3D12 scene submission capture hook");
                 return false;
             }
             submitInstalled = true;
-            gSubmitHookMask.fetch_or(1u, std::memory_order_release);
         }
         if (!submitD3D11Installed) {
             if (OfflineRenderSubmitD3D11Hook::hook() != 0) {
-                getLogger().error(
-                    "Unable to install the BGFX D3D11 scene submission capture hook; requestedMask={}, actualMask={}",
-                    exporting::renderDiagnosticProfile().submitHookMask(),
-                    offlineSubmitHookMask()
-                );
+                getLogger().error("Unable to install the BGFX D3D11 scene submission capture hook");
                 return false;
             }
             submitD3D11Installed = true;
-            gSubmitHookMask.fetch_or(2u, std::memory_order_release);
         }
 
-        auto const profile = exporting::renderDiagnosticProfile();
-        if (profile.submitScope())
-            getLogger().info(
-                "[RenderDiag] submit hooks requestedMask={} actualMask={}; actual callback hits require game "
-                "validation",
-                profile.submitHookMask(),
-                offlineSubmitHookMask()
-            );
-        if (profile.enabled) {
-            if (!switchTraceOpened) {
-                auto const path   = Playback::getInstance().getSelf().getModDir()
-                                  / fmt::format("graphics-switch-{}-{}.log", GetCurrentProcessId(), GetTickCount64());
-                switchTraceOpened = openGraphicsSwitchTrace(path);
-                if (switchTraceOpened) getLogger().info("[RenderDiag] graphics switch journal={}", path);
-                else getLogger().warn("Unable to open the graphics switch diagnostic journal");
-            }
-            if (switchTraceOpened && !modeDiagnosticInstalled) {
-                modeDiagnosticInstalled = GraphicsModeDiagnosticHook::hook() == 0;
-                if (!modeDiagnosticInstalled) getLogger().warn("Unable to install the graphics mode diagnostic hook");
-            }
-            if (switchTraceOpened && !suspendDiagnosticInstalled) {
-                suspendDiagnosticInstalled = RendererSuspendDiagnosticHook::hook() == 0;
-                if (!suspendDiagnosticInstalled)
-                    getLogger().warn("Unable to install the renderer suspend diagnostic hook");
-            }
-            getLogger().info(
-                "[RenderDiag] graphics switch hooks mode={} suspend={}",
-                modeDiagnosticInstalled,
-                suspendDiagnosticInstalled
-            );
-        }
         gRendererInitHookStopping.store(false, std::memory_order_release);
         return true;
     }
 
     gRendererInitHookStopping.store(true, std::memory_order_release);
     gD3D12RendererActive.store(false, std::memory_order_release);
-    if (modeDiagnosticInstalled) {
-        if (GraphicsModeDiagnosticHook::unhook()) modeDiagnosticInstalled = false;
-        else return false;
-    }
-    if (suspendDiagnosticInstalled) {
-        if (RendererSuspendDiagnosticHook::unhook()) suspendDiagnosticInstalled = false;
-        else return false;
-    }
     if (shutdownInstalled) {
         if (RendererShutdownHook::unhook()) shutdownInstalled = false;
         else return false;
@@ -1241,22 +946,17 @@ bool hookRendererInit(bool enable) {
     if (submitD3D11Installed) {
         if (OfflineRenderSubmitD3D11Hook::unhook()) submitD3D11Installed = false;
         else return false;
-        gSubmitHookMask.fetch_and(~2u, std::memory_order_release);
     }
     if (submitInstalled) {
         if (OfflineRenderSubmitHook::unhook()) submitInstalled = false;
         else return false;
-        gSubmitHookMask.fetch_and(~1u, std::memory_order_release);
     }
     if (initInstalled) {
         if (RendererInitHook::unhook()) initInstalled = false;
         else return false;
     }
     if (!waitForActiveRendererInitDetours()) return false;
-    if (!waitForActiveDetours()) return false;
-    closeGraphicsSwitchTrace();
-    switchTraceOpened = false;
-    return true;
+    return waitForActiveDetours();
 }
 
 bool hookD3D12(bool enable) {

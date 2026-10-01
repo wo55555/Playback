@@ -4,8 +4,6 @@
 #include "playback/Playback.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
-#include "playback/exporting/OfflineRenderTrace.h"
-#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/visuals/ReplaySampleTime.h"
@@ -23,9 +21,6 @@ constexpr auto     RenderWaitTimeout     = std::chrono::seconds{30};
 constexpr auto     RenderWaitLogInterval = std::chrono::seconds{2};
 constexpr auto     WarmupSceneTimeout    = std::chrono::seconds{30};
 constexpr uint32_t StableWarmupFrames    = 3;
-
-uint64_t gWarmupFramesRendered{};
-uint64_t gConfiguredWarmupFrames{};
 
 bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
     return left.frameIndex == right.frameIndex && left.ptsNumerator == right.ptsNumerator
@@ -54,7 +49,6 @@ bool OfflineRenderBoundary::open(
         return false;
     }
     mCaptureCapacity          = capacity;
-    mTraceEpoch               = offlineRenderTraceEpoch();
     mMaximumReplayTick        = std::max<int64_t>(0, settings.endTick);
     auto const maximumIntTick = std::min<int64_t>(mMaximumReplayTick, std::numeric_limits<int>::max());
     auto const startTick      = std::clamp<int64_t>(settings.startTick, 0, maximumIntTick);
@@ -103,8 +97,6 @@ bool OfflineRenderBoundary::open(
     mInitializationTickObserved    = false;
     mCaptureArmed                  = false;
     mWarmupFramesRemaining         = settings.warmupFrames;
-    gWarmupFramesRendered          = 0;
-    gConfiguredWarmupFrames        = settings.warmupFrames;
     mWarmupStableFrames            = 0;
     mConvergenceRendersDone        = 0;
     mConvergenceComplete           = false;
@@ -479,26 +471,9 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
     if (!mCaptureArmed) {
         mCaptureArmed = editor::graphics::gImGuiRenderer.armExportCapture(mPendingFrame->ticket);
         if (mCaptureArmed) markOfflineRenderClockCaptureArmed(*mClockToken);
-        recordOfflineRenderTrace(
-            OfflineRenderTraceEvent::CaptureArm,
-            nullptr,
-            nullptr,
-            mPendingFrame->ticket.frameIndex,
-            mCaptureArmed ? 1 : 0,
-            offlineRenderSceneGeneration()
-        );
     }
 
     auto const captureStatus = editor::graphics::gImGuiRenderer.exportCaptureStatus();
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::CaptureGate,
-        nullptr,
-        nullptr,
-        mPendingFrame->ticket.frameIndex,
-        captureStatus.armed ? 1 : 0,
-        captureStatus.bufferedFrames,
-        captureStatus.inFlightFrames
-    );
     if (captureStatus.state == visuals::FrameTapState::Faulted) {
         fault(
             OfflineRenderBoundaryError::CaptureFailed,
@@ -516,13 +491,6 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
 
     // executeSample only reports the clock being applied, not that the Present capture landed.
     auto const executed = mExecutor.executeSample(*mPendingFrame, *mClockToken);
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::ClockPermitted,
-        nullptr,
-        nullptr,
-        mPendingFrame->ticket.frameIndex,
-        executed == OfflineRenderFrameExecutionResult::Executed ? 1 : 0
-    );
     if (executed == OfflineRenderFrameExecutionResult::Failed) {
         auto const executorStatus = mExecutor.status();
         fault(
@@ -583,27 +551,6 @@ std::optional<visuals::CapturedFrame> OfflineRenderBoundary::finishDownload() {
     mExecutor.pollCapture();
     auto frame = editor::graphics::gImGuiRenderer.collectExportFrame();
     if (!frame) return std::nullopt;
-    recordCaptureLineage(
-        renderDiagnosticProfile(),
-        mTraceEpoch,
-        OfflineRenderTraceEvent::CaptureCollectedLink,
-        frame->submission.exportResource,
-        frame->submission.completionFence,
-        frame->ticket.frameIndex,
-        frame->submission.completionFenceValue,
-        reinterpret_cast<uintptr_t>(frame->submission.commandQueue),
-        0
-    );
-    recordOfflineRenderTraceForEpoch(
-        mTraceEpoch,
-        OfflineRenderTraceEvent::CaptureCollected,
-        nullptr,
-        nullptr,
-        frame->ticket.frameIndex,
-        frame->width,
-        frame->height
-    );
-    if (renderDiagnosticsEnabled()) recordOfflineRenderPixels(*frame);
 
     if (!mPendingFrame) {
         if (mState == OfflineRenderBoundaryState::Draining) return frame;
@@ -787,7 +734,6 @@ OfflineRenderStepResult OfflineRenderBoundary::advanceWarmup(ExportFramePlan con
     mRenderWaitStartedAt    = {};
     mRenderWaitLastLoggedAt = {};
     mExecutor.completeWarmup();
-    ++gWarmupFramesRendered;
     auto const executor = mExecutor.status();
     clearClockSample();
     if (mWarmupFramesRemaining != 0) --mWarmupFramesRemaining;
@@ -816,16 +762,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advanceWarmup(ExportFramePlan con
         fault(OfflineRenderBoundaryError::ReplayUnavailable, "The export scene did not become stable during warm-up");
         return OfflineRenderStepResult::Failed;
     }
-    if (warmupComplete()) {
-        recordOfflineRenderTrace(
-            OfflineRenderTraceEvent::WarmupComplete,
-            nullptr,
-            nullptr,
-            gWarmupFramesRendered,
-            gConfiguredWarmupFrames
-        );
-        mState = OfflineRenderBoundaryState::PreparingReplay;
-    }
+    if (warmupComplete()) mState = OfflineRenderBoundaryState::PreparingReplay;
     if (mWarmupFramesRemaining != 0) return waiting(OfflineRenderWaitReason::WarmupBudget);
     if (mWarmupStableFrames < StableWarmupFrames) return waiting(OfflineRenderWaitReason::WarmupUi);
     return waiting(OfflineRenderWaitReason::ReplayPreparation);
@@ -847,16 +784,6 @@ bool OfflineRenderBoundary::publishClockSample(ExportFramePlan const& frame, boo
     switch (publishOfflineRenderClockSample(*sample, token, captureSample)) {
     case OfflineRenderClockPublishResult::Published:
         mClockToken = token;
-        setOfflineRenderTraceSample(token.id, frame.ticket.frameIndex);
-        recordOfflineRenderTrace(
-            OfflineRenderTraceEvent::ClockPublished,
-            nullptr,
-            nullptr,
-            frame.ticket.frameIndex,
-            token.id,
-            static_cast<uint64_t>(sample->replayTime.numerator),
-            static_cast<uint64_t>(sample->replayTime.denominator)
-        );
         return true;
     case OfflineRenderClockPublishResult::Unavailable:
         fault(OfflineRenderBoundaryError::ClockUnavailable, "The fractional render clock is unavailable");
@@ -921,13 +848,12 @@ void OfflineRenderBoundary::clearClockSample() {
         mConvergenceToken.reset();
     }
     if (!mClockToken) return;
-    recordOfflineRenderTrace(OfflineRenderTraceEvent::ClockCleared, nullptr, nullptr, mClockToken->id);
     clearOfflineRenderClockSample(*mClockToken);
     mClockToken.reset();
 }
 
 // Only rendering advances the renderer's clock, so a stall with no published sample freezes the temporal state.
-void OfflineRenderBoundary::holdRenderAlive(uint64_t waitedMicros) {
+void OfflineRenderBoundary::holdRenderAlive() {
     if (mHoldToken || mClockToken || !mLastSubmittedFrame) return;
     // Ready is the state a driver stall leaves behind, so that is when the hold has to engage.
     if (mState != OfflineRenderBoundaryState::Ready && mState != OfflineRenderBoundaryState::AwaitingDownload
@@ -940,14 +866,6 @@ void OfflineRenderBoundary::holdRenderAlive(uint64_t waitedMicros) {
     OfflineRenderClockToken token;
     if (publishOfflineRenderClockSample(*sample, token, false) != OfflineRenderClockPublishResult::Published) return;
     mHoldToken = token;
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::RenderKeepAlive,
-        nullptr,
-        nullptr,
-        mLastSubmittedFrame->ticket.frameIndex,
-        token.id,
-        waitedMicros
-    );
 }
 
 void OfflineRenderBoundary::releaseHeldRender() {
@@ -957,7 +875,6 @@ void OfflineRenderBoundary::releaseHeldRender() {
 }
 
 void OfflineRenderBoundary::fault(OfflineRenderBoundaryError error, std::string message) {
-    recordOfflineRenderTrace(OfflineRenderTraceEvent::BoundaryFault, nullptr, nullptr, static_cast<uint64_t>(error));
     setOfflineRenderActivityActive(false);
     clearClockSample();
     mReplayTickToken.reset();
