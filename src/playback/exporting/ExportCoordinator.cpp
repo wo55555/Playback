@@ -12,7 +12,9 @@ namespace playback::exporting {
 namespace {
 
 [[nodiscard]] std::unique_ptr<IFrameWriter> makeDefaultWriter(ExportFormat format) {
-    if (format == ExportFormat::Mp4Video) return std::make_unique<FfmpegVideoWriter>();
+    if (format == ExportFormat::Mp4Video) {
+        return std::make_unique<FfmpegVideoWriter>();
+    }
     return std::make_unique<PngSequenceWriter>();
 }
 
@@ -123,6 +125,7 @@ bool ExportCoordinator::start(ExportSettings settings, state::editing::model::Ed
         mImpl->setFailureLocked(compiled.error, std::move(compiled.message));
         return false;
     }
+    compiled.plan->outputPath = findAvailableExportPath(compiled.plan->outputPath);
 
     auto writer = mImpl->factory ? mImpl->factory(compiled.plan->settings.format) : nullptr;
     if (!writer) {

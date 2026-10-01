@@ -1,6 +1,7 @@
 ﻿#include "D3D11FrameTapBackend.h"
 
 #include "playback/Playback.h"
+#include "playback/visuals/FramePixelBufferPool.h"
 
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -145,7 +146,7 @@ void D3D11FrameTapBackend::poll(ID3D11DeviceContext* context) {
             slot->capture.reset();
             continue;
         }
-        frame.pixels.resize(static_cast<size_t>(byteCount));
+        frame.pixels = visuals::framePixelBufferPool().acquire(static_cast<size_t>(byteCount));
         for (uint32_t y = 0; y < frame.height; ++y) {
             auto const* source = static_cast<std::byte const*>(mapped.pData) + static_cast<size_t>(y) * mapped.RowPitch;
             auto*       target = frame.pixels.data() + static_cast<size_t>(y) * frame.rowPitch;

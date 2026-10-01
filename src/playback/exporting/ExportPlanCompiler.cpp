@@ -12,10 +12,11 @@ namespace {
 constexpr int64_t  ReplayTicksPerSecond = 20;
 constexpr int64_t  MaxFrameRateValue    = 1'000'000;
 constexpr uint64_t MaxExportFrames      = 1'000'000;
-constexpr uint32_t MaxResolution        = 16'384;
-constexpr uint32_t MaxSsaa              = 2;
+constexpr uint32_t MaxResolution        = MaxExportResolution;
+constexpr uint32_t MaxSsaa              = MaxExportSsaa;
 constexpr uint32_t MaxWarmupFrames      = 3'600;
-constexpr uint64_t MaxFramePixels       = (512ull * 1024 * 1024) / 4;
+constexpr uint32_t MaxConvergenceFrames = 240;
+constexpr uint64_t MaxFramePixels       = MaxExportPixels;
 
 [[nodiscard]] int64_t gcd(int64_t left, int64_t right) {
     while (right != 0) {
@@ -94,23 +95,6 @@ constexpr uint64_t MaxFramePixels       = (512ull * 1024 * 1024) / 4;
     return name;
 }
 
-[[nodiscard]] std::string frameRateLabel(FrameRate rate) {
-    rate              = normalizeFrameRate(rate);
-    std::string label = std::to_string(rate.numerator);
-    if (rate.denominator != 1) {
-        label += '-';
-        label += std::to_string(rate.denominator);
-    }
-    label += "fps";
-    return label;
-}
-
-[[nodiscard]] std::string resolutionLabel(ExportSettings const& settings) {
-    if (settings.resolutionX == 0 && settings.resolutionY == 0) return "native";
-    return std::to_string(settings.resolutionX) + "x" + std::to_string(settings.resolutionY) + "_ssaa"
-         + std::to_string(settings.ssaa);
-}
-
 [[nodiscard]] std::filesystem::path utf8Path(std::string const& value) {
     auto const* begin = reinterpret_cast<char8_t const*>(value.data());
     return std::filesystem::path(std::u8string{begin, begin + value.size()});
@@ -124,12 +108,24 @@ constexpr uint64_t MaxFramePixels       = (512ull * 1024 * 1024) / 4;
 
 std::filesystem::path buildExportOutputPath(ExportSettings const& settings) {
     auto const baseName = outputBaseName(settings.outputName);
-    auto const variant  = baseName + "_t" + std::to_string(settings.startTick) + "-" + std::to_string(settings.endTick)
-                        + "_" + frameRateLabel(settings.frameRate) + "_" + resolutionLabel(settings);
-    auto const root     = settings.outputDirectory / utf8Path(baseName);
+    if (settings.format == ExportFormat::Mp4Video) return settings.outputDirectory / utf8Path(baseName + ".mp4");
+    // A frame sequence is many files, so it still needs a folder of its own to live in.
+    return settings.outputDirectory / utf8Path(baseName);
+}
 
-    if (settings.format == ExportFormat::Mp4Video) return root / utf8Path(variant + ".mp4");
-    return root / utf8Path(variant + "_frames");
+std::filesystem::path findAvailableExportPath(std::filesystem::path const& desired) {
+    std::error_code error;
+    if (!std::filesystem::exists(desired, error) && !error) return desired;
+
+    auto const parent    = desired.parent_path();
+    auto const extension = desired.extension();
+    auto const stem      = desired.stem();
+    for (int index = 1; index < 10'000; ++index) {
+        auto suffix    = std::filesystem::path{" (" + std::to_string(index) + ")"};
+        auto candidate = parent / (stem.native() + suffix.native() + extension.native());
+        if (!std::filesystem::exists(candidate, error) || error) return candidate;
+    }
+    return desired;
 }
 
 std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t frameIndex) const {
@@ -201,6 +197,9 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     }
     if (settings.warmupFrames > MaxWarmupFrames) {
         return failure(ExportError::InvalidSettings, "The export warm-up frame count is too large");
+    }
+    if (settings.convergenceFrames > MaxConvergenceFrames) {
+        return failure(ExportError::InvalidSettings, "The export convergence frame count is too large");
     }
 
     ExportSettings normalized = settings;

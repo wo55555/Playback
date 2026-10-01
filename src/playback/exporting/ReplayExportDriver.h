@@ -3,6 +3,8 @@
 #include "ExportCoordinator.h"
 #include "OfflineRenderBoundary.h"
 
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -54,11 +56,16 @@ private:
 
     [[nodiscard]] SubmissionResult submitReadyFrames();
     [[nodiscard]] SubmissionResult collectDownloads();
-    [[nodiscard]] ExportError      mapBoundaryError(OfflineRenderBoundaryError error) const;
-    void                           finish();
-    void                           fail(ExportError error, std::string message);
-    void                           restoreReplayState();
-    void                           closeCapture(bool cancelled);
+    // Records a wait and keeps the renderer drawing for its duration, so a waiting frame is never a render-free frame.
+    void                      waitFor(OfflineRenderWaitReason reason);
+    [[nodiscard]] ExportError mapBoundaryError(OfflineRenderBoundaryError error) const;
+    void                      finish();
+    void                      fail(ExportError error, std::string message);
+    void                      restoreReplayState();
+    void                      closeCapture(bool cancelled);
+    // Charges elapsed time to whichever reason the driver was parked on, so a frame's cost splits by cause.
+    void accumulateWait(std::chrono::steady_clock::time_point now);
+    void reportWaitProfile() const;
 
     ExportCoordinator&                     mCoordinator;
     replay::ReplaySession&                 mReplay;
@@ -67,6 +74,12 @@ private:
     std::deque<visuals::CapturedFrame>     mReadyFrames;
     std::optional<bool>                    mPreviousPaused;
     uint64_t                               mNextFrameIndex{};
+    static constexpr size_t                WaitReasonCount = static_cast<size_t>(OfflineRenderWaitReason::Count);
+    std::array<uint64_t, WaitReasonCount>  mWaitMicros{};
+    std::array<uint64_t, WaitReasonCount>  mWaitHits{};
+    std::chrono::steady_clock::time_point  mWaitChargedAt{};
+    std::optional<OfflineRenderWaitReason> mWaitCharged;
+    uint64_t                               mDriverTicks{};
     Phase                                  mPhase{Phase::Idle};
 };
 

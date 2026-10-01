@@ -105,7 +105,7 @@ LL_TYPE_INSTANCE_HOOK(
         auto const topScene = static_cast<unsigned int>(getTopSceneType());
         auto const hudScene = static_cast<unsigned int>(ui::SceneType::HudScene);
         hudVisible = (topScene & hudScene) != 0 && isInWorldAndNotShowingAnyMenuScreens() && !isShowingLoadingScreen()
-                  && !isShowingProgressScreen();
+                  && !isShowingProgressScreen() && !isShowingWorldProgressScreen();
     }
     editor::tickReplayUI(hudVisible);
     replay.tryFinalizeWorldCleanup();

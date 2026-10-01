@@ -31,18 +31,20 @@ public:
     [[nodiscard]] bool saveReplayThumbnail(std::filesystem::path const& output) override;
 
     // Present-time export capture; the back buffer holds the overlay-free world, so no MSAA or resize is needed.
-    [[nodiscard]] bool                                  openExportCapture(uint32_t capacity);
+    [[nodiscard]] bool                                  openExportCapture(uint32_t capacity, uint32_t downsample);
     void                                                closeExportCapture();
     [[nodiscard]] bool                                  armExportCapture(visuals::FrameTicket const& ticket);
     [[nodiscard]] std::optional<visuals::CapturedFrame> collectExportFrame();
     [[nodiscard]] visuals::FrameTapStatus               exportCaptureStatus() const;
-    [[nodiscard]] void* acquireReplayThumbnailTexture(std::string_view key, std::string_view png);
+    [[nodiscard]] void* acquireReplayThumbnailTexture(std::filesystem::path const& path);
 
     bool               render(IDXGISwapChain* swapChain, bool allowFrameCapture = true);
     bool               renderExportOverlay(IDXGISwapChain* swapChain);
     void               pollFrameCapture();
     [[nodiscard]] bool isD3D12RendererActive() const;
     [[nodiscard]] bool ownsSwapChain(IDXGISwapChain* swapChain) const;
+    [[nodiscard]] bool beforeRendererReset(bool shuttingDown = false);
+    void               afterRendererReset();
     bool               beforeResize(IDXGISwapChain* swapChain);
     void               afterPresent(IDXGISwapChain* swapChain, long result);
     bool               shutdown();

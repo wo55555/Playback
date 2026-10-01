@@ -175,7 +175,7 @@ bool remapRecordedPlayerReferences(
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
         bool  changed   = addPlayer.mEntityId->rawID == sourceUniqueId.rawID
-                       || addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
+                    || addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid;
         for (auto& link : *addPlayer.mLinks) {
             changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
             changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
@@ -1101,12 +1101,16 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
 
         // The recorded local player is required snapshot state, independent of the transient runtime actor list.
         AddPlayerPacket recordedPlayer(*finalPlayer);
-        recordedPlayer.mUuid           = *mRecordedLocalPlayerUuid;
-        recordedPlayer.mEntityId       = *mRecordedLocalPlayerId;
-        recordedPlayer.mRuntimeId      = *mRecordedLocalPlayerRuntimeId;
+        remapRecordedPlayerReferences(
+            recordedPlayer,
+            finalPlayer->getOrCreateUniqueID(),
+            finalPlayer->getRuntimeID(),
+            finalPlayer->getUuid(),
+            *mRecordedLocalPlayerId,
+            *mRecordedLocalPlayerRuntimeId,
+            *mRecordedLocalPlayerUuid
+        );
         recordedPlayer.mPlayerGameType = finalPlayer->getPlayerGameType();
-        recordedPlayer.mPlatformOnlineId->clear();
-        recordedPlayer.mDeviceId->clear();
         PlaybackBuffer recordedPlayerStream;
         recordedPlayer.write(recordedPlayerStream);
         mSnapshotLocalPlayerPayload = std::move(recordedPlayerStream.mBuffer);

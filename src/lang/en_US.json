@@ -219,8 +219,12 @@
                 "frameCount": "{} / {} frames",
                 "formatLabel": "Format",
                 "outputLabel": "Output",
-                "cancel": "Cancel Export",
-                "cancelling": "Cancelling..."
+                "elapsedLabel": "Elapsed",
+                "speedLabel": "Render speed",
+                "speedValue": "{:.2f} frames/s",
+                "remainingValue": "About {} remaining",
+                "estimating": "Estimating time remaining...",
+                "cancel": "Cancel Export"
             },
             "status": {
                 "replay": "[Replay]",
@@ -245,13 +249,17 @@
                 "resolution": "Resolution",
                 "ssaa": "SSAA",
                 "warmupFrames": "Warm-up frames",
+                "convergenceFrames": "Convergence frames",
+                "resolutionPreset": "Presets",
+                "ssaaHint": "Renders at a multiple of the output size and downsamples. Sharper edges, slower export. Levels that would exceed the GPU limit are disabled.",
+                "warmupHint": "Frames rendered and discarded before the first captured frame, so chunks and lighting can settle.",
+                "convergenceHint": "Extra renders per captured frame, letting ray-traced lighting and temporal effects converge.",
                 "summary": "OUTPUT SUMMARY",
                 "timelineSummary": "Timeline",
                 "captureSummary": "Capture",
+                "outputSummary": "Output",
                 "summaryValue": "{} FPS | {:.2f} s | {} frames",
                 "captureValue": "{} x {} | {}x SSAA | {} warm-up frames",
-                "destinationLabel": "Destination",
-                "destination": "Destination: {}",
                 "fullRange": "Full replay",
                 "usePlayhead": "Use current playhead tick",
                 "export": "Start Export",
@@ -349,7 +357,11 @@
                 "uiScaleMedium": "Medium (125%)",
                 "uiScaleLarge": "Large (150%)",
                 "uiScaleHuge": "Huge (175%)",
-                "uiScaleAutoHint": "Resolved to {}% for this resolution"
+                "uiScaleAutoHint": "Resolved to {}% for this resolution",
+                "optiPiston": "OptiPiston",
+                "pistonEnabled": "Smooth piston animation",
+                "pistonDuration": "Animation duration",
+                "optiPistonHint": "Saved to OptiPiston's config; also applies outside replays."
             },
             "defaults": {
                 "camera": "Camera {}"

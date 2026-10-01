@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
+#include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 
@@ -556,6 +557,8 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto const existing = keyframe::currentCameraTimelineRenderContext();
     if (existing && existing->source == keyframe::CameraTimelineSource::Export) {
+        // The offline clock already writes the sample fraction into the native alpha.
+        integration::pushReplayPartial(std::nullopt);
         (void)applyCameraEcs(*existing);
         origin(partialTick);
         return;
@@ -563,7 +566,9 @@ LL_TYPE_INSTANCE_HOOK(
 
     // Vanilla interpolates on the client tick, which only matches the replay tick at 1x; drive the pose ourselves.
     auto& replay = replay::ReplaySession::getInstance();
-    auto  pose   = [&]() -> std::unique_ptr<visuals::ScopedReplayEntityPose> {
+    // Native alpha keeps cycling while paused; pistons must hold the same fraction as the entity poses.
+    integration::pushReplayPartial(replay.previewPartialTick());
+    auto pose = [&]() -> std::unique_ptr<visuals::ScopedReplayEntityPose> {
         auto const time = replay.getEntityRenderSampleTime();
         return time ? replay.createReplayEntityRenderScope(*time) : nullptr;
     }();

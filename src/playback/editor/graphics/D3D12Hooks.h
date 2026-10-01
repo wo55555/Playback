@@ -12,14 +12,15 @@ namespace playback::editor::graphics {
 
 using Microsoft::WRL::ComPtr;
 
-inline constexpr UINT  SrvDescriptorCount  = 32;
+// Leave room for dynamic font atlases alongside the bounded thumbnail cache and per-frame game textures.
+inline constexpr UINT  SrvDescriptorCount  = 512;
 inline constexpr DWORD GpuWaitTimeoutMs    = 2000;
 inline constexpr DWORD DetourWaitTimeoutMs = 2000;
 inline constexpr GUID  SwapChainQueueGuid{
     0xe185a345,
     0x1169,
     0x4fc8,
-    {0xa4, 0x4b, 0x86, 0x73, 0xd1, 0x5d, 0x7b, 0x2f}
+     {0xa4, 0x4b, 0x86, 0x73, 0xd1, 0x5d, 0x7b, 0x2f}
 };
 
 [[nodiscard]] bool isTimelineRenderingEnabled();

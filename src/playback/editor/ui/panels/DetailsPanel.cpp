@@ -5,6 +5,7 @@
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
+#include "playback/integration/OptiPistonBridge.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -773,6 +774,8 @@ void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {
         property::endSection();
     }
 
+    drawOptiPistonSection();
+
     if (property::beginSection("playback.refactorEditor.viewport.aspectTooltip"_tr().c_str())) {
         struct Preset {
             char const* label;
@@ -793,6 +796,40 @@ void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {
         }
         property::endSection();
     }
+}
+
+void DetailsPanel::drawOptiPistonSection() {
+    // Absent OptiPiston means no section at all, not a disabled one.
+    auto const piston = integration::optiPistonSettings();
+    if (!piston) {
+        mPistonDurationDraft.reset();
+        return;
+    }
+    if (!property::beginSection("playback.refactorEditor.inspector.optiPiston"_tr().c_str())) return;
+
+    bool enabled = piston->enabled;
+    if (ImGui::Checkbox(("playback.refactorEditor.inspector.pistonEnabled"_tr() + "##set-piston").c_str(), &enabled))
+        integration::setOptiPistonEnabled(enabled);
+
+    ImGui::BeginDisabled(!piston->enabled);
+    ImGui::TextUnformatted("playback.refactorEditor.inspector.pistonDuration"_tr().c_str());
+    // Held locally while dragging so the config is written once, on release.
+    float duration = mPistonDurationDraft.value_or(piston->durationTicks);
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::SliderFloat(
+        "##set-piston-duration",
+        &duration,
+        piston->minDurationTicks,
+        piston->maxDurationTicks,
+        "%.2f gt",
+        ImGuiSliderFlags_AlwaysClamp
+    );
+    if (ImGui::IsItemActive()) mPistonDurationDraft = duration;
+    if (ImGui::IsItemDeactivatedAfterEdit()) integration::setOptiPistonDuration(duration);
+    if (!ImGui::IsItemActive()) mPistonDurationDraft.reset();
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.optiPistonHint"_tr().c_str());
+    property::endSection();
 }
 
 } // namespace playback::editor::ui

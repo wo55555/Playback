@@ -3,7 +3,6 @@
 #include "ExportActivity.h"
 
 #include "playback/Playback.h"
-#include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/models/EditorStateExt.h"
@@ -14,7 +13,8 @@ namespace playback::exporting {
 
 namespace {
 
-constexpr uint32_t ExportCaptureCapacity = 4;
+// Deeper than the in-flight capture count so a full writer queue does not stall the next arm.
+constexpr uint32_t ExportCaptureCapacity = 6;
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
@@ -109,10 +109,16 @@ bool ReplayExportDriver::start(
     }
     mReadyFrames.clear();
     mNextFrameIndex = 0;
+    mWaitMicros.fill(0);
+    mWaitHits.fill(0);
+    mWaitChargedAt = {};
+    mWaitCharged.reset();
+    mDriverTicks = 0;
     setExportActivityActive(true);
     mPhase = Phase::Rendering;
     getLogger().info(
-        "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}",
+        "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
+        "warmup={}, convergence={}",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -121,19 +127,23 @@ bool ReplayExportDriver::start(
         mPlan->settings.frameRate.denominator,
         mPlan->settings.resolutionX,
         mPlan->settings.resolutionY,
-        mPlan->settings.ssaa
+        mPlan->settings.ssaa,
+        mPlan->settings.warmupFrames,
+        mPlan->settings.convergenceFrames
     );
     return true;
 }
 
 void ReplayExportDriver::tick() {
     if (!isActive()) return;
+    ++mDriverTicks;
     auto const coordinatorStatus = mCoordinator.status();
     if (mPhase == Phase::Finalizing || mPhase == Phase::Cancelling) {
         if (coordinatorStatus.state == ExportState::Completed) {
             restoreReplayState();
             setExportActivityActive(false);
             mPhase = Phase::Completed;
+            getLogger().info("Video export completed: {} frames written to {}", mNextFrameIndex, mPlan->outputPath);
         } else if (coordinatorStatus.state == ExportState::Cancelled) {
             restoreReplayState();
             setExportActivityActive(false);
@@ -174,9 +184,16 @@ void ReplayExportDriver::tick() {
     }
 
     auto const submission = collectDownloads();
-    if (submission == SubmissionResult::Failed || submission == SubmissionResult::Backpressured) return;
+    if (submission == SubmissionResult::Failed || submission == SubmissionResult::Backpressured) {
+        waitFor(
+            submission == SubmissionResult::Backpressured ? OfflineRenderWaitReason::WriterBackpressure
+                                                          : OfflineRenderWaitReason::Failed
+        );
+        return;
+    }
 
     if (mPhase == Phase::Draining) {
+        waitFor(OfflineRenderWaitReason::Draining);
         if (mReadyFrames.empty() && mRenderBoundary->isDrained()) finish();
         return;
     }
@@ -191,6 +208,7 @@ void ReplayExportDriver::tick() {
         switch (mRenderBoundary->advance(*frame)) {
         case OfflineRenderStepResult::Waiting:
         case OfflineRenderStepResult::Backpressured:
+            waitFor(mRenderBoundary->lastWaitReason());
             return;
         case OfflineRenderStepResult::Failed: {
             auto const status = mRenderBoundary->status();
@@ -201,6 +219,9 @@ void ReplayExportDriver::tick() {
             return;
         }
         case OfflineRenderStepResult::FrameSubmitted:
+            accumulateWait(std::chrono::steady_clock::now());
+            mWaitCharged = OfflineRenderWaitReason::None;
+            ++mWaitHits[static_cast<size_t>(OfflineRenderWaitReason::None)];
             ++mNextFrameIndex;
             if (mNextFrameIndex >= mPlan->frameCount) {
                 if (!mRenderBoundary->beginDrain()) {
@@ -275,6 +296,70 @@ ReplayExportDriver::SubmissionResult ReplayExportDriver::collectDownloads() {
     return submitReadyFrames();
 }
 
+void ReplayExportDriver::waitFor(OfflineRenderWaitReason reason) {
+    accumulateWait(std::chrono::steady_clock::now());
+    mWaitCharged = reason;
+    ++mWaitHits[static_cast<size_t>(reason)];
+    if (mRenderBoundary) mRenderBoundary->holdRenderAlive();
+}
+
+void ReplayExportDriver::reportWaitProfile() const {
+    if (mDriverTicks == 0) return;
+    static constexpr std::array<char const*, WaitReasonCount> names{
+        "None",
+        "WriterBackpressure",
+        "CaptureCapacity",
+        "ReplayPreparation",
+        "DimensionTransition",
+        "UiStable",
+        "NativeTick",
+        "WarmupCpu",
+        "WarmupBudget",
+        "WarmupUi",
+        "CaptureArm",
+        "CpuSample",
+        "CapturePending",
+        "CollectPending",
+        "Draining",
+        "Failed",
+        "Convergence",
+        "Unknown",
+    };
+    uint64_t total = 0;
+    for (auto const micros : mWaitMicros) total += micros;
+    auto const frames = std::max<uint64_t>(mNextFrameIndex, 1);
+
+    std::string breakdown;
+    for (size_t index = 0; index < WaitReasonCount; ++index) {
+        if (mWaitMicros[index] == 0 && mWaitHits[index] == 0) continue;
+        if (!breakdown.empty()) breakdown += ", ";
+        breakdown += fmt::format(
+            "{}={:.1f}ms ({:.2f}/frame, {} hits)",
+            names[index],
+            static_cast<double>(mWaitMicros[index]) / 1000.0,
+            static_cast<double>(mWaitMicros[index]) / 1000.0 / static_cast<double>(frames),
+            mWaitHits[index]
+        );
+    }
+    getLogger().debug(
+        "Export wait profile: frames={}, driverTicks={} ({:.2f}/frame), totalMs={:.0f} ({:.2f}/frame); {}",
+        mNextFrameIndex,
+        mDriverTicks,
+        static_cast<double>(mDriverTicks) / static_cast<double>(frames),
+        static_cast<double>(total) / 1000.0,
+        static_cast<double>(total) / 1000.0 / static_cast<double>(frames),
+        breakdown
+    );
+}
+
+void ReplayExportDriver::accumulateWait(std::chrono::steady_clock::time_point now) {
+    if (mWaitCharged && mWaitChargedAt != std::chrono::steady_clock::time_point{}) {
+        mWaitMicros[static_cast<size_t>(*mWaitCharged)] +=
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - mWaitChargedAt).count());
+    }
+    mWaitChargedAt = now;
+}
+
 ExportError ReplayExportDriver::mapBoundaryError(OfflineRenderBoundaryError error) const {
     switch (error) {
     case OfflineRenderBoundaryError::ReplayUnavailable:
@@ -295,7 +380,6 @@ ExportError ReplayExportDriver::mapBoundaryError(OfflineRenderBoundaryError erro
 }
 
 void ReplayExportDriver::finish() {
-    getLogger().info("Captured {} video export frames; finalizing output", mNextFrameIndex);
     closeCapture(false);
     if (!mCoordinator.finish()) {
         auto const status = mCoordinator.status();
@@ -329,12 +413,13 @@ void ReplayExportDriver::restoreReplayState() {
 }
 
 void ReplayExportDriver::closeCapture(bool cancelled) {
+    reportWaitProfile();
     setOfflineRenderActivityActive(false);
     if (mRenderBoundary) {
         if (cancelled) mRenderBoundary->cancel();
         else mRenderBoundary->close();
     }
-    if (isOfflineRenderClockInstalled() && !hookOfflineRenderClock(false)) {
+    if (!hookOfflineRenderClock(false)) {
         getLogger().error("Unable to remove export-scoped offline render hooks after capture close");
     }
     mReadyFrames.clear();

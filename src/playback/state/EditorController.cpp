@@ -34,7 +34,6 @@ ReplayBrowserEntry makeBrowserEntry(io::ReplaySummary summary) {
     entry.lastModified  = summary.lastModified;
     entry.canOpen       = summary.canOpen;
     entry.problem       = std::move(summary.problem);
-    entry.thumbnailPng  = std::move(summary.thumbnailPng);
     return entry;
 }
 
@@ -355,9 +354,9 @@ void EditorController::publishState(bool hudVisible) {
 
     EditorState state;
     state.replayVisible = sessionActive && session.hasJoinedReplayWorld();
-    // Latched, so opening a menu does not flicker the editor away once it is up.
+    // Gate only on the loading/progress screen clearing and let chunks stream in natively.
     if (!sessionActive) mEditorReadyLatched = false;
-    else if (hudVisible && session.isReplayWorldReady()) mEditorReadyLatched = true;
+    else if (hudVisible) mEditorReadyLatched = true;
     state.editorVisible = mEditorReadyLatched;
     state.hudVisible    = hudVisible;
     state.paused        = session.isPaused();
