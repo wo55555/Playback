@@ -238,7 +238,7 @@ bool remapRecordedPlayerReferences(
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
         bool  changed   = addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid
-                       || addPlayer.mAbilitiesData->mTargetPlayer->rawID == sourceUniqueId.rawID;
+                    || addPlayer.mAbilitiesData->mTargetPlayer->rawID == sourceUniqueId.rawID;
         for (auto& link : *addPlayer.mLinks) {
             changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
             changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);

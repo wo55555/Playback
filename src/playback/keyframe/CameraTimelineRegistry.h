@@ -71,9 +71,9 @@ void                                           setLastPreviewPose(CameraRenderSt
 
 [[nodiscard]] CameraTimelineRenderContextHandle publishCameraTimelineRenderContext(CameraTimelineRenderContext context);
 void                                            clearCameraTimelineRenderContext(
-    CameraTimelineSource                     source,
-    CameraTimelineRenderContextHandle const& expected = {}
-) noexcept;
+                                               CameraTimelineSource                     source,
+                                               CameraTimelineRenderContextHandle const& expected = {}
+                                           ) noexcept;
 
 [[nodiscard]] CameraTimelineRenderContextHandle currentCameraTimelineRenderContext() noexcept;
 
