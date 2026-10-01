@@ -233,7 +233,7 @@ void TimelinePanel::drawTransportGroup(PanelContext const& ctx, int displayTick,
     float const speedWidth = widgets::dropdownChipWidth(speedLabel);
     float const groupWidth = timeWidth + metrics::gutter() * 2.0f + unit * 5.0f + 4.0f + metrics::gutter() * 2.0f
                            + speedWidth + metrics::gutter() * 2.0f + unit;
-    float const startX     = std::max(0.0f, (width - groupWidth) * 0.5f);
+    float const startX = std::max(0.0f, (width - groupWidth) * 0.5f);
 
     // SameLine() restores Y to the line's first item, so the timecode is drawn rather than submitted.
     ImGui::SetCursorPos({startX, rowY});
@@ -917,10 +917,10 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             {
                 float const amount = mAnimator.animate("canvas-selected", camera.id, cameraSelected ? 1.0f : 0.0f);
                 ImU32 const fill   = camera.enabled ? lerpColor(
-                                                          theme::withAlpha(trackColor, theme::kTrackFillAlpha),
-                                                          theme::withAlpha(trackColor, theme::kTrackFillSelectedAlpha),
-                                                          amount
-                                                      )
+                                                        theme::withAlpha(trackColor, theme::kTrackFillAlpha),
+                                                        theme::withAlpha(trackColor, theme::kTrackFillSelectedAlpha),
+                                                        amount
+                                                    )
                                                     : theme::withAlpha(theme::kTrackDisabled, 0x80);
                 drawList->AddRectFilled({layout.canvasLeft, y + 3.0f}, {layout.fullMax.x, rowBottom - 3.0f}, fill);
             }

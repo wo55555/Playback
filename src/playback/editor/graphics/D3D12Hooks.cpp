@@ -641,8 +641,8 @@ LL_TYPE_INSTANCE_HOOK(
     ActiveDetour activeDetour;
     auto const   entry        = exporting::offlineRenderSceneSubmissionTicket();
     bool const   carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
-                             && exporting::isOfflineRenderActivityActive()
-                             && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
+                           && exporting::isOfflineRenderActivityActive()
+                           && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
     useSubmittedCameraProjection(render);
     (void)exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
