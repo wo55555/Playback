@@ -8,11 +8,12 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 
 | Minecraft / LeviLamina | Playback release                                                                    |
 | ---------------------- | ----------------------------------------------------------------------------------- |
-| `26.10.*`              | [`v0.3.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.10) |
-| `26.20.*`              | [`v0.3.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.20) |
-| `26.40.*`              | [`v0.3.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40) |
+| `26.10.*`              | [`v0.3.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.10) |
+| `26.20.*`              | [`v0.3.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.20) |
+| `26.40.*`              | [`v0.3.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.40) |
+| `26.51.*`              | [`v0.3.2-mc26.51`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.51) |
 
-All three Playback releases listed above are prereleases; install only the version that matches your instance.
+All four Playback releases listed above are prereleases; install only the version that matches your instance.
 
 > [!IMPORTANT]
 > Use a clean LeviLamina instance without other third-party mods whenever possible. Broad mod compatibility is not currently guaranteed.
@@ -21,11 +22,11 @@ All three Playback releases listed above are prereleases; install only the versi
 > Vibrant Visuals is not supported yet. Turn it off in the video settings before recording, replaying, or exporting; leaving it on is untested and can break rendering and capture.
 
 > [!CAUTION]
-> `v0.3.1-mc26.20` is a prerelease. Replay archives created before `v0.2.0-mc26.20` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete `v0.2.1-mc26.20` and `v0.3.0-mc26.20` archives are compatible with `v0.3.1-mc26.20` and require no conversion. The configuration version, recording-file snapshot context version, and editor project format version are all `1`; no migration is provided.
+> `v0.3.2` is a prerelease on every release line. Replay archives created before `v0.2.0` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete archives recorded with `v0.2.0` or later on the same release line are compatible with `v0.3.2` and require no conversion. The configuration version, recording-file snapshot context version, and editor project format version are all `1`; no migration is provided.
 
 ## Install with LeviLauncher and Lip
 
-The screenshots below use a `26.10` instance and are illustrative. For `26.20` or `26.40`, follow the same steps with the matching Minecraft, LeviLamina, and Playback release.
+The screenshots below use a `26.10` instance and are illustrative. For `26.20`, `26.40`, or `26.51`, follow the same steps with the matching Minecraft, LeviLamina, and Playback release.
 
 1. Select **Download** in the left sidebar, find the Minecraft version you want, and use its install menu to create an instance with the **LeviLamina** loader.
 
@@ -65,13 +66,16 @@ Run the matching command from the root directory of the target LeviLamina instan
 
 ```powershell
 # Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.3.1-mc26.10#client
+lip install github.com/wo55555/Playback@0.3.2-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
-lip install github.com/wo55555/Playback@0.3.1-mc26.20#client
+lip install github.com/wo55555/Playback@0.3.2-mc26.20#client
 
 # Minecraft / LeviLamina 26.40
-lip install github.com/wo55555/Playback@0.3.1-mc26.40#client
+lip install github.com/wo55555/Playback@0.3.2-mc26.40#client
+
+# Minecraft / LeviLamina 26.51
+lip install github.com/wo55555/Playback@0.3.2-mc26.51#client
 ```
 
 > [!NOTE]
@@ -143,17 +147,17 @@ Keyboard input belongs to the editor while it is open. Hold the left mouse butto
 
 Open **File > Export...** in the replay editor and configure:
 
-- Output directory and file name.
+- Output name, used verbatim as the file name; an existing file gets a numbered suffix instead of being overwritten.
 - MP4 video or PNG image sequence.
 - Start and end tick.
 - Frame rate and output resolution.
-- SSAA and warm-up frames.
+- SSAA, warm-up frames, and convergence frames. Convergence frames render each frame again without capturing it so the ray-traced denoiser can settle.
 
 The experimental exporter renders frames from replay time rather than recording the screen in real time. MP4 uses the bundled FFmpeg/libx264 tool; PNG export remains available if FFmpeg cannot be started. Outputs are written under `mods/playback/exports` by default.
 
 | Renderer | Formats                 | Stable SSAA |
 | -------- | ----------------------- | ----------- |
-| D3D12    | H.264 MP4, PNG sequence | 1x, 2x      |
+| D3D12    | H.264 MP4, PNG sequence | 1x, 2x, 4x  |
 | D3D11    | H.264 MP4, PNG sequence | 1x          |
 
 > [!IMPORTANT]

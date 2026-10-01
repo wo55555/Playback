@@ -12,7 +12,7 @@ Playback 目前面向 Windows x64 的 LeviLamina 客户端运行环境。`xmake.
 
 ## Release 构建
 
-请按目标运行时选择源码分支：`main` 和 `develop` 面向 MC/LeviLamina 26.10，`feat/26.20` 面向 26.20，`feat/26.40` 面向 26.40。三个运行时对应的当前 Playback 版本均为预发布版本。设置 `PLAYBACK_VERSION` 只会改变打包版本标识，不会切换源码分支或 SDK 目标。
+请按目标运行时选择源码分支：`main` 和 `develop` 面向 MC/LeviLamina 26.10，`feat/26.20` 面向 26.20，`feat/26.40` 面向 26.40，`feat/26.51` 面向 26.51。四个运行时对应的当前 Playback 版本均为预发布版本。设置 `PLAYBACK_VERSION` 只会改变打包版本标识，不会切换源码分支或 SDK 目标。
 
 打包后的模组版本默认来自最近的 Git 发行标签。在标签创建前验证发行构建时，请显式设置 `PLAYBACK_VERSION`。
 
@@ -28,7 +28,7 @@ Tooth `format_version`、资源包 `format_version` 和 VS Code 配置版本等�
 在仓库根目录配置并执行干净的 Release 客户端构建：
 
 ```powershell
-$env:PLAYBACK_VERSION = 'v0.3.1-mc26.20'
+$env:PLAYBACK_VERSION = 'v0.3.2-mc26.20'
 xmake f -y -p windows -a x64 -m release --target_type=client
 xmake -r -y
 ```
@@ -37,7 +37,7 @@ xmake -r -y
 
 Xmake 会使用 x264 构建固定版本的 FFmpeg 7.1 命令行运行时，并将静态可执行文件复制到 `bin/playback/tools/ffmpeg.exe`。发行版用户无需单独安装 FFmpeg。首次源码构建需要下载并编译这套工具链，因此依赖配置会比后续命中缓存的构建耗时更长。
 
-构建完成后，请确认 `bin/playback/manifest.json` 显示 `0.3.1-mc26.20`、`bin/playback/tools/ffmpeg.exe` 存在，并执行 `git diff --check`。涉及运行时行为的发行版本还应在支持的渲染路径上分别导出短 PNG 序列和 MP4。
+构建完成后，请确认 `bin/playback/manifest.json` 显示 `0.3.2-mc26.20`、`bin/playback/tools/ffmpeg.exe` 存在，并执行 `git diff --check`。涉及运行时行为的发行版本还应在支持的渲染路径上分别导出短 PNG 序列和 MP4。
 
 ## 刷新依赖
 
