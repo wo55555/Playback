@@ -4,8 +4,6 @@
 #include "playback/Playback.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
-#include "playback/exporting/OfflineRenderTrace.h"
-#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 
@@ -13,23 +11,16 @@
 
 #include "mc/client/game/IClientInstance.h"
 #include "mc/client/game/MinecraftGame.h"
-#include "mc/client/multiplayer/ClientLevel.h"
 #include "mc/client/renderer/game/GameRenderer.h"
-#include "mc/common/Globals.h"
-#include "mc/deps/minecraft_renderer/objects/ViewRenderObject.h"
 #include "mc/platform/threading/Mutex.h"
 #include "mc/util/Timer.h"
 
-
 #include <atomic>
-#include <bit>
 #include <cmath>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <utility>
-
 
 namespace playback::exporting {
 
@@ -64,51 +55,7 @@ struct ActiveRenderSample {
     uint32_t                gameRenderCalls{};
 };
 
-void recordRendererClock(GameRenderer const& renderer, uint64_t stage) noexcept {
-    if (renderDiagnosticProfile().probe != RenderDiagnosticProbe::Clock || !isOfflineRenderTraceActive()) return;
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::RendererClock,
-        &renderer,
-        nullptr,
-        stage,
-        std::bit_cast<uint32_t>(static_cast<float>(renderer.mLastClockTime)),
-        static_cast<uint64_t>(static_cast<int64_t>(renderer.mLastFrameTime.get().count())),
-        static_cast<uint64_t>(static_cast<int64_t>(renderer._tick))
-    );
-}
-
-void recordGraphicsClock(uint64_t phase, Timer const& timer, IClientInstance& client) noexcept try {
-    if (!renderDiagnosticsEnabled() || !isOfflineRenderTraceActive()) return;
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::GraphicsTimer,
-        &timer,
-        &client,
-        phase,
-        std::bit_cast<uint32_t>(static_cast<float>(timer.mAlpha)),
-        std::bit_cast<uint32_t>(static_cast<float>(timer.mLastTimestep)),
-        std::bit_cast<uint32_t>(static_cast<float>(timer.mPassedTime))
-    );
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::GraphicsTimerAbsolute,
-        &timer,
-        &client,
-        phase,
-        static_cast<uint64_t>(static_cast<int64_t>(timer.mTicks)),
-        std::bit_cast<uint32_t>(static_cast<float>(timer.mLastTimeSeconds)),
-        std::bit_cast<uint32_t>(static_cast<float>(timer.mTimeScale))
-    );
-    if (phase == 2 || phase == 3) {
-        recordWorldEnvironment(
-            phase == 2 ? WorldDiagnosticStage::GraphicsBefore : WorldDiagnosticStage::GraphicsAfter,
-            client.getLevel(),
-            nullptr,
-            timer.mAlpha
-        );
-    }
-} catch (...) {}
-
 std::atomic_bool                               gHookInstalled{false};
-std::atomic<uint32_t>                          gDiagnosticHookMask{};
 std::atomic_bool                               gOfflineFlagMismatchLogged{false};
 std::atomic_bool                               gInitialCameraSampleLogged{false};
 std::atomic_bool                               gMissingCameraSampleLogged{false};
@@ -233,27 +180,12 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
 }
 
 void completeClockSample(OfflineRenderClockToken token, uint64_t renderSerial, bool entityApplied) {
-    uint64_t captureGeneration{};
-    bool     permitted{};
-    {
-        std::scoped_lock lock(gClockMutex);
-        if (!gActiveSample || gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial)
-            return;
-        gActiveSample->entityApplied  = entityApplied;
-        gActiveSample->renderReturned = true;
-        captureGeneration             = gActiveSample->captureGeneration;
-        if (captureGeneration != 0) permitted = permitOfflineRenderSceneSample(captureGeneration);
-    }
-    if (captureGeneration != 0) {
-        recordOfflineRenderTrace(
-            OfflineRenderTraceEvent::CpuSubmissionPermit,
-            nullptr,
-            nullptr,
-            captureGeneration,
-            token.id,
-            renderSerial,
-            permitted ? 1 : 0
-        );
+    std::scoped_lock lock(gClockMutex);
+    if (!gActiveSample || gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial) return;
+    gActiveSample->entityApplied  = entityApplied;
+    gActiveSample->renderReturned = true;
+    if (gActiveSample->captureGeneration != 0) {
+        (void)permitOfflineRenderSceneSample(gActiveSample->captureGeneration);
     }
 }
 
@@ -280,35 +212,12 @@ LL_TYPE_INSTANCE_HOOK(
     Bedrock::NotNullNonOwnerPtr<IClientInstance> const& client,
     Timer const&                                        timer
 ) {
-    recordOfflineRenderTrace(OfflineRenderTraceEvent::GraphicsHookEnter, this);
     // Export steps resolve on this path, so advance before rendering instead of waiting for the 20Hz client tick.
     if (isOfflineRenderActivityActive()) editor::tickReplayExportDuringGraphics();
 
     auto const sample = acquireClockSampleForRender();
     if (sample) {
-        ScopedOfflineRenderTraceSample traceSample(sample->token.id, sample->sample.frameIndex, sample->renderSerial);
-        OfflineRenderTraceScope        trace(
-            OfflineRenderTraceEvent::GraphicsEnter,
-            OfflineRenderTraceEvent::GraphicsExit,
-            nullptr,
-            nullptr,
-            sample->sample.frameIndex,
-            sample->token.id,
-            sample->renderSerial
-        );
         bool poseApplied = false;
-        if (renderDiagnosticsEnabled()) {
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::ClockSample,
-                nullptr,
-                nullptr,
-                sample->sample.frameIndex,
-                std::bit_cast<uint64_t>(static_cast<double>(sample->sample.replayTime.value())),
-                std::bit_cast<uint32_t>(sample->sample.deltaTicks),
-                static_cast<uint64_t>(sample->sample.wholeTicks)
-            );
-        }
-        recordGraphicsClock(1, timer, *client);
         {
             ScopedTimerOverride                         timerOverride(timer, sample->sample);
             ScopedRenderSample                          renderSample(sample->token, sample->renderSerial);
@@ -317,33 +226,14 @@ LL_TYPE_INSTANCE_HOOK(
             poseApplied = pose != nullptr;
 
             markClockSampleRenderReady(sample->token, sample->renderSerial, true);
-            recordRenderDiagnostics(RenderDiagnosticStage::GraphicsBefore);
-            recordGraphicsClock(2, timer, *client);
             origin(client, timer);
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::GraphicsDecision,
-                this,
-                nullptr,
-                1,
-                sample->token.id,
-                sample->sample.frameIndex,
-                sample->renderSerial
-            );
-            recordGraphicsClock(3, timer, *client);
-            recordRenderDiagnostics(RenderDiagnosticStage::GraphicsAfter);
         }
-        recordGraphicsClock(4, timer, *client);
         completeClockSample(sample->token, sample->renderSerial, poseApplied);
-        trace.result(poseApplied ? 1 : 0);
         return;
     }
 
     if (isOfflineRenderActivityActive()) {
-        recordOfflineRenderTrace(OfflineRenderTraceEvent::GraphicsSkipped);
-        if (isExportActivityActive()) {
-            recordOfflineRenderTrace(OfflineRenderTraceEvent::GraphicsDecision, this, nullptr, 2, 0, 0, 0);
-            return;
-        }
+        if (isExportActivityActive()) return;
         setOfflineRenderActivityActive(false);
         if (!gOfflineFlagMismatchLogged.exchange(true, std::memory_order_acq_rel)) {
             Playback::getInstance().getSelf().getLogger().warn(
@@ -352,10 +242,7 @@ LL_TYPE_INSTANCE_HOOK(
         }
     }
 
-    recordRenderDiagnostics(RenderDiagnosticStage::GraphicsBefore);
     origin(client, timer);
-    recordOfflineRenderTrace(OfflineRenderTraceEvent::GraphicsDecision, this, nullptr, 3, 0, 0, 0);
-    recordRenderDiagnostics(RenderDiagnosticStage::GraphicsAfter);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -366,28 +253,15 @@ LL_TYPE_INSTANCE_HOOK(
     void,
     float partialTick
 ) {
-    OfflineRenderTraceScope trace(
-        OfflineRenderTraceEvent::GameRenderEnter,
-        OfflineRenderTraceEvent::GameRenderExit,
-        this
-    );
     auto* const sample = gRenderSample ? &*gRenderSample : nullptr;
     if (!sample || !sample->token) {
-        recordRendererClock(*this, 1);
         origin(partialTick);
-        recordRendererClock(*this, 2);
         return;
     }
     ++sample->gameRenderCalls;
     recordGameRenderStart(sample->token, sample->renderSerial, sample->gameRenderCalls);
-    recordRendererClock(*this, 1);
     origin(partialTick);
-    recordRendererClock(*this, 2);
-    trace.result(sample->gameRenderCalls);
 }
-
-// The 26.40 SDK no longer declares GameRenderer::_extractFrame or GameRenderer::endFrame, so the
-// extract-frame and end-frame diagnostic hooks are unavailable on this line.
 
 } // namespace
 
@@ -403,7 +277,6 @@ bool hookOfflineRenderClock(bool enable) {
         resetOfflineRenderClock();
         if (state.gameFrame && OfflineRenderGameFrameHook::unhook()) state.gameFrame = false;
         if (state.clock && OfflineRenderClockUpdateGraphicsHook::unhook()) state.clock = false;
-        gDiagnosticHookMask.store(0);
         return !state.clock && !state.gameFrame;
     };
 
@@ -413,15 +286,6 @@ bool hookOfflineRenderClock(bool enable) {
         bool const ready = state.clock && state.gameFrame;
         gHookInstalled.store(ready, std::memory_order_release);
         if (ready) {
-            auto const profile = renderDiagnosticProfile();
-            gDiagnosticHookMask.store(0);
-            if (gDiagnosticHookMask.load() != profile.hookMask()) {
-                Playback::getInstance().getSelf().getLogger().warn(
-                    "CPU diagnostic hooks incomplete: expectedMask={}, actualMask={}; controlled gap disabled",
-                    profile.hookMask(),
-                    gDiagnosticHookMask.load()
-                );
-            }
             gInitialCameraSampleLogged.store(false, std::memory_order_release);
             gMissingCameraSampleLogged.store(false, std::memory_order_release);
             return true;
@@ -443,8 +307,6 @@ bool hookOfflineRenderClock(bool enable) {
 }
 
 bool isOfflineRenderClockInstalled() { return gHookInstalled.load(std::memory_order_acquire); }
-
-uint32_t offlineRenderClockDiagnosticHookMask() noexcept { return gDiagnosticHookMask.load(std::memory_order_acquire); }
 
 OfflineRenderClockPublishResult
 publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token, bool captureSample) {

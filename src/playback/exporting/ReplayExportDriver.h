@@ -57,13 +57,12 @@ private:
     [[nodiscard]] SubmissionResult submitReadyFrames();
     [[nodiscard]] SubmissionResult collectDownloads();
     // Records a wait and keeps the renderer drawing for its duration, so a waiting frame is never a render-free frame.
-    void                      waitFor(OfflineRenderTraceScope& trace, OfflineRenderWaitReason reason, uint64_t result);
+    void                      waitFor(OfflineRenderWaitReason reason);
     [[nodiscard]] ExportError mapBoundaryError(OfflineRenderBoundaryError error) const;
     void                      finish();
     void                      fail(ExportError error, std::string message);
     void                      restoreReplayState();
     void                      closeCapture(bool cancelled);
-    void                      recordWait(OfflineRenderWaitReason reason) const noexcept;
     // Charges elapsed time to whichever reason the driver was parked on, so a frame's cost splits by cause.
     void accumulateWait(std::chrono::steady_clock::time_point now);
     void reportWaitProfile() const;
@@ -75,8 +74,6 @@ private:
     std::deque<visuals::CapturedFrame>     mReadyFrames;
     std::optional<bool>                    mPreviousPaused;
     uint64_t                               mNextFrameIndex{};
-    std::chrono::steady_clock::time_point  mWaitStartedAt{};
-    std::optional<OfflineRenderWaitReason> mWaitReason;
     static constexpr size_t                WaitReasonCount = static_cast<size_t>(OfflineRenderWaitReason::Count);
     std::array<uint64_t, WaitReasonCount>  mWaitMicros{};
     std::array<uint64_t, WaitReasonCount>  mWaitHits{};
