@@ -130,9 +130,9 @@ Basis basisOf(keyframe::CameraRenderState const& pose) {
     float const sinPitch = std::sin(pitch);
     float const cosPitch = std::cos(pitch);
     Basis       basis{
-        {-cosYaw,            0.0f,      -sinYaw          },
-        {-sinYaw * sinPitch, cosPitch,  cosYaw * sinPitch},
-        {-sinYaw * cosPitch, -sinPitch, cosYaw * cosPitch},
+              {-cosYaw,            0.0f,      -sinYaw          },
+              {-sinYaw * sinPitch, cosPitch,  cosYaw * sinPitch},
+              {-sinYaw * cosPitch, -sinPitch, cosYaw * cosPitch},
     };
     float const roll = pose.roll * kRadiansPerDegree;
     if (std::abs(roll) > std::numeric_limits<float>::epsilon()) {
