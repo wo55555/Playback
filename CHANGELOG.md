@@ -7,16 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1-mc26.40] - 2026-09-19
+## [0.3.2-mc26.10] - 2026-10-01
 
-> Separate MC 26.40 prerelease; hotfix updated September 20, 2026. These notes apply only to that release line and do not describe code changes in `main`. Reinstall the same release to receive these fixes; no re-recording or format conversion is required for these fixes. Existing MC 26.10 and MC 26.20 release assets are unchanged.
+### Added
+
+- Added a 4x supersampling tier to video export. Tiers whose supersampled render size does not fit are disabled for the chosen resolution.
+- Added a convergence frame count to the export settings. Each frame is rendered without a capture until the ray-traced denoiser settles, removing green and yellow streaks from exported skies. The MC 26.10 headers expose no way to detect ray tracing, so it defaults to 0; raise it when exporting with ray tracing enabled.
+- Added support for the separate OptiPiston mod: when it is installed, Playback drives its piston animation from the replay clock, with its settings in the inspector.
+
+### Changed
+
+- Exports now use the chosen name verbatim as the output file name instead of rewriting it into a folder with a parameter suffix. Existing files get a numbered suffix, and the default name is a timestamp.
+- Refined the export settings and progress dialogs: a fixed height that fits 1080p without a scrollbar, clearer hints and timecodes, and a translucent progress overlay with a pill-shaped cancel button.
+- Supersampled captures are now downsampled on the GPU, so readback stays at the output size; frames are normalized and encoded in separate stages, and captured pixel buffers are reused.
+- The replay browser now loads thumbnails on demand with bounded caches.
+- Kept the configuration version, recording-file snapshot context version, and project format version at `1`; existing `v0.3.1` archives and projects remain compatible.
 
 ### Fixed
 
-- Restored recorded player `entityId`, abilities, and entity-link mappings to fix players standing still during replay.
-- Preserved required teleport data to fix replay disconnections when processing teleport packets.
-- Used native chunk replacement to fix backward seeks stalling on previously loaded terrain.
-- Preserved original player names and restored affected names in existing recordings from the recorded player list.
+- Fixed the export cancel button not responding to the mouse while an export runs.
+- Kept the renderer drawing while an export waits, so the render clock keeps advancing instead of stalling the export.
+- Preserved completed offline frame samples so they are not discarded before capture.
+- Preserved the recorded local player's original name and recovered legacy synthetic names from the matching player-list entry when available.
+- Remapped local-player snapshot links along with the player's unique ID, runtime ID, and UUID.
+- Hid camera paths and markers while the game HUD is covered by loading, progress, or menu screens, and restored them when the HUD returns.
+
+## [0.3.1-mc26.40] - 2026-09-19
+
+> Separate MC 26.40 prerelease; hotfix updated September 20, 2026. These notes apply only to that release line and do not describe changes in this branch. Existing recordings need no re-recording or format conversion for these fixes. Existing MC 26.10 and MC 26.20 release assets are unchanged.
+
+### Fixed
+
+- Fixed recorded players standing still by correcting entity-ID mappings, including IDs in abilities data and entity links.
+- Fixed replay disconnections caused by teleport packets missing required teleport data.
+- Fixed backward seeks stalling on previously loaded terrain by using the native chunk replacement path.
+- Preserved original player names and restored affected names in existing recordings from the matching recorded player-list entry when available.
 
 ## [0.3.1-mc26.10] - 2026-09-17
 

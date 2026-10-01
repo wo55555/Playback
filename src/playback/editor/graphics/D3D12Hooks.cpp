@@ -241,15 +241,23 @@ DECLARE_DETOUR_FN(
     ActiveDetour activeDetour;
     bool         allowResize{true};
     runDetourInstrumentation([&] { allowResize = gImGuiRenderer.beforeResize(swapChain); });
-    if (!allowResize) return DXGI_ERROR_INVALID_CALL;
-    return reinterpret_cast<ResizeBuffersFn>(gOriginalResizeBuffers)(
-        swapChain,
-        bufferCount,
-        width,
-        height,
-        format,
-        flags
-    );
+    if (!allowResize) {
+        runDetourInstrumentation([&] { getLogger().error("ResizeBuffers blocked: overlay GPU work did not drain"); });
+        return DXGI_ERROR_INVALID_CALL;
+    }
+    HRESULT const result =
+        reinterpret_cast<ResizeBuffersFn>(gOriginalResizeBuffers)(swapChain, bufferCount, width, height, format, flags);
+    if (FAILED(result)) {
+        runDetourInstrumentation([&] {
+            getLogger().error(
+                "ResizeBuffers failed: HRESULT=0x{:08X}, size={}x{}",
+                static_cast<uint32_t>(result),
+                width,
+                height
+            );
+        });
+    }
+    return result;
 }
 
 DECLARE_DETOUR_FN(
@@ -272,7 +280,10 @@ DECLARE_DETOUR_FN(
         queue       = getResizePresentQueue(bufferCount, presentQueue);
         allowResize = gImGuiRenderer.beforeResize(swapChain);
     });
-    if (!allowResize) return DXGI_ERROR_INVALID_CALL;
+    if (!allowResize) {
+        runDetourInstrumentation([&] { getLogger().error("ResizeBuffers1 blocked: overlay GPU work did not drain"); });
+        return DXGI_ERROR_INVALID_CALL;
+    }
     HRESULT const result = reinterpret_cast<ResizeBuffers1Fn>(gOriginalResizeBuffers1)(
         swapChain,
         bufferCount,
@@ -287,6 +298,16 @@ DECLARE_DETOUR_FN(
         runDetourInstrumentation([&] {
             if (queue) bindSwapChainQueue(swapChain, queue.Get());
             else unbindSwapChainQueue(swapChain);
+        });
+    }
+    if (FAILED(result)) {
+        runDetourInstrumentation([&] {
+            getLogger().error(
+                "ResizeBuffers1 failed: HRESULT=0x{:08X}, size={}x{}",
+                static_cast<uint32_t>(result),
+                width,
+                height
+            );
         });
     }
     return result;
@@ -565,8 +586,9 @@ constexpr uint32_t InvalidVertexDeclIndex = 0xFFFFu;
 // Only world geometry brings its own vertex formats; measured overlay submissions never do.
 exporting::SceneSubmissionKind classifySubmission(bgfx::Frame const* render) {
     if (!render) return exporting::SceneSubmissionKind::OverlayOnly;
-    auto const  items = static_cast<uint32_t>(render->m_numRenderItems);
-    auto const* base  = reinterpret_cast<std::byte const*>(&render->m_renderItem[0].get());
+    auto const items = static_cast<uint32_t>(render->m_numRenderItems);
+    if (items == 0 || items > 65536u) return exporting::SceneSubmissionKind::OverlayOnly;
+    auto const* base = reinterpret_cast<std::byte const*>(&render->m_renderItem[0].get());
     for (uint32_t i = 0; i < items; ++i) {
         auto const& draw = *reinterpret_cast<bgfx::RenderDraw const*>(base + i * RenderItemStride);
         auto const  decl = static_cast<uint32_t>(draw.m_stream[0].get().m_decl.get().idx);
@@ -588,13 +610,14 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
     ActiveDetour activeDetour;
+    auto const   entry = exporting::offlineRenderSceneSubmissionTicket();
     // Only this hook sees the BGFX render thread submit world geometry; updateGraphics returning does not.
     bool const carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
                            && exporting::isOfflineRenderActivityActive()
                            && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
     useSubmittedCameraProjection(render);
-    if (carriesScene) exporting::markOfflineRenderSceneSubmitted();
+    (void)exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -608,12 +631,56 @@ LL_TYPE_INSTANCE_HOOK(
     bgfx::TextVideoMemBlitter& textVideoMemBlitter
 ) {
     ActiveDetour activeDetour;
+    auto const   entry        = exporting::offlineRenderSceneSubmissionTicket();
     bool const   carriesScene = !gTimelineHooksStopping.load(std::memory_order_acquire)
-                             && exporting::isOfflineRenderActivityActive()
-                             && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
+                           && exporting::isOfflineRenderActivityActive()
+                           && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
     useSubmittedCameraProjection(render);
-    if (carriesScene) exporting::markOfflineRenderSceneSubmitted();
+    (void)exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    RendererPreResetHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d12::RendererContextD3D12,
+    &bgfx::d3d12::RendererContextD3D12::preReset,
+    void,
+    bool swapChainReset
+) {
+    ActiveRendererInitDetour activeDetour;
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire) && !gImGuiRenderer.beforeRendererReset()) {
+        getLogger().error("D3D12 reset: overlay GPU work did not drain; preview/capture remain suspended");
+    }
+    origin(swapChainReset);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    RendererPostResetHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d12::RendererContextD3D12,
+    &bgfx::d3d12::RendererContextD3D12::postReset,
+    void,
+    bool swapChainReset
+) {
+    ActiveRendererInitDetour activeDetour;
+    origin(swapChainReset);
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire)) gImGuiRenderer.afterRendererReset();
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    RendererShutdownHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d12::RendererContextD3D12,
+    &bgfx::d3d12::RendererContextD3D12::$shutdown,
+    void
+) {
+    ActiveRendererInitDetour activeDetour;
+    gD3D12RendererActive.store(false, std::memory_order_release);
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire) && !gImGuiRenderer.beforeRendererReset(true)) {
+        getLogger().error("D3D12 shutdown: overlay GPU work did not drain");
+    }
+    origin();
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -632,6 +699,9 @@ LL_TYPE_INSTANCE_HOOK(
     }
     bool const initialized = origin(init);
     gD3D12RendererActive.store(initialized, std::memory_order_release);
+    if (initialized && !gRendererInitHookStopping.load(std::memory_order_acquire)) {
+        gImGuiRenderer.afterRendererReset();
+    }
     return initialized;
 }
 
@@ -801,6 +871,9 @@ bool resolveHookTargets(
 bool hookRendererInit(bool enable) {
     std::scoped_lock lock(gRendererInitHookMutex);
     static bool      initInstalled{};
+    static bool      preResetInstalled{};
+    static bool      postResetInstalled{};
+    static bool      shutdownInstalled{};
     static bool      submitInstalled{};
     static bool      submitD3D11Installed{};
 
@@ -809,6 +882,18 @@ bool hookRendererInit(bool enable) {
             gRendererInitHookStopping.store(true, std::memory_order_release);
             if (RendererInitHook::hook() != 0) return false;
             initInstalled = true;
+        }
+        if (!preResetInstalled) {
+            if (RendererPreResetHook::hook() != 0) return false;
+            preResetInstalled = true;
+        }
+        if (!postResetInstalled) {
+            if (RendererPostResetHook::hook() != 0) return false;
+            postResetInstalled = true;
+        }
+        if (!shutdownInstalled) {
+            if (RendererShutdownHook::hook() != 0) return false;
+            shutdownInstalled = true;
         }
         // Both backend hooks are installed up front; only the backend BGFX actually selected will run.
         if (!submitInstalled) {
@@ -832,6 +917,18 @@ bool hookRendererInit(bool enable) {
 
     gRendererInitHookStopping.store(true, std::memory_order_release);
     gD3D12RendererActive.store(false, std::memory_order_release);
+    if (shutdownInstalled) {
+        if (RendererShutdownHook::unhook()) shutdownInstalled = false;
+        else return false;
+    }
+    if (postResetInstalled) {
+        if (RendererPostResetHook::unhook()) postResetInstalled = false;
+        else return false;
+    }
+    if (preResetInstalled) {
+        if (RendererPreResetHook::unhook()) preResetInstalled = false;
+        else return false;
+    }
     if (submitD3D11Installed) {
         if (OfflineRenderSubmitD3D11Hook::unhook()) submitD3D11Installed = false;
         else return false;

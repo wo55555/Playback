@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -140,36 +141,61 @@ struct FfmpegVideoWriter::Impl {
         wait();
     }
 
-    uint32_t                           capacity;
-    mutable std::mutex                 mutex;
-    std::condition_variable            changed;
-    std::deque<visuals::CapturedFrame> queue;
-    std::filesystem::path              output;
-    std::filesystem::path              temporary;
-    std::filesystem::path              log;
-    std::filesystem::path              executable;
-    FrameWriterState                   state{FrameWriterState::Idle};
-    uint64_t                           submitted{};
-    uint64_t                           written{};
-    uint64_t                           nextFrameIndex{};
-    uint32_t                           frameWidth{};
-    uint32_t                           frameHeight{};
-    uint32_t                           targetWidth{};
-    uint32_t                           targetHeight{};
-    uint32_t                           sourceWidth{};
-    uint32_t                           sourceHeight{};
-    ExportError                        error{ExportError::None};
-    std::string                        message;
-    HANDLE                             process{};
-    HANDLE                             stdinWrite{};
-    std::thread                        worker;
+    // Normalized frames are output-sized, so depth here is cheap compared to the submit queue.
+    static constexpr uint32_t EncodeCapacity = 24;
+
+    uint32_t                capacity;
+    mutable std::mutex      mutex;
+    std::condition_variable changed;
+    struct QueuedFrame {
+        visuals::CapturedFrame frame;
+    };
+    std::deque<QueuedFrame> queue;
+    std::deque<QueuedFrame> encodeQueue;
+    bool                    normalizeFinished{};
+    std::filesystem::path   output;
+    std::filesystem::path   temporary;
+    std::filesystem::path   log;
+    std::filesystem::path   executable;
+    FrameWriterState        state{FrameWriterState::Idle};
+    uint64_t                submitted{};
+    uint64_t                written{};
+    uint64_t                nextFrameIndex{};
+    uint32_t                frameWidth{};
+    uint32_t                frameHeight{};
+    uint32_t                targetWidth{};
+    uint32_t                targetHeight{};
+    uint32_t                sourceWidth{};
+    uint32_t                sourceHeight{};
+    ExportError             error{ExportError::None};
+    std::string             message;
+    HANDLE                  process{};
+    HANDLE                  stdinWrite{};
+    std::thread             worker;
+    std::thread             normalizer;
+    // Starved microseconds tell which stage is the bottleneck; instantaneous depth alone cannot.
+    uint64_t normalizeStarvedMicros{};
+    uint64_t normalizeBlockedMicros{};
+    uint64_t encodeStarvedMicros{};
+    uint64_t normalizeDepthSum{};
+    uint64_t encodeDepthSum{};
+    uint64_t normalizeDepthPeak{};
+    uint64_t encodeDepthPeak{};
+    uint64_t depthSamples{};
+
+    void recycleQueuesLocked() {
+        for (auto& item : queue) visuals::framePixelBufferPool().release(std::move(item.frame.pixels));
+        for (auto& item : encodeQueue) visuals::framePixelBufferPool().release(std::move(item.frame.pixels));
+        queue.clear();
+        encodeQueue.clear();
+    }
 
     void setFailureLocked(ExportError failure, std::string text) {
         if (error == ExportError::None) {
             error   = failure;
             message = std::move(text);
         }
-        queue.clear();
+        recycleQueuesLocked();
         state = FrameWriterState::Cancelling;
         if (process) TerminateProcess(process, 0xC000013A);
         changed.notify_all();
@@ -183,7 +209,7 @@ struct FfmpegVideoWriter::Impl {
             std::scoped_lock lock(mutex);
             if (state == FrameWriterState::Running || state == FrameWriterState::Finishing) {
                 state = FrameWriterState::Cancelling;
-                queue.clear();
+                recycleQueuesLocked();
                 if (process) TerminateProcess(process, 0xC000013A);
                 changed.notify_all();
                 requested     = true;
@@ -201,6 +227,7 @@ struct FfmpegVideoWriter::Impl {
     }
 
     void wait() {
+        if (normalizer.joinable()) normalizer.join();
         if (worker.joinable()) worker.join();
     }
 
@@ -302,10 +329,12 @@ struct FfmpegVideoWriter::Impl {
             }
             DWORD const remaining = static_cast<DWORD>(std::min<size_t>(size - offset, 1u << 20));
             DWORD       writtenBytes{};
-            if (!WriteFile(pipe, bytes + offset, remaining, &writtenBytes, nullptr) || writtenBytes == 0) {
+            BOOL const  writeResult = WriteFile(pipe, bytes + offset, remaining, &writtenBytes, nullptr);
+            DWORD const writeError  = GetLastError();
+            if (!writeResult || writtenBytes == 0) {
                 std::scoped_lock lock(mutex);
                 if (state == FrameWriterState::Cancelling) return false;
-                failure = windowsErrorMessage("Unable to write a frame to FFmpeg", GetLastError());
+                failure = windowsErrorMessage("Unable to write a frame to FFmpeg", writeError);
                 return false;
             }
             offset += writtenBytes;
@@ -358,41 +387,43 @@ struct FfmpegVideoWriter::Impl {
         if (removeOutput) std::filesystem::remove(output, ec);
     }
 
-    void workerLoop() {
-        std::vector<uint8_t> rgba;
-        bool                 processStarted = false;
+    // Downsampling a supersampled frame costs more than the pipe write, so it runs ahead of the encoder.
+    void normalizeLoop() {
         while (true) {
-            visuals::CapturedFrame item;
+            QueuedFrame item;
             {
                 std::unique_lock lock(mutex);
-                changed.wait(lock, [this] {
-                    return !queue.empty() || state == FrameWriterState::Finishing
-                        || state == FrameWriterState::Cancelling;
+                auto const       waitStart = std::chrono::steady_clock::now();
+                bool             blocked{};
+                changed.wait(lock, [this, &blocked] {
+                    if (state != FrameWriterState::Running && state != FrameWriterState::Finishing) return true;
+                    if (encodeQueue.size() >= EncodeCapacity) {
+                        blocked = true;
+                        return false;
+                    }
+                    return !queue.empty() || state == FrameWriterState::Finishing;
                 });
-                if (state == FrameWriterState::Cancelling) {
-                    queue.clear();
-                    break;
+                auto const waited = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - waitStart)
+                        .count()
+                );
+                // Blocked means the encoder is behind; starved means no capture has arrived yet.
+                if (blocked) {
+                    normalizeBlockedMicros += waited;
+                } else {
+                    normalizeStarvedMicros += waited;
                 }
+                if (state != FrameWriterState::Running && state != FrameWriterState::Finishing) break;
                 if (queue.empty()) break;
                 item = std::move(queue.front());
                 queue.pop_front();
                 changed.notify_all();
             }
 
-            if (!processStarted) {
-                std::string launchFailure;
-                if (!launchProcess(launchFailure)) {
-                    std::scoped_lock lock(mutex);
-                    if (state != FrameWriterState::Cancelling) {
-                        setFailureLocked(ExportError::WriterUnavailable, std::move(launchFailure));
-                    }
-                    break;
-                }
-                processStarted = true;
-            }
-
-            if (!detail::normalizeFrame(item, targetWidth, targetHeight)) {
+            bool const normalized = detail::normalizeFrame(item.frame, targetWidth, targetHeight);
+            if (!normalized) {
                 std::scoped_lock lock(mutex);
+                visuals::framePixelBufferPool().release(std::move(item.frame.pixels));
                 if (state != FrameWriterState::Cancelling) {
                     setFailureLocked(
                         ExportError::InvalidFrame,
@@ -401,6 +432,71 @@ struct FfmpegVideoWriter::Impl {
                 }
                 break;
             }
+
+            {
+                std::scoped_lock lock(mutex);
+                if (state == FrameWriterState::Cancelling) {
+                    visuals::framePixelBufferPool().release(std::move(item.frame.pixels));
+                    break;
+                }
+                encodeQueue.emplace_back(std::move(item));
+                changed.notify_all();
+            }
+        }
+
+        std::scoped_lock lock(mutex);
+        normalizeFinished = true;
+        changed.notify_all();
+    }
+
+    void workerLoop() {
+        std::vector<uint8_t> rgba;
+        bool                 processStarted = false;
+        while (true) {
+            visuals::CapturedFrame item;
+            {
+                std::unique_lock lock(mutex);
+                auto const       waitStart = std::chrono::steady_clock::now();
+                changed.wait(lock, [this] {
+                    return !encodeQueue.empty() || normalizeFinished || state == FrameWriterState::Cancelling;
+                });
+                encodeStarvedMicros += static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - waitStart)
+                        .count()
+                );
+                if (state == FrameWriterState::Cancelling) {
+                    recycleQueuesLocked();
+                    break;
+                }
+                if (encodeQueue.empty()) {
+                    if (normalizeFinished) break;
+                    continue;
+                }
+                item = std::move(encodeQueue.front().frame);
+                encodeQueue.pop_front();
+                // Sampled where both depths are known under one lock, so the two levels stay comparable.
+                normalizeDepthSum  += queue.size();
+                encodeDepthSum     += encodeQueue.size();
+                normalizeDepthPeak  = std::max<uint64_t>(normalizeDepthPeak, queue.size());
+                encodeDepthPeak     = std::max<uint64_t>(encodeDepthPeak, encodeQueue.size());
+                ++depthSamples;
+                changed.notify_all();
+            }
+
+            if (!processStarted) {
+                std::string launchFailure;
+                bool const  launched = launchProcess(launchFailure);
+                if (!launched) {
+                    std::scoped_lock lock(mutex);
+                    visuals::framePixelBufferPool().release(std::move(item.pixels));
+                    if (state != FrameWriterState::Cancelling) {
+                        setFailureLocked(ExportError::WriterUnavailable, std::move(launchFailure));
+                    }
+                    break;
+                }
+                processStarted = true;
+            }
+
             // Normalization already produced tightly packed RGBA, so the extra staging copy is skipped.
             size_t const   packedRowPitch = static_cast<size_t>(item.width) * 4;
             uint8_t const* frameBytes     = nullptr;
@@ -414,15 +510,16 @@ struct FfmpegVideoWriter::Impl {
                 frameSize  = rgba.size();
             }
             std::string writeFailure;
-            if (!writeBytes(frameBytes, frameSize, writeFailure)) {
-                std::scoped_lock lock(mutex);
-                if (state != FrameWriterState::Cancelling) {
-                    setFailureLocked(ExportError::WriteFailed, std::move(writeFailure));
-                }
-                break;
-            }
+            bool const  piped = writeBytes(frameBytes, frameSize, writeFailure);
             {
                 std::scoped_lock lock(mutex);
+                visuals::framePixelBufferPool().release(std::move(item.pixels));
+                if (!piped) {
+                    if (state != FrameWriterState::Cancelling) {
+                        setFailureLocked(ExportError::WriteFailed, std::move(writeFailure));
+                    }
+                    break;
+                }
                 ++written;
                 changed.notify_all();
                 if (state == FrameWriterState::Cancelling) break;
@@ -481,6 +578,22 @@ struct FfmpegVideoWriter::Impl {
             } else {
                 state = FrameWriterState::Cancelled;
             }
+            auto const samples = std::max<uint64_t>(1, depthSamples);
+            getLogger().debug(
+                "Export writer stage profile: frames={}, submitQueue(cap={}, avg={:.2f}, peak={}), "
+                "encodeQueue(cap={}, avg={:.2f}, peak={}), normalizeStarvedMs={}, normalizeBlockedMs={}, "
+                "encodeStarvedMs={}",
+                written,
+                capacity,
+                static_cast<double>(normalizeDepthSum) / static_cast<double>(samples),
+                normalizeDepthPeak,
+                EncodeCapacity,
+                static_cast<double>(encodeDepthSum) / static_cast<double>(samples),
+                encodeDepthPeak,
+                normalizeStarvedMicros / 1000,
+                normalizeBlockedMicros / 1000,
+                encodeStarvedMicros / 1000
+            );
             changed.notify_all();
         }
     }
@@ -501,9 +614,12 @@ struct FfmpegVideoWriter::Impl {
         sourceWidth = sourceHeight = 0;
         error                      = ExportError::None;
         message.clear();
-        process    = nullptr;
-        stdinWrite = nullptr;
-        queue.clear();
+        process                = nullptr;
+        stdinWrite             = nullptr;
+        normalizeFinished      = false;
+        normalizeStarvedMicros = normalizeBlockedMicros = encodeStarvedMicros = 0;
+        normalizeDepthSum = encodeDepthSum = normalizeDepthPeak = encodeDepthPeak = depthSamples = 0;
+        recycleQueuesLocked();
     }
 
     int64_t frameRateNumerator{60};
@@ -549,7 +665,8 @@ bool FfmpegVideoWriter::open(CompiledExportPlan const& plan) {
         mImpl->state = FrameWriterState::Running;
     }
     getLogger().debug("FFmpeg video writer opened: executable={}", mImpl->executable);
-    mImpl->worker = std::thread([impl = mImpl.get()] { impl->workerLoop(); });
+    mImpl->worker     = std::thread([impl = mImpl.get()] { impl->workerLoop(); });
+    mImpl->normalizer = std::thread([impl = mImpl.get()] { impl->normalizeLoop(); });
     return true;
 }
 
@@ -591,7 +708,7 @@ FrameWriterSubmitResult FfmpegVideoWriter::trySubmit(visuals::CapturedFrame& fra
         return FrameWriterSubmitResult::Failed;
     }
     if (mImpl->queue.size() >= mImpl->capacity) return FrameWriterSubmitResult::Backpressured;
-    mImpl->queue.push_back(std::move(frame));
+    mImpl->queue.push_back({std::move(frame)});
     ++mImpl->nextFrameIndex;
     ++mImpl->submitted;
     mImpl->changed.notify_all();

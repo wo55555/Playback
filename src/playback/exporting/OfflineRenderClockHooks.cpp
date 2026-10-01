@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -29,8 +30,10 @@ struct ActiveClockSample {
     OfflineRenderClockToken                     token;
     OfflineRenderClockSample                    sample;
     keyframe::CameraTimelineRenderContextHandle cameraContext;
+    uint64_t                                    captureGeneration{};
     uint64_t                                    renderSerial{};
     uint32_t                                    gameRenderOrdinal{};
+    bool                                        captureArmed{};
     bool                                        claimed{};
     bool                                        renderReady{};
     bool                                        cameraRequired{};
@@ -155,8 +158,10 @@ private:
 std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     std::scoped_lock lock(gClockMutex);
     if (!gActiveSample) return std::nullopt;
-    // The frame is captured at Present, so a sample that already rendered must not be rendered again.
-    if (gActiveSample->claimed && gActiveSample->renderReturned) return std::nullopt;
+    if (gActiveSample->captureGeneration != 0 && !gActiveSample->captureArmed) return std::nullopt;
+    // A capture-carrying sample renders once because Present captures it; one without a capture repeats until released.
+    if (gActiveSample->captureGeneration != 0 && gActiveSample->claimed && gActiveSample->renderReturned)
+        return std::nullopt;
 
     gActiveSample->claimed                        = true;
     gActiveSample->renderSerial                   = gNextRenderSerial++;
@@ -179,6 +184,9 @@ void completeClockSample(OfflineRenderClockToken token, uint64_t renderSerial, b
     if (!gActiveSample || gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial) return;
     gActiveSample->entityApplied  = entityApplied;
     gActiveSample->renderReturned = true;
+    if (gActiveSample->captureGeneration != 0) {
+        (void)permitOfflineRenderSceneSample(gActiveSample->captureGeneration);
+    }
 }
 
 void markClockSampleRenderReady(OfflineRenderClockToken token, uint64_t renderSerial, bool ready) {
@@ -301,7 +309,7 @@ bool hookOfflineRenderClock(bool enable) {
 bool isOfflineRenderClockInstalled() { return gHookInstalled.load(std::memory_order_acquire); }
 
 OfflineRenderClockPublishResult
-publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token) {
+publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token, bool captureSample) {
     token = {};
     if (!sample.replayTime.isValid() || !std::isfinite(sample.deltaTicks) || sample.deltaTicks < 0.0f
         || sample.wholeTicks < 0) {
@@ -349,11 +357,12 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
             }
         );
         ActiveClockSample active{};
-        active.token          = token;
-        active.sample         = sample;
-        active.cameraContext  = cameraContext;
-        active.cameraRequired = cameraSample.has_value();
-        gActiveSample         = std::move(active);
+        active.token             = token;
+        active.sample            = sample;
+        active.cameraContext     = cameraContext;
+        active.captureGeneration = captureSample ? beginOfflineRenderSceneSample() : 0;
+        active.cameraRequired    = cameraSample.has_value();
+        gActiveSample            = std::move(active);
     }
     bool const logSample  = cameraSample && !gInitialCameraSampleLogged.exchange(true, std::memory_order_acq_rel);
     bool const logMissing = !cameraSample && !gMissingCameraSampleLogged.exchange(true, std::memory_order_acq_rel);
@@ -390,6 +399,13 @@ publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderCl
     return OfflineRenderClockPublishResult::Published;
 }
 
+void markOfflineRenderClockCaptureArmed(OfflineRenderClockToken token) {
+    std::scoped_lock lock(gClockMutex);
+    if (gActiveSample && gActiveSample->token.id == token.id && gActiveSample->captureGeneration != 0) {
+        gActiveSample->captureArmed = true;
+    }
+}
+
 bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token) {
     if (!token) return false;
     std::scoped_lock lock(gClockMutex);
@@ -418,6 +434,9 @@ void clearOfflineRenderClockSample(OfflineRenderClockToken token) {
         std::scoped_lock lock(gClockMutex);
         if (!gActiveSample || gActiveSample->token.id != token.id) return;
         cameraContext = std::move(gActiveSample->cameraContext);
+        if (gActiveSample->captureGeneration != 0) {
+            (void)invalidateOfflineRenderSceneSampleIfCurrent(gActiveSample->captureGeneration);
+        }
         gActiveSample.reset();
     }
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Export, cameraContext);
@@ -427,7 +446,12 @@ void resetOfflineRenderClock() {
     keyframe::CameraTimelineRenderContextHandle cameraContext;
     {
         std::scoped_lock lock(gClockMutex);
-        if (gActiveSample) cameraContext = std::move(gActiveSample->cameraContext);
+        if (gActiveSample) {
+            cameraContext = std::move(gActiveSample->cameraContext);
+            if (gActiveSample->captureGeneration != 0) {
+                (void)invalidateOfflineRenderSceneSampleIfCurrent(gActiveSample->captureGeneration);
+            }
+        }
         gActiveSample.reset();
     }
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Export, cameraContext);

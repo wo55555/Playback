@@ -130,9 +130,9 @@ Basis basisOf(keyframe::CameraRenderState const& pose) {
     float const sinPitch = std::sin(pitch);
     float const cosPitch = std::cos(pitch);
     Basis       basis{
-        {-cosYaw,            0.0f,      -sinYaw          },
-        {-sinYaw * sinPitch, cosPitch,  cosYaw * sinPitch},
-        {-sinYaw * cosPitch, -sinPitch, cosYaw * cosPitch},
+              {-cosYaw,            0.0f,      -sinYaw          },
+              {-sinYaw * sinPitch, cosPitch,  cosYaw * sinPitch},
+              {-sinYaw * cosPitch, -sinPitch, cosYaw * cosPitch},
     };
     float const roll = pose.roll * kRadiansPerDegree;
     if (std::abs(roll) > std::numeric_limits<float>::epsilon()) {
@@ -419,8 +419,8 @@ void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImD
         clear();
         return;
     }
-    if (!ctx.cameraProjection || exporting::isExportActive(ctx.state.exportStatus.state) || videoRect.GetWidth() <= 0.0f
-        || videoRect.GetHeight() <= 0.0f) {
+    if (!ctx.state.hudVisible || !ctx.cameraProjection || exporting::isExportActive(ctx.state.exportStatus.state)
+        || videoRect.GetWidth() <= 0.0f || videoRect.GetHeight() <= 0.0f) {
         return;
     }
     auto const       ticks = neighborTicks(*timeline, ctx.state.currentTick);

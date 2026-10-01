@@ -35,6 +35,7 @@ private:
     int                   mExportHeight{1080};
     int                   mExportSsaa{0};
     int                   mExportWarmupFrames{60};
+    int                   mExportConvergenceFrames{8};
     int                   mExportStartTick{-1};
     int                   mExportEndTick{-1};
     std::array<char, 128> mExportName{"replay-export"};

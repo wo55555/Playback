@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -21,6 +22,22 @@ struct ReplayThumbnailPixels {
     uint32_t             width{};
     uint32_t             height{};
     std::vector<uint8_t> rgba;
+};
+
+class ReplayThumbnailLoader {
+public:
+    ReplayThumbnailLoader();
+    ~ReplayThumbnailLoader();
+
+    void                                                       beginFrame();
+    void                                                       endFrame();
+    void                                                       reset();
+    void                                                       stop();
+    [[nodiscard]] std::shared_ptr<ReplayThumbnailPixels const> request(std::filesystem::path const& path);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> mImpl;
 };
 
 [[nodiscard]] bool writeRgbaPng(

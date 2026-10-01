@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
+#include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
@@ -443,6 +444,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
 
         mCleanupState = CleanupState::None;
         mActive       = true;
+        integration::pushReplayClock(mCurrentTick, true);
         screenModel->startLocalServerAsync(mReplayLevelId, "Playback Replay", settings);
         getLogger().debug("Starting replay from {} in {}", mReplayFilePath, mReplayLevelId);
         return true;
@@ -457,6 +459,7 @@ void ReplaySession::clearReplayData() {
     mReplayDimensionProfile.store({}, std::memory_order_release);
     mStopRequested.store(false, std::memory_order_release);
     mRequestedSeekTick.store(-1, std::memory_order_release);
+    integration::clearReplayClock();
     mActive       = false;
     mIsPaused     = false;
     mWorldReady   = false;
@@ -733,9 +736,9 @@ void ReplaySession::updateObserverPreview() {
     Vec2 const     rotation{sample->state.pitch, sample->state.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    mLastObserverPreviewFeet        = feetPosition;
-    mLastObserverPreviewRotation    = rotation;
+                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
+    mLastObserverPreviewFeet     = feetPosition;
+    mLastObserverPreviewRotation = rotation;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -845,7 +848,7 @@ void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint)
     Vec2 const     rotation{viewpoint.pitch, viewpoint.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
+                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -1080,6 +1083,7 @@ void ReplaySession::beginSeek(int targetTick) {
 
     mReaderIndex = selectedReader;
     mCurrentTick = selectedStart;
+    integration::pushReplayClock(mCurrentTick, true);
     applySnapshot(*mReaders[mReaderIndex], followRecordedPlayer);
     getLogger()
         .debug("Seeking replay to tick {} from snapshot {} at tick {}", targetTick, selectedReader, selectedStart);
@@ -2083,7 +2087,7 @@ void ReplaySession::processPendingDimensionTransition() {
     bool const loadingScreenVisible = client
                                    && (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
                                        || client->isShowingWorldProgressScreen());
-    bool const readyToRender        = client && client->isReadyToRender();
+    bool const readyToRender = client && client->isReadyToRender();
 
     if (elapsed >= DIMENSION_TRANSITION_TIMEOUT) {
         getLogger().error(
@@ -2222,7 +2226,11 @@ void ReplaySession::resetDimensionScopedReplayState() {
 bool ReplaySession::refreshReplayPlayer() {
     auto  client = ll::service::getClientInstance();
     auto* player = client ? client->getLocalPlayer() : nullptr;
-    if (!player || !isReplayLevel(player->getLevel())) return false;
+    if (!player || !isReplayLevel(player->getLevel())) {
+        // Stale on failure: callers must not act on a player object the engine may have already destroyed.
+        mReplayPlayer = nullptr;
+        return false;
+    }
 
     mReplayPlayer = player;
     if (mPendingReplayDimension && player->getDimensionId() != *mPendingReplayDimension) {
@@ -2897,6 +2905,7 @@ void ReplaySession::handleNextTick() {
     }
     visuals::commitReplayEntityPoses(static_cast<int64_t>(mCurrentTick) + 1);
     mCurrentTick += 1;
+    integration::pushReplayClock(mCurrentTick, false);
     if (mReplayTime) {
         ++*mReplayTime;
         if (mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
@@ -2927,7 +2936,7 @@ void ReplaySession::handleCreateLocalPlayer(PlaybackBuffer& data) {
         return;
     }
 
-    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload)) mReplayFailed = true;
+    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload, true)) mReplayFailed = true;
 }
 
 bool ReplaySession::sendRecordedTickPacket() {
@@ -2946,7 +2955,7 @@ bool ReplaySession::advanceReplayReader(bool stopAtEnd) {
         if (stopAtEnd) {
             mIsPaused                = true;
             mPlaybackTickAccumulator = 0.0f;
-            getLogger().info("Replay finished and paused at tick {}", mCurrentTick);
+            getLogger().debug("Replay finished and paused at tick {}", mCurrentTick);
         }
         return false;
     }
@@ -2971,7 +2980,7 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
             if (stopAtEnd) {
                 mIsPaused                = true;
                 mPlaybackTickAccumulator = 0.0f;
-                getLogger().info("Replay finished and paused at tick {}", mCurrentTick);
+                getLogger().debug("Replay finished and paused at tick {}", mCurrentTick);
             }
             return false;
         }
@@ -3328,14 +3337,14 @@ bool ReplaySession::applyPendingSnapshotLocalPlayer() {
 
     auto payload = std::move(*mPendingSnapshotLocalPlayer);
     mPendingSnapshotLocalPlayer.reset();
-    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload)) {
+    if (!applyGamePacket(MinecraftPacketIds::AddPlayer, payload, true)) {
         getLogger().error("Unable to apply the CreateLocalPlayer action for replay snapshot {}", mReaderIndex);
         return false;
     }
     return true;
 }
 
-bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload) {
+bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
     // Keep UI packets for a future first-person handler and let the replay world own client chunk publishing.
     if (shouldIgnoreReplayPacket(packetId)) return true;
 
@@ -3403,6 +3412,14 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
+        if (recordedLocalPlayer && mReplayPlayer && *addPlayer.mName == "__playback_" + addPlayer.mUuid->asString()) {
+            // Older snapshots kept the original name in the player list under the synthetic UUID.
+            auto const& entries = mReplayPlayer->getLevel().getPlayerList();
+            auto const  entry   = entries.find(*addPlayer.mUuid);
+            if (entry != entries.end() && !entry->second.mName->empty()) {
+                *addPlayer.mName = *entry->second.mName;
+            }
+        }
         if (addPlayer.mPlayerGameType == GameType::Default || addPlayer.mPlayerGameType == GameType::Undefined) {
             auto const& abilities = *addPlayer.mAbilities;
             if (abilities.getBool(AbilitiesIndex::NoClip)) {
