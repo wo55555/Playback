@@ -7,7 +7,7 @@
   <p>
     <img src="https://img.shields.io/badge/release-v0.3.2-4c8bf5?style=flat-square" alt="Playback v0.3.2">
     <img src="https://img.shields.io/badge/Minecraft%20Bedrock-Windows%20x64-62b47a?style=flat-square" alt="Minecraft Bedrock for Windows x64">
-    <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
+    <img src="https://img.shields.io/badge/LeviLamina-26.51.*-7b68ee?style=flat-square" alt="LeviLamina 26.51">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 license"></a>
   </p>
 

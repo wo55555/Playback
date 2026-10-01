@@ -7,13 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2-mc26.51] - 2026-10-01
+
 ### Added
 
-- Drive the separate OptiPiston mod's piston animation from the replay clock when it is installed, with its settings in the inspector.
+- Added a 4x supersampling tier to video export. Tiers whose supersampled render size does not fit are disabled for the chosen resolution.
+- Added a convergence frame count to the export settings. Each frame is rendered without a capture until the ray-traced denoiser settles, removing green and yellow streaks from exported skies; it defaults to 8 with ray tracing active and 0 otherwise.
+- Added support for the separate OptiPiston mod: when it is installed, Playback drives its piston animation from the replay clock, with its settings in the inspector.
+
+### Changed
+
+- Exports now use the chosen name verbatim as the output file name instead of rewriting it into a folder with a parameter suffix. Existing files get a numbered suffix, and the default name is a timestamp.
+- Refined the export settings and progress dialogs: a fixed height that fits 1080p without a scrollbar, clearer hints and timecodes, and a translucent progress overlay with a pill-shaped cancel button.
+- Supersampled captures are now downsampled on the GPU, so readback stays at the output size; frames are normalized and encoded in separate stages, and captured pixel buffers are reused.
+- The replay browser now loads thumbnails on demand with bounded caches.
+- Kept the configuration version, recording-file snapshot context version, and project format version at `1`; existing `v0.3.1` archives and projects remain compatible.
 
 ### Fixed
 
-- Hide camera paths and markers while the game HUD is covered by loading, progress, or menu screens, and restore them when the HUD returns.
+- Fixed player skins not loading in replays on MC 26.51. Skin-change packets are now recorded and remapped, snapshots fall back to the player's own skin, and player-list entries without a skin get the default skin.
+- Fixed custom block geometry not being initialized in replays on MC 26.51.
+- Kept the offline export clock in exact milliseconds on MC 26.51 so exported frame timing does not drift.
+- Fixed the export cancel button not responding to the mouse while an export runs.
+- Kept the renderer drawing while an export waits, so the render clock keeps advancing instead of stalling the export.
+- Preserved completed offline frame samples so they are not discarded before capture.
+- Hid camera paths and markers while the game HUD is covered by loading, progress, or menu screens, and restored them when the HUD returns.
 
 ## [0.3.1-mc26.51] - 2026-09-23
 
