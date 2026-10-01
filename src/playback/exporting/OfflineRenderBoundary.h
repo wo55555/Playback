@@ -3,7 +3,7 @@
 #include "ExportTypes.h"
 #include "OfflineRenderClockHooks.h"
 #include "OfflineRenderFrameExecutor.h"
-#include "OfflineRenderTrace.h"
+#include "OfflineRenderWaitReason.h"
 
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/visuals/FrameTap.h"
@@ -77,7 +77,7 @@ public:
     [[nodiscard]] bool                    isDrained();
 
     // Republishes the last submitted frame without a capture so the game keeps drawing through a driver stall.
-    void holdRenderAlive(uint64_t waitedMicros);
+    void holdRenderAlive();
 
     [[nodiscard]] std::optional<visuals::CapturedFrame> finishDownload();
 
@@ -101,7 +101,6 @@ private:
 
     replay::ReplaySession&                         mReplay;
     uint32_t                                       mCaptureCapacity{};
-    uint64_t                                       mTraceEpoch{};
     bool                                           mCaptureArmed{};
     OfflineRenderFrameExecutor                     mExecutor;
     std::optional<ExportFramePlan>                 mPendingFrame;

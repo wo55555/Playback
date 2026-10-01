@@ -5,7 +5,6 @@
 #include "playback/Playback.h"
 #include "playback/editor/graphics/D3D12Downsampler.h"
 #include "playback/exporting/FrameWorkerPool.h"
-#include "playback/exporting/OfflineRenderTrace.h"
 #include "playback/visuals/FramePixelBufferPool.h"
 
 #include <Windows.h>
@@ -28,10 +27,6 @@
 #include <vector>
 
 namespace playback::editor::graphics {
-
-using playback::exporting::offlineRenderTraceEpoch;
-using playback::exporting::OfflineRenderTraceEvent;
-using playback::exporting::recordOfflineRenderTraceForEpoch;
 
 using Microsoft::WRL::ComPtr;
 using visuals::CapturedFrame;
@@ -69,8 +64,6 @@ struct D3D12FrameTapBackend::Impl {
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT    footprint{};
         uint64_t                              byteCount{};
         uint64_t                              fenceValue{};
-        uint64_t                              traceEpoch{};
-        exporting::RenderDiagnosticProfile    traceProfile{};
         uint32_t                              width{};
         uint32_t                              height{};
         DXGI_FORMAT                           format{DXGI_FORMAT_UNKNOWN};
@@ -351,8 +344,6 @@ struct D3D12FrameTapBackend::Impl {
             FrameTapBackendCapture             capture;
             uint64_t                           byteCount{};
             uint64_t                           fenceValue{};
-            uint64_t                           traceEpoch{};
-            exporting::RenderDiagnosticProfile traceProfile{};
             uint32_t                           width{};
             uint32_t                           height{};
             DXGI_FORMAT                        format{DXGI_FORMAT_UNKNOWN};
@@ -381,8 +372,6 @@ struct D3D12FrameTapBackend::Impl {
                 capture         = *selected->capture;
                 byteCount       = selected->byteCount;
                 fenceValue      = selected->fenceValue;
-                traceEpoch      = selected->traceEpoch;
-                traceProfile    = selected->traceProfile;
                 width           = selected->width;
                 height          = selected->height;
                 format          = selected->format;
@@ -498,28 +487,7 @@ struct D3D12FrameTapBackend::Impl {
                         );
                         copiedBytes.fetch_add(static_cast<uint64_t>(packedBytes));
                         copiedFrames.fetch_add(1);
-                        auto const captureId  = capture.captureId;
-                        auto const frameIndex = capture.ticket.frameIndex;
-                        exporting::recordCaptureLineage(
-                            traceProfile,
-                            traceEpoch,
-                            OfflineRenderTraceEvent::CaptureReadyBeforeComplete,
-                            readback.Get(),
-                            fence.Get(),
-                            frameIndex,
-                            captureId,
-                            fenceValue
-                        );
                         frameTap.complete(capture, std::move(frame));
-                        recordOfflineRenderTraceForEpoch(
-                            traceEpoch,
-                            OfflineRenderTraceEvent::ReadbackReady,
-                            readback.Get(),
-                            fence.Get(),
-                            frameIndex,
-                            captureId,
-                            fenceValue
-                        );
                     }
                     D3D12_RANGE const writtenRange{0, 0};
                     readback->Unmap(0, &writtenRange);
@@ -616,7 +584,6 @@ bool D3D12FrameTapBackend::capture(
     uint32_t                   sourceState
 ) {
     if (!device || !queue || !commandList || !source || !mImpl->frameTap.requiresRenderPass()) return false;
-    auto const           traceEpoch = offlineRenderTraceEpoch();
     ComPtr<ID3D12Device> commandListDevice;
     ComPtr<ID3D12Device> queueDevice;
     ComPtr<ID3D12Device> sourceDevice;
@@ -695,9 +662,6 @@ bool D3D12FrameTapBackend::capture(
     auto capture = mImpl->frameTap.beginCapture();
     if (!capture) return false;
 
-    slot->traceEpoch   = traceEpoch;
-    slot->traceProfile = exporting::renderDiagnosticProfile();
-
     capture->submission = {
         static_cast<uint32_t>(sourceDesc.Width),
         sourceDesc.Height,
@@ -765,30 +729,6 @@ bool D3D12FrameTapBackend::capture(
         );
     }
 
-    recordOfflineRenderTraceForEpoch(
-        slot->traceEpoch,
-        OfflineRenderTraceEvent::ReadbackCopy,
-        source,
-        slot->readback.Get(),
-        capture->ticket.frameIndex,
-        capture->captureId,
-        reinterpret_cast<uintptr_t>(commandList),
-        reinterpret_cast<uintptr_t>(queue)
-    );
-    if (slot->traceProfile.captureLineage()) {
-        auto const observed = exporting::offlineSubmitObservation(slot->traceEpoch);
-        exporting::recordCaptureLineage(
-            slot->traceProfile,
-            slot->traceEpoch,
-            OfflineRenderTraceEvent::CaptureSubmitObserved,
-            source,
-            queue,
-            capture->ticket.frameIndex,
-            capture->captureId,
-            observed.active,
-            observed.lastReturned
-        );
-    }
     slot->capture            = *capture;
     slot->state              = Impl::SlotState::AwaitingFence;
     auto const slotIndex     = static_cast<size_t>(std::distance(mImpl->slots.begin(), slot));
@@ -803,7 +743,6 @@ bool D3D12FrameTapBackend::captureSubmitted(
     uint32_t            sourceState
 ) {
     if (!device || !queue || !source || !mImpl->frameTap.requiresRenderPass()) return false;
-    auto const traceEpoch = offlineRenderTraceEpoch();
 
     ComPtr<ID3D12Device> sourceDevice;
     ComPtr<ID3D12Device> queueDevice;
@@ -867,9 +806,6 @@ bool D3D12FrameTapBackend::captureSubmitted(
 
     auto capture = mImpl->frameTap.beginCapture();
     if (!capture) return false;
-
-    slot->traceEpoch   = traceEpoch;
-    slot->traceProfile = exporting::renderDiagnosticProfile();
 
     capture->submission = {
         static_cast<uint32_t>(sourceDesc.Width),
@@ -950,41 +886,6 @@ bool D3D12FrameTapBackend::captureSubmitted(
     sourceLocation.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     sourceLocation.SubresourceIndex = 0;
     slot->commandList->CopyTextureRegion(&destination, 0, 0, 0, &sourceLocation, nullptr);
-    recordOfflineRenderTraceForEpoch(
-        slot->traceEpoch,
-        OfflineRenderTraceEvent::ReadbackCopy,
-        exportTexture,
-        slot->readback.Get(),
-        capture->ticket.frameIndex,
-        capture->captureId,
-        reinterpret_cast<uintptr_t>(slot->commandList.Get()),
-        reinterpret_cast<uintptr_t>(queue)
-    );
-    if (slot->traceProfile.captureLineage()) {
-        auto const observed = exporting::offlineSubmitObservation(slot->traceEpoch);
-        exporting::recordCaptureLineage(
-            slot->traceProfile,
-            slot->traceEpoch,
-            OfflineRenderTraceEvent::CaptureSubmitObserved,
-            exportTexture,
-            queue,
-            capture->ticket.frameIndex,
-            capture->captureId,
-            observed.active,
-            observed.lastReturned
-        );
-        exporting::recordCaptureLineage(
-            slot->traceProfile,
-            slot->traceEpoch,
-            OfflineRenderTraceEvent::CaptureSourceLink,
-            source,
-            slot->commandList.Get(),
-            0,
-            UINT64_MAX,
-            reinterpret_cast<uintptr_t>(queue),
-            12
-        );
-    }
 
     barrierCount = 0;
     addBarrier(exportTexture, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
@@ -1027,44 +928,10 @@ bool D3D12FrameTapBackend::captureSubmitted(
     slot->capture = *capture;
     ID3D12CommandList* commandLists[]{slot->commandList.Get()};
     queue->ExecuteCommandLists(1, commandLists);
-    exporting::recordCaptureLineage(
-        slot->traceProfile,
-        slot->traceEpoch,
-        OfflineRenderTraceEvent::CaptureQueueExecute,
-        slot->commandList.Get(),
-        queue,
-        0,
-        UINT64_MAX,
-        1,
-        1
-    );
-    auto const signalResult = queue->Signal(mImpl->submissionFence.Get(), slot->fenceValue);
-    exporting::recordCaptureLineage(
-        slot->traceProfile,
-        slot->traceEpoch,
-        OfflineRenderTraceEvent::CaptureQueueSignal,
-        mImpl->submissionFence.Get(),
-        queue,
-        0,
-        UINT64_MAX,
-        slot->fenceValue,
-        static_cast<uint32_t>(signalResult)
-    );
-    if (FAILED(signalResult)) {
+    if (FAILED(queue->Signal(mImpl->submissionFence.Get(), slot->fenceValue))) {
         failSubmission(FrameTapError::FenceFailed, "Unable to signal the D3D12 submitted frame fence");
         return false;
     }
-    exporting::recordCaptureLineage(
-        slot->traceProfile,
-        slot->traceEpoch,
-        OfflineRenderTraceEvent::CaptureFenceLink,
-        exportTexture,
-        mImpl->submissionFence.Get(),
-        capture->ticket.frameIndex,
-        capture->captureId,
-        slot->fenceValue,
-        reinterpret_cast<uintptr_t>(queue)
-    );
     mImpl->changed.notify_one();
     return true;
 }
@@ -1081,17 +948,6 @@ void D3D12FrameTapBackend::submitted(ID3D12Fence* fence, uint64_t fenceValue) {
         if (slot.capture) {
             slot.capture->submission.completionFence      = fence;
             slot.capture->submission.completionFenceValue = fenceValue;
-            exporting::recordCaptureLineage(
-                slot.traceProfile,
-                slot.traceEpoch,
-                OfflineRenderTraceEvent::CaptureFenceLink,
-                slot.capture->submission.exportResource,
-                fence,
-                slot.capture->ticket.frameIndex,
-                slot.capture->captureId,
-                fenceValue,
-                reinterpret_cast<uintptr_t>(slot.capture->submission.commandQueue)
-            );
         }
         slot.fence      = fence;
         slot.fenceValue = fenceValue;
