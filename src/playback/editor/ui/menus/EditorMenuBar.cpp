@@ -6,7 +6,7 @@
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
-#include "playback/exporting/RenderDiagnostics.h"
+#include "playback/exporting/RayTracing.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"

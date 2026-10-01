@@ -1,19 +1,12 @@
-// Must precede the Minecraft headers: they pull in a conflicting d3d12 declaration set.
-#include "playback/editor/graphics/D3D12Hooks.h"
-
 #include "ReplayExportDriver.h"
 
 #include "ExportActivity.h"
 
 #include "playback/Playback.h"
-#include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/exporting/IdleDetectionHooks.h"
-#include "playback/exporting/OfflineRenderTrace.h"
-#include "playback/exporting/RenderDiagnostics.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 
-#include <filesystem>
 #include <utility>
 
 namespace playback::exporting {
@@ -24,10 +17,6 @@ namespace {
 constexpr uint32_t ExportCaptureCapacity = 6;
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
-
-std::filesystem::path tracePathFor(CompiledExportPlan const& plan) {
-    return plan.outputPath.parent_path() / (plan.outputPath.filename().string() + ".render-trace.csv");
-}
 
 } // namespace
 
@@ -108,38 +97,7 @@ bool ReplayExportDriver::start(
     }
     mPreviousPaused = previousPaused;
 
-    if (renderDiagnosticsEnabled()) {
-        auto const tracePath = tracePathFor(*mPlan);
-        if (beginOfflineRenderTrace(tracePath)) {
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::SessionBegin,
-                nullptr,
-                nullptr,
-                mPlan->frameCount,
-                mPlan->settings.resolutionX,
-                mPlan->settings.resolutionY,
-                mPlan->settings.ssaa
-            );
-            auto const hooks = editor::graphics::cameraRenderHookInventory();
-            recordOfflineRenderTrace(
-                OfflineRenderTraceEvent::HookInventory,
-                nullptr,
-                nullptr,
-                hooks.renderFrame ? 1 : 0,
-                hooks.upscaling ? 1 : 0,
-                mPlan->settings.warmupFrames,
-                offlineRenderClockDiagnosticHookMask()
-            );
-            getLogger().info("[RenderDiag] export render trace={}", tracePath);
-        } else {
-            getLogger().warn("Export render trace could not be opened: {}", tracePath);
-        }
-    }
-    recordRenderDiagnostics(RenderDiagnosticStage::ExportBeforeOpen);
-    bool const opened =
-        mRenderBoundary->open(ExportCaptureCapacity, mPlan->settings, project, std::move(cameraFallback));
-    recordRenderDiagnostics(RenderDiagnosticStage::ExportAfterOpen);
-    if (!opened) {
+    if (!mRenderBoundary->open(ExportCaptureCapacity, mPlan->settings, project, std::move(cameraFallback))) {
         (void)hookOfflineRenderClock(false);
         auto const boundaryStatus = mRenderBoundary->status();
         fail(
@@ -151,29 +109,11 @@ bool ReplayExportDriver::start(
     }
     mReadyFrames.clear();
     mNextFrameIndex = 0;
-    mWaitStartedAt  = {};
-    mWaitReason.reset();
     mWaitMicros.fill(0);
     mWaitHits.fill(0);
     mWaitChargedAt = {};
     mWaitCharged.reset();
-    mDriverTicks       = 0;
-    auto const profile = renderDiagnosticProfile();
-    if (profile.enabled) {
-        getLogger().info(
-            "[RenderDiag] profile configured={}, known={}, probe={}, actualMask={}, expectedMask={}, traceOpen={}, "
-            "submitRequestedMask={}, submitActualMask={}",
-            Playback::getInstance().getConfig().renderDiagnosticExperiment,
-            profile.known,
-            static_cast<int>(profile.probe),
-            offlineRenderClockDiagnosticHookMask(),
-            profile.hookMask(),
-            isOfflineRenderTraceActive(),
-            profile.submitHookMask(),
-            editor::graphics::offlineSubmitHookMask()
-        );
-        if (!profile.known) getLogger().warn("Unknown render diagnostic experiment; using observation only");
-    }
+    mDriverTicks = 0;
     setExportActivityActive(true);
     mPhase = Phase::Rendering;
     getLogger().info(
@@ -197,26 +137,7 @@ bool ReplayExportDriver::start(
 void ReplayExportDriver::tick() {
     if (!isActive()) return;
     ++mDriverTicks;
-    OfflineRenderTraceScope tickTrace(
-        OfflineRenderTraceEvent::DriverTickEnter,
-        OfflineRenderTraceEvent::DriverTickExit,
-        this,
-        nullptr,
-        0,
-        mNextFrameIndex,
-        mReadyFrames.size(),
-        static_cast<uint64_t>(mPhase)
-    );
     auto const coordinatorStatus = mCoordinator.status();
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::DriverStage,
-        this,
-        nullptr,
-        1,
-        mNextFrameIndex,
-        coordinatorStatus.submittedFrames,
-        coordinatorStatus.writtenFrames
-    );
     if (mPhase == Phase::Finalizing || mPhase == Phase::Cancelling) {
         if (coordinatorStatus.state == ExportState::Completed) {
             restoreReplayState();
@@ -235,7 +156,6 @@ void ReplayExportDriver::tick() {
         return;
     }
     if (!mPlan || !mRenderBoundary) {
-        recordWait(OfflineRenderWaitReason::Failed);
         fail(ExportError::CaptureUnavailable, "The offline render boundary is no longer available");
         return;
     }
@@ -255,17 +175,7 @@ void ReplayExportDriver::tick() {
     }
 
     auto const boundaryStatus = mRenderBoundary->status();
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::DriverStage,
-        this,
-        nullptr,
-        2,
-        mNextFrameIndex,
-        static_cast<uint64_t>(boundaryStatus.state),
-        mReadyFrames.size()
-    );
     if (boundaryStatus.state == OfflineRenderBoundaryState::Faulted) {
-        recordWait(OfflineRenderWaitReason::Failed);
         fail(
             mapBoundaryError(boundaryStatus.error),
             boundaryStatus.message.empty() ? "The offline renderer failed" : boundaryStatus.message
@@ -276,16 +186,14 @@ void ReplayExportDriver::tick() {
     auto const submission = collectDownloads();
     if (submission == SubmissionResult::Failed || submission == SubmissionResult::Backpressured) {
         waitFor(
-            tickTrace,
             submission == SubmissionResult::Backpressured ? OfflineRenderWaitReason::WriterBackpressure
-                                                          : OfflineRenderWaitReason::Failed,
-            submission == SubmissionResult::Backpressured ? 1 : 4
+                                                          : OfflineRenderWaitReason::Failed
         );
         return;
     }
 
     if (mPhase == Phase::Draining) {
-        waitFor(tickTrace, OfflineRenderWaitReason::Draining, 5);
+        waitFor(OfflineRenderWaitReason::Draining);
         if (mReadyFrames.empty() && mRenderBoundary->isDrained()) finish();
         return;
     }
@@ -297,17 +205,12 @@ void ReplayExportDriver::tick() {
             return;
         }
 
-        auto const step = mRenderBoundary->advance(*frame);
-        switch (step) {
+        switch (mRenderBoundary->advance(*frame)) {
         case OfflineRenderStepResult::Waiting:
-            waitFor(tickTrace, mRenderBoundary->lastWaitReason(), 2);
-            return;
         case OfflineRenderStepResult::Backpressured:
-            waitFor(tickTrace, mRenderBoundary->lastWaitReason(), 3);
+            waitFor(mRenderBoundary->lastWaitReason());
             return;
         case OfflineRenderStepResult::Failed: {
-            recordWait(OfflineRenderWaitReason::Failed);
-            tickTrace.result(4);
             auto const status = mRenderBoundary->status();
             fail(
                 mapBoundaryError(status.error),
@@ -316,12 +219,9 @@ void ReplayExportDriver::tick() {
             return;
         }
         case OfflineRenderStepResult::FrameSubmitted:
-            recordWait(OfflineRenderWaitReason::None);
             accumulateWait(std::chrono::steady_clock::now());
             mWaitCharged = OfflineRenderWaitReason::None;
             ++mWaitHits[static_cast<size_t>(OfflineRenderWaitReason::None)];
-            mWaitStartedAt = {};
-            mWaitReason.reset();
             ++mNextFrameIndex;
             if (mNextFrameIndex >= mPlan->frameCount) {
                 if (!mRenderBoundary->beginDrain()) {
@@ -358,9 +258,7 @@ void ReplayExportDriver::reset() {
     mPlan.reset();
     mReadyFrames.clear();
     mNextFrameIndex = 0;
-    mWaitStartedAt  = {};
-    mWaitReason.reset();
-    mPhase = Phase::Idle;
+    mPhase          = Phase::Idle;
 }
 
 bool ReplayExportDriver::isAvailable() const {
@@ -374,21 +272,7 @@ bool ReplayExportDriver::isActive() const {
 
 ReplayExportDriver::SubmissionResult ReplayExportDriver::submitReadyFrames() {
     while (!mReadyFrames.empty()) {
-        auto const result = [&] {
-            OfflineRenderTraceScope submitTrace(
-                OfflineRenderTraceEvent::WriterSubmitEnter,
-                OfflineRenderTraceEvent::WriterSubmitExit,
-                this,
-                &mCoordinator,
-                0,
-                mReadyFrames.front().ticket.frameIndex,
-                mReadyFrames.size()
-            );
-            submitTrace.result(UINT64_MAX);
-            auto const submitted = mCoordinator.trySubmit(mReadyFrames.front());
-            submitTrace.result(static_cast<uint64_t>(submitted));
-            return submitted;
-        }();
+        auto const result = mCoordinator.trySubmit(mReadyFrames.front());
         if (result == FrameWriterSubmitResult::Backpressured) return SubmissionResult::Backpressured;
         if (result != FrameWriterSubmitResult::Accepted) {
             fail(ExportError::WriteFailed, "The export frame writer rejected a captured frame");
@@ -401,9 +285,7 @@ ReplayExportDriver::SubmissionResult ReplayExportDriver::submitReadyFrames() {
 
 ReplayExportDriver::SubmissionResult ReplayExportDriver::collectDownloads() {
     auto const submission = submitReadyFrames();
-    if (submission == SubmissionResult::Failed) {
-        return submission;
-    }
+    if (submission == SubmissionResult::Failed) return submission;
 
     // Draining even while backpressured is what keeps the boundary from re-rendering its armed sample forever.
     while (mReadyFrames.size() < ExportCaptureCapacity) {
@@ -411,27 +293,14 @@ ReplayExportDriver::SubmissionResult ReplayExportDriver::collectDownloads() {
         if (!frame) break;
         mReadyFrames.emplace_back(std::move(*frame));
     }
-    auto const result = submitReadyFrames();
-    return result;
+    return submitReadyFrames();
 }
 
-void ReplayExportDriver::waitFor(OfflineRenderTraceScope& trace, OfflineRenderWaitReason reason, uint64_t result) {
-    auto const now = std::chrono::steady_clock::now();
-    accumulateWait(now);
+void ReplayExportDriver::waitFor(OfflineRenderWaitReason reason) {
+    accumulateWait(std::chrono::steady_clock::now());
     mWaitCharged = reason;
     ++mWaitHits[static_cast<size_t>(reason)];
-    // Holds from the first waiting frame, so the renderer keeps drawing for the whole wait.
-    if (!mWaitReason || *mWaitReason != reason) {
-        mWaitReason    = reason;
-        mWaitStartedAt = now;
-    }
-    if (mRenderBoundary) {
-        mRenderBoundary->holdRenderAlive(
-            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - mWaitStartedAt).count())
-        );
-    }
-    recordWait(reason);
-    trace.result(result);
+    if (mRenderBoundary) mRenderBoundary->holdRenderAlive();
 }
 
 void ReplayExportDriver::reportWaitProfile() const {
@@ -489,18 +358,6 @@ void ReplayExportDriver::accumulateWait(std::chrono::steady_clock::time_point no
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - mWaitChargedAt).count());
     }
     mWaitChargedAt = now;
-}
-
-void ReplayExportDriver::recordWait(OfflineRenderWaitReason reason) const noexcept {
-    recordOfflineRenderTrace(
-        OfflineRenderTraceEvent::DriverWait,
-        this,
-        nullptr,
-        static_cast<uint64_t>(reason),
-        mNextFrameIndex,
-        mReadyFrames.empty() ? UINT64_MAX : mReadyFrames.front().ticket.frameIndex,
-        static_cast<uint64_t>(mPhase)
-    );
 }
 
 ExportError ReplayExportDriver::mapBoundaryError(OfflineRenderBoundaryError error) const {
@@ -566,11 +423,6 @@ void ReplayExportDriver::closeCapture(bool cancelled) {
         getLogger().error("Unable to remove export-scoped offline render hooks after capture close");
     }
     mReadyFrames.clear();
-    if (isOfflineRenderTraceActive()) {
-        recordRenderDiagnostics(RenderDiagnosticStage::ExportClosed);
-        recordOfflineRenderTrace(OfflineRenderTraceEvent::SessionEnd, nullptr, nullptr, cancelled ? 1 : 0);
-        if (!finishOfflineRenderTrace()) getLogger().error("Unable to flush the export render trace");
-    }
 }
 
 } // namespace playback::exporting
