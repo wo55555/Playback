@@ -41,6 +41,7 @@
 #include "mc/network/packet/PlayerActionPacket.h"
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/PlayerListPacketType.h"
+#include "mc/network/packet/PlayerSkinPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/RemoveScore.h"
 #include "mc/network/packet/SetActorDataPacket.h"
@@ -206,6 +207,7 @@ bool packetMayReferenceRecordedPlayer(MinecraftPacketIds packetId) {
     switch (packetId) {
     case MinecraftPacketIds::AddPlayer:
     case MinecraftPacketIds::PlayerList:
+    case MinecraftPacketIds::PlayerSkin:
     case MinecraftPacketIds::RemoveActor:
     case MinecraftPacketIds::TakeItemActor:
     case MinecraftPacketIds::ActorEvent:
@@ -266,6 +268,13 @@ bool remapRecordedPlayerReferences(
             }
         }
         return changed;
+    }
+    case MinecraftPacketIds::PlayerSkin: {
+        // Left unmapped, a skin change of the recording player lands on the replay viewer, who shares its UUID.
+        auto& playerSkin = static_cast<PlayerSkinPacket&>(packet);
+        if (*playerSkin.mUUID != sourceUuid) return false;
+        playerSkin.mUUID = targetUuid;
+        return true;
     }
     case MinecraftPacketIds::RemoveActor:
         return remapUniqueId(static_cast<RemoveActorPacket&>(packet).mEntityId, sourceUniqueId, targetUniqueId);
@@ -1124,6 +1133,14 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
                 auto            entry = playerList.find(player->getUuid());
                 PlayerListEntry snapshotEntry =
                     entry != playerList.end() ? PlayerListEntry(entry->second) : PlayerListEntry(*player);
+                // The level's player list can hold an entry whose skin has not arrived yet; the replay drops such
+                // entries, so fall back to the skin the player actor is already rendering with.
+                if (!snapshotEntry.mSkin->isValid()) {
+                    if (auto const& ownSkin = player->mSkin; ownSkin && ownSkin->isValid()) {
+                        // SerializedSkinRef's copy constructor is not exported; it only shares the skin handle.
+                        snapshotEntry.mSkin->mSkinImpl = ownSkin->mSkinImpl;
+                    }
+                }
                 if (player == finalPlayer) {
                     snapshotEntry.mId   = *mRecordedLocalPlayerId;
                     snapshotEntry.mUUID = *mRecordedLocalPlayerUuid;
