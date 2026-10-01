@@ -715,19 +715,19 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         bool const     validOutput   = mExportName.front() != '\0' && mExportDirectory.front() != '\0';
         bool const     validTimeline =
             mExportStartTick >= 0 && mExportEndTick > mExportStartTick && mExportEndTick <= maximumReplayTick;
-        bool const validFps         = mFps >= 1 && mFps <= 240;
-        bool const validResolution  = mExportWidth >= 16 && mExportHeight >= 16
-                                   && static_cast<uint32_t>(mExportWidth) <= exporting::MaxExportResolution
-                                   && static_cast<uint32_t>(mExportHeight) <= exporting::MaxExportResolution
-                                   && static_cast<uint64_t>(mExportWidth) * mExportHeight <= exporting::MaxExportPixels
-                                   && exporting::supersampleFits(
-                                          static_cast<uint32_t>(mExportWidth),
-                                          static_cast<uint32_t>(mExportHeight),
-                                          ssaaValue
+        bool const validFps        = mFps >= 1 && mFps <= 240;
+        bool const validResolution = mExportWidth >= 16 && mExportHeight >= 16
+                                  && static_cast<uint32_t>(mExportWidth) <= exporting::MaxExportResolution
+                                  && static_cast<uint32_t>(mExportHeight) <= exporting::MaxExportResolution
+                                  && static_cast<uint64_t>(mExportWidth) * mExportHeight <= exporting::MaxExportPixels
+                                  && exporting::supersampleFits(
+                                         static_cast<uint32_t>(mExportWidth),
+                                         static_cast<uint32_t>(mExportHeight),
+                                         ssaaValue
                                   );
-        bool const validCapture     = mExportSsaa >= 0 && mExportSsaa <= 2 && mExportWarmupFrames >= 0
-                                   && mExportWarmupFrames <= 3600 && mExportConvergenceFrames >= 0
-                                   && mExportConvergenceFrames <= 240;
+        bool const validCapture = mExportSsaa >= 0 && mExportSsaa <= 2 && mExportWarmupFrames >= 0
+                               && mExportWarmupFrames <= 3600 && mExportConvergenceFrames >= 0
+                               && mExportConvergenceFrames <= 240;
         bool const formatAvailable  = mExportFormat != 0 || capabilities.ffmpegVideoExport;
         bool const rawSettingsValid = validOutput && validTimeline && validFps && validResolution && validCapture
                                    && formatAvailable && state.project != nullptr;
