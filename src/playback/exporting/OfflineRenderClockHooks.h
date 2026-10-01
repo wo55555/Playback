@@ -22,9 +22,8 @@ struct OfflineRenderClockToken {
 
 enum class OfflineRenderClockPublishResult : uint8_t { Published, Unavailable, Busy, InvalidSample };
 
-[[nodiscard]] bool     hookOfflineRenderClock(bool enable);
-[[nodiscard]] bool     isOfflineRenderClockInstalled();
-[[nodiscard]] uint32_t offlineRenderClockDiagnosticHookMask() noexcept;
+[[nodiscard]] bool hookOfflineRenderClock(bool enable);
+[[nodiscard]] bool isOfflineRenderClockInstalled();
 
 // clang-format off
 [[nodiscard]] OfflineRenderClockPublishResult publishOfflineRenderClockSample(
