@@ -11,7 +11,7 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 | `26.10.*`              | [`v0.3.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.10) |
 | `26.20.*`              | [`v0.3.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.20) |
 | `26.40.*`              | [`v0.3.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.40) |
-| `26.51.*`              | [`v0.3.2-mc26.51`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.51) |
+| `26.51.*`              | [`v0.3.2-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.50) |
 
 All four Playback releases listed above are prereleases; install only the version that matches your instance.
 
@@ -75,7 +75,7 @@ lip install github.com/wo55555/Playback@0.3.2-mc26.20#client
 lip install github.com/wo55555/Playback@0.3.2-mc26.40#client
 
 # Minecraft / LeviLamina 26.51
-lip install github.com/wo55555/Playback@0.3.2-mc26.51#client
+lip install github.com/wo55555/Playback@0.3.2-mc26.50#client
 ```
 
 > [!NOTE]
