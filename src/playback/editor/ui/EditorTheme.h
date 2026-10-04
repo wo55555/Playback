@@ -31,9 +31,12 @@ constexpr ImU32 kButton        = IM_COL32(0x2a, 0x2a, 0x2a, 0xff);
 constexpr ImU32 kButtonHover   = IM_COL32(0x38, 0x38, 0x38, 0xff);
 constexpr ImU32 kButtonActive  = IM_COL32(0x44, 0x44, 0x44, 0xff);
 constexpr ImU32 kScrollThumb   = IM_COL32(0x50, 0x50, 0x50, 0xff);
-// Range bar zoom grips; the ring doubles as the rail outline that contains the accent fill.
-constexpr ImU32 kGripBody = IM_COL32(0xc8, 0xcc, 0xd4, 0xff);
-constexpr ImU32 kGripRing = IM_COL32(0x11, 0x11, 0x11, 0xff);
+// Timeline zoom bar, after Premiere: a thin grey bar with ring handles, brightening on hover and drag.
+constexpr ImU32 kRangeTrack       = IM_COL32(0x30, 0x30, 0x30, 0xff);
+constexpr ImU32 kRangeThumb       = IM_COL32(0x5a, 0x5a, 0x5a, 0xff);
+constexpr ImU32 kRangeThumbHover  = IM_COL32(0x6c, 0x6c, 0x6c, 0xff);
+constexpr ImU32 kRangeThumbActive = IM_COL32(0x80, 0x80, 0x80, 0xff);
+constexpr ImU32 kRangeHandle      = IM_COL32(0xc8, 0xc8, 0xc8, 0xff);
 
 // Shapes past ImGui's own cursors; Windows has no grab hand, so the cursor hook draws these.
 constexpr ImGuiMouseCursor kCursorGrab     = ImGuiMouseCursor_COUNT;
@@ -139,8 +142,7 @@ namespace playback::editor::ui::metrics {
 [[nodiscard]] inline float subRow() { return font() * 1.55f; }
 [[nodiscard]] inline float propertyRow() { return font() + 8.0f * scale(); }
 [[nodiscard]] inline float rail() { return font() * 2.3f; }
-// Tall enough for the round zoom grips that live on it.
-[[nodiscard]] inline float rangeBar() { return font() * 1.3f; }
+[[nodiscard]] inline float rangeBar() { return font() * 1.2f; }
 [[nodiscard]] inline float labelColumn() { return font() * 4.6f; }
 [[nodiscard]] inline float splitter() { return 4.0f * scale(); }
 [[nodiscard]] inline float trackSwatch() { return std::max(3.0f, 3.0f * scale()); }
