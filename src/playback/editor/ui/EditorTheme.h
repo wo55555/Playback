@@ -35,6 +35,10 @@ constexpr ImU32 kScrollThumb   = IM_COL32(0x50, 0x50, 0x50, 0xff);
 constexpr ImU32 kGripBody = IM_COL32(0xc8, 0xcc, 0xd4, 0xff);
 constexpr ImU32 kGripRing = IM_COL32(0x11, 0x11, 0x11, 0xff);
 
+// Shapes past ImGui's own cursors; Windows has no grab hand, so the cursor hook draws these.
+constexpr ImGuiMouseCursor kCursorGrab     = ImGuiMouseCursor_COUNT;
+constexpr ImGuiMouseCursor kCursorGrabbing = ImGuiMouseCursor_COUNT + 1;
+
 // Timeline surfaces.
 constexpr ImU32 kTimelineBg        = IM_COL32(0x14, 0x14, 0x14, 0xff);
 constexpr ImU32 kTimelineSidebar   = IM_COL32(0x1c, 0x1c, 0x1c, 0xff);
