@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
+#include "playback/editor/ui/EditorTheme.h"
 #include "playback/exporting/ExportActivity.h"
 
 #include "ll/api/event/EventBus.h"
@@ -16,6 +17,8 @@
 #include "imgui.h"
 
 #include <Windows.h>
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -81,6 +84,12 @@ thread_local uint32_t   gCallbackDepth{};
 
 std::mutex gOwnershipMutex;
 
+// ImGui picks the cursor on the render thread, but SetCursor only takes effect on the window's own thread.
+std::atomic<HWND>    gCursorWindow{};
+std::atomic<WNDPROC> gCursorOriginalProc{};
+std::atomic<int>     gUiCursor{ImGuiMouseCursor_Arrow};
+bool                 gCursorOverridden{}; // Window thread only.
+
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
 char const* mouseOwnerName(MouseOwner owner) {
@@ -126,6 +135,266 @@ LL_TYPE_INSTANCE_HOOK(
 bool replayUiOwnsMouse() {
     return gInstalled.load(std::memory_order_acquire) && gReplayUiActive.load(std::memory_order_acquire)
         && gInputActive.load(std::memory_order_acquire);
+}
+
+UINT applyCursorMessage() {
+    static UINT const message = RegisterWindowMessageW(L"Playback.ApplyUiCursor");
+    return message;
+}
+
+LPCTSTR systemCursor(int cursor) {
+    switch (cursor) {
+    case ImGuiMouseCursor_TextInput:
+        return IDC_IBEAM;
+    case ImGuiMouseCursor_ResizeAll:
+        return IDC_SIZEALL;
+    case ImGuiMouseCursor_ResizeNS:
+        return IDC_SIZENS;
+    case ImGuiMouseCursor_ResizeEW:
+        return IDC_SIZEWE;
+    case ImGuiMouseCursor_ResizeNESW:
+        return IDC_SIZENESW;
+    case ImGuiMouseCursor_ResizeNWSE:
+        return IDC_SIZENWSE;
+    case ImGuiMouseCursor_Hand:
+        return IDC_HAND;
+    case ImGuiMouseCursor_Wait:
+        return IDC_WAIT;
+    case ImGuiMouseCursor_Progress:
+        return IDC_APPSTARTING;
+    case ImGuiMouseCursor_NotAllowed:
+        return IDC_NO;
+    default:
+        return nullptr;
+    }
+}
+
+struct Capsule {
+    float ax{};
+    float ay{};
+    float bx{};
+    float by{};
+    float radius{};
+};
+
+// Hand outlines in a 32-unit box: a rounded palm plus capsule fingers, with crease lines drawn inside.
+struct HandShape {
+    float                  palmX{};
+    float                  palmY{};
+    float                  palmHalfWidth{};
+    float                  palmHalfHeight{};
+    float                  palmRadius{};
+    std::array<Capsule, 5> parts{};
+    std::array<Capsule, 3> creases{};
+    size_t                 creaseCount{};
+    float                  hotX{};
+    float                  hotY{};
+};
+
+// Narrow gaps between fingers fall inside the outline band and read as dark separators.
+constexpr HandShape OpenHand{
+    17.0f,
+    21.0f,
+    7.5f,
+    6.5f,
+    4.5f,
+    {{
+        {11.8f, 7.0f, 11.8f, 16.0f, 1.9f},
+        {16.2f, 5.0f, 16.2f, 16.0f, 1.9f},
+        {20.6f, 6.0f, 20.6f, 16.0f, 1.9f},
+        {24.8f, 10.0f, 24.2f, 17.5f, 1.7f},
+        {10.5f, 23.0f, 5.5f, 16.5f, 2.1f},
+    }},
+    {},
+    0,
+    16.0f,
+    18.0f,
+};
+
+constexpr HandShape ClosedHand{
+    17.0f,
+    21.5f,
+    7.5f,
+    6.0f,
+    4.5f,
+    {{
+        {11.8f, 13.2f, 11.8f, 16.0f, 2.1f},
+        {16.0f, 12.6f, 16.0f, 16.0f, 2.1f},
+        {20.2f, 13.0f, 20.2f, 16.0f, 2.1f},
+        {24.2f, 14.4f, 24.2f, 17.0f, 1.9f},
+        {10.0f, 22.0f, 7.0f, 18.0f, 2.1f},
+    }},
+    {{
+        {13.9f, 12.0f, 13.9f, 17.5f, 0.0f},
+        {18.1f, 11.6f, 18.1f, 17.5f, 0.0f},
+        {22.3f, 12.6f, 22.3f, 17.5f, 0.0f},
+    }},
+    3,
+    16.0f,
+    19.0f,
+};
+
+float capsuleDistance(float x, float y, Capsule const& capsule) {
+    float const dx       = capsule.bx - capsule.ax;
+    float const dy       = capsule.by - capsule.ay;
+    float const lengthSq = dx * dx + dy * dy;
+    float const t =
+        lengthSq > 0.0f ? std::clamp(((x - capsule.ax) * dx + (y - capsule.ay) * dy) / lengthSq, 0.0f, 1.0f) : 0.0f;
+    return std::hypot(x - (capsule.ax + t * dx), y - (capsule.ay + t * dy)) - capsule.radius;
+}
+
+float handDistance(float x, float y, HandShape const& hand) {
+    float const qx = std::abs(x - hand.palmX) - hand.palmHalfWidth + hand.palmRadius;
+    float const qy = std::abs(y - hand.palmY) - hand.palmHalfHeight + hand.palmRadius;
+    float       distance =
+        std::hypot(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - hand.palmRadius;
+    for (auto const& part : hand.parts) distance = std::min(distance, capsuleDistance(x, y, part));
+    return distance;
+}
+
+// White fill with a black outline, anti-aliased from the distance field so it stays smooth at any DPI.
+HCURSOR createHandCursor(int size, HandShape const& hand) {
+    BITMAPINFO info{};
+    info.bmiHeader.biSize        = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth       = size;
+    info.bmiHeader.biHeight      = -size;
+    info.bmiHeader.biPlanes      = 1;
+    info.bmiHeader.biBitCount    = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void*         bits{};
+    HBITMAP const color = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!color) return nullptr;
+
+    // The hand fills most of its 32-unit box; shrinking it about the centre matches the system arrow's height.
+    float const scale   = static_cast<float>(size) / 32.0f * 0.72f;
+    float const centre  = static_cast<float>(size) * 0.5f;
+    float const outline = std::max(1.0f, 1.1f * scale);
+    auto* const pixels  = static_cast<uint32_t*>(bits);
+    for (int py = 0; py < size; ++py) {
+        for (int px = 0; px < size; ++px) {
+            float const x        = (static_cast<float>(px) + 0.5f - centre) / scale + 16.0f;
+            float const y        = (static_cast<float>(py) + 0.5f - centre) / scale + 16.0f;
+            float const distance = handDistance(x, y, hand) * scale;
+            float       crease   = 1.0f;
+            for (size_t i = 0; i < hand.creaseCount; ++i) {
+                float const d = capsuleDistance(x, y, hand.creases[i]) * scale;
+                crease        = std::min(crease, std::clamp(d - outline * 0.5f + 0.5f, 0.0f, 1.0f));
+            }
+            float const alpha      = std::clamp(outline + 0.5f - distance, 0.0f, 1.0f);
+            float const white      = std::clamp(0.5f - distance, 0.0f, 1.0f) * crease;
+            auto const  a          = static_cast<uint32_t>(std::lround(alpha * 255.0f));
+            auto const  c          = static_cast<uint32_t>(std::lround(white * alpha * 255.0f));
+            pixels[py * size + px] = (a << 24) | (c << 16) | (c << 8) | c;
+        }
+    }
+
+    // The colour bitmap's alpha carries the shape, so the AND mask stays empty.
+    std::vector<uint8_t> maskBits(static_cast<size_t>((size + 15) / 16 * 2 * size), 0);
+    HBITMAP const        mask = CreateBitmap(size, size, 1, 1, maskBits.data());
+    HCURSOR              cursor{};
+    if (mask) {
+        ICONINFO iconInfo{};
+        iconInfo.fIcon    = FALSE;
+        iconInfo.xHotspot = static_cast<DWORD>(std::lround((hand.hotX - 16.0f) * scale + centre));
+        iconInfo.yHotspot = static_cast<DWORD>(std::lround((hand.hotY - 16.0f) * scale + centre));
+        iconInfo.hbmMask  = mask;
+        iconInfo.hbmColor = color;
+        cursor            = CreateIconIndirect(&iconInfo);
+        DeleteObject(mask);
+    }
+    DeleteObject(color);
+    return cursor;
+}
+
+// Window thread only. Cursors from an earlier DPI are kept, since one may still be on screen.
+HCURSOR handCursor(HWND window, bool closed) {
+    static int     cachedSize{};
+    static HCURSOR open{};
+    static HCURSOR grabbing{};
+    int const      size = std::clamp(GetSystemMetricsForDpi(SM_CXCURSOR, GetDpiForWindow(window)), 32, 128);
+    if (size != cachedSize) {
+        open       = createHandCursor(size, OpenHand);
+        grabbing   = createHandCursor(size, ClosedHand);
+        cachedSize = size;
+    }
+    return closed ? grabbing : open;
+}
+
+HCURSOR uiCursorHandle(HWND window, int cursor) {
+    if (cursor == ui::theme::kCursorGrab) return handCursor(window, false);
+    if (cursor == ui::theme::kCursorGrabbing) return handCursor(window, true);
+    LPCTSTR const id = systemCursor(cursor);
+    return id ? LoadCursor(nullptr, id) : nullptr;
+}
+
+// Window thread. Only non-arrow shapes are forced, so the game keeps its own arrow and hidden-cursor handling.
+bool applyUiCursor(HWND window) {
+    bool const uiCursor = replayUiOwnsMouse() && gMouseOwner.load(std::memory_order_acquire) == MouseOwner::UiReleased;
+    HCURSOR const shape = uiCursor ? uiCursorHandle(window, gUiCursor.load(std::memory_order_acquire)) : nullptr;
+    if (!shape) {
+        if (gCursorOverridden) SetCursor(LoadCursor(nullptr, IDC_ARROW));
+        gCursorOverridden = false;
+        return false;
+    }
+    SetCursor(shape);
+    gCursorOverridden = true;
+    return true;
+}
+
+bool isCursorInClient(HWND window) {
+    POINT point{};
+    RECT  client{};
+    return GetCursorPos(&point) && ScreenToClient(window, &point) && GetClientRect(window, &client)
+        && PtInRect(&client, point);
+}
+
+LRESULT CALLBACK cursorWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_SETCURSOR && LOWORD(lParam) == HTCLIENT && applyUiCursor(window)) return TRUE;
+    // WM_SETCURSOR only follows mouse movement, and not at all while the mouse is captured.
+    if (message == applyCursorMessage()) {
+        if (isCursorInClient(window)) (void)applyUiCursor(window);
+        return 0;
+    }
+    return CallWindowProcW(gCursorOriginalProc.load(std::memory_order_acquire), window, message, wParam, lParam);
+}
+
+void installCursorProc(HWND window) {
+    // A still-live window may have been subclassed over us, so it keeps the proc rather than moving it.
+    HWND const current = gCursorWindow.load(std::memory_order_acquire);
+    if (!window || current == window || (current && IsWindow(current))) return;
+
+    auto const original = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(window, GWLP_WNDPROC));
+    if (!original) return;
+    // Published before the swap: the window thread can call the new proc immediately.
+    gCursorOriginalProc.store(original, std::memory_order_release);
+    SetLastError(0);
+    auto const previous = SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&cursorWndProc));
+    if (!previous && GetLastError() != 0) return;
+    gCursorOriginalProc.store(reinterpret_cast<WNDPROC>(previous), std::memory_order_release);
+    gCursorWindow.store(window, std::memory_order_release);
+}
+
+void removeCursorProc() {
+    HWND const window = gCursorWindow.load(std::memory_order_acquire);
+    if (!window || !IsWindow(window)) {
+        gCursorWindow.store(nullptr, std::memory_order_release);
+        return;
+    }
+    // Another subclass on top still calls us; we stay in its chain as a pass-through.
+    if (GetWindowLongPtrW(window, GWLP_WNDPROC) != reinterpret_cast<LONG_PTR>(&cursorWndProc)) return;
+    SetWindowLongPtrW(
+        window,
+        GWLP_WNDPROC,
+        reinterpret_cast<LONG_PTR>(gCursorOriginalProc.load(std::memory_order_acquire))
+    );
+    gCursorWindow.store(nullptr, std::memory_order_release);
+}
+
+void publishUiCursor(int cursor) {
+    if (gUiCursor.exchange(cursor, std::memory_order_acq_rel) == cursor) return;
+    if (HWND const window = gCursorWindow.load(std::memory_order_acquire)) {
+        PostMessageW(window, applyCursorMessage(), 0, 0);
+    }
 }
 
 void setMouseOwner(MouseOwner owner) {
@@ -341,6 +610,8 @@ bool hookReplayMouse(bool enable) {
 
     gInstalled.store(false, std::memory_order_release);
     gInputActive.store(false, std::memory_order_release);
+    publishUiCursor(ImGuiMouseCursor_Arrow);
+    removeCursorProc();
     setMouseOwner(MouseOwner::Inactive);
     resetOwnershipRequests();
     clearQueuedEvents();
@@ -357,6 +628,7 @@ void setReplayMouseInputActive(bool active) {
     gInputActive.store(active, std::memory_order_release);
     if (active) return;
 
+    publishUiCursor(ImGuiMouseCursor_Arrow);
     resetOwnershipRequests();
     gReleaseRequested.store(true, std::memory_order_release);
     input::setGameInputCaptured(false);
@@ -470,7 +742,9 @@ void setReplayGameViewportExclusion(float left, float top, float right, float bo
     }
 }
 
-void endReplayMouseFrame() {
+void endReplayMouseFrame(void* window) {
+    installCursorProc(static_cast<HWND>(window));
+    publishUiCursor(ImGui::GetMouseCursor());
     bool const popupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
     gPopupOpen.store(popupOpen, std::memory_order_release);
     input::setUiKeyboardCaptured(
