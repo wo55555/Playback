@@ -147,23 +147,32 @@ constexpr float kFontScaleNavTitle    = kNavigationLayout.titleFontSize / kBaseF
 constexpr float kFontScaleNavBackIcon = kNavigationLayout.backIconFontSize / kBaseFontSize;
 constexpr float kFontScaleNavControl  = kNavigationLayout.controlFontSize / kBaseFontSize;
 
-constexpr ImU32 kColorAccent       = playback::editor::ui::theme::kAccent;
-constexpr ImU32 kColorAccentHover  = IM_COL32(78, 158, 250, 255);
-constexpr ImU32 kColorBg           = IM_COL32(22, 23, 25, 255);
-constexpr ImU32 kColorPanelBg      = IM_COL32(30, 32, 35, 255);
-constexpr ImU32 kColorCardBg       = IM_COL32(25, 27, 29, 255);
-constexpr ImU32 kColorCardSelected = IM_COL32(70, 72, 76, 255);
-constexpr ImU32 kColorListSelected = IM_COL32(70, 72, 76, 255);
-constexpr ImU32 kColorCardBorder   = IM_COL32(76, 80, 86, 220);
-constexpr ImU32 kColorCardHover    = IM_COL32(104, 110, 120, 255);
-constexpr ImU32 kColorButton       = IM_COL32(48, 50, 54, 255);
-constexpr ImU32 kColorButtonHover  = IM_COL32(64, 67, 72, 255);
-constexpr ImU32 kColorButtonActive = IM_COL32(78, 81, 88, 255);
-constexpr ImU32 kColorPreviewBg    = IM_COL32(30, 42, 58, 255);
-constexpr ImU32 kColorDanger       = IM_COL32(210, 60, 60, 255);
-constexpr ImU32 kColorText         = IM_COL32(238, 240, 244, 255);
-constexpr ImU32 kColorTextDim      = IM_COL32(164, 168, 176, 255);
-constexpr ImU32 kColorBackdrop     = IM_COL32(0, 0, 0, 88);
+constexpr ImU32 kColorAccent        = playback::editor::ui::theme::kAccent;
+constexpr ImU32 kColorAccentHover   = IM_COL32(78, 158, 250, 255);
+constexpr ImU32 kColorBg            = IM_COL32(22, 23, 25, 255);
+constexpr ImU32 kColorPanelBg       = IM_COL32(30, 32, 35, 255);
+constexpr ImU32 kColorCardBg        = IM_COL32(25, 27, 29, 255);
+constexpr ImU32 kColorCardHoverFill = IM_COL32(38, 41, 45, 255);
+constexpr ImU32 kColorCardSelected  = IM_COL32(70, 72, 76, 255);
+constexpr ImU32 kColorCardBorder    = IM_COL32(76, 80, 86, 220);
+constexpr ImU32 kColorCardHover     = IM_COL32(104, 110, 120, 255);
+constexpr ImU32 kColorButton        = IM_COL32(48, 50, 54, 255);
+constexpr ImU32 kColorButtonHover   = IM_COL32(64, 67, 72, 255);
+constexpr ImU32 kColorButtonActive  = IM_COL32(78, 81, 88, 255);
+constexpr ImU32 kColorPreviewBg     = IM_COL32(30, 42, 58, 255);
+constexpr ImU32 kColorDanger        = IM_COL32(210, 60, 60, 255);
+constexpr ImU32 kColorText          = IM_COL32(238, 240, 244, 255);
+constexpr ImU32 kColorTextDim       = IM_COL32(164, 168, 176, 255);
+constexpr ImU32 kColorBackdrop      = IM_COL32(0, 0, 0, 88);
+
+// Selection reads as an accent tint over the row, so it stays apparent against the dark panels and is never
+// confused with the neutral hover fill.
+ImU32 selectionFill(ImU32 idle, ImU32 hover, float hoverAmount, float selectedAmount) {
+    using playback::editor::ui::lerpColor;
+    ImU32 const neutral  = lerpColor(idle, hover, hoverAmount);
+    ImU32 const selected = lerpColor(idle, kColorAccent, 0.30f + 0.06f * hoverAmount);
+    return lerpColor(neutral, selected, selectedAmount);
+}
 
 float cardPreviewHeight(float width) { return std::max(0.0f, width - kCardLayout.previewInset * 2.0f) * 9.0f / 16.0f; }
 
@@ -739,7 +748,12 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
         submit({playback::state::EditorActionType::CloseReplayBrowser});
     }
 
+    // Quick operations such as a delete would otherwise flash the whole list grey for a frame.
+    mBusyTime           = state.busy() ? mBusyTime + io.DeltaTime : 0.0f;
+    float const busyDim = std::clamp((mBusyTime - 0.3f) / 0.2f, 0.0f, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f - (1.0f - ImGui::GetStyle().DisabledAlpha) * busyDim);
     ImGui::BeginDisabled(state.busy());
+    ImGui::PopStyleVar();
     drawNavigation();
     ImGui::Separator();
 
@@ -748,12 +762,7 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
     ImGui::BeginChild("##content", {0.0f, -actionHeight}, false, ImGuiWindowFlags_NoScrollbar);
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * mViewTransition);
     if (mViewMode == ViewMode::Grid) drawGrid();
-    // Quick operations such as a delete would otherwise flash the whole list grey for a frame.
-    mBusyTime           = state.busy() ? mBusyTime + io.DeltaTime : 0.0f;
-    float const busyDim = std::clamp((mBusyTime - 0.3f) / 0.2f, 0.0f, 1.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f - (1.0f - ImGui::GetStyle().DisabledAlpha) * busyDim);
     else drawDetails();
-    ImGui::PopStyleVar();
     ImGui::PopStyleVar();
     ImGui::EndChild();
 
@@ -931,6 +940,13 @@ void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& 
     auto  texture = playback::editor::graphics::gImGuiRenderer.acquireReplayThumbnailTexture(replay.path);
     float shown   = 1.0f;
     if (texture) {
+        // Only thumbnails that were seen loading fade in; cached ones appear at once.
+        if (auto load = mPreviewLoads.find(replay.replayId); load != mPreviewLoads.end()) {
+            load->second.fade =
+                playback::editor::ui::advanceAnimation(load->second.fade, 1.0f, ImGui::GetIO().DeltaTime);
+            shown = load->second.fade;
+            if (shown >= 1.0f) mPreviewLoads.erase(load);
+        }
         // Thumbnail sources are 16:9; center-crop to the target aspect ratio without stretching.
         constexpr float sourceAspect = 16.0f / 9.0f;
         float const     targetAspect = size.x / size.y;
@@ -940,13 +956,6 @@ void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& 
             float const visibleWidth = targetAspect / sourceAspect;
             uv0.x                    = (1.0f - visibleWidth) * 0.5f;
             uv1.x                    = 1.0f - uv0.x;
-        // Only thumbnails that were seen loading fade in; cached ones appear at once.
-        if (auto load = mPreviewLoads.find(replay.replayId); load != mPreviewLoads.end()) {
-            load->second.fade =
-                playback::editor::ui::advanceAnimation(load->second.fade, 1.0f, ImGui::GetIO().DeltaTime);
-            shown = load->second.fade;
-            if (shown >= 1.0f) mPreviewLoads.erase(load);
-        }
         } else if (targetAspect > sourceAspect) {
             float const visibleHeight = sourceAspect / targetAspect;
             uv0.y                     = (1.0f - visibleHeight) * 0.5f;
@@ -991,17 +1000,21 @@ void SelectReplayScreen::drawCard(
     float const footerY       = modifiedY + kCardLayout.metadataRowAdvance();
 
     ImGui::PushID(replay.replayId.c_str());
-    float const selectedAmount = mAnimator.animate("card-selected", replay.replayId, selected ? 1.0f : 0.0f);
+    float const selectedAmount = mAnimator.animate("card-selected", replay.replayId, selected ? 1.0f : 0.0f, true);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
     ImGui::BeginChild("##card", {width, height}, false, ImGuiWindowFlags_NoScrollbar);
     ImVec2 const cardMinimum = ImGui::GetWindowPos();
     ImVec2 const cardMaximum{cardMinimum.x + width, cardMinimum.y + height};
+    // Hit-tested here so the fill, drawn before the button, follows the same hover as the border.
+    bool const cardHovered = ImGui::IsMouseHoveringRect(cardMinimum, cardMaximum)
+                          && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    float const hoverAmount = mAnimator.animate("card-hover", replay.replayId, cardHovered ? 1.0f : 0.0f, true);
     ImGui::GetWindowDrawList()->AddRectFilled(
         cardMinimum,
         cardMaximum,
-        playback::editor::ui::lerpColor(kColorCardBg, kColorCardSelected, selectedAmount),
+        selectionFill(kColorCardBg, kColorCardHoverFill, hoverAmount, selectedAmount),
         8.0f
     );
 
@@ -1018,8 +1031,6 @@ void SelectReplayScreen::drawCard(
     } else if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
         select(replay.replayId, visibleIndex, ImGui::GetIO().KeyCtrl, ImGui::GetIO().KeyShift);
     }
-    bool const  cardHovered = ImGui::IsItemHovered();
-    float const hoverAmount = mAnimator.animate("card-hover", replay.replayId, cardHovered ? 1.0f : 0.0f);
 
     // Keep full file details in the info-button tooltip without crowding the card body.
     float const infoSize = 28.0f;
@@ -1140,10 +1151,14 @@ void SelectReplayScreen::drawCard(
     ImGui::GetWindowDrawList()->AddRect(
         {cardMinimum.x + 1.0f, cardMinimum.y + 1.0f},
         {cardMaximum.x - 1.0f, cardMaximum.y - 1.0f},
-        playback::editor::ui::lerpColor(kColorCardBorder, kColorCardHover, std::max(selectedAmount, hoverAmount)),
+        playback::editor::ui::lerpColor(
+            playback::editor::ui::lerpColor(kColorCardBorder, kColorCardHover, hoverAmount),
+            kColorAccent,
+            selectedAmount
+        ),
         8.0f,
         0,
-        1.0f
+        1.0f + selectedAmount
     );
 
     ImGui::SetWindowFontScale(kFontScaleBody);
@@ -1259,7 +1274,7 @@ void SelectReplayScreen::drawDetailsListItem(
     float const thumbnailY      = (itemHeight - thumbnailHeight) * 0.5f;
 
     ImGui::PushID(replay.replayId.c_str());
-    float const selectedAmount = mAnimator.animate("details-selected", replay.replayId, selected ? 1.0f : 0.0f);
+    float const selectedAmount = mAnimator.animate("details-selected", replay.replayId, selected ? 1.0f : 0.0f, true);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, kDetailsLayout.panelRounding);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
@@ -1268,18 +1283,31 @@ void SelectReplayScreen::drawDetailsListItem(
     ImVec2 const itemMinimum = ImGui::GetWindowPos();
     ImVec2 const itemMaximum{itemMinimum.x + width, itemMinimum.y + itemHeight};
     // Hit-tested here rather than from the overlay button so the fill can be drawn beneath the thumbnail.
-    float const hoverAmount = mAnimator.animate(
-        "details-hover",
-        replay.replayId,
-        ImGui::IsMouseHoveringRect(itemMinimum, itemMaximum) ? 1.0f : 0.0f
+    bool const itemHovered = ImGui::IsMouseHoveringRect(itemMinimum, itemMaximum)
+                          && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    float const hoverAmount   = mAnimator.animate("details-hover", replay.replayId, itemHovered ? 1.0f : 0.0f, true);
+    ImDrawList* const rowDraw = ImGui::GetWindowDrawList();
+    rowDraw->AddRectFilled(
+        itemMinimum,
+        itemMaximum,
+        selectionFill(kColorPanelBg, kColorButton, hoverAmount, selectedAmount),
+        kDetailsLayout.panelRounding
     );
-    float const highlight = std::max(selectedAmount, hoverAmount * 0.45f);
-    if (highlight > 0.0f) {
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            itemMinimum,
-            itemMaximum,
-            playback::editor::ui::lerpColor(kColorPanelBg, kColorListSelected, highlight),
-            kDetailsLayout.panelRounding
+    if (selectedAmount > 0.0f) {
+        rowDraw->AddRect(
+            {itemMinimum.x + 0.5f, itemMinimum.y + 0.5f},
+            {itemMaximum.x - 0.5f, itemMaximum.y - 0.5f},
+            playback::editor::ui::theme::withAlpha(kColorAccent, static_cast<int>(selectedAmount * 255.0f)),
+            kDetailsLayout.panelRounding,
+            0,
+            1.5f
+        );
+        float const barInset = itemHeight * 0.2f;
+        rowDraw->AddRectFilled(
+            {itemMinimum.x, itemMinimum.y + barInset},
+            {itemMinimum.x + 4.0f, itemMaximum.y - barInset},
+            playback::editor::ui::theme::withAlpha(kColorAccent, static_cast<int>(selectedAmount * 255.0f)),
+            2.0f
         );
     }
     ImGui::SetCursorPos({kDetailsLayout.listItemHorizontalPadding, thumbnailY});
@@ -1741,10 +1769,10 @@ void SelectReplayScreen::drawDeleteDialog() {
             playback::state::EditorAction action{playback::state::EditorActionType::DeleteReplays};
             action.replayIds.assign(mSelectedIds.begin(), mSelectedIds.end());
             submit(std::move(action));
-            mShowDeleteDialog = false;
-            ImGui::CloseCurrentPopup();
         }
         if (choice >= 0) {
+            mShowDeleteDialog = false;
+            ImGui::CloseCurrentPopup();
         }
         ui::endMessageDialog();
     }
@@ -1825,9 +1853,9 @@ void SelectReplayScreen::drawRenameDialog() {
         action.name     = mRenameBuffer;
         submit(std::move(action));
     }
+    if (choice >= 0) ImGui::CloseCurrentPopup();
 
     ui::endMessageDialog();
 }
 
 } // namespace playback::screen::select_replay
-    if (choice >= 0) ImGui::CloseCurrentPopup();
