@@ -22,6 +22,7 @@
 #include "imgui_impl_dx12.h"
 
 #include <d3d11.h>
+#include <dcomp.h>
 
 #include <algorithm>
 #include <array>
@@ -40,6 +41,20 @@ namespace playback::editor::graphics {
 using namespace playback::state;
 
 namespace {
+
+// The export overlay is a full-window opaque screen.
+constexpr float OpaqueBlack[]{0.0f, 0.0f, 0.0f, 1.0f};
+
+constexpr UINT ExportSurfaceBufferCount = 2;
+
+constexpr auto ExportSurfaceRetryDelay = std::chrono::seconds(1);
+
+// Our own surface also goes through the DXGI hooks, which must not re-enter the renderer lock.
+std::atomic<IDXGISwapChain*> gExportSurfaceSwapChain{};
+
+bool isExportSurfaceSwapChain(IDXGISwapChain* swapChain) {
+    return swapChain && swapChain == gExportSurfaceSwapChain.load(std::memory_order_acquire);
+}
 
 class ImGuiContextRestore {
 public:
@@ -243,17 +258,36 @@ struct ImGuiRenderer::Impl {
     size_t                                  frameCursor{};
     uint64_t                                surfaceArea{};
     std::optional<UINT>                     lastGameTextureIndex;
-    bool                                    unfenced{};
-    bool                                    initialized{};
-    bool                                    backendInit{};
-    bool                                    renderingDisabled{};
-    bool                                    initFailed{};
-    bool                                    missingQueue{};
-    bool                                    nativeD3D12Resetting{};
-    bool                                    nativeD3D12ResetReady{true};
-    std::chrono::steady_clock::time_point   lastInitAttempt{};
-    std::chrono::steady_clock::time_point   lastFrameTime{};
-    std::chrono::steady_clock::time_point   lastPresent{};
+    // Export resizes the game swap chain, so its UI goes to a window-sized composition layer above it.
+    struct ExportSurface {
+        HWND                                                              window{};
+        ComPtr<IDCompositionDevice>                                       composition;
+        ComPtr<IDCompositionTarget>                                       target;
+        ComPtr<IDCompositionVisual>                                       visual;
+        ComPtr<IDXGISwapChain3>                                           swapChain;
+        ComPtr<ID3D12DescriptorHeap>                                      rtvHeap;
+        std::array<ComPtr<ID3D12Resource>, ExportSurfaceBufferCount>      buffers;
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, ExportSurfaceBufferCount> rtvs{};
+        ComPtr<ID3D11RenderTargetView>                                    d3d11Rtv;
+        UINT                                                              width{};
+        UINT                                                              height{};
+        bool                                                              d3d11{};
+        bool                                                              committed{};
+    };
+    ExportSurface                         exportSurface;
+    std::chrono::steady_clock::time_point exportSurfaceRetryAt{};
+    bool                                  exportSurfaceErrorLogged{};
+    bool                                  unfenced{};
+    bool                                  initialized{};
+    bool                                  backendInit{};
+    bool                                  renderingDisabled{};
+    bool                                  initFailed{};
+    bool                                  missingQueue{};
+    bool                                  nativeD3D12Resetting{};
+    bool                                  nativeD3D12ResetReady{true};
+    std::chrono::steady_clock::time_point lastInitAttempt{};
+    std::chrono::steady_clock::time_point lastFrameTime{};
+    std::chrono::steady_clock::time_point lastPresent{};
 
     ComPtr<ID3D11Device>             d3d11Device;
     ComPtr<ID3D11DeviceContext>      d3d11Context;
@@ -447,6 +481,7 @@ struct ImGuiRenderer::Impl {
         visuals::FrameTapError frameTapError   = visuals::FrameTapError::BackendUnavailable,
         std::string            frameTapMessage = "D3D11 frame capture backend was released"
     ) {
+        if (exportSurface.d3d11) destroyExportSurface();
         if (d3d11Initialized) d3d11FrameTap.reset(frameTapError, std::move(frameTapMessage));
         if (d3d11Context) d3d11Context->ClearState();
         if (d3d11ImguiCtx) {
@@ -468,6 +503,173 @@ struct ImGuiRenderer::Impl {
         d3d11SwapChain        = nullptr;
         d3d11Initialized      = false;
         d3d11FirstFrameLogged = false;
+    }
+
+    bool createExportSurfaceViews() {
+        auto& s = exportSurface;
+        if (s.d3d11) {
+            // Flip-model D3D11 swap chains always render through buffer 0.
+            ComPtr<ID3D11Texture2D> buffer;
+            return SUCCEEDED(s.swapChain->GetBuffer(0, IID_PPV_ARGS(&buffer)))
+                && SUCCEEDED(d3d11Device->CreateRenderTargetView(buffer.Get(), nullptr, &s.d3d11Rtv));
+        }
+        auto rtv = s.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        for (UINT i = 0; i < ExportSurfaceBufferCount; ++i) {
+            if (FAILED(s.swapChain->GetBuffer(i, IID_PPV_ARGS(&s.buffers[i])))) return false;
+            s.rtvs[i] = rtv;
+            device->CreateRenderTargetView(s.buffers[i].Get(), nullptr, rtv);
+            rtv.ptr += static_cast<SIZE_T>(rtvDescSize);
+        }
+        return true;
+    }
+
+    void releaseExportSurfaceViews() {
+        auto& s = exportSurface;
+        if (s.d3d11 && d3d11Context) {
+            d3d11Context->OMSetRenderTargets(0, nullptr, nullptr);
+            d3d11Context->Flush();
+        }
+        s.d3d11Rtv.Reset();
+        for (auto& buffer : s.buffers) buffer.Reset();
+    }
+
+    HRESULT
+    createExportSurface(
+        IDXGISwapChain* gameSwapChain,
+        HWND            window,
+        UINT            width,
+        UINT            height,
+        bool            d3d11,
+        DXGI_FORMAT     format
+    ) {
+        auto&                 s = exportSurface;
+        ComPtr<IDXGIFactory2> factory;
+        if (auto hr = gameSwapChain->GetParent(IID_PPV_ARGS(&factory)); FAILED(hr)) return hr;
+        s.d3d11 = d3d11;
+
+        DXGI_SWAP_CHAIN_DESC1 desc{};
+        desc.Width            = width;
+        desc.Height           = height;
+        desc.Format           = format;
+        desc.SampleDesc.Count = 1;
+        desc.BufferUsage      = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        desc.BufferCount      = ExportSurfaceBufferCount;
+        desc.Scaling          = DXGI_SCALING_STRETCH;
+        desc.SwapEffect       = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        desc.AlphaMode        = DXGI_ALPHA_MODE_IGNORE;
+
+        IUnknown* const         presenter = d3d11 ? static_cast<IUnknown*>(d3d11Device.Get()) : commandQueue.Get();
+        ComPtr<IDXGISwapChain1> swapChain1;
+        if (auto hr = factory->CreateSwapChainForComposition(presenter, &desc, nullptr, &swapChain1); FAILED(hr)) {
+            return hr;
+        }
+        if (auto hr = swapChain1.As(&s.swapChain); FAILED(hr)) return hr;
+        gExportSurfaceSwapChain.store(s.swapChain.Get(), std::memory_order_release);
+
+        if (!d3d11) {
+            D3D12_DESCRIPTOR_HEAP_DESC heap{};
+            heap.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+            heap.NumDescriptors = ExportSurfaceBufferCount;
+            if (auto hr = device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&s.rtvHeap)); FAILED(hr)) return hr;
+        }
+        if (!createExportSurfaceViews()) return E_FAIL;
+
+        // A topmost composition visual draws over the game's own swap chain and is invisible to hit testing.
+        if (auto hr = DCompositionCreateDevice(nullptr, IID_PPV_ARGS(&s.composition)); FAILED(hr)) return hr;
+        if (auto hr = s.composition->CreateTargetForHwnd(window, TRUE, &s.target); FAILED(hr)) return hr;
+        if (auto hr = s.composition->CreateVisual(&s.visual); FAILED(hr)) return hr;
+        if (auto hr = s.visual->SetContent(s.swapChain.Get()); FAILED(hr)) return hr;
+        if (auto hr = s.target->SetRoot(s.visual.Get()); FAILED(hr)) return hr;
+        s.window    = window;
+        s.width     = width;
+        s.height    = height;
+        s.committed = false;
+        return S_OK;
+    }
+
+    // Recorded D3D12 frames may still draw into the surface buffers.
+    bool exportSurfaceIdle() const {
+        return exportSurface.d3d11 || !fence || (!unfenced && waitForFence(lastFenceValue, fence, fenceEvent));
+    }
+
+    void destroyExportSurface() {
+        auto& s = exportSurface;
+        if (!s.swapChain && !s.composition) return;
+        (void)exportSurfaceIdle();
+        releaseExportSurfaceViews();
+        if (s.target && s.composition) {
+            s.target->SetRoot(nullptr);
+            s.composition->Commit();
+        }
+        gExportSurfaceSwapChain.store(nullptr, std::memory_order_release);
+        s = {};
+    }
+
+    void resetExportSurface() {
+        destroyExportSurface();
+        exportSurfaceRetryAt     = {};
+        exportSurfaceErrorLogged = false;
+    }
+
+    void failExportSurface(char const* step, HRESULT hr) {
+        if (!exportSurfaceErrorLogged) {
+            getLogger()
+                .error("Export UI layer failed ({}: HRESULT=0x{:08X}); retrying", step, static_cast<uint32_t>(hr));
+            exportSurfaceErrorLogged = true;
+        }
+        destroyExportSurface();
+        exportSurfaceRetryAt = std::chrono::steady_clock::now() + ExportSurfaceRetryDelay;
+    }
+
+    bool ensureExportSurface(IDXGISwapChain* gameSwapChain, bool d3d11, DXGI_FORMAT format) {
+        if (std::chrono::steady_clock::now() < exportSurfaceRetryAt) return false;
+        DXGI_SWAP_CHAIN_DESC gameDesc{};
+        if (FAILED(gameSwapChain->GetDesc(&gameDesc)) || !gameDesc.OutputWindow) return false;
+        RECT client{};
+        if (!GetClientRect(gameDesc.OutputWindow, &client)) return false;
+        // A minimized window has nothing to show.
+        if (client.right <= client.left || client.bottom <= client.top) return false;
+        auto const width  = static_cast<UINT>(client.right - client.left);
+        auto const height = static_cast<UINT>(client.bottom - client.top);
+
+        auto& s = exportSurface;
+        if (s.swapChain && (s.window != gameDesc.OutputWindow || s.d3d11 != d3d11)) destroyExportSurface();
+        if (!s.swapChain) {
+            auto const hr = createExportSurface(gameSwapChain, gameDesc.OutputWindow, width, height, d3d11, format);
+            if (FAILED(hr)) failExportSurface("create", hr);
+            return SUCCEEDED(hr);
+        }
+        if (s.width == width && s.height == height) return true;
+        if (!exportSurfaceIdle()) return false;
+        releaseExportSurfaceViews();
+        if (auto hr = s.swapChain->ResizeBuffers(ExportSurfaceBufferCount, width, height, DXGI_FORMAT_UNKNOWN, 0);
+            FAILED(hr)) {
+            failExportSurface("resize", hr);
+            return false;
+        }
+        if (!createExportSurfaceViews()) {
+            failExportSurface("resize", E_FAIL);
+            return false;
+        }
+        s.width  = width;
+        s.height = height;
+        return true;
+    }
+
+    void presentExportSurface() {
+        auto& s = exportSurface;
+        if (auto hr = s.swapChain->Present(0, 0); FAILED(hr)) return failExportSurface("present", hr);
+        if (s.committed) return;
+        // Showing the layer only after its first frame avoids flashing an empty surface.
+        if (auto hr = s.composition->Commit(); FAILED(hr)) return failExportSurface("commit", hr);
+        s.committed = true;
+    }
+
+    ImGuiSurfaceMetrics exportSurfaceMetrics() const {
+        return {
+            ImVec2(static_cast<float>(exportSurface.width), static_cast<float>(exportSurface.height)),
+            ImVec2(1.0f, 1.0f),
+        };
     }
 
     bool renderD3D11(
@@ -509,11 +711,14 @@ struct ImGuiRenderer::Impl {
 
         // Capture-only passes must not modify the swap-chain buffer.
         if (!renderUi) return true;
+        // Export UI goes to its own window-sized layer, so the export resolution cannot blur it.
+        if (exportFrame && !ensureExportSurface(sc, true, desc.Format)) return false;
 
         ImGuiContextRestore restore;
         ImGui::SetCurrentContext(d3d11ImguiCtx);
-        auto const surfaceMetrics  = getImGuiSurfaceMetrics(sc, desc.Width, desc.Height);
-        auto&      io              = ImGui::GetIO();
+        auto const surfaceMetrics =
+            exportFrame ? exportSurfaceMetrics() : getImGuiSurfaceMetrics(sc, desc.Width, desc.Height);
+        auto& io                   = ImGui::GetIO();
         io.DisplaySize             = surfaceMetrics.displaySize;
         io.DisplayFramebufferScale = surfaceMetrics.framebufferScale;
         applyReplayUIScale(io.DisplaySize.y);
@@ -565,10 +770,16 @@ struct ImGuiRenderer::Impl {
             if (FAILED(d3d11Device->CreateRenderTargetView(source.Get(), nullptr, &currentRtv))) return false;
             rtv = currentRtv.Get();
         }
-        d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
-        if (!state.browser.visible && !exporting::isExportActive(state.exportStatus.state)) {
-            float clearColor[]{0.055f, 0.055f, 0.065f, 1};
-            d3d11Context->ClearRenderTargetView(rtv, clearColor);
+        if (exportFrame) {
+            rtv = exportSurface.d3d11Rtv.Get();
+            d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
+            d3d11Context->ClearRenderTargetView(rtv, OpaqueBlack);
+        } else {
+            d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
+            if (!state.browser.visible && !exporting::isExportActive(state.exportStatus.state)) {
+                float clearColor[]{0.055f, 0.055f, 0.065f, 1};
+                d3d11Context->ClearRenderTargetView(rtv, clearColor);
+            }
         }
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         if (thumbnailQuery) {
@@ -577,6 +788,7 @@ struct ImGuiRenderer::Impl {
                 if (texture.lastUsedFrame == thumbnailFrame) texture.lastUseQuery = thumbnailQuery;
             }
         }
+        if (exportFrame) presentExportSurface();
         d3d11FirstFrameLogged = true;
         return true;
     }
@@ -806,6 +1018,7 @@ struct ImGuiRenderer::Impl {
             if (!waitForFence(lastFenceValue, fence, fenceEvent)) return false;
             unfenced = false;
         }
+        destroyExportSurface();
         thumbnailLoader.reset();
         bool const hadRenderer = initialized || d3d11Initialized;
         {
@@ -1177,6 +1390,7 @@ bool ImGuiRenderer::renderInternal(
     bool            allowFrameCapture,
     bool            forceExportOverlay
 ) {
+    if (isExportSurfaceSwapChain(swapChain)) return false;
     auto&            p = *mImpl;
     std::scoped_lock lk(p.mutex);
 
@@ -1190,6 +1404,7 @@ bool ImGuiRenderer::renderInternal(
     bool const editorOpen    = allowUi && state.editorVisible;
     bool const uiActive      = browserOpen || editorOpen || (forceExportOverlay && exportOverlay);
     if (allowUi) input::setUiVisible(uiActive);
+    if (!forceExportOverlay || !exportOverlay) p.resetExportSurface();
 
     auto const browserRevision = allowUi && state.browser.snapshot ? state.browser.snapshot->revision : 0;
     if (allowUi && (p.browserVisible != browserOpen || p.browserSnapshotRevision != browserRevision)) {
@@ -1289,11 +1504,19 @@ bool ImGuiRenderer::renderInternal(
     // The export preview reuses the editor viewport copy, since Present already holds the clean world frame.
     bool const copyGameTexture = !exportOverlay || captureActive;
 
+    // Export UI goes to its own window-sized layer, so the export resolution cannot blur it.
+    bool const exportUi         = uiActive && forceExportOverlay && exportOverlay;
+    bool const surfaceUi        = exportUi && p.ensureExportSurface(swapChain, false, p.rtvFormat);
+    bool const drawUi           = exportUi ? surfaceUi : uiActive;
+    bool const drawOnBackBuffer = drawUi && !surfaceUi;
+
     ImGuiContextRestore cr;
-    if (uiActive) {
+    if (drawUi) {
+        auto const surfaceMetrics = surfaceUi
+                                      ? p.exportSurfaceMetrics()
+                                      : getImGuiSurfaceMetrics(swapChain, static_cast<uint32_t>(bd.Width), bd.Height);
         ImGui::SetCurrentContext(p.imguiCtx);
-        auto const surfaceMetrics  = getImGuiSurfaceMetrics(swapChain, static_cast<uint32_t>(bd.Width), bd.Height);
-        auto&      io              = ImGui::GetIO();
+        auto& io                   = ImGui::GetIO();
         io.DisplaySize             = surfaceMetrics.displaySize;
         io.DisplayFramebufferScale = surfaceMetrics.framebufferScale;
         applyReplayUIScale(io.DisplaySize.y);
@@ -1388,7 +1611,7 @@ bool ImGuiRenderer::renderInternal(
         addRenderBarrier(
             captureSource,
             D3D12_RESOURCE_STATE_COPY_SOURCE,
-            uiActive ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_PRESENT
+            drawOnBackBuffer ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_PRESENT
         );
     }
     if (copyGameTexture) {
@@ -1396,7 +1619,7 @@ bool ImGuiRenderer::renderInternal(
             addRenderBarrier(
                 f.backBuffer.Get(),
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
-                uiActive ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_PRESENT
+                drawOnBackBuffer ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_PRESENT
             );
         }
         addRenderBarrier(
@@ -1404,23 +1627,41 @@ bool ImGuiRenderer::renderInternal(
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
         );
-    } else if (uiActive && !captureActive) {
+    } else if (drawOnBackBuffer && !captureActive) {
         addRenderBarrier(f.backBuffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
     if (renderBarrierCount != 0) f.commandList->ResourceBarrier(renderBarrierCount, toRender.data());
-    if (uiActive) {
-        f.commandList->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
-        if (!browserOpen && !exportOverlay) {
-            float cc[]{0.055f, 0.055f, 0.065f, 1};
-            f.commandList->ClearRenderTargetView(f.rtv, cc, 0, nullptr);
-        }
+    if (drawUi) {
         ID3D12DescriptorHeap* dh[]{p.srvHeap.Get()};
-        f.commandList->SetDescriptorHeaps(1, dh);
-        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), f.commandList.Get());
+        if (surfaceUi) {
+            auto const si = p.exportSurface.swapChain->GetCurrentBackBufferIndex() % ExportSurfaceBufferCount;
+            D3D12_RESOURCE_BARRIER surfaceBarrier{};
+            surfaceBarrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            surfaceBarrier.Transition.pResource   = p.exportSurface.buffers[si].Get();
+            surfaceBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            surfaceBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+            surfaceBarrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            f.commandList->ResourceBarrier(1, &surfaceBarrier);
+            auto const surfaceRtv = p.exportSurface.rtvs[si];
+            f.commandList->OMSetRenderTargets(1, &surfaceRtv, FALSE, nullptr);
+            f.commandList->ClearRenderTargetView(surfaceRtv, OpaqueBlack, 0, nullptr);
+            f.commandList->SetDescriptorHeaps(1, dh);
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), f.commandList.Get());
+            std::swap(surfaceBarrier.Transition.StateBefore, surfaceBarrier.Transition.StateAfter);
+            f.commandList->ResourceBarrier(1, &surfaceBarrier);
+        } else {
+            f.commandList->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
+            if (!browserOpen && !exportOverlay) {
+                float cc[]{0.055f, 0.055f, 0.065f, 1};
+                f.commandList->ClearRenderTargetView(f.rtv, cc, 0, nullptr);
+            }
+            f.commandList->SetDescriptorHeaps(1, dh);
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), f.commandList.Get());
+        }
     }
     ++p.frameCursor;
 
-    if (uiActive) {
+    if (drawOnBackBuffer) {
         D3D12_RESOURCE_BARRIER toPresent{};
         toPresent.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         toPresent.Transition.pResource   = f.backBuffer.Get();
@@ -1461,11 +1702,13 @@ bool ImGuiRenderer::renderInternal(
         if (texture.lastUsedFrame == p.thumbnailFrame) texture.lastUseFence = fv;
     }
     if (frameTapSubmitted) p.d3d12FrameTap.submitted(p.fence.Get(), fv);
-    ia.commit();
+    if (surfaceUi) p.presentExportSurface();
+    if (drawUi) ia.commit();
     return true;
 }
 
 bool ImGuiRenderer::ownsSwapChain(IDXGISwapChain* swapChain) const {
+    if (isExportSurfaceSwapChain(swapChain)) return false;
     std::scoped_lock lock(mImpl->mutex);
     return swapChain && (swapChain == mImpl->swapChain || swapChain == mImpl->d3d11SwapChain);
 }
@@ -1493,6 +1736,7 @@ void ImGuiRenderer::afterRendererReset() {
 }
 
 bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
+    if (isExportSurfaceSwapChain(sc)) return true;
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
         bool const wasD3D12SwapChain = sc == mImpl->swapChain;
@@ -1528,6 +1772,7 @@ bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
 
 void ImGuiRenderer::afterPresent(IDXGISwapChain* sc, long result) {
     if (result != DXGI_ERROR_DEVICE_REMOVED && result != DXGI_ERROR_DEVICE_RESET) return;
+    if (isExportSurfaceSwapChain(sc)) return;
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
         ComPtr<ID3D12Device> device;
