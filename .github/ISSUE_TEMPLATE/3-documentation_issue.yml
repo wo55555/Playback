@@ -1,0 +1,55 @@
+name: 📖 Documentation Issue
+description: Report a problem in the docs, README, changelog, or in-game text
+title: "[Docs] "
+labels: ["documentation","enhancement"]
+
+body:
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      description: Please search existing issues first. By submitting this issue, you agree to follow the project's Code of Conduct.
+      options:
+        - label: I have searched the existing issues to ensure this is not a duplicate
+          required: true
+        - label: I have read and agree to follow the Code of Conduct
+          required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: Specify the document, section heading, or file path where the issue was found.
+      placeholder: e.g. Getting Started guide, Quick Start section
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the problem — broken link, outdated version, incorrect instructions, typo, or missing information.
+      placeholder: |
+        The link to the changelog points to the wrong URL.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected content
+      description: Describe what the correct content should be.
+      placeholder: |
+        The link should point to https://github.com/wo55555/Playback/blob/main/CHANGELOG.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other relevant information.
+      placeholder: |
+        - Screenshots or links
+        - When you noticed the issue
+        - Any other notes
