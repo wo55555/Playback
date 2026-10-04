@@ -14,7 +14,8 @@ void setReplayGameViewport(float left, float top, float right, float bottom);
 // UI drawn over the game viewport (floating transport); clicks inside stay with ImGui.
 void setReplayGameViewportExclusion(float left, float top, float right, float bottom);
 
-void endReplayMouseFrame();
+// `window` is the game HWND; the ImGui cursor shape is applied on its thread.
+void endReplayMouseFrame(void* window);
 
 // Runs on the client update thread after ClientInstance::$update.
 void updateReplayMouseOwnership(ClientInstance& client);
