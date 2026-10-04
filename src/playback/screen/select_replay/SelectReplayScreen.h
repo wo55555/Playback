@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -64,6 +65,13 @@ private:
     std::string                                mRenameBuffer;
     playback::editor::ui::Animator             mAnimator;
     float                                      mViewTransition{1.0f};
+    float                                      mBusyTime{};
+    struct PreviewLoad {
+        float wait{};
+        float fade{};
+    };
+    // Thumbnails still loading or fading in, keyed by replay id.
+    std::unordered_map<std::string, PreviewLoad> mPreviewLoads;
 };
 
 } // namespace playback::screen::select_replay
