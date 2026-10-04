@@ -330,11 +330,30 @@ struct ImGuiRenderer::Impl {
         bool                              stale{};
     };
     std::unordered_map<std::string, D3D12ThumbnailTexture> d3d12ThumbnailTextures;
-    std::uint64_t                                          browserSnapshotRevision{};
-    bool                                                   browserVisible{};
-    visuals::ReplayThumbnailLoader                         thumbnailLoader;
-    uint64_t                                               thumbnailFrame{};
-    unsigned                                               thumbnailUploads{};
+
+    struct ThumbnailStamp {
+        std::filesystem::file_time_type modified{};
+        std::uintmax_t                  size{};
+
+        bool operator==(ThumbnailStamp const&) const = default;
+    };
+    using ThumbnailStamps = std::unordered_map<std::string, ThumbnailStamp>;
+
+    static ThumbnailStamps thumbnailStamps(playback::state::ReplayBrowserSnapshot const* snapshot) {
+        ThumbnailStamps stamps;
+        if (!snapshot) return stamps;
+        for (auto const& replay : snapshot->replays) {
+            stamps.emplace(replay.path.generic_string(), ThumbnailStamp{replay.lastModified, replay.fileSize});
+        }
+        return stamps;
+    }
+
+    ThumbnailStamps                browserThumbnailStamps;
+    std::uint64_t                  browserSnapshotRevision{};
+    bool                           browserVisible{};
+    visuals::ReplayThumbnailLoader thumbnailLoader;
+    uint64_t                       thumbnailFrame{};
+    unsigned                       thumbnailUploads{};
 
     bool thumbnailComplete(D3D11ThumbnailTexture const& texture) const {
         return !texture.lastUseQuery
@@ -422,6 +441,28 @@ struct ImGuiRenderer::Impl {
         thumbnailLoader.reset();
         for (auto& [_, texture] : d3d12ThumbnailTextures) texture.stale = true;
         for (auto& [_, texture] : d3d11ThumbnailTextures) texture.stale = true;
+        collectThumbnailTextures();
+    }
+
+    // A new snapshot only drops thumbnails whose replay file vanished or changed, so deleting one keeps the rest.
+    void retainBrowserThumbnailTextures(ThumbnailStamps const& stamps) {
+        auto const unchanged = [&](std::string const& key) {
+            auto const before = browserThumbnailStamps.find(key);
+            auto const after  = stamps.find(key);
+            return before != browserThumbnailStamps.end() && after != stamps.end() && before->second == after->second;
+        };
+        for (auto& [key, texture] : d3d12ThumbnailTextures) {
+            if (!unchanged(key)) texture.stale = true;
+        }
+        for (auto& [key, texture] : d3d11ThumbnailTextures) {
+            if (!unchanged(key)) texture.stale = true;
+        }
+        // Pending or decoded pixels may belong to a file that changed under the same path.
+        bool const rewritten = std::any_of(stamps.begin(), stamps.end(), [&](auto const& entry) {
+            auto const before = browserThumbnailStamps.find(entry.first);
+            return before != browserThumbnailStamps.end() && before->second != entry.second;
+        });
+        if (rewritten) thumbnailLoader.reset();
         collectThumbnailTextures();
     }
 
@@ -1421,7 +1462,10 @@ bool ImGuiRenderer::renderInternal(
 
     auto const browserRevision = allowUi && state.browser.snapshot ? state.browser.snapshot->revision : 0;
     if (allowUi && (p.browserVisible != browserOpen || p.browserSnapshotRevision != browserRevision)) {
-        p.clearBrowserThumbnailTextures();
+        auto stamps = Impl::thumbnailStamps(browserOpen ? state.browser.snapshot.get() : nullptr);
+        if (p.browserVisible != browserOpen) p.clearBrowserThumbnailTextures();
+        else p.retainBrowserThumbnailTextures(stamps);
+        p.browserThumbnailStamps  = std::move(stamps);
         p.browserVisible          = browserOpen;
         p.browserSnapshotRevision = browserRevision;
     }
