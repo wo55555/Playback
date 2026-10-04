@@ -653,65 +653,82 @@ void TimelinePanel::drawRangeBar(PanelContext const& ctx, Layout const& layout, 
 
     drawList->AddRectFilled({layout.fullMin.x, barTop}, {layout.fullMax.x, layout.fullMax.y}, theme::kBgHeader);
 
-    // The bar is the visible window over the whole replay: round grips scale, the body pans.
+    // The thumb is the visible window over the whole replay: its end handles scale, the body pans.
     float const windowSpan  = std::clamp(1.0f / std::max(kMinZoomScale, mZoomScale), 0.02f, 1.0f);
     float const maxScroll   = maxScrollFor(layout.canvasWidth, mZoomScale, state.totalTicks);
     float const windowStart = maxScroll > 0.0f ? (mScrollX / maxScroll) * (1.0f - windowSpan) : 0.0f;
+    float const uiScale     = metrics::scale();
     float const centreY     = (barTop + layout.fullMax.y) * 0.5f;
-    float const grip        = std::min(barHeight, metrics::rangeBar()) * 0.5f - 1.0f;
-    float const trackH      = std::max(3.0f, grip * 0.7f);
-    // Grips are centred on the window edges, so the track must inset by their radius to stay inside.
-    float const railLeft  = barLeft + grip;
-    float const railWidth = std::max(1.0f, barWidth - grip * 2.0f);
-    float const winLeft   = railLeft + windowStart * railWidth;
-    float const winRight  = winLeft + windowSpan * railWidth;
+    // Premiere style: a thin bar whose ends carry ring handles centred on the window edges.
+    float const radius    = std::max(4.0f, std::min(barHeight, metrics::rangeBar()) * 0.26f);
+    float const thumbH    = std::max(3.0f, radius * 1.1f);
+    float const top       = centreY - thumbH * 0.5f;
+    float const bottom    = centreY + thumbH * 0.5f;
+    float const rounding  = thumbH * 0.5f;
+    float const ring      = std::max(1.5f, 1.5f * uiScale);
+    float const handleW   = radius + 2.0f * uiScale;
+    float const minThumb  = handleW * 2.0f + 6.0f * uiScale;
+    float const railLeft  = barLeft + radius + ring;
+    float const railWidth = barWidth - (radius + ring) * 2.0f;
+    if (railWidth <= minThumb) {
+        mRangeDragMode = 0;
+        return;
+    }
 
-    drawList->AddRectFilled(
-        {railLeft, centreY - trackH * 0.5f},
-        {railLeft + railWidth, centreY + trackH * 0.5f},
-        theme::kInputBg,
-        trackH * 0.5f
-    );
+    // Deep zoom still draws the thumb wide enough to hold both handles.
+    float winLeft  = railLeft + windowStart * railWidth;
+    float winRight = winLeft + windowSpan * railWidth;
+    if (winRight - winLeft < minThumb) {
+        float const centre =
+            std::clamp((winLeft + winRight) * 0.5f, railLeft + minThumb * 0.5f, railLeft + railWidth - minThumb * 0.5f);
+        winLeft  = centre - minThumb * 0.5f;
+        winRight = centre + minThumb * 0.5f;
+    }
 
     ImGui::SetCursorScreenPos({barLeft, barTop});
     ImGui::InvisibleButton("##timeline-range", {barWidth, barHeight});
-    ImVec2 const mouse       = ImGui::GetMousePos();
-    float const  hitRadius   = grip + 3.0f;
-    bool const   barHovered  = ImGui::IsItemHovered();
-    bool const   nearLeft    = barHovered && std::abs(mouse.x - winLeft) <= hitRadius;
-    bool const   nearRight   = barHovered && std::abs(mouse.x - winRight) <= hitRadius;
-    bool const   leftActive  = mRangeDragMode == 1 || (mRangeDragMode == 0 && nearLeft);
-    bool const   rightActive = mRangeDragMode == 2 || (mRangeDragMode == 0 && nearRight && !nearLeft);
-    bool const   bodyActive  = mRangeDragMode == 3 || (mRangeDragMode == 0 && barHovered && !nearLeft && !nearRight);
+    ImVec2 const mouse      = ImGui::GetMousePos();
+    bool const   barHovered = ImGui::IsItemHovered();
+    bool const   nearLeft   = barHovered && std::abs(mouse.x - winLeft) <= handleW;
+    bool const   nearRight  = barHovered && !nearLeft && std::abs(mouse.x - winRight) <= handleW;
+    bool const   overBody   = barHovered && !nearLeft && !nearRight && mouse.x > winLeft && mouse.x < winRight;
+    bool const   idle       = mRangeDragMode == 0;
+    float const  leftAmount =
+        mAnimator.animate("range-bar", "left", mRangeDragMode == 1 || (idle && nearLeft) ? 1.0f : 0.0f);
+    float const rightAmount =
+        mAnimator.animate("range-bar", "right", mRangeDragMode == 2 || (idle && nearRight) ? 1.0f : 0.0f);
+    // Half way is hover, full is dragging, so each state gets its own colour.
+    float const bodyAmount =
+        mAnimator.animate("range-bar", "body", mRangeDragMode == 3 ? 1.0f : (idle && overBody ? 0.5f : 0.0f));
 
-    drawList->AddRectFilled(
-        {winLeft, centreY - trackH * 0.5f},
-        {winRight, centreY + trackH * 0.5f},
-        bodyActive ? theme::kAccentHover : theme::kAccent,
-        trackH * 0.5f
-    );
-    // A dark outline around the whole rail contains the accent fill instead of letting it float.
-    drawList->AddRect(
-        {railLeft, centreY - trackH * 0.5f},
-        {railLeft + railWidth, centreY + trackH * 0.5f},
-        theme::kGripRing,
-        trackH * 0.5f,
-        0,
-        1.0f
-    );
+    drawList->AddRectFilled({railLeft, top}, {railLeft + railWidth, bottom}, theme::kRangeTrack, rounding);
+    ImU32 const thumbColor = bodyAmount <= 0.5f
+                               ? lerpColor(theme::kRangeThumb, theme::kRangeThumbHover, bodyAmount * 2.0f)
+                               : lerpColor(theme::kRangeThumbHover, theme::kRangeThumbActive, bodyAmount * 2.0f - 1.0f);
+    drawList->AddRectFilled({winLeft, top}, {winRight, bottom}, thumbColor, rounding);
 
-    auto const gripAt = [&](float x, bool active) {
-        drawList->AddCircleFilled({x, centreY}, grip, active ? theme::kIconHighlight : theme::kGripBody);
-        drawList->AddCircle({x, centreY}, grip, theme::kGripRing, 0, 1.0f);
+    // Hollow rings: the panel colour fills the centre so the bar appears to pass behind them.
+    auto const handle = [&](float centreX, float amount) {
+        float const r = radius * (1.0f + 0.15f * amount);
+        drawList->AddCircleFilled({centreX, centreY}, r, theme::kBgHeader);
+        drawList->AddCircle(
+            {centreX, centreY},
+            r - ring * 0.5f,
+            lerpColor(theme::kRangeHandle, theme::kIconHighlight, amount),
+            0,
+            ring
+        );
     };
-    gripAt(winLeft, leftActive);
-    gripAt(winRight, rightActive);
+    handle(winLeft, leftAmount);
+    handle(winRight, rightAmount);
 
     if (!allowInput) {
         mRangeDragMode = 0;
         return;
     }
-    if (barHovered) ImGui::SetMouseCursor(nearLeft || nearRight ? ImGuiMouseCursor_ResizeEW : ImGuiMouseCursor_Hand);
+    if (barHovered || ImGui::IsItemActive()) {
+        ImGui::SetMouseCursor(ImGui::IsItemActive() ? theme::kCursorGrabbing : theme::kCursorGrab);
+    }
     if (ImGui::IsItemActivated()) {
         if (nearLeft) mRangeDragMode = 1;
         else if (nearRight) mRangeDragMode = 2;
@@ -838,6 +855,13 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     }
 
     drawTrackHeaders(ctx, layout, allowInput);
+    if (listSplitterHovered || listSplitterActive) {
+        drawList->AddRectFilled(
+            listSplitterMin,
+            listSplitterMax,
+            listSplitterActive ? theme::kAccent : theme::withAlpha(theme::kAccent, 0xa0)
+        );
+    }
 
     drawList
         ->AddRectFilled({layout.canvasLeft, layout.bodyTop}, {layout.fullMax.x, layout.bodyBottom}, theme::kTimelineBg);
@@ -855,13 +879,6 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mRulerDragTick = -1;
     }
 
-    if (listSplitterHovered || listSplitterActive) {
-        drawList->AddRectFilled(
-            listSplitterMin,
-            listSplitterMax,
-            listSplitterActive ? theme::kAccent : theme::withAlpha(theme::kAccent, 0xa0)
-        );
-    }
     auto tickFromMouse = [&] { return std::clamp(scale.tickAt(ImGui::GetMousePos().x), 0, state.totalTicks); };
     auto snapTick      = [&](int tick) {
         tick = std::clamp(tick, 0, state.totalTicks);
