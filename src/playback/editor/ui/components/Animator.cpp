@@ -24,8 +24,10 @@ float advanceAnimation(float current, float target, float deltaTime) {
     return std::abs(target - current) < 0.001f ? target : current;
 }
 
-float Animator::animate(uint64_t key, float target) {
-    auto& entry = mValues[key];
+float Animator::animate(uint64_t key, float target, bool snapOnCreate) {
+    auto [it, created] = mValues.try_emplace(key);
+    auto& entry        = it->second;
+    if (created && snapOnCreate) entry.value = target;
     if (entry.frame != mFrame) {
         entry.frame = mFrame;
         entry.value = advanceAnimation(entry.value, target, ImGui::GetIO().DeltaTime);
