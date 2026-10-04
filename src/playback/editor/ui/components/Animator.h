@@ -40,11 +40,12 @@ constexpr float kAnimationDuration = 0.2f;
 
 class Animator {
 public:
-    float animate(uint64_t key, float target);
+    // `snapOnCreate` starts a new entry at its target, so an item that was culled and returns does not replay its fade.
+    float animate(uint64_t key, float target, bool snapOnCreate = false);
 
     // Scope and id stay separate so call sites never concatenate into a per-frame temporary.
-    float animate(std::string_view scope, std::string_view id, float target) {
-        return animate(animationKey(scope, id), target);
+    float animate(std::string_view scope, std::string_view id, float target, bool snapOnCreate = false) {
+        return animate(animationKey(scope, id), target, snapOnCreate);
     }
 
     // Drops entries untouched since the previous beginFrame to keep the map bounded.
