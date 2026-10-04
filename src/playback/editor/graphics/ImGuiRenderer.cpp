@@ -113,6 +113,11 @@ ImGuiSurfaceMetrics getImGuiSurfaceMetrics(IDXGISwapChain* swapChain, uint32_t w
     return metrics;
 }
 
+HWND getSwapChainWindow(IDXGISwapChain* swapChain) {
+    DXGI_SWAP_CHAIN_DESC desc{};
+    return swapChain && SUCCEEDED(swapChain->GetDesc(&desc)) ? desc.OutputWindow : nullptr;
+}
+
 uint64_t getSwapChainArea(IDXGISwapChain* swapChain) {
     ComPtr<ID3D12Resource> backBuffer;
     if (!swapChain || FAILED(swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer)))) return 0;
@@ -752,7 +757,7 @@ struct ImGuiRenderer::Impl {
                 setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
         }
-        endReplayMouseFrame();
+        endReplayMouseFrame(getSwapChainWindow(sc));
         ImGui::Render();
         thumbnailLoader.endFrame();
 
@@ -1555,7 +1560,7 @@ bool ImGuiRenderer::renderInternal(
                 setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
         }
-        endReplayMouseFrame();
+        endReplayMouseFrame(getSwapChainWindow(swapChain));
         ImGui::Render();
         p.thumbnailLoader.endFrame();
         if (p.renderingDisabled) return false;

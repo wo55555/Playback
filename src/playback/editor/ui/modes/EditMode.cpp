@@ -39,6 +39,8 @@ void EditMode::draw(PanelContext const& ctx) {
     float                  viewportHeight = contentHeight - timelineHeight - kSplitterThickness;
     bool const             popupOpen      = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
     ImGuiWindowFlags const inputBlock     = popupOpen ? ImGuiWindowFlags_NoInputs : ImGuiWindowFlags_None;
+    // Splitter bands overlap the panel edges, so a clicked panel must not rise above them.
+    ImGuiWindowFlags const panelLayer = ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     auto drawMenuBar = [&] {
         ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -96,7 +98,8 @@ void EditMode::draw(PanelContext const& ctx) {
         ImGui::Begin(
             "##DetailsPanel",
             nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | inputBlock
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | panelLayer
+                | inputBlock
         );
         editor.mDetailsPanel.draw(ctx);
         ImGui::End();
@@ -111,7 +114,7 @@ void EditMode::draw(PanelContext const& ctx) {
             "##ViewportPanel",
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
+                | ImGuiWindowFlags_NoScrollWithMouse | panelLayer | inputBlock
         );
         editor.mViewportPanel.draw(ctx, false);
         ImGui::End();
@@ -125,11 +128,15 @@ void EditMode::draw(PanelContext const& ctx) {
             "##TimelinePanel",
             nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
-                | ImGuiWindowFlags_NoScrollWithMouse | inputBlock
+                | ImGuiWindowFlags_NoScrollWithMouse | panelLayer | inputBlock
         );
         editor.mTimelinePanel.draw(ctx, !popupOpen);
         ImGui::End();
     }
+
+    // Splitter windows must keep their band size; the default minimum would spread them over the panels.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.0f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
     {
         Rect fullArea{
@@ -156,7 +163,8 @@ void EditMode::draw(PanelContext const& ctx) {
             {0.0f,      kMenuHeight                  },
             {leftWidth, displaySize.y - kStatusHeight}
         };
-        float splitterY = kMenuHeight + viewportHeight - kSplitterThickness * 0.5f;
+        // The band is the gap between the viewport and the timeline.
+        float splitterY = kMenuHeight + viewportHeight;
         ImGui::SetNextWindowPos(ImVec2(0, splitterY));
         ImGui::SetNextWindowSize(ImVec2(leftWidth, kSplitterThickness));
         ImGui::Begin(
@@ -192,6 +200,7 @@ void EditMode::draw(PanelContext const& ctx) {
         }
         ImGui::End();
     }
+    ImGui::PopStyleVar(2);
 
     {
         ImGui::SetNextWindowPos(ImVec2(0, displaySize.y - kStatusHeight));
