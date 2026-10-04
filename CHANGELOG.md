@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Export frames whose scene misses the capture are now re-rendered as soon as the miss is detected instead of after a timeout, making exports several times faster.
+- Splitters and the timeline zoom bar now show an open or closed hand cursor, and splitters highlight while hovered or dragged.
+- Restyled the timeline zoom bar after Premiere Pro, with ring handles and a thin grey bar.
+- Delete, rename and error prompts in the replay list and editor now share one dialog style.
+- The selected replay in the replay list is tinted with the accent colour and outlined, so it is easy to tell from hover.
+
+### Fixed
+
+- Fixed the export progress UI blurring when the export resolution is below the window size; it now draws on its own layer at the window resolution.
+- Fixed the replay list flashing and reloading every thumbnail when a replay is deleted.
+- Fixed the selected replay's highlight flickering in the replay list.
+
 ## [0.3.2-mc26.50] - 2026-10-01
 
 ### Added
