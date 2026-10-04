@@ -31,7 +31,9 @@ enum class OfflineRenderClockPublishResult : uint8_t { Published, Unavailable, B
     bool captureSample
 );
 // clang-format on
-void               markOfflineRenderClockCaptureArmed(OfflineRenderClockToken token);
+void markOfflineRenderClockCaptureArmed(OfflineRenderClockToken token);
+// Re-renders a capture sample whose scene submit was early or never arrived; false when nothing changed.
+[[nodiscard]] bool retryMissedOfflineRenderScene(OfflineRenderClockToken token);
 [[nodiscard]] bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token);
 // Overlay-only BGFX submissions carry no world geometry and must never satisfy an armed capture.
 enum class SceneSubmissionKind : uint8_t { OverlayOnly, Scene };
