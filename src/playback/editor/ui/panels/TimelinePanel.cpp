@@ -819,11 +819,22 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     float const maxScrollY         = std::max(0.0f, trackContentHeight - visibleTrackHeight);
     mScrollY                       = std::clamp(mScrollY, 0.0f, maxScrollY);
 
-    ImGui::SetCursorScreenPos({fullMin.x + layout.listWidth - metrics::splitter() * 0.5f, layout.rulerTop});
-    ImGui::InvisibleButton("##timeline-list-splitter", {metrics::splitter(), layout.bodyBottom - layout.rulerTop});
-    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    if (allowInput && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        mTrackListWidthRatio = std::clamp((ImGui::GetMousePos().x - fullMin.x) / available.x, 0.18f, 0.55f);
+    // The band is the gap between the track list and the canvas; the child windows on either side would take its hover.
+    ImVec2 const listSplitterMin{fullMin.x + layout.listWidth, layout.rulerTop};
+    ImVec2 const listSplitterMax{layout.canvasLeft, layout.bodyBottom};
+    ImGui::SetCursorScreenPos(listSplitterMin);
+    ImGui::InvisibleButton(
+        "##timeline-list-splitter",
+        {listSplitterMax.x - listSplitterMin.x, listSplitterMax.y - listSplitterMin.y}
+    );
+    bool const listSplitterHovered = ImGui::IsItemHovered();
+    bool const listSplitterActive  = ImGui::IsItemActive();
+    if (listSplitterHovered || listSplitterActive) {
+        ImGui::SetMouseCursor(listSplitterActive ? theme::kCursorGrabbing : theme::kCursorGrab);
+    }
+    if (allowInput && listSplitterActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        float const listRight = ImGui::GetMousePos().x - metrics::splitter() * 0.5f;
+        mTrackListWidthRatio  = std::clamp((listRight - fullMin.x) / available.x, 0.18f, 0.55f);
     }
 
     drawTrackHeaders(ctx, layout, allowInput);
@@ -844,6 +855,13 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mRulerDragTick = -1;
     }
 
+    if (listSplitterHovered || listSplitterActive) {
+        drawList->AddRectFilled(
+            listSplitterMin,
+            listSplitterMax,
+            listSplitterActive ? theme::kAccent : theme::withAlpha(theme::kAccent, 0xa0)
+        );
+    }
     auto tickFromMouse = [&] { return std::clamp(scale.tickAt(ImGui::GetMousePos().x), 0, state.totalTicks); };
     auto snapTick      = [&](int tick) {
         tick = std::clamp(tick, 0, state.totalTicks);
