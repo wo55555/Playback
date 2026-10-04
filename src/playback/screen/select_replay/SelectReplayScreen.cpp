@@ -2,6 +2,7 @@
 
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/MessageDialog.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/utils/PathUtils.h"
 
@@ -587,7 +588,11 @@ void SelectReplayScreen::syncSnapshot() {
     auto const revision = mState && mState->snapshot ? mState->snapshot->revision : 0;
     if (revision == mSnapshotRevision) return;
     mSnapshotRevision = revision;
-    mSelectedIds.clear();
+    // Only state for replays that left the library is dropped, so the remaining entries carry on unchanged.
+    std::unordered_set<std::string_view> present;
+    for (auto const& replay : replays()) present.insert(replay.replayId);
+    std::erase_if(mSelectedIds, [&](auto const& id) { return !present.contains(id); });
+    std::erase_if(mPreviewLoads, [&](auto const& entry) { return !present.contains(entry.first); });
     mSelectionAnchor.reset();
     mShowDeleteDialog = false;
     rebuildVisible();
@@ -729,7 +734,8 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
     ImGui::BeginChild("##replay-browser-panel", panelSize, true, ImGuiWindowFlags_NoScrollbar);
 
     ImGui::SetWindowFontScale(kFontScaleBody);
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    // Escape belongs to an open dialog first.
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
         submit({playback::state::EditorActionType::CloseReplayBrowser});
     }
 
@@ -742,7 +748,12 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
     ImGui::BeginChild("##content", {0.0f, -actionHeight}, false, ImGuiWindowFlags_NoScrollbar);
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * mViewTransition);
     if (mViewMode == ViewMode::Grid) drawGrid();
+    // Quick operations such as a delete would otherwise flash the whole list grey for a frame.
+    mBusyTime           = state.busy() ? mBusyTime + io.DeltaTime : 0.0f;
+    float const busyDim = std::clamp((mBusyTime - 0.3f) / 0.2f, 0.0f, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f - (1.0f - ImGui::GetStyle().DisabledAlpha) * busyDim);
     else drawDetails();
+    ImGui::PopStyleVar();
     ImGui::PopStyleVar();
     ImGui::EndChild();
 
@@ -917,7 +928,8 @@ void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& 
     auto* const drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(start, end, kColorPreviewBg, rounding);
 
-    auto texture = playback::editor::graphics::gImGuiRenderer.acquireReplayThumbnailTexture(replay.path);
+    auto  texture = playback::editor::graphics::gImGuiRenderer.acquireReplayThumbnailTexture(replay.path);
+    float shown   = 1.0f;
     if (texture) {
         // Thumbnail sources are 16:9; center-crop to the target aspect ratio without stretching.
         constexpr float sourceAspect = 16.0f / 9.0f;
@@ -928,18 +940,37 @@ void SelectReplayScreen::drawPreview(playback::state::ReplayBrowserEntry const& 
             float const visibleWidth = targetAspect / sourceAspect;
             uv0.x                    = (1.0f - visibleWidth) * 0.5f;
             uv1.x                    = 1.0f - uv0.x;
+        // Only thumbnails that were seen loading fade in; cached ones appear at once.
+        if (auto load = mPreviewLoads.find(replay.replayId); load != mPreviewLoads.end()) {
+            load->second.fade =
+                playback::editor::ui::advanceAnimation(load->second.fade, 1.0f, ImGui::GetIO().DeltaTime);
+            shown = load->second.fade;
+            if (shown >= 1.0f) mPreviewLoads.erase(load);
+        }
         } else if (targetAspect > sourceAspect) {
             float const visibleHeight = sourceAspect / targetAspect;
             uv0.y                     = (1.0f - visibleHeight) * 0.5f;
             uv1.y                     = 1.0f - uv0.y;
         }
-        drawList->AddImageRounded(texture, start, end, uv0, uv1, IM_COL32_WHITE, rounding);
+        auto const alpha = static_cast<int>(std::lround(shown * 255.0f));
+        drawList->AddImageRounded(texture, start, end, uv0, uv1, IM_COL32(255, 255, 255, alpha), rounding);
         ImGui::Dummy(size);
     } else {
-        auto              center = ImVec2(start.x + size.x * 0.5f, start.y + size.y * 0.5f);
-        std::string const msg    = "playback.replayBrowser.previewUnavailable"_tr();
-        auto              ts     = ImGui::CalcTextSize(msg.c_str());
-        drawList->AddText(ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f), kColorTextDim, msg.c_str());
+        // Thumbnails still decoding get a plain placeholder; the label only appears once loading has clearly failed.
+        auto& load              = mPreviewLoads[replay.replayId];
+        load.wait              += ImGui::GetIO().DeltaTime;
+        load.fade               = 0.0f;
+        float const labelAlpha  = std::clamp((load.wait - 0.6f) / 0.2f, 0.0f, 1.0f);
+        if (labelAlpha > 0.0f) {
+            auto              center = ImVec2(start.x + size.x * 0.5f, start.y + size.y * 0.5f);
+            std::string const msg    = "playback.replayBrowser.previewUnavailable"_tr();
+            auto              ts     = ImGui::CalcTextSize(msg.c_str());
+            drawList->AddText(
+                ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f),
+                playback::editor::ui::theme::withAlpha(kColorTextDim, static_cast<int>(labelAlpha * 255.0f)),
+                msg.c_str()
+            );
+        }
         ImGui::Dummy(size);
     }
 }
@@ -1688,43 +1719,55 @@ void SelectReplayScreen::drawActionBar() {
 }
 
 void SelectReplayScreen::drawDeleteDialog() {
-    std::string const deleteTitle = "playback.replayBrowser.dialog.delete.title"_tr() + "###delete-replay";
-    if (mShowDeleteDialog) ImGui::OpenPopup(deleteTitle.c_str());
-    if (ImGui::BeginPopupModal(deleteTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("playback.replayBrowser.dialog.delete.confirm"_tr().c_str());
-        ImGui::TextDisabled("%s", "playback.replayBrowser.dialog.delete.irreversible"_tr().c_str());
-        ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button, kColorDanger);
-        std::string const confirmDelete =
-            std::string(ICON_DELETE) + "  " + "playback.replayBrowser.dialog.delete.confirmButton"_tr();
-        if (ImGui::Button(confirmDelete.c_str(), {156.0f, kControlHeight})) {
+    namespace ui                   = playback::editor::ui;
+    constexpr char const* deleteId = "##delete-replay";
+    if (mShowDeleteDialog) ImGui::OpenPopup(deleteId);
+    if (ui::beginMessageDialog(
+            deleteId,
+            ICON_DELETE,
+            kColorDanger,
+            "playback.replayBrowser.dialog.delete.title"_tr(),
+            kFontScaleSmall
+        )) {
+        ui::dialogText("playback.replayBrowser.dialog.delete.confirm"_tr());
+        ui::dialogText("playback.replayBrowser.dialog.delete.irreversible"_tr(), true);
+        std::string const cancel        = "playback.replayBrowser.dialog.cancel"_tr();
+        std::string const confirmDelete = "playback.replayBrowser.dialog.delete.confirmButton"_tr();
+        int const         choice        = ui::dialogButtons({
+            {cancel},
+            {confirmDelete, ui::DialogButtonKind::Danger}
+        });
+        if (choice == 1) {
             playback::state::EditorAction action{playback::state::EditorActionType::DeleteReplays};
             action.replayIds.assign(mSelectedIds.begin(), mSelectedIds.end());
             submit(std::move(action));
             mShowDeleteDialog = false;
             ImGui::CloseCurrentPopup();
         }
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-        std::string const cancel = std::string(ICON_CLOSE) + "  " + "playback.replayBrowser.dialog.cancel"_tr();
-        if (ImGui::Button(cancel.c_str(), {120.0f, kControlHeight})) {
-            mShowDeleteDialog = false;
-            ImGui::CloseCurrentPopup();
+        if (choice >= 0) {
         }
-        ImGui::EndPopup();
+        ui::endMessageDialog();
     }
     if (mState && !mState->error.empty()) {
-        std::string const errorTitle =
-            "playback.replayBrowser.dialog.operationFailed"_tr() + "###replay-operation-failed";
-        ImGui::OpenPopup(errorTitle.c_str());
-        if (ImGui::BeginPopupModal(errorTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextWrapped("%s", mState->error.c_str());
-            std::string const ok = std::string(ICON_CHECK) + "  " + "playback.replayBrowser.dialog.ok"_tr();
-            if (ImGui::Button(ok.c_str(), {120.0f, kControlHeight})) {
+        constexpr char const* errorId = "##replay-operation-failed";
+        ImGui::OpenPopup(errorId);
+        if (ui::beginMessageDialog(
+                errorId,
+                ICON_WARNING,
+                playback::editor::ui::theme::kError,
+                "playback.replayBrowser.dialog.operationFailed"_tr(),
+                kFontScaleSmall
+            )) {
+            ui::dialogText(mState->error, true);
+            std::string const ok = "playback.replayBrowser.dialog.ok"_tr();
+            if (ui::dialogButtons({
+                    {ok, ui::DialogButtonKind::Primary}
+            })
+                == 0) {
                 submit({playback::state::EditorActionType::ClearReplayBrowserError});
                 ImGui::CloseCurrentPopup();
             }
-            ImGui::EndPopup();
+            ui::endMessageDialog();
         }
     }
 }
@@ -1743,11 +1786,17 @@ void SelectReplayScreen::drawRenameDialog() {
         ImGui::OpenPopup(renameTitle.c_str());
         mRenameDialogOpen = false;
     }
-    if (!ImGui::BeginPopupModal(renameTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    namespace ui = playback::editor::ui;
+    if (!ui::beginMessageDialog(
+            renameTitle.c_str(),
+            ICON_FILE,
+            kColorAccent,
+            "playback.replayBrowser.dialog.rename.title"_tr(),
+            kFontScaleSmall
+        ))
+        return;
 
-    ImGui::SetWindowFontScale(kFontScaleBody);
-    ImGui::TextDisabled("%s", "playback.replayBrowser.dialog.rename.description"_tr().c_str());
-    ImGui::Spacing();
+    ui::dialogText("playback.replayBrowser.dialog.rename.description"_tr(), true);
 
     std::array<char, 256> buffer{};
     std::copy_n(mRenameBuffer.data(), std::min(mRenameBuffer.size(), buffer.size() - 1), buffer.data());
@@ -1756,38 +1805,29 @@ void SelectReplayScreen::drawRenameDialog() {
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, kColorButtonActive);
     ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {12.0f, 10.0f});
-    ImGui::SetNextItemWidth(460.0f);
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(-FLT_MIN);
     bool const edited =
         ImGui::InputText("##rename-input", buffer.data(), buffer.size(), ImGuiInputTextFlags_AutoSelectAll);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(4);
     if (edited) mRenameBuffer = buffer.data();
 
-    ImGui::Spacing();
-    bool const empty = mRenameBuffer.empty();
-    ImGui::BeginDisabled(empty);
-    styleButton();
-    std::string const save  = std::string(ICON_CHECK) + "  " + "playback.replayBrowser.dialog.rename.save"_tr();
-    bool const        saved = ImGui::Button(save.c_str(), {140.0f, kControlHeight});
-    popButtonStyle();
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    styleButton();
-    std::string const cancel    = std::string(ICON_CLOSE) + "  " + "playback.replayBrowser.dialog.cancel"_tr();
-    bool const        cancelled = ImGui::Button(cancel.c_str(), {120.0f, kControlHeight});
-    popButtonStyle();
-
-    if (saved && replay) {
+    std::string const cancel = "playback.replayBrowser.dialog.cancel"_tr();
+    std::string const save   = "playback.replayBrowser.dialog.rename.save"_tr();
+    int const         choice = ui::dialogButtons({
+        {cancel},
+        {save, ui::DialogButtonKind::Primary, mRenameBuffer.empty() || !replay}
+    });
+    if (choice == 1) {
         playback::state::EditorAction action{playback::state::EditorActionType::RenameReplay};
         action.replayId = (*replay)->replayId;
         action.name     = mRenameBuffer;
         submit(std::move(action));
-        ImGui::CloseCurrentPopup();
-    } else if (cancelled) {
-        ImGui::CloseCurrentPopup();
     }
 
-    ImGui::EndPopup();
+    ui::endMessageDialog();
 }
 
 } // namespace playback::screen::select_replay
+    if (choice >= 0) ImGui::CloseCurrentPopup();
