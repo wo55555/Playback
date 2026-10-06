@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
+#include "playback/exporting/ExportEcoMode.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
@@ -96,6 +97,7 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     editor::tickReplayExportBeforeClientUpdate();
     auto result = origin(isInitFinished);
+    if (isInitFinished) exporting::recoverEcoModeAfterInterruptedExport();
     editor::graphics::updateReplayMouseOwnership(*this);
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
