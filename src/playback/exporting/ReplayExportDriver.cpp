@@ -1,6 +1,7 @@
 #include "ReplayExportDriver.h"
 
 #include "ExportActivity.h"
+#include "ExportEcoMode.h"
 
 #include "playback/Playback.h"
 #include "playback/exporting/IdleDetectionHooks.h"
@@ -134,7 +135,7 @@ bool ReplayExportDriver::start(
     return true;
 }
 
-void ReplayExportDriver::tick() {
+void ReplayExportDriver::tick() try {
     if (!isActive()) return;
     ++mDriverTicks;
     auto const coordinatorStatus = mCoordinator.status();
@@ -233,9 +234,12 @@ void ReplayExportDriver::tick() {
             break;
         }
     }
+} catch (...) {
+    applyExportEcoMode(false);
+    throw;
 }
 
-void ReplayExportDriver::cancel() {
+void ReplayExportDriver::cancel() try {
     if (!isActive() && mPhase != Phase::Faulted) return;
     if (mPhase == Phase::Cancelling) return;
     bool const preserveFailure = mPhase == Phase::Faulted || mCoordinator.status().state == ExportState::Faulted;
@@ -248,6 +252,9 @@ void ReplayExportDriver::cancel() {
     } else {
         setExportActivityActive(false);
     }
+} catch (...) {
+    applyExportEcoMode(false);
+    throw;
 }
 
 void ReplayExportDriver::reset() {
