@@ -37,19 +37,4 @@ void applyExportEcoMode(bool active) noexcept {
     logger.debug("Eco Mode restored after the export");
 }
 
-// The game has no setting for Eco Mode, so a crash during an export would otherwise leave it off for good.
-void restoreEcoModeAfterCrash() noexcept {
-    static std::atomic_bool checked{false};
-    if (checked.load(std::memory_order_acquire)) return;
-
-    auto client = ll::service::getClientInstance();
-    if (!client) return;
-    checked.store(true, std::memory_order_release);
-
-    auto& options = client->getOptions();
-    if (options.getEcoMode()) return;
-    options.setEcoMode(true);
-    Playback::getInstance().getSelf().getLogger().info("Eco Mode was off at startup; restored it to the game default");
-}
-
 } // namespace playback::exporting
