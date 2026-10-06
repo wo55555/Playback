@@ -1,6 +1,7 @@
 #include "playback/exporting/ExportEcoMode.h"
 
 #include "playback/Playback.h"
+#include "playback/exporting/EcoModeJournal.h"
 
 #include "ll/api/service/Bedrock.h"
 
@@ -85,6 +86,8 @@ private:
 
 // After 15 minutes without input, Eco Mode drops the main loop to ~10 FPS and starves the export's GPU work.
 void applyExportEcoMode(bool active) noexcept {
+    if (!active && !gEcoModeSuspended.load(std::memory_order_acquire)) return;
+
     auto client = ll::service::getClientInstance();
     if (!client) return;
 
@@ -97,7 +100,12 @@ void applyExportEcoMode(bool active) noexcept {
 
     if (active) {
         if (!option.get()) return;
+        if (!writeEcoModeJournal()) {
+            logger.warn("Eco Mode was left on because its restore marker could not be written");
+            return;
+        }
         if (!option.set(false)) {
+            clearEcoModeJournal();
             logger.warn("Eco Mode could not be switched off for the export");
             return;
         }
@@ -107,8 +115,39 @@ void applyExportEcoMode(bool active) noexcept {
     }
 
     if (!gEcoModeSuspended.exchange(false, std::memory_order_acq_rel)) return;
-    if (option.set(true)) logger.debug("Eco Mode restored after the export");
-    else logger.warn("Eco Mode could not be restored after the export");
+    if (!option.set(true)) {
+        logger.warn("Eco Mode could not be restored after the export; it will be retried on the next launch");
+        return;
+    }
+    clearEcoModeJournal();
+    logger.debug("Eco Mode restored after the export");
+}
+
+void recoverEcoModeAfterInterruptedExport() noexcept {
+    static bool checked = false;
+    if (checked) return;
+
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    checked = true;
+
+    auto const interrupted = findInterruptedEcoModeJournals();
+    if (interrupted.empty()) return;
+
+    EcoModeOption<Options> option{client->getOptions()};
+    auto&                  logger = Playback::getInstance().getSelf().getLogger();
+    if (!option.available()) {
+        logger.warn("An interrupted export may have left Eco Mode off, and it cannot be restored on this version");
+        return;
+    }
+
+    bool const wasOff = !option.get();
+    if (wasOff && !option.set(true)) {
+        logger.warn("Eco Mode could not be restored after an interrupted export; retrying on the next launch");
+        return;
+    }
+    discardEcoModeJournals(interrupted);
+    if (wasOff) logger.info("Eco Mode restored after an interrupted export");
 }
 
 } // namespace playback::exporting

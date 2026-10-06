@@ -5,6 +5,7 @@
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
+#include "playback/exporting/ExportEcoMode.h"
 #include "playback/exporting/GuiScaleHooks.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
@@ -303,6 +304,7 @@ bool Playback::disable() {
         return false;
     }
 
+    exporting::applyExportEcoMode(false);
     record::Recorder::getInstance().stop();
     if (!unhook()) {
         logger.error("Playback cannot disable because its runtime hooks could not be removed safely");
