@@ -15,7 +15,6 @@ constexpr uint64_t MaxExportFrames      = 1'000'000;
 constexpr uint32_t MaxResolution        = MaxExportResolution;
 constexpr uint32_t MaxSsaa              = MaxExportSsaa;
 constexpr uint32_t MaxWarmupFrames      = 3'600;
-constexpr uint32_t MaxConvergenceFrames = 240;
 constexpr uint64_t MaxFramePixels       = MaxExportPixels;
 
 [[nodiscard]] int64_t gcd(int64_t left, int64_t right) {
@@ -198,7 +197,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     if (settings.warmupFrames > MaxWarmupFrames) {
         return failure(ExportError::InvalidSettings, "The export warm-up frame count is too large");
     }
-    if (settings.convergenceFrames > MaxConvergenceFrames) {
+    if (settings.convergenceFrames > MaxExportConvergenceFrames) {
         return failure(ExportError::InvalidSettings, "The export convergence frame count is too large");
     }
 
