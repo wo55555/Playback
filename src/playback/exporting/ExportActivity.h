@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include "playback/exporting/ExportEcoMode.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -190,7 +192,9 @@ finishOfflineRenderSceneSubmission(detail::OfflineRenderSceneSubmissionTicket en
 }
 
 inline void setExportActivityActive(bool active) noexcept {
-    detail::gExportActivityActive.store(active, std::memory_order_release);
+    if (detail::gExportActivityActive.exchange(active, std::memory_order_acq_rel) != active) {
+        applyExportEcoMode(active);
+    }
 }
 
 [[nodiscard]] inline bool isExportActivityActive() noexcept {
