@@ -5,7 +5,6 @@
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
-#include "playback/exporting/ExportEcoMode.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
 #include "playback/record/ChunkMutationBarrier.h"
@@ -107,12 +106,10 @@ bool Playback::hook() {
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
             setupCommands();
-            exporting::restoreEcoModeAfterCrash();
         })
     );
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientStartJoinLevelEvent>([this](auto&&) {
-            exporting::restoreEcoModeAfterCrash();
             replay::ReplaySession::getInstance().onLevelStartJoin();
             record::ChunkMutationBarrier::setActiveLevel(nullptr);
             impl->mLevelId.clear();
