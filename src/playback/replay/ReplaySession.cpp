@@ -635,6 +635,12 @@ void ReplaySession::parkReplayCameraAtPreview() {
     syncObserverServerPosition(feetPosition, rotation);
 }
 
+void ReplaySession::enforceReplayWorldTime() {
+    if (!mActive || !mReplayTime || !mReplayPlayer) return;
+    auto& level = mReplayPlayer->getLevel();
+    if (level.getTime() != *mReplayTime) level.setTime(*mReplayTime);
+}
+
 void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& rotation) {
     if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
     auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
