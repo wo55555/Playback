@@ -705,7 +705,13 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 "playback.refactorEditor.export.convergenceFrames"_tr().c_str(),
                 "playback.refactorEditor.export.convergenceHint"_tr().c_str()
             );
-            inputClampedInt("##export-convergence", mExportConvergenceFrames, 0, 240, fieldWidth);
+            inputClampedInt(
+                "##export-convergence",
+                mExportConvergenceFrames,
+                0,
+                static_cast<int>(exporting::MaxExportConvergenceFrames),
+                fieldWidth
+            );
             ImGui::EndTable();
         }
 
@@ -724,9 +730,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                                          static_cast<uint32_t>(mExportHeight),
                                          ssaaValue
                                   );
-        bool const validCapture = mExportSsaa >= 0 && mExportSsaa <= 2 && mExportWarmupFrames >= 0
-                               && mExportWarmupFrames <= 3600 && mExportConvergenceFrames >= 0
-                               && mExportConvergenceFrames <= 240;
+        bool const validCapture =
+            mExportSsaa >= 0 && mExportSsaa <= 2 && mExportWarmupFrames >= 0 && mExportWarmupFrames <= 3600
+            && mExportConvergenceFrames >= 0
+            && static_cast<uint32_t>(mExportConvergenceFrames) <= exporting::MaxExportConvergenceFrames;
         bool const formatAvailable  = mExportFormat != 0 || capabilities.ffmpegVideoExport;
         bool const rawSettingsValid = validOutput && validTimeline && validFps && validResolution && validCapture
                                    && formatAvailable && state.project != nullptr;

@@ -23,6 +23,8 @@ enum class ExportFormat : uint8_t { Mp4Video, PngSequence };
 constexpr uint32_t MaxExportResolution = 16'384;
 constexpr uint32_t MaxExportSsaa       = 4;
 constexpr uint64_t MaxExportPixels     = (512ull * 1024 * 1024) / 4;
+// Noise falls roughly with the square root of the pass count, so each doubling costs twice the render time.
+constexpr uint32_t MaxExportConvergenceFrames = 1'000;
 
 // The supersampled surface, not the output, is what the renderer and the capture path have to hold.
 [[nodiscard]] constexpr bool supersampleFits(uint32_t width, uint32_t height, uint32_t ssaa) {
