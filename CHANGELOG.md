@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fixed long exports slowing down and GPU usage dropping after about 15 minutes without input. The game's Eco Mode is now switched off while an export runs and restored afterwards, including when the export fails with an error.
+- Fixed long exports slowing down and GPU usage dropping after about 15 minutes without input. The game's Eco Mode is now switched off while an export runs and restored afterwards, including when the export fails with an error or the game is killed mid-export (restored on the next launch).
 - Pinned the replay world time before every render pass of an export frame, so the level clock cannot drift between passes.
 - Fixed the export progress UI blurring when the export resolution is below the window size; it now draws on its own layer at the window resolution.
 - Fixed the replay list flashing and reloading every thumbnail when a replay is deleted.
