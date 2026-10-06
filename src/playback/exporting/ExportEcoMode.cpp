@@ -9,27 +9,77 @@
 #include "mc/client/settings/IBooleanDataProvider.h"
 #include "mc/options/option_types/OptionID.h"
 
+#if __has_include("mc/client/options/IOptionRegistry.h")
+#include "mc/client/options/IOptionRegistry.h"
+#endif
+#if __has_include("mc/client/options/IOptions.h")
+#include "mc/client/options/IOptions.h"
+#endif
+
 #include <atomic>
+#include <concepts>
 #include <memory>
+#include <type_traits>
+#include <utility>
 
 namespace playback::exporting {
 
 namespace {
 
+using Options = std::remove_cvref_t<decltype(std::declval<ClientInstance&>().getOptions())>;
+
+template <class T>
+concept HasEcoModeAccessor = requires(T& options, bool value) {
+    options.setEcoMode(value);
+    { options.getEcoMode() } -> std::convertible_to<bool>;
+};
+
+template <class Id>
+concept HasEcoModeId = requires { Id::EcoMode; };
+
 std::atomic_bool gEcoModeSuspended{false};
 
-// This SDK's IOptionRegistry has no Eco Mode accessor, so the option goes through the settings data provider.
-std::unique_ptr<Settings::IBooleanDataProvider> openEcoModeOption(ClientInstance& client) {
-    auto provider = Settings::DataProvider::createBooleanDataProvider(OptionID::EcoMode, client.getOptions());
-    if (!provider || !*provider || !(*provider)->canModify()) return nullptr;
-    return std::move(*provider);
-}
+// The SDKs reach Eco Mode differently: a direct accessor on the options object, or only the settings data provider.
+template <class O>
+class EcoModeOption {
+public:
+    explicit EcoModeOption(O& options) : mOptions(options) {
+        if constexpr (!HasEcoModeAccessor<O>) openProvider(options);
+    }
 
-// Returns false when the value did not take.
-bool setEcoMode(Settings::IBooleanDataProvider& option, bool value) {
-    option.setValue(value);
-    return option.getValue() == value;
-}
+    bool available() const {
+        if constexpr (HasEcoModeAccessor<O>) return true;
+        else return mProvider != nullptr;
+    }
+
+    bool get() {
+        if constexpr (HasEcoModeAccessor<O>) return mOptions.getEcoMode();
+        else return mProvider->getValue();
+    }
+
+    // Returns false when the value did not take.
+    bool set(bool value) {
+        if constexpr (HasEcoModeAccessor<O>) {
+            mOptions.setEcoMode(value);
+            return mOptions.getEcoMode() == value;
+        } else {
+            mProvider->setValue(value);
+            return mProvider->getValue() == value;
+        }
+    }
+
+private:
+    template <class Id = OptionID>
+    void openProvider(O& options) {
+        if constexpr (HasEcoModeId<Id>) {
+            auto provider = Settings::DataProvider::createBooleanDataProvider(Id::EcoMode, options);
+            if (provider && *provider && (*provider)->canModify()) mProvider = std::move(*provider);
+        }
+    }
+
+    O&                                              mOptions;
+    std::unique_ptr<Settings::IBooleanDataProvider> mProvider;
+};
 
 } // namespace
 
@@ -38,16 +88,16 @@ void applyExportEcoMode(bool active) noexcept {
     auto client = ll::service::getClientInstance();
     if (!client) return;
 
-    auto  option = openEcoModeOption(*client);
-    auto& logger = Playback::getInstance().getSelf().getLogger();
-    if (!option) {
+    EcoModeOption<Options> option{client->getOptions()};
+    auto&                  logger = Playback::getInstance().getSelf().getLogger();
+    if (!option.available()) {
         if (active) logger.warn("Eco Mode is not available; a long export may slow down after 15 minutes idle");
         return;
     }
 
     if (active) {
-        if (!option->getValue()) return;
-        if (!setEcoMode(*option, false)) {
+        if (!option.get()) return;
+        if (!option.set(false)) {
             logger.warn("Eco Mode could not be switched off for the export");
             return;
         }
@@ -57,7 +107,7 @@ void applyExportEcoMode(bool active) noexcept {
     }
 
     if (!gEcoModeSuspended.exchange(false, std::memory_order_acq_rel)) return;
-    if (setEcoMode(*option, true)) logger.debug("Eco Mode restored after the export");
+    if (option.set(true)) logger.debug("Eco Mode restored after the export");
     else logger.warn("Eco Mode could not be restored after the export");
 }
 
