@@ -359,6 +359,9 @@ public:
 
     [[nodiscard]] Player* getReplayPlayer() const noexcept { return mReplayPlayer; }
 
+    // Something outside the replay rewrites the level clock between render passes; export pins it before each pass.
+    void enforceReplayWorldTime();
+
     void teleportReplayPlayer(::Vec3 const& feetPosition, ::Vec2 const& rotation);
 
     // Preview drives the observer (the camera) per frame at the render partial tick.
