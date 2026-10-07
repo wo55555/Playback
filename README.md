@@ -119,7 +119,7 @@ Playback maintains separate release lines for Minecraft and LeviLamina versions.
 | `26.10.*`              | [`v0.3.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.10) | Prerelease |
 | `26.20.*`              | [`v0.3.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.20) | Prerelease |
 | `26.40.*`              | [`v0.3.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.40) | Prerelease |
-| `26.51.*`              | [`v0.3.2-mc26.51`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.51) | Prerelease |
+| `26.51.*`              | [`v0.3.2-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.50) | Prerelease |
 
 All release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
 
@@ -166,7 +166,7 @@ No. Every recorded dimension change splits the camera timeline, including transi
 
 ### Which Playback build should I install?
 
-Use `v0.3.2-mc26.10` for Minecraft/LeviLamina `26.10.*`, `v0.3.2-mc26.20` for `26.20.*`, `v0.3.2-mc26.40` for `26.40.*`, and `v0.3.2-mc26.51` for `26.51.*`. All four are prereleases. Do not mix release lines; see [Compatibility](#compatibility).
+Use `v0.3.2-mc26.10` for Minecraft/LeviLamina `26.10.*`, `v0.3.2-mc26.20` for `26.20.*`, `v0.3.2-mc26.40` for `26.40.*`, and `v0.3.2-mc26.50` for `26.51.*`. All four are prereleases. Do not mix release lines; see [Compatibility](#compatibility).
 
 ## Development Status and Roadmap
 
