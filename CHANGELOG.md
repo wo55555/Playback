@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserved completed offline frame samples so they are not discarded before capture.
 - Hid camera paths and markers while the game HUD is covered by loading, progress, or menu screens, and restored them when the HUD returns.
 
-## [0.3.1-mc26.51] - 2026-09-23
+## [0.3.1-mc26.50] - 2026-09-23
 
 > **First release on the MC 26.51 line, branched from `v0.3.1-mc26.40`.**
 
@@ -260,8 +260,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.51...HEAD
-[0.3.1-mc26.51]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.20...v0.3.1-mc26.51
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.50...HEAD
+[0.3.1-mc26.50]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.20...v0.3.1-mc26.50
 [0.3.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.20...v0.3.1-mc26.20
 [0.3.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.20...v0.3.0-mc26.20
 [0.2.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.20...v0.2.1-mc26.20
