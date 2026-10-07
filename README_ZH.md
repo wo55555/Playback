@@ -119,7 +119,7 @@ Playback 针对不同 Minecraft 与 LeviLamina 版本维护独立发行线。产
 | `26.10.*`              | [`v0.3.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.10) | 预发布 |
 | `26.20.*`              | [`v0.3.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.20) | 预发布 |
 | `26.40.*`              | [`v0.3.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.40) | 预发布 |
-| `26.51.*`              | [`v0.3.2-mc26.51`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.51) | 预发布 |
+| `26.51.*`              | [`v0.3.2-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.50) | 预发布 |
 
 所有发行线均面向 Windows x64 平台的 Minecraft 基岩版，并以纯客户端模组形式发布。
 
@@ -166,7 +166,7 @@ Playback 是面向 Windows x64 LeviLamina 客户端的 Minecraft 基岩版回放
 
 ### 应该安装哪个 Playback 版本？
 
-Minecraft/LeviLamina `26.10.*` 使用 `v0.3.2-mc26.10`，`26.20.*` 使用 `v0.3.2-mc26.20`，`26.40.*` 使用 `v0.3.2-mc26.40`，`26.51.*` 使用 `v0.3.2-mc26.51`。上述四个版本均为预发布版本。不要混装不同发行线，参见[兼容性](#兼容性)。
+Minecraft/LeviLamina `26.10.*` 使用 `v0.3.2-mc26.10`，`26.20.*` 使用 `v0.3.2-mc26.20`，`26.40.*` 使用 `v0.3.2-mc26.40`，`26.51.*` 使用 `v0.3.2-mc26.50`。上述四个版本均为预发布版本。不要混装不同发行线，参见[兼容性](#兼容性)。
 
 ## 开发状态与计划
 
