@@ -15,10 +15,13 @@
 #include "mc/client/multiplayer/ClientLevel.h"
 #include "mc/client/player/LocalPlayer.h"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <utility>
 
 namespace playback::runtime {
 using namespace playback::record;
@@ -33,6 +36,8 @@ struct OfflineTickGateState {
     std::optional<uint64_t>                    inFlightToken;
     std::optional<uint64_t>                    completedToken;
     std::optional<OfflineReplayTickCompletion> completion;
+    std::chrono::steady_clock::time_point      requestedAt;
+    OfflineReplayTickPacing                    pacing;
 };
 
 struct OfflineTickClaim {
@@ -68,6 +73,18 @@ OfflineTickClaim claimOfflineTick() {
     claim.token                    = gOfflineTickGate.pendingToken;
     gOfflineTickGate.inFlightToken = gOfflineTickGate.pendingToken;
     gOfflineTickGate.pendingToken.reset();
+
+    auto const waited = static_cast<uint64_t>(std::max<int64_t>(
+        0,
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - gOfflineTickGate.requestedAt
+        )
+            .count()
+    ));
+    auto&      pacing = gOfflineTickGate.pacing;
+    ++pacing.claims;
+    pacing.claimLatencyMicros    += waited;
+    pacing.maxClaimLatencyMicros  = std::max(pacing.maxClaimLatencyMicros, waited);
     return claim;
 }
 
@@ -249,6 +266,8 @@ OfflineReplayTickRequestResult requestOfflineReplayTick(OfflineReplayTickToken& 
     token.id = gOfflineTickGate.nextTokenId++;
     if (gOfflineTickGate.nextTokenId == 0) ++gOfflineTickGate.nextTokenId;
     gOfflineTickGate.pendingToken = token.id;
+    gOfflineTickGate.requestedAt  = std::chrono::steady_clock::now();
+    ++gOfflineTickGate.pacing.requests;
     gOfflineTickGate.completedToken.reset();
     gOfflineTickGate.completion.reset();
     return OfflineReplayTickRequestResult::Requested;
@@ -269,6 +288,17 @@ std::optional<OfflineReplayTickCompletion> getOfflineReplayTickCompletion(Offlin
         return std::nullopt;
     }
     return gOfflineTickGate.completion;
+}
+
+bool hasPendingOfflineReplayTick() {
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    return gOfflineTickGate.active && gOfflineTickGate.pendingToken.has_value()
+        && !gOfflineTickGate.inFlightToken.has_value();
+}
+
+OfflineReplayTickPacing takeOfflineReplayTickPacing() {
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    return std::exchange(gOfflineTickGate.pacing, OfflineReplayTickPacing{});
 }
 
 } // namespace playback::runtime
