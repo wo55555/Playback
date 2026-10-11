@@ -11,17 +11,16 @@
 #include "ll/api/service/TargetedBedrock.h"
 #include "ll/api/thread/ServerThreadExecutor.h"
 
+#include "mc-external/IOptionRegistry.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
 #include "mc/client/model/GeometryGroup.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
-#include "mc/client/options/IOptions.h"
 #include "mc/client/particle/ParticleEngine.h"
 #include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/LevelRenderer.h"
-#include "mc/common/SharedConstants.h"
 #include "mc/deps/core/file/Path.h"
 #include "mc/deps/core/file/PathView.h"
 #include "mc/deps/core/resource/ResourceLocation.h"
@@ -70,7 +69,7 @@
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/resources/MinEngineVersion.h"
-#include "mc/resources/ResourcePack.h"
+#include "mc/resources/PackInstance.h"
 #include "mc/resources/ResourcePackManager.h"
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
@@ -93,9 +92,6 @@
 #include "mc/world/level/block/components/BlockGeometryDescription.h"
 #include "mc/world/level/block/components/BlockMaterialInstance.h"
 #include "mc/world/level/block/components/BlockMaterialInstancesDescription.h"
-#include "mc/world/level/block/components/BlockRendererDescription.h"
-#include "mc/world/level/block/components/BlockRendererName.h"
-#include "mc/world/level/block/components/BlockTransformationComponent.h"
 #include "mc/world/level/block/components/BlockTypeComponentStorageFinalizer.h"
 #include "mc/world/level/block/definition/BlockComponentGroupDescription.h"
 #include "mc/world/level/block/definition/BlockDefinition.h"
@@ -122,7 +118,6 @@
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -130,12 +125,10 @@
 #include <memory>
 #include <optional>
 #include <random>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace playback::replay {
@@ -1511,14 +1504,9 @@ void ReplaySession::applyRecordedBlockRegistry() {
         auto const preloadedGeometry = preloadRecordedBlockGeometry(properties);
         definitions->digestServerBlockProperties(properties);
 
-        auto findDefinition = [definitions](std::string const& name) -> BlockDefinition const* {
-            auto const entry = definitions->mBlockDefinitions->find(name);
-            return entry == definitions->mBlockDefinitions->end() ? nullptr : entry->second.get();
-        };
-
         size_t registered = 0;
         for (auto const& [name, tag] : properties) {
-            auto const* definition = findDefinition(name);
+            auto const* definition = definitions->tryGetBlockDefinition(name);
             if (!definition) continue;
 
             auto blockType = definitions->registerDataDrivenBlock(definition->mDescription);
@@ -1533,10 +1521,16 @@ void ReplaySession::applyRecordedBlockRegistry() {
 
         registry.setupDirectAccessBlocks();
         registry.finalizeBlockComponentStorage();
+        definitions->initializeBlocks(*level);
 
+        auto& palette = level->getBlockPalette();
+        palette.initFromBlockDefinitions();
+        palette.cacheBlockComponentData();
         for (auto const& [name, tag] : properties) {
-            if (auto const* definition = findDefinition(name)) {
-                definitions->initializeBlockFromDefinition(*definition, *level);
+            auto blockType = registry.lookupByName(HashedString{name}, false);
+            if (!blockType) continue;
+            for (auto const& permutation : *blockType->mBlockPermutations) {
+                if (permutation) permutation->cacheComponentData();
             }
         }
 
@@ -1557,16 +1551,9 @@ size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::st
     auto client = ll::service::getClientInstance();
     if (!client) return 0;
 
-    auto       geometry         = client->getGeometryGroup();
-    auto&      resourceManager  = client->getResourcePackManager();
-    auto const minEngineVersion = MinEngineVersion::fromString(
-        std::format(
-            "{}.{}.{}",
-            SharedConstants::MajorVersion(),
-            SharedConstants::MinorVersion(),
-            SharedConstants::PatchVersion()
-        )
-    );
+    auto                            geometry        = client->getGeometryGroup();
+    auto&                           resourceManager = client->getResourcePackManager();
+    MinEngineVersion                minEngineVersion;
     std::unordered_set<std::string> geometryPaths;
 
     std::function<void(CompoundTagVariant const&)> collectGeometryNames;
@@ -1644,38 +1631,16 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(
                 }
             }
         };
-        client->getResourcePackRepository().forEachPack([&](ResourcePack const& pack) {
+        client->getResourcePackManager().iteratePacks([&](PackInstance const& pack) {
             std::string content;
-            if (pack.getResource(Core::Path{"blocks.json"}, content, 0)) collectLegacyTextures(content);
+            if (pack.getResource(Core::Path{"blocks.json"}, content)) collectLegacyTextures(content);
         });
     }
-
-    // Geometry-less blocks would fall back to BlockGraphics here, so legacy cubes get full_block geometry.
-    alignas(16) std::array<std::byte, 512> fullBlockGeometryStorage{};
-    auto& fullBlockGeometry = *reinterpret_cast<BlockGeometryDescription*>(fullBlockGeometryStorage.data());
-    HashedString const                               noCullingName;
-    std::variant<bool, std::set<HashedString>> const uvLock{false};
-    BlockRendererDescription const                   renderer{
-        BlockRendererName::Default,
-        Vec3{},
-        BlockTransformationComponent::RotationType{0, 0, 0, Vec3{0.5f}},
-        Vec3::ONE()
-    };
-    fullBlockGeometry.$ctor(
-        BlockGeometryDescription::FULL_BLOCK_GEO_NAME(),
-        noCullingName,
-        BlockGeometryDescription::CULLING_SHAPE_DEFAULT(),
-        BlockGeometryDescription::CULLING_LAYER_UNDEFINED(),
-        uvLock,
-        renderer,
-        false
-    );
 
     size_t modernInjected = 0;
     size_t legacyInjected = 0;
     for (auto const& [name, tag] : properties) {
-        auto const  entry      = definitions->mBlockDefinitions->find(name);
-        auto const* definition = entry == definitions->mBlockDefinitions->end() ? nullptr : entry->second.get();
+        auto const* definition = definitions->tryGetBlockDefinition(name);
         if (!definition) continue;
 
         auto const* materialDescription =
@@ -1688,14 +1653,15 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(
 
         // Init layer only: the engine's rendering pass skips blocks whose Rendering layer is already marked.
         auto inject = [&type](auto const& description) {
-            type.mComponents->mAllowComponentReplacement = true;
+            type.mComponents->allowComponentReplacement();
             description.$initializeComponent(*type.mComponents);
             BlockTypeComponentStorageFinalizer{}.finalizeComponentData(type);
 
             for (auto const& permutation : *type.mBlockPermutations) {
                 if (!permutation) continue;
-                permutation->mComponents->mAllowComponentReplacement = true;
+                permutation->mComponents->allowComponentReplacement();
                 description.$initializeComponent(*permutation->mComponents);
+                permutation->finalizeBlockComponentStorage();
                 BlockComponentStorageFinalizer{}.finalizeComponentData(*permutation);
             }
         };
@@ -1723,11 +1689,9 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(
             false,
             false
         };
-        inject(fullBlockGeometry);
         inject(material);
         ++legacyInjected;
     }
-    fullBlockGeometry.$dtor();
     getLogger().debug("Injected recorded block visuals: material={} legacy={}", modernInjected, legacyInjected);
     return modernInjected + legacyInjected;
 }
@@ -1928,8 +1892,8 @@ bool ReplaySession::ensureReplayDimension(
         if (*mPendingReplayDimension != target) {
             getLogger().error(
                 "Replay requested dimension {} while dimension {} is still pending",
-                target.id,
-                mPendingReplayDimension->id
+                target.mValue,
+                mPendingReplayDimension->mValue
             );
             mReplayFailed = true;
         }
@@ -1954,7 +1918,10 @@ bool ReplaySession::ensureReplayDimension(
     mObserverPreviewInRange = false;
 
     if (!clearRecordedEntities()) {
-        getLogger().error("Unable to clear recorded entities before leaving replay dimension {}", sourceDimension.id);
+        getLogger().error(
+            "Unable to clear recorded entities before leaving replay dimension {}",
+            sourceDimension.mValue
+        );
         mReplayFailed = true;
         return false;
     }
@@ -1973,12 +1940,12 @@ bool ReplaySession::ensureReplayDimension(
         "Replay dimension transition generation {} started at tick {} from dimension {} to {}",
         generation,
         mCurrentTick,
-        sourceDimension.id,
-        target.id
+        sourceDimension.mValue,
+        target.mValue
     );
     std::string targetName;
     if (auto const profile = mReplayDimensionProfile.load(std::memory_order_acquire)) {
-        if (auto const it = profile->names.find(target.id); it != profile->names.end()) targetName = it->second;
+        if (auto const it = profile->names.find(target.mValue); it != profile->names.end()) targetName = it->second;
     }
 
     ll::thread::ServerThreadExecutor::getDefault().execute([request,
@@ -2029,7 +1996,7 @@ bool ReplaySession::ensureReplayDimension(
             if (!targetDimension || !player) {
                 getLogger().error(
                     "Unable to change replay dimension to {}: target dimension or server player is unavailable",
-                    target.id
+                    target.mValue
                 );
                 fail();
                 return;
@@ -2058,10 +2025,10 @@ bool ReplaySession::ensureReplayDimension(
                 return;
             }
         } catch (std::exception const& e) {
-            getLogger().error("Unable to change replay dimension to {}: {}", target.id, e.what());
+            getLogger().error("Unable to change replay dimension to {}: {}", target.mValue, e.what());
             fail();
         } catch (...) {
-            getLogger().error("Unable to change replay dimension to {}", target.id);
+            getLogger().error("Unable to change replay dimension to {}", target.mValue);
             fail();
         }
     });
@@ -2101,11 +2068,11 @@ void ReplaySession::processPendingDimensionTransition() {
             "playerAvailable={}, currentDimension={}, dimensionMatches={}, waitingForAck={}, loadingScreen={}, "
             "readyToRender={}",
             mDimensionTransitionRequest->generation,
-            mPendingReplayDimension->id,
+            mPendingReplayDimension->mValue,
             std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
             static_cast<int>(status),
             playerAvailable,
-            playerAvailable ? mReplayPlayer->getDimensionId().id : 0,
+            playerAvailable ? mReplayPlayer->getDimensionId().mValue : 0,
             dimensionMatches,
             waitingForAcknowledgment,
             loadingScreenVisible,
@@ -2151,7 +2118,7 @@ void ReplaySession::processPendingDimensionTransition() {
             "Replay dimension transition generation {} reached dimension {} but its client acknowledgment remains "
             "pending; continuing after the fallback grace period",
             mDimensionTransitionRequest->generation,
-            mPendingReplayDimension->id
+            mPendingReplayDimension->mValue
         );
     }
 
@@ -2165,7 +2132,7 @@ void ReplaySession::processPendingDimensionTransition() {
             "Replay dimension transition generation {} reached dimension {} behind the loading screen "
             "(readyToRender={})",
             mDimensionTransitionRequest->generation,
-            mPendingReplayDimension->id,
+            mPendingReplayDimension->mValue,
             readyToRender
         );
     }
@@ -2185,7 +2152,7 @@ void ReplaySession::completeReplayDimensionTransition() {
         "Replay dimension transition generation {} completed at tick {} in dimension {} after {} ms",
         completedGeneration,
         mCurrentTick,
-        mReplayPlayer->getDimensionId().id,
+        mReplayPlayer->getDimensionId().mValue,
         elapsed.count()
     );
     mReplayDimension.store(&mReplayPlayer->getDimension(), std::memory_order_release);
@@ -3775,7 +3742,7 @@ void ReplaySession::configureReplayDimension(DimensionArguments& arguments) cons
     auto profile = mReplayDimensionProfile.load(std::memory_order_acquire);
     if (!profile || arguments.mDerived->mLevel.getLevelId() != profile->levelId) return;
 
-    auto const dimensionId = arguments.mDimId->id;
+    auto const dimensionId = arguments.mDimId->mValue;
     if (auto const name = profile->names.find(dimensionId); name != profile->names.end()) {
         arguments.mName = name->second;
     }

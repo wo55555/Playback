@@ -2,17 +2,17 @@
 
 Playback uses the following third-party projects. Their licenses remain with their respective copyright holders.
 
-| Project | Version or range | License |
-| --- | --- | --- |
-| [LeviLamina](https://github.com/LiteLDev/LeviLamina) | `26.10.*` | LGPL-3.0 for non-closed-source portions |
-| [SymbolProvider](https://github.com/LiteLDev/SymbolProvider) | `1.2.0` (via LeviLamina) | Public Domain statement in source; no standalone license file |
-| [Dear ImGui](https://github.com/ocornut/imgui) | `1.92.7` | MIT |
-| [libzip](https://github.com/nih-at/libzip) | `1.11.4` | BSD-3-Clause |
-| [OpenSSL](https://www.openssl.org/) | `1.1.1w` | OpenSSL and SSLeay licenses |
-| [stduuid](https://github.com/mariusbancila/stduuid) | `1.2.3` | MIT |
-| [xxHash](https://github.com/Cyan4973/xxHash) | `0.8.3` | BSD-2-Clause |
-| [FFmpeg](https://ffmpeg.org/) | `7.1` | GPL-3.0-or-later for the bundled `--enable-gpl --enable-version3` build |
-| [x264](https://www.videolan.org/developers/x264.html) | `2024.02.27` (via FFmpeg) | GPL-2.0-or-later |
+| Project                                                      | Version or range          | License                                                                 |
+| ------------------------------------------------------------ | ------------------------- | ----------------------------------------------------------------------- |
+| [LeviLamina](https://github.com/LiteLDev/LeviLamina)         | `26.20.*`                 | LGPL-3.0 for non-closed-source portions                                 |
+| [SymbolProvider](https://github.com/LiteLDev/SymbolProvider) | `1.3.0` (via LeviLamina)  | Public Domain statement in source; no standalone license file           |
+| [Dear ImGui](https://github.com/ocornut/imgui)               | `1.92.7`                  | MIT                                                                     |
+| [libzip](https://github.com/nih-at/libzip)                   | `1.11.4`                  | BSD-3-Clause                                                            |
+| [OpenSSL](https://www.openssl.org/)                          | `1.1.1w`                  | OpenSSL and SSLeay licenses                                             |
+| [stduuid](https://github.com/mariusbancila/stduuid)          | `1.2.3`                   | MIT                                                                     |
+| [xxHash](https://github.com/Cyan4973/xxHash)                 | `0.8.3`                   | BSD-2-Clause                                                            |
+| [FFmpeg](https://ffmpeg.org/)                                | `7.1`                     | GPL-3.0-or-later for the bundled `--enable-gpl --enable-version3` build |
+| [x264](https://www.videolan.org/developers/x264.html)        | `2024.02.27` (via FFmpeg) | GPL-2.0-or-later                                                        |
 
 The complete Dear ImGui, FFmpeg, and x264 license texts are distributed in `licenses/`. Other dependencies are resolved by xmake from their upstream packages; consult each linked project for its complete license text and source code. Playback packages the Xmake-built FFmpeg command-line executable under `tools/ffmpeg.exe`; the pinned build recipe enables x264 and is reproducible from this repository's `xmake.lua` and the linked upstream source releases.
 

@@ -1,5 +1,6 @@
 #include "EditorMenuBar.h"
 
+#include "playback/Playback.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/Widgets.h"

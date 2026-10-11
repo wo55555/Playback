@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.3-mc26.10] - 2026-10-11
+## [0.3.3-mc26.20] - 2026-10-11
 
 ### Added
 
@@ -34,12 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the replay list flashing and reloading every thumbnail when a replay is deleted.
 - Fixed the selected replay's highlight flickering in the replay list.
 
-## [0.3.2-mc26.10] - 2026-10-01
+## [0.3.2-mc26.20] - 2026-10-01
 
 ### Added
 
 - Added a 4x supersampling tier to video export. Tiers whose supersampled render size does not fit are disabled for the chosen resolution.
-- Added a convergence frame count to the export settings. Each frame is rendered without a capture until the ray-traced denoiser settles, removing green and yellow streaks from exported skies. The MC 26.10 headers expose no way to detect ray tracing, so it defaults to 0; raise it when exporting with ray tracing enabled.
+- Added a convergence frame count to the export settings. Each frame is rendered without a capture until the ray-traced denoiser settles, removing green and yellow streaks from exported skies; it defaults to 8 with ray tracing active and 0 otherwise.
 - Added support for the separate OptiPiston mod: when it is installed, Playback drives its piston animation from the replay clock, with its settings in the inspector.
 
 ### Changed
@@ -61,16 +61,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.1-mc26.40] - 2026-09-19
 
-> Separate MC 26.40 prerelease; hotfix updated September 20, 2026. These notes apply only to that release line and do not describe changes in this branch. Existing recordings need no re-recording or format conversion for these fixes. Existing MC 26.10 and MC 26.20 release assets are unchanged.
+> Separate MC 26.40 prerelease; hotfix updated September 20, 2026. These notes describe that release line, not code changes in this branch. Reinstall the same release to update; existing MC 26.40 recordings need no re-recording or format conversion for these fixes.
 
 ### Fixed
 
-- Fixed recorded players standing still by correcting entity-ID mappings, including IDs in abilities data and entity links.
-- Fixed replay disconnections caused by teleport packets missing required teleport data.
-- Fixed backward seeks stalling on previously loaded terrain by using the native chunk replacement path.
-- Preserved original player names and restored affected names in existing recordings from the matching recorded player-list entry when available.
+- Fixed recorded players standing still by restoring entity-id registration and remapping the local-player snapshot's abilities and entity links.
+- Fixed replay disconnections caused by teleport movement packets missing required teleport data.
+- Fixed backward seeks stalling on previously loaded terrain by allowing native chunk replacement with recorded data.
+- Preserved original player names and restored affected existing names from the recorded player list when available.
 
-## [0.3.1-mc26.10] - 2026-09-17
+## [0.3.1-mc26.20] - 2026-09-17
 
 ### Added
 
@@ -89,7 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Aligned timeline and toolbar icons optically rather than on their glyph boxes.
 - Moved timeline zoom to `-` and `=`, zoom-to-fit to `\`, and playback speed to `J` and `L`, matching common video editors. `Shift+Wheel` no longer zooms.
 - Made `K` add a keyframe to the first usable camera track when nothing is selected instead of doing nothing.
-- Kept the configuration version, recording-file snapshot context version, and project format version at `1`; `v0.3.0-mc26.10` archives and projects remain compatible.
+- Kept the configuration version, recording-file snapshot context version, and project format version at `1`; `v0.3.0-mc26.20` archives and projects remain compatible.
 
 ### Removed
 
@@ -101,13 +101,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed replays losing a dimension boundary when the recorder rotated the chunk instead of leaving a packet on the timeline; boundaries are now derived from the snapshot contexts.
 - Fixed columns without complete subchunk coverage being injected, which could leave partially built terrain.
 - Fixed clicks on viewport overlays reaching the game camera.
+- Fixed recordings being cancelled when the player changed dimensions.
+- Fixed block updates storing runtime-only network IDs instead of portable block network IDs.
+- Fixed entity name tags not updating during replay by recording actor-data packets.
 - Fixed entities jittering during preview playback. Recorded poses are now interpolated on preview frames as well as during export, and are sampled one tick behind the camera so the pose history is actually interpolated instead of snapping to its end.
 - Fixed one missing or incomplete entity cancelling pose interpolation for the whole frame, and left passenger positions to their vehicle so riders no longer fight the mount.
 - Fixed camera-path overlays being sampled across dimension boundaries, which spent work on points that were discarded at draw time.
 - Fixed a plain click on a timeline keyframe nudging it; any horizontal movement is now required before a drag begins, so a click only seeks.
 - Fixed players not loading in the replay when a server withheld skin data for any one of them. A single entry without a skin discarded the whole player list; that entry is now skipped and the rest of the list still spawns.
 
-## [0.3.0-mc26.10] - 2026-09-08
+## [0.3.0-mc26.20] - 2026-09-08
 
 ### Added
 
@@ -122,7 +125,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kept the editor hidden until the replay world is joined and ready, so loading, resource-pack download, and sign-in screens are no longer covered.
 - Cut seek time roughly in half by draining chunk injection inline during catch-up and reusing already-applied snapshot columns.
 - Downgraded project save/load, keyframe capture, and custom block registration logs to debug.
-- Kept the configuration version, recording-file snapshot context version, and new project format version at `1`; complete `v0.2.x-mc26.10` archives remain compatible and require no conversion.
+- Kept the configuration version, recording-file snapshot context version, and new project format version at `1`; complete `v0.2.1-mc26.20` archives remain compatible and require no conversion.
 - Documented that Vibrant Visuals is not supported yet; recording, replay, and export are only validated with the standard renderer.
 - Documented that `0.2.0` was skipped on the MC 26.20 line because video export stalled on that runtime, and that `0.2.1` is published for both runtimes.
 
@@ -135,14 +138,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the property search box discarding typed text every frame.
 - Fixed a rewind keeping stale player-list skins instead of re-registering them.
 
-## [0.2.1-mc26.10] - 2026-08-27
+## [0.2.1-mc26.20] - 2026-08-27
 
 ### Changed
 
 - Reworked export capture around the RenderDragon scene target and semantic world-submission detection instead of the swap-chain UI target and a draw-count threshold.
 - Polished editor and replay-browser scrolling, timeline routing, selection feedback, icon alignment, compact controls, animations, and bilingual labels.
 - Preserved the release tag during CI builds so packaged manifests carry the published version.
-- Kept the configuration version and recording-file snapshot context version at `1`; complete `v0.2.0-mc26.10` archives remain compatible and require no conversion.
+- Kept the configuration version and recording-file snapshot context version at `1`; complete `v0.2.0-mc26.20` archives remain compatible and require no conversion.
 
 ### Removed
 
@@ -158,7 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed ordinary observer server synchronization abandoning a parked preview camera after pausing.
 - Fixed replay-browser wheel scrolling and crowded timeline labels or click routing obscuring the intended target.
 
-## [0.2.0-mc26.10] - 2026-08-20
+## [0.2.0-mc26.20] - 2026-08-20
 
 ### Added
 
@@ -177,10 +180,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified entity rendering around one sampled pose per frame and temporarily suppressed native movement interpolation during export rendering.
 - Reworked chunk recording to preserve native request-mode packets for local worlds while converting inline or cache-enabled server chunks into portable replay data after client decoding.
 - Changed export preparation to rely on replay tick, dimension transition, UI stability, and warm-up state instead of requiring every chunk in a fixed camera neighborhood.
-- Derived the packaged mod version from the nearest Git release tag so hotfix builds retain the `0.2.0-mc26.10` identifier.
-- Set the product version to `0.2.0` and the MC 26.10 release identifier to `v0.2.0-mc26.10`.
+- Derived the packaged mod version from the nearest Git release tag so hotfix builds retain the `0.2.0-mc26.20` identifier.
+- Set the product version to `0.2.0` and the MC 26.20 release identifier to `v0.2.0-mc26.20`.
 - Kept the configuration version in `Config.h` and the recording-file snapshot context version at `1`; no configuration or replay migration layer is provided.
-- Replays recorded before this hotfix on affected servers may already be missing portable chunk or custom-entity registry data. Those archives cannot be repaired and must be recorded again; complete `v0.2.0-mc26.10` archives do not require conversion.
+- Replays recorded before this hotfix on affected servers may already be missing portable chunk or custom-entity registry data. Those archives cannot be repaired and must be recorded again; complete `v0.2.0-mc26.20` archives do not require conversion.
 
 ### Removed
 
@@ -201,7 +204,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed offline video export stopping when Minecraft lost focus or attempted to open pause or suspend UI.
 - Fixed valid exports remaining at frame 0 because a fixed 5x5 camera-neighborhood readiness check could never be satisfied.
 
-## [0.1.2-mc26.10] - 2026-08-03
+## [0.1.2-mc26.20] - 2026-08-03
 
 ### Added
 
@@ -229,11 +232,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved replay snapshot cleanup and chunk application by refreshing the replay player, isolating chunks by dimension, filtering unsuccessful subchunk responses, and clearing recorded objectives between snapshots.
 - Expanded D3D12 command-queue and swap-chain capture to cover additional renderer creation paths.
 
-## [0.1.1-mc26.10] - 2026-07-29
+## [0.1.1-mc26.20] - 2026-07-29
 
 ### Added
 
 - Added PDB symbols to release assets to help diagnose crashes.
+- Adapted to Minecraft 26.20.4
 
 ## [0.1.0-alpha.2] - 2026-07-29
 
@@ -257,14 +261,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.10...HEAD
-[0.3.3-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.10...v0.3.3-mc26.10
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.20...HEAD
+[0.3.3-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.20...v0.3.3-mc26.20
 [0.3.1-mc26.40]: https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40
-[0.3.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.10...v0.3.1-mc26.10
-[0.3.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.10...v0.3.0-mc26.10
-[0.2.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.10...v0.2.1-mc26.10
-[0.2.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.1.2-mc26.10...v0.2.0-mc26.10
-[0.1.2-mc26.10]: https://github.com/wo55555/Playback/compare/v0.1.1-mc26.10...v0.1.2-mc26.10
-[0.1.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.1.0-alpha.2...v0.1.1-mc26.10
+[0.3.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.20...v0.3.1-mc26.20
+[0.3.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.20...v0.3.0-mc26.20
+[0.2.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.0-mc26.20...v0.2.1-mc26.20
+[0.2.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.2-mc26.20...v0.2.0-mc26.20
+[0.1.2-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.1-mc26.20...v0.1.2-mc26.20
+[0.1.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.1.0-alpha.2...v0.1.1-mc26.20
 [0.1.0-alpha.2]: https://github.com/wo55555/Playback/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/wo55555/Playback/releases/tag/v0.1.0-alpha.1

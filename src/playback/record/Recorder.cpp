@@ -49,7 +49,11 @@
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/network/packet/TakeItemActorPacket.h"
 #include "mc/network/packet/UpdateAttributesPacket.h"
+#include "mc/network/packet/UpdateBlockPacket.h"
+#include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdatePlayerGameTypePacket.h"
+#include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/network/packet/UpdateSubChunkNetworkBlockInfo.h"
 #include "mc/util/VarIntDataOutput.h"
 #include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
@@ -58,6 +62,7 @@
 #include "mc/world/actor/state/PropertyComponent.h"
 #include "mc/world/effect/MobEffectInstance.h"
 #include "mc/world/item/SaveContextFactory.h"
+#include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/block/BedrockBlockNames.h"
 #include "mc/world/level/block/Block.h"
@@ -97,6 +102,8 @@
 #include <utility>
 #include <vector>
 
+PlayerInputTick::PlayerInputTick() { mValue = 0; }
+
 namespace playback::record {
 using namespace playback::action;
 using namespace playback::packet;
@@ -106,6 +113,11 @@ namespace {
 
 constexpr ActorUniqueID  RecordedPlayerUniqueId{std::numeric_limits<int64_t>::max() - 1024};
 constexpr ActorRuntimeID RecordedPlayerRuntimeId{uint64_t{1} << 62};
+
+// A dimension change floods the engine task groups, and a missed snapshot there cancels the whole recording.
+constexpr auto DimensionChangeBarrierTimeout = std::chrono::milliseconds{15000};
+constexpr auto ChunkRotationBarrierTimeout   = std::chrono::milliseconds{8000};
+constexpr auto InitialSnapshotBarrierTimeout = std::chrono::milliseconds{2000};
 
 struct NetworkPacketFilter {
     [[nodiscard]] static constexpr bool shouldFilter(MinecraftPacketIds packetId) {
@@ -136,6 +148,51 @@ bool remapUniqueId(ActorUniqueID& id, ActorUniqueID source, ActorUniqueID target
     if (id.rawID != source.rawID) return false;
     id = target;
     return true;
+}
+
+bool packetCarriesBlockNetworkIds(MinecraftPacketIds packetId) {
+    switch (packetId) {
+    case MinecraftPacketIds::UpdateBlock:
+    case MinecraftPacketIds::UpdateBlockSynced:
+    case MinecraftPacketIds::UpdateSubChunkBlocks:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Sequential palette indices only mean something on the recording server, so store the portable hash instead.
+bool portableBlockNetworkId(uint& runtimeId, BlockPalette const& palette) {
+    auto const& sequentialBlocks = *palette.mBlockFromNetworkId;
+    if (runtimeId >= sequentialBlocks.size()) return false;
+
+    auto const* block = sequentialBlocks[runtimeId];
+    if (!block || block->mSerializationIdHashForNetwork == 0) return false;
+    if (runtimeId == block->mSerializationIdHashForNetwork) return false;
+
+    runtimeId = block->mSerializationIdHashForNetwork;
+    return true;
+}
+
+bool makeBlockNetworkIdsPortable(Packet& packet, BlockPalette const& palette) {
+    switch (packet.getId()) {
+    case MinecraftPacketIds::UpdateBlock:
+        return portableBlockNetworkId(static_cast<UpdateBlockPacket&>(packet).mRuntimeId, palette);
+    case MinecraftPacketIds::UpdateBlockSynced:
+        return portableBlockNetworkId(static_cast<UpdateBlockSyncedPacket&>(packet).mRuntimeId, palette);
+    case MinecraftPacketIds::UpdateSubChunkBlocks: {
+        auto& changed = *static_cast<UpdateSubChunkBlocksPacket&>(packet).mBlocksChanged;
+        bool  updated = false;
+        for (auto* blocks : {&*changed.mStandards, &*changed.mExtras}) {
+            for (auto& info : *blocks) {
+                updated |= portableBlockNetworkId(info.mRuntimeId, palette);
+            }
+        }
+        return updated;
+    }
+    default:
+        return false;
+    }
 }
 
 bool packetMayReferenceRecordedPlayer(MinecraftPacketIds packetId) {
@@ -555,6 +612,7 @@ void Recorder::resetStateForNewRecording() {
     mOpenChunkHasData              = false;
     mCurrentChunkForcePlaySnapshot = false;
     mThumbnailCaptureRequested     = false;
+    mPendingDimensionSnapshot      = false;
     mNeedsInitialSnapshot          = true;
     mDimensionTransitionPending    = false;
     mDimensionTransitionTargetId   = 0;
@@ -607,7 +665,7 @@ void Recorder::endTick(bool close) {
     }
 
     if (dimensionChanged) {
-        auto const currentDimensionId = localPlayer->getDimensionId().id;
+        auto const currentDimensionId = localPlayer->getDimensionId();
 
         // Finish the client tick in the old chunk before snapshotting the state produced by that tick.
         if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeTickBoundary()
@@ -616,27 +674,11 @@ void Recorder::endTick(bool close) {
         }
         if (close) return;
 
-        auto                                captureStart = std::chrono::steady_clock::now();
-        std::chrono::steady_clock::duration barrierWait{};
-        auto                                captureResult = captureChunkSnapshot(barrierWait);
-        auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
+        // The new dimension has no columns yet, so defer the snapshot to the retrying initial-snapshot path.
+        mRecordingDimension       = currentDimensionId;
+        mNeedsInitialSnapshot     = true;
+        mPendingDimensionSnapshot = true;
 
-        if (captureResult != SnapshotCaptureResult::Success) {
-            getLogger().error(
-                "New dimension replay snapshot capture failed after {:.3f} ms: {}",
-                std::chrono::duration<double, std::milli>(elapsed).count(),
-                mSnapshotFailure
-            );
-            failRecording(
-                mSnapshotFailure.empty() ? "Unable to prepare the new dimension replay snapshot" : mSnapshotFailure
-            );
-            return;
-        }
-
-        mCurrentChunkForcePlaySnapshot = true;
-        if (!writeSnapshot() || !commitChunkSnapshot(elapsed, barrierWait)) {
-            return;
-        }
         bool const reachedRequestedDimension =
             !mDimensionTransitionPending.load(std::memory_order_acquire)
             || currentDimensionId == mDimensionTransitionTargetId.load(std::memory_order_acquire);
@@ -653,8 +695,8 @@ void Recorder::endTick(bool close) {
     if (rotateChunk) {
         auto                                captureStart = std::chrono::steady_clock::now();
         std::chrono::steady_clock::duration barrierWait{};
-        auto                                captureResult = captureChunkSnapshot(barrierWait);
-        auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
+        auto captureResult = captureChunkSnapshot(barrierWait, ChunkRotationBarrierTimeout);
+        auto elapsed       = std::chrono::steady_clock::now() - captureStart;
 
         if (captureResult != SnapshotCaptureResult::Success) {
             getLogger().error(
@@ -691,7 +733,10 @@ void Recorder::resetChunkSnapshot() {
     mSnapshotFailure.clear();
 }
 
-Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait) {
+Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
+    std::chrono::steady_clock::duration& barrierWait,
+    std::chrono::milliseconds            barrierTimeout
+) {
     resetChunkSnapshot();
 
     auto  clientInstance = ll::service::getClientInstance();
@@ -703,38 +748,50 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(std::chrono::stea
 
     auto const dimension = localPlayer->getDimensionId();
 
-    auto mutationGuard = ChunkMutationBarrier::capture();
-    barrierWait        = mutationGuard.waited();
-    if (!mutationGuard) {
-        mSnapshotFailure = "Unable to acquire the chunk mutation barrier";
-        return SnapshotCaptureResult::NotReady;
-    }
-
-    auto* guardedPlayer = clientInstance->getLocalPlayer();
-    if (guardedPlayer != localPlayer || !guardedPlayer || guardedPlayer->getDimensionId() != dimension) {
-        mSnapshotFailure = "The player or dimension changed while acquiring the chunk mutation barrier";
-        return SnapshotCaptureResult::NotReady;
-    }
-
-    auto& dimensionObject = guardedPlayer->getDimension();
-
     struct SnapshotColumn {
         ChunkPos                    pos;
         std::shared_ptr<LevelChunk> chunk;
     };
 
     std::vector<SnapshotColumn> columns;
-    auto const&                 storage = dimensionObject.getChunkSource().getStorage();
-    columns.reserve(storage.size());
+    Dimension*                  capturedDimension{};
 
-    for (auto const& [pos, weakChunk] : storage) {
-        auto chunk = weakChunk.lock();
-        if (!chunk || chunk->mIsEmptyClientChunk
-            || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
-            continue;
+    // The barrier only has to cover the storage walk; holding shared_ptrs keeps the columns alive for serialization.
+    {
+        auto mutationGuard = ChunkMutationBarrier::capture(barrierTimeout);
+        barrierWait        = mutationGuard.waited();
+        if (!mutationGuard) {
+            mSnapshotFailure = "Unable to acquire the chunk mutation barrier";
+            return SnapshotCaptureResult::NotReady;
         }
-        columns.push_back(SnapshotColumn{pos, std::move(chunk)});
+
+        auto* guardedPlayer = clientInstance->getLocalPlayer();
+        if (guardedPlayer != localPlayer || !guardedPlayer || guardedPlayer->getDimensionId() != dimension) {
+            mSnapshotFailure = "The player or dimension changed while acquiring the chunk mutation barrier";
+            return SnapshotCaptureResult::NotReady;
+        }
+
+        capturedDimension = &guardedPlayer->getDimension();
+
+        auto const& storage = capturedDimension->getChunkSource().getStorage();
+        columns.reserve(storage.size());
+        for (auto const& [pos, weakChunk] : storage) {
+            auto chunk = weakChunk.lock();
+            if (!chunk || chunk->mIsEmptyClientChunk
+                || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+                continue;
+            }
+            columns.push_back(SnapshotColumn{pos, std::move(chunk)});
+        }
     }
+
+    // A dimension change arrives before its columns load; retry instead of storing a snapshot with no terrain.
+    if (columns.empty()) {
+        mSnapshotFailure = "No loaded columns are available for a chunk snapshot yet";
+        return SnapshotCaptureResult::NotReady;
+    }
+
+    auto& dimensionObject = *capturedDimension;
 
     auto const& position = localPlayer->getPosition();
     auto const& rotation = localPlayer->getRotation();
@@ -1214,8 +1271,9 @@ bool Recorder::writeInitialSnapshotIfNeeded() {
 
     auto                                captureStart = std::chrono::steady_clock::now();
     std::chrono::steady_clock::duration barrierWait{};
-    auto                                captureResult = captureChunkSnapshot(barrierWait);
-    auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
+    // Retried every tick, so a short budget is fine here.
+    auto captureResult = captureChunkSnapshot(barrierWait, InitialSnapshotBarrierTimeout);
+    auto elapsed       = std::chrono::steady_clock::now() - captureStart;
 
     if (captureResult == SnapshotCaptureResult::NotReady) return false;
     if (captureResult == SnapshotCaptureResult::Failed) {
@@ -1228,6 +1286,11 @@ bool Recorder::writeInitialSnapshotIfNeeded() {
             mSnapshotFailure.empty() ? "Unable to prepare the initial replay chunk snapshot" : mSnapshotFailure
         );
         return false;
+    }
+
+    if (mPendingDimensionSnapshot) {
+        mCurrentChunkForcePlaySnapshot = true;
+        mPendingDimensionSnapshot      = false;
     }
 
     if (!writeSnapshot()) return false;
@@ -1265,7 +1328,7 @@ bool Recorder::writeSnapshot() {
     }
 
     PlaybackSnapshotContext context;
-    context.dimensionId        = mSnapshotDimension->id.id;
+    context.dimensionId        = mSnapshotDimension->id.mValue;
     context.dimensionMinHeight = mSnapshotDimension->minHeight;
     context.dimensionMaxHeight = mSnapshotDimension->maxHeight;
     context.x                  = mSnapshotView->x;
@@ -1612,7 +1675,7 @@ void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSe
 void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimension) {
     if (mState.load(std::memory_order_acquire) != State::Recording) return;
 
-    auto const dimensionId = dimension.getDimensionId().id;
+    auto const dimensionId = dimension.getDimensionId();
     {
         std::scoped_lock lock(mPendingPortableChunksMutex);
         auto const       byDimension = mPendingPortableChunks.find(dimensionId);
@@ -1721,7 +1784,7 @@ void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet) {
     if (state != State::Recording && state != State::Closing) return;
 
     auto const& pos          = *packet.mPos;
-    auto const  dimensionId  = static_cast<DimensionType const&>(packet.mDimensionId).id;
+    auto const  dimensionId  = *packet.mDimensionId;
     bool const  requestMode  = static_cast<bool>(packet.mClientNeedsToRequestSubchunks);
     bool const  cacheEnabled = static_cast<bool>(packet.mCacheEnabled);
     if (requestMode && !cacheEnabled) {
@@ -1796,12 +1859,28 @@ void Recorder::recordGamePacket(Packet const& packet) {
 
         if (packetId == MinecraftPacketIds::ChangeDimension) {
             auto const& change = static_cast<ChangeDimensionPacket const&>(packet);
-            mDimensionTransitionTargetId.store(change.mDimensionId->id, std::memory_order_release);
+            mDimensionTransitionTargetId.store(change.mDimensionId->mValue, std::memory_order_release);
             mDimensionTransitionPending.store(true, std::memory_order_release);
         }
 
         auto  clientInstance = ll::service::getClientInstance();
         auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+
+        if (packetCarriesBlockNetworkIds(packetId)) {
+            auto level = ll::service::getMultiPlayerLevel();
+            if (level && !level->blockNetworkIdsAreHashes()) {
+                auto                 portablePacket = MinecraftPackets::createPacket(packetId);
+                ReadOnlyBinaryStream input(stream.mBuffer, false);
+                if (!portablePacket || !portablePacket->read(input) || !input.ensureReadCompleted()) {
+                    getLogger().warn("Unable to decode {} for block network ID normalization", packet.getName());
+                } else if (makeBlockNetworkIdsPortable(*portablePacket, level->getBlockPalette())) {
+                    PlaybackBuffer portableStream;
+                    portablePacket->write(portableStream);
+                    stream.mBuffer = std::move(portableStream.mBuffer);
+                }
+            }
+        }
+
         if (localPlayer && mRecordedLocalPlayerId && mRecordedLocalPlayerRuntimeId && mRecordedLocalPlayerUuid
             && packetMayReferenceRecordedPlayer(packetId)) {
             auto                 remappedPacket = MinecraftPackets::createPacket(packetId);
@@ -1884,6 +1963,7 @@ void Recorder::cancelRecording(std::string_view reason) {
 
     mState                       = State::Idle;
     mNeedsInitialSnapshot        = true;
+    mPendingDimensionSnapshot    = false;
     mDimensionTransitionPending  = false;
     mDimensionTransitionTargetId = 0;
     resetChunkSnapshot();

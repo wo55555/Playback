@@ -5,12 +5,11 @@
 #include "playback/utils/container/LinkedHashMap.h"
 #include "playback/visuals/ReplayThumbnail.h"
 
-
-#include "mc/deps/core/utility/AutomaticID.h"
 #include "mc/legacy/ActorRuntimeID.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/platform/UUID.h"
 #include "mc/world/level/ChunkPos.h"
+#include "mc/world/level/dimension/DimensionType.h"
 
 #include <atomic>
 #include <chrono>
@@ -126,12 +125,14 @@ private:
     bool mOpenChunkHasData              = false;
     bool mCurrentChunkForcePlaySnapshot = false;
     bool mThumbnailCaptureRequested     = false;
+    bool mPendingDimensionSnapshot      = false;
 
 private:
     static constexpr int RECORD_CHUNK_TICKS      = 20 * 60 * 5;
     static constexpr int THUMBNAIL_CAPTURE_TICKS = 20;
 
-    [[nodiscard]] SnapshotCaptureResult captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait);
+    [[nodiscard]] SnapshotCaptureResult
+    captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait, std::chrono::milliseconds barrierTimeout);
 
     [[nodiscard]] bool commitChunkSnapshot(
         std::chrono::steady_clock::duration captureElapsed,
