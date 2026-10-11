@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3-mc26.10] - 2026-10-11
+
 ### Added
 
 - Added encode speed (Quality, Fast, Fastest) and CRF settings for MP4 export under Advanced. They map to the libx264 `medium`, `veryfast` and `ultrafast` presets and `-crf`; the defaults match the previous fixed `medium` / CRF 18.
@@ -255,7 +257,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.10...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.10...HEAD
+[0.3.3-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.10...v0.3.3-mc26.10
 [0.3.1-mc26.40]: https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40
 [0.3.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.10...v0.3.1-mc26.10
 [0.3.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.10...v0.3.0-mc26.10
