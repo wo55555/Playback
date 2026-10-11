@@ -35,7 +35,13 @@ private:
     int                   mExportHeight{1080};
     int                   mExportSsaa{0};
     int                   mExportWarmupFrames{60};
-    int                   mExportConvergenceFrames{8};
+    int                   mExportConvergenceFrames{0};
+    bool                  mExportAccelerateClient{false};
+    int                   mExportEncodeSpeed{0};
+    int                   mExportCrf{18};
+    bool                  mExportAdvancedOpen{false};
+    bool                  mExportScrollToAdvanced{false};
+    float                 mExportBodyHeight{0.0f};
     int                   mExportStartTick{-1};
     int                   mExportEndTick{-1};
     std::array<char, 128> mExportName{"replay-export"};

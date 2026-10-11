@@ -151,7 +151,8 @@ Open **File > Export...** in the replay editor and configure:
 - MP4 video or PNG image sequence.
 - Start and end tick.
 - Frame rate and output resolution.
-- SSAA, warm-up frames, and convergence frames. Convergence frames render each frame again without capturing it so the ray-traced denoiser can settle.
+- SSAA and warm-up frames.
+- Under **Advanced**, convergence frames (0 by default). They render each frame again without capturing it so ray-traced temporal effects can settle, at the cost of a full render per extra frame.
 
 The experimental exporter renders frames from replay time rather than recording the screen in real time. MP4 uses the bundled FFmpeg/libx264 tool; PNG export remains available if FFmpeg cannot be started. Outputs are written under `mods/playback/exports` by default.
 
