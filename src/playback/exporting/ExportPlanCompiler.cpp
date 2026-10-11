@@ -200,6 +200,9 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     if (settings.convergenceFrames > MaxExportConvergenceFrames) {
         return failure(ExportError::InvalidSettings, "The export convergence frame count is too large");
     }
+    if (settings.videoCrf > MaxExportCrf || settings.encodeSpeed > VideoEncodeSpeed::Fastest) {
+        return failure(ExportError::InvalidSettings, "The video encoder quality or speed setting is invalid");
+    }
 
     ExportSettings normalized = settings;
     normalized.frameRate      = normalizeFrameRate(normalized.frameRate);

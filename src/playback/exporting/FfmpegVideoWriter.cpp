@@ -270,7 +270,9 @@ struct FfmpegVideoWriter::Impl {
         command += std::to_wstring(frameWidth) + L"x" + std::to_wstring(frameHeight);
         command += L" -framerate ";
         command += std::to_wstring(frameRateNumerator) + L"/" + std::to_wstring(frameRateDenominator);
-        command += L" -i pipe:0 -an -c:v libx264 -preset medium -crf 18";
+        std::string const preset = x264Preset(encodeSpeed);
+        command += L" -i pipe:0 -an -c:v libx264 -preset " + std::wstring(preset.begin(), preset.end());
+        command += L" -crf " + std::to_wstring(videoCrf);
         command += L" -vf pad=ceil(iw/2)*2:ceil(ih/2)*2 -pix_fmt yuv420p -movflags +faststart ";
         command += quoteWindowsArgument(temporary.wstring());
         std::vector<wchar_t> commandLine(command.begin(), command.end());
@@ -606,6 +608,8 @@ struct FfmpegVideoWriter::Impl {
         executable           = ffmpegPath();
         frameRateNumerator   = plan.settings.frameRate.numerator;
         frameRateDenominator = plan.settings.frameRate.denominator;
+        encodeSpeed          = plan.settings.encodeSpeed;
+        videoCrf             = plan.settings.videoCrf;
         targetWidth          = plan.settings.resolutionX;
         targetHeight         = plan.settings.resolutionY;
         state                = FrameWriterState::Idle;
@@ -622,8 +626,10 @@ struct FfmpegVideoWriter::Impl {
         recycleQueuesLocked();
     }
 
-    int64_t frameRateNumerator{60};
-    int64_t frameRateDenominator{1};
+    int64_t          frameRateNumerator{60};
+    int64_t          frameRateDenominator{1};
+    VideoEncodeSpeed encodeSpeed{VideoEncodeSpeed::Quality};
+    uint32_t         videoCrf{18};
 };
 
 FfmpegVideoWriter::FfmpegVideoWriter(uint32_t capacity) : mImpl(std::make_unique<Impl>(capacity)) {}
