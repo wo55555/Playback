@@ -6,8 +6,10 @@
 #include "playback/Playback.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/runtime/ClientTickHooks.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace playback::exporting {
@@ -18,6 +20,32 @@ namespace {
 constexpr uint32_t ExportCaptureCapacity = 6;
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
+
+// Draining the counters means a second close of the same export prints nothing.
+void reportTickPacing(bool accelerated) {
+    auto const pacing = runtime::takeOfflineReplayTickPacing();
+    auto const boost  = takeOfflineRenderClientBoostStats();
+    if (pacing.requests == 0) return;
+
+    double const claims = static_cast<double>(std::max<uint64_t>(pacing.claims, 1));
+    getLogger().debug(
+        "Export native tick pacing: accelerated={}, requests={}, claims={}, claimWait avg={:.2f}ms max={:.2f}ms; "
+        "sim timer advances={}, withRequest={}, naturalTick={}, forced={}, otherTimers={}, "
+        "passedTimeAfterForce=[{:.3f}, {:.3f}]",
+        accelerated,
+        pacing.requests,
+        pacing.claims,
+        static_cast<double>(pacing.claimLatencyMicros) / 1000.0 / claims,
+        static_cast<double>(pacing.maxClaimLatencyMicros) / 1000.0,
+        boost.advances,
+        boost.pendingAdvances,
+        boost.naturalTicks,
+        boost.forcedTicks,
+        boost.otherTimerAdvances,
+        boost.minPassedAfterForce,
+        boost.maxPassedAfterForce
+    );
+}
 
 } // namespace
 
@@ -115,11 +143,16 @@ bool ReplayExportDriver::start(
     mWaitChargedAt = {};
     mWaitCharged.reset();
     mDriverTicks = 0;
+    (void)runtime::takeOfflineReplayTickPacing();
+    (void)takeOfflineRenderClientBoostStats();
+    if (mPlan->settings.accelerateClient && !setOfflineRenderClientBoost(true)) {
+        getLogger().warn("Client acceleration could not be installed; the export keeps the game's 20 Hz tick pacing");
+    }
     setExportActivityActive(true);
     mPhase = Phase::Rendering;
     getLogger().info(
         "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
-        "warmup={}, convergence={}",
+        "warmup={}, convergence={}, accelerateClient={}, x264={}/crf{}",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -130,7 +163,10 @@ bool ReplayExportDriver::start(
         mPlan->settings.resolutionY,
         mPlan->settings.ssaa,
         mPlan->settings.warmupFrames,
-        mPlan->settings.convergenceFrames
+        mPlan->settings.convergenceFrames,
+        mPlan->settings.accelerateClient,
+        x264Preset(mPlan->settings.encodeSpeed),
+        mPlan->settings.videoCrf
     );
     return true;
 }
@@ -421,6 +457,7 @@ void ReplayExportDriver::restoreReplayState() {
 
 void ReplayExportDriver::closeCapture(bool cancelled) {
     reportWaitProfile();
+    reportTickPacing(mPlan && mPlan->settings.accelerateClient);
     setOfflineRenderActivityActive(false);
     if (mRenderBoundary) {
         if (cancelled) mRenderBoundary->cancel();
