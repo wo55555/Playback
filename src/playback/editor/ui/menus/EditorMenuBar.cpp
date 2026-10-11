@@ -5,7 +5,6 @@
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
-#include "playback/exporting/RayTracing.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -13,12 +12,14 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace playback::editor::ui {
 using namespace playback::state;
@@ -26,8 +27,6 @@ using namespace playback::state;
 using namespace ll::i18n_literals;
 
 namespace {
-
-constexpr int DefaultRayTracedConvergenceFrames = 8;
 
 // Matches the recorder's replay naming so exports and recordings sort together.
 [[nodiscard]] std::string timestampName() {
@@ -60,14 +59,21 @@ bool inputClampedInt(char const* id, int& value, int minimum, int maximum, float
 }
 
 // Dim caption with a hairline underneath, used for every group in the export dialog.
-void sectionHeader(char const* label) {
-    ImGui::Dummy({0.0f, 5.0f * metrics::scale()});
+void sectionHeader(char const* label, float top = 10.0f) {
+    ImGui::Dummy({0.0f, top * metrics::scale()});
     ImGui::TextDisabled("%s", label);
     ImVec2 const min   = ImGui::GetItemRectMin();
     float const  y     = ImGui::GetItemRectMax().y + 3.0f * metrics::scale();
     float const  right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
     ImGui::GetWindowDrawList()->AddLine({min.x, y}, {right, y}, theme::kBorder);
-    ImGui::Dummy({0.0f, 3.0f * metrics::scale()});
+    ImGui::Dummy({0.0f, 1.0f * metrics::scale()});
+}
+
+// Sub-group caption inside a section: dim text only, no hairline.
+void subHeader(char const* label, float top) {
+    ImGui::Dummy({0.0f, top * metrics::scale()});
+    ImGui::TextDisabled("%s", label);
+    ImGui::Dummy({0.0f, 1.0f * metrics::scale()});
 }
 
 bool beginPropertyTable(char const* id, float labelWidth) {
@@ -129,6 +135,55 @@ bool frameIconButton(char const* id, char const* icon, char const* tooltip) {
     widgets::drawIconCentred(drawList, icon, origin, size, hovered ? theme::kIconHighlight : theme::kIconInactive);
     widgets::itemTooltip(tooltip);
     return clicked;
+}
+
+// Collapsible section title: same look as sectionHeader but clickable, with a chevron and an optional summary.
+bool collapseHeader(char const* id, char const* label, std::vector<std::string> const& summaryParts, bool open) {
+    float const s = metrics::scale();
+    ImGui::Dummy({0.0f, 10.0f * s});
+    ImVec2 const min    = ImGui::GetCursorScreenPos();
+    float const  width  = ImGui::GetContentRegionAvail().x;
+    float const  height = ImGui::GetFrameHeight() + 2.0f * s;
+    ImVec2 const max    = {min.x + width, min.y + height};
+    if (ImGui::InvisibleButton(id, {width, height})) open = !open;
+    bool const hovered = ImGui::IsItemHovered();
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    auto*       dl   = ImGui::GetWindowDrawList();
+    ImU32 const tone = hovered ? theme::kIconHighlight : theme::kText;
+
+    float const textY = min.y + (height - ImGui::GetFontSize()) * 0.5f;
+    dl->AddText({min.x, textY}, tone, label);
+
+    // Chevron points down while closed and up while open.
+    float const  half       = 4.0f * s;
+    ImVec2 const centre     = {max.x - half - 2.0f * s, min.y + height * 0.5f};
+    float const  dir        = open ? -1.0f : 1.0f;
+    ImVec2 const chevron[3] = {
+        {centre.x - half, centre.y - dir * half * 0.5f},
+        {centre.x,        centre.y + dir * half * 0.5f},
+        {centre.x + half, centre.y - dir * half * 0.5f},
+    };
+    dl->AddPolyline(chevron, 3, hovered ? theme::kIconHighlight : theme::kIconInactive, ImDrawFlags_None, 1.5f * s);
+
+    // Drop trailing parts until the summary fits between the label and the chevron.
+    if (!open) {
+        float const rightEdge = centre.x - half - 8.0f * s;
+        float const leftEdge  = min.x + ImGui::CalcTextSize(label).x + 16.0f * s;
+        for (size_t count = summaryParts.size(); count > 0; --count) {
+            std::string text;
+            for (size_t i = 0; i < count; ++i) text += (i == 0 ? "" : " | ") + summaryParts[i];
+            float const textWidth = ImGui::CalcTextSize(text.c_str()).x;
+            if (rightEdge - textWidth >= leftEdge) {
+                dl->AddText({rightEdge - textWidth, textY}, theme::kTextDim, text.c_str());
+                break;
+            }
+        }
+    }
+
+    float const lineY = max.y + 1.0f * s;
+    dl->AddLine({min.x, lineY}, {max.x, lineY}, theme::kBorder);
+    ImGui::Dummy({0.0f, 2.0f * s});
+    return open;
 }
 
 struct ResolutionPreset {
@@ -200,13 +255,15 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
         }
     }
     if (!mExportSettingsInitialized) {
-        mExportConvergenceFrames = exporting::rayTracingActive() ? DefaultRayTracedConvergenceFrames : 0;
-        auto const stamp         = timestampName();
+        auto const stamp = timestampName();
         std::snprintf(mExportName.data(), mExportName.size(), "%s", stamp.c_str());
     }
     mExportSettingsInitialized = true;
     if (!ffmpegAvailable && mExportFormat == 0) mExportFormat = 1;
-    mExportDialogOpen = true;
+    mExportAdvancedOpen     = false;
+    mExportScrollToAdvanced = false;
+    mExportBodyHeight       = 0.0f;
+    mExportDialogOpen       = true;
 }
 
 void EditorMenuBar::markExportPoint(bool isIn, int tick, int totalTicks) {
@@ -496,7 +553,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     ImVec2 const exportWorkSize = ImGui::GetMainViewport()->WorkSize;
     float const  uiScale        = metrics::scale();
     ImVec2 const exportDialogSize{std::max(1.0f, std::min(580.0f * uiScale, exportWorkSize.x - 24.0f)), 0.0f};
-    ImVec2 const dialogPadding{22.0f * uiScale, 14.0f * uiScale};
+    ImVec2 const dialogPadding{22.0f * uiScale, 16.0f * uiScale};
+    float const  advancedIndent = 14.0f * uiScale;
+    float const  insetBleed     = 8.0f * uiScale;
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     // Height fits the content and never changes; the dialog only scrolls when the viewport is shorter than that.
     ImGui::SetNextWindowSize(exportDialogSize, ImGuiCond_Always);
@@ -505,8 +564,15 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         {exportDialogSize.x, std::max(1.0f, exportWorkSize.y - 24.0f)}
     );
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, dialogPadding);
-    bool const dialogVisible = ImGui::BeginPopupModal("##ExportVideo", &mExportDialogOpen, ImGuiWindowFlags_NoResize);
-    ImGui::PopStyleVar();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * uiScale);
+    // The body child's scrollbar slot overhangs the content by one scrollbar width, so the dialog's own bars are
+    // hidden.
+    bool const dialogVisible = ImGui::BeginPopupModal(
+        "##ExportVideo",
+        &mExportDialogOpen,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar
+    );
+    ImGui::PopStyleVar(2);
     if (dialogVisible) {
         std::string const custom                   = "playback.refactorEditor.export.custom"_tr();
         char const*       fpsOptions[]             = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
@@ -514,23 +580,34 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         char const*       ssaaOptions[]            = {"1x", "2x", "4x"};
         char const*       resolutionPresetLabels[] = {"720p", "1080p", "1440p", "4K"};
         static_assert(IM_ARRAYSIZE(resolutionPresetLabels) == IM_ARRAYSIZE(kResolutionPresets));
-        std::string const mp4Format       = "playback.refactorEditor.export.mp4"_tr();
-        std::string const pngFormat       = "playback.refactorEditor.export.pngSequence"_tr();
-        char const*       formatOptions[] = {mp4Format.c_str(), pngFormat.c_str()};
-        mExportSsaa                       = std::clamp(mExportSsaa, 0, 2);
-        int const maximumReplayTick       = std::max(state.totalTicks, 0);
+        std::string const mp4Format            = "playback.refactorEditor.export.mp4"_tr();
+        std::string const pngFormat            = "playback.refactorEditor.export.pngSequence"_tr();
+        char const*       formatOptions[]      = {mp4Format.c_str(), pngFormat.c_str()};
+        std::string const encodeQuality        = "playback.refactorEditor.export.encodeQuality"_tr();
+        std::string const encodeFast           = "playback.refactorEditor.export.encodeFast"_tr();
+        std::string const encodeFastest        = "playback.refactorEditor.export.encodeFastest"_tr();
+        char const*       encodeSpeedOptions[] = {encodeQuality.c_str(), encodeFast.c_str(), encodeFastest.c_str()};
+        mExportSsaa                            = std::clamp(mExportSsaa, 0, 2);
+        int const maximumReplayTick            = std::max(state.totalTicks, 0);
         // Fixed label column aligns every value; the capped value column stops inputs spanning the dialog.
         auto const& style = ImGui::GetStyle();
         // The label column must fit the longest label that carries a "(?)" hint.
-        float hintedLabelWidth = 0.0f;
+        float const hintExtra = style.ItemInnerSpacing.x + ImGui::CalcTextSize("(?)").x + style.CellPadding.x * 2.0f;
+        float       hintedLabelWidth = 0.0f;
         for (std::string const& label :
-             {"playback.refactorEditor.export.ssaa"_tr(),
-              "playback.refactorEditor.export.warmupFrames"_tr(),
-              "playback.refactorEditor.export.convergenceFrames"_tr()}) {
-            hintedLabelWidth = std::max(hintedLabelWidth, ImGui::CalcTextSize(label.c_str()).x);
+             {"playback.refactorEditor.export.ssaa"_tr(), "playback.refactorEditor.export.warmupFrames"_tr()}) {
+            hintedLabelWidth = std::max(hintedLabelWidth, ImGui::CalcTextSize(label.c_str()).x + hintExtra);
         }
-        hintedLabelWidth       += style.ItemInnerSpacing.x + ImGui::CalcTextSize("(?)").x + style.CellPadding.x * 2.0f;
-        float const labelWidth  = std::min(
+        // Advanced labels sit one indent deeper, yet their values must stay on the shared value column.
+        for (std::string const& label :
+             {"playback.refactorEditor.export.convergenceFrames"_tr(),
+              "playback.refactorEditor.export.accelerateClient"_tr(),
+              "playback.refactorEditor.export.encodeSpeed"_tr(),
+              "playback.refactorEditor.export.crf"_tr()}) {
+            hintedLabelWidth =
+                std::max(hintedLabelWidth, ImGui::CalcTextSize(label.c_str()).x + hintExtra + advancedIndent);
+        }
+        float const labelWidth = std::min(
             std::max(std::clamp(exportDialogSize.x * 0.26f, 96.0f * uiScale, 150.0f * uiScale), hintedLabelWidth),
             exportDialogSize.x * 0.4f
         );
@@ -540,6 +617,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             320.0f * uiScale,
             exportDialogSize.x - dialogPadding.x * 2.0f - labelWidth - style.CellPadding.x * 4.0f
         );
+        // Width/height row: two fields plus the "x" between them; preset rows end on the same edge.
+        float const resolutionRowWidth = fieldWidth * 2.0f + ImGui::CalcTextSize("x").x + style.ItemSpacing.x * 2.0f;
 
         // Header: accent-tinted icon tile with title and subtitle stacked beside it.
         {
@@ -550,7 +629,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 origin,
                 {origin.x + box, origin.y + box},
                 theme::withAlpha(theme::kAccent, 0x40),
-                theme::kFrameRounding * 2.0f
+                6.0f * uiScale
             );
             widgets::drawIconCentred(dl, ICON_EXPORT, origin, box, theme::kAccentHover);
             std::string const title    = "playback.refactorEditor.export.title"_tr();
@@ -563,14 +642,28 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             dl->AddText({textX, topY + lineH + gap}, theme::kTextDim, subtitle.c_str());
             ImGui::Dummy({0.0f, box});
         }
-        ImGui::Dummy({0.0f, 4.0f * uiScale});
-        ImGui::Separator();
-
         float const buttonH = frameH + 6.0f * uiScale;
         // Taller cells give the rows room to breathe without widening the label column.
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, 2.0f * uiScale});
 
-        sectionHeader("playback.refactorEditor.export.output"_tr().c_str());
+        // Auto height while the advanced group is closed; once open the height freezes and the body scrolls.
+        bool const frozenBody = mExportAdvancedOpen && mExportBodyHeight > 0.0f;
+        // The scrollbar slot is always reserved (and invisible while auto-sized) so content width never shifts.
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, 0);
+        if (!frozenBody) {
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, 0);
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, 0);
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, 0);
+        }
+        ImGui::BeginChild(
+            "##export-body",
+            {ImGui::GetContentRegionAvail().x + style.ScrollbarSize, frozenBody ? mExportBodyHeight : 0.0f},
+            frozenBody ? ImGuiChildFlags_None : ImGuiChildFlags_AutoResizeY,
+            ImGuiWindowFlags_AlwaysVerticalScrollbar
+        );
+        ImGui::PopStyleColor(frozenBody ? 1 : 4);
+
+        sectionHeader("playback.refactorEditor.export.output"_tr().c_str(), 8.0f);
         if (beginPropertyTable("##export-output", labelWidth)) {
             propertyLabel("playback.refactorEditor.export.name"_tr().c_str());
             ImGui::SetNextItemWidth(valueWidth);
@@ -664,7 +757,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     resolutionPresetLabels,
                     IM_ARRAYSIZE(resolutionPresetLabels),
                     resolutionPreset,
-                    fieldWidth * 2.0f + style.ItemSpacing.x
+                    resolutionRowWidth
                 )) {
                 mExportWidth  = kResolutionPresets[resolutionPreset].width;
                 mExportHeight = kResolutionPresets[resolutionPreset].height;
@@ -690,7 +783,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     ssaaOptions,
                     IM_ARRAYSIZE(ssaaOptions),
                     mExportSsaa,
-                    fieldWidth * 2.0f + style.ItemSpacing.x,
+                    resolutionRowWidth,
                     ssaaDisabledMask
                 ))
                 mExportSsaa = std::clamp(mExportSsaa, 0, 2);
@@ -700,20 +793,108 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 "playback.refactorEditor.export.warmupHint"_tr().c_str()
             );
             inputClampedInt("##export-warmup", mExportWarmupFrames, 0, 3600, fieldWidth);
-
-            propertyLabel(
-                "playback.refactorEditor.export.convergenceFrames"_tr().c_str(),
-                "playback.refactorEditor.export.convergenceHint"_tr().c_str()
-            );
-            inputClampedInt(
-                "##export-convergence",
-                mExportConvergenceFrames,
-                0,
-                static_cast<int>(exporting::MaxExportConvergenceFrames),
-                fieldWidth
-            );
             ImGui::EndTable();
         }
+
+        bool const               advancedWasOpen = mExportAdvancedOpen;
+        std::vector<std::string> advancedSummary;
+        if (mExportFormat == 0) {
+            advancedSummary.push_back(
+                std::string(encodeSpeedOptions[std::clamp(mExportEncodeSpeed, 0, 2)]) + " | CRF "
+                + std::to_string(mExportCrf)
+            );
+        }
+        if (mExportConvergenceFrames > 0) {
+            advancedSummary.push_back(
+                "playback.refactorEditor.export.advancedSummaryConvergence"_tr(mExportConvergenceFrames)
+            );
+        }
+        if (mExportAccelerateClient) {
+            advancedSummary.push_back("playback.refactorEditor.export.advancedSummaryAccelerate"_tr());
+        }
+        mExportAdvancedOpen = collapseHeader(
+            "##export-advanced",
+            "playback.refactorEditor.export.advanced"_tr().c_str(),
+            advancedSummary,
+            mExportAdvancedOpen
+        );
+        if (mExportAdvancedOpen && !advancedWasOpen) mExportScrollToAdvanced = true;
+        // The body only has its frozen height from the frame after opening, so the scroll waits until then.
+        if (mExportScrollToAdvanced && frozenBody) {
+            ImGui::SetScrollHereY(0.0f);
+            mExportScrollToAdvanced = false;
+        }
+        if (mExportAdvancedOpen) {
+            // Indented group with a hairline down its left edge; tables give back the indent so values stay aligned.
+            float const advancedTop = ImGui::GetCursorScreenPos().y;
+            float const advancedX   = ImGui::GetCursorScreenPos().x;
+            ImGui::Indent(advancedIndent);
+            float const subLabelWidth = labelWidth - advancedIndent;
+            subHeader("playback.refactorEditor.export.advancedEncode"_tr().c_str(), 4.0f);
+            if (beginPropertyTable("##export-encoding", subLabelWidth)) {
+                // Labels stay live so their hints work; only the encoder widgets grey out for a PNG sequence.
+                propertyLabel(
+                    "playback.refactorEditor.export.encodeSpeed"_tr().c_str(),
+                    "playback.refactorEditor.export.encodeSpeedHint"_tr().c_str()
+                );
+                ImGui::BeginDisabled(mExportFormat != 0);
+                mExportEncodeSpeed = std::clamp(mExportEncodeSpeed, 0, 2);
+                segmented(
+                    "##export-encode-speed",
+                    encodeSpeedOptions,
+                    IM_ARRAYSIZE(encodeSpeedOptions),
+                    mExportEncodeSpeed,
+                    valueWidth
+                );
+                ImGui::EndDisabled();
+
+                propertyLabel(
+                    "playback.refactorEditor.export.crf"_tr().c_str(),
+                    "playback.refactorEditor.export.crfHint"_tr().c_str()
+                );
+                ImGui::BeginDisabled(mExportFormat != 0);
+                inputClampedInt("##export-crf", mExportCrf, 0, static_cast<int>(exporting::MaxExportCrf), fieldWidth);
+                ImGui::EndDisabled();
+                ImGui::EndTable();
+            }
+
+            subHeader("playback.refactorEditor.export.advancedRender"_tr().c_str(), 8.0f);
+            if (beginPropertyTable("##export-rendering", subLabelWidth)) {
+                propertyLabel(
+                    "playback.refactorEditor.export.convergenceFrames"_tr().c_str(),
+                    "playback.refactorEditor.export.convergenceHint"_tr().c_str()
+                );
+                inputClampedInt(
+                    "##export-convergence",
+                    mExportConvergenceFrames,
+                    0,
+                    static_cast<int>(exporting::MaxExportConvergenceFrames),
+                    fieldWidth
+                );
+                ImGui::EndTable();
+            }
+
+            subHeader("playback.refactorEditor.export.advancedExperimental"_tr().c_str(), 8.0f);
+            if (beginPropertyTable("##export-experimental", subLabelWidth)) {
+                propertyLabel(
+                    "playback.refactorEditor.export.accelerateClient"_tr().c_str(),
+                    "playback.refactorEditor.export.accelerateClientHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-accelerate-client", &mExportAccelerateClient);
+                ImGui::EndTable();
+            }
+            ImGui::Unindent(advancedIndent);
+            float const advancedBottom = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y;
+            ImGui::GetWindowDrawList()->AddLine(
+                {advancedX + 4.0f * uiScale, advancedTop + 2.0f * uiScale},
+                {advancedX + 4.0f * uiScale, advancedBottom},
+                theme::kBorder
+            );
+        }
+
+        ImGui::EndChild();
+        // The child's size lags a frame, so the last closed frame holds the natural height to freeze at.
+        if (!mExportAdvancedOpen) mExportBodyHeight = ImGui::GetItemRectSize().y;
 
         int const      safeSsaaIndex = std::clamp(mExportSsaa, 0, 2);
         uint32_t const ssaaValue     = 1u << safeSsaaIndex;
@@ -733,7 +914,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         bool const validCapture =
             mExportSsaa >= 0 && mExportSsaa <= 2 && mExportWarmupFrames >= 0 && mExportWarmupFrames <= 3600
             && mExportConvergenceFrames >= 0
-            && static_cast<uint32_t>(mExportConvergenceFrames) <= exporting::MaxExportConvergenceFrames;
+            && static_cast<uint32_t>(mExportConvergenceFrames) <= exporting::MaxExportConvergenceFrames
+            && mExportCrf >= 0 && static_cast<uint32_t>(mExportCrf) <= exporting::MaxExportCrf;
         bool const formatAvailable  = mExportFormat != 0 || capabilities.ffmpegVideoExport;
         bool const rawSettingsValid = validOutput && validTimeline && validFps && validResolution && validCapture
                                    && formatAvailable && state.project != nullptr;
@@ -749,6 +931,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.ssaa              = ssaaValue;
         previewSettings.warmupFrames      = static_cast<uint32_t>(std::max(0, mExportWarmupFrames));
         previewSettings.convergenceFrames = static_cast<uint32_t>(std::max(0, mExportConvergenceFrames));
+        previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
+        previewSettings.videoCrf    = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
+        previewSettings.accelerateClient = mExportAccelerateClient;
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
 
@@ -758,8 +943,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         double const   durationSeconds = validTimeline ? (mExportEndTick - mExportStartTick) / 20.0 : 0.0;
         uint64_t const frameCount      = compiled.plan ? compiled.plan->frameCount : 0;
 
-        // Summary card: a tinted panel so the derived values read apart from the editable fields above.
-        sectionHeader("playback.refactorEditor.export.summary"_tr().c_str());
+        // Read-only recap on a tinted block without an outline, so it reads apart from the editable rows above.
+        ImGui::Dummy({0.0f, 6.0f * uiScale});
         {
             std::string const timelineValue =
                 "playback.refactorEditor.export.summaryValue"_tr(mFps, durationSeconds, frameCount);
@@ -775,46 +960,34 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 auto const u8 = compiled.plan->outputPath.filename().u8string();
                 outputValue.assign(reinterpret_cast<char const*>(u8.data()), u8.size());
             }
-            float const  pad     = 10.0f * uiScale;
-            float const  lineH   = ImGui::GetFontSize() + 4.0f * uiScale;
-            float const  cardH   = pad * 2.0f + lineH * 3.0f - 4.0f * uiScale;
-            float const  cardW   = ImGui::GetContentRegionAvail().x;
-            ImVec2 const cardMin = ImGui::GetCursorScreenPos();
-            ImVec2 const cardMax{cardMin.x + cardW, cardMin.y + cardH};
-            auto*        dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(cardMin, cardMax, theme::kSection, theme::kFrameRounding * 2.0f);
-            dl->AddRect(cardMin, cardMax, theme::kBorder, theme::kFrameRounding * 2.0f);
-
-            // The label column matches the tables above so the card reads as one continuous grid.
-            float const  valueX = cardMin.x + labelWidth + style.CellPadding.x * 2.0f;
-            ImVec2 const row0{cardMin.x + pad, cardMin.y + pad};
-            dl->AddText(row0, theme::kTextDim, "playback.refactorEditor.export.timelineSummary"_tr().c_str());
-            dl->AddText({valueX, row0.y}, theme::kText, timelineValue.c_str());
-            dl->AddText(
-                {row0.x, row0.y + lineH},
-                theme::kTextDim,
-                "playback.refactorEditor.export.captureSummary"_tr().c_str()
+            // The block bleeds past the window padding while its rows stay on the shared label/value columns.
+            float const  padY     = 6.0f * uiScale;
+            float const  rowH     = ImGui::GetTextLineHeight() + style.CellPadding.y * 2.0f;
+            float const  blockH   = padY * 2.0f + rowH * 3.0f;
+            float const  blockW   = ImGui::GetContentRegionAvail().x;
+            ImVec2 const blockMin = ImGui::GetCursorScreenPos();
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                {blockMin.x - insetBleed, blockMin.y},
+                {blockMin.x + blockW + insetBleed, blockMin.y + blockH},
+                theme::kBgPanel,
+                6.0f * uiScale
             );
-            dl->AddText({valueX, row0.y + lineH}, theme::kText, captureValue.c_str());
-            dl->AddText(
-                {row0.x, row0.y + lineH * 2.0f},
-                theme::kTextDim,
-                "playback.refactorEditor.export.outputSummary"_tr().c_str()
-            );
-            // Clipped to the card so a long name cannot spill past the border.
-            ImVec4 const clip{valueX, cardMin.y, cardMax.x - pad, cardMax.y};
-            dl->AddText(
-                nullptr,
-                0.0f,
-                {valueX, row0.y + lineH * 2.0f},
-                theme::kText,
-                outputValue.c_str(),
-                nullptr,
-                0.0f,
-                &clip
-            );
-            ImGui::SetCursorScreenPos({cardMin.x, cardMax.y});
-            ImGui::Dummy({cardW, style.ItemSpacing.y});
+            ImGui::SetCursorScreenPos({blockMin.x, blockMin.y + padY});
+            if (beginPropertyTable("##export-summary", labelWidth)) {
+                auto const summaryRow = [](char const* label, std::string const& value) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextDisabled("%s", label);
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(value.c_str());
+                };
+                summaryRow("playback.refactorEditor.export.timelineSummary"_tr().c_str(), timelineValue);
+                summaryRow("playback.refactorEditor.export.captureSummary"_tr().c_str(), captureValue);
+                summaryRow("playback.refactorEditor.export.outputSummary"_tr().c_str(), outputValue);
+                ImGui::EndTable();
+            }
+            ImGui::SetCursorScreenPos({blockMin.x, blockMin.y + blockH});
+            ImGui::Dummy({blockW, 0.0f});
         }
 
         // Note slot: always reserved, so a validation warning or the FFmpeg note never changes the dialog height.
@@ -837,18 +1010,26 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             float const  pad    = 10.0f * uiScale;
             float const  stripH = frameH + 6.0f * uiScale;
             float const  stripW = ImGui::GetContentRegionAvail().x;
-            ImVec2 const min    = ImGui::GetCursorScreenPos();
-            ImVec2 const max{min.x + stripW, min.y + stripH};
+            ImVec2 const cursor = ImGui::GetCursorScreenPos();
+            // Same bleed as the summary block, so both strips share their outer edges.
+            ImVec2 const min{cursor.x - insetBleed, cursor.y};
+            ImVec2 const max{cursor.x + stripW + insetBleed, cursor.y + stripH};
             ImGui::Dummy({stripW, stripH});
             if (!note.empty()) {
                 auto* dl = ImGui::GetWindowDrawList();
-                dl->AddRectFilled(min, max, theme::withAlpha(noteTone, 0x22), theme::kFrameRounding);
-                dl->AddRectFilled(min, {min.x + 3.0f * uiScale, max.y}, noteTone, theme::kFrameRounding);
+                dl->AddRectFilled(min, max, theme::withAlpha(noteTone, 0x22), 6.0f * uiScale);
+                dl->AddRectFilled(
+                    min,
+                    {min.x + 3.0f * uiScale, max.y},
+                    noteTone,
+                    6.0f * uiScale,
+                    ImDrawFlags_RoundCornersLeft
+                );
                 float const iconBox = metrics::iconGlyph();
                 widgets::drawIconCentred(
                     dl,
                     noteIcon,
-                    {min.x + pad, min.y + (stripH - iconBox) * 0.5f},
+                    {cursor.x, min.y + (stripH - iconBox) * 0.5f},
                     iconBox,
                     noteTone
                 );
@@ -856,7 +1037,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 dl->AddText(
                     nullptr,
                     0.0f,
-                    {min.x + pad + iconBox + pad * 0.75f, min.y + widgets::textOffsetInBox(stripH, note.c_str())},
+                    {cursor.x + iconBox + pad * 0.75f, min.y + widgets::textOffsetInBox(stripH, note.c_str())},
                     theme::kText,
                     note.c_str(),
                     nullptr,
@@ -869,7 +1050,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
         ImGui::PopStyleVar();
         ImGui::Separator();
-        ImGui::Dummy({0.0f, 4.0f * uiScale});
+        ImGui::Dummy({0.0f, 5.0f * uiScale});
 
         // Footer: quiet cancel on the left of an accent-filled primary action, both one button height tall.
         std::string const cancelLabel = "playback.refactorEditor.export.cancel"_tr();
@@ -877,8 +1058,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         float const       labelPad    = style.FramePadding.x * 4.0f;
         float const cancelWidth = std::max(96.0f * uiScale, ImGui::CalcTextSize(cancelLabel.c_str()).x + labelPad);
         float const startWidth  = std::max(150.0f * uiScale, ImGui::CalcTextSize(startLabel.c_str()).x + labelPad);
-        float const footerWidth = cancelWidth + style.ItemSpacing.x + startWidth;
+        float const footerGap   = 8.0f * uiScale;
+        float const footerWidth = cancelWidth + footerGap + startWidth;
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - footerWidth - dialogPadding.x));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f * uiScale);
         ImGui::PushStyleColor(ImGuiCol_Button, theme::withAlpha(theme::kButton, 0x00));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kButtonHover);
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kButtonActive);
@@ -887,7 +1070,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::PopStyleColor(3);
-        ImGui::SameLine();
+        ImGui::SameLine(0.0f, footerGap);
         ImGui::BeginDisabled(!validSettings || exportActive);
         ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kAccentHover);
@@ -902,6 +1085,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         }
         ImGui::PopStyleColor(4);
         ImGui::EndDisabled();
+        ImGui::PopStyleVar();
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             mExportDialogOpen = false;
