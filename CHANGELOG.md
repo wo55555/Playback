@@ -7,14 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added encode speed (Quality, Fast, Fastest) and CRF settings for MP4 export under Advanced. They map to the libx264 `medium`, `veryfast` and `ultrafast` presets and `-crf`; the defaults match the previous fixed `medium` / CRF 18.
+- Added an experimental Accelerate client option under Advanced that hands out client ticks as soon as an export asks for one instead of waiting for the game's 20 Hz timer. It is off by default.
+
 ### Changed
 
+- Regrouped the export dialog into output, timeline and capture sections plus a collapsible Advanced section that keeps the dialog height and scrolls instead of growing.
 - Export frames whose scene misses the capture are now re-rendered as soon as the miss is detected instead of after a timeout, making exports several times faster.
 - Splitters and the timeline zoom bar now show an open or closed hand cursor, and splitters highlight while hovered or dragged.
 - Restyled the timeline zoom bar with ring handles and a thin grey bar.
 - Delete, rename and error prompts in the replay list and editor now share one dialog style.
 - The selected replay in the replay list is tinted with the accent colour and outlined, so it is easy to tell from hover.
 - Raised the export convergence frame limit from 240 to 1000.
+- Moved the export convergence frame count into the Advanced section and made it default to 0 on every renderer, including ray tracing.
+- Opening the Advanced section of the export dialog now scrolls it into view.
 
 ### Fixed
 
