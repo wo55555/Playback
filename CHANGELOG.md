@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3-mc26.10] - 2026-10-11
+
+### Added
+
+- Added encode speed (Quality, Fast, Fastest) and CRF settings for MP4 export under Advanced. They map to the libx264 `medium`, `veryfast` and `ultrafast` presets and `-crf`; the defaults match the previous fixed `medium` / CRF 18.
+- Added an experimental Accelerate client option under Advanced that hands out client ticks as soon as an export asks for one instead of waiting for the game's 20 Hz timer. It is off by default.
+
+### Changed
+
+- Regrouped the export dialog into output, timeline and capture sections plus a collapsible Advanced section that keeps the dialog height and scrolls instead of growing.
+- Export frames whose scene misses the capture are now re-rendered as soon as the miss is detected instead of after a timeout, making exports several times faster.
+- Splitters and the timeline zoom bar now show an open or closed hand cursor, and splitters highlight while hovered or dragged.
+- Restyled the timeline zoom bar with ring handles and a thin grey bar.
+- Delete, rename and error prompts in the replay list and editor now share one dialog style.
+- The selected replay in the replay list is tinted with the accent colour and outlined, so it is easy to tell from hover.
+- Raised the export convergence frame limit from 240 to 1000.
+- Moved the export convergence frame count into the Advanced section and made it default to 0 on every renderer, including ray tracing.
+- Opening the Advanced section of the export dialog now scrolls it into view.
+
+### Fixed
+
+- Fixed long exports slowing down and GPU usage dropping after about 15 minutes without input. The game's Eco Mode is now switched off while an export runs and restored afterwards, including when the export fails with an error or the game is killed mid-export (restored on the next launch).
+- Pinned the replay world time before every render pass of an export frame, so the level clock cannot drift between passes.
+- Fixed the export progress UI blurring when the export resolution is below the window size; it now draws on its own layer at the window resolution.
+- Fixed the replay list flashing and reloading every thumbnail when a replay is deleted.
+- Fixed the selected replay's highlight flickering in the replay list.
+
 ## [0.3.2-mc26.10] - 2026-10-01
 
 ### Added
@@ -230,7 +257,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.10...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.10...HEAD
+[0.3.3-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.10...v0.3.3-mc26.10
 [0.3.1-mc26.40]: https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40
 [0.3.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.10...v0.3.1-mc26.10
 [0.3.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.10...v0.3.0-mc26.10

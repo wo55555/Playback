@@ -5,7 +5,7 @@
   <p>面向 Windows LeviLamina 的开源 Minecraft 基岩版回放录制与电影相机编辑模组，并提供实验性视频导出。</p>
 
   <p>
-    <img src="https://img.shields.io/badge/release-v0.3.2-4c8bf5?style=flat-square" alt="Playback v0.3.2">
+    <img src="https://img.shields.io/badge/release-v0.3.3-4c8bf5?style=flat-square" alt="Playback v0.3.3">
     <img src="https://img.shields.io/badge/Minecraft%20Bedrock-Windows%20x64-62b47a?style=flat-square" alt="Windows x64 Minecraft 基岩版">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 许可证"></a>
   </p>
@@ -100,10 +100,10 @@ Playback 将客户端可见的 Minecraft 基岩版游戏过程录制为便携回
 
 ## 本版更新
 
-`v0.3.2` 是面向 MC 26.10、MC 26.20、MC 26.40 和 MC 26.51 的导出向预发布版本。视频导出新增 4x 超采样档位、GPU 降采样、独立的归一化与编码阶段，以及在每次采集前让光追降噪器收敛的收敛帧；输出文件现在直接使用所填名称。导出对话框经过打磨，导出期间取消按钮可正常响应，回放浏览器按需加载缩略图；安装独立的 OptiPiston 模组时，Playback 会用回放时钟驱动其活塞动画。MC 26.51 版本修复了回放中玩家皮肤和自定义方块几何无法加载的问题。
+`v0.3.3` 是面向 MC 26.10、MC 26.20、MC 26.40 和 MC 26.51 的导出向预发布版本。视频导出在新增的可折叠「高级设置」中提供编码速度与 CRF 选项和实验性的客户端加速选项，丢失的场景采样不再等待超时而是立即重渲，收敛帧默认改为 0（上限 1000）。导出期间会关闭游戏的节能模式并在结束后恢复，导出中断后也会恢复。导出对话框重新分组，回放列表与时间轴缩放条经过重绘，分隔条显示抓手光标。
 
 > [!CAUTION]
-> Playback 当前发布的仍是预发布版本，可能直接进行破坏性的格式或配置更新。早于 `v0.2.0` 的版本创建的回放不兼容，必须重新录制。受影响服务器在 2026 年 8 月 20 日热更新前录制的回放可能已经缺少可移植区块或自定义实体注册数据，这类归档无法修复，也必须重新录制；同一发行线上 `v0.2.0` 及之后版本录制的完整回放与 `v0.3.2` 兼容，无需转换。配置版本、录制文件的快照上下文版本和编辑器工程格式版本均为 `1`，不提供迁移层。
+> Playback 当前发布的仍是预发布版本，可能直接进行破坏性的格式或配置更新。早于 `v0.2.0` 的版本创建的回放不兼容，必须重新录制。受影响服务器在 2026 年 8 月 20 日热更新前录制的回放可能已经缺少可移植区块或自定义实体注册数据，这类归档无法修复，也必须重新录制；同一发行线上 `v0.2.0` 及之后版本录制的完整回放与 `v0.3.3` 兼容，无需转换。配置版本、录制文件的快照上下文版本和编辑器工程格式版本均为 `1`，不提供迁移层。
 
 > [!IMPORTANT]
 > 主菜单中的 **Playback** 按钮仍依赖轻量 UI 资源包。通过 Lip 或完整 Release ZIP 安装时，资源包会放入 `mods/playback/resource_packs/playback-ui/`；Release 同时提供 `playback-ui.mcpack` 供单独手动导入。
@@ -112,14 +112,14 @@ Playback 将客户端可见的 Minecraft 基岩版游戏过程录制为便携回
 
 ## 兼容性
 
-Playback 针对不同 Minecraft 与 LeviLamina 版本维护独立发行线。产品版本 `0.3.2` 已为下表所有运行时发布；请安装与当前实例匹配的版本。四个版本均为预发布版本。
+Playback 针对不同 Minecraft 与 LeviLamina 版本维护独立发行线。产品版本 `0.3.3` 已为下表所有运行时发布；请安装与当前实例匹配的版本。四个版本均为预发布版本。
 
 | Minecraft / LeviLamina | Playback 版本                                                                       | 状态   |
 | ---------------------- | ----------------------------------------------------------------------------------- | ------ |
-| `26.10.*`              | [`v0.3.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.10) | 预发布 |
-| `26.20.*`              | [`v0.3.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.20) | 预发布 |
-| `26.40.*`              | [`v0.3.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.40) | 预发布 |
-| `26.51.*`              | [`v0.3.2-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.3.2-mc26.50) | 预发布 |
+| `26.10.*`              | [`v0.3.3-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.10) | 预发布 |
+| `26.20.*`              | [`v0.3.3-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.20) | 预发布 |
+| `26.40.*`              | [`v0.3.3-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.40) | 预发布 |
+| `26.51.*`              | [`v0.3.3-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.50) | 预发布 |
 
 所有发行线均面向 Windows x64 平台的 Minecraft 基岩版，并以纯客户端模组形式发布。
 
@@ -158,7 +158,7 @@ Playback 是面向 Windows x64 LeviLamina 客户端的 Minecraft 基岩版回放
 
 ### Playback 可以将回放导出为视频吗？
 
-`v0.3.2` 提供实验性的 H.264 MP4 和 PNG 序列导出。目前仍存在已知限制，并且不包含音频。
+`v0.3.3` 提供实验性的 H.264 MP4 和 PNG 序列导出。目前仍存在已知限制，并且不包含音频。
 
 ### 相机关键帧会跨维度插值吗？
 
@@ -166,7 +166,7 @@ Playback 是面向 Windows x64 LeviLamina 客户端的 Minecraft 基岩版回放
 
 ### 应该安装哪个 Playback 版本？
 
-Minecraft/LeviLamina `26.10.*` 使用 `v0.3.2-mc26.10`，`26.20.*` 使用 `v0.3.2-mc26.20`，`26.40.*` 使用 `v0.3.2-mc26.40`，`26.51.*` 使用 `v0.3.2-mc26.50`。上述四个版本均为预发布版本。不要混装不同发行线，参见[兼容性](#兼容性)。
+Minecraft/LeviLamina `26.10.*` 使用 `v0.3.3-mc26.10`，`26.20.*` 使用 `v0.3.3-mc26.20`，`26.40.*` 使用 `v0.3.3-mc26.40`，`26.51.*` 使用 `v0.3.3-mc26.50`。上述四个版本均为预发布版本。不要混装不同发行线，参见[兼容性](#兼容性)。
 
 ## 开发状态与计划
 

@@ -22,6 +22,14 @@ struct OfflineReplayTickCompletion {
 
 enum class OfflineReplayTickRequestResult : uint8_t { Requested, Unavailable, Busy };
 
+// How long requested ticks waited for the game's own 20 Hz timer to hand them to the gate.
+struct OfflineReplayTickPacing {
+    uint64_t requests{};
+    uint64_t claims{};
+    uint64_t claimLatencyMicros{};
+    uint64_t maxClaimLatencyMicros{};
+};
+
 [[nodiscard]] bool hookClientTick(bool enable);
 
 [[nodiscard]] bool beginOfflineReplayTickGate();
@@ -30,5 +38,10 @@ void               endOfflineReplayTickGate();
 [[nodiscard]] OfflineReplayTickRequestResult             requestOfflineReplayTick(OfflineReplayTickToken& token);
 [[nodiscard]] bool                                       wasOfflineReplayTickCompleted(OfflineReplayTickToken token);
 [[nodiscard]] std::optional<OfflineReplayTickCompletion> getOfflineReplayTickCompletion(OfflineReplayTickToken token);
+
+// True while a requested tick has not yet reached the level tick hook.
+[[nodiscard]] bool hasPendingOfflineReplayTick();
+// Returns the pacing counters gathered since the last call and resets them.
+[[nodiscard]] OfflineReplayTickPacing takeOfflineReplayTickPacing();
 
 } // namespace playback::runtime

@@ -6,6 +6,7 @@
 #include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/runtime/ClientTickHooks.h"
 
 #include "ll/api/memory/Hook.h"
 
@@ -15,7 +16,10 @@
 #include "mc/platform/threading/Mutex.h"
 #include "mc/util/Timer.h"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <mutex>
@@ -26,13 +30,29 @@ namespace playback::exporting {
 
 namespace {
 
+constexpr auto MissedSceneRetryDelay = std::chrono::milliseconds(250);
+// A render can return without its scene ever reaching the submit hook; the wait scales with observed latency.
+constexpr auto   MinLostSceneRetryDelay = std::chrono::milliseconds(250);
+constexpr auto   MaxLostSceneRetryDelay = std::chrono::milliseconds(2000);
+constexpr size_t SceneLatencyWindow     = 64;
+constexpr size_t MinSceneLatencySamples = 8;
+constexpr int    SceneLatencyMargin     = 3;
+// Accepted scenes have always arrived before the first overlay submit that entered after the permit.
+constexpr uint32_t LostSceneOverlaySubmits = 3;
+// Overlay-driven retries are fast, so the bound is wall time rather than attempts.
+constexpr auto     MaxSceneRetryDuration = std::chrono::seconds(120);
+constexpr uint32_t MaxMissedSceneRetries = 100'000;
+
 struct ActiveClockSample {
     OfflineRenderClockToken                     token;
     OfflineRenderClockSample                    sample;
     keyframe::CameraTimelineRenderContextHandle cameraContext;
+    std::chrono::steady_clock::time_point       renderReturnedAt;
+    std::chrono::steady_clock::time_point       sceneRetryStartedAt;
     uint64_t                                    captureGeneration{};
     uint64_t                                    renderSerial{};
     uint32_t                                    gameRenderOrdinal{};
+    uint32_t                                    sceneRetries{};
     bool                                        captureArmed{};
     bool                                        claimed{};
     bool                                        renderReady{};
@@ -64,6 +84,68 @@ std::optional<ActiveClockSample>               gActiveSample;
 uint64_t                                       gNextTokenId{1};
 uint64_t                                       gNextRenderSerial{1};
 thread_local std::optional<ActiveRenderSample> gRenderSample;
+
+// The timer handed to updateGraphics is the one whose ticks the client loop runs.
+std::atomic<Timer const*>     gSimTimer{nullptr};
+std::atomic<uint64_t>         gOtherTimerAdvances{0};
+std::mutex                    gClientBoostMutex;
+OfflineRenderClientBoostStats gClientBoostStats;
+bool                          gClientBoostInstalled{false};
+
+// Guarded by gClockMutex; reset per export.
+struct SceneLatencyStats {
+    std::array<std::chrono::steady_clock::duration, SceneLatencyWindow> recent{};
+    size_t                                                              recentCount{};
+    size_t                                                              recentNext{};
+    uint32_t                                                            earlyRetries{};
+    uint32_t                                                            lostRetries{};
+    uint32_t                                                            framesRetried{};
+    uint32_t                                                            maxFrameRetries{};
+    uint64_t                                                            maxFrameRetriesFrame{};
+    std::chrono::steady_clock::duration                                 maxFrameRetrying{};
+};
+SceneLatencyStats gSceneLatency;
+
+std::chrono::steady_clock::duration lostSceneRetryDelay() {
+    if (gSceneLatency.recentCount < MinSceneLatencySamples) return MaxLostSceneRetryDelay;
+    auto const worst = *std::max_element(
+        gSceneLatency.recent.begin(),
+        gSceneLatency.recent.begin() + static_cast<std::ptrdiff_t>(gSceneLatency.recentCount)
+    );
+    return std::clamp<std::chrono::steady_clock::duration>(
+        worst * SceneLatencyMargin,
+        MinLostSceneRetryDelay,
+        MaxLostSceneRetryDelay
+    );
+}
+
+void recordSceneLatency(ActiveClockSample const& active) {
+    if (active.captureGeneration == 0 || !active.renderReturned) return;
+    auto const acceptedAt = offlineRenderSceneAcceptedAt(active.captureGeneration);
+    if (!acceptedAt) return;
+    gSceneLatency.recent[gSceneLatency.recentNext] =
+        std::max(*acceptedAt - active.renderReturnedAt, std::chrono::steady_clock::duration{});
+    gSceneLatency.recentNext  = (gSceneLatency.recentNext + 1) % SceneLatencyWindow;
+    gSceneLatency.recentCount = std::min(gSceneLatency.recentCount + 1, SceneLatencyWindow);
+}
+
+void reportSceneRetries() {
+    SceneLatencyStats stats;
+    {
+        std::scoped_lock lock(gClockMutex);
+        stats = std::exchange(gSceneLatency, SceneLatencyStats{});
+    }
+    if (stats.framesRetried == 0) return;
+    Playback::getInstance().getSelf().getLogger().debug(
+        "Offline scene retries: frames={}, early={}, lost={}, worstFrame(frame={}, retries={}, ms={})",
+        stats.framesRetried,
+        stats.earlyRetries,
+        stats.lostRetries,
+        stats.maxFrameRetriesFrame,
+        stats.maxFrameRetries,
+        std::chrono::duration_cast<std::chrono::milliseconds>(stats.maxFrameRetrying).count()
+    );
+}
 
 class ScopedRenderSample {
 public:
@@ -182,8 +264,9 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
 void completeClockSample(OfflineRenderClockToken token, uint64_t renderSerial, bool entityApplied) {
     std::scoped_lock lock(gClockMutex);
     if (!gActiveSample || gActiveSample->token.id != token.id || gActiveSample->renderSerial != renderSerial) return;
-    gActiveSample->entityApplied  = entityApplied;
-    gActiveSample->renderReturned = true;
+    gActiveSample->entityApplied    = entityApplied;
+    gActiveSample->renderReturned   = true;
+    gActiveSample->renderReturnedAt = std::chrono::steady_clock::now();
     if (gActiveSample->captureGeneration != 0) {
         (void)permitOfflineRenderSceneSample(gActiveSample->captureGeneration);
     }
@@ -212,6 +295,7 @@ LL_TYPE_INSTANCE_HOOK(
     Bedrock::NotNullNonOwnerPtr<IClientInstance> const& client,
     Timer const&                                        timer
 ) {
+    gSimTimer.store(&timer, std::memory_order_release);
     // Export steps resolve on this path, so advance before rendering instead of waiting for the 20Hz client tick.
     if (isOfflineRenderActivityActive()) editor::tickReplayExportDuringGraphics();
 
@@ -260,7 +344,47 @@ LL_TYPE_INSTANCE_HOOK(
     }
     ++sample->gameRenderCalls;
     recordGameRenderStart(sample->token, sample->renderSerial, sample->gameRenderCalls);
+    replay::ReplaySession::getInstance().enforceReplayWorldTime();
     origin(partialTick);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    OfflineRenderClientBoostHook,
+    ll::memory::HookPriority::Normal,
+    Timer,
+    &Timer::advanceTime,
+    void,
+    float preferredFrameStep
+) {
+    origin(preferredFrameStep);
+
+    if (this != gSimTimer.load(std::memory_order_acquire)) {
+        gOtherTimerAdvances.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    bool const pending = runtime::hasPendingOfflineReplayTick();
+    int const  natural = this->mTicks;
+
+    std::scoped_lock lock(gClientBoostMutex);
+    auto&            stats = gClientBoostStats;
+    ++stats.advances;
+    if (!pending) return;
+    ++stats.pendingAdvances;
+    if (natural >= 1) {
+        ++stats.naturalTicks;
+        return;
+    }
+
+    // The level tick hook swallows every tick except the requested one, so one is all the gate needs.
+    this->mTicks       = 1;
+    float const passed = this->mPassedTime;
+    if (++stats.forcedTicks == 1) {
+        stats.minPassedAfterForce = stats.maxPassedAfterForce = passed;
+    } else {
+        stats.minPassedAfterForce = std::min(stats.minPassedAfterForce, passed);
+        stats.maxPassedAfterForce = std::max(stats.maxPassedAfterForce, passed);
+    }
 }
 
 } // namespace
@@ -275,8 +399,11 @@ bool hookOfflineRenderClock(bool enable) {
     auto removeAll = [&] {
         gHookInstalled.store(false, std::memory_order_release);
         resetOfflineRenderClock();
+        reportSceneRetries();
+        (void)setOfflineRenderClientBoost(false);
         if (state.gameFrame && OfflineRenderGameFrameHook::unhook()) state.gameFrame = false;
         if (state.clock && OfflineRenderClockUpdateGraphicsHook::unhook()) state.clock = false;
+        gSimTimer.store(nullptr, std::memory_order_release);
         return !state.clock && !state.gameFrame;
     };
 
@@ -307,6 +434,28 @@ bool hookOfflineRenderClock(bool enable) {
 }
 
 bool isOfflineRenderClockInstalled() { return gHookInstalled.load(std::memory_order_acquire); }
+
+bool setOfflineRenderClientBoost(bool enable) {
+    if (enable == gClientBoostInstalled) return true;
+    if (enable) {
+        {
+            std::scoped_lock lock(gClientBoostMutex);
+            gClientBoostStats = {};
+        }
+        gOtherTimerAdvances.store(0, std::memory_order_relaxed);
+        gClientBoostInstalled = OfflineRenderClientBoostHook::hook() == 0;
+        return gClientBoostInstalled;
+    }
+    if (OfflineRenderClientBoostHook::unhook()) gClientBoostInstalled = false;
+    return !gClientBoostInstalled;
+}
+
+OfflineRenderClientBoostStats takeOfflineRenderClientBoostStats() {
+    std::scoped_lock lock(gClientBoostMutex);
+    auto             stats   = std::exchange(gClientBoostStats, OfflineRenderClientBoostStats{});
+    stats.otherTimerAdvances = gOtherTimerAdvances.exchange(0, std::memory_order_relaxed);
+    return stats;
+}
 
 OfflineRenderClockPublishResult
 publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token, bool captureSample) {
@@ -406,6 +555,63 @@ void markOfflineRenderClockCaptureArmed(OfflineRenderClockToken token) {
     }
 }
 
+bool retryMissedOfflineRenderScene(OfflineRenderClockToken token) {
+    if (!token) return false;
+    uint64_t frameIndex{};
+    uint32_t attempt{};
+    uint32_t overlays{};
+    int64_t  waitedMs{};
+    int64_t  retryingMs{};
+    bool     early{};
+    {
+        std::scoped_lock lock(gClockMutex);
+        if (!gActiveSample || gActiveSample->token.id != token.id) return false;
+        auto& active = *gActiveSample;
+        if (active.captureGeneration == 0 || !active.captureArmed || !active.renderReturned
+            || active.sceneRetries >= MaxMissedSceneRetries || !isOfflineRenderScenePending(active.captureGeneration)) {
+            return false;
+        }
+        auto const now = std::chrono::steady_clock::now();
+        if (active.sceneRetries != 0 && now - active.sceneRetryStartedAt >= MaxSceneRetryDuration) return false;
+        auto const sinceReturn = now - active.renderReturnedAt;
+        early                  = wasOfflineRenderSceneMissed(active.captureGeneration);
+        overlays               = offlineRenderOverlaySubmitsAfterPermit(active.captureGeneration);
+        bool const due         = overlays >= LostSceneOverlaySubmits
+                      || sinceReturn >= (early ? MissedSceneRetryDelay : lostSceneRetryDelay());
+        if (!due) return false;
+
+        if (active.sceneRetries == 0) active.sceneRetryStartedAt = now;
+        waitedMs   = std::chrono::duration_cast<std::chrono::milliseconds>(sinceReturn).count();
+        retryingMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - active.sceneRetryStartedAt).count();
+        ++(early ? gSceneLatency.earlyRetries : gSceneLatency.lostRetries);
+
+        active.captureGeneration = beginOfflineRenderSceneSample();
+        active.claimed           = false;
+        active.renderReady       = false;
+        active.entityApplied     = false;
+        active.renderReturned    = false;
+        if (active.cameraContext && active.cameraContext->appliedFlag) {
+            active.cameraContext->appliedFlag->store(false, std::memory_order_release);
+        }
+        attempt    = ++active.sceneRetries;
+        frameIndex = active.sample.frameIndex;
+    }
+    // Fast retries can run hundreds of times during a long stall.
+    if (attempt <= 3 || attempt % 100 == 0) {
+        Playback::getInstance().getSelf().getLogger().debug(
+            "Offline scene sample missed; re-rendering (frame={}, attempt={}, reason={}, waitedMs={}, overlays={}, "
+            "retryingMs={})",
+            frameIndex,
+            attempt,
+            early ? "early-submit" : "no-scene-after-render",
+            waitedMs,
+            overlays,
+            retryingMs
+        );
+    }
+    return true;
+}
+
 bool wasOfflineRenderClockSampleApplied(OfflineRenderClockToken token) {
     if (!token) return false;
     std::scoped_lock lock(gClockMutex);
@@ -433,6 +639,15 @@ void clearOfflineRenderClockSample(OfflineRenderClockToken token) {
     {
         std::scoped_lock lock(gClockMutex);
         if (!gActiveSample || gActiveSample->token.id != token.id) return;
+        recordSceneLatency(*gActiveSample);
+        if (auto const retries = gActiveSample->sceneRetries; retries != 0) {
+            ++gSceneLatency.framesRetried;
+            if (retries > gSceneLatency.maxFrameRetries) {
+                gSceneLatency.maxFrameRetries      = retries;
+                gSceneLatency.maxFrameRetriesFrame = gActiveSample->sample.frameIndex;
+                gSceneLatency.maxFrameRetrying = std::chrono::steady_clock::now() - gActiveSample->sceneRetryStartedAt;
+            }
+        }
         cameraContext = std::move(gActiveSample->cameraContext);
         if (gActiveSample->captureGeneration != 0) {
             (void)invalidateOfflineRenderSceneSampleIfCurrent(gActiveSample->captureGeneration);

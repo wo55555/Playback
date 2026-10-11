@@ -506,6 +506,12 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         return waiting(OfflineRenderWaitReason::CollectPending);
     }
 
+    // The capture is still armed, so a scene submit that raced the permit was discarded and must be rendered again.
+    // Each re-render gets its own timeout; the retry cap bounds the total wait.
+    if (captureStatus.armed && captureStatus.inFlightFrames == 0 && retryMissedOfflineRenderScene(*mClockToken)) {
+        mRenderWaitStartedAt = {};
+    }
+
     auto const now = std::chrono::steady_clock::now();
     if (mRenderWaitStartedAt == std::chrono::steady_clock::time_point{}) mRenderWaitStartedAt = now;
     if (mRenderWaitLastLoggedAt == std::chrono::steady_clock::time_point{}
