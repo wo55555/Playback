@@ -20,6 +20,22 @@ struct FrameRate {
 
 enum class ExportFormat : uint8_t { Mp4Video, PngSequence };
 
+// Maps to the libx264 preset: faster presets trade file size and some sharpness for encode speed.
+enum class VideoEncodeSpeed : uint8_t { Quality, Fast, Fastest };
+
+[[nodiscard]] constexpr char const* x264Preset(VideoEncodeSpeed speed) {
+    switch (speed) {
+    case VideoEncodeSpeed::Fast:
+        return "veryfast";
+    case VideoEncodeSpeed::Fastest:
+        return "ultrafast";
+    case VideoEncodeSpeed::Quality:
+    default:
+        return "medium";
+    }
+}
+
+constexpr uint32_t MaxExportCrf        = 51;
 constexpr uint32_t MaxExportResolution = 16'384;
 constexpr uint32_t MaxExportSsaa       = 4;
 constexpr uint64_t MaxExportPixels     = (512ull * 1024 * 1024) / 4;
@@ -47,8 +63,13 @@ struct ExportSettings {
     uint32_t resolutionY{};
     uint32_t ssaa{1};
     uint32_t warmupFrames{60};
-    // Ray-traced denoisers accumulate across frames, so one render per output frame leaves streaks in the sky.
-    uint32_t convergenceFrames{8};
+    // Extra renders per frame so ray-traced temporal accumulation can settle; each one costs a full render.
+    uint32_t convergenceFrames{0};
+    // Experimental: hand out client ticks as soon as the export asks instead of waiting for the 20 Hz game timer.
+    bool accelerateClient{false};
+    // MP4 only; the defaults are what the writer used before these were configurable.
+    VideoEncodeSpeed encodeSpeed{VideoEncodeSpeed::Quality};
+    uint32_t         videoCrf{18};
 };
 
 enum class ExportError : uint8_t {
