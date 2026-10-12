@@ -28,6 +28,7 @@ struct EditorState {
     bool                                                         editorVisible{};
     bool                                                         hudVisible{};
     bool                                                         paused{};
+    bool                                                         followingRecordedPlayer{};
     float                                                        playbackSpeed{1.0f};
     int                                                          currentTick{};
     int                                                          totalTicks{};
