@@ -167,6 +167,8 @@ private:
     bool                                        mObserverPreviewInRange{false};
     std::optional<keyframe::CameraRenderState>  mPausedPreviewPose;
     uint64_t                                    mPausedPreviewSeekCount{};
+    std::atomic<bool>                           mFollowRecordedPlayer{false};
+    bool                                        mTeleportToSubjectPending{false};
     std::atomic<uint64_t>                       mSeekFinishCount{0};
     uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
@@ -317,6 +319,9 @@ private:
 
     void updatePausedObserverPreview();
 
+    // Parks the observer on the recorded player for a pending teleport or while following; true if following.
+    [[nodiscard]] bool updateSubjectFollow();
+
     // Align the server authority with the client so a paused replay isn't pulled back.
     void syncObserverServerPosition(::Vec3 const& feetPosition, ::Vec2 const& rotation);
 
@@ -383,6 +388,16 @@ public:
     // Preview drives the observer (the camera) per frame at the render partial tick.
 
     void updateObserverPreview();
+
+    // Moves the observer onto the recorded player once, as soon as the replay world and the player's pose are ready.
+    void requestTeleportToRecordedPlayer() noexcept { mTeleportToSubjectPending = true; }
+
+    // Keeps the observer on the recorded player's first-person view until the user takes over or picks a camera.
+    void setFollowRecordedPlayer(bool follow);
+
+    [[nodiscard]] bool isFollowingRecordedPlayer() const noexcept {
+        return mFollowRecordedPlayer.load(std::memory_order_acquire);
+    }
 
     [[nodiscard]] int getCurrentTick() const {
         int const requestedTick = mRequestedSeekTick.load(std::memory_order_acquire);
