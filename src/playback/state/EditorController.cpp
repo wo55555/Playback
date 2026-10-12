@@ -325,6 +325,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(CommandFactory::createSetSubActorDetails(action.id, action.details), mProject);
         break;
     case EditorActionType::SetPreviewCamera:
+        replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
         if (std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
                 return camera.id == action.id && state::editing::model::isCameraRenderable(camera);
@@ -333,6 +334,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         }
         break;
     case EditorActionType::ClearPreviewCamera:
+        replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
         break;
     default:
@@ -357,12 +359,13 @@ void EditorController::publishState(bool hudVisible) {
     // Gate only on the loading/progress screen clearing and let chunks stream in natively.
     if (!sessionActive) mEditorReadyLatched = false;
     else if (hudVisible) mEditorReadyLatched = true;
-    state.editorVisible = mEditorReadyLatched;
-    state.hudVisible    = hudVisible;
-    state.paused        = session.isPaused();
-    state.playbackSpeed = session.getPlaybackSpeed();
-    state.currentTick   = std::max(0, session.getCurrentTick());
-    state.totalTicks    = std::max(0, session.getTotalTicks());
+    state.editorVisible           = mEditorReadyLatched;
+    state.hudVisible              = hudVisible;
+    state.paused                  = session.isPaused();
+    state.followingRecordedPlayer = session.isFollowingRecordedPlayer();
+    state.playbackSpeed           = session.getPlaybackSpeed();
+    state.currentTick             = std::max(0, session.getCurrentTick());
+    state.totalTicks              = std::max(0, session.getTotalTicks());
     if (state.editorVisible != mEditorVisibleLogged) {
         mEditorVisibleLogged = state.editorVisible;
         logger().debug(
@@ -560,6 +563,12 @@ void EditorController::tick(bool hudVisible) {
             if (!target.empty()) (void)saveProject(target);
             break;
         }
+        case EditorActionType::TeleportToRecordedPlayer:
+            session.requestTeleportToRecordedPlayer();
+            break;
+        case EditorActionType::SetFollowRecordedPlayer:
+            session.setFollowRecordedPlayer(action.value);
+            break;
         case EditorActionType::LoadProject: {
             auto const target = action.path.empty() ? mProjectFile : action.path;
             if (target.empty()) break;
