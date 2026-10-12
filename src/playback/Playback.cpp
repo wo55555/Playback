@@ -76,6 +76,7 @@ void Playback::registerActions() {
     registry.registerAction(std::make_unique<action::ActionConfigurationPacket>());
     registry.registerAction(std::make_unique<action::ActionGamePacket>());
     registry.registerAction(std::make_unique<action::ActionMoveEntities>());
+    registry.registerAction(std::make_unique<action::ActionLocalCameraOffset>());
 }
 
 bool Playback::hook() {
