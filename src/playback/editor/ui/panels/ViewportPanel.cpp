@@ -93,8 +93,11 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     ImGui::SetCursorPos({metrics::gutter(), (height - metrics::iconButton()) * 0.5f});
 
     auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
+    bool const  following      = state.followingRecordedPlayer;
     std::string cameraLabel    = "playback.refactorEditor.viewport.freeCamera"_tr();
-    if (project && selectedCamera) {
+    if (following) {
+        cameraLabel = "playback.refactorEditor.viewport.followPlayer"_tr();
+    } else if (project && selectedCamera) {
         auto const camera =
             std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
         if (camera != project->cameras.end()) cameraLabel = camera->name;
@@ -109,14 +112,18 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         ImGui::OpenPopup("##viewport-camera-menu");
     }
     if (ImGui::BeginPopup("##viewport-camera-menu")) {
-        if (ImGui::MenuItem("playback.refactorEditor.viewport.freeCamera"_tr().c_str(), nullptr, !selectedCamera)) {
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.viewport.freeCamera"_tr().c_str(),
+                nullptr,
+                !selectedCamera && !following
+            )) {
             ctx.selection.clear();
             ctx.submitAction({EditorActionType::ClearPreviewCamera});
         }
         if (project && !project->cameras.empty()) ImGui::Separator();
         if (project) {
             for (auto const& camera : project->cameras) {
-                bool const current = selectedCamera && selectedCamera->cameraId == camera.id;
+                bool const current = !following && selectedCamera && selectedCamera->cameraId == camera.id;
                 if (ImGui::MenuItem(camera.name.c_str(), nullptr, current)) {
                     ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
                     EditorAction action{EditorActionType::SetPreviewCamera};
@@ -124,6 +131,25 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
                     ctx.submitAction(std::move(action));
                 }
             }
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.viewport.teleportToPlayer"_tr().c_str(),
+                nullptr,
+                false,
+                state.replayVisible
+            )) {
+            ctx.submitAction({EditorActionType::TeleportToRecordedPlayer});
+        }
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.viewport.followPlayer"_tr().c_str(),
+                nullptr,
+                following,
+                state.replayVisible
+            )) {
+            EditorAction action{EditorActionType::SetFollowRecordedPlayer};
+            action.value = !following;
+            ctx.submitAction(std::move(action));
         }
         ImGui::EndPopup();
     }
