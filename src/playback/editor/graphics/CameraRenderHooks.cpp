@@ -54,10 +54,12 @@ std::array<std::atomic_bool, 2> gFinalViewFailureLogged{};
 std::array<std::atomic_bool, 2> gCameraEcsFailureLogged{};
 
 thread_local std::optional<keyframe::CameraRenderState> gParkedObserverCamera;
-std::mutex                                              gRendererCameraMutex;
-std::optional<keyframe::CameraRenderState>              gRendererCameraState;
-std::optional<RenderCameraProjection>                   gRenderCameraProjection;
-std::optional<RenderCameraProjection>                   gSubmittedCameraProjection;
+// A paused preview leaves the view to the teleported observer and only carries the keyframe FOV.
+thread_local std::optional<float>          gPausedFov;
+std::mutex                                 gRendererCameraMutex;
+std::optional<keyframe::CameraRenderState> gRendererCameraState;
+std::optional<RenderCameraProjection>      gRenderCameraProjection;
+std::optional<RenderCameraProjection>      gSubmittedCameraProjection;
 
 // Frame* cannot be matched to a submission, so Context::frame queues projections and $submit consumes in order.
 std::array<std::optional<RenderCameraProjection>, 4> gFrameProjections;
@@ -515,19 +517,48 @@ void publishRenderCameraProjection(
     gRenderCameraProjection = RenderCameraProjection{transform, nearW, sampleTime};
 }
 
+thread_local std::optional<keyframe::CameraRenderState> gPausedAppliedPose;
+thread_local uint64_t                                   gPausedAppliedSeekCount{};
+
+// While paused the observer camera is only refreshed when the sample changes or a seek lands, never against player
+// input.
+void syncPausedParkedCamera(replay::ReplaySession& replay) noexcept {
+    if (replay.isSeekPending() || editor::input::isGameInputCaptured()) return;
+
+    auto const time = replay.getCameraRenderSampleTime();
+    if (!time) return;
+    auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
+    if (!sample) {
+        gPausedAppliedPose.reset();
+        return;
+    }
+
+    auto const seekCount = replay.seekFinishCount();
+    if (gPausedAppliedPose == sample->state && gPausedAppliedSeekCount == seekCount) return;
+    gPausedAppliedPose      = sample->state;
+    gPausedAppliedSeekCount = seekCount;
+    gParkedObserverCamera.reset();
+    gPausedFov = sample->state.fov;
+}
+
 keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept {
     auto& replay = replay::ReplaySession::getInstance();
 
     auto const clear = [] { keyframe::setPreviewCameraApplied(false); };
 
     if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+        gPausedAppliedPose.reset();
+        gPausedFov.reset();
         clear();
         return {};
     }
     if (replay.isPaused()) {
         clear();
+        syncPausedParkedCamera(replay);
         return {};
     }
+    gPausedAppliedPose.reset();
+    gPausedFov.reset();
 
     auto const time = replay.getCameraRenderSampleTime();
     if (!time) {
@@ -625,6 +656,7 @@ LL_TYPE_INSTANCE_HOOK(
     float const native  = origin(amount, enableVariableFov);
     auto const  context = keyframe::currentCameraTimelineRenderContext();
     if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
+    if (gPausedFov && observerStillParked()) return *gPausedFov;
     return gParkedObserverCamera && observerStillParked() ? gParkedObserverCamera->fov : native;
 }
 
@@ -638,6 +670,7 @@ LL_TYPE_INSTANCE_HOOK(
     float const native  = origin();
     auto const  context = keyframe::currentCameraTimelineRenderContext();
     if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
+    if (gPausedFov && observerStillParked()) return *gPausedFov;
     return gParkedObserverCamera && observerStillParked() ? gParkedObserverCamera->fov : native;
 }
 
@@ -806,6 +839,8 @@ bool hookCameraRender(bool enable) {
     auto removeAll = [&] {
         gInstalled.store(false, std::memory_order_release);
         gParkedObserverCamera.reset();
+        gPausedFov.reset();
+        gPausedAppliedPose.reset();
         {
             std::scoped_lock lock(gRendererCameraMutex);
             gRenderCameraProjection.reset();

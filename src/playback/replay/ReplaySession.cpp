@@ -2,6 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
+#include "playback/editor/input/EditorInput.h"
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
@@ -472,9 +473,10 @@ void ReplaySession::clearReplayData() {
     mExportTimelinePhase     = ReplayExportTimelinePhase::Inactive;
     mExportTargetTick        = -1;
     mExportCameraViewpoint.reset();
-    mPlaybackSpeed               = 1.0f;
-    mPlaybackTickAccumulator     = 0.0f;
-    mObserverPreviewInRange      = false;
+    mPlaybackSpeed           = 1.0f;
+    mPlaybackTickAccumulator = 0.0f;
+    mObserverPreviewInRange  = false;
+    mPausedPreviewPose.reset();
     mObserverServerPositionDirty = false;
     mLastObserverServerSyncChunk.reset();
     mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
@@ -599,6 +601,7 @@ bool ReplaySession::setPaused(bool paused) {
     if (paused) mFrozenPreviewPartial.store(previewPartialTick(), std::memory_order_release);
     mIsPaused = paused;
     if (!paused) {
+        mPausedPreviewPose.reset();
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
         mObserverServerPositionDirty = false;
         mLastObserverServerSyncChunk.reset();
@@ -627,14 +630,42 @@ void ReplaySession::parkReplayCameraAtPreview() {
     if (!sample) return;
 
     auto const lastPose = keyframe::takeLastPreviewPose();
-    auto const pose     = lastPose.value_or(sample->state);
+    parkObserverAtPose(lastPose.value_or(sample->state));
+}
 
+void ReplaySession::parkObserverAtPose(keyframe::CameraRenderState const& pose) {
     Vec3 const feetPosition{pose.x, pose.y, pose.z};
     Vec2 const rotation{pose.pitch, pose.yaw};
     forceFirstPersonCamera();
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     syncObserverServerPosition(feetPosition, rotation);
+}
+
+// Like Flashback applying keyframes on a paused seek: park the observer at the pose the preview timeline samples here.
+void ReplaySession::updatePausedObserverPreview() {
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || !mNetworkHandler) return;
+    if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return;
+    if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+        mPausedPreviewPose.reset();
+        return;
+    }
+    // Player input owns the camera; only a new seek or a changed sample takes it back.
+    if (editor::input::isGameInputCaptured()) return;
+
+    auto const time = getCameraRenderSampleTime();
+    if (!time) return;
+    auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
+    if (!sample) {
+        mPausedPreviewPose.reset();
+        return;
+    }
+
+    auto const seekCount = seekFinishCount();
+    if (mPausedPreviewPose == sample->state && mPausedPreviewSeekCount == seekCount) return;
+    mPausedPreviewPose      = sample->state;
+    mPausedPreviewSeekCount = seekCount;
+    parkObserverAtPose(sample->state);
 }
 
 void ReplaySession::enforceReplayWorldTime() {
@@ -699,7 +730,10 @@ void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 co
 
 void ReplaySession::updateObserverPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
-    if (mIsPaused) return;
+    if (mIsPaused) {
+        if (!mPendingReplayDimension) updatePausedObserverPreview();
+        return;
+    }
     if (mPendingReplayDimension) return;
     if (!mNetworkHandler) return;
     if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return;
@@ -993,6 +1027,7 @@ void ReplaySession::finishSeek() {
     mSeekTargetTick         = -1;
     mExportSeekRequested    = false;
     mSnapMovementDuringSeek = false;
+    mSeekFinishCount.fetch_add(1, std::memory_order_acq_rel);
     settleAfterSeek();
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();

@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "playback/keyframe/CameraRenderState.h"
 #include "playback/record/Recorder.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
@@ -164,6 +165,9 @@ private:
     std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
 
     bool                                        mObserverPreviewInRange{false};
+    std::optional<keyframe::CameraRenderState>  mPausedPreviewPose;
+    uint64_t                                    mPausedPreviewSeekCount{};
+    std::atomic<uint64_t>                       mSeekFinishCount{0};
     uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
     ::Vec2                                      mLastObserverPreviewRotation{};
@@ -309,6 +313,10 @@ private:
 
     void parkReplayCameraAtPreview();
 
+    void parkObserverAtPose(keyframe::CameraRenderState const& pose);
+
+    void updatePausedObserverPreview();
+
     // Align the server authority with the client so a paused replay isn't pulled back.
     void syncObserverServerPosition(::Vec3 const& feetPosition, ::Vec2 const& rotation);
 
@@ -349,6 +357,13 @@ public:
     }
 
     [[nodiscard]] bool isPaused() const { return mIsPaused; }
+
+    [[nodiscard]] bool isSeekPending() const noexcept {
+        return mSeekTargetTick >= 0 || mRequestedSeekTick.load(std::memory_order_acquire) >= 0;
+    }
+
+    // Lets a paused preview reapply its camera when a seek lands on the tick it already shows.
+    [[nodiscard]] uint64_t seekFinishCount() const noexcept { return mSeekFinishCount.load(std::memory_order_acquire); }
 
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
 
