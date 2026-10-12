@@ -14,19 +14,25 @@ struct Binding {
     CameraTimelineHandle timeline;
 };
 
-std::atomic<std::shared_ptr<Binding const>>    gPreview;
-std::atomic<std::shared_ptr<Binding const>>    gExport;
-std::atomic<CameraTimelineRenderContextHandle> gPreviewRenderContext;
-std::atomic<CameraTimelineRenderContextHandle> gExportRenderContext;
-thread_local CameraTimelineRenderContextHandle gRenderContext;
-std::atomic_bool                               gPreviewWasApplied{};
-std::atomic_uint64_t                           gPreviewGeneration{};
+std::atomic<std::shared_ptr<Binding const>>              gPreview;
+std::atomic<std::shared_ptr<Binding const>>              gExport;
+std::atomic<std::shared_ptr<CameraSampleOverride const>> gPreviewOverride;
+std::atomic<std::shared_ptr<CameraSampleOverride const>> gExportOverride;
+std::atomic<CameraTimelineRenderContextHandle>           gPreviewRenderContext;
+std::atomic<CameraTimelineRenderContextHandle>           gExportRenderContext;
+thread_local CameraTimelineRenderContextHandle           gRenderContext;
+std::atomic_bool                                         gPreviewWasApplied{};
+std::atomic_uint64_t                                     gPreviewGeneration{};
 
 std::mutex                       gPreviewPoseMutex;
 std::optional<CameraRenderState> gLastPreviewPose;
 
 std::atomic<std::shared_ptr<Binding const>>& bindingFor(CameraTimelineSource source) {
     return source == CameraTimelineSource::Export ? gExport : gPreview;
+}
+
+std::atomic<std::shared_ptr<CameraSampleOverride const>>& overrideFor(CameraTimelineSource source) {
+    return source == CameraTimelineSource::Export ? gExportOverride : gPreviewOverride;
 }
 
 std::atomic<CameraTimelineRenderContextHandle>& renderContextFor(CameraTimelineSource source) {
@@ -79,6 +85,14 @@ void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const
     }
 }
 
+void setCameraSampleOverride(CameraTimelineSource source, CameraSampleOverride provider) {
+    overrideFor(source).store(
+        provider ? std::make_shared<CameraSampleOverride const>(std::move(provider))
+                 : std::shared_ptr<CameraSampleOverride const>{},
+        std::memory_order_release
+    );
+}
+
 CameraTimelineHandle currentCameraTimeline(CameraTimelineSource source) noexcept {
     auto const current = bindingFor(source).load(std::memory_order_acquire);
     return current ? current->timeline : CameraTimelineHandle{};
@@ -90,6 +104,11 @@ std::optional<CameraTimelineSample> sampleCameraTimeline(
     std::string_view                 cameraId
 ) noexcept {
     try {
+        if (cameraId.empty()) {
+            if (auto const provider = overrideFor(source).load(std::memory_order_acquire)) {
+                if (auto state = (*provider)(time)) return CameraTimelineSample{*state, "__playback_first_person__"};
+            }
+        }
         auto const current = bindingFor(source).load(std::memory_order_acquire);
         if (!current || !current->timeline) return std::nullopt;
         auto const evaluation =

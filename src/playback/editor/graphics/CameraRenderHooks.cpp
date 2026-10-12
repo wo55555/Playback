@@ -260,6 +260,20 @@ void writeLevelCameraPose(LevelRendererPlayer& level, ::glm::vec3 const& positio
     level.mCameraUp      = Vec3{basis.up.x, basis.up.y, basis.up.z};
 }
 
+// The export observer is teleported onto the sample and vanilla renders it; only roll needs the camera rewritten.
+bool exportNeedsRoll(keyframe::CameraRenderState const& state) noexcept { return std::abs(state.roll) > 0.01f; }
+
+bool vanillaViewReachedSample(
+    LevelRendererPlayer& level,
+    ::glm::vec3 const&   position,
+    CameraBasis const&   basis
+) noexcept {
+    auto const& worldCamera = level.mWorldSpaceCamera.get();
+    return maxError(level.mCameraPos.get(), position) <= PositionTolerance
+        && maxError(inverseViewPosition(worldCamera), position) <= PositionTolerance
+        && maxError(inverseViewForward(worldCamera), basis.forward) <= DirectionTolerance;
+}
+
 void logMissingSample(keyframe::CameraTimelineRenderContext const& context) noexcept {
     auto& logged = gMissingSampleLogged[sourceIndex(context.source)];
     if (logged.exchange(true, std::memory_order_acq_rel)) return;
@@ -665,8 +679,9 @@ LL_TYPE_INSTANCE_HOOK(
         // Timeline cameras bypass vanilla observer interpolation.
         if (context->source == keyframe::CameraTimelineSource::Export) {
             (void)applyCameraEcs(*context);
+            if (context->sample && finite(context->sample->state) && !exportNeedsRoll(context->sample->state)) return;
         }
-        (void)applyTimelineCamera(*static_cast<LevelRendererPlayer*>(this), camera, *context);
+        (void)applyTimelineCamera(level, camera, *context);
         return;
     }
 
@@ -721,35 +736,44 @@ LL_TYPE_INSTANCE_HOOK(
     auto  client       = ll::service::getClientInstance();
     auto* clientCamera = client ? &client->getCamera() : nullptr;
 
+    bool const rolled = exportNeedsRoll(sample.state);
     (void)applyCameraEcs(*context);
-    writeCameraSpaces({clientCamera, nullptr}, worldCamera, position, basis);
-    writeLevelCameraPose(level, position, basis);
+    if (rolled) {
+        writeCameraSpaces({clientCamera, nullptr}, worldCamera, position, basis);
+        writeLevelCameraPose(level, position, basis);
+    }
 
     auto  renderObject = origin(screenContext, clientSubId);
     auto& view         = renderObject.mViewData.get();
 
     (void)applyCameraEcs(*context);
-    writeCameraSpaces({clientCamera, nullptr}, worldCamera, position, basis);
-    writeLevelCameraPose(level, position, basis);
-    view.mCameraPos       = position;
-    view.mCameraTargetPos = position + basis.forward;
+    if (rolled) {
+        writeCameraSpaces({clientCamera, nullptr}, worldCamera, position, basis);
+        writeLevelCameraPose(level, position, basis);
+        view.mCameraPos       = position;
+        view.mCameraTargetPos = position + basis.forward;
+    }
 
-    auto const  worldCheck          = verifyCamera(worldCamera, position, basis);
-    float const levelPositionError  = maxError(level.mCameraPos.get(), position);
-    float const levelDirectionError = maxError(
-        normalized({
-            level.mCameraTargetPos->x - level.mCameraPos->x,
-            level.mCameraTargetPos->y - level.mCameraPos->y,
-            level.mCameraTargetPos->z - level.mCameraPos->z,
-        }),
-        basis.forward
-    );
-    float const viewPositionError = maxError(view.mCameraPos.get(), position);
-    float const viewDirectionError =
-        maxError(normalized(view.mCameraTargetPos.get() - view.mCameraPos.get()), basis.forward);
-    bool const verified = worldCheck.valid() && levelPositionError <= PositionTolerance
-                       && levelDirectionError <= DirectionTolerance && viewPositionError <= PositionTolerance
-                       && viewDirectionError <= DirectionTolerance;
+    bool verified = vanillaViewReachedSample(level, position, basis)
+                 && maxError(view.mCameraPos.get(), position) <= PositionTolerance;
+    if (rolled) {
+        auto const  worldCheck          = verifyCamera(worldCamera, position, basis);
+        float const levelPositionError  = maxError(level.mCameraPos.get(), position);
+        float const levelDirectionError = maxError(
+            normalized({
+                level.mCameraTargetPos->x - level.mCameraPos->x,
+                level.mCameraTargetPos->y - level.mCameraPos->y,
+                level.mCameraTargetPos->z - level.mCameraPos->z,
+            }),
+            basis.forward
+        );
+        float const viewPositionError = maxError(view.mCameraPos.get(), position);
+        float const viewDirectionError =
+            maxError(normalized(view.mCameraTargetPos.get() - view.mCameraPos.get()), basis.forward);
+        verified = worldCheck.valid() && levelPositionError <= PositionTolerance
+                && levelDirectionError <= DirectionTolerance && viewPositionError <= PositionTolerance
+                && viewDirectionError <= DirectionTolerance;
+    }
 
     if (verified && context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
 

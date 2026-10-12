@@ -132,4 +132,16 @@ public:
     }
 };
 
+// Offset from the recorded local player's position to the camera (sneak/swim eye drop), three floats per tick.
+struct ActionLocalCameraOffset : Action {
+    ActionLocalCameraOffset() : Action("local_camera_offset") {}
+    void handle(replay::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionLocalCameraOffset& getInstance() {
+        static ActionLocalCameraOffset instance;
+        return instance;
+    }
+};
+
 } // namespace playback::action

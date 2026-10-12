@@ -35,4 +35,8 @@ void ActionMoveEntities::handle(replay::ReplaySession& session, PlaybackBuffer& 
     session.handleMoveEntities(data);
 }
 
+void ActionLocalCameraOffset::handle(replay::ReplaySession& session, PlaybackBuffer& data) {
+    session.handleLocalCameraOffset(data);
+}
+
 } // namespace playback::action

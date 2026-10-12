@@ -603,6 +603,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         for (std::string const& label :
              {"playback.refactorEditor.export.convergenceFrames"_tr(),
               "playback.refactorEditor.export.accelerateClient"_tr(),
+              "playback.refactorEditor.export.firstPerson"_tr(),
               "playback.refactorEditor.export.encodeSpeed"_tr(),
               "playback.refactorEditor.export.crf"_tr()}) {
             hintedLabelWidth =
@@ -813,6 +814,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         if (mExportAccelerateClient) {
             advancedSummary.push_back("playback.refactorEditor.export.advancedSummaryAccelerate"_tr());
         }
+        if (mExportFirstPerson) {
+            advancedSummary.push_back("playback.refactorEditor.export.advancedSummaryFirstPerson"_tr());
+        }
         mExportAdvancedOpen = collapseHeader(
             "##export-advanced",
             "playback.refactorEditor.export.advanced"_tr().c_str(),
@@ -872,6 +876,11 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     static_cast<int>(exporting::MaxExportConvergenceFrames),
                     fieldWidth
                 );
+                propertyLabel(
+                    "playback.refactorEditor.export.firstPerson"_tr().c_str(),
+                    "playback.refactorEditor.export.firstPersonHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-first-person", &mExportFirstPerson);
                 ImGui::EndTable();
             }
 
@@ -935,6 +944,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         previewSettings.videoCrf    = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         previewSettings.accelerateClient = mExportAccelerateClient;
+        previewSettings.firstPerson      = mExportFirstPerson;
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
 
