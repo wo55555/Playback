@@ -52,6 +52,15 @@ void clearReplayEntityPoses();
 // The recorded local player: the entity a first-person view follows. Safe to read from any thread.
 void setReplaySubject(std::optional<EntityRenderKey> key);
 
+// Independent reasons to hide the subject's model; it stays hidden while any is set.
+enum class SubjectHideReason : uint8_t {
+    Export = 1,
+    Follow = 2,
+};
+
+// While hidden, the subject's model is not drawn by any render scope (a first-person view sits inside it).
+void setReplaySubjectHidden(SubjectHideReason reason, bool hidden);
+
 // Camera position minus entity position of the subject plus the rendered FOV in degrees (0 when the renderer had none
 // yet), committed with the next commitReplayEntityPoses.
 void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov);

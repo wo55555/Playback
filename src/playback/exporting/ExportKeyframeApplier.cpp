@@ -36,6 +36,8 @@ void ExportKeyframeApplier::configure(
                 };
             }
         );
+        // The camera sits inside the recorded player, so its own model would fill the view.
+        visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Export, true);
         Playback::getInstance().getSelf().getLogger().debug("Export camera follows the recorded player");
     }
     if (project.cameras.empty()) {
@@ -61,6 +63,7 @@ void ExportKeyframeApplier::configure(
 }
 
 void ExportKeyframeApplier::reset() {
+    visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Export, false);
     keyframe::setCameraSampleOverride(keyframe::CameraTimelineSource::Export, {});
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline);
     mTimeline.reset();

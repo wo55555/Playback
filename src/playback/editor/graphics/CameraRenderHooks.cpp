@@ -546,6 +546,15 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept 
 
     auto const clear = [] { keyframe::setPreviewCameraApplied(false); };
 
+    // Following leaves the camera to the vanilla view from the observer parked on the recorded player.
+    if (replay.isFollowingRecordedPlayer()) {
+        gPausedAppliedPose.reset();
+        gPausedFov.reset();
+        gParkedObserverCamera.reset();
+        clear();
+        return {};
+    }
+
     if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
         gPausedAppliedPose.reset();
         gPausedFov.reset();

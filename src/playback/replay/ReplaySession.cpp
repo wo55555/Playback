@@ -477,6 +477,8 @@ void ReplaySession::clearReplayData() {
     mPlaybackTickAccumulator = 0.0f;
     mObserverPreviewInRange  = false;
     mPausedPreviewPose.reset();
+    setFollowRecordedPlayer(false);
+    mTeleportToSubjectPending    = false;
     mObserverServerPositionDirty = false;
     mLastObserverServerSyncChunk.reset();
     mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
@@ -668,6 +670,70 @@ void ReplaySession::updatePausedObserverPreview() {
     parkObserverAtPose(sample->state);
 }
 
+void ReplaySession::setFollowRecordedPlayer(bool follow) {
+    if (mFollowRecordedPlayer.exchange(follow, std::memory_order_acq_rel) == follow) return;
+    // The camera sits inside the recorded player while following, so its own model would fill the view.
+    visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Follow, follow);
+    mLastObserverServerSyncChunk.reset();
+    mPausedPreviewPose.reset();
+    getLogger().debug("Observer {} the recorded player", follow ? "follows" : "stopped following");
+}
+
+// Like Flashback teleporting the viewer to the local player: a pending request lands once, following repeats per frame.
+bool ReplaySession::updateSubjectFollow() {
+    bool following = isFollowingRecordedPlayer();
+    // Player input owns the camera, and a started export drives it from the export timeline.
+    bool const exporting = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
+    if (following && (editor::input::isGameInputCaptured() || exporting)) {
+        setFollowRecordedPlayer(false);
+        following = false;
+    }
+    if (exporting) mTeleportToSubjectPending = false;
+    if (!following && !mTeleportToSubjectPending) return false;
+
+    if (!mNetworkHandler || !isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return following;
+
+    // The entity pose trails the camera by one tick; the camera time covers tick 0.
+    auto time = getEntityRenderSampleTime();
+    if (!time) time = getCameraRenderSampleTime();
+    if (!time) return following;
+    auto const pose = visuals::sampleReplaySubjectPose(*time);
+    if (!pose) return following;
+    auto const& position = pose->position;
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
+        || !std::isfinite(pose->yaw) || !std::isfinite(pose->pitch)
+        || (position.x == 0.0f && position.y == 0.0f && position.z == 0.0f)) {
+        return following;
+    }
+
+    // The recorded player's position is already its eye position.
+    keyframe::CameraRenderState const state{position.x, position.y, position.z, pose->yaw, pose->pitch, 0.0f, 70.0f};
+    bool const                        oneShot = std::exchange(mTeleportToSubjectPending, false);
+    if (oneShot && !following) {
+        parkObserverAtPose(state);
+        getLogger().debug(
+            "Observer teleported to the recorded player at tick {} ({:.2f}, {:.2f}, {:.2f})",
+            mCurrentTick,
+            position.x,
+            position.y,
+            position.z
+        );
+        return false;
+    }
+
+    Vec3 const     feetPosition{state.x, state.y, state.z};
+    Vec2 const     rotation{state.pitch, state.yaw};
+    ChunkPos const chunk{feetPosition.x, feetPosition.z};
+    bool const     serverSyncNeeded =
+        oneShot || !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != chunk.x
+        || mLastObserverServerSyncChunk->z != chunk.z;
+    forceFirstPersonCamera();
+    teleportReplayPlayer(feetPosition, rotation);
+    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
+    if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
+    return true;
+}
+
 void ReplaySession::enforceReplayWorldTime() {
     if (!mActive || !mReplayTime || !mReplayPlayer) return;
     auto& level = mReplayPlayer->getLevel();
@@ -730,6 +796,7 @@ void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 co
 
 void ReplaySession::updateObserverPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
+    if (updateSubjectFollow()) return;
     if (mIsPaused) {
         if (!mPendingReplayDimension) updatePausedObserverPreview();
         return;
@@ -828,9 +895,11 @@ std::optional<visuals::ReplaySampleTime> ReplaySession::getEntityRenderSampleTim
 bool ReplaySession::beginExportTimeline(int startTick) {
     if (!mActive || mReplayFailed || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return false;
 
-    startTick                = std::clamp(startTick, 0, getTotalTicks());
-    mIsPaused                = true;
-    mPlaybackTickAccumulator = 0.0f;
+    setFollowRecordedPlayer(false);
+    mTeleportToSubjectPending = false;
+    startTick                 = std::clamp(startTick, 0, getTotalTicks());
+    mIsPaused                 = true;
+    mPlaybackTickAccumulator  = 0.0f;
 
     mRequestedSeekTick.store(startTick, std::memory_order_release);
     mSeekTargetTick         = -1;
@@ -2205,6 +2274,8 @@ void ReplaySession::completeReplayDimensionTransition() {
     mDimensionTransitionStartedAt      = {};
     mCompletedDimensionGeneration      = completedGeneration;
     resetDimensionScopedReplayState();
+    // The observer keeps its old coordinates in the new dimension; bring it to the recorded player once that is known.
+    if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) mTeleportToSubjectPending = true;
 }
 
 void ReplaySession::resetDimensionScopedReplayState() {

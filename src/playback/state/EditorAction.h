@@ -31,6 +31,8 @@ enum class EditorActionType {
     ClearReplayBrowserError,
     SaveProject,
     LoadProject,
+    TeleportToRecordedPlayer,
+    SetFollowRecordedPlayer,
     UndoEditorEdit,
     RedoEditorEdit,
     AddFreeCamera,
