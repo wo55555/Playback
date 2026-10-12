@@ -132,7 +132,8 @@ public:
     }
 };
 
-// Offset from the recorded local player's position to the camera (sneak/swim eye drop), three floats per tick.
+// Camera offset from the recorded local player's position (sneak/swim eye drop) plus the rendered FOV in degrees, four
+// floats per tick; the snapshot context carries the same values for the snapshot tick.
 struct ActionLocalCameraOffset : Action {
     ActionLocalCameraOffset() : Action("local_camera_offset") {}
     void handle(replay::ReplaySession& replaySession, PlaybackBuffer& data) override;
