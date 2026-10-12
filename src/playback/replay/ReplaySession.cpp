@@ -1871,6 +1871,10 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         mApplyingChunkSnapshot = false;
         return;
     }
+    visuals::queueReplaySubjectCameraOffset(
+        {snapshotContext.cameraOffsetX, snapshotContext.cameraOffsetY, snapshotContext.cameraOffsetZ},
+        snapshotContext.fov
+    );
 
     PlaybackView view;
     if (followRecordedPlayer) {
@@ -3130,10 +3134,11 @@ void ReplaySession::handleGamePacket(PlaybackBuffer& data) {
 }
 
 void ReplaySession::handleLocalCameraOffset(PlaybackBuffer& data) {
-    float const x = data.getFloat().value();
-    float const y = data.getFloat().value();
-    float const z = data.getFloat().value();
-    visuals::queueReplaySubjectCameraOffset({x, y, z});
+    float const x   = data.getFloat().value();
+    float const y   = data.getFloat().value();
+    float const z   = data.getFloat().value();
+    float const fov = data.getFloat().value();
+    visuals::queueReplaySubjectCameraOffset({x, y, z}, fov);
 }
 
 void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {

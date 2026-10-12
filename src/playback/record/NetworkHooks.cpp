@@ -11,6 +11,7 @@
 #include "mc/client/network/ClientNetworkHandler.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
 #include "mc/client/player/LocalPlayer.h"
+#include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/network/NetworkIdentifier.h"
 #include "mc/network/NetworkStatistics.h"
 #include "mc/network/Packet.h"
@@ -40,6 +41,7 @@
 #include "mc/world/level/dimension/DimensionArguments.h"
 
 
+#include <atomic>
 #include <utility>
 #include <variant>
 
@@ -73,6 +75,7 @@ struct NetworkHookState {
     bool updateBlockSynced{};
     bool updateSubChunkBlocks{};
     bool renderFinalizer{};
+    bool renderedFov{};
 
     [[nodiscard]] bool fastPathHandlersInstalled() const {
         return removeActor && setActorData && takeItemActor && actorEvent && levelEvent && updateBlock
@@ -96,7 +99,11 @@ NetworkHookState& networkHookState() {
     return state;
 }
 
+std::atomic<float> gRenderedFov{0.0f};
+
 } // namespace
+
+float latestRenderedFov() noexcept { return gRenderedFov.load(std::memory_order_relaxed); }
 
 LL_TYPE_INSTANCE_HOOK(
     PlaybackPacketReceivedHook,
@@ -448,6 +455,22 @@ LL_TYPE_INSTANCE_HOOK(
     replay::ReplaySession::getInstance().onLevelChunkHandled(pos, dimension);
 }
 
+// The renderer smooths the FOV per frame (option FOV times the sprint/potion modifier); the final value is what replays
+// need.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackRenderedFovHook,
+    ll::memory::HookPriority::Lowest,
+    LevelRendererPlayer,
+    &LevelRendererPlayer::getFov,
+    float,
+    float amount,
+    bool  enableVariableFov
+) {
+    float const fov = origin(amount, enableVariableFov);
+    if (enableVariableFov) gRenderedFov.store(fov, std::memory_order_relaxed);
+    return fov;
+}
+
 template <class Hook>
 bool installNetworkHook(bool& installed) {
     if (!installed) installed = Hook::hook() == 0;
@@ -466,13 +489,13 @@ bool hookNetwork(bool enable) {
         return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
             && state.resourceHandlersInstalled() && state.actorIdentifiers && state.completion && state.packetObserver
             && state.packetSender && state.addActor && state.addItemActor && state.fastPathHandlersInstalled()
-            && state.renderFinalizer;
+            && state.renderFinalizer && state.renderedFov;
     };
     auto noneInstalled = [&] {
         return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime
             && state.resourceHandlersRemoved() && !state.actorIdentifiers && !state.completion && !state.packetObserver
             && !state.packetSender && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved()
-            && !state.renderFinalizer;
+            && !state.renderFinalizer && !state.renderedFov;
     };
     auto installAll = [&] {
         return installNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor)
@@ -496,9 +519,11 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackUpdateBlockHook>(state.updateBlock)
             && installNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced)
             && installNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks)
-            && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
+            && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer)
+            && installNetworkHook<PlaybackRenderedFovHook>(state.renderedFov);
     };
     auto removeAll = [&] {
+        removeNetworkHook<PlaybackRenderedFovHook>(state.renderedFov);
         removeNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
         removeNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks);
         removeNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced);
