@@ -52,6 +52,14 @@ struct PlaybackView {
     float pitch = 0.0f;
 };
 
+// Camera position minus entity position, and the rendered FOV in degrees.
+struct PlaybackCameraSample {
+    float x   = 0.0f;
+    float y   = 0.0f;
+    float z   = 0.0f;
+    float fov = 0.0f;
+};
+
 struct PlaybackChunkMeta {
     int  duration          = 0;
     bool forcePlaySnapshot = false;
@@ -116,6 +124,7 @@ private:
     std::optional<PlaybackSetEquipmentPacket>                 mLastLocalPlayerEquipmentPacket;
     std::optional<int>                                        mLastLocalPlayerSwingTime;
     std::optional<PlaybackView>                               mSnapshotView;
+    std::optional<PlaybackCameraSample>                       mSnapshotCamera;
     std::optional<SnapshotDimension>                          mSnapshotDimension;
 
     std::optional<DimensionType>        mRecordingDimension;
@@ -235,5 +244,9 @@ public:
 };
 
 [[nodiscard]] bool hookNetwork(bool);
+
+// Last FOV (degrees) the renderer used for the player's view while recording hooks were installed; 0 before the first
+// frame.
+[[nodiscard]] float latestRenderedFov() noexcept;
 
 } // namespace playback::record
