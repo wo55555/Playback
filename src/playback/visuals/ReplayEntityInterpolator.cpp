@@ -9,6 +9,7 @@
 #include "mc/entity/components/RenderPositionComponent.h"
 #include "mc/entity/components/RenderRotationComponent.h"
 #include "mc/world/actor/Actor.h"
+#include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
 
 #include <algorithm>
@@ -69,6 +70,7 @@ std::optional<PendingCameraOffset>                                          gPen
 
 constexpr uint64_t   kNoSubject = std::numeric_limits<uint64_t>::max();
 std::atomic_uint64_t gSubject{kNoSubject};
+std::atomic_uint8_t  gSubjectHidden{0};
 
 std::optional<EntityRenderKey> subjectKey() noexcept {
     auto const packed = gSubject.load(std::memory_order_acquire);
@@ -178,11 +180,22 @@ struct ScopedReplayEntityPose::State {
         float                          previousBodyYaw{};
     };
 
-    std::vector<ActorState> actors;
-    State*                  previous{};
+    struct HiddenActor {
+        Actor* actor{};
+        bool   invisible{};
+        bool   hiddenWhenInvisible{};
+    };
+
+    std::vector<ActorState>    actors;
+    std::optional<HiddenActor> hidden;
+    State*                     previous{};
 
     ~State() {
         if (gActiveState == this) gActiveState = previous;
+        if (hidden) {
+            hidden->actor->setStatusFlag(ActorFlags::HiddenWhenInvisible, hidden->hiddenWhenInvisible);
+            hidden->actor->setStatusFlag(ActorFlags::Invisible, hidden->invisible);
+        }
         for (auto state = actors.rbegin(); state != actors.rend(); ++state) {
             state->stateVector->mPos      = state->statePosition;
             state->stateVector->mPosPrev  = state->statePositionPrevious;
@@ -229,9 +242,20 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
         state->actors.reserve(targets.size());
 
         if (!poses) return {};
+        auto const subject = gSubjectHidden.load(std::memory_order_acquire) != 0 ? subjectKey() : std::nullopt;
         for (auto const& target : targets) {
             // A despawned or unloaded entity must not cost the rest of the frame its interpolation.
             if (!target.actor) continue;
+
+            if (subject && target.key == *subject && !state->hidden) {
+                state->hidden = ScopedReplayEntityPose::State::HiddenActor{
+                    target.actor,
+                    target.actor->getStatusFlag(ActorFlags::Invisible),
+                    target.actor->getStatusFlag(ActorFlags::HiddenWhenInvisible),
+                };
+                target.actor->setStatusFlag(ActorFlags::Invisible, true);
+                target.actor->setStatusFlag(ActorFlags::HiddenWhenInvisible, true);
+            }
 
             auto const history = poses->find(target.key);
             if (history == poses->end()) continue;
@@ -383,6 +407,12 @@ void setReplaySubject(std::optional<EntityRenderKey> key) {
         key ? (static_cast<uint64_t>(key->registryId) << 32U) | key->entityId : kNoSubject,
         std::memory_order_release
     );
+}
+
+void setReplaySubjectHidden(SubjectHideReason reason, bool hidden) {
+    auto const bit = static_cast<uint8_t>(reason);
+    if (hidden) gSubjectHidden.fetch_or(bit, std::memory_order_acq_rel);
+    else gSubjectHidden.fetch_and(static_cast<uint8_t>(~bit), std::memory_order_acq_rel);
 }
 
 std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample) {
