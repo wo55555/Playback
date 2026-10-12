@@ -570,7 +570,10 @@ bool removeAll(HookState& state) {
 
 bool renderPresentFrame(IDXGISwapChain* swapChain) {
     if (!swapChain) return false;
-    if (!exporting::isOfflineRenderActivityActive()) return gImGuiRenderer.render(swapChain);
+    // A native dimension wait pauses offline rendering mid-export; the export UI must stay on its window-sized layer.
+    if (!exporting::isOfflineRenderActivityActive() && !exporting::isExportActivityActive()) {
+        return gImGuiRenderer.render(swapChain);
+    }
     if (!gImGuiRenderer.ownsSwapChain(swapChain)) return false;
     // Captures before drawing the overlay, so the export frame holds the bare world.
     return gImGuiRenderer.renderExportOverlay(swapChain);
