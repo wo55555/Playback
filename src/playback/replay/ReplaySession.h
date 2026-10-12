@@ -220,6 +220,7 @@ private:
     std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
     std::unordered_set<int32_t>                                 mUnknownConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
+    std::optional<ActorUniqueID>                                mRecordedLocalPlayerId;
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     std::unordered_set<std::string>                             mReplayObjectiveNames;
     std::unordered_set<ChunkPos>                                mCenterChunkPositions;
@@ -481,6 +482,7 @@ public:
     void handleGamePacket(PlaybackBuffer& data);
 
     void handleMoveEntities(PlaybackBuffer& data);
+    void handleLocalCameraOffset(PlaybackBuffer& data);
 
 private:
     ReplaySession();
