@@ -18,6 +18,8 @@
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/entity/components/VanillaOffsetComponent.h"
+#include "mc/entity/systems/VanillaOffsetSystem.h"
 #include "mc/network/MinecraftPacketIds.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/Packet.h"
@@ -668,8 +670,8 @@ void Recorder::endTick(bool close) {
         auto const currentDimensionId = localPlayer->getDimensionId();
 
         // Finish the client tick in the old chunk before snapshotting the state produced by that tick.
-        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeTickBoundary()
-            || !finishCurrentChunk(close)) {
+        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
+            || !writeTickBoundary() || !finishCurrentChunk(close)) {
             return;
         }
         if (close) return;
@@ -708,15 +710,16 @@ void Recorder::endTick(bool close) {
             return;
         }
 
-        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeTickBoundary()
-            || !finishCurrentChunk(false) || !writeSnapshot() || !commitChunkSnapshot(elapsed, barrierWait)) {
+        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
+            || !writeTickBoundary() || !finishCurrentChunk(false) || !writeSnapshot()
+            || !commitChunkSnapshot(elapsed, barrierWait)) {
             return;
         }
         return;
     }
 
     if (!writeInitialSnapshotIfNeeded() || !writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements()
-        || !writeTickBoundary()) {
+        || !writeLocalCameraOffset() || !writeTickBoundary()) {
         return;
     }
     if (close && !finishCurrentChunk(true)) return;
@@ -1519,6 +1522,43 @@ bool Recorder::writeEntityMovements() {
         })) {
         auto error = mAsyncReplaySaver->getError();
         failRecording(error.value_or("Unable to queue entity movements"));
+        return false;
+    }
+    return true;
+}
+
+bool Recorder::writeLocalCameraOffset() {
+    if (!mAsyncReplaySaver) {
+        failRecording("Replay saver is not initialized while writing the local camera offset");
+        return false;
+    }
+
+    auto  clientInstance = ll::service::getClientInstance();
+    auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+    if (!localPlayer) {
+        failRecording("The local player is not ready while writing the local camera offset");
+        return false;
+    }
+
+    // The vanilla camera sits below the entity position while sneaking or swimming. The replayed actor has no such
+    // state, so the camera-to-position delta is recorded every tick; a snapshot does not carry it.
+    Vec3 offset{0.0f, 0.0f, 0.0f};
+    if (localPlayer->getEntityContext().hasComponent<VanillaOffsetComponent>()) {
+        auto const camera   = VanillaOffsetSystem::getCameraPosition(*localPlayer, 1.0f);
+        auto const position = localPlayer->getPosition();
+        offset              = {camera.x - position.x, camera.y - position.y, camera.z - position.z};
+    }
+
+    if (!mAsyncReplaySaver->submit([offset](ReplayWriter& writer) {
+            auto& action = ActionLocalCameraOffset::getInstance();
+            writer.startAction(action);
+            writer.mStream.writeFloat(offset.x, nullptr, nullptr);
+            writer.mStream.writeFloat(offset.y, nullptr, nullptr);
+            writer.mStream.writeFloat(offset.z, nullptr, nullptr);
+            writer.finishAction(action);
+        })) {
+        auto error = mAsyncReplaySaver->getError();
+        failRecording(error.value_or("Unable to queue the local camera offset"));
         return false;
     }
     return true;

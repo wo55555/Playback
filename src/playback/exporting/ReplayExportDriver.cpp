@@ -152,7 +152,7 @@ bool ReplayExportDriver::start(
     mPhase = Phase::Rendering;
     getLogger().info(
         "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
-        "warmup={}, convergence={}, accelerateClient={}, x264={}/crf{}",
+        "warmup={}, convergence={}, accelerateClient={}, firstPerson={}, x264={}/crf{}",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -165,6 +165,7 @@ bool ReplayExportDriver::start(
         mPlan->settings.warmupFrames,
         mPlan->settings.convergenceFrames,
         mPlan->settings.accelerateClient,
+        mPlan->settings.firstPerson,
         x264Preset(mPlan->settings.encodeSpeed),
         mPlan->settings.videoCrf
     );

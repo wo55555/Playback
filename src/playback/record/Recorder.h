@@ -150,6 +150,7 @@ private:
     [[nodiscard]] bool flushGamePackets();
 
     [[nodiscard]] bool writeEntityMovements();
+    [[nodiscard]] bool writeLocalCameraOffset();
 
     [[nodiscard]] bool writeLocalPlayerState();
 
