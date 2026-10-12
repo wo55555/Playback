@@ -42,11 +42,21 @@ struct PendingEntityPose {
 };
 
 // Camera position minus entity position of the replay subject; it changes while the subject stands still.
+struct CameraOffsetSample {
+    EntityRenderPosition offset{};
+    float                fov{}; // degrees, 0 when the renderer had produced none yet
+};
+
 struct CameraOffsetHistory {
-    int64_t              previousTick{};
-    int64_t              currentTick{};
-    EntityRenderPosition previous{};
-    EntityRenderPosition current{};
+    int64_t            previousTick{};
+    int64_t            currentTick{};
+    CameraOffsetSample previous{};
+    CameraOffsetSample current{};
+};
+
+struct PendingCameraOffset {
+    CameraOffsetSample previous{};
+    CameraOffsetSample current{};
 };
 
 using EntityPoseMap = std::unordered_map<EntityRenderKey, EntityPoseHistory, EntityRenderKeyHash>;
@@ -55,7 +65,7 @@ std::atomic<std::shared_ptr<EntityPoseMap const>>                           gEnt
 std::atomic<std::shared_ptr<CameraOffsetHistory const>>                     gCameraOffset;
 std::mutex                                                                  gPendingMutex;
 std::unordered_map<EntityRenderKey, PendingEntityPose, EntityRenderKeyHash> gPending;
-std::optional<EntityRenderPosition>                                         gPendingCameraOffset;
+std::optional<PendingCameraOffset>                                          gPendingCameraOffset;
 
 constexpr uint64_t   kNoSubject = std::numeric_limits<uint64_t>::max();
 std::atomic_uint64_t gSubject{kNoSubject};
@@ -103,7 +113,7 @@ EntityRenderPose samplePose(EntityPoseHistory const& history, ReplaySampleTime c
     };
 }
 
-EntityRenderPosition sampleCameraOffset(CameraOffsetHistory const& history, ReplaySampleTime const& sample) noexcept {
+CameraOffsetSample sampleCameraOffset(CameraOffsetHistory const& history, ReplaySampleTime const& sample) noexcept {
     auto const time = sample.value();
     if (time <= static_cast<long double>(history.previousTick)) return history.previous;
     if (time >= static_cast<long double>(history.currentTick) || history.currentTick <= history.previousTick) {
@@ -114,11 +124,27 @@ EntityRenderPosition sampleCameraOffset(CameraOffsetHistory const& history, Repl
         (time - static_cast<long double>(history.previousTick))
         / static_cast<long double>(history.currentTick - history.previousTick)
     );
+    auto const& previous = history.previous;
+    auto const& current  = history.current;
+    // A zero FOV means the renderer had produced none yet and must not be blended in.
+    float const fov =
+        previous.fov > 0.0f && current.fov > 0.0f ? std::lerp(previous.fov, current.fov, amount) : current.fov;
     return {
-        std::lerp(history.previous.x, history.current.x, amount),
-        std::lerp(history.previous.y, history.current.y, amount),
-        std::lerp(history.previous.z, history.current.z, amount),
+        {
+         std::lerp(previous.offset.x, current.offset.x, amount),
+         std::lerp(previous.offset.y, current.offset.y, amount),
+         std::lerp(previous.offset.z, current.offset.z, amount),
+         },
+        fov,
     };
+}
+
+std::optional<CameraOffsetSample> sampleSubjectCamera(ReplaySampleTime const& sample) {
+    if (auto const history = gCameraOffset.load(std::memory_order_acquire)) return sampleCameraOffset(*history, sample);
+    // The snapshot's sample stays pending until the first tick commits it.
+    std::scoped_lock lock(gPendingMutex);
+    if (gPendingCameraOffset) return gPendingCameraOffset->current;
+    return std::nullopt;
 }
 
 } // namespace
@@ -298,10 +324,12 @@ void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, Entit
     if (!inserted) entry->second.current = current;
 }
 
-void queueReplaySubjectCameraOffset(EntityRenderPosition offset) {
+void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov) {
     if (!finite(offset)) return;
-    std::scoped_lock lock(gPendingMutex);
-    gPendingCameraOffset = offset;
+    CameraOffsetSample const sample{offset, std::isfinite(fov) && fov > 1.0f && fov < 179.0f ? fov : 0.0f};
+    std::scoped_lock         lock(gPendingMutex);
+    if (gPendingCameraOffset) gPendingCameraOffset->current = sample;
+    else gPendingCameraOffset = PendingCameraOffset{sample, sample};
 }
 
 void commitReplayEntityPoses(int64_t tick) {
@@ -309,10 +337,10 @@ void commitReplayEntityPoses(int64_t tick) {
     std::scoped_lock lock(gPendingMutex);
     if (gPendingCameraOffset) {
         auto const existing = gCameraOffset.load(std::memory_order_acquire);
-        auto const previous = existing ? existing->current : *gPendingCameraOffset;
+        auto const previous = existing ? existing->current : gPendingCameraOffset->previous;
         gCameraOffset.store(
             std::make_shared<CameraOffsetHistory const>(
-                CameraOffsetHistory{std::max<int64_t>(0, tick - 1), tick, previous, *gPendingCameraOffset}
+                CameraOffsetHistory{std::max<int64_t>(0, tick - 1), tick, previous, gPendingCameraOffset->current}
             ),
             std::memory_order_release
         );
@@ -373,13 +401,18 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
     }
     if (!found) return std::nullopt;
     auto pose = *found;
-    if (auto const offset = gCameraOffset.load(std::memory_order_acquire)) {
-        auto const sampled  = sampleCameraOffset(*offset, sample);
-        pose.position.x    += sampled.x;
-        pose.position.y    += sampled.y;
-        pose.position.z    += sampled.z;
+    if (auto const camera = sampleSubjectCamera(sample)) {
+        pose.position.x += camera->offset.x;
+        pose.position.y += camera->offset.y;
+        pose.position.z += camera->offset.z;
     }
     return pose;
+}
+
+std::optional<float> sampleReplaySubjectFov(ReplaySampleTime const& sample) {
+    auto const camera = sampleSubjectCamera(sample);
+    if (camera && camera->fov > 0.0f) return camera->fov;
+    return std::nullopt;
 }
 
 } // namespace playback::visuals

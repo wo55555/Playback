@@ -436,6 +436,17 @@ PlaybackMeta metaFromJson(nlohmann::ordered_json const& json) {
     return meta;
 }
 
+// The vanilla camera sits below the entity position while sneaking or swimming; the replayed actor has no such state.
+PlaybackCameraSample captureLocalCameraSample(LocalPlayer& player) {
+    Vec3 offset{0.0f, 0.0f, 0.0f};
+    if (player.getEntityContext().hasComponent<VanillaOffsetComponent>()) {
+        auto const camera   = VanillaOffsetSystem::getCameraPosition(player, 1.0f);
+        auto const position = player.getPosition();
+        offset              = {camera.x - position.x, camera.y - position.y, camera.z - position.z};
+    }
+    return {offset.x, offset.y, offset.z, latestRenderedFov()};
+}
+
 } // namespace
 
 PlaybackMeta PlaybackMeta::fromJson(std::string_view json) {
@@ -732,6 +743,7 @@ void Recorder::resetChunkSnapshot() {
     mSnapshotEntityPackets.clear();
     mSnapshotLocalPlayerPayload.reset();
     mSnapshotView.reset();
+    mSnapshotCamera.reset();
     mSnapshotDimension.reset();
     mSnapshotFailure.clear();
 }
@@ -799,6 +811,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
     auto const& position = localPlayer->getPosition();
     auto const& rotation = localPlayer->getRotation();
     auto const  view     = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
+    auto const  camera   = captureLocalCameraSample(*localPlayer);
     auto const  center   = SubChunkPos{
         static_cast<int>(std::floor(view.x / 16.0f)),
         static_cast<int>(std::floor(view.y / 16.0f)),
@@ -1239,6 +1252,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         mSnapshotConfigurationPackets = mConfigurationPackets;
     }
     mSnapshotView       = view;
+    mSnapshotCamera     = camera;
     mSnapshotDimension  = SnapshotDimension{dimension, dimensionMinHeight, dimensionMaxHeight, *dimensionObject.mName};
     mRecordingDimension = dimension;
 
@@ -1250,6 +1264,7 @@ bool Recorder::commitChunkSnapshot(
     std::chrono::steady_clock::duration barrierWait
 ) {
     mSnapshotView.reset();
+    mSnapshotCamera.reset();
     mSnapshotDimension.reset();
     mLongestSnapshotStall = std::max(mLongestSnapshotStall, captureElapsed);
     mNeedsInitialSnapshot = false;
@@ -1325,10 +1340,13 @@ bool Recorder::writeSnapshot() {
         failRecording("Replay saver is not initialized while writing a snapshot");
         return false;
     }
-    if (!mSnapshotView || !mSnapshotDimension) {
+    if (!mSnapshotView || !mSnapshotCamera || !mSnapshotDimension) {
         failRecording("Replay snapshot context is unavailable");
         return false;
     }
+
+    // NaN would never compare equal to its own copy when the replay re-reads the context.
+    auto const finiteOrZero = [](float value) { return std::isfinite(value) ? value : 0.0f; };
 
     PlaybackSnapshotContext context;
     context.dimensionId        = mSnapshotDimension->id.mValue;
@@ -1339,6 +1357,10 @@ bool Recorder::writeSnapshot() {
     context.z                  = mSnapshotView->z;
     context.yaw                = mSnapshotView->yaw;
     context.pitch              = mSnapshotView->pitch;
+    context.cameraOffsetX      = finiteOrZero(mSnapshotCamera->x);
+    context.cameraOffsetY      = finiteOrZero(mSnapshotCamera->y);
+    context.cameraOffsetZ      = finiteOrZero(mSnapshotCamera->z);
+    context.fov                = finiteOrZero(mSnapshotCamera->fov);
     context.dimensionName      = mSnapshotDimension->name;
     if (!mAsyncReplaySaver->submit([context](ReplayWriter& writer) {
             writer.startSnapshot();
@@ -1540,21 +1562,15 @@ bool Recorder::writeLocalCameraOffset() {
         return false;
     }
 
-    // The vanilla camera sits below the entity position while sneaking or swimming. The replayed actor has no such
-    // state, so the camera-to-position delta is recorded every tick; a snapshot does not carry it.
-    Vec3 offset{0.0f, 0.0f, 0.0f};
-    if (localPlayer->getEntityContext().hasComponent<VanillaOffsetComponent>()) {
-        auto const camera   = VanillaOffsetSystem::getCameraPosition(*localPlayer, 1.0f);
-        auto const position = localPlayer->getPosition();
-        offset              = {camera.x - position.x, camera.y - position.y, camera.z - position.z};
-    }
+    auto const sample = captureLocalCameraSample(*localPlayer);
 
-    if (!mAsyncReplaySaver->submit([offset](ReplayWriter& writer) {
+    if (!mAsyncReplaySaver->submit([sample](ReplayWriter& writer) {
             auto& action = ActionLocalCameraOffset::getInstance();
             writer.startAction(action);
-            writer.mStream.writeFloat(offset.x, nullptr, nullptr);
-            writer.mStream.writeFloat(offset.y, nullptr, nullptr);
-            writer.mStream.writeFloat(offset.z, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.x, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.y, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.z, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.fov, nullptr, nullptr);
             writer.finishAction(action);
         })) {
         auto error = mAsyncReplaySaver->getError();

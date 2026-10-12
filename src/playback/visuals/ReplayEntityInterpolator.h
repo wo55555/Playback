@@ -52,11 +52,15 @@ void clearReplayEntityPoses();
 // The recorded local player: the entity a first-person view follows. Safe to read from any thread.
 void setReplaySubject(std::optional<EntityRenderKey> key);
 
-// Camera position minus entity position of the subject, committed with the next commitReplayEntityPoses.
-void queueReplaySubjectCameraOffset(EntityRenderPosition offset);
+// Camera position minus entity position of the subject plus the rendered FOV in degrees (0 when the renderer had none
+// yet), committed with the next commitReplayEntityPoses.
+void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov);
 
 // The subject's entity pose with the recorded camera offset added to its position, i.e. the first-person view.
 [[nodiscard]] std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample);
+
+// The subject's recorded rendered FOV in degrees; empty until the snapshot or a tick supplies a valid one.
+[[nodiscard]] std::optional<float> sampleReplaySubjectFov(ReplaySampleTime const& sample);
 
 class ScopedReplayEntityPose {
 public:
