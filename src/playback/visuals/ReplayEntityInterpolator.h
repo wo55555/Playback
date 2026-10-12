@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 class Actor;
@@ -47,6 +48,15 @@ void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, Entit
 void commitReplayEntityPoses(int64_t tick);
 void removeReplayEntityPose(EntityRenderKey key);
 void clearReplayEntityPoses();
+
+// The recorded local player: the entity a first-person view follows. Safe to read from any thread.
+void setReplaySubject(std::optional<EntityRenderKey> key);
+
+// Camera position minus entity position of the subject, committed with the next commitReplayEntityPoses.
+void queueReplaySubjectCameraOffset(EntityRenderPosition offset);
+
+// The subject's entity pose with the recorded camera offset added to its position, i.e. the first-person view.
+[[nodiscard]] std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample);
 
 class ScopedReplayEntityPose {
 public:

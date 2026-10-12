@@ -559,6 +559,8 @@ void ReplaySession::clearReplayData() {
     mPendingSnapshotGamePackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
+    mRecordedLocalPlayerId.reset();
+    visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     mReplayObjectiveNames.clear();
@@ -1392,6 +1394,8 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mPendingSnapshotGamePackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
+    mRecordedLocalPlayerId.reset();
+    visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     mReplayObjectiveNames.clear();
@@ -2328,6 +2332,8 @@ void ReplaySession::resetDimensionScopedReplayState() {
     mDirectLevelChunkIndices.clear();
     mCenterChunkPositions.clear();
     mRecordedEntityIds.clear();
+    mRecordedLocalPlayerId.reset();
+    visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     {
@@ -3227,6 +3233,13 @@ void ReplaySession::handleGamePacket(PlaybackBuffer& data) {
     if (!applyGamePacket(packetId, payload)) mReplayFailed = true;
 }
 
+void ReplaySession::handleLocalCameraOffset(PlaybackBuffer& data) {
+    float const x = data.getFloat().value();
+    float const y = data.getFloat().value();
+    float const z = data.getFloat().value();
+    visuals::queueReplaySubjectCameraOffset({x, y, z});
+}
+
 void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
 
     auto dispatchMovementPacket = [this](std::shared_ptr<Packet>& packet) {
@@ -3628,6 +3641,20 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 
     if (addsEntity) mRecordedEntityIds.emplace(entityId);
+
+    if (recordedLocalPlayer && packetId == MinecraftPacketIds::AddPlayer && mReplayPlayer) {
+        mRecordedLocalPlayerId = entityId;
+        // A player who never moves again has no movement action to seed the pose history a first-person view reads.
+        auto& level = mReplayPlayer->getLevel();
+        if (auto* actor = level.fetchEntity(entityId, false)) {
+            if (auto const renderKey = replayEntityRenderKey(level, entityId)) {
+                auto const pose = replayRenderPose(*actor);
+                mEntityRenderKeys.insert_or_assign(entityId, *renderKey);
+                visuals::queueReplayEntityPose(*renderKey, pose, pose);
+                visuals::setReplaySubject(*renderKey);
+            }
+        }
+    }
 
     switch (packetId) {
     case MinecraftPacketIds::RemoveActor: {
