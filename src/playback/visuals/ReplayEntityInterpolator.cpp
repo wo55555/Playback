@@ -232,6 +232,11 @@ ScopedReplayEntityPose::ScopedReplayEntityPose(std::unique_ptr<State> state) noe
 
 ScopedReplayEntityPose::~ScopedReplayEntityPose() = default;
 
+bool isReplayEntityHiddenInScope(Actor const& actor) {
+    auto const* state = ScopedReplayEntityPose::State::gActiveState;
+    return state && state->hidden && state->hidden->actor == &actor;
+}
+
 std::unique_ptr<ScopedReplayEntityPose>
 createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, ReplaySampleTime const& sample) {
     if (!sample.isValid() || ScopedReplayEntityPose::State::gActiveState) return {};
@@ -241,7 +246,7 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
         auto       state = std::make_unique<ScopedReplayEntityPose::State>();
         state->actors.reserve(targets.size());
 
-        if (!poses) return {};
+        // Frames right after a dimension switch have no committed poses yet; the hidden subject must still be hidden.
         auto const subject = gSubjectHidden.load(std::memory_order_acquire) != 0 ? subjectKey() : std::nullopt;
         for (auto const& target : targets) {
             // A despawned or unloaded entity must not cost the rest of the frame its interpolation.
@@ -257,6 +262,7 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                 target.actor->setStatusFlag(ActorFlags::HiddenWhenInvisible, true);
             }
 
+            if (!poses) continue;
             auto const history = poses->find(target.key);
             if (history == poses->end()) continue;
 
@@ -332,6 +338,8 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                 applied.bodyRotation->mYBodyRotO = sampled.bodyYaw;
             }
         }
+
+        if (!poses && !state->hidden) return {};
 
         state->previous                             = ScopedReplayEntityPose::State::gActiveState;
         ScopedReplayEntityPose::State::gActiveState = state.get();
