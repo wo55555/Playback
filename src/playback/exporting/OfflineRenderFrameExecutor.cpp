@@ -9,8 +9,14 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/GuiData.h"
+#include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/GameRenderer.h"
+#include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
+#include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
 #include "mc/deps/renderer/ViewportInfo.h"
+#include "mc/entity/components/DimensionStateComponent.h"
+#include "mc/entity/systems/ClientLoadingProgressTickingSystem.h"
+#include "mc/entity/systems/DimensionStateSystem.h"
 
 #include <cmath>
 #include <limits>
@@ -321,6 +327,24 @@ bool OfflineRenderFrameExecutor::isUiStable() const {
     return client && replay.isActive() && replay.hasJoinedReplayWorld() && !replay.isDimensionTransitionPending()
         && client->isInWorldAndNotShowingAnyMenuScreens() && !client->isShowingLoadingScreen()
         && !client->isShowingProgressScreen() && !client->isShowingWorldProgressScreen();
+}
+
+bool OfflineRenderFrameExecutor::forceFinishDimensionLoading() const {
+    auto client = ll::service::getClientInstance();
+    auto player = client ? client->getLocalPlayer() : nullptr;
+    if (!player) return false;
+    auto& context     = player->getEntityContext();
+    bool  dimensionOk = DimensionStateSystem::isDimensionReady(context);
+    auto  loading     = ClientLoadingProgressTickingSystem::getLoadingState(context);
+    if (dimensionOk && ClientLoadingProgressTickingSystem::hasFinishedLoading(context)) return false;
+    getLogger().warn(
+        "Forcing the native dimension loading to finish: dimensionReady={}, loadingState={}",
+        dimensionOk,
+        static_cast<int>(loading)
+    );
+    DimensionStateSystem::setDimensionState(context, DimensionStateComponent::DimensionState::Ready);
+    ClientLoadingProgressTickingSystem::setLoadingState(context, LoadingState::Done);
+    return true;
 }
 
 void OfflineRenderFrameExecutor::fail(std::string message) { mMessage = std::move(message); }

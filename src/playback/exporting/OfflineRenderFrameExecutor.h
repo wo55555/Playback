@@ -46,6 +46,7 @@ public:
 
     [[nodiscard]] OfflineRenderFrameExecutorStatus status() const;
     [[nodiscard]] bool                             isUiStable() const;
+    bool                                           forceFinishDimensionLoading() const;
 
 private:
     [[nodiscard]] bool configureRenderSize(ExportSettings const& settings);
