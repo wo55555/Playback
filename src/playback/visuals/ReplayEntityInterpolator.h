@@ -61,6 +61,9 @@ enum class SubjectHideReason : uint8_t {
 // While hidden, the subject's model is not drawn by any render scope (a first-person view sits inside it).
 void setReplaySubjectHidden(SubjectHideReason reason, bool hidden);
 
+// True for the actor the active render scope on this thread is hiding.
+[[nodiscard]] bool isReplayEntityHiddenInScope(Actor const& actor);
+
 // Camera position minus entity position of the subject plus the rendered FOV in degrees (0 when the renderer had none
 // yet), committed with the next commitReplayEntityPoses.
 void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov);
@@ -88,7 +91,8 @@ private:
     std::unique_ptr<State> mState;
 
     friend std::unique_ptr<ScopedReplayEntityPose>
-    createReplayEntityRenderScope(std::vector<EntityRenderTarget> const&, ReplaySampleTime const&);
+                createReplayEntityRenderScope(std::vector<EntityRenderTarget> const&, ReplaySampleTime const&);
+    friend bool isReplayEntityHiddenInScope(Actor const&);
 };
 
 } // namespace playback::visuals
