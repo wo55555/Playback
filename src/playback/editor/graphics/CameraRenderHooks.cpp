@@ -662,8 +662,10 @@ LL_TYPE_INSTANCE_HOOK(
     float amount,
     bool  enableVariableFov
 ) {
-    float const native  = origin(amount, enableVariableFov);
-    auto const  context = keyframe::currentCameraTimelineRenderContext();
+    float const native = origin(amount, enableVariableFov);
+    // The hand projection takes getFov(false), a fixed 70 in vanilla; the timeline FOV would shrink the hands.
+    if (!enableVariableFov) return native;
+    auto const context = keyframe::currentCameraTimelineRenderContext();
     if (context && context->sample && finite(context->sample->state)) return context->sample->state.fov;
     if (gPausedFov && observerStillParked()) return *gPausedFov;
     return gParkedObserverCamera && observerStillParked() ? gParkedObserverCamera->fov : native;
