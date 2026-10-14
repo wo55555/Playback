@@ -39,6 +39,8 @@
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MobWalkAnimationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/entity/components/WalkDistComponent.h"
+#include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/PacketSender.h"
@@ -235,6 +237,9 @@ void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
     }
 }
 
+// Bedrock's WalkDistComponent advances by exactly the horizontal distance moved (measured live, ratio 1.000).
+constexpr float WalkDistancePerBlock = 1.0f;
+
 void applyReplayEntityMovement(
     Actor&                           actor,
     Vec3 const&                      position,
@@ -263,6 +268,13 @@ void applyReplayEntityMovement(
             float const dx          = state.mPos->x - state.mPosPrev->x;
             float const dz          = state.mPos->z - state.mPosPrev->z;
             walk->mMovementThisTick = std::sqrt(dx * dx + dz * dz);
+        }
+    }
+    // The native system needs a move request the replayed player never has; query.walk_distance drives the hand bob.
+    if (actor.isPlayer()) {
+        if (auto distance = actor.getEntityContext().tryGetComponent<WalkDistComponent>()) {
+            distance->mPrevious  = distance->mCurrent;
+            distance->mCurrent  += std::hypot(state.mPosDelta->x, state.mPosDelta->z) * WalkDistancePerBlock;
         }
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
