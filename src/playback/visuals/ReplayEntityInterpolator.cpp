@@ -237,6 +237,11 @@ bool isReplayEntityHiddenInScope(Actor const& actor) {
     return state && state->hidden && state->hidden->actor == &actor;
 }
 
+Actor* replayHiddenActorInScope() {
+    auto const* state = ScopedReplayEntityPose::State::gActiveState;
+    return state && state->hidden ? state->hidden->actor : nullptr;
+}
+
 std::unique_ptr<ScopedReplayEntityPose>
 createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, ReplaySampleTime const& sample) {
     if (!sample.isValid() || ScopedReplayEntityPose::State::gActiveState) return {};
@@ -311,9 +316,11 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
 
             auto& applied = state->actors.back();
             if (positioned) {
-                applied.stateVector->mPos      = applied.exportPosition;
-                applied.stateVector->mPosPrev  = applied.stateVector->mPos;
-                applied.stateVector->mPosDelta = Vec3{};
+                applied.stateVector->mPos     = applied.exportPosition;
+                applied.stateVector->mPosPrev = applied.stateVector->mPos;
+                // The hidden subject keeps its per-tick movement: its first-person hand bob is driven by it.
+                bool const isSubject           = state->hidden && state->hidden->actor == target.actor;
+                applied.stateVector->mPosDelta = isSubject ? applied.statePositionDelta : Vec3{};
                 applied.renderPosition->mValue = applied.exportPosition;
             }
             if (applied.movementInterpolator) {

@@ -64,6 +64,9 @@ void setReplaySubjectHidden(SubjectHideReason reason, bool hidden);
 // True for the actor the active render scope on this thread is hiding.
 [[nodiscard]] bool isReplayEntityHiddenInScope(Actor const& actor);
 
+// The actor the active render scope on this thread is hiding, or null.
+[[nodiscard]] Actor* replayHiddenActorInScope();
+
 // Camera position minus entity position of the subject plus the rendered FOV in degrees (0 when the renderer had none
 // yet), committed with the next commitReplayEntityPoses.
 void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov);
@@ -91,8 +94,9 @@ private:
     std::unique_ptr<State> mState;
 
     friend std::unique_ptr<ScopedReplayEntityPose>
-                createReplayEntityRenderScope(std::vector<EntityRenderTarget> const&, ReplaySampleTime const&);
-    friend bool isReplayEntityHiddenInScope(Actor const&);
+                  createReplayEntityRenderScope(std::vector<EntityRenderTarget> const&, ReplaySampleTime const&);
+    friend bool   isReplayEntityHiddenInScope(Actor const&);
+    friend Actor* replayHiddenActorInScope();
 };
 
 } // namespace playback::visuals
