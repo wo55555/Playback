@@ -1,6 +1,7 @@
 ﻿#include "ReplaySubjectHideHooks.h"
 
 #include "ReplayEntityInterpolator.h"
+#include "ReplayFirstPersonHandHooks.h"
 #include "playback/Playback.h"
 
 #include "ll/api/memory/Hook.h"
@@ -29,7 +30,7 @@ LL_TYPE_INSTANCE_HOOK(
     Actor&                  entity,
     bool                    ignoreLighting
 ) {
-    if (isReplayEntityHiddenInScope(entity)) return;
+    if (isReplayEntityHiddenInScope(entity) && !isReplayFirstPersonHandPass()) return;
     origin(context, entity, ignoreLighting);
 }
 
@@ -45,7 +46,7 @@ LL_TYPE_INSTANCE_HOOK(
     Vec2 const&             rot,
     bool                    ignoreLighting
 ) {
-    if (isReplayEntityHiddenInScope(entity)) return;
+    if (isReplayEntityHiddenInScope(entity) && !isReplayFirstPersonHandPass()) return;
     origin(context, entity, pos, rot, ignoreLighting);
 }
 
@@ -62,7 +63,7 @@ LL_TYPE_INSTANCE_HOOK(
     Vec2 const&             rot,
     bool                    ignoreLighting
 ) {
-    if (isReplayEntityHiddenInScope(entity)) return;
+    if (isReplayEntityHiddenInScope(entity) && !isReplayFirstPersonHandPass()) return;
     origin(context, entity, cameraTargetPos, pos, rot, ignoreLighting);
 }
 
