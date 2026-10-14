@@ -7,6 +7,7 @@
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
+#include "playback/visuals/ReplayFirstPersonHandHooks.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/memory/Hook.h"
@@ -399,6 +400,7 @@ bool hookOfflineRenderClock(bool enable) {
 
     auto removeAll = [&] {
         gHookInstalled.store(false, std::memory_order_release);
+        visuals::hookReplayFirstPersonHands(false);
         visuals::hookReplaySubjectHide(false);
         resetOfflineRenderClock();
         reportSceneRetries();
@@ -416,6 +418,7 @@ bool hookOfflineRenderClock(bool enable) {
         gHookInstalled.store(ready, std::memory_order_release);
         if (ready) {
             visuals::hookReplaySubjectHide(true);
+            visuals::hookReplayFirstPersonHands(true);
             gInitialCameraSampleLogged.store(false, std::memory_order_release);
             gMissingCameraSampleLogged.store(false, std::memory_order_release);
             return true;
