@@ -400,8 +400,8 @@ bool hookOfflineRenderClock(bool enable) {
 
     auto removeAll = [&] {
         gHookInstalled.store(false, std::memory_order_release);
-        visuals::hookReplayFirstPersonHands(false);
-        visuals::hookReplaySubjectHide(false);
+        visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Export);
+        visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Export);
         resetOfflineRenderClock();
         reportSceneRetries();
         (void)setOfflineRenderClientBoost(false);
@@ -417,8 +417,8 @@ bool hookOfflineRenderClock(bool enable) {
         bool const ready = state.clock && state.gameFrame;
         gHookInstalled.store(ready, std::memory_order_release);
         if (ready) {
-            visuals::hookReplaySubjectHide(true);
-            visuals::hookReplayFirstPersonHands(true);
+            visuals::hookReplaySubjectHide(true, visuals::SubjectHideReason::Export);
+            visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Export);
             gInitialCameraSampleLogged.store(false, std::memory_order_release);
             gMissingCameraSampleLogged.store(false, std::memory_order_release);
             return true;
