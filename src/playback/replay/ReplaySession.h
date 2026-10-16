@@ -156,6 +156,8 @@ private:
     int                                  mSeekTargetTick{-1};
     bool                                 mExportSeekRequested{};
     bool                                 mSnapMovementDuringSeek{};
+    bool                                 mSeekParticlesCleared{};
+    bool                                 mSeekParticlesStale{};
     ReplayExportTimelinePhase            mExportTimelinePhase{ReplayExportTimelinePhase::Inactive};
     int                                  mExportTargetTick{-1};
     std::optional<ReplayCameraViewpoint> mExportCameraViewpoint;
@@ -228,9 +230,16 @@ private:
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
     std::optional<ActorUniqueID>                                mRecordedLocalPlayerId;
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
-    std::unordered_set<std::string>                             mReplayObjectiveNames;
-    std::unordered_set<ChunkPos>                                mCenterChunkPositions;
-    std::unordered_map<ChunkPos, size_t>                        mRemainingSubChunkPacketsByColumn;
+    bool                                                        mLevelSimFrozen{false};
+    // Item-use duration each recorded player had after the last replay tick; the client ticks it between ticks too.
+    struct HeldItemUse {
+        void const* item{};
+        int         duration{};
+    };
+    std::unordered_map<ActorUniqueID, HeldItemUse> mHeldItemUse;
+    std::unordered_set<std::string>                mReplayObjectiveNames;
+    std::unordered_set<ChunkPos>                   mCenterChunkPositions;
+    std::unordered_map<ChunkPos, size_t>           mRemainingSubChunkPacketsByColumn;
 
     std::unordered_map<ChunkPos, std::shared_ptr<LevelChunk>> mRetainedReplayChunks;
 
@@ -322,6 +331,9 @@ private:
     // Parks the observer on the recorded player for a pending teleport or while following; true if following.
     [[nodiscard]] bool updateSubjectFollow();
 
+    // Where the observer must sit to see through the recorded player's eyes right now.
+    [[nodiscard]] std::optional<keyframe::CameraRenderState> sampleSubjectFollowState();
+
     // Align the server authority with the client so a paused replay isn't pulled back.
     void syncObserverServerPosition(::Vec3 const& feetPosition, ::Vec2 const& rotation);
 
@@ -342,6 +354,10 @@ private:
     [[nodiscard]] bool advanceReplayReader(bool stopAtEnd);
 
     [[nodiscard]] bool advanceReplayTick(bool stopAtEnd);
+
+    void syncLevelSimPause(bool freeze);
+
+    void holdItemUseBetweenTicks();
 
 public:
     bool start(std::filesystem::path filePath);
@@ -388,6 +404,9 @@ public:
     // Preview drives the observer (the camera) per frame at the render partial tick.
 
     void updateObserverPreview();
+
+    // While following, re-pins the observer just before the frame is drawn; returns the pose the camera must use.
+    [[nodiscard]] std::optional<keyframe::CameraRenderState> pinFollowObserverForRender();
 
     // Moves the observer onto the recorded player once, as soon as the replay world and the player's pose are ready.
     void requestTeleportToRecordedPlayer() noexcept { mTeleportToSubjectPending = true; }

@@ -54,6 +54,8 @@ std::array<std::atomic_bool, 2> gFinalViewFailureLogged{};
 std::array<std::atomic_bool, 2> gCameraEcsFailureLogged{};
 
 thread_local std::optional<keyframe::CameraRenderState> gParkedObserverCamera;
+// The recorded player's eye pose for the frame being drawn; the native camera lags the observer, so it is overridden.
+thread_local std::optional<keyframe::CameraRenderState> gFollowCamera;
 // A paused preview leaves the view to the teleported observer and only carries the keyframe FOV.
 thread_local std::optional<float>          gPausedFov;
 std::mutex                                 gRendererCameraMutex;
@@ -617,8 +619,16 @@ LL_TYPE_INSTANCE_HOOK(
     auto& replay = replay::ReplaySession::getInstance();
     // Native alpha keeps cycling while paused; pistons must hold the same fraction as the entity poses.
     integration::pushReplayPartial(replay.previewPartialTick());
+    // The native hand animation reads the frame alpha, so a paused frame must not feed it the cycling value.
+    if (replay.isPaused()) partialTick = replay.previewPartialTick();
+    gFollowCamera = replay.pinFollowObserverForRender();
+    struct FollowCameraReset {
+        ~FollowCameraReset() { gFollowCamera.reset(); }
+    } followCameraReset;
     auto pose = [&]() -> std::unique_ptr<visuals::ScopedReplayEntityPose> {
-        auto const time = replay.getEntityRenderSampleTime();
+        auto time = replay.getEntityRenderSampleTime();
+        // Tick 0 has no entity sample yet, but the followed player must already be hidden and its hands drawn.
+        if (!time && replay.isFollowingRecordedPlayer()) time = replay.getCameraRenderSampleTime();
         return time ? replay.createReplayEntityRenderScope(*time) : nullptr;
     }();
 
@@ -726,6 +736,11 @@ LL_TYPE_INSTANCE_HOOK(
             if (context->sample && finite(context->sample->state) && !exportNeedsRoll(context->sample->state)) return;
         }
         (void)applyTimelineCamera(level, camera, *context);
+        return;
+    }
+
+    if (gFollowCamera) {
+        applyObserverCamera(level, camera, *gFollowCamera);
         return;
     }
 

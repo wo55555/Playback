@@ -20,6 +20,7 @@
 #include "mc/world/item/ItemStack.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -307,9 +308,14 @@ HookSlot makeSlot(char const* name) {
 
 bool isReplayFirstPersonHandPass() { return gPassDepth > 0; }
 
-void hookReplayFirstPersonHands(bool enable) {
+void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
     static bool                  installed = false;
     static std::vector<HookSlot> slots;
+    static uint8_t               owners = 0;
+
+    auto const bit = static_cast<uint8_t>(owner);
+    if (enable) owners |= bit;
+    else owners &= static_cast<uint8_t>(~bit);
 
     if (enable) {
         if (installed) return;
@@ -326,12 +332,17 @@ void hookReplayFirstPersonHands(bool enable) {
             makeSlot<HandOffhandItemHook>("offhandItem"),
             makeSlot<HandMiniMapHook>("miniMap"),
         };
-        bool complete = true;
+        bool       complete = true;
+        auto const begin    = std::chrono::steady_clock::now();
         for (auto& slot : slots) {
             slot.ok   = slot.hook();
             complete &= slot.ok;
         }
         installed = true;
+        Playback::getInstance().getSelf().getLogger().debug(
+            "Replay first-person hand hooks installed in {} ms",
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count()
+        );
         if (!complete) {
             std::string missing;
             for (auto const& slot : slots) {
@@ -342,7 +353,7 @@ void hookReplayFirstPersonHands(bool enable) {
         return;
     }
 
-    if (!installed) return;
+    if (!installed || owners != 0) return;
     for (auto& slot : slots) {
         if (slot.ok) slot.unhook();
     }

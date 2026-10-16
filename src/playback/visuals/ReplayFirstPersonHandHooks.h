@@ -1,10 +1,12 @@
 ﻿#pragma once
 
+#include "ReplayEntityInterpolator.h"
+
 namespace playback::visuals {
 
-// While the export view is first-person, the observer cannot show hands (a spectator's first-person model is hidden),
-// so the native hand pass runs on the recorded player instead.
-void hookReplayFirstPersonHands(bool enable);
+// While the view is first-person on the recorded player (export, follow preview), the observer cannot show hands, so
+// the native hand pass runs on the recorded player instead. Stays installed while any owner still needs it.
+void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner);
 
 // True inside the swapped hand pass, where the recorded player's own model must not be hidden.
 [[nodiscard]] bool isReplayFirstPersonHandPass();
