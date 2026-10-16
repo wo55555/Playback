@@ -7,7 +7,10 @@
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/record/Recorder.h"
+#include "playback/runtime/ClientTickHooks.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
+#include "playback/visuals/ReplayFirstPersonHandHooks.h"
+#include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/service/Bedrock.h"
 #include "ll/api/service/TargetedBedrock.h"
@@ -35,6 +38,8 @@
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
+#include "mc/entity/components/ItemInUseComponent.h"
+#include "mc/entity/components/ItemInUseTicksDuringMovementComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
@@ -154,6 +159,9 @@ constexpr auto             SnapshotGamePacketBudget   = std::chrono::millisecond
 // Every client tick a seek spills into is one more frame of visible catch-up, so land it in as few as possible.
 constexpr auto       SeekCatchUpBudget = std::chrono::milliseconds(2000);
 constexpr std::array PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f};
+// A seek keeps only the particle events from this many ticks before its landing, and ticks the level once per replay
+// tick across them. Emitters such as lingering clouds are spawned by actor ticks and live about 27 ticks.
+constexpr int SeekParticleWindowTicks = 40;
 
 bool shouldIgnoreReplayPacket(MinecraftPacketIds packetId) {
     switch (packetId) {
@@ -231,6 +239,17 @@ void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
 
 // Bedrock's WalkDistComponent advances by exactly the horizontal distance moved (measured live, ratio 1.000).
 constexpr float WalkDistancePerBlock = 1.0f;
+
+// Items flagged to tick during movement (trident) are skipped by the normal use-duration system, and a replayed
+// player has no move request to drive the movement one.
+void tickReplayItemUse(Actor& actor) {
+    auto& context = actor.getEntityContext();
+    if (!context.hasComponent<ItemInUseTicksDuringMovementComponent>()) return;
+    if (auto inUse = context.tryGetComponent<ItemInUseComponent>()) {
+        int& remaining = inUse->mDuration;
+        if (remaining > 1) --remaining;
+    }
+}
 
 void applyReplayEntityMovement(
     Actor&                           actor,
@@ -356,6 +375,21 @@ void clearReplayParticles() {
     if (auto systems = renderer->mParticleSystemEngine.get()) systems->clear();
 }
 
+// The forced level ticks of a seek never tick the particle systems, which age by wall-clock time between their own
+// ticks, so backdate that clock by one replay tick and tick them here.
+void ageReplayParticles() {
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    auto* renderer = client->getLevelRenderer();
+    if (!renderer) return;
+    auto systems = renderer->mParticleSystemEngine.get();
+    if (!systems) return;
+
+    systems->mLastTickTime      = std::chrono::steady_clock::now() - std::chrono::milliseconds(50);
+    systems->mLastTickTimeValid = true;
+    systems->tick(1.0f, false);
+}
+
 // Server teleport lands one eye height above the request; compensate so the feet agree.
 constexpr float kServerEyeHeight = 1.62f;
 
@@ -388,6 +422,9 @@ bool ReplaySession::start(std::filesystem::path filePath) {
     }
 
     forceFirstPersonCamera();
+    // Installed once per replay (inert until the subject is hidden) so toggling follow never hooks anything.
+    visuals::hookReplaySubjectHide(true, visuals::SubjectHideReason::Session);
+    visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Session);
 
     try {
         if (!init(std::move(filePath))) {
@@ -475,6 +512,9 @@ void ReplaySession::clearReplayData() {
     mWorldReady   = false;
     mReplayFailed = false;
     mInjectingPacket.store(nullptr, std::memory_order_release);
+    mLevelSimFrozen       = false;
+    mSeekParticlesCleared = false;
+    mSeekParticlesStale   = false;
     mChunkCompletionObserved.store(false, std::memory_order_release);
     mReplayDimension.store(nullptr, std::memory_order_release);
     mInitialSnapshotApplied  = false;
@@ -689,6 +729,7 @@ void ReplaySession::updatePausedObserverPreview() {
 void ReplaySession::setFollowRecordedPlayer(bool follow) {
     if (mFollowRecordedPlayer.exchange(follow, std::memory_order_acq_rel) == follow) return;
     // The camera sits inside the recorded player while following, so its own model would fill the view.
+    // The hide and hand hooks stay installed for the whole replay; (un)hooking them here froze the game for seconds.
     visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Follow, follow);
     mLastObserverServerSyncChunk.reset();
     mPausedPreviewPose.reset();
@@ -709,22 +750,11 @@ bool ReplaySession::updateSubjectFollow() {
 
     if (!mNetworkHandler || !isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return following;
 
-    // The entity pose trails the camera by one tick; the camera time covers tick 0.
-    auto time = getEntityRenderSampleTime();
-    if (!time) time = getCameraRenderSampleTime();
-    if (!time) return following;
-    auto const pose = visuals::sampleReplaySubjectPose(*time);
-    if (!pose) return following;
-    auto const& position = pose->position;
-    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
-        || !std::isfinite(pose->yaw) || !std::isfinite(pose->pitch)
-        || (position.x == 0.0f && position.y == 0.0f && position.z == 0.0f)) {
-        return following;
-    }
-
-    // The recorded player's position is already its eye position.
-    keyframe::CameraRenderState const state{position.x, position.y, position.z, pose->yaw, pose->pitch, 0.0f, 70.0f};
-    bool const                        oneShot = std::exchange(mTeleportToSubjectPending, false);
+    auto const sampled = sampleSubjectFollowState();
+    if (!sampled) return following;
+    auto const& state    = *sampled;
+    auto const  position = Vec3{state.x, state.y, state.z};
+    bool const  oneShot  = std::exchange(mTeleportToSubjectPending, false);
     if (oneShot && !following) {
         parkObserverAtPose(state);
         getLogger().debug(
@@ -748,6 +778,40 @@ bool ReplaySession::updateSubjectFollow() {
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
     return true;
+}
+
+std::optional<keyframe::CameraRenderState> ReplaySession::sampleSubjectFollowState() {
+    // The entity pose trails the camera by one tick; the camera time covers tick 0.
+    auto time = getEntityRenderSampleTime();
+    if (!time) time = getCameraRenderSampleTime();
+    if (!time) return std::nullopt;
+    auto const pose = visuals::sampleReplaySubjectPose(*time);
+    if (!pose) return std::nullopt;
+    auto const& position = pose->position;
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
+        || !std::isfinite(pose->yaw) || !std::isfinite(pose->pitch)
+        || (position.x == 0.0f && position.y == 0.0f && position.z == 0.0f)) {
+        return std::nullopt;
+    }
+    // The recorded player's position is already its eye position.
+    return keyframe::CameraRenderState{position.x, position.y, position.z, pose->yaw, pose->pitch, 0.0f, 70.0f};
+}
+
+// Server corrections land during the client update, after the previous frame's pin; pin again right before drawing.
+std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRender() {
+    if (!isFollowingRecordedPlayer() || !mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return std::nullopt;
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return std::nullopt;
+    if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return std::nullopt;
+
+    auto const state = sampleSubjectFollowState();
+    if (!state) return std::nullopt;
+    cancelNativeMovementInterpolation(
+        *mReplayPlayer,
+        Vec3{state->x, state->y, state->z},
+        Vec2{state->pitch, state->yaw},
+        state->yaw
+    );
+    return state;
 }
 
 void ReplaySession::enforceReplayWorldTime() {
@@ -1110,6 +1174,8 @@ void ReplaySession::setPlaybackSpeed(float speed) {
 std::span<float const> ReplaySession::playbackSpeeds() noexcept { return PlaybackSpeeds; }
 
 void ReplaySession::finishSeek() {
+    // Export seeks never tick the level during catch-up, so they always drop the particles it piled up.
+    if (mExportSeekRequested) mSeekParticlesStale = true;
     mSeekTargetTick         = -1;
     mExportSeekRequested    = false;
     mSnapMovementDuringSeek = false;
@@ -1122,7 +1188,9 @@ void ReplaySession::finishSeek() {
 
 // Per-action snapping misses entities that never moved during catch-up, so settle every recorded one here.
 void ReplaySession::settleAfterSeek() {
-    clearReplayParticles();
+    if (mSeekParticlesStale) clearReplayParticles();
+    mSeekParticlesStale   = false;
+    mSeekParticlesCleared = false;
     if (!mReplayPlayer || !mReplayWorldJoined) return;
 
     auto& level = mReplayPlayer->getLevel();
@@ -1163,6 +1231,8 @@ void ReplaySession::beginSeek(int targetTick) {
     mPlaybackTickAccumulator = 0.0f;
     mSeekTargetTick          = targetTick;
     mSnapMovementDuringSeek  = !exportSeek || mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
+    mSeekParticlesCleared    = false;
+    mSeekParticlesStale      = false;
     if (selectedReader >= mSnapshotContexts.size()) {
         throw std::runtime_error("Replay seek snapshot context index is out of range");
     }
@@ -1203,8 +1273,11 @@ void ReplaySession::beginSeek(int targetTick) {
         );
     }
 
-    mReaderIndex = selectedReader;
-    mCurrentTick = selectedStart;
+    // A reloaded world keeps the particles of the place it left, so they are dropped even when the landing ticks
+    // nothing.
+    mSeekParticlesStale = true;
+    mReaderIndex        = selectedReader;
+    mCurrentTick        = selectedStart;
     integration::pushReplayClock(mCurrentTick, true);
     applySnapshot(*mReaders[mReaderIndex], followRecordedPlayer);
     getLogger()
@@ -1216,6 +1289,12 @@ void ReplaySession::tick() {
     try {
         if (!mReplayWorldJoined || !mNetworkHandler) return;
         if (!refreshReplayPlayer()) return;
+        // The level stays live on every early return; only a settled pause or slow-motion gap freezes it.
+        struct LevelFreezeScope {
+            ReplaySession& session;
+            bool           freeze{};
+            ~LevelFreezeScope() { session.syncLevelSimPause(freeze); }
+        } levelFreeze{*this};
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
@@ -1276,6 +1355,26 @@ void ReplaySession::tick() {
                     if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                 }
                 if (mPendingSnapshotApply || mPendingReplayDimension) break;
+                // Export seeks keep the clear at the landing frame so their first frames stay unchanged.
+                bool const inParticleWindow =
+                    !mExportSeekRequested && mCurrentTick >= mSeekTargetTick - SeekParticleWindowTicks;
+                if (inParticleWindow) {
+                    if (!mSeekParticlesCleared) {
+                        mSeekParticlesCleared = true;
+                        // Ticks skipped before the window left their particle events piled up at age zero.
+                        if (mSeekParticlesStale) {
+                            clearReplayParticles();
+                            mSeekParticlesStale = false;
+                        }
+                        // A paused level would tick its particles as frozen.
+                        syncLevelSimPause(false);
+                    }
+                    // Like normal playback the level ticks before each replay tick, so the landing is not aged past it.
+                    if (runtime::runNativeLevelTick()) ageReplayParticles();
+                    else mSeekParticlesStale = true;
+                } else {
+                    mSeekParticlesStale = true;
+                }
                 if (!advanceReplayTick(false)) {
                     getLogger().warn("Replay ended at tick {} while seeking to tick {}", mCurrentTick, mSeekTargetTick);
                     finishSeek();
@@ -1287,6 +1386,8 @@ void ReplaySession::tick() {
             if (mCurrentTick >= mSeekTargetTick) {
                 getLogger().debug("Replay seek completed at tick {}", mCurrentTick);
                 finishSeek();
+                // The next level tick runs before the next replay tick, so a paused landing is frozen from here.
+                levelFreeze.freeze = mIsPaused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive;
             }
             return;
         }
@@ -1301,10 +1402,16 @@ void ReplaySession::tick() {
             return;
         }
 
-        if (mIsPaused) return;
+        bool const exportActive = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
+        if (mIsPaused) {
+            levelFreeze.freeze = !exportActive;
+            holdItemUseBetweenTicks();
+            return;
+        }
         mPlaybackTickAccumulator += mPlaybackSpeed;
         int const ticksToAdvance  = static_cast<int>(mPlaybackTickAccumulator);
         mPlaybackTickAccumulator -= static_cast<float>(ticksToAdvance);
+        if (ticksToAdvance == 0) holdItemUseBetweenTicks();
         for (int tick = 0;
              tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
              ++tick) {
@@ -1312,6 +1419,9 @@ void ReplaySession::tick() {
             if (!advanceReplayTick(true)) break;
             if (mCurrentTick != before) markReplayTickAdvanced();
         }
+        // The next client tick runs before its replay tick, so freeze it only when that replay tick will not advance.
+        bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
+        levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + mPlaybackSpeed < 1.0f;
     } catch (std::exception const& e) {
         getLogger().error("Replay session failed: {}", e.what());
         stop();
@@ -3098,7 +3208,51 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
 
         if (mReplayFailed) throw std::runtime_error("Unable to apply a replay action");
     }
+    if (mActive && mReplayPlayer) {
+        auto& level = mReplayPlayer->getLevel();
+        mHeldItemUse.clear();
+        for (auto const& id : mRecordedEntityIds) {
+            auto* actor = level.fetchEntity(id, false);
+            if (!actor || !actor->isPlayer()) continue;
+            tickReplayItemUse(*actor);
+            if (auto inUse = actor->getEntityContext().tryGetComponent<ItemInUseComponent>()) {
+                int const duration = inUse->mDuration;
+                mHeldItemUse[id]   = {static_cast<void const*>(inUse->mItem.get().get()), duration};
+            }
+        }
+    }
     return true;
+}
+
+// The native pause flag stops animation and particle updates; the replay drives entity state itself.
+void ReplaySession::syncLevelSimPause(bool freeze) {
+    if (mLevelSimFrozen == freeze || !mReplayPlayer) return;
+    mReplayPlayer->getLevel().setSimPaused(freeze);
+    mLevelSimFrozen = freeze;
+}
+
+// The native pause flag leaves item-use ticking alone, which runs the use animation on between replay ticks.
+void ReplaySession::holdItemUseBetweenTicks() {
+    if (!mReplayPlayer) return;
+    auto& level = mReplayPlayer->getLevel();
+    for (auto const& id : mRecordedEntityIds) {
+        auto* actor = level.fetchEntity(id, false);
+        if (!actor || !actor->isPlayer()) continue;
+        auto inUse = actor->getEntityContext().tryGetComponent<ItemInUseComponent>();
+        if (!inUse) {
+            mHeldItemUse.erase(id);
+            continue;
+        }
+        int&        duration = inUse->mDuration;
+        void const* item     = static_cast<void const*>(inUse->mItem.get().get());
+        auto const  held     = mHeldItemUse.find(id);
+        // A new item or a snapshot-reloaded use has no tick to hold yet; take its current state as the baseline.
+        if (held == mHeldItemUse.end() || held->second.item != item || duration > held->second.duration) {
+            mHeldItemUse[id] = {item, duration};
+            continue;
+        }
+        if (duration < held->second.duration) duration = held->second.duration;
+    }
 }
 
 void ReplaySession::handleLevelChunkCached(int index) {
@@ -3732,6 +3886,7 @@ bool ReplaySession::clearRecordedEntities() {
 
     auto ids = std::move(mRecordedEntityIds);
     mRecordedEntityIds.clear();
+    mHeldItemUse.clear();
     for (auto const& id : ids) {
         auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::RemoveActor);
         if (!packet || !packet->mHandler) return false;
