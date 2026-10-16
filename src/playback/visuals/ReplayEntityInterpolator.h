@@ -53,9 +53,11 @@ void clearReplayEntityPoses();
 void setReplaySubject(std::optional<EntityRenderKey> key);
 
 // Independent reasons to hide the subject's model; it stays hidden while any is set.
+// Session only owns the render hooks for the whole replay and never hides anything (hooking is slow).
 enum class SubjectHideReason : uint8_t {
-    Export = 1,
-    Follow = 2,
+    Export  = 1,
+    Follow  = 2,
+    Session = 4,
 };
 
 // While hidden, the subject's model is not drawn by any render scope (a first-person view sits inside it).
