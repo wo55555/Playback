@@ -14,6 +14,9 @@
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
+#include "playback/visuals/ReplayEntityInterpolator.h"
+#include "playback/visuals/ReplayFirstPersonHandHooks.h"
+#include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -183,6 +186,9 @@ bool Playback::unhook() {
         getSelf().getLogger().error("Unable to remove export-scoped offline render hooks during shutdown");
         return false;
     }
+    // The replay session installs these for its whole lifetime; release them with the mod.
+    visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Session);
+    visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Session);
     if (!exporting::hookIdleDetection(false)) {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = record::hookNetwork(true);
