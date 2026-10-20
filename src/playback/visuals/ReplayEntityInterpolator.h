@@ -91,8 +91,8 @@ struct SubjectSleepSignals {
 // HUD pass, which runs outside any render scope.
 [[nodiscard]] float replaySubjectViewWeight();
 
-// 0..1 growth of the sleep vignette: the subject's consecutive sleeping ticks over vanilla's 60-tick ramp.
-[[nodiscard]] float replaySubjectSleepRamp();
+// The subject's consecutive sleeping ticks at the last sample; drives the replayed sleep fade-to-black.
+[[nodiscard]] float replaySubjectSleepTicks();
 
 // The followed subject's nausea, refreshed by every render scope that hides it for a follow view.
 struct SubjectNauseaSample {
