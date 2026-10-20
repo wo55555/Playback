@@ -41,7 +41,7 @@ struct PlaybackSerializedGamePacket {
 };
 
 struct PlaybackSnapshotContext {
-    static constexpr int32_t FormatVersion = 1;
+    static constexpr int32_t FormatVersion = 2;
 
     int32_t dimensionId{};
     int32_t dimensionMinHeight{};
@@ -56,6 +56,13 @@ struct PlaybackSnapshotContext {
     float cameraOffsetY{};
     float cameraOffsetZ{};
     float fov{};
+    // Absolute game camera pose, only present while the vanilla camera is detached from the entity (sleeping).
+    bool  hasView{};
+    float viewX{};
+    float viewY{};
+    float viewZ{};
+    float viewYaw{};
+    float viewPitch{};
     // Custom dimensions have ids outside VanillaDimensions, so the name is the only way to resolve them.
     std::string dimensionName;
 

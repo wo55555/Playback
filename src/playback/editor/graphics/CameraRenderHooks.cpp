@@ -5,6 +5,7 @@
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/visuals/ReplayFirstPersonHandHooks.h"
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/TargetedBedrock.h"
@@ -55,7 +56,7 @@ std::array<std::atomic_bool, 2> gFinalViewFailureLogged{};
 std::array<std::atomic_bool, 2> gCameraEcsFailureLogged{};
 
 thread_local std::optional<keyframe::CameraRenderState> gParkedObserverCamera;
-// The recorded player's eye pose for the frame being drawn; the native camera lags the observer, so it is overridden.
+// The recorded player's eye pose for the frame being drawn; the camera components carry it into the vanilla view.
 thread_local std::optional<keyframe::CameraRenderState> gFollowCamera;
 // A paused preview leaves the view to the teleported observer and only carries the keyframe FOV.
 thread_local std::optional<float>          gPausedFov;
@@ -274,9 +275,11 @@ bool vanillaViewReachedSample(
     CameraBasis const&   basis
 ) noexcept {
     auto const& worldCamera = level.mWorldSpaceCamera.get();
+    // The nausea distortion turns the built view around the eye, so only its direction legitimately differs.
     return maxError(level.mCameraPos.get(), position) <= PositionTolerance
         && maxError(inverseViewPosition(worldCamera), position) <= PositionTolerance
-        && maxError(inverseViewForward(worldCamera), basis.forward) <= DirectionTolerance;
+        && (visuals::isReplayNauseaDistortionActive()
+            || maxError(inverseViewForward(worldCamera), basis.forward) <= DirectionTolerance);
 }
 
 void logMissingSample(keyframe::CameraTimelineRenderContext const& context) noexcept {
@@ -297,18 +300,19 @@ void logMissingSample(keyframe::CameraTimelineRenderContext const& context) noex
     return ::glm::normalize(::glm::quat_cast(cameraToWorld));
 }
 
-bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexcept {
-    if (!context.sample || !finite(context.sample->state)) return false;
+// Writes the pose into the active camera components.
+bool applyCameraEcsPose(keyframe::CameraRenderState const& state, bool applyFov, size_t& targets) noexcept {
+    targets = 0;
+    if (!finite(state)) return false;
 
     auto client   = ll::service::getClientInstance();
     auto registry = client ? client->getCameraRegistry() : Bedrock::NonOwnerPointer<CameraRegistry>{};
     if (!registry) return false;
 
-    auto const& state        = context.sample->state;
-    auto const  position     = ::glm::vec3{state.x, state.y, state.z};
-    auto const  basis        = basisFromState(state);
-    auto const  modelView    = viewMatrix(position, basis);
-    auto const  componentFov = state.fov * RadiansPerDegree;
+    auto const position     = ::glm::vec3{state.x, state.y, state.z};
+    auto const basis        = basisFromState(state);
+    auto const modelView    = viewMatrix(position, basis);
+    auto const componentFov = state.fov * RadiansPerDegree;
 
     struct AppliedComponent {
         MinecraftCamera::CameraComponent* component{};
@@ -326,10 +330,10 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
         }
         if (std::ranges::find(components, component, &AppliedComponent::component) != components.end()) return;
 
-        auto const orientation         = orientationFromBasis(basis);
-        component->mPosition           = position;
-        component->mOrientation        = orientation;
-        component->mFieldOfView        = componentFov;
+        auto const orientation  = orientationFromBasis(basis);
+        component->mPosition    = position;
+        component->mOrientation = orientation;
+        if (applyFov) component->mFieldOfView = componentFov;
         component->mSavedModelView->_m = modelView;
         components.push_back({component, orientation});
     };
@@ -345,9 +349,18 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
         auto const& appliedOrientation = applied.component->mOrientation.get();
         float const orientationDot     = std::abs(::glm::dot(appliedOrientation, applied.orientation));
         verified = verified && maxError(applied.component->mPosition.get(), position) <= PositionTolerance
-                && std::abs(applied.component->mFieldOfView - componentFov) <= 0.001f && std::isfinite(orientationDot)
-                && orientationDot >= 0.9999f;
+                && (!applyFov || std::abs(applied.component->mFieldOfView - componentFov) <= 0.001f)
+                && std::isfinite(orientationDot) && orientationDot >= 0.9999f;
     }
+    targets = components.size();
+    return verified;
+}
+
+bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexcept {
+    if (!context.sample) return false;
+
+    size_t     targets  = 0;
+    bool const verified = applyCameraEcsPose(context.sample->state, true, targets);
 
     auto&      failureFlag = gCameraEcsFailureLogged[sourceIndex(context.source)];
     bool const logFailure  = !verified && !failureFlag.exchange(true, std::memory_order_acq_rel);
@@ -361,10 +374,17 @@ bool applyCameraEcs(keyframe::CameraTimelineRenderContext const& context) noexce
             context.time.numerator,
             context.time.denominator,
             context.sample->cameraId,
-            components.size()
+            targets
         );
     }
     return verified;
+}
+
+// The followed player's pose drives the vanilla camera through the same components as the export, so every derived
+// matrix agrees; rewriting the finished cameras left the world camera's inverse view on the observer.
+bool applyFollowCameraEcs(keyframe::CameraRenderState const& state) noexcept {
+    size_t targets = 0;
+    return applyCameraEcsPose(state, true, targets);
 }
 
 void publishRenderCameraProjection(
@@ -623,6 +643,7 @@ LL_TYPE_INSTANCE_HOOK(
     // The native hand animation reads the frame alpha, so a paused frame must not feed it the cycling value.
     if (replay.isPaused()) partialTick = replay.previewPartialTick();
     gFollowCamera = replay.pinFollowObserverForRender();
+    if (gFollowCamera) (void)applyFollowCameraEcs(*gFollowCamera);
     struct FollowCameraReset {
         ~FollowCameraReset() { gFollowCamera.reset(); }
     } followCameraReset;
@@ -674,6 +695,8 @@ LL_TYPE_INSTANCE_HOOK(
     bool  enableVariableFov
 ) {
     float const native = origin(amount, enableVariableFov);
+    // The followed player's recorded FOV carries the spyglass zoom the observer never has.
+    if (gFollowCamera) return enableVariableFov ? gFollowCamera->fov : native;
     // The hand projection takes getFov(false), a fixed 70 in vanilla; the timeline FOV would shrink the hands.
     if (!enableVariableFov) return native;
     auto const context = keyframe::currentCameraTimelineRenderContext();
@@ -694,6 +717,7 @@ LL_TYPE_INSTANCE_HOOK(
     // Keep "no FOV available" intact so callers never see a camera the game does not have.
     if (!native) return native;
 
+    if (gFollowCamera) return ::std::optional<float>{gFollowCamera->fov * RadiansPerDegree};
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (context && context->sample && finite(context->sample->state)) {
         return ::std::optional<float>{context->sample->state.fov * RadiansPerDegree};
@@ -749,10 +773,8 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
 
-    if (gFollowCamera) {
-        applyObserverCamera(level, camera, *gFollowCamera);
-        return;
-    }
+    // Following leaves the view to the camera components, like the export; rewriting the cameras here drops geometry.
+    if (gFollowCamera) return;
 
     if (gParkedObserverCamera) {
         if (observerStillParked()) {
@@ -774,7 +796,9 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (!context || context->source != keyframe::CameraTimelineSource::Export) {
+        if (gFollowCamera) applyFollowCameraEcs(*gFollowCamera);
         auto result = origin(screenContext, clientSubId);
+        if (gFollowCamera) (void)applyFollowCameraEcs(*gFollowCamera);
         // Without a timeline camera the vanilla observer owns the view, so publish it here.
         if (!context && keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
             auto client = ll::service::getClientInstance();
@@ -839,9 +863,13 @@ LL_TYPE_INSTANCE_HOOK(
         float const viewPositionError = maxError(view.mCameraPos.get(), position);
         float const viewDirectionError =
             maxError(normalized(view.mCameraTargetPos.get() - view.mCameraPos.get()), basis.forward);
-        verified = worldCheck.valid() && levelPositionError <= PositionTolerance
-                && levelDirectionError <= DirectionTolerance && viewPositionError <= PositionTolerance
-                && viewDirectionError <= DirectionTolerance;
+        bool const nausea = visuals::isReplayNauseaDistortionActive();
+        verified          = worldCheck.publicPositionError <= PositionTolerance
+                && worldCheck.publicDirectionError <= DirectionTolerance
+                && worldCheck.viewPositionError <= PositionTolerance
+                && (nausea || worldCheck.viewDirectionError <= DirectionTolerance)
+                && levelPositionError <= PositionTolerance && levelDirectionError <= DirectionTolerance
+                && viewPositionError <= PositionTolerance && viewDirectionError <= DirectionTolerance;
     }
 
     if (verified && context->appliedFlag) context->appliedFlag->store(true, std::memory_order_release);
