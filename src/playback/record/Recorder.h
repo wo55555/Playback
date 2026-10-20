@@ -56,6 +56,13 @@ struct PlaybackCameraSample {
     float y   = 0.0f;
     float z   = 0.0f;
     float fov = 0.0f;
+    // Absolute game camera pose, only captured while the vanilla camera is not bound to the entity (sleeping).
+    bool  hasView = false;
+    float viewX   = 0.0f;
+    float viewY   = 0.0f;
+    float viewZ   = 0.0f;
+    float viewYaw = 0.0f;
+    float viewPitch = 0.0f;
 };
 
 struct PlaybackChunkMeta {
