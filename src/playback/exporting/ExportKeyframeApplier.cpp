@@ -21,6 +21,8 @@ void ExportKeyframeApplier::configure(
         keyframe::setCameraSampleOverride(
             keyframe::CameraTimelineSource::Export,
             [](visuals::ReplaySampleTime const& time) -> std::optional<keyframe::CameraRenderState> {
+                // Export skips the follow path, so refresh the sleep weight the hand hooks read here.
+                visuals::sampleReplaySubjectViewWeight(time);
                 auto const pose = visuals::sampleReplaySubjectPose(time);
                 auto const fov  = visuals::sampleReplaySubjectFov(time);
                 if (!pose || !fov) return std::nullopt;
