@@ -54,7 +54,12 @@
 #include "mc/network/packet/BlockActorDataPacket.h"
 #include "mc/network/packet/BlockEventPacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
+#include "mc/network/packet/ContainerClosePacket.h"
+#include "mc/network/packet/ContainerOpenPacket.h"
+#include "mc/network/packet/ContainerSetDataPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
+#include "mc/network/packet/InventoryContentPacket.h"
+#include "mc/network/packet/InventorySlotPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
@@ -86,7 +91,9 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/level/ActorRuntimeIDManager.h"
+#include "mc/world/ContainerID.h"
 #include "mc/world/level/BlockPalette.h"
+#include "mc/world/level/BlockSource.h"
 #include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
@@ -160,9 +167,6 @@ constexpr int SeekParticleWindowTicks = 40;
 
 bool shouldIgnoreReplayPacket(MinecraftPacketIds packetId) {
     switch (packetId) {
-    case MinecraftPacketIds::ContainerOpen:
-    case MinecraftPacketIds::ContainerClose:
-    case MinecraftPacketIds::ClientboundCloseScreen:
     case MinecraftPacketIds::NetworkChunkPublisherUpdate:
     case MinecraftPacketIds::ChunkRadiusUpdated:
         return true;
@@ -507,6 +511,7 @@ void ReplaySession::clearReplayData() {
     mWorldReady   = false;
     mReplayFailed = false;
     mInjectingPacket.store(nullptr, std::memory_order_release);
+    mContainerPreview.reset();
     mLevelSimFrozen       = false;
     mSeekParticlesCleared = false;
     mSeekParticlesStale   = false;
@@ -765,9 +770,8 @@ bool ReplaySession::updateSubjectFollow() {
     Vec3 const     feetPosition{state.x, state.y, state.z};
     Vec2 const     rotation{state.pitch, state.yaw};
     ChunkPos const chunk{feetPosition.x, feetPosition.z};
-    bool const     serverSyncNeeded =
-        oneShot || !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != chunk.x
-        || mLastObserverServerSyncChunk->z != chunk.z;
+    bool const serverSyncNeeded = oneShot || !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != chunk.x
+                               || mLastObserverServerSyncChunk->z != chunk.z;
     forceFirstPersonCamera();
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
@@ -788,24 +792,40 @@ std::optional<keyframe::CameraRenderState> ReplaySession::sampleSubjectFollowSta
         || (position.x == 0.0f && position.y == 0.0f && position.z == 0.0f)) {
         return std::nullopt;
     }
-    // The recorded player's position is already its eye position.
-    return keyframe::CameraRenderState{position.x, position.y, position.z, pose->yaw, pose->pitch, 0.0f, 70.0f};
+    // The recorded player's position is already its eye position; the recorded FOV carries the spyglass zoom.
+    auto const fov = visuals::sampleReplaySubjectFov(*time);
+    // The hand and vignette hooks read the sleep state sampled here.
+    (void)visuals::sampleReplaySubjectViewWeight(*time);
+    return keyframe::CameraRenderState{
+        position.x,
+        position.y,
+        position.z,
+        pose->yaw,
+        pose->pitch,
+        0.0f,
+        fov && *fov > 1.0f && *fov < 179.0f ? *fov : 70.0f,
+    };
 }
 
 // Server corrections land during the client update, after the previous frame's pin; pin again right before drawing.
 std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRender() {
-    if (!isFollowingRecordedPlayer() || !mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return std::nullopt;
-    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return std::nullopt;
-    if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return std::nullopt;
+    if (!isFollowingRecordedPlayer() || !mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler
+        || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || mPendingReplayDimension) {
+        mFollowHeldPose.reset();
+        return std::nullopt;
+    }
+    // The tick stops while chunks or a snapshot stream in, but frames keep coming: keep the last pose.
+    if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return mFollowHeldPose;
 
     auto const state = sampleSubjectFollowState();
-    if (!state) return std::nullopt;
+    if (!state) return mFollowHeldPose;
     cancelNativeMovementInterpolation(
         *mReplayPlayer,
         Vec3{state->x, state->y, state->z},
         Vec2{state->pitch, state->yaw},
         state->yaw
     );
+    mFollowHeldPose = state;
     return state;
 }
 
@@ -1201,7 +1221,7 @@ void ReplaySession::beginSeek(int targetTick) {
     if (mReaders.empty()) return;
     if (!refreshReplayPlayer()) throw std::runtime_error("Replay player is unavailable while seeking");
 
-
+    closeContainerPreview("seek");
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
 
@@ -1291,6 +1311,7 @@ void ReplaySession::tick() {
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
+        updateContainerPreview();
 
         if (mPendingSnapshotApply) {
             if (mPendingReplayDimension) return;
@@ -2061,9 +2082,20 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         mApplyingChunkSnapshot = false;
         return;
     }
+    std::optional<visuals::EntityRenderPose> snapshotCameraView;
+    if (snapshotContext.hasView) {
+        snapshotCameraView = visuals::EntityRenderPose{
+            {snapshotContext.viewX, snapshotContext.viewY, snapshotContext.viewZ},
+            snapshotContext.viewPitch,
+            snapshotContext.viewYaw,
+            snapshotContext.viewYaw,
+            snapshotContext.viewYaw
+        };
+    }
     visuals::queueReplaySubjectCameraOffset(
         {snapshotContext.cameraOffsetX, snapshotContext.cameraOffsetY, snapshotContext.cameraOffsetZ},
-        snapshotContext.fov
+        snapshotContext.fov,
+        snapshotCameraView
     );
 
     PlaybackView view;
@@ -3374,7 +3406,15 @@ void ReplaySession::handleLocalCameraOffset(PlaybackBuffer& data) {
     float const y   = data.getFloat().value();
     float const z   = data.getFloat().value();
     float const fov = data.getFloat().value();
-    visuals::queueReplaySubjectCameraOffset({x, y, z}, fov);
+    bool const  hasView   = data.getBool().value();
+    float const viewX     = data.getFloat().value();
+    float const viewY     = data.getFloat().value();
+    float const viewZ     = data.getFloat().value();
+    float const viewYaw   = data.getFloat().value();
+    float const viewPitch = data.getFloat().value();
+    std::optional<visuals::EntityRenderPose> view;
+    if (hasView) view = visuals::EntityRenderPose{{viewX, viewY, viewZ}, viewPitch, viewYaw, viewYaw, viewYaw};
+    visuals::queueReplaySubjectCameraOffset({x, y, z}, fov, view);
 }
 
 void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
@@ -3606,8 +3646,88 @@ bool ReplaySession::applyPendingSnapshotLocalPlayer() {
     return true;
 }
 
+bool ReplaySession::dispatchUiPacket(std::shared_ptr<Packet> packet) {
+    if (!packet || !mNetworkHandler || !packet->mHandler) return false;
+    mInjectingPacket.store(packet.get(), std::memory_order_release);
+    InjectionReset reset{mInjectingPacket};
+    packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+    return true;
+}
+
+// Container screens are only previewed for a followed, settled, non-exporting replay; every other case skips.
+bool ReplaySession::trackContainerUiPacket(MinecraftPacketIds packetId, std::string_view payload) {
+    if (packetId != MinecraftPacketIds::ContainerOpen) {
+        if (mContainerPreview) closeContainerPreview(packetId == MinecraftPacketIds::ContainerClose ? "recordedClose" : "closeScreen");
+        return true;
+    }
+
+    auto packet = MinecraftPackets::createPacket(packetId);
+    if (!packet) return true;
+    ReadOnlyBinaryStream stream(payload, false);
+    if (!packet->read(stream) || !stream.ensureReadCompleted()) return true;
+
+    auto&      open      = static_cast<ContainerOpenPacket&>(*packet);
+    int const  id        = static_cast<int>(open.mContainerId);
+    int const  type      = static_cast<int>(open.mType);
+    auto const pos       = open.mPos.get();
+    auto const entityRaw = open.mEntityUniqueID.get().rawID;
+    bool const following = isFollowingRecordedPlayer();
+
+    char const* action      = "inject";
+    int         blockEntity = -1;
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) action = "skip:noWorld";
+    else if (!following) action = "skip:notFollowing";
+    else if (mSeekTargetTick >= 0 || mIsProcessingSnapshot || mPendingSnapshotApply || mPendingReplayDimension) action = "skip:seeking";
+    else if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) action = "skip:export";
+    else if (mContainerPreview) action = "skip:alreadyOpen";
+    else if (entityRaw != -1 && entityRaw != 0) {
+        if (!mReplayPlayer->getLevel().fetchEntity(open.mEntityUniqueID.get(), false)) action = "skip:entityMissing";
+    } else {
+        using Type = SharedTypes::Legacy::ContainerType;
+        auto const kind = open.mType;
+        bool const needsBlockEntity =
+            kind == Type::Container || kind == Type::Furnace || kind == Type::BrewingStand || kind == Type::Dispenser
+            || kind == Type::Dropper || kind == Type::Hopper || kind == Type::BlastFurnace || kind == Type::Smoker;
+        if (needsBlockEntity) {
+            blockEntity = mReplayPlayer->getDimensionBlockSource().getBlockEntity(pos) ? 1 : 0;
+            if (blockEntity == 0) action = "skip:noBlockEntity";
+        }
+    }
+
+    if (std::string_view(action) != "inject") return true;
+
+    mContainerPreview = ContainerPreview{id, type};
+    (void)dispatchUiPacket(std::move(packet));
+    return true;
+}
+
+void ReplaySession::closeContainerPreview(char const* reason) {
+    if (!mContainerPreview) return;
+    auto const preview = *mContainerPreview;
+    mContainerPreview.reset();
+    if (mReplayPlayer && mReplayWorldJoined && mNetworkHandler) {
+        if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerClose)) {
+            auto& close                 = static_cast<ContainerClosePacket&>(*packet);
+            close.mContainerId          = static_cast<ContainerID>(preview.id);
+            close.mContainerType        = static_cast<SharedTypes::Legacy::ContainerType>(preview.type);
+            close.mServerInitiatedClose = true;
+            (void)dispatchUiPacket(std::move(packet));
+        }
+    }
+}
+
+void ReplaySession::updateContainerPreview() {
+    if (mContainerPreview && (!isFollowingRecordedPlayer() || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive)) {
+        closeContainerPreview("followEnded");
+    }
+}
+
 bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
-    // Keep UI packets for a future first-person handler and let the replay world own client chunk publishing.
+    if (packetId == MinecraftPacketIds::ContainerOpen || packetId == MinecraftPacketIds::ContainerClose
+        || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
+        return trackContainerUiPacket(packetId, payload);
+    }
+    // The replay world owns client chunk publishing.
     if (shouldIgnoreReplayPacket(packetId)) return true;
 
     auto packet = MinecraftPackets::createPacket(packetId);

@@ -11,4 +11,7 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner);
 // True inside the swapped hand pass, where the recorded player's own model must not be hidden.
 [[nodiscard]] bool isReplayFirstPersonHandPass();
 
+// True while the native nausea distortion is reshaping the view matrix, which then differs from the camera sample.
+[[nodiscard]] bool isReplayNauseaDistortionActive();
+
 } // namespace playback::visuals

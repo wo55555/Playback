@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
 #include "playback/io/AsyncReplaySaver.h"
+#include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/utils/PathUtils.h"
@@ -444,7 +445,28 @@ PlaybackCameraSample captureLocalCameraSample(LocalPlayer& player) {
         auto const position = player.getPosition();
         offset              = {camera.x - position.x, camera.y - position.y, camera.z - position.z};
     }
-    return {offset.x, offset.y, offset.z, latestRenderedFov()};
+    PlaybackCameraSample sample{offset.x, offset.y, offset.z, latestRenderedFov()};
+    // While sleeping the vanilla camera detaches from the entity, so its absolute pose is recorded instead.
+    if (player.isSleeping()) {
+        bool foreignCamera = false;
+        if (auto client = ll::service::getClientInstance()) {
+            auto* cameraActor = client->getCameraActor();
+            foreignCamera     = cameraActor && cameraActor != &player;
+        }
+        // The sleep camera system overrides every preset's pose, so a third-person sleep still carries the bed view;
+        // only a /camera view is not the player's own.
+        if (!foreignCamera) {
+            if (auto const view = keyframe::captureClientCamera()) {
+                sample.hasView   = true;
+                sample.viewX     = view->x;
+                sample.viewY     = view->y;
+                sample.viewZ     = view->z;
+                sample.viewYaw   = view->yaw;
+                sample.viewPitch = view->pitch;
+            }
+        }
+    }
+    return sample;
 }
 
 } // namespace
@@ -1361,6 +1383,12 @@ bool Recorder::writeSnapshot() {
     context.cameraOffsetY      = finiteOrZero(mSnapshotCamera->y);
     context.cameraOffsetZ      = finiteOrZero(mSnapshotCamera->z);
     context.fov                = finiteOrZero(mSnapshotCamera->fov);
+    context.hasView            = mSnapshotCamera->hasView;
+    context.viewX              = finiteOrZero(mSnapshotCamera->viewX);
+    context.viewY              = finiteOrZero(mSnapshotCamera->viewY);
+    context.viewZ              = finiteOrZero(mSnapshotCamera->viewZ);
+    context.viewYaw            = finiteOrZero(mSnapshotCamera->viewYaw);
+    context.viewPitch          = finiteOrZero(mSnapshotCamera->viewPitch);
     context.dimensionName      = mSnapshotDimension->name;
     if (!mAsyncReplaySaver->submit([context](ReplayWriter& writer) {
             writer.startSnapshot();
@@ -1571,6 +1599,12 @@ bool Recorder::writeLocalCameraOffset() {
             writer.mStream.writeFloat(sample.y, nullptr, nullptr);
             writer.mStream.writeFloat(sample.z, nullptr, nullptr);
             writer.mStream.writeFloat(sample.fov, nullptr, nullptr);
+            writer.mStream.writeBool(sample.hasView, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewX, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewY, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewZ, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewYaw, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewPitch, nullptr, nullptr);
             writer.finishAction(action);
         })) {
         auto error = mAsyncReplaySaver->getError();

@@ -11,9 +11,13 @@
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/effect/EffectDuration.h"
+#include "mc/world/effect/MobEffect.h"
+#include "mc/world/effect/MobEffectInstance.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <mutex>
@@ -44,9 +48,14 @@ struct PendingEntityPose {
 
 // Camera position minus entity position of the replay subject; it changes while the subject stands still.
 struct CameraOffsetSample {
-    EntityRenderPosition offset{};
-    float                fov{}; // degrees, 0 when the renderer had produced none yet
+    EntityRenderPosition            offset{};
+    float                           fov{}; // degrees, 0 when the renderer had produced none yet
+    std::optional<EntityRenderPose> view{}; // absolute camera pose that replaces entity pose + offset
+    float                           viewWeight{}; // 0 = entity pose + offset, 1 = view
+    float                           sleepTicks{}; // consecutive ticks spent in the view, 0 outside it
 };
+
+constexpr float kSleepRampTicks = 60.0f; // vanilla's vignette reaches full strength after 60 sleep ticks
 
 struct CameraOffsetHistory {
     int64_t            previousTick{};
@@ -71,11 +80,37 @@ std::optional<PendingCameraOffset>                                          gPen
 constexpr uint64_t   kNoSubject = std::numeric_limits<uint64_t>::max();
 std::atomic_uint64_t gSubject{kNoSubject};
 std::atomic_uint8_t  gSubjectHidden{0};
+std::atomic<float>   gSubjectViewWeight{0.0f}; // blend of the recorded sleeping view at the last followed sample
+std::atomic<float>   gSubjectSleepTicks{0.0f}; // consecutive sleeping ticks at the last followed sample
 
 std::optional<EntityRenderKey> subjectKey() noexcept {
     auto const packed = gSubject.load(std::memory_order_acquire);
     if (packed == kNoSubject) return std::nullopt;
     return EntityRenderKey{static_cast<uint32_t>(packed >> 32U), static_cast<uint32_t>(packed & 0xFFFFFFFFU)};
+}
+
+constexpr int64_t kNauseaFreshNs = 500'000'000;
+
+std::atomic_int64_t gNauseaStamp{0};
+std::atomic_bool    gNauseaPresent{false};
+std::atomic_bool    gNauseaActive{false};
+std::atomic_int     gNauseaDuration{0};
+std::atomic<double> gNauseaTick{0.0};
+
+int64_t steadyNs() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+void publishSubjectNausea(Actor const& subject, long double tick) {
+    auto*       confusion = MobEffect::CONFUSION();
+    auto const* effect    = confusion ? subject.getEffect(*confusion) : nullptr;
+    int const   duration  = effect ? effect->getDuration().mValue : 0;
+    gNauseaPresent.store(effect != nullptr, std::memory_order_relaxed);
+    gNauseaDuration.store(duration, std::memory_order_relaxed);
+    gNauseaActive.store(effect && (duration == -1 || duration > 60), std::memory_order_relaxed);
+    gNauseaTick.store(static_cast<double>(tick), std::memory_order_relaxed);
+    gNauseaStamp.store(steadyNs(), std::memory_order_release);
 }
 
 bool finite(EntityRenderPosition const& value) noexcept {
@@ -131,13 +166,34 @@ CameraOffsetSample sampleCameraOffset(CameraOffsetHistory const& history, Replay
     // A zero FOV means the renderer had produced none yet and must not be blended in.
     float const fov =
         previous.fov > 0.0f && current.fov > 0.0f ? std::lerp(previous.fov, current.fov, amount) : current.fov;
-    return {
+    std::optional<EntityRenderPose> view = current.view ? current.view : previous.view;
+    // Entering or leaving the view fades its weight instead of switching on a tick boundary.
+    float viewWeight = previous.view && current.view ? 1.0f : current.view ? amount : previous.view ? 1.0f - amount : 0.0f;
+    if (previous.view && current.view) {
+        auto const& a = *previous.view;
+        auto const& b = *current.view;
+        view          = EntityRenderPose{
+            {
+             std::lerp(a.position.x, b.position.x, amount),
+             std::lerp(a.position.y, b.position.y, amount),
+             std::lerp(a.position.z, b.position.z, amount),
+             },
+            interpolateAngle(a.pitch, b.pitch, amount),
+            interpolateAngle(a.yaw, b.yaw, amount),
+            interpolateAngle(a.headYaw, b.headYaw, amount),
+            interpolateAngle(a.bodyYaw, b.bodyYaw, amount),
+        };
+    }
+    return CameraOffsetSample{
         {
          std::lerp(previous.offset.x, current.offset.x, amount),
          std::lerp(previous.offset.y, current.offset.y, amount),
          std::lerp(previous.offset.z, current.offset.z, amount),
          },
         fov,
+        view,
+        viewWeight,
+        std::lerp(previous.sleepTicks, current.sleepTicks, amount),
     };
 }
 
@@ -242,6 +298,36 @@ Actor* replayHiddenActorInScope() {
     return state && state->hidden ? state->hidden->actor : nullptr;
 }
 
+std::optional<SubjectSleepSignals> replaySubjectSleepInScope() {
+    auto* actor = replayHiddenActorInScope();
+    if (!actor) return std::nullopt;
+    return SubjectSleepSignals{
+        actor->isSleeping(),
+        actor->getStatusFlag(ActorFlags::Sleeping),
+        gSubjectViewWeight.load(std::memory_order_relaxed),
+    };
+}
+
+float replaySubjectViewWeight() { return gSubjectViewWeight.load(std::memory_order_relaxed); }
+
+float replaySubjectSleepRamp() {
+    return std::clamp(gSubjectSleepTicks.load(std::memory_order_relaxed) / kSleepRampTicks, 0.0f, 1.0f);
+}
+
+std::optional<SubjectNauseaSample> sampleReplaySubjectNausea() {
+    auto const stamp = gNauseaStamp.load(std::memory_order_acquire);
+    // An export pass can take longer than the freshness window, and it only ends by clearing the hide reason.
+    bool const exporting =
+        (gSubjectHidden.load(std::memory_order_acquire) & static_cast<uint8_t>(SubjectHideReason::Export)) != 0;
+    if (stamp == 0 || (!exporting && steadyNs() - stamp > kNauseaFreshNs)) return std::nullopt;
+    return SubjectNauseaSample{
+        gNauseaPresent.load(std::memory_order_relaxed),
+        gNauseaDuration.load(std::memory_order_relaxed),
+        gNauseaActive.load(std::memory_order_relaxed),
+        static_cast<long double>(gNauseaTick.load(std::memory_order_relaxed)),
+    };
+}
+
 std::unique_ptr<ScopedReplayEntityPose>
 createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, ReplaySampleTime const& sample) {
     if (!sample.isValid() || ScopedReplayEntityPose::State::gActiveState) return {};
@@ -265,6 +351,7 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                 };
                 target.actor->setStatusFlag(ActorFlags::Invisible, true);
                 target.actor->setStatusFlag(ActorFlags::HiddenWhenInvisible, true);
+                publishSubjectNausea(*target.actor, sample.value());
             }
 
             if (!poses) continue;
@@ -346,6 +433,7 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             }
         }
 
+        if (!state->hidden) gNauseaStamp.store(0, std::memory_order_release);
         if (!poses && !state->hidden) return {};
 
         state->previous                             = ScopedReplayEntityPose::State::gActiveState;
@@ -363,9 +451,15 @@ void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, Entit
     if (!inserted) entry->second.current = current;
 }
 
-void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov) {
+void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov, std::optional<EntityRenderPose> view) {
     if (!finite(offset)) return;
-    CameraOffsetSample const sample{offset, std::isfinite(fov) && fov > 1.0f && fov < 179.0f ? fov : 0.0f};
+    if (view && !finite(*view)) view.reset();
+    CameraOffsetSample const sample{
+        offset,
+        std::isfinite(fov) && fov > 1.0f && fov < 179.0f ? fov : 0.0f,
+        view,
+        view ? 1.0f : 0.0f
+    };
     std::scoped_lock         lock(gPendingMutex);
     if (gPendingCameraOffset) gPendingCameraOffset->current = sample;
     else gPendingCameraOffset = PendingCameraOffset{sample, sample};
@@ -377,6 +471,8 @@ void commitReplayEntityPoses(int64_t tick) {
     if (gPendingCameraOffset) {
         auto const existing = gCameraOffset.load(std::memory_order_acquire);
         auto const previous = existing ? existing->current : gPendingCameraOffset->previous;
+        gPendingCameraOffset->current.sleepTicks =
+            gPendingCameraOffset->current.view ? previous.sleepTicks + 1.0f : 0.0f;
         gCameraOffset.store(
             std::make_shared<CameraOffsetHistory const>(
                 CameraOffsetHistory{std::max<int64_t>(0, tick - 1), tick, previous, gPendingCameraOffset->current}
@@ -428,6 +524,19 @@ void setReplaySubjectHidden(SubjectHideReason reason, bool hidden) {
     auto const bit = static_cast<uint8_t>(reason);
     if (hidden) gSubjectHidden.fetch_or(bit, std::memory_order_acq_rel);
     else gSubjectHidden.fetch_and(static_cast<uint8_t>(~bit), std::memory_order_acq_rel);
+    if (reason != SubjectHideReason::Session && !hidden) {
+        gSubjectViewWeight.store(0.0f, std::memory_order_relaxed);
+        gSubjectSleepTicks.store(0.0f, std::memory_order_relaxed);
+    }
+}
+
+bool isReplaySubjectFollowed() {
+    return (gSubjectHidden.load(std::memory_order_acquire) & static_cast<uint8_t>(SubjectHideReason::Follow)) != 0;
+}
+
+bool isReplaySubjectViewDriven() {
+    constexpr auto mask = static_cast<uint8_t>(SubjectHideReason::Follow) | static_cast<uint8_t>(SubjectHideReason::Export);
+    return (gSubjectHidden.load(std::memory_order_acquire) & mask) != 0;
 }
 
 std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample) {
@@ -450,8 +559,28 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
         pose.position.x += camera->offset.x;
         pose.position.y += camera->offset.y;
         pose.position.z += camera->offset.z;
+        if (camera->view && camera->viewWeight > 0.0f) {
+            // The recorded game camera replaces the actor pose (sleeping), faded in and out at its edges.
+            float const w = std::clamp(camera->viewWeight, 0.0f, 1.0f);
+            auto const& v = *camera->view;
+            pose.position = {
+                std::lerp(pose.position.x, v.position.x, w),
+                std::lerp(pose.position.y, v.position.y, w),
+                std::lerp(pose.position.z, v.position.z, w),
+            };
+            pose.pitch = interpolateAngle(pose.pitch, v.pitch, w);
+            pose.yaw   = interpolateAngle(pose.yaw, v.yaw, w);
+        }
     }
     return pose;
+}
+
+float sampleReplaySubjectViewWeight(ReplaySampleTime const& sample) {
+    auto const camera = sampleSubjectCamera(sample);
+    float const weight = camera && camera->view ? camera->viewWeight : 0.0f;
+    gSubjectViewWeight.store(weight, std::memory_order_relaxed);
+    gSubjectSleepTicks.store(camera && camera->view ? camera->sleepTicks : 0.0f, std::memory_order_relaxed);
+    return weight;
 }
 
 std::optional<float> sampleReplaySubjectFov(ReplaySampleTime const& sample) {

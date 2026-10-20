@@ -29,6 +29,12 @@ void writeSnapshotContext(PlaybackBuffer& buffer, PlaybackSnapshotContext const&
     buffer.writeFloat(context.cameraOffsetY, nullptr, nullptr);
     buffer.writeFloat(context.cameraOffsetZ, nullptr, nullptr);
     buffer.writeFloat(context.fov, nullptr, nullptr);
+    buffer.writeBool(context.hasView, nullptr, nullptr);
+    buffer.writeFloat(context.viewX, nullptr, nullptr);
+    buffer.writeFloat(context.viewY, nullptr, nullptr);
+    buffer.writeFloat(context.viewZ, nullptr, nullptr);
+    buffer.writeFloat(context.viewYaw, nullptr, nullptr);
+    buffer.writeFloat(context.viewPitch, nullptr, nullptr);
     buffer.writeString(context.dimensionName, nullptr, nullptr);
 }
 
@@ -51,6 +57,12 @@ PlaybackSnapshotContext readSnapshotContext(PlaybackBuffer& buffer) {
     context.cameraOffsetY      = buffer.getFloat().value();
     context.cameraOffsetZ      = buffer.getFloat().value();
     context.fov                = buffer.getFloat().value();
+    context.hasView            = buffer.getBool().value();
+    context.viewX              = buffer.getFloat().value();
+    context.viewY              = buffer.getFloat().value();
+    context.viewZ              = buffer.getFloat().value();
+    context.viewYaw            = buffer.getFloat().value();
+    context.viewPitch          = buffer.getFloat().value();
     context.dimensionName      = buffer.getString(MAX_STRING_LENGTH).value();
     return context;
 }

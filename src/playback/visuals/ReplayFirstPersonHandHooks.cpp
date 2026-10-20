@@ -8,10 +8,14 @@
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
 #include "mc-external/IOptionRegistry.h"
+#include "mc/client/game/ClientInputCallbacks.h"
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/gui/controls/renderers/HudVignetteRenderer.h"
 #include "mc/client/gui/screens/InGamePlayScreen.h"
+#include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
+#include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
@@ -19,11 +23,15 @@
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/item/ItemStack.h"
 
+#include <Windows.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <intrin.h>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,6 +46,13 @@ thread_local int gPassDepth = 0;
 Player* subjectPlayer() {
     auto* actor = replayHiddenActorInScope();
     return actor && actor->isPlayer() ? static_cast<Player*>(actor) : nullptr;
+}
+
+// The vanilla sleeping camera draws no hand. The synthetic subject's own sleeping flags are not proven, so the
+// recorded sleep view counts as well.
+bool subjectSleepSuppressesHand() {
+    auto const signals = replaySubjectSleepInScope();
+    return signals && signals->sleeping();
 }
 
 // Only the observer is replaced; any other player passed in is left alone.
@@ -177,6 +192,7 @@ LL_TYPE_INSTANCE_HOOK(
         origin(screenContext, player);
         return;
     }
+    if (subjectSleepSuppressesHand()) return;
     ScopedHandPass pass(*subject);
     origin(screenContext, *subject);
 }
@@ -195,6 +211,7 @@ LL_TYPE_INSTANCE_HOOK(
         origin(context, itemFlags);
         return;
     }
+    if (subjectSleepSuppressesHand()) return;
     syncRenderer(*this, *subject);
     ScopedHandPass pass(*subject);
     origin(context, itemFlags);
@@ -292,6 +309,151 @@ LL_TYPE_INSTANCE_HOOK(
     origin(context, handPlayer(player), inOffhand);
 }
 
+// Client RVA span of the screen-overlay renderers (fire, in-block); every other caller keeps the observer.
+constexpr uintptr_t OverlayCallerBegin = 0x1DCC5B0;
+constexpr uintptr_t OverlayCallerEnd   = 0x1DD1D82;
+
+bool isOverlayCaller(void* returnAddress) {
+    static auto const base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    auto const        rva  = reinterpret_cast<uintptr_t>(returnAddress) - base;
+    return rva >= OverlayCallerBegin && rva < OverlayCallerEnd;
+}
+
+// Follow mode parks the observer on the subject, so only the overlays are redirected; the render list and name tags
+// keep the observer.
+LL_TYPE_INSTANCE_HOOK(
+    CameraTargetHook,
+    ll::memory::HookPriority::High,
+    ClientInstance,
+    &ClientInstance::$getCameraTargetActor,
+    Actor*
+) {
+    auto* actor = origin();
+    if (!actor || !actor->isPlayer() || !static_cast<Player*>(actor)->isLocalPlayer()) return actor;
+    auto* subject = subjectPlayer();
+    if (!subject || !isOverlayCaller(_ReturnAddress())) return actor;
+    // The scope overlay reads LocalPlayer-only members, which a remote subject lacks; it follows the observer via
+    // isScoping.
+    return !subject->isScoping() && !subject->isUsingItem() ? subject : actor;
+}
+
+// The vignette renderer reads the sleep counter of the level renderer's player, which is the observer and never
+// sleeps; the followed subject's recorded sleep ticks raise the parameter by vanilla's 0.7 share over 60 ticks.
+constexpr float SleepVignetteShare = 0.7f;
+
+LL_TYPE_INSTANCE_HOOK(
+    SleepVignetteHook,
+    ll::memory::HookPriority::High,
+    HudVignetteRenderer,
+    &HudVignetteRenderer::_renderVignette,
+    bool,
+    MinecraftUIRenderContext& renderContext,
+    IClientInstance&          client,
+    float                     undergroundness,
+    int                       w,
+    int                       h
+) {
+    float const weight    = isReplaySubjectViewDriven() ? replaySubjectViewWeight() : 0.0f;
+    float const ramp      = weight > 0.0f ? replaySubjectSleepRamp() : 0.0f;
+    float const forced    = SleepVignetteShare * ramp;
+    float const effective = weight > 0.0f ? std::max(undergroundness, forced) : undergroundness;
+    return origin(renderContext, client, effective, w, h);
+}
+
+// The recorded perspective is first person; a toggle while following would be undone by the follow loop anyway.
+LL_TYPE_STATIC_HOOK(
+    TogglePerspectiveHook,
+    ll::memory::HookPriority::High,
+    ClientInputCallbacks,
+    &ClientInputCallbacks::handleTogglePerspectiveButtonPress,
+    void,
+    IClientInstance& client
+) {
+    if (isReplaySubjectFollowed()) return;
+    origin(client);
+}
+
+LL_TYPE_INSTANCE_HOOK(PlayerIsScopingHook, ll::memory::HookPriority::High, Player, &Player::isScoping, bool) {
+    bool const scoping = origin();
+    if (!isLocalPlayer()) return scoping;
+    auto* subject = subjectPlayer();
+    return scoping || !subject || subject == this ? scoping : subject->isScoping();
+}
+
+// The screen overlay reads these LocalPlayer-only fields from the remote subject, whose smaller object yields heap
+// garbage.
+float neutralPortalTime(LocalPlayer const& self, float raw) {
+    return static_cast<Player const&>(self).isLocalPlayer() ? raw : 0.0f;
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PortalEffectTimeHook,
+    ll::memory::HookPriority::High,
+    LocalPlayer,
+    &LocalPlayer::getPortalEffectTime,
+    float
+) {
+    return neutralPortalTime(*this, origin());
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    OPortalEffectTimeHook,
+    ll::memory::HookPriority::High,
+    LocalPlayer,
+    &LocalPlayer::getOPortalEffectTime,
+    float
+) {
+    return neutralPortalTime(*this, origin());
+}
+
+// Vanilla grows the distortion 0.0066667 per tick while nausea lasts over 60 ticks and fades it 0.05 per tick.
+struct NauseaRamp {
+    bool        valid{};
+    bool        active{};
+    long double tick{};
+    float       level{};
+};
+
+NauseaRamp       gNausea;
+std::atomic_bool gNauseaDistorting{false};
+
+float advanceNausea(SubjectNauseaSample const& sample) {
+    auto& ramp = gNausea;
+    if (ramp.valid) {
+        float const ticks = static_cast<float>(std::clamp<long double>(sample.tick - ramp.tick, 0.0L, 8.0L));
+        ramp.level        = std::clamp(ramp.level + (sample.active ? 0.0066667f : -0.05f) * ticks, 0.0f, 1.0f);
+    }
+    ramp.valid  = true;
+    ramp.tick   = sample.tick;
+    ramp.active = sample.active;
+    return ramp.level;
+}
+
+// The distortion reads the observer's own effects, which have none; follow mode feeds it the subject's nausea.
+LL_TYPE_INSTANCE_HOOK(
+    PortalDataHook,
+    ll::memory::HookPriority::High,
+    VanillaCameraAPI,
+    &VanillaCameraAPI::$tryGetPortalData,
+    std::optional<IVanillaCameraAPI::PortalData>
+) {
+    auto       data   = origin();
+    auto const sample = sampleReplaySubjectNausea();
+    if (!sample) {
+        gNausea = NauseaRamp{};
+        gNauseaDistorting.store(false, std::memory_order_release);
+        return data;
+    }
+    float const level = advanceNausea(*sample);
+    gNauseaDistorting.store(level > 0.0f && data.has_value(), std::memory_order_release);
+    if (level <= 0.0f || !data) return data;
+    data->mTime = std::max(data->mTime, level);
+    // The game spins by speed * (frame alpha + client tick), a clock that keeps running while the replay is paused.
+    // Nausea spins at 7 per tick; drive it from the replay time so a pause freezes it and a seek rewinds it.
+    data->mRotation = static_cast<float>(7.0L * sample->tick);
+    return data;
+}
+
 struct HookSlot {
     char const* name;
     bool (*hook)();
@@ -307,6 +469,8 @@ HookSlot makeSlot(char const* name) {
 } // namespace
 
 bool isReplayFirstPersonHandPass() { return gPassDepth > 0; }
+
+bool isReplayNauseaDistortionActive() { return gNauseaDistorting.load(std::memory_order_acquire); }
 
 void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
     static bool                  installed = false;
@@ -331,6 +495,13 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             makeSlot<HandMainhandItemHook>("mainhandItem"),
             makeSlot<HandOffhandItemHook>("offhandItem"),
             makeSlot<HandMiniMapHook>("miniMap"),
+            makeSlot<CameraTargetHook>("cameraTarget"),
+            makeSlot<PortalEffectTimeHook>("portalEffectTime"),
+            makeSlot<OPortalEffectTimeHook>("oPortalEffectTime"),
+            makeSlot<PortalDataHook>("portalData"),
+            makeSlot<PlayerIsScopingHook>("isScoping"),
+            makeSlot<SleepVignetteHook>("sleepVignette"),
+            makeSlot<TogglePerspectiveHook>("togglePerspective"),
         };
         bool       complete = true;
         auto const begin    = std::chrono::steady_clock::now();
