@@ -63,18 +63,62 @@ enum class SubjectHideReason : uint8_t {
 // While hidden, the subject's model is not drawn by any render scope (a first-person view sits inside it).
 void setReplaySubjectHidden(SubjectHideReason reason, bool hidden);
 
+// True while the follow view owns the camera (the observer sits on the recorded player).
+[[nodiscard]] bool isReplaySubjectFollowed();
+
+// True while the subject's view drives the camera: follow preview or first-person export.
+[[nodiscard]] bool isReplaySubjectViewDriven();
+
 // True for the actor the active render scope on this thread is hiding.
 [[nodiscard]] bool isReplayEntityHiddenInScope(Actor const& actor);
 
 // The actor the active render scope on this thread is hiding, or null.
 [[nodiscard]] Actor* replayHiddenActorInScope();
 
+// Every signal that can say the hidden subject is asleep; the synthetic actor's own flags are not proven reliable.
+struct SubjectSleepSignals {
+    bool  actorSleeping{};  // Actor::isSleeping()
+    bool  statusSleeping{}; // ActorFlags::Sleeping
+    float viewWeight{};     // blend of the recorded sleeping camera view
+
+    [[nodiscard]] bool sleeping() const { return actorSleeping || statusSleeping || viewWeight > 0.0f; }
+};
+
+// Sleep state of the subject the active render scope hides; empty without such a scope on this thread.
+[[nodiscard]] std::optional<SubjectSleepSignals> replaySubjectSleepInScope();
+
+// Blend of the followed subject's recorded sleeping view at the last sample (0 when not following); readable from the
+// HUD pass, which runs outside any render scope.
+[[nodiscard]] float replaySubjectViewWeight();
+
+// 0..1 growth of the sleep vignette: the subject's consecutive sleeping ticks over vanilla's 60-tick ramp.
+[[nodiscard]] float replaySubjectSleepRamp();
+
+// The followed subject's nausea, refreshed by every render scope that hides it for a follow view.
+struct SubjectNauseaSample {
+    bool        present{};  // the subject has the effect at all
+    int         duration{}; // remaining ticks, -1 when infinite
+    bool        active{};   // long enough to keep the distortion growing
+    long double tick{};     // replay time of the sample
+};
+
+// Empty unless a follow render scope refreshed it within the last half second.
+[[nodiscard]] std::optional<SubjectNauseaSample> sampleReplaySubjectNausea();
+
 // Camera position minus entity position of the subject plus the rendered FOV in degrees (0 when the renderer had none
-// yet), committed with the next commitReplayEntityPoses.
-void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov);
+// yet), committed with the next commitReplayEntityPoses. A view (position, yaw, pitch) replaces the whole first-person
+// pose for poses the offset cannot express, such as the vanilla sleeping camera.
+void queueReplaySubjectCameraOffset(
+    EntityRenderPosition            offset,
+    float                           fov,
+    std::optional<EntityRenderPose> view = std::nullopt
+);
 
 // The subject's entity pose with the recorded camera offset added to its position, i.e. the first-person view.
 [[nodiscard]] std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample);
+
+// How much of the recorded game camera view (sleeping) replaces the entity pose, 0 to 1.
+[[nodiscard]] float sampleReplaySubjectViewWeight(ReplaySampleTime const& sample);
 
 // The subject's recorded rendered FOV in degrees; empty until the snapshot or a tick supplies a valid one.
 [[nodiscard]] std::optional<float> sampleReplaySubjectFov(ReplaySampleTime const& sample);

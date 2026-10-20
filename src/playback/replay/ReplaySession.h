@@ -171,6 +171,7 @@ private:
     uint64_t                                    mPausedPreviewSeekCount{};
     std::atomic<bool>                           mFollowRecordedPlayer{false};
     bool                                        mTeleportToSubjectPending{false};
+    std::optional<keyframe::CameraRenderState>  mFollowHeldPose;
     std::atomic<uint64_t>                       mSeekFinishCount{0};
     uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
@@ -247,6 +248,13 @@ private:
     Player*                             mReplayPlayer   = nullptr;
     LegacyClientNetworkHandler*         mNetworkHandler = nullptr;
 
+    // The container screen the replay world opened for the followed player.
+    struct ContainerPreview {
+        int id{};
+        int type{};
+    };
+    std::optional<ContainerPreview> mContainerPreview;
+
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
     bool                                                        mReplayCachedResourcePacksLoaded{};
@@ -297,6 +305,15 @@ private:
 
     [[nodiscard]] bool
     applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer = false);
+
+    // Tracks the recorded container state; true when the packet was consumed (open/close), false to apply it normally.
+    [[nodiscard]] bool trackContainerUiPacket(MinecraftPacketIds packetId, std::string_view payload);
+
+    bool dispatchUiPacket(std::shared_ptr<Packet> packet);
+
+    void closeContainerPreview(char const* reason);
+
+    void updateContainerPreview();
 
     [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
 
@@ -405,6 +422,7 @@ public:
 
     void updateObserverPreview();
 
+    // Chunk streaming, snapshot applies and seeks hold the last pose instead of exposing the stale observer.
     // While following, re-pins the observer just before the frame is drawn; returns the pose the camera must use.
     [[nodiscard]] std::optional<keyframe::CameraRenderState> pinFollowObserverForRender();
 
