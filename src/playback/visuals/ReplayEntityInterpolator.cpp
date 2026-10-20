@@ -55,8 +55,6 @@ struct CameraOffsetSample {
     float                           sleepTicks{}; // consecutive ticks spent in the view, 0 outside it
 };
 
-constexpr float kSleepRampTicks = 60.0f; // vanilla's vignette reaches full strength after 60 sleep ticks
-
 struct CameraOffsetHistory {
     int64_t            previousTick{};
     int64_t            currentTick{};
@@ -310,9 +308,7 @@ std::optional<SubjectSleepSignals> replaySubjectSleepInScope() {
 
 float replaySubjectViewWeight() { return gSubjectViewWeight.load(std::memory_order_relaxed); }
 
-float replaySubjectSleepRamp() {
-    return std::clamp(gSubjectSleepTicks.load(std::memory_order_relaxed) / kSleepRampTicks, 0.0f, 1.0f);
-}
+float replaySubjectSleepTicks() { return gSubjectSleepTicks.load(std::memory_order_relaxed); }
 
 std::optional<SubjectNauseaSample> sampleReplaySubjectNausea() {
     auto const stamp = gNauseaStamp.load(std::memory_order_acquire);
