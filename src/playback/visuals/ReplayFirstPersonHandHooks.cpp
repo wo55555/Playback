@@ -15,6 +15,9 @@
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
+#include "mc/client/renderer/screen/MinecraftUIRenderContext.h"
+#include "mc/deps/core/math/Color.h"
+#include "mc/deps/input/RectangleArea.h"
 #include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/world/actor/Actor.h"
@@ -337,9 +340,17 @@ LL_TYPE_INSTANCE_HOOK(
     return !subject->isScoping() && !subject->isUsingItem() ? subject : actor;
 }
 
-// The vignette renderer reads the sleep counter of the level renderer's player, which is the observer and never
-// sleeps; the followed subject's recorded sleep ticks raise the parameter by vanilla's 0.7 share over 60 ticks.
-constexpr float SleepVignetteShare = 0.7f;
+// Vanilla darkens a sleeping player's screen with PlayerSleepFadeEffectSystem::Fade, which runs the registry-context
+// CameraFadeEffectComponent animation: a full-screen quad of colour (16, 16, 32) / 255 whose alpha rises linearly from
+// 0 to 0.863 over 5 s and holds while the player sleeps; PlayerSleepFadeEffectSystem::Wakeup clears it instantly.
+// The observer never sleeps, so that component stays idle during a replay. The recorded sleep ticks drive the same
+// curve here, drawn as a full-screen fill from the HUD vignette pass (1.26.20.04).
+constexpr float SleepFadeSeconds   = 5.0f;
+constexpr float SleepFadeTargetA   = 0.863f;
+constexpr float SleepFadeTickRate  = 20.0f;
+constexpr float SleepFadeRed       = 16.0f / 255.0f;
+constexpr float SleepFadeGreen     = 16.0f / 255.0f;
+constexpr float SleepFadeBlue      = 32.0f / 255.0f;
 
 LL_TYPE_INSTANCE_HOOK(
     SleepVignetteHook,
@@ -353,11 +364,18 @@ LL_TYPE_INSTANCE_HOOK(
     int                       w,
     int                       h
 ) {
-    float const weight    = isReplaySubjectViewDriven() ? replaySubjectViewWeight() : 0.0f;
-    float const ramp      = weight > 0.0f ? replaySubjectSleepRamp() : 0.0f;
-    float const forced    = SleepVignetteShare * ramp;
-    float const effective = weight > 0.0f ? std::max(undergroundness, forced) : undergroundness;
-    return origin(renderContext, client, effective, w, h);
+    if (isReplaySubjectViewDriven() && replaySubjectViewWeight() > 0.0f) {
+        float const progress = std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
+        float const alpha    = SleepFadeTargetA * progress;
+        if (alpha > 0.0f) {
+            renderContext.fillRectangle(
+                RectangleArea(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), false),
+                mce::Color(SleepFadeRed, SleepFadeGreen, SleepFadeBlue, 1.0f),
+                alpha
+            );
+        }
+    }
+    return origin(renderContext, client, undergroundness, w, h);
 }
 
 // The recorded perspective is first person; a toggle while following would be undone by the follow loop anyway.
