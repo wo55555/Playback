@@ -7,6 +7,7 @@
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/runtime/ClientTickHooks.h"
+#include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
@@ -92,6 +93,7 @@
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/level/ActorRuntimeIDManager.h"
 #include "mc/world/ContainerID.h"
+#include "mc/world/containers/managers/models/ContainerManagerModel.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/BlockSource.h"
 #include "mc/world/level/DimensionManager.h"
@@ -512,6 +514,8 @@ void ReplaySession::clearReplayData() {
     mReplayFailed = false;
     mInjectingPacket.store(nullptr, std::memory_order_release);
     mContainerPreview.reset();
+    mRecordedContainers.clear();
+    visuals::setReplayContainerKeepOpen(false);
     mLevelSimFrozen       = false;
     mSeekParticlesCleared = false;
     mSeekParticlesStale   = false;
@@ -990,6 +994,8 @@ std::optional<visuals::ReplaySampleTime> ReplaySession::getEntityRenderSampleTim
 bool ReplaySession::beginExportTimeline(int startTick) {
     if (!mActive || mReplayFailed || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return false;
 
+    // The export warm-up waits for a menu-free scene, so a preview from before the export must not stay open.
+    closeContainerPreview("exportBegin");
     setFollowRecordedPlayer(false);
     mTeleportToSubjectPending = false;
     startTick                 = std::clamp(startTick, 0, getTotalTicks());
@@ -1124,6 +1130,7 @@ bool ReplaySession::finishExportTimelineInitialization() {
     mExportSeekRequested    = false;
     mSnapMovementDuringSeek = false;
     mExportTimelinePhase    = ReplayExportTimelinePhase::Continuous;
+    syncContainerPreviewAfterSeek();
     return true;
 }
 
@@ -1198,6 +1205,7 @@ void ReplaySession::finishSeek() {
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();
     if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
+    syncContainerPreviewAfterSeek();
 }
 
 // Per-action snapping misses entities that never moved during catch-up, so settle every recorded one here.
@@ -1221,7 +1229,6 @@ void ReplaySession::beginSeek(int targetTick) {
     if (mReaders.empty()) return;
     if (!refreshReplayPlayer()) throw std::runtime_error("Replay player is unavailable while seeking");
 
-    closeContainerPreview("seek");
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
 
@@ -1289,6 +1296,7 @@ void ReplaySession::beginSeek(int targetTick) {
 
     // A reloaded world keeps the particles of the place it left, so they are dropped even when the landing ticks
     // nothing.
+    closeContainerPreview("seek");
     mSeekParticlesStale = true;
     mReaderIndex        = selectedReader;
     mCurrentTick        = selectedStart;
@@ -3657,6 +3665,11 @@ bool ReplaySession::dispatchUiPacket(std::shared_ptr<Packet> packet) {
 // Container screens are only previewed for a followed, settled, non-exporting replay; every other case skips.
 bool ReplaySession::trackContainerUiPacket(MinecraftPacketIds packetId, std::string_view payload) {
     if (packetId != MinecraftPacketIds::ContainerOpen) {
+        for (auto it = mRecordedContainers.rbegin(); it != mRecordedContainers.rend(); ++it) {
+            if (it->openTick > mCurrentTick) continue;
+            if (it->closeTick < 0) it->closeTick = mCurrentTick;
+            break;
+        }
         if (mContainerPreview) closeContainerPreview(packetId == MinecraftPacketIds::ContainerClose ? "recordedClose" : "closeScreen");
         return true;
     }
@@ -3665,20 +3678,40 @@ bool ReplaySession::trackContainerUiPacket(MinecraftPacketIds packetId, std::str
     if (!packet) return true;
     ReadOnlyBinaryStream stream(payload, false);
     if (!packet->read(stream) || !stream.ensureReadCompleted()) return true;
+    int const id = static_cast<int>(static_cast<ContainerOpenPacket&>(*packet).mContainerId);
+
+    // Reads repeat after a backward seek, so an interval is only recorded once.
+    bool known = false;
+    for (auto& record : mRecordedContainers) {
+        if (record.closeTick < 0 && record.openTick < mCurrentTick) record.closeTick = mCurrentTick;
+        if (record.openTick == mCurrentTick && record.id == id) known = true;
+    }
+    if (!known) mRecordedContainers.push_back({id, mCurrentTick, -1, std::string(payload)});
+
+    openContainerPreview(payload, mCurrentTick);
+    return true;
+}
+
+void ReplaySession::openContainerPreview(std::string_view payload, int openTick) {
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerOpen);
+    if (!packet) return;
+    ReadOnlyBinaryStream stream(payload, false);
+    if (!packet->read(stream) || !stream.ensureReadCompleted()) return;
 
     auto&      open      = static_cast<ContainerOpenPacket&>(*packet);
     int const  id        = static_cast<int>(open.mContainerId);
     int const  type      = static_cast<int>(open.mType);
     auto const pos       = open.mPos.get();
     auto const entityRaw = open.mEntityUniqueID.get().rawID;
-    bool const following = isFollowingRecordedPlayer();
+    bool const following = visuals::isReplaySubjectViewDriven();
 
     char const* action      = "inject";
     int         blockEntity = -1;
     if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) action = "skip:noWorld";
     else if (!following) action = "skip:notFollowing";
     else if (mSeekTargetTick >= 0 || mIsProcessingSnapshot || mPendingSnapshotApply || mPendingReplayDimension) action = "skip:seeking";
-    else if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) action = "skip:export";
+    // The export waits for a menu-free scene while it initializes; finishExportTimelineInitialization reopens it.
+    else if (mExportTimelinePhase == ReplayExportTimelinePhase::Initializing) action = "skip:exportInit";
     else if (mContainerPreview) action = "skip:alreadyOpen";
     else if (entityRaw != -1 && entityRaw != 0) {
         if (!mReplayPlayer->getLevel().fetchEntity(open.mEntityUniqueID.get(), false)) action = "skip:entityMissing";
@@ -3694,17 +3727,37 @@ bool ReplaySession::trackContainerUiPacket(MinecraftPacketIds packetId, std::str
         }
     }
 
-    if (std::string_view(action) != "inject") return true;
+    getLogger().info(
+        "containerPreview open action={} id={} type={} entity={} blockEntity={} following={} tick={} openTick={}",
+        action,
+        id,
+        type,
+        entityRaw,
+        blockEntity,
+        following,
+        mCurrentTick,
+        openTick
+    );
+    if (std::string_view(action) != "inject") return;
 
-    mContainerPreview = ContainerPreview{id, type};
+    mContainerPreview = ContainerPreview{id, type, openTick};
+    visuals::setReplayContainerKeepOpen(true);
     (void)dispatchUiPacket(std::move(packet));
-    return true;
 }
 
 void ReplaySession::closeContainerPreview(char const* reason) {
     if (!mContainerPreview) return;
     auto const preview = *mContainerPreview;
     mContainerPreview.reset();
+    getLogger().info(
+        "containerPreview close reason={} id={} type={} openTick={} tick={} keepOpenOverrides={}",
+        reason,
+        preview.id,
+        preview.type,
+        preview.openTick,
+        mCurrentTick,
+        visuals::replayContainerKeepOpenOverrides()
+    );
     if (mReplayPlayer && mReplayWorldJoined && mNetworkHandler) {
         if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerClose)) {
             auto& close                 = static_cast<ContainerClosePacket&>(*packet);
@@ -3714,12 +3767,25 @@ void ReplaySession::closeContainerPreview(char const* reason) {
             (void)dispatchUiPacket(std::move(packet));
         }
     }
+    visuals::setReplayContainerKeepOpen(false);
 }
 
 void ReplaySession::updateContainerPreview() {
-    if (mContainerPreview && (!isFollowingRecordedPlayer() || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive)) {
-        closeContainerPreview("followEnded");
+    if (!mContainerPreview) return;
+    // A native screen would keep the dimension loading screen from clearing, so it closes before the transition.
+    if (!visuals::isReplaySubjectViewDriven()) closeContainerPreview("followEnded");
+    else if (mPendingReplayDimension) closeContainerPreview("dimension");
+}
+
+// The landing tick has applied every action before it, so a container opened earlier and not yet closed is the one to show.
+void ReplaySession::syncContainerPreviewAfterSeek() {
+    RecordedContainer const* wanted = nullptr;
+    for (auto const& record : mRecordedContainers) {
+        if (record.openTick < mCurrentTick && (record.closeTick < 0 || record.closeTick >= mCurrentTick)) wanted = &record;
     }
+    if (mContainerPreview && wanted && mContainerPreview->id == wanted->id && mContainerPreview->openTick == wanted->openTick) return;
+    closeContainerPreview("seek");
+    if (wanted) openContainerPreview(wanted->payload, wanted->openTick);
 }
 
 bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
