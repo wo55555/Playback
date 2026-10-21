@@ -252,8 +252,18 @@ private:
     struct ContainerPreview {
         int id{};
         int type{};
+        int openTick{};
     };
     std::optional<ContainerPreview> mContainerPreview;
+
+    // Open/close intervals seen while reading actions, so a seek can show the container that is open at its landing.
+    struct RecordedContainer {
+        int         id{};
+        int         openTick{};
+        int         closeTick{-1};
+        std::string payload;
+    };
+    std::vector<RecordedContainer> mRecordedContainers;
 
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
@@ -311,9 +321,14 @@ private:
 
     bool dispatchUiPacket(std::shared_ptr<Packet> packet);
 
+    void openContainerPreview(std::string_view payload, int openTick);
+
     void closeContainerPreview(char const* reason);
 
     void updateContainerPreview();
+
+    // Brings the preview in line with the recorded container after a seek landed.
+    void syncContainerPreviewAfterSeek();
 
     [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
 

@@ -14,6 +14,7 @@
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
+#include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
@@ -189,6 +190,7 @@ bool Playback::unhook() {
     // The replay session installs these for its whole lifetime; release them with the mod.
     visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Session);
     visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Session);
+    visuals::releaseReplayContainerKeepOpen();
     if (!exporting::hookIdleDetection(false)) {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = record::hookNetwork(true);
