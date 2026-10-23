@@ -6,6 +6,7 @@
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/record/ChunkMutationBarrier.h"
+#include "playback/utils/MapItemId.h"
 #include "playback/utils/PathUtils.h"
 
 #include "ll/api/service/Bedrock.h"
@@ -30,7 +31,9 @@
 #include "mc/network/packet/AddPlayerPacket.h"
 #include "mc/network/packet/AnimatePacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
+#include "mc/network/packet/ClientboundMapItemDataPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
+#include "mc/network/packet/InventorySlotPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/LevelSoundEventPacket.h"
@@ -38,6 +41,7 @@
 #include "mc/network/packet/MobEffectPacket.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
 #include "mc/network/packet/PlayerActionPacket.h"
+#include "mc/network/packet/PlayerHotbarPacket.h"
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/PlayerListPacketType.h"
 #include "mc/network/packet/RemoveActorPacket.h"
@@ -61,9 +65,19 @@
 #include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/player/PlayerInventory.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/state/PropertyComponent.h"
+#include "mc/world/attribute/Attribute.h"
+#include "mc/world/attribute/AttributeData.h"
+#include "mc/world/attribute/AttributeInstance.h"
+#include "mc/world/attribute/AttributeInstanceConstRef.h"
+#include "mc/world/attribute/AttributeInstanceHandle.h"
+#include "mc/world/attribute/AttributeModifier.h"
+#include "mc/world/attribute/SharedAttributes.h"
 #include "mc/world/effect/MobEffectInstance.h"
+#include "mc/world/item/ItemStack.h"
+#include "mc/world/item/MapItem.h"
 #include "mc/world/item/SaveContextFactory.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/Level.h"
@@ -73,6 +87,7 @@
 #include "mc/world/level/chunk/LevelChunk.h"
 #include "mc/world/level/chunk/SubChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
+#include "mc/world/level/saveddata/maps/MapItemSavedData.h"
 #include "mc/world/level/storage/LevelData.h"
 #include "mc/world/scores/DisplayObjective.h"
 #include "mc/world/scores/Objective.h"
@@ -115,7 +130,7 @@ using namespace playback::io;
 namespace {
 
 constexpr ActorUniqueID  RecordedPlayerUniqueId{std::numeric_limits<int64_t>::max() - 1024};
-constexpr ActorRuntimeID RecordedPlayerRuntimeId{uint64_t{1} << 62};
+constexpr ActorRuntimeID RecordedPlayerRuntimeId{RecordedPlayerRuntimeIdValue};
 
 // A dimension change floods the engine task groups, and a missed snapshot there cancels the whole recording.
 constexpr auto DimensionChangeBarrierTimeout = std::chrono::milliseconds{15000};
@@ -135,6 +150,65 @@ struct NetworkPacketFilter {
 };
 
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
+
+// The replay observer's HUD and inventory screen read its own slots. The whole player inventory is recorded, not
+// just the hotbar, so the backpack rows match the recording. HudCacheSize must fit Recorder.h mLastLocalHudPackets.
+constexpr int    HudHotbarSlots  = 36;
+constexpr int    HudArmorSlots   = 4;
+constexpr size_t HudArmorKey     = HudHotbarSlots;
+constexpr size_t HudOffhandKey   = HudArmorKey + HudArmorSlots;
+constexpr size_t HudAttributeKey = HudOffhandKey + 1;
+constexpr size_t HudSelectedKey  = HudAttributeKey + 1;
+constexpr size_t HudCacheSize    = HudSelectedKey + 1;
+static_assert(HudCacheSize <= 48);
+
+std::shared_ptr<Packet> makeHudSlotPacket(ContainerID container, int slot, ItemStack const& item) {
+    return std::make_shared<InventorySlotPacket>(InventorySlotPacketPayload(container, slot, item));
+}
+
+std::shared_ptr<Packet> makeHudSelectedSlotPacket(Player& player) {
+    return std::make_shared<PlayerHotbarPacket>(
+        PlayerHotbarPacketPayload(static_cast<uint>(player.getSelectedItemSlot()), ContainerID::Inventory, true)
+    );
+}
+
+// Only what the HUD draws; exhaustion and the like change every tick and would bloat the recording.
+std::shared_ptr<Packet> makeHudAttributePacket(Player& player, ActorRuntimeID runtimeId) {
+    // AttributeData cannot be copied or moved from here, so the SDK constructor builds the entries from handles.
+    auto const attributes = {
+        &SharedAttributes::HEALTH(),
+        &SharedAttributes::ABSORPTION(),
+        &Player::HUNGER(),
+        &Player::SATURATION(),
+        &Player::LEVEL(),
+        &Player::EXPERIENCE(),
+    };
+    std::vector<AttributeInstanceHandle> handles;
+    handles.reserve(attributes.size());
+    for (auto const* attribute : attributes) {
+        auto const instance = player.getAttribute(*attribute);
+        if (instance.mPtr) handles.push_back(instance.mPtr->getHandle());
+    }
+    auto packet        = std::make_shared<UpdateAttributesPacket>(player, handles);
+    packet->mRuntimeId = runtimeId;
+    return packet;
+}
+
+std::shared_ptr<Packet> makeHudGameTypePacket(Player& player, ActorUniqueID target) {
+    auto packet             = std::make_shared<UpdatePlayerGameTypePacket>();
+    packet->mPlayerGameType = player.getPlayerGameType();
+    packet->mTargetPlayer   = target;
+    packet->mTick           = PlayerInputTick{};
+    return packet;
+}
+
+std::optional<int64_t> heldMapId(ItemStack const& item) { return utils::readMapUuid(item); }
+
+// The replay level only has the map data its recorded map packets carried, so a held map is written out in full.
+std::unique_ptr<Packet> makeHeldMapPacket(Player& player, int64_t mapId) {
+    auto* data = player.getLevel().getMapSavedData(ActorUniqueID{mapId});
+    return data ? data->getFullDataPacket() : nullptr;
+}
 
 bool isSuccessfulSubChunkResult(SubChunkPacket::SubChunkRequestResult result) {
     return result == SubChunkPacket::SubChunkRequestResult::Success
@@ -658,6 +732,9 @@ void Recorder::resetStateForNewRecording() {
     mLastLocalPlayerDataPacket.reset();
     mLastLocalPlayerEquipmentPacket.reset();
     mLastLocalPlayerSwingTime.reset();
+    mLastLocalHudPackets.fill(std::nullopt);
+    mLastLocalGameTypePacket.reset();
+    mLastLocalHeldMapIds.fill(std::nullopt);
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mPendingGamePackets.clear();
@@ -1213,6 +1290,31 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
             return SnapshotCaptureResult::Failed;
         }
 
+        // The observer's HUD state: a seek restores it from the snapshot instead of waiting for the next change.
+        for (int slot = 0; slot < HudHotbarSlots; ++slot) {
+            appendEntityPacket(*makeHudSlotPacket(
+                ContainerID::Inventory,
+                slot,
+                finalPlayer->getSupplies().getItem(slot, ContainerID::Inventory)
+            ));
+        }
+        for (int slot = 0; slot < HudArmorSlots; ++slot) {
+            appendEntityPacket(*makeHudSlotPacket(
+                ContainerID::Armor,
+                slot,
+                finalPlayer->getArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(slot))
+            ));
+        }
+        appendEntityPacket(*makeHudSlotPacket(ContainerID::Offhand, 0, finalPlayer->getOffhandSlot()));
+        appendEntityPacket(*makeHudSelectedSlotPacket(*finalPlayer));
+        appendEntityPacket(*makeHudAttributePacket(*finalPlayer, *mRecordedLocalPlayerRuntimeId));
+        appendEntityPacket(*makeHudGameTypePacket(*finalPlayer, *mRecordedLocalPlayerId));
+        for (auto const* item : {&finalPlayer->getCarriedItem(), &finalPlayer->getOffhandSlot()}) {
+            auto const mapId = heldMapId(*item);
+            if (!mapId) continue;
+            if (auto mapPacket = makeHeldMapPacket(*finalPlayer, *mapId)) appendEntityPacket(*mapPacket);
+        }
+
         for (auto* actor : actors) {
             if (!actor || actor == finalPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
 
@@ -1625,9 +1727,10 @@ bool Recorder::writeLocalPlayerState() {
     auto recordChanged = [this](Packet const& packet, std::optional<std::string>& previous) {
         PlaybackBuffer serialized;
         packet.write(serialized);
-        if (previous && *previous == serialized.mBuffer) return;
+        if (previous && *previous == serialized.mBuffer) return false;
         previous = serialized.mBuffer;
         recordGamePacket(packet);
+        return true;
     };
 
     auto&              entityContext = localPlayer->getEntityContext();
@@ -1641,6 +1744,45 @@ bool Recorder::writeLocalPlayerState() {
     mLastLocalPlayerEquipmentPacket = std::move(equipment);
     for (auto const& packet : equipmentPackets) {
         recordGamePacket(*packet);
+    }
+
+    // The replay observer's HUD reads its own hotbar, armor, attributes and game mode, so they are recorded as well.
+    for (int slot = 0; slot < HudHotbarSlots; ++slot) {
+        auto const packet = makeHudSlotPacket(
+            ContainerID::Inventory,
+            slot,
+            localPlayer->getSupplies().getItem(slot, ContainerID::Inventory)
+        );
+        recordChanged(*packet, mLastLocalHudPackets[static_cast<size_t>(slot)]);
+    }
+    for (int slot = 0; slot < HudArmorSlots; ++slot) {
+        auto const packet = makeHudSlotPacket(
+            ContainerID::Armor,
+            slot,
+            localPlayer->getArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(slot))
+        );
+        recordChanged(*packet, mLastLocalHudPackets[HudArmorKey + static_cast<size_t>(slot)]);
+    }
+    recordChanged(
+        *makeHudSlotPacket(ContainerID::Offhand, 0, localPlayer->getOffhandSlot()),
+        mLastLocalHudPackets[HudOffhandKey]
+    );
+    recordChanged(*makeHudSelectedSlotPacket(*localPlayer), mLastLocalHudPackets[HudSelectedKey]);
+    recordChanged(
+        *makeHudAttributePacket(*localPlayer, *mRecordedLocalPlayerRuntimeId),
+        mLastLocalHudPackets[HudAttributeKey]
+    );
+    if (mRecordedLocalPlayerId) {
+        recordChanged(*makeHudGameTypePacket(*localPlayer, *mRecordedLocalPlayerId), mLastLocalGameTypePacket);
+    }
+
+    for (size_t hand = 0; hand < mLastLocalHeldMapIds.size(); ++hand) {
+        auto const& item  = hand == 0 ? localPlayer->getCarriedItem() : localPlayer->getOffhandSlot();
+        auto const  mapId = heldMapId(item);
+        if (mapId == mLastLocalHeldMapIds[hand]) continue;
+        mLastLocalHeldMapIds[hand] = mapId;
+        if (!mapId) continue;
+        if (auto mapPacket = makeHeldMapPacket(*localPlayer, *mapId)) recordGamePacket(*mapPacket);
     }
 
     bool const swinging  = localPlayer->mSwinging;
@@ -2064,6 +2206,9 @@ void Recorder::cancelRecording(std::string_view reason) {
     mLastLocalPlayerDataPacket.reset();
     mLastLocalPlayerEquipmentPacket.reset();
     mLastLocalPlayerSwingTime.reset();
+    mLastLocalHudPackets.fill(std::nullopt);
+    mLastLocalGameTypePacket.reset();
+    mLastLocalHeldMapIds.fill(std::nullopt);
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mPendingGamePackets.clear();
