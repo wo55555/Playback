@@ -10,6 +10,7 @@
 #include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
+#include "playback/visuals/ReplayHudHooks.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/service/Bedrock.h"
@@ -44,7 +45,9 @@
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
+#include "mc/world/actor/ActorFlags.h"
 #include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
@@ -56,6 +59,7 @@
 #include "mc/network/packet/BlockActorDataPacket.h"
 #include "mc/network/packet/BlockEventPacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
+#include "mc/network/packet/ClientboundMapItemDataPacket.h"
 #include "mc/network/packet/ContainerClosePacket.h"
 #include "mc/network/packet/ContainerOpenPacket.h"
 #include "mc/network/packet/ContainerSetDataPacket.h"
@@ -71,6 +75,8 @@
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/PlayerListPacketType.h"
 #include "mc/network/packet/RemoveActorPacket.h"
+#include "mc/network/packet/UpdateAttributesPacket.h"
+#include "mc/network/packet/UpdatePlayerGameTypePacket.h"
 #include "mc/network/packet/RemoveObjectivePacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
@@ -87,18 +93,26 @@
 #include "mc/resources/ResourcePackManager.h"
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
-#include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
-#include "mc/world/containers/managers/models/ContainerManagerModel.h"
 #include "mc/world/level/ActorRuntimeIDManager.h"
+#include "mc/world/ContainerID.h"
+#include "mc/world/containers/managers/models/ContainerManagerModel.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/BlockSource.h"
 #include "mc/world/level/DimensionManager.h"
+#include "mc/world/attribute/Attribute.h"
+#include "mc/world/attribute/AttributeData.h"
+#include "mc/world/attribute/AttributeInstance.h"
+#include "mc/world/attribute/AttributeInstanceConstRef.h"
+#include "mc/world/attribute/AttributeModifier.h"
+#include "mc/world/attribute/BaseAttributeMap.h"
+#include "mc/world/attribute/SharedAttributes.h"
 #include "mc/world/level/Level.h"
+#include "mc/world/level/saveddata/maps/MapItemSavedData.h"
 #include "mc/world/level/LevelSettings.h"
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/BlockRenderLayer.h"
@@ -123,7 +137,6 @@
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
-
 
 
 #include "snappy.h"
@@ -240,6 +253,17 @@ void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
     }
 }
 
+// The HUD draws health, hunger, armor and experience from the observer's own attributes, so the recorded player's
+// are copied onto it. Health never drops below 1: a dead local player would open the death screen.
+void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
+    auto&             attributes = *observer.getAttributes();
+    std::string const health     = SharedAttributes::HEALTH().getName().getString();
+    for (auto& data : *packet.mAttributeData) {
+        if (data.mName->getString() == health && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
+        attributes.updateOrCreateAttribute(data);
+    }
+}
+
 // Bedrock's WalkDistComponent advances by exactly the horizontal distance moved (measured live, ratio 1.000).
 constexpr float WalkDistancePerBlock = 1.0f;
 
@@ -254,12 +278,30 @@ void tickReplayItemUse(Actor& actor) {
     }
 }
 
+// Tick of the last real step written into the recorded player's PlayerBobComponent. A tick with no movement decays it.
+int gReplayHandBobTick = -1;
+
+// PlayerTickBobSystem (1.26.20.04): the held map sways from this component. A remote player never runs that system.
+void updateReplayHandBob(Actor& actor, float horizontalSpeed) {
+    auto& context = actor.getEntityContext();
+    auto  bob     = context.tryGetComponent<PlayerBobComponent>();
+    if (!bob) {
+        context.getRegistry().emplace<PlayerBobComponent>(context.mEntity);
+        bob = context.tryGetComponent<PlayerBobComponent>();
+        if (!bob) return;
+    }
+    float const target = actor.getStatusFlag(ActorFlags::Swimming) ? 0.0f : std::min(0.1f, horizontalSpeed);
+    bob->mBobPrev      = bob->mBob;
+    bob->mBob         += (target - bob->mBob) * 0.08f;
+}
+
 void applyReplayEntityMovement(
     Actor&                           actor,
     Vec3 const&                      position,
     visuals::EntityRenderPose const& previousPose,
     Vec2 const&                      rotation,
-    float                            headYaw
+    float                            headYaw,
+    int                              tick
 ) {
     Vec3 const previousPosition{
         previousPose.position.x,
@@ -279,9 +321,15 @@ void applyReplayEntityMovement(
     }
     // The native system needs a move request the replayed player never has; query.walk_distance drives the hand bob.
     if (actor.isPlayer()) {
+        float const horizontal = std::hypot(state.mPosDelta->x, state.mPosDelta->z);
         if (auto distance = actor.getEntityContext().tryGetComponent<WalkDistComponent>()) {
             distance->mPrevious  = distance->mCurrent;
-            distance->mCurrent  += std::hypot(state.mPosDelta->x, state.mPosDelta->z) * WalkDistancePerBlock;
+            distance->mCurrent  += horizontal * WalkDistancePerBlock;
+        }
+        // Only the recorded subject is shown in first person. Other players moving must not keep its map from settling.
+        if (actor.getOrCreateUniqueID().rawID == RecordedPlayerUniqueIdValue) {
+            updateReplayHandBob(actor, horizontal);
+            gReplayHandBobTick = tick;
         }
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
@@ -438,6 +486,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
     // Installed once per replay (inert until the subject is hidden) so toggling follow never hooks anything.
     visuals::hookReplaySubjectHide(true, visuals::SubjectHideReason::Session);
     visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Session);
+    visuals::installReplayHudHooks();
 
     try {
         if (!init(std::move(filePath))) {
@@ -528,6 +577,7 @@ void ReplaySession::clearReplayData() {
     mContainerPreview.reset();
     mRecordedContainers.clear();
     visuals::setReplayContainerKeepOpen(false);
+    visuals::setReplayHudGameType(-1);
     mLevelSimFrozen       = false;
     mSeekParticlesCleared = false;
     mSeekParticlesStale   = false;
@@ -612,6 +662,7 @@ void ReplaySession::clearReplayData() {
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
     mRecordedLocalPlayerId.reset();
+    gReplayHandBobTick = -1;
     visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
@@ -1309,7 +1360,7 @@ void ReplaySession::beginSeek(int targetTick) {
 
     // A reloaded world keeps the particles of the place it left, so they are dropped even when the landing ticks
     // nothing. The same interval does not close: the screen stays until the landing tick leaves it.
-    auto const* landing       = recordedContainerOpenAt(targetTick);
+    auto const* landing      = recordedContainerOpenAt(targetTick);
     bool const  sameContainer = mContainerPreview && landing && mContainerPreview->id == landing->id
                             && mContainerPreview->openTick == landing->openTick;
     if (changesDimension || forceExportSnapshot || !sameContainer) closeContainerPreview("seek");
@@ -1336,6 +1387,13 @@ void ReplaySession::tick() {
         forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
         updateContainerPreview();
+        if (mReplayPlayer && mRecordedLocalPlayerId) {
+            // Recordings without the game type packet still carry the mode on the recorded player actor.
+            Actor* recorded = mReplayPlayer->getLevel().fetchEntity(*mRecordedLocalPlayerId, false);
+            if (recorded && recorded->isPlayer()) {
+                (void)visuals::offerReplayHudGameType(static_cast<int>(static_cast<Player*>(recorded)->getPlayerGameType()));
+            }
+        }
 
         if (mPendingSnapshotApply) {
             if (mPendingReplayDimension) return;
@@ -1639,6 +1697,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
     mRecordedLocalPlayerId.reset();
+    gReplayHandBobTick = -1;
     visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
@@ -2477,6 +2536,7 @@ void ReplaySession::resetDimensionScopedReplayState() {
     mDirectLevelChunkIndices.clear();
     mCenterChunkPositions.clear();
     mRecordedEntityIds.clear();
+    gReplayHandBobTick = -1;
     mRecordedLocalPlayerId.reset();
     visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
@@ -3169,6 +3229,12 @@ void ReplaySession::handleNextTick() {
     if (mIsProcessingSnapshot) {
         throw std::runtime_error("Can't go to next tick while processing snapshot");
     }
+    // A tick the recorded player did not move still has to settle the map bob; the last step would otherwise stick.
+    if (gReplayHandBobTick != mCurrentTick && mReplayPlayer && mRecordedLocalPlayerId) {
+        if (auto* actor = mReplayPlayer->getLevel().fetchEntity(*mRecordedLocalPlayerId, false)) {
+            updateReplayHandBob(*actor, 0.0f);
+        }
+    }
     visuals::commitReplayEntityPoses(static_cast<int64_t>(mCurrentTick) + 1);
     mCurrentTick += 1;
     integration::pushReplayClock(mCurrentTick, false);
@@ -3426,25 +3492,18 @@ void ReplaySession::handleGamePacket(PlaybackBuffer& data) {
 }
 
 void ReplaySession::handleLocalCameraOffset(PlaybackBuffer& data) {
-    float const                              x         = data.getFloat().value();
-    float const                              y         = data.getFloat().value();
-    float const                              z         = data.getFloat().value();
-    float const                              fov       = data.getFloat().value();
-    bool const                               hasView   = data.getBool().value();
-    float const                              viewX     = data.getFloat().value();
-    float const                              viewY     = data.getFloat().value();
-    float const                              viewZ     = data.getFloat().value();
-    float const                              viewYaw   = data.getFloat().value();
-    float const                              viewPitch = data.getFloat().value();
+    float const x   = data.getFloat().value();
+    float const y   = data.getFloat().value();
+    float const z   = data.getFloat().value();
+    float const fov = data.getFloat().value();
+    bool const  hasView   = data.getBool().value();
+    float const viewX     = data.getFloat().value();
+    float const viewY     = data.getFloat().value();
+    float const viewZ     = data.getFloat().value();
+    float const viewYaw   = data.getFloat().value();
+    float const viewPitch = data.getFloat().value();
     std::optional<visuals::EntityRenderPose> view;
-    if (hasView)
-        view = visuals::EntityRenderPose{
-            {viewX, viewY, viewZ},
-            viewPitch,
-            viewYaw,
-            viewYaw,
-            viewYaw
-        };
+    if (hasView) view = visuals::EntityRenderPose{{viewX, viewY, viewZ}, viewPitch, viewYaw, viewYaw, viewYaw};
     visuals::queueReplaySubjectCameraOffset({x, y, z}, fov, view);
 }
 
@@ -3514,7 +3573,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                     entityContext.removeComponent<OnGroundFlagComponent>();
                 }
                 if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
-                else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw);
+                else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw, mCurrentTick);
                 continue;
             }
 
@@ -3552,7 +3611,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
 
             pinReplayEntityHeadRotation(*actor, headYaw, bodyYaw);
             if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
-            else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw);
+            else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw, mCurrentTick);
         }
         return;
     }
@@ -3657,7 +3716,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             Vec2 const rotation{currentPose.pitch, currentPose.yaw};
             pinReplayEntityHeadRotation(*actor, currentPose.headYaw, currentPose.bodyYaw);
             if (snapMovement) cancelNativeMovementInterpolation(*actor, targetPosition, rotation, currentPose.headYaw);
-            else applyReplayEntityMovement(*actor, targetPosition, previousPose, rotation, currentPose.headYaw);
+            else applyReplayEntityMovement(*actor, targetPosition, previousPose, rotation, currentPose.headYaw, mCurrentTick);
         }
     }
 }
@@ -3740,8 +3799,7 @@ void ReplaySession::openContainerPreview(std::string_view payload, int openTick)
     int         blockEntity = -1;
     if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) action = "skip:noWorld";
     else if (!following) action = "skip:notFollowing";
-    else if (mSeekTargetTick >= 0 || mIsProcessingSnapshot || mPendingSnapshotApply || mPendingReplayDimension)
-        action = "skip:seeking";
+    else if (mSeekTargetTick >= 0 || mIsProcessingSnapshot || mPendingSnapshotApply || mPendingReplayDimension) action = "skip:seeking";
     // The export waits for a menu-free scene while it initializes; finishExportTimelineInitialization reopens it.
     else if (mExportTimelinePhase == ReplayExportTimelinePhase::Initializing) action = "skip:exportInit";
     else if (mContainerPreview) action = "skip:alreadyOpen";
@@ -3750,11 +3808,11 @@ void ReplaySession::openContainerPreview(std::string_view payload, int openTick)
     else if (entityRaw != -1 && entityRaw != 0) {
         if (!mReplayPlayer->getLevel().fetchEntity(open.mEntityUniqueID.get(), false)) action = "skip:entityMissing";
     } else {
-        using Type                  = SharedTypes::Legacy::ContainerType;
-        auto const kind             = open.mType;
-        bool const needsBlockEntity = kind == Type::Container || kind == Type::Furnace || kind == Type::BrewingStand
-                                   || kind == Type::Dispenser || kind == Type::Dropper || kind == Type::Hopper
-                                   || kind == Type::BlastFurnace || kind == Type::Smoker;
+        using Type = SharedTypes::Legacy::ContainerType;
+        auto const kind = open.mType;
+        bool const needsBlockEntity =
+            kind == Type::Container || kind == Type::Furnace || kind == Type::BrewingStand || kind == Type::Dispenser
+            || kind == Type::Dropper || kind == Type::Hopper || kind == Type::BlastFurnace || kind == Type::Smoker;
         if (needsBlockEntity) {
             blockEntity = mReplayPlayer->getDimensionBlockSource().getBlockEntity(pos) ? 1 : 0;
             if (blockEntity == 0) action = "skip:noBlockEntity";
@@ -3812,8 +3870,7 @@ void ReplaySession::updateContainerPreview() {
     if (!mContainerPreview) popReplayContainerScreen();
 }
 
-// The landing tick has applied every action before it, so a container opened earlier and not yet closed is the one to
-// show.
+// The landing tick has applied every action before it, so a container opened earlier and not yet closed is the one to show.
 ReplaySession::RecordedContainer const* ReplaySession::recordedContainerOpenAt(int tick) const {
     RecordedContainer const* wanted = nullptr;
     for (auto const& record : mRecordedContainers) {
@@ -3957,9 +4014,46 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     // Must also run while chunks are streaming: a seek keeps applying block updates between batches.
     if (!mIsProcessingSnapshot) invalidateSnapshotColumns(*packet);
 
+    // Texture updates do not create the map. A recording that started after the map was created never carries the
+    // creation packet, so the level has to own the map before the native handler will keep its pixels.
+    if (packetId == MinecraftPacketIds::MapData && mReplayPlayer) {
+        auto& mapPacket = static_cast<ClientboundMapItemDataPacket&>(*packet);
+        if (!mapPacket.mMapPixels->empty()) {
+            auto& level = mReplayPlayer->getLevel();
+            for (auto const& id : *mapPacket.mMapIds) {
+                if (level.getMapSavedData(id)) continue;
+                (void)level.createMapSavedData(
+                    id,
+                    mapPacket.mMapOrigin,
+                    DimensionType{static_cast<int>(mapPacket.mDimension)},
+                    static_cast<int>(mapPacket.mScale)
+                );
+            }
+        }
+    }
+
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+
+    if (packetId == MinecraftPacketIds::MapData && mReplayPlayer) {
+        auto& map   = static_cast<ClientboundMapItemDataPacket&>(*packet);
+        auto& level = mReplayPlayer->getLevel();
+        if (!map.mMapPixels->empty()) {
+            for (auto const& id : *map.mMapIds) {
+                auto* saved = level.getMapSavedData(id);
+                if (!saved) {
+                    saved = &level.createMapSavedData(
+                        id,
+                        map.mMapOrigin,
+                        DimensionType{static_cast<int>(map.mDimension)},
+                        static_cast<int>(map.mScale)
+                    );
+                }
+                if (saved->getPixels().size() == 0) map.applyToMap(*saved, false);
+            }
+        }
+    }
 
     if (addsEntity) mRecordedEntityIds.emplace(entityId);
 
@@ -3995,6 +4089,20 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     case MinecraftPacketIds::RemoveObjective:
         mReplayObjectiveNames.erase(*static_cast<RemoveObjectivePacket const&>(*packet).mObjectiveName);
         break;
+    case MinecraftPacketIds::UpdateAttributes: {
+        auto& attributes = static_cast<UpdateAttributesPacket&>(*packet);
+        if (mReplayPlayer && attributes.mRuntimeId->rawID == record::RecordedPlayerRuntimeIdValue) {
+            mirrorRecordedAttributes(*mReplayPlayer, attributes);
+        }
+        break;
+    }
+    case MinecraftPacketIds::UpdatePlayerGameType: {
+        auto const& gameType = static_cast<UpdatePlayerGameTypePacket const&>(*packet);
+        if (gameType.mTargetPlayer->rawID == record::RecordedPlayerUniqueIdValue) {
+            visuals::setReplayHudGameType(static_cast<int>(gameType.mPlayerGameType));
+        }
+        break;
+    }
     default:
         break;
     }

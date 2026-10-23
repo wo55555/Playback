@@ -11,6 +11,7 @@
 #include "mc/world/level/ChunkPos.h"
 #include "mc/world/level/dimension/DimensionType.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -35,6 +36,10 @@ struct PacketLifecycleSemantics;
 
 namespace playback::record {
 
+// IDs every recording stores the local player under.
+inline constexpr uint64_t RecordedPlayerRuntimeIdValue = uint64_t{1} << 62;
+inline constexpr int64_t  RecordedPlayerUniqueIdValue  = std::numeric_limits<int64_t>::max() - 1024;
+
 using playback::io::AsyncReplaySaver;
 using playback::io::PlaybackBuffer;
 using playback::io::PlaybackSerializedGamePacket;
@@ -57,11 +62,11 @@ struct PlaybackCameraSample {
     float z   = 0.0f;
     float fov = 0.0f;
     // Absolute game camera pose, only captured while the vanilla camera is not bound to the entity (sleeping).
-    bool  hasView = false;
-    float viewX   = 0.0f;
-    float viewY   = 0.0f;
-    float viewZ   = 0.0f;
-    float viewYaw = 0.0f;
+    bool  hasView   = false;
+    float viewX     = 0.0f;
+    float viewY     = 0.0f;
+    float viewZ     = 0.0f;
+    float viewYaw   = 0.0f;
     float viewPitch = 0.0f;
 };
 
@@ -117,9 +122,14 @@ private:
     std::optional<std::string>                                mLastLocalPlayerDataPacket;
     std::optional<PlaybackSetEquipmentPacket>                 mLastLocalPlayerEquipmentPacket;
     std::optional<int>                                        mLastLocalPlayerSwingTime;
-    std::optional<PlaybackView>                               mSnapshotView;
-    std::optional<PlaybackCameraSample>                       mSnapshotCamera;
-    std::optional<SnapshotDimension>                          mSnapshotDimension;
+    // Inventory slots 0-35, armor, offhand, attributes and the selected slot. Must stay >= Recorder.cpp HudCacheSize.
+    std::array<std::optional<std::string>, 48> mLastLocalHudPackets;
+    std::optional<std::string>                 mLastLocalGameTypePacket;
+    // Map id whose full data was last written for the main hand and the offhand.
+    std::array<std::optional<int64_t>, 2> mLastLocalHeldMapIds;
+    std::optional<PlaybackView>           mSnapshotView;
+    std::optional<PlaybackCameraSample>   mSnapshotCamera;
+    std::optional<SnapshotDimension>      mSnapshotDimension;
 
     std::optional<DimensionType>        mRecordingDimension;
     std::string                         mSnapshotFailure;

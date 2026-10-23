@@ -15,8 +15,12 @@
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
+#include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/client/renderer/screen/MinecraftUIRenderContext.h"
 #include "mc/deps/core/math/Color.h"
+#include "mc/deps/core/math/Matrix.h"
+#include "mc/deps/vanilla_components/PlayerBobComponent.h"
+#include "mc/entity/components/WalkDistComponent.h"
 #include "mc/deps/input/RectangleArea.h"
 #include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
@@ -31,7 +35,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <intrin.h>
 #include <memory>
 #include <optional>
@@ -312,6 +318,77 @@ LL_TYPE_INSTANCE_HOOK(
     origin(context, handPlayer(player), inOffhand);
 }
 
+// LevelRendererPlayer::bobView reads its bob from IClientInstance::getCameraEntity, the observer while following
+// (1.26.20.04): WalkDistComponent, PlayerBobComponent and an interpolated Actor float pair at +0x3B4/+0x3B8 (tilt).
+// The subject's values stand in for one call so the first-person view and the held map sway with the recorded walk.
+constexpr size_t BobTiltOffset = 0x3B4;
+
+class ScopedObserverBob {
+public:
+    ScopedObserverBob(Actor& observer, Actor& subject) {
+        auto& to   = observer.getEntityContext();
+        auto& from = subject.getEntityContext();
+        mWalk      = to.tryGetComponent<WalkDistComponent>();
+        mBob       = to.tryGetComponent<PlayerBobComponent>();
+        auto walk  = from.tryGetComponent<WalkDistComponent>();
+        auto bob   = from.tryGetComponent<PlayerBobComponent>();
+        if (!mWalk || !mBob || !walk || !bob) {
+            mWalk = nullptr;
+            return;
+        }
+        mTilt      = reinterpret_cast<float*>(reinterpret_cast<std::byte*>(&observer) + BobTiltOffset);
+        mSavedWalk = *mWalk;
+        mSavedBob  = *mBob;
+        std::memcpy(mSavedTilt, mTilt, sizeof(mSavedTilt));
+        *mWalk = *walk;
+        *mBob  = *bob;
+        std::memcpy(mTilt, reinterpret_cast<std::byte const*>(&subject) + BobTiltOffset, sizeof(mSavedTilt));
+    }
+
+    ~ScopedObserverBob() {
+        if (!mWalk) return;
+        *mWalk = mSavedWalk;
+        *mBob  = mSavedBob;
+        std::memcpy(mTilt, mSavedTilt, sizeof(mSavedTilt));
+    }
+
+    ScopedObserverBob(ScopedObserverBob const&)            = delete;
+    ScopedObserverBob& operator=(ScopedObserverBob const&) = delete;
+
+private:
+    WalkDistComponent*  mWalk{};
+    PlayerBobComponent* mBob{};
+    float*              mTilt{};
+    WalkDistComponent   mSavedWalk{};
+    PlayerBobComponent  mSavedBob{};
+    float               mSavedTilt[2]{};
+};
+
+LL_TYPE_INSTANCE_HOOK(
+    BobViewHook,
+    ll::memory::HookPriority::High,
+    LevelRendererPlayer,
+    &LevelRendererPlayer::bobView,
+    void,
+    ::Matrix& view,
+    float     alpha
+) {
+    auto* subject = isReplaySubjectViewDriven() ? subjectPlayer() : nullptr;
+    auto  client  = subject ? ll::service::getClientInstance() : nullptr;
+    auto* local   = client ? client->getLocalPlayer() : nullptr;
+    if (!local || static_cast<Actor*>(local) == static_cast<Actor*>(subject)) {
+        origin(view, alpha);
+        return;
+    }
+    // The subject's walk distance advances per replay tick; the native alpha only matches the replay at 1x.
+    if (auto const context = keyframe::currentCameraTimelineRenderContext(); context && context->time.isValid()) {
+        auto const tick = context->time.requiredAppliedTick();
+        alpha = std::clamp(static_cast<float>(context->time.value() - static_cast<long double>(tick - 1)), 0.0f, 1.0f);
+    }
+    ScopedObserverBob swap(*local, *subject);
+    origin(view, alpha);
+}
+
 // Client RVA span of the screen-overlay renderers (fire, in-block); every other caller keeps the observer.
 constexpr uintptr_t OverlayCallerBegin = 0x1DCC5B0;
 constexpr uintptr_t OverlayCallerEnd   = 0x1DD1D82;
@@ -514,6 +591,7 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             makeSlot<HandOffhandItemHook>("offhandItem"),
             makeSlot<HandMiniMapHook>("miniMap"),
             makeSlot<CameraTargetHook>("cameraTarget"),
+            makeSlot<BobViewHook>("bobView"),
             makeSlot<PortalEffectTimeHook>("portalEffectTime"),
             makeSlot<OPortalEffectTimeHook>("oPortalEffectTime"),
             makeSlot<PortalDataHook>("portalData"),
