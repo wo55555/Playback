@@ -327,6 +327,9 @@ private:
 
     void updateContainerPreview();
 
+    // Last record still open at tick: opened before it and not closed before it. Unread closes stay open.
+    [[nodiscard]] RecordedContainer const* recordedContainerOpenAt(int tick) const;
+
     // Brings the preview in line with the recorded container after a seek landed.
     void syncContainerPreviewAfterSeek();
 
