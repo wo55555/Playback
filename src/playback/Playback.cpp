@@ -17,6 +17,7 @@
 #include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
+#include "playback/visuals/ReplayHudHooks.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/event/EventBus.h"
@@ -191,6 +192,7 @@ bool Playback::unhook() {
     visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Session);
     visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Session);
     visuals::releaseReplayContainerKeepOpen();
+    visuals::releaseReplayHudHooks();
     if (!exporting::hookIdleDetection(false)) {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = record::hookNetwork(true);
