@@ -64,12 +64,9 @@ bool subjectSleepSuppressesHand() {
     return signals && signals->sleeping();
 }
 
-// Only the observer is replaced; any other player passed in is left alone.
-Player& handPlayer(Player& player) {
-    if (!player.isLocalPlayer()) return player;
-    auto* subject = subjectPlayer();
-    return subject ? *subject : player;
-}
+// The vanilla hand mesh only exists for the local player. The pass copies the subject's items onto the observer
+// and reports the subject's game type, so a spectator observer still draws that hand and skin.
+Player& handPlayer(Player& player) { return player; }
 
 struct HeightTracker {
     Player const* subject{};
@@ -176,6 +173,18 @@ private:
     Vec3                  mPosDelta{};
 };
 
+LL_TYPE_INSTANCE_HOOK(HandGameTypeHook, ll::memory::HookPriority::High, Player, &Player::getPlayerGameType, GameType) {
+    if (gPassDepth > 0 && isLocalPlayer()) {
+        auto* subject = subjectPlayer();
+        if (subject && subject != this) {
+            auto const type = subject->getPlayerGameType();
+            if (type != GameType::Spectator && type != GameType::Default && type != GameType::Undefined) return type;
+            return GameType::Survival;
+        }
+    }
+    return origin();
+}
+
 LL_TYPE_INSTANCE_HOOK(
     HandShowHook,
     ll::memory::HookPriority::High,
@@ -202,8 +211,14 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
     if (subjectSleepSuppressesHand()) return;
+    ItemStack const savedCarried = player.getCarriedItem();
+    ItemStack const savedOffhand = player.getOffhandSlot();
+    player.setCarriedItem(subject->getCarriedItem());
+    player.setOffhandSlot(subject->getOffhandSlot());
     ScopedHandPass pass(*subject);
-    origin(screenContext, *subject);
+    origin(screenContext, player);
+    player.setCarriedItem(savedCarried);
+    player.setOffhandSlot(savedOffhand);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -581,6 +596,7 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
         gHeights.reset();
         slots = {
             makeSlot<HandShowHook>("showHand"),
+            makeSlot<HandGameTypeHook>("gameType"),
             makeSlot<HandItemInHandHook>("itemInHand"),
             makeSlot<HandRenderFirstPersonHook>("renderFirstPerson"),
             makeSlot<HandHandsHook>("hands"),
