@@ -77,6 +77,7 @@ std::optional<PendingCameraOffset>                                          gPen
 
 constexpr uint64_t   kNoSubject = std::numeric_limits<uint64_t>::max();
 std::atomic_uint64_t gSubject{kNoSubject};
+std::atomic_bool     gSubjectIsRecorder{true};
 std::atomic_uint8_t  gSubjectHidden{0};
 std::atomic<float>   gSubjectViewWeight{0.0f}; // blend of the recorded sleeping view at the last followed sample
 std::atomic<float>   gSubjectSleepTicks{0.0f}; // consecutive sleeping ticks at the last followed sample
@@ -201,6 +202,23 @@ std::optional<CameraOffsetSample> sampleSubjectCamera(ReplaySampleTime const& sa
     std::scoped_lock lock(gPendingMutex);
     if (gPendingCameraOffset) return gPendingCameraOffset->current;
     return std::nullopt;
+}
+
+// Local-player camera offset measured 2026-10-25: standing 0, sneak 0.35 below, swim 1.22 below, ~8 ticks.
+constexpr float kSneakCameraOffsetY = -0.35f;
+constexpr float kSwimCameraOffsetY  = -1.22f;
+constexpr float kPostureBlend       = 0.3f;
+
+std::atomic<float> gPostureOffsetY{0.0f};
+std::atomic<float> gPostureViewWeight{0.0f};
+std::atomic<float> gPostureSleepTicks{0.0f};
+int64_t            gPostureTick{-1};
+
+void resetPosture() noexcept {
+    gPostureOffsetY.store(0.0f, std::memory_order_relaxed);
+    gPostureViewWeight.store(0.0f, std::memory_order_relaxed);
+    gPostureSleepTicks.store(0.0f, std::memory_order_relaxed);
+    gPostureTick = -1;
 }
 
 } // namespace
@@ -510,10 +528,62 @@ void clearReplayEntityPoses() {
 }
 
 void setReplaySubject(std::optional<EntityRenderKey> key) {
+    if (!key) {
+        gSubjectIsRecorder.store(true, std::memory_order_release);
+        resetPosture();
+    }
     gSubject.store(
         key ? (static_cast<uint64_t>(key->registryId) << 32U) | key->entityId : kNoSubject,
         std::memory_order_release
     );
+}
+
+void noteReplaySubjectPosture(int64_t tick, bool snap, ReplaySubjectPosture const& posture) {
+    bool const  recorder = isReplaySubjectRecorder();
+    float const target   = !recorder && posture.swimming ? kSwimCameraOffsetY
+                         : !recorder && posture.sneaking ? kSneakCameraOffsetY
+                                                         : 0.0f;
+    bool const  sleeping = posture.sleeping || posture.actorSleeping;
+    float       offset   = gPostureOffsetY.load(std::memory_order_relaxed);
+    float       slept    = gPostureSleepTicks.load(std::memory_order_relaxed);
+    if (snap || gPostureTick < 0) {
+        offset = target;
+        slept  = sleeping && !recorder ? 1.0f : 0.0f;
+    } else if (tick == gPostureTick) {
+        return;
+    } else {
+        offset += (target - offset) * kPostureBlend;
+        if (std::abs(target - offset) < 0.001f) offset = target;
+        slept = sleeping && !recorder ? slept + 1.0f : 0.0f;
+    }
+    gPostureTick = tick;
+    float const weight = sleeping && !recorder ? 1.0f : 0.0f;
+    gPostureOffsetY.store(offset, std::memory_order_relaxed);
+    gPostureViewWeight.store(weight, std::memory_order_relaxed);
+    gPostureSleepTicks.store(slept, std::memory_order_relaxed);
+    if (!recorder) {
+        gSubjectViewWeight.store(weight, std::memory_order_relaxed);
+        gSubjectSleepTicks.store(slept, std::memory_order_relaxed);
+    }
+}
+
+float replaySubjectPostureOffsetY() noexcept { return gPostureOffsetY.load(std::memory_order_relaxed); }
+
+float replaySubjectPostureViewWeight() noexcept { return gPostureViewWeight.load(std::memory_order_relaxed); }
+
+float replaySubjectPostureSleepTicks() noexcept { return gPostureSleepTicks.load(std::memory_order_relaxed); }
+
+void setReplaySubjectRecorder(bool recorder) noexcept {
+    gSubjectIsRecorder.store(recorder, std::memory_order_release);
+}
+
+bool isReplaySubjectRecorder() noexcept { return gSubjectIsRecorder.load(std::memory_order_acquire); }
+
+bool hasReplaySubject() noexcept { return gSubject.load(std::memory_order_acquire) != kNoSubject; }
+
+bool isReplaySubject(EntityRenderKey const& key) noexcept {
+    uint64_t const packed = (static_cast<uint64_t>(key.registryId) << 32U) | key.entityId;
+    return gSubject.load(std::memory_order_acquire) == packed;
 }
 
 void setReplaySubjectHidden(SubjectHideReason reason, bool hidden) {
@@ -551,6 +621,12 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
     }
     if (!found) return std::nullopt;
     auto pose = *found;
+    // Recorded positions are already standing eye height. The recorder uses its recorded camera offset.
+    // Another player has no such track, so sneak and swim add the offset measured on the local player.
+    if (!isReplaySubjectRecorder()) {
+        pose.position.y += replaySubjectPostureOffsetY();
+        return pose;
+    }
     if (auto const camera = sampleSubjectCamera(sample)) {
         pose.position.x += camera->offset.x;
         pose.position.y += camera->offset.y;
@@ -572,6 +648,13 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
 }
 
 float sampleReplaySubjectViewWeight(ReplaySampleTime const& sample) {
+    if (!isReplaySubjectRecorder()) {
+        // No recorded bed camera. Sleeping only publishes the fade the vignette and the hand already read.
+        float const weight = replaySubjectPostureViewWeight();
+        gSubjectViewWeight.store(weight, std::memory_order_relaxed);
+        gSubjectSleepTicks.store(replaySubjectPostureSleepTicks(), std::memory_order_relaxed);
+        return weight;
+    }
     auto const camera = sampleSubjectCamera(sample);
     float const weight = camera && camera->view ? camera->viewWeight : 0.0f;
     gSubjectViewWeight.store(weight, std::memory_order_relaxed);
@@ -580,6 +663,7 @@ float sampleReplaySubjectViewWeight(ReplaySampleTime const& sample) {
 }
 
 std::optional<float> sampleReplaySubjectFov(ReplaySampleTime const& sample) {
+    if (!isReplaySubjectRecorder()) return 70.0f;
     auto const camera = sampleSubjectCamera(sample);
     if (camera && camera->fov > 0.0f) return camera->fov;
     return std::nullopt;
