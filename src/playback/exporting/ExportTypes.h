@@ -70,6 +70,8 @@ struct ExportSettings {
     // Render from the recorded player's eyes instead of the camera timeline; the timeline is the fallback while the
     // recorded player has no pose.
     bool firstPerson{false};
+    // Empty selects the recorded local player. Any other value is that replay player's UUID.
+    std::string firstPersonSubject;
     // MP4 only; the defaults are what the writer used before these were configurable.
     VideoEncodeSpeed encodeSpeed{VideoEncodeSpeed::Quality};
     uint32_t         videoCrf{18};

@@ -32,6 +32,7 @@ class Actor;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
 class Player;
+class SerializedSkinRef;
 class CompoundTag;
 class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
@@ -230,6 +231,21 @@ private:
     std::unordered_set<int32_t>                                 mUnknownConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
     std::optional<ActorUniqueID>                                mRecordedLocalPlayerId;
+    struct ReplayPlayerRecord {
+        ActorUniqueID id;
+        std::string   name;
+        bool          recorder{};
+        // False means the identity is known but no player actor is in the current dimension.
+        bool          present{};
+    };
+    // Copied before the first observer skin swap and restored when the follow binding drops.
+    std::unique_ptr<::SerializedSkinRef> mObserverOriginalSkin;
+    bool                                mObserverSkinApplied{false};
+    mutable std::mutex                                  mReplayPlayersMutex;
+    std::unordered_map<std::string, ReplayPlayerRecord> mReplayPlayers;
+    std::string                                         mReplaySubjectChoice;
+    // Choice that already logged "not in this snapshot", so a missing player does not spam every tick.
+    std::string                                         mReplaySubjectGapChoice;
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     bool                                                        mLevelSimFrozen{false};
     // Item-use duration each recorded player had after the last replay tick; the client ticks it between ticks too.
@@ -240,6 +256,8 @@ private:
     std::unordered_map<ActorUniqueID, HeldItemUse> mHeldItemUse;
     std::unordered_set<std::string>                mReplayObjectiveNames;
     std::unordered_set<ChunkPos>                   mCenterChunkPositions;
+    // Last replay-chunk-center log signature, so identical plans do not log again.
+    std::string                                    mChunkCenterLogKey;
     std::unordered_map<ChunkPos, size_t>           mRemainingSubChunkPacketsByColumn;
 
     std::unordered_map<ChunkPos, std::shared_ptr<LevelChunk>> mRetainedReplayChunks;
@@ -292,6 +310,15 @@ private:
     void completeReplayDimensionTransition();
 
     void resetDimensionScopedReplayState();
+
+    struct FollowedChunkCenter {
+        std::string subject;
+        float       x{};
+        float       z{};
+    };
+
+    // Live actor of the camera's current non-recorder subject, only when that actor is in this snapshot's dimension.
+    [[nodiscard]] std::optional<FollowedChunkCenter> followedPlayerChunkCenter(DimensionType const& snapshotDimension);
 
     [[nodiscard]] bool prepareChunkInjectionPlan(PlaybackView const& view);
 
@@ -394,6 +421,20 @@ private:
 
     void holdItemUseBetweenTicks();
 
+    void rememberReplayPlayer(std::string uuid, std::string name, ActorUniqueID id, bool recorder);
+    void noteReplayIdentity(std::string uuid, std::string name, ActorUniqueID id, bool recorder);
+    void forgetReplayIdentity(std::string const& uuid);
+    void markReplayPlayerAbsent(ActorUniqueID id);
+    void clearReplayPlayers(bool clearChoice);
+    // Updates who is spawned. Identities from the player list stay until a player-list remove.
+    void refreshReplayPlayerRoster();
+    void restoreObserverSkin();
+    void applyObserverSkin(::SerializedSkinRef const& skin);
+    void rebindReplaySubject();
+    void refreshReplaySubjectBinding();
+    // Reads the followed actor's flags once per replay tick. snap drops the smoothed eye offset immediately.
+    void updateReplaySubjectPosture(bool snap);
+
 public:
     bool start(std::filesystem::path filePath);
     void stop();
@@ -449,6 +490,20 @@ public:
 
     // Keeps the observer on the recorded player's first-person view until the user takes over or picks a camera.
     void setFollowRecordedPlayer(bool follow);
+
+    struct ReplayPlayerInfo {
+        std::string uuid;
+        std::string name;
+        bool        recorder{};
+        bool        present{};
+    };
+
+    // Empty uuid selects the recorded local player. The choice survives a seek and a missing actor.
+    void setReplaySubjectChoice(std::string uuid);
+
+    [[nodiscard]] std::string replaySubjectChoice() const;
+
+    [[nodiscard]] std::vector<ReplayPlayerInfo> replayPlayers() const;
 
     [[nodiscard]] bool isFollowingRecordedPlayer() const noexcept {
         return mFollowRecordedPlayer.load(std::memory_order_acquire);

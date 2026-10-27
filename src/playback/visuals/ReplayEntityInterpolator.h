@@ -52,6 +52,31 @@ void clearReplayEntityPoses();
 // The recorded local player: the entity a first-person view follows. Safe to read from any thread.
 void setReplaySubject(std::optional<EntityRenderKey> key);
 
+// Empty subject choice is the recorder. Other players only get a pose, a hand and a hidden model.
+void setReplaySubjectRecorder(bool recorder) noexcept;
+
+[[nodiscard]] bool isReplaySubjectRecorder() noexcept;
+
+[[nodiscard]] bool hasReplaySubject() noexcept;
+
+// Flags of the followed replay actor, read once per replay tick. Other players have no recorded camera
+// offset, so sneak and swim use the offsets measured on the local player. Crawl is recorded but not applied.
+struct ReplaySubjectPosture {
+    bool sneaking{};
+    bool swimming{};
+    bool crawling{};
+    bool sleeping{};
+    bool actorSleeping{};
+};
+
+// snap resets the smoothed offset.
+void noteReplaySubjectPosture(int64_t tick, bool snap, ReplaySubjectPosture const& posture);
+[[nodiscard]] float replaySubjectPostureOffsetY() noexcept;
+[[nodiscard]] float replaySubjectPostureViewWeight() noexcept;
+[[nodiscard]] float replaySubjectPostureSleepTicks() noexcept;
+
+[[nodiscard]] bool isReplaySubject(EntityRenderKey const& key) noexcept;
+
 // Independent reasons to hide the subject's model; it stays hidden while any is set.
 // Session only owns the render hooks for the whole replay and never hides anything (hooking is slow).
 enum class SubjectHideReason : uint8_t {

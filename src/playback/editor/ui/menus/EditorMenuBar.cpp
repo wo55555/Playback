@@ -6,6 +6,7 @@
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -880,7 +881,47 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     "playback.refactorEditor.export.firstPerson"_tr().c_str(),
                     "playback.refactorEditor.export.firstPersonHint"_tr().c_str()
                 );
-                ImGui::Checkbox("##export-first-person", &mExportFirstPerson);
+                auto const players = replay::ReplaySession::getInstance().replayPlayers();
+                std::string preview = "playback.refactorEditor.export.firstPersonOff"_tr();
+                if (mExportFirstPerson) {
+                    preview = "playback.refactorEditor.export.firstPersonRecorder"_tr();
+                    if (!mExportFirstPersonSubject.empty()) {
+                        preview = mExportFirstPersonSubject;
+                        for (auto const& player : players) {
+                            if (player.uuid != mExportFirstPersonSubject) continue;
+                            preview = player.name.empty() ? player.uuid : player.name;
+                            break;
+                        }
+                    }
+                }
+                if (ImGui::BeginCombo("##export-first-person", preview.c_str())) {
+                    if (ImGui::Selectable(
+                            "playback.refactorEditor.export.firstPersonOff"_tr().c_str(),
+                            !mExportFirstPerson
+                        )) {
+                        mExportFirstPerson = false;
+                        mExportFirstPersonSubject.clear();
+                    }
+                    bool const recorderSelected = mExportFirstPerson && mExportFirstPersonSubject.empty();
+                    if (ImGui::Selectable(
+                            "playback.refactorEditor.export.firstPersonRecorder"_tr().c_str(),
+                            recorderSelected
+                        )) {
+                        mExportFirstPerson         = true;
+                        mExportFirstPersonSubject.clear();
+                    }
+                    for (auto const& player : players) {
+                        if (player.recorder || !player.present) continue;
+                        bool const        selected = mExportFirstPerson && mExportFirstPersonSubject == player.uuid;
+                        std::string const shown    = player.name.empty() ? player.uuid : player.name;
+                        std::string const label    = shown + "##" + player.uuid;
+                        if (ImGui::Selectable(label.c_str(), selected)) {
+                            mExportFirstPerson         = true;
+                            mExportFirstPersonSubject  = player.uuid;
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
                 ImGui::EndTable();
             }
 
@@ -944,7 +985,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         previewSettings.videoCrf    = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         previewSettings.accelerateClient = mExportAccelerateClient;
-        previewSettings.firstPerson      = mExportFirstPerson;
+        previewSettings.firstPerson        = mExportFirstPerson;
+        previewSettings.firstPersonSubject = mExportFirstPersonSubject;
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
 

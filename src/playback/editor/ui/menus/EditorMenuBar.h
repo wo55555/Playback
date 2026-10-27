@@ -3,6 +3,7 @@
 #include "playback/editor/ui/PanelContext.h"
 
 #include <array>
+#include <string>
 
 namespace playback::editor::ui {
 
@@ -38,6 +39,7 @@ private:
     int                   mExportConvergenceFrames{0};
     bool                  mExportAccelerateClient{false};
     bool                  mExportFirstPerson{false};
+    std::string           mExportFirstPersonSubject;
     int                   mExportEncodeSpeed{0};
     int                   mExportCrf{18};
     bool                  mExportAdvancedOpen{false};

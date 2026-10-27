@@ -18,7 +18,10 @@
 #include "mc/network/packet/ActorEventPacket.h"
 #include "mc/network/packet/AddActorPacket.h"
 #include "mc/network/packet/AddItemActorPacket.h"
+#include "mc/network/packet/AddPlayerPacket.h"
 #include "mc/network/packet/AvailableActorIdentifiersPacket.h"
+#include "mc/network/packet/PlayerListPacket.h"
+#include "mc/network/packet/PlayerSkinPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
@@ -66,6 +69,9 @@ struct NetworkHookState {
     bool packetSender{};
     bool addActor{};
     bool addItemActor{};
+    bool addPlayer{};
+    bool playerList{};
+    bool playerSkin{};
     bool removeActor{};
     bool setActorData{};
     bool takeItemActor{};
@@ -79,12 +85,12 @@ struct NetworkHookState {
 
     [[nodiscard]] bool fastPathHandlersInstalled() const {
         return removeActor && setActorData && takeItemActor && actorEvent && levelEvent && updateBlock
-            && updateBlockSynced && updateSubChunkBlocks;
+            && updateBlockSynced && updateSubChunkBlocks && addPlayer && playerList && playerSkin;
     }
 
     [[nodiscard]] bool fastPathHandlersRemoved() const {
         return !removeActor && !setActorData && !takeItemActor && !actorEvent && !levelEvent && !updateBlock
-            && !updateBlockSynced && !updateSubChunkBlocks;
+            && !updateBlockSynced && !updateSubChunkBlocks && !addPlayer && !playerList && !playerSkin;
     }
 
     [[nodiscard]] bool resourceHandlersInstalled() const { return resourcePacksInfo && resourcePackStack && startGame; }
@@ -247,6 +253,10 @@ LL_TYPE_INSTANCE_HOOK(
     }
 
 PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackRemoveActorHook, LegacyClientNetworkHandler, RemoveActorPacket)
+// The statistics observer did not keep these during a match whose tab list still grew. Record the handler copy.
+PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackAddPlayerHook, LegacyClientNetworkHandler, AddPlayerPacket)
+PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackPlayerListHook, LegacyClientNetworkHandler, PlayerListPacket)
+PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackPlayerSkinHook, LegacyClientNetworkHandler, PlayerSkinPacket)
 PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackTakeItemActorHook, ClientNetworkHandler, TakeItemActorPacket)
 PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackActorEventHook, ClientNetworkHandler, ActorEventPacket)
 PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackLevelEventHook, ClientNetworkHandler, LevelEventPacket)
@@ -511,6 +521,9 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackPacketSentHook>(state.packetSender)
             && installNetworkHook<PlaybackAddActorHook>(state.addActor)
             && installNetworkHook<PlaybackAddItemActorHook>(state.addItemActor)
+            && installNetworkHook<PlaybackAddPlayerHook>(state.addPlayer)
+            && installNetworkHook<PlaybackPlayerListHook>(state.playerList)
+            && installNetworkHook<PlaybackPlayerSkinHook>(state.playerSkin)
             && installNetworkHook<PlaybackRemoveActorHook>(state.removeActor)
             && installNetworkHook<PlaybackSetActorDataHook>(state.setActorData)
             && installNetworkHook<PlaybackTakeItemActorHook>(state.takeItemActor)
@@ -533,6 +546,9 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackTakeItemActorHook>(state.takeItemActor);
         removeNetworkHook<PlaybackSetActorDataHook>(state.setActorData);
         removeNetworkHook<PlaybackRemoveActorHook>(state.removeActor);
+        removeNetworkHook<PlaybackPlayerSkinHook>(state.playerSkin);
+        removeNetworkHook<PlaybackPlayerListHook>(state.playerList);
+        removeNetworkHook<PlaybackAddPlayerHook>(state.addPlayer);
         removeNetworkHook<PlaybackAddItemActorHook>(state.addItemActor);
         removeNetworkHook<PlaybackAddActorHook>(state.addActor);
         removeNetworkHook<PlaybackPacketSentHook>(state.packetSender);
