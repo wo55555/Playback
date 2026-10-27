@@ -567,6 +567,7 @@ void EditorController::tick(bool hudVisible) {
             session.requestTeleportToRecordedPlayer();
             break;
         case EditorActionType::SetFollowRecordedPlayer:
+            if (action.value) session.setReplaySubjectChoice(action.id);
             session.setFollowRecordedPlayer(action.value);
             break;
         case EditorActionType::LoadProject: {

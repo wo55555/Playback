@@ -1247,42 +1247,89 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
 
         auto actors = level.getRuntimeActorList();
 
-        std::vector<Player*> snapshotPlayers{finalPlayer};
-        snapshotPlayers.reserve(actors.size() + 1);
+        // Identity (the menu) is everyone the client already lists, plus any spawned player the list missed.
+        // Spawn packets are only for living players in this dimension. One write point, no second pass.
+        std::vector<Player*>    spawnPlayers;
+        std::unordered_set<int64_t> spawnIds;
+        std::unordered_set<int64_t> deadIds;
+        int                     runtimePlayers = 0;
+        auto const              considerSpawn  = [&](Player& player, bool fromRuntimeList) {
+            if (&player == finalPlayer || player.getDimensionId() != dimension) return;
+            auto const uniqueId = player.getOrCreateUniqueID().rawID;
+            if (!player.isAlive()) {
+                deadIds.insert(uniqueId);
+                return;
+            }
+            if (!spawnIds.insert(uniqueId).second) return;
+            spawnPlayers.push_back(&player);
+            if (fromRuntimeList) ++runtimePlayers;
+        };
         for (auto* actor : actors) {
-            if (!actor || actor == finalPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
-            if (actor->isPlayer()) snapshotPlayers.emplace_back(static_cast<Player*>(actor));
+            if (!actor || !actor->isPlayer()) continue;
+            considerSpawn(static_cast<Player&>(*actor), true);
         }
-        if (!snapshotPlayers.empty()) {
+        level.forEachPlayer([&](Player& player) {
+            considerSpawn(player, false);
+            return true;
+        });
+
+        auto const playerUniqueId = finalPlayer->getOrCreateUniqueID();
+        auto const playerUuid     = finalPlayer->getUuid().asString();
+        std::vector<PlayerListEntry>     identity;
+        std::unordered_map<std::string, size_t> identityIndex;
+        auto const hasSkin = [](PlayerListEntry const& entry) {
+            return static_cast<bool>(entry.mSkin->mSkinImpl);
+        };
+        std::unordered_map<std::string, Player const*> playersByUuid;
+        playersByUuid.emplace(playerUuid, finalPlayer);
+        level.forEachPlayer([&](Player& player) {
+            playersByUuid.emplace(player.getUuid().asString(), &player);
+            return true;
+        });
+        auto const upsertIdentity = [&](PlayerListEntry entry) {
+            // The level's player list can hold an entry whose skin has not arrived yet; the replay drops such
+            // entries, so fall back to the skin the player actor is already rendering with.
+            if (!entry.mSkin->isValid()) {
+                auto const source = playersByUuid.find(entry.mUUID->asString());
+                if (source != playersByUuid.end()) {
+                    if (auto const& ownSkin = source->second->mSkin; ownSkin && ownSkin->isValid()) {
+                        // SerializedSkinRef's copy constructor is not exported; it only shares the skin handle.
+                        entry.mSkin->mSkinImpl = ownSkin->mSkinImpl;
+                    }
+                }
+            }
+            auto const entryId = entry.mId->rawID;
+            if (entry.mUUID->asString() == playerUuid || (entryId != 0 && entryId == playerUniqueId.rawID)) {
+                entry.mId   = *mRecordedLocalPlayerId;
+                entry.mUUID = *mRecordedLocalPlayerUuid;
+                entry.mXUID->clear();
+                entry.mPlatformOnlineId->clear();
+            }
+            auto const key = entry.mUUID->asString();
+            if (key.empty()) return;
+            auto const found = identityIndex.find(key);
+            if (found == identityIndex.end()) {
+                identityIndex.emplace(key, identity.size());
+                identity.push_back(std::move(entry));
+                return;
+            }
+            auto& existing = identity[found->second];
+            if (!hasSkin(existing) && hasSkin(entry)) existing = std::move(entry);
+        };
+        for (auto const& listed : level.getPlayerList()) upsertIdentity(PlayerListEntry(listed.second));
+        upsertIdentity(PlayerListEntry(*finalPlayer));
+        for (auto const* player : spawnPlayers) upsertIdentity(PlayerListEntry(*player));
+
+        if (!identity.empty()) {
             auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::PlayerList);
             if (!packet) {
                 mSnapshotFailure = "Unable to create the entity snapshot player list packet";
                 return SnapshotCaptureResult::Failed;
             }
 
-            auto&       playerListPacket = static_cast<PlayerListPacket&>(*packet);
-            auto const& playerList       = level.getPlayerList();
-            playerListPacket.mEntries->reserve(snapshotPlayers.size());
-            for (auto const* player : snapshotPlayers) {
-                auto            entry = playerList.find(player->getUuid());
-                PlayerListEntry snapshotEntry =
-                    entry != playerList.end() ? PlayerListEntry(entry->second) : PlayerListEntry(*player);
-                // The level's player list can hold an entry whose skin has not arrived yet; the replay drops such
-                // entries, so fall back to the skin the player actor is already rendering with.
-                if (!snapshotEntry.mSkin->isValid()) {
-                    if (auto const& ownSkin = player->mSkin; ownSkin && ownSkin->isValid()) {
-                        // SerializedSkinRef's copy constructor is not exported; it only shares the skin handle.
-                        snapshotEntry.mSkin->mSkinImpl = ownSkin->mSkinImpl;
-                    }
-                }
-                if (player == finalPlayer) {
-                    snapshotEntry.mId   = *mRecordedLocalPlayerId;
-                    snapshotEntry.mUUID = *mRecordedLocalPlayerUuid;
-                    snapshotEntry.mXUID->clear();
-                    snapshotEntry.mPlatformOnlineId->clear();
-                }
-                playerListPacket.mEntries->emplace_back(std::move(snapshotEntry));
-            }
+            auto& playerListPacket = static_cast<PlayerListPacket&>(*packet);
+            playerListPacket.mEntries->reserve(identity.size());
+            for (auto& entry : identity) playerListPacket.mEntries->emplace_back(std::move(entry));
             appendEntityPacket(playerListPacket);
         }
 
@@ -1360,14 +1407,30 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
             if (auto mapPacket = makeHeldMapPacket(*finalPlayer, *mapId)) appendEntityPacket(*mapPacket);
         }
 
+        std::unordered_set<int64_t> serializedPlayers;
         for (auto* actor : actors) {
             if (!actor || actor == finalPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
+            if (actor->isPlayer()) continue;
 
             auto packet = actor->tryCreateAddActorPacket();
             if (!packet) continue;
             appendEntityPacket(*packet);
             if (!appendActorState(*actor, actor->getRuntimeID())) return SnapshotCaptureResult::Failed;
         }
+        for (auto* player : spawnPlayers) {
+            AddPlayerPacket packet(*player);
+            serializedPlayers.insert(player->getOrCreateUniqueID().rawID);
+            appendEntityPacket(packet);
+            if (!appendActorState(*player, player->getRuntimeID())) return SnapshotCaptureResult::Failed;
+        }
+        getLogger().debug(
+            "replay snapshot players runtime={} listed={} serialized={} deadSkipped={} identity={}",
+            runtimePlayers,
+            static_cast<int>(spawnPlayers.size()),
+            static_cast<int>(serializedPlayers.size()),
+            static_cast<int>(deadIds.size()),
+            static_cast<int>(identity.size())
+        );
 
         auto&                                scoreboard = level.getScoreboard();
         std::unordered_set<Objective const*> displayedObjectives;
