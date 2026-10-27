@@ -3,6 +3,7 @@
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -141,15 +142,34 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             )) {
             ctx.submitAction({EditorActionType::TeleportToRecordedPlayer});
         }
-        if (ImGui::MenuItem(
-                "playback.refactorEditor.viewport.followPlayer"_tr().c_str(),
-                nullptr,
-                following,
-                state.replayVisible
-            )) {
-            EditorAction action{EditorActionType::SetFollowRecordedPlayer};
-            action.value = !following;
-            ctx.submitAction(std::move(action));
+        if (ImGui::BeginMenu("playback.refactorEditor.viewport.firstPerson"_tr().c_str(), state.replayVisible)) {
+            auto&      session = replay::ReplaySession::getInstance();
+            auto const choice  = session.replaySubjectChoice();
+            auto const players = session.replayPlayers();
+            bool const recorderSelected = following && choice.empty();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.viewport.followRecorder"_tr().c_str(),
+                    nullptr,
+                    recorderSelected
+                )) {
+                EditorAction action{EditorActionType::SetFollowRecordedPlayer};
+                action.value = !recorderSelected;
+                ctx.submitAction(std::move(action));
+            }
+            // The identity table keeps people from earlier segments. List only whoever is spawned now,
+            // the same way Flashback's player list reads the live connection instead of a historical roster.
+            for (auto const& player : players) {
+                if (player.recorder || !player.present) continue;
+                bool const        selected = following && choice == player.uuid;
+                std::string const label    = player.name.empty() ? player.uuid : player.name;
+                if (ImGui::MenuItem(label.c_str(), nullptr, selected)) {
+                    EditorAction action{EditorActionType::SetFollowRecordedPlayer};
+                    action.value = !selected;
+                    action.id    = player.uuid;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+            ImGui::EndMenu();
         }
         ImGui::EndPopup();
     }
