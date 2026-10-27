@@ -14,10 +14,15 @@ ExportKeyframeApplier::~ExportKeyframeApplier() { reset(); }
 void ExportKeyframeApplier::configure(
     state::editing::model::EditorStateExt const& project,
     std::optional<std::string>                   cameraFallback,
-    bool                                         firstPerson
+    bool                                         firstPerson,
+    std::string                                  firstPersonSubject
 ) {
     reset();
     if (firstPerson) {
+        auto& session       = replay::ReplaySession::getInstance();
+        mSavedSubjectChoice = session.replaySubjectChoice();
+        mSubjectChoiceSaved = true;
+        session.setReplaySubjectChoice(std::move(firstPersonSubject));
         keyframe::setCameraSampleOverride(
             keyframe::CameraTimelineSource::Export,
             [](visuals::ReplaySampleTime const& time) -> std::optional<keyframe::CameraRenderState> {
@@ -26,7 +31,7 @@ void ExportKeyframeApplier::configure(
                 auto const pose = visuals::sampleReplaySubjectPose(time);
                 auto const fov  = visuals::sampleReplaySubjectFov(time);
                 if (!pose || !fov) return std::nullopt;
-                // The recorded player's position is already its eye position.
+                // The sampler returns an eye position: the recorder through its camera offset, anyone else at feet plus 1.62.
                 return keyframe::CameraRenderState{
                     pose->position.x,
                     pose->position.y,
@@ -65,6 +70,12 @@ void ExportKeyframeApplier::configure(
 }
 
 void ExportKeyframeApplier::reset() {
+    if (mSubjectChoiceSaved) {
+        mSubjectChoiceSaved = false;
+        auto saved          = std::move(mSavedSubjectChoice);
+        mSavedSubjectChoice.clear();
+        replay::ReplaySession::getInstance().setReplaySubjectChoice(std::move(saved));
+    }
     visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Export, false);
     keyframe::setCameraSampleOverride(keyframe::CameraTimelineSource::Export, {});
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline);
