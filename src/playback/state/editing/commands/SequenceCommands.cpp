@@ -87,6 +87,22 @@ void DeleteSequenceSegment::execute(model::EditorStateExt& state) {
 void        DeleteSequenceSegment::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string DeleteSequenceSegment::label() const { return "Delete Sequence Segment"; }
 
+MergeSequenceSegment::MergeSequenceSegment(std::string id, bool withNext)
+: mId(std::move(id)),
+  mWithNext(withNext) {}
+
+void MergeSequenceSegment::execute(model::EditorStateExt& state) {
+    auto before = state;
+    if (!SequenceOps::mergeWithNeighbour(state.sequence, mId, mWithNext)) {
+        mBefore.reset();
+        return;
+    }
+    mBefore = std::move(before);
+}
+
+void        MergeSequenceSegment::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string MergeSequenceSegment::label() const { return "Merge Sequence Segment"; }
+
 BindSequenceToCamera::BindSequenceToCamera(std::string id, std::string cameraId)
 : mId(std::move(id)),
   mCameraId(std::move(cameraId)) {}
@@ -94,10 +110,10 @@ BindSequenceToCamera::BindSequenceToCamera(std::string id, std::string cameraId)
 void BindSequenceToCamera::execute(model::EditorStateExt& state) {
     auto segment =
         std::find_if(state.sequence.begin(), state.sequence.end(), [&](auto const& value) { return value.id == mId; });
-    bool const cameraExists =
-        mCameraId.empty() || std::any_of(state.cameras.begin(), state.cameras.end(), [&](auto const& camera) {
-            return camera.id == mCameraId;
-        });
+    bool const cameraExists = mCameraId.empty() || mCameraId == model::kFirstPersonCameraId
+                           || std::any_of(state.cameras.begin(), state.cameras.end(), [&](auto const& camera) {
+                                  return camera.id == mCameraId;
+                              });
     if (segment == state.sequence.end() || segment->locked || segment->cameraId == mCameraId || !cameraExists) {
         mBefore.reset();
         return;
