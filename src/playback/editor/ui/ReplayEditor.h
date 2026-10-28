@@ -34,6 +34,7 @@ public:
     void draw(playback::state::EditorState const& state, SubmitAction const& submit);
 
     void handleKeyboardShortcuts();
+    void updateFollowExitTap();
 
     [[nodiscard]] playback::state::EditorState const&          state() const;
     [[nodiscard]] state::editing::model::SelectionModel const& selection() const { return mSelection; }
@@ -97,6 +98,7 @@ private:
     state::editing::model::SelectionModel mSelection;
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
+    bool  mFollowExitTapArmed{false};
     float mExitHoldSeconds{};
 
     float       mDetailsWidthRatio{0.28f};

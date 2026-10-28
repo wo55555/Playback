@@ -316,6 +316,7 @@
                 "seekTicks": "跳转 1 游戏刻",
                 "editPoints": "上一个 / 下一个编辑点",
                 "speed": "减速 / 加速",
+                "stopFollow": "第一人称跟随时：退出跟随（单独按下松开）",
                 "undoRedo": "撤销 / 重做",
                 "saveProject": "保存项目",
                 "keyframe": "添加相机关键帧",

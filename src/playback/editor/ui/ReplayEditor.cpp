@@ -262,7 +262,10 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
 
     ErrorDialog::getInstance().draw();
     updateExitHold();
-    if (!exportActive) handleKeyboardShortcuts();
+    if (!exportActive) {
+        handleKeyboardShortcuts();
+        updateFollowExitTap();
+    }
 
     mFrameState = nullptr;
     mSubmit     = nullptr;
@@ -279,6 +282,40 @@ void ReplayEditor::updateExitHold() {
     mExitHoldSeconds     += io.DeltaTime;
     if (previous < kExitHoldDuration && mExitHoldSeconds >= kExitHoldDuration) {
         submitAction({playback::state::EditorActionType::StopReplay});
+    }
+}
+
+// Flashback leaves spectating on sneak; here a lone Shift tap does it, so Shift+click and Ctrl+Shift chords stay free.
+void ReplayEditor::updateFollowExitTap() {
+    ImGuiIO const& io        = ImGui::GetIO();
+    bool const     shiftDown = ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift);
+    if (!shiftDown) {
+        bool const tapped   = mFollowExitTapArmed;
+        mFollowExitTapArmed = false;
+        if (!tapped || !state().followingRecordedPlayer || input::isGameInputCaptured() || io.WantTextInput
+            || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+            return;
+        }
+        playback::state::EditorAction action{playback::state::EditorActionType::SetFollowRecordedPlayer};
+        action.value = false;
+        submitAction(std::move(action));
+        return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftShift, false) || ImGui::IsKeyPressed(ImGuiKey_RightShift, false)) {
+        mFollowExitTapArmed = !io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyMouseDown();
+        return;
+    }
+    if (!mFollowExitTapArmed) return;
+    if (io.KeyCtrl || io.KeyAlt || ImGui::IsAnyMouseDown() || io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f) {
+        mFollowExitTapArmed = false;
+        return;
+    }
+    for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_ReservedForModCtrl; ++key) {
+        if (key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift) continue;
+        if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(key), false)) {
+            mFollowExitTapArmed = false;
+            return;
+        }
     }
 }
 

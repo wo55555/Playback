@@ -316,6 +316,7 @@
                 "seekTicks": "Seek 1 tick",
                 "editPoints": "Previous / next edit point",
                 "speed": "Slower / faster",
+                "stopFollow": "While following in first person: stop following (tap alone)",
                 "undoRedo": "Undo / Redo",
                 "saveProject": "Save project",
                 "keyframe": "Add camera keyframe",
