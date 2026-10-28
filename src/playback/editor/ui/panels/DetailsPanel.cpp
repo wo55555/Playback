@@ -1,6 +1,7 @@
 ﻿#include "DetailsPanel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/PropertyControls.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
@@ -182,6 +183,8 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
         subject = "playback.refactorEditor.details.cameraKeyframe"_tr();
     } else if (selection.getAs<state::editing::model::SelectedMarker>()) {
         subject = "playback.refactorEditor.details.marker"_tr();
+    } else if (selection.getAs<state::editing::model::SelectedSequenceSegment>()) {
+        subject = "playback.refactorEditor.details.sequenceSegment"_tr();
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
@@ -191,7 +194,108 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawCamera(ctx)) return;
     if (drawKeyframe(ctx)) return;
     if (drawMarker(ctx)) return;
+    if (drawSequenceSegment(ctx)) return;
+    mFocusSubjectSearch = false;
     drawOverview(ctx);
+}
+
+bool DetailsPanel::drawSequenceSegment(PanelContext const& ctx) {
+    using state::editing::model::kFirstPersonCameraId;
+    auto const* selected = ctx.selection.getAs<state::editing::model::SelectedSequenceSegment>();
+    if (!selected) return false;
+    auto const project = ctx.state.project;
+    auto const* segment = findById(project->sequence, selected->segmentId);
+    if (!segment) {
+        mFocusSubjectSearch = false;
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.sequenceSegmentMissing"_tr().c_str());
+        return true;
+    }
+
+    bool const  firstPerson = segment->cameraId == kFirstPersonCameraId;
+    auto const  camera      = std::ranges::find(project->cameras, segment->cameraId, &state::editing::model::CameraEntity::id);
+    std::string cameraLabel = "playback.refactorEditor.timeline.autoCamera"_tr();
+    if (firstPerson) cameraLabel = "playback.refactorEditor.timeline.firstPersonCamera"_tr();
+    else if (!segment->cameraId.empty() && camera != project->cameras.end()) cameraLabel = camera->name;
+
+    if (property::beginSection("playback.refactorEditor.details.sequenceSegment"_tr().c_str())) {
+        ImGui::TextUnformatted(
+            "playback.refactorEditor.details.range"_tr(formatTick(segment->startTick), formatTick(segment->endTick))
+                .c_str()
+        );
+        ImGui::TextUnformatted(
+            "playback.refactorEditor.details.duration"_tr(segment->endTick - segment->startTick).c_str()
+        );
+        property::separator();
+
+        auto const bind = [&](std::string cameraId) {
+            EditorAction action{EditorActionType::BindSequenceCamera};
+            action.id          = segment->id;
+            action.secondaryId = std::move(cameraId);
+            ctx.submitAction(std::move(action));
+        };
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.sequenceCameraHeader"_tr().c_str());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::BeginDisabled(segment->locked);
+        if (widgets::beginCombo("##sequence-camera", cameraLabel.c_str())) {
+            if (ImGui::Selectable("playback.refactorEditor.timeline.autoCamera"_tr().c_str(), segment->cameraId.empty())) {
+                bind({});
+            }
+            if (ImGui::Selectable("playback.refactorEditor.timeline.firstPersonCamera"_tr().c_str(), firstPerson)) {
+                bind(std::string{kFirstPersonCameraId});
+            }
+            if (!project->cameras.empty()) ImGui::Separator();
+            for (auto const& entry : project->cameras) {
+                ImGui::PushID(entry.id.c_str());
+                if (ImGui::Selectable(entry.name.c_str(), segment->cameraId == entry.id)) bind(entry.id);
+                ImGui::PopID();
+            }
+            widgets::endCombo();
+        }
+        ImGui::EndDisabled();
+        if (segment->locked) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.segmentLocked"_tr().c_str());
+        }
+        property::endSection();
+    }
+
+    if (!firstPerson) {
+        mFocusSubjectSearch = false;
+        return true;
+    }
+
+    // The subject is one replay-wide choice, so it stays editable even on a locked segment.
+    if (property::beginSection("playback.refactorEditor.details.firstPersonSubject"_tr().c_str())) {
+        std::string const current = playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replaySubjectChoice);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.currentSubject"_tr().c_str());
+        ImGui::SameLine();
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(current.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.subjectShared"_tr().c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+
+        if (mFocusSubjectSearch) ImGui::SetScrollHereY(0.0f);
+        PlayerPickerResult picked;
+        if (drawPlayerList(
+                "##inspector-subject-list",
+                PlayerPickerMode::SegmentSubject,
+                ctx.state.replayPlayers,
+                ctx.state.replaySubjectChoice,
+                mFocusSubjectSearch,
+                picked
+            )) {
+            EditorAction action{EditorActionType::SetReplaySubjectChoice};
+            action.id = std::move(picked.uuid);
+            ctx.submitAction(std::move(action));
+        }
+        property::endSection();
+    }
+    mFocusSubjectSearch = false;
+    return true;
 }
 
 bool DetailsPanel::drawWorldActor(PanelContext const& ctx) {
