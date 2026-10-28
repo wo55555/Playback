@@ -125,7 +125,9 @@
                 "undo": "撤销",
                 "redo": "重做",
                 "delete": "删除",
-                "selectAll": "全选",
+                "selectAll": "全选关键帧",
+                "copy": "复制关键帧",
+                "paste": "在播放头处粘贴关键帧",
                 "shortcuts": "快捷键",
                 "documentation": "文档",
                 "about": "关于"
@@ -199,7 +201,13 @@
                 "marker": "标记",
                 "markerMissing": "标记已不存在。",
                 "deleteMarker": "删除标记",
-                "markerNotWired": "标记编辑尚未接入后端。",
+                "keyframesSelected": "已选 {} 个关键帧",
+                "multiKeyframe": "关键帧",
+                "keyframeCount": "关键帧数",
+                "trackCount": "轨道数",
+                "mixed": "（混合）",
+                "deleteKeyframes": "删除 {} 个关键帧",
+                "multiKeyframeHint": "拖动任一选中的关键帧可整体移动；Ctrl+单击可加选或取消。",
                 "addFreeCamera": "添加自由相机",
                 "interpolationType": {
                     "smooth": "平滑",
@@ -329,6 +337,13 @@
                 "zoomReset": "缩放时间轴至全长",
                 "exportRange": "标记导出头 / 尾",
                 "delete": "删除选中项",
+                "selectAll": "全选关键帧",
+                "boxSelect": "加选 / 框选关键帧",
+                "clearSelection": "取消选择",
+                "copyPaste": "复制关键帧 / 在播放头处粘贴",
+                "shiftSnap": "拖动时吸附到关键帧、标记和播放头",
+                "insertMarker": "在播放头处添加标记",
+                "markers": "上一个 / 下一个标记",
                 "export": "打开导出设置",
                 "viewport": "最大化 / 还原视口",
                 "uiScale": "缩小 / 放大界面",
@@ -338,7 +353,7 @@
             "timeline": {
                 "searchTracks": "搜索轨道",
                 "snap": "吸附",
-                "snapTooltip": "关键帧吸附到整秒",
+                "snapTooltip": "关键帧吸附到整秒。拖动时按住 Shift 可吸附到关键帧、标记和播放头。",
                 "addTrack": "添加轨道",
                 "maximize": "最大化视口（Ctrl+Shift+F）",
                 "restore": "还原视口（Esc）",
@@ -372,6 +387,13 @@
                 "deleteSegment": "删除片段",
                 "copyKeyframe": "复制关键帧",
                 "pasteKeyframe": "粘贴关键帧",
+                "copyKeyframes": "复制 {} 个关键帧",
+                "pasteKeyframes": "粘贴 {} 个关键帧",
+                "addMarker": "在播放头处添加标记",
+                "addMarkerHere": "在此添加标记",
+                "renameMarker": "名称（回车应用）",
+                "deleteMarker": "删除标记",
+                "seekToMarker": "播放头移到标记",
                 "addKeyframeHere": "在此添加关键帧",
                 "seekHere": "播放头移到这里",
                 "setTick": "游戏刻",
@@ -437,7 +459,8 @@
                 "optiPistonHint": "保存到 OptiPiston 配置，回放外同样生效。"
             },
             "defaults": {
-                "camera": "相机 {}"
+                "camera": "相机 {}",
+                "marker": "标记 {}"
             }
         }
     }

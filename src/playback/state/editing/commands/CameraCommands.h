@@ -5,8 +5,67 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace playback::state::editing::command {
+
+// Shifts every referenced keyframe by the same delta. All or nothing: a locked track, a key
+// leaving [0, total] or landing on a key that is not moving rejects the whole move.
+class MoveKeyframes final : public model::IEditCommand {
+public:
+    MoveKeyframes(std::vector<model::KeyframeRef> refs, int delta);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    int                                  mDelta;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+// Deletes the referenced keyframes, skipping locked tracks.
+class DeleteKeyframes final : public model::IEditCommand {
+public:
+    explicit DeleteKeyframes(std::vector<model::KeyframeRef> refs);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetKeyframesInterpolation final : public model::IEditCommand {
+public:
+    SetKeyframesInterpolation(std::vector<model::KeyframeRef> refs, model::CameraInterpolationType interpolation);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    model::CameraInterpolationType       mInterpolation;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+// Inserts keyframes with explicit poses (multi-key paste). Occupied ticks and locked tracks are skipped.
+class AddKeyframes final : public model::IEditCommand {
+public:
+    explicit AddKeyframes(std::vector<model::KeyframeRef> refs);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    std::optional<model::EditorStateExt> mBefore;
+};
 
 class AddFreeCamera final : public model::IEditCommand {
 public:

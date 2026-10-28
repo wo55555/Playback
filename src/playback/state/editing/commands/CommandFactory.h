@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace playback::state::editing::command {
 
@@ -48,6 +49,18 @@ public:
     static std::unique_ptr<model::IEditCommand> createClearCameraKeyframes(const std::string& id);
     static std::unique_ptr<model::IEditCommand>
     createSetSubActorDetails(const std::string& id, model::AgentDetails details);
+
+    static std::unique_ptr<model::IEditCommand> createMoveCameraKeyframes(std::vector<model::KeyframeRef> refs, int delta);
+    static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframes(std::vector<model::KeyframeRef> refs);
+    static std::unique_ptr<model::IEditCommand>
+    createSetKeyframesInterpolation(std::vector<model::KeyframeRef> refs, model::CameraInterpolationType interpolation);
+    static std::unique_ptr<model::IEditCommand> createAddCameraKeyframes(std::vector<model::KeyframeRef> refs);
+
+    static std::unique_ptr<model::IEditCommand>
+    createAddMarker(const std::string& id, int tick, const std::string& label);
+    static std::unique_ptr<model::IEditCommand> createDeleteMarker(const std::string& id);
+    static std::unique_ptr<model::IEditCommand> createMoveMarker(const std::string& id, int tick);
+    static std::unique_ptr<model::IEditCommand> createRenameMarker(const std::string& id, const std::string& label);
 };
 
 } // namespace playback::state::editing::command

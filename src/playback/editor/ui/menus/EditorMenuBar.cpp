@@ -365,7 +365,39 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                 )) {
                 (void)ctx.commands.deleteSelection();
             }
-            ImGui::MenuItem("playback.refactorEditor.menu.selectAll"_tr().c_str(), "Ctrl+A", false, false);
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.selectAll"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::SelectAll).c_str(),
+                    false,
+                    state.project != nullptr
+                )) {
+                (void)ctx.commands.selectAllKeyframes();
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.copy"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::Copy).c_str(),
+                    false,
+                    ctx.selection.keyframeCount() > 0
+                )) {
+                (void)ctx.commands.copySelection();
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.paste"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::Paste).c_str(),
+                    false,
+                    state.project != nullptr
+                )) {
+                (void)ctx.commands.pasteAtPlayhead();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeline.addMarker"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::InsertMarker).c_str(),
+                    false,
+                    state.project != nullptr
+                )) {
+                (void)ctx.commands.addMarkerAtPlayhead();
+            }
             widgets::endMenu();
         }
 
@@ -496,6 +528,28 @@ void EditorMenuBar::drawShortcutDialog() {
             shortcutRow(
                 input::KeyMap::displayString(input::EditorKeybind::DeleteSelection),
                 "playback.refactorEditor.shortcuts.delete"_tr()
+            );
+            shortcutRow(
+                input::KeyMap::displayString(input::EditorKeybind::SelectAll),
+                "playback.refactorEditor.shortcuts.selectAll"_tr()
+            );
+            shortcutRow("Ctrl+Click / Drag", "playback.refactorEditor.shortcuts.boxSelect"_tr());
+            shortcutRow(
+                input::KeyMap::displayString(input::EditorKeybind::ClearSelection),
+                "playback.refactorEditor.shortcuts.clearSelection"_tr()
+            );
+            shortcutRow(
+                shortcutPair(input::EditorKeybind::Copy, input::EditorKeybind::Paste),
+                "playback.refactorEditor.shortcuts.copyPaste"_tr()
+            );
+            shortcutRow("Shift+Drag", "playback.refactorEditor.shortcuts.shiftSnap"_tr());
+            shortcutRow(
+                input::KeyMap::displayString(input::EditorKeybind::InsertMarker),
+                "playback.refactorEditor.shortcuts.insertMarker"_tr()
+            );
+            shortcutRow(
+                shortcutPair(input::EditorKeybind::PreviousMarker, input::EditorKeybind::NextMarker),
+                "playback.refactorEditor.shortcuts.markers"_tr()
             );
             shortcutRow(
                 shortcutPair(input::EditorKeybind::ZoomOutTimeline, input::EditorKeybind::ZoomInTimeline),

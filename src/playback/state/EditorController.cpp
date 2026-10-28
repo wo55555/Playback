@@ -354,6 +354,36 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SetSubActorDetails:
         mCommandStack.push(CommandFactory::createSetSubActorDetails(action.id, action.details), mProject);
         break;
+    case EditorActionType::MoveCameraKeyframes:
+        mCommandStack.push(CommandFactory::createMoveCameraKeyframes(action.keyframeRefs, action.tick), mProject);
+        break;
+    case EditorActionType::DeleteCameraKeyframes:
+        mCommandStack.push(CommandFactory::createDeleteCameraKeyframes(action.keyframeRefs), mProject);
+        break;
+    case EditorActionType::SetKeyframesInterpolation:
+        mCommandStack.push(
+            CommandFactory::createSetKeyframesInterpolation(
+                action.keyframeRefs,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::AddCameraKeyframes:
+        mCommandStack.push(CommandFactory::createAddCameraKeyframes(action.keyframeRefs), mProject);
+        break;
+    case EditorActionType::AddMarker:
+        mCommandStack.push(CommandFactory::createAddMarker(action.id, action.tick, action.name), mProject);
+        break;
+    case EditorActionType::DeleteMarker:
+        mCommandStack.push(CommandFactory::createDeleteMarker(action.id), mProject);
+        break;
+    case EditorActionType::MoveMarker:
+        mCommandStack.push(CommandFactory::createMoveMarker(action.id, action.tick), mProject);
+        break;
+    case EditorActionType::RenameMarker:
+        mCommandStack.push(CommandFactory::createRenameMarker(action.id, action.name), mProject);
+        break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();

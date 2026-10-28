@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a searchable player list for choosing the first-person subject in the viewport, the timeline and the export dialog. Selecting a camera switch segment shows its range, camera and the full-width player list in the inspector.
 - Added right-click menus for keyframes, empty lanes, track headers and the ruler on the timeline.
 - Tapping Shift on its own while following a player now stops following.
+- Added a third-person follow view, toggled with F5 or from the viewport camera menu. A sleeping subject still shows its first-person bed view.
+- Camera tracks can be renamed, locked and cleared from their right-click menu, and a keyframe's menu can move the free camera to its pose.
+- Added multi-select for keyframes: Ctrl+click, box select on empty canvas and Ctrl+A. Selected keyframes move, delete, copy, paste and change interpolation together.
+- Holding Shift while dragging snaps to keyframes, markers, segment edges, the playhead and the export range.
+- Markers can be added with M or from the ruler menu, dragged, renamed and deleted. `[` and `]` jump between them.
 
 ### Changed
 
