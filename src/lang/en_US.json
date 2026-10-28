@@ -125,7 +125,9 @@
                 "undo": "Undo",
                 "redo": "Redo",
                 "delete": "Delete",
-                "selectAll": "Select All",
+                "selectAll": "Select All Keyframes",
+                "copy": "Copy Keyframes",
+                "paste": "Paste Keyframes at Playhead",
                 "shortcuts": "Keyboard Shortcuts",
                 "documentation": "Documentation",
                 "about": "About"
@@ -199,7 +201,13 @@
                 "marker": "Marker",
                 "markerMissing": "Marker no longer exists.",
                 "deleteMarker": "Delete Marker",
-                "markerNotWired": "Marker editing is not yet wired to the backend.",
+                "keyframesSelected": "{} keyframes selected",
+                "multiKeyframe": "Keyframes",
+                "keyframeCount": "Keyframes",
+                "trackCount": "Tracks",
+                "mixed": "(mixed)",
+                "deleteKeyframes": "Delete {} keyframes",
+                "multiKeyframeHint": "Drag any selected keyframe to move them all. Ctrl+click adds or removes one.",
                 "addFreeCamera": "Add Free Camera",
                 "interpolationType": {
                     "smooth": "Smooth",
@@ -329,6 +337,13 @@
                 "zoomReset": "Zoom timeline to fit",
                 "exportRange": "Mark export in / out point",
                 "delete": "Delete selected item",
+                "selectAll": "Select all keyframes",
+                "boxSelect": "Add to selection / box select keyframes",
+                "clearSelection": "Clear selection",
+                "copyPaste": "Copy keyframes / paste at playhead",
+                "shiftSnap": "Snap to keyframes, markers and playhead while dragging",
+                "insertMarker": "Add marker at playhead",
+                "markers": "Previous / next marker",
                 "export": "Open export settings",
                 "viewport": "Maximize / restore viewport",
                 "uiScale": "Smaller / larger interface",
@@ -338,7 +353,7 @@
             "timeline": {
                 "searchTracks": "Search tracks",
                 "snap": "Snap",
-                "snapTooltip": "Snap keyframes to whole seconds",
+                "snapTooltip": "Snap keyframes to whole seconds. Hold Shift while dragging to snap to keyframes, markers and the playhead.",
                 "addTrack": "Add track",
                 "maximize": "Maximize viewport (Ctrl+Shift+F)",
                 "restore": "Restore viewport (Esc)",
@@ -372,6 +387,13 @@
                 "deleteSegment": "Delete segment",
                 "copyKeyframe": "Copy keyframe",
                 "pasteKeyframe": "Paste keyframe",
+                "copyKeyframes": "Copy {} keyframes",
+                "pasteKeyframes": "Paste {} keyframes",
+                "addMarker": "Add Marker at Playhead",
+                "addMarkerHere": "Add marker here",
+                "renameMarker": "Name (Enter to apply)",
+                "deleteMarker": "Delete marker",
+                "seekToMarker": "Move playhead to marker",
                 "addKeyframeHere": "Add keyframe here",
                 "seekHere": "Move playhead here",
                 "setTick": "Tick",
@@ -437,7 +459,8 @@
                 "optiPistonHint": "Saved to OptiPiston's config; also applies outside replays."
             },
             "defaults": {
-                "camera": "Camera {}"
+                "camera": "Camera {}",
+                "marker": "Marker {}"
             }
         }
     }

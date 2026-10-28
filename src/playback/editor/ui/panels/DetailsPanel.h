@@ -2,7 +2,9 @@
 
 #include "playback/editor/ui/PanelContext.h"
 
+#include <array>
 #include <optional>
+#include <string>
 
 namespace playback::editor::ui {
 
@@ -31,6 +33,7 @@ private:
     bool drawWorldActorSegment(PanelContext const& ctx);
     bool drawSubActor(PanelContext const& ctx);
     bool drawCamera(PanelContext const& ctx);
+    bool drawKeyframes(PanelContext const& ctx);
     bool drawKeyframe(PanelContext const& ctx);
     bool drawMarker(PanelContext const& ctx);
     bool drawSequenceSegment(PanelContext const& ctx);
@@ -39,6 +42,10 @@ private:
     InspectorPage        mPage{InspectorPage::Selection};
     std::optional<float> mPistonDurationDraft;
     bool                 mFocusSubjectSearch{false};
+    // The label field edits a local copy so typing is not overwritten by the project each frame.
+    std::string           mMarkerLabelId;
+    std::array<char, 128> mMarkerLabelBuffer{};
+    bool                  mMarkerLabelEditing{};
 };
 
 } // namespace playback::editor::ui
