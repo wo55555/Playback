@@ -173,6 +173,7 @@ private:
     std::atomic<bool>                           mFollowRecordedPlayer{false};
     bool                                        mTeleportToSubjectPending{false};
     std::optional<keyframe::CameraRenderState>  mFollowHeldPose;
+    bool                                        mFollowExitParkPending{false};
     std::atomic<uint64_t>                       mSeekFinishCount{0};
     uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
@@ -387,6 +388,7 @@ private:
     void parkReplayCameraAtPreview();
 
     void parkObserverAtPose(keyframe::CameraRenderState const& pose);
+    void parkObserverAfterFollow();
 
     void updatePausedObserverPreview();
 
