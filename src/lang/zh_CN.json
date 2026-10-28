@@ -183,6 +183,7 @@
                 "nameLabel": "名称",
                 "keyframesLabel": "关键帧",
                 "enabled": "启用",
+                "locked": "锁定",
                 "unbindCamera": "解除相机绑定",
                 "addKeyframeAtPlayhead": "在播放头添加关键帧",
                 "tickValue": "游戏刻 {}",
@@ -378,6 +379,11 @@
                 "setOutPoint": "设为出点",
                 "clearExportRange": "清除导出范围",
                 "previewCamera": "设为预览相机",
+                "applyKeyframe": "移动视角到此关键帧",
+                "renameTrack": "名称（回车应用）",
+                "lockTrack": "锁定轨道",
+                "unlockTrack": "解锁轨道",
+                "clearKeyframes": "清空关键帧（{}）",
                 "deleteTrack": "删除轨道"
             },
             "viewport": {

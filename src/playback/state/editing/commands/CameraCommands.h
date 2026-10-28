@@ -123,7 +123,7 @@ private:
 
 class SetCameraTrackState final : public model::IEditCommand {
 public:
-    enum class Property : uint8_t { Enabled };
+    enum class Property : uint8_t { Enabled, Locked };
 
     SetCameraTrackState(std::string cameraId, Property property, bool value);
     void                      execute(model::EditorStateExt& state) override;
@@ -135,6 +135,33 @@ private:
     std::string                          mCameraId;
     Property                             mProperty;
     bool                                 mValue;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class RenameCamera final : public model::IEditCommand {
+public:
+    RenameCamera(std::string cameraId, std::string name);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    std::string                          mName;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class ClearCameraKeyframes final : public model::IEditCommand {
+public:
+    explicit ClearCameraKeyframes(std::string cameraId);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
     std::optional<model::EditorStateExt> mBefore;
 };
 

@@ -8,6 +8,7 @@
 
 #include "imgui.h"
 
+#include <array>
 #include <optional>
 #include <string>
 
@@ -120,6 +121,9 @@ private:
     std::string                                           mTrackMenuCameraId;
     bool                                                  mTrackMenuSequence{};
     int                                                   mRulerMenuTick{-1};
+    // Inline rename field of the track menu; refilled whenever the menu targets another camera.
+    std::string                                           mRenameCameraId;
+    std::array<char, 128>                                 mRenameBuffer{};
     std::string mSequenceMenuSegmentId;
 };
 
