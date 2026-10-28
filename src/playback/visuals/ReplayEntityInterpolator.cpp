@@ -78,6 +78,8 @@ std::optional<PendingCameraOffset>                                          gPen
 constexpr uint64_t   kNoSubject = std::numeric_limits<uint64_t>::max();
 std::atomic_uint64_t gSubject{kNoSubject};
 std::atomic_bool     gSubjectIsRecorder{true};
+std::atomic_bool     gSubjectIsPlayer{true};
+std::atomic<float>   gSubjectEyeHeight{0.0f}; // feet to eyes of a non-player subject
 std::atomic_uint8_t  gSubjectHidden{0};
 std::atomic<float>   gSubjectViewWeight{0.0f}; // blend of the recorded sleeping view at the last followed sample
 std::atomic<float>   gSubjectSleepTicks{0.0f}; // consecutive sleeping ticks at the last followed sample
@@ -530,6 +532,8 @@ void clearReplayEntityPoses() {
 void setReplaySubject(std::optional<EntityRenderKey> key) {
     if (!key) {
         gSubjectIsRecorder.store(true, std::memory_order_release);
+        gSubjectIsPlayer.store(true, std::memory_order_release);
+        gSubjectEyeHeight.store(0.0f, std::memory_order_relaxed);
         resetPosture();
     }
     gSubject.store(
@@ -540,10 +544,12 @@ void setReplaySubject(std::optional<EntityRenderKey> key) {
 
 void noteReplaySubjectPosture(int64_t tick, bool snap, ReplaySubjectPosture const& posture) {
     bool const  recorder = isReplaySubjectRecorder();
-    float const target   = !recorder && posture.swimming ? kSwimCameraOffsetY
-                         : !recorder && posture.sneaking ? kSneakCameraOffsetY
-                                                         : 0.0f;
-    bool const  sleeping = posture.sleeping || posture.actorSleeping;
+    // The measured offsets are a player's; another entity keeps its own eye height.
+    bool const  player   = isReplaySubjectPlayer();
+    float const target   = !recorder && player && posture.swimming ? kSwimCameraOffsetY
+                         : !recorder && player && posture.sneaking ? kSneakCameraOffsetY
+                                                                   : 0.0f;
+    bool const  sleeping = player && (posture.sleeping || posture.actorSleeping);
     float       offset   = gPostureOffsetY.load(std::memory_order_relaxed);
     float       slept    = gPostureSleepTicks.load(std::memory_order_relaxed);
     if (snap || gPostureTick < 0) {
@@ -578,6 +584,13 @@ void setReplaySubjectRecorder(bool recorder) noexcept {
 }
 
 bool isReplaySubjectRecorder() noexcept { return gSubjectIsRecorder.load(std::memory_order_acquire); }
+
+void setReplaySubjectEntity(bool player, float eyeHeight) noexcept {
+    gSubjectEyeHeight.store(std::isfinite(eyeHeight) ? std::max(0.0f, eyeHeight) : 0.0f, std::memory_order_relaxed);
+    gSubjectIsPlayer.store(player, std::memory_order_release);
+}
+
+bool isReplaySubjectPlayer() noexcept { return gSubjectIsPlayer.load(std::memory_order_acquire); }
 
 bool hasReplaySubject() noexcept { return gSubject.load(std::memory_order_acquire) != kNoSubject; }
 
@@ -629,7 +642,13 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
     }
     if (!found) return std::nullopt;
     auto pose = *found;
-    // Recorded positions are already standing eye height. The recorder uses its recorded camera offset.
+    // Any other entity records its feet and turns its head independently of its body, like Flashback's spectate.
+    if (!isReplaySubjectPlayer()) {
+        pose.position.y += gSubjectEyeHeight.load(std::memory_order_relaxed);
+        pose.yaw = pose.headYaw;
+        return pose;
+    }
+    // Recorded player positions are already standing eye height. The recorder uses its recorded camera offset.
     // Another player has no such track, so sneak and swim add the offset measured on the local player.
     if (!isReplaySubjectRecorder()) {
         pose.position.y += replaySubjectPostureOffsetY();

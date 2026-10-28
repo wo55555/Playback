@@ -33,7 +33,8 @@ void ExportKeyframeApplier::configure(
         auto& session       = replay::ReplaySession::getInstance();
         mSavedSubjectChoice = session.replaySubjectChoice();
         mSubjectChoiceSaved = true;
-        bool legal          = firstPersonSubject.empty();
+        // An entity subject is rebound by the session tick and falls back to the recorder once it is gone.
+        bool legal = firstPersonSubject.empty() || replay::ReplaySession::parseEntityChoice(firstPersonSubject);
         if (!legal) {
             for (auto const& player : session.replayPlayers()) {
                 if (player.uuid == firstPersonSubject && player.present) {

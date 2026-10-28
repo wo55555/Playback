@@ -3,6 +3,7 @@
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -233,6 +234,10 @@ void moveHighlight(std::vector<Row> const& rows, int& highlight, int direction) 
 
 std::string playerSubjectLabel(std::span<state::ReplayPlayerView const> players, std::string_view uuid) {
     if (uuid.empty()) return "playback.refactorEditor.playerPicker.recorder"_tr();
+    // A mob picked in the viewport; the session keeps its label while it is loaded.
+    if (replay::ReplaySession::parseEntityChoice(uuid)) {
+        return replay::ReplaySession::getInstance().replaySubjectLabel(std::string{uuid});
+    }
     for (auto const& player : players) {
         if (player.uuid != uuid) continue;
         std::string label = rawName(player);

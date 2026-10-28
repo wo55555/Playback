@@ -247,6 +247,10 @@ private:
     std::string                                         mReplaySubjectChoice;
     // Choice that already logged "not in this snapshot", so a missing player does not spam every tick.
     std::string                                         mReplaySubjectGapChoice;
+    // Played ticks an entity choice has had no actor. Like Flashback, a removed entity hands the view back to the
+    // recorder after a short grace; a re-add with the same id inside it binds again.
+    int                                                 mReplaySubjectEntityMissingTicks{0};
+    int                                                 mReplaySubjectEntityMissingLastTick{-1};
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     bool                                                        mLevelSimFrozen{false};
     // Item-use duration each recorded player had after the last replay tick; the client ticks it between ticks too.
@@ -435,6 +439,10 @@ private:
     void applyObserverSkin(::SerializedSkinRef const& skin);
     void rebindReplaySubject();
     void refreshReplaySubjectBinding();
+    // Actor id the current choice names: the recorder, a player uuid or an "entity:" id.
+    [[nodiscard]] std::optional<ActorUniqueID> resolveReplaySubjectId(std::string const& choice) const;
+    // Game-thread snapshot of the actors the editor can pick, read by the UI under its own mutex.
+    void refreshReplayEntityList();
     // Reads the followed actor's flags once per replay tick. snap drops the smoothed eye offset immediately.
     void updateReplaySubjectPosture(bool snap);
 
@@ -507,6 +515,31 @@ public:
     [[nodiscard]] std::string replaySubjectChoice() const;
 
     [[nodiscard]] std::vector<ReplayPlayerInfo> replayPlayers() const;
+
+    // Choice string that follows one replay entity. Player uuids never carry this prefix.
+    static constexpr std::string_view EntityChoicePrefix = "entity:";
+
+    [[nodiscard]] static std::string entityChoice(int64_t rawId) {
+        return std::string{EntityChoicePrefix} + std::to_string(rawId);
+    }
+
+    [[nodiscard]] static std::optional<int64_t> parseEntityChoice(std::string_view choice);
+
+    struct ReplayEntityInfo {
+        std::string choice; // entityChoice(id), a player's uuid, or empty for the recorder
+        std::string label;
+        bool        player{};
+        bool        recorder{};
+        float       x{}, y{}, z{};    // feet
+        float       height{};         // collision box height
+    };
+
+    // Living mobs and players in the replay, observer excluded, nearest to the observer first, as of the last
+    // replay tick.
+    [[nodiscard]] std::vector<ReplayEntityInfo> replayEntities() const;
+
+    // Display label of a choice: the player's name, the entity's label, or the choice itself.
+    [[nodiscard]] std::string replaySubjectLabel(std::string const& choice) const;
 
     [[nodiscard]] bool isFollowingRecordedPlayer() const noexcept {
         return mFollowRecordedPlayer.load(std::memory_order_acquire);
@@ -630,6 +663,9 @@ public:
 private:
     ReplaySession();
     ~ReplaySession();
+
+    mutable std::mutex            mReplayEntitiesMutex;
+    std::vector<ReplayEntityInfo> mReplayEntities;
 
 public:
     [[nodiscard]] static ReplaySession& getInstance() {

@@ -3,9 +3,11 @@
 #include "playback/editor/ui/PanelContext.h"
 #include "playback/editor/ui/components/CameraPathOverlay.h"
 #include "playback/editor/ui/components/Splitter.h"
+#include "playback/replay/ReplaySession.h"
 
 #include "imgui.h"
 
+#include <optional>
 #include <string>
 
 namespace playback::editor::ui {
@@ -30,6 +32,10 @@ private:
     void drawToolbar(PanelContext const& ctx);
     void drawInfoOverlay(PanelContext const& ctx, ImVec2 const& videoMin, ImDrawList* drawList) const;
     void drawFloatingTransport(PanelContext const& ctx, ImVec2 const& sceneMin, ImVec2 const& sceneMax);
+    // Nearest entity whose projected box covers the mouse in the last rendered view.
+    [[nodiscard]] std::optional<replay::ReplaySession::ReplayEntityInfo>
+         pickEntityAt(PanelContext const& ctx, ImVec2 const& mouse) const;
+    void drawEntityPickMenu(PanelContext const& ctx);
 
     ImTextureID       mGameTexture{};
     float             mVideoAspectRatio{16.0f / 9.0f};
@@ -38,6 +44,8 @@ private:
     CameraPathOverlay mCameraPath;
     bool              mInfoOverlayVisible{true};
     bool              mAutoPreview{true};
+    // Entity under the cursor when the viewport was right-clicked; the menu acts on it.
+    std::optional<replay::ReplaySession::ReplayEntityInfo> mPickedEntity;
 };
 
 } // namespace playback::editor::ui

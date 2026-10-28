@@ -43,7 +43,8 @@ bool isHudFlagCaller(void* returnAddress) {
 
 // Only while the view follows the recorded player, and only once its game mode is known.
 std::optional<GameType> drivenGameType() {
-    if (!isReplaySubjectViewDriven()) return std::nullopt;
+    // A followed mob has no hotbar or hearts to show; the spectator observer's own HUD stays, as in Flashback.
+    if (!isReplaySubjectViewDriven() || !isReplaySubjectPlayer()) return std::nullopt;
     int const value = gGameType.load(std::memory_order_acquire);
     if (value == UnknownGameType) return std::nullopt;
     return static_cast<GameType>(value);

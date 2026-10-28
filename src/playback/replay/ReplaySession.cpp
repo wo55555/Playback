@@ -95,6 +95,7 @@
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
 #include "mc/world/actor/Actor.h"
+#include "mc/world/actor/ActorCategory.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/SerializedSkinRef.h"
@@ -149,6 +150,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -209,6 +211,43 @@ std::optional<visuals::EntityRenderKey> replayEntityRenderKey(Level const& level
 
 visuals::EntityRenderPosition replayRenderPosition(Vec3 const& position) {
     return {position.x, position.y, position.z};
+}
+
+// Played ticks a missing entity subject keeps its choice before the view returns to the recorder.
+constexpr int EntitySubjectGraceTicks = 20;
+
+// First line of a name tag without its § formatting codes.
+std::string plainNameTag(std::string const& tag) {
+    std::string out;
+    out.reserve(tag.size());
+    for (size_t i = 0; i < tag.size(); ++i) {
+        char const c = tag[i];
+        if (c == '\n' || c == '\r') break;
+        // § is C2 A7 in UTF-8; the code that follows it is one ASCII character.
+        if (static_cast<unsigned char>(c) == 0xC2 && i + 1 < tag.size() && static_cast<unsigned char>(tag[i + 1]) == 0xA7) {
+            i += 2;
+            continue;
+        }
+        out.push_back(c);
+    }
+    auto const first = out.find_first_not_of(' ');
+    if (first == std::string::npos) return {};
+    return out.substr(first, out.find_last_not_of(' ') - first + 1);
+}
+
+std::string entityTypeLabel(Actor const& actor) {
+    std::string type = actor.getTypeName();
+    if (type.starts_with("minecraft:")) type.erase(0, 10);
+    return type;
+}
+
+// Feet to eyes. A mob's position is its feet, unlike a player's.
+float entityEyeHeight(Actor const& actor) {
+    float const eye = actor.getEyePos().y - actor.getPosition().y;
+    if (std::isfinite(eye) && eye > 0.05f && eye < 64.0f) return eye;
+    auto const& box    = actor.getAABB();
+    float const height = box.max.y - box.min.y;
+    return std::isfinite(height) && height > 0.0f ? height * 0.85f : 0.0f;
 }
 
 visuals::EntityRenderPose replayRenderPose(Actor const& actor) {
@@ -912,6 +951,12 @@ void ReplaySession::clearReplayPlayers(bool clearChoice) {
     mReplayPlayers.clear();
     mReplaySubjectChoice.clear();
     mReplaySubjectGapChoice.clear();
+    mReplaySubjectEntityMissingTicks    = 0;
+    mReplaySubjectEntityMissingLastTick = -1;
+    {
+        std::lock_guard entitiesLock(mReplayEntitiesMutex);
+        mReplayEntities.clear();
+    }
     mObserverOriginalSkin.reset();
     mObserverSkinApplied = false;
 }
@@ -1016,8 +1061,103 @@ void ReplaySession::setReplaySubjectChoice(std::string uuid) {
         changed              = mReplaySubjectChoice != uuid;
         mReplaySubjectChoice = std::move(uuid);
     }
-    if (changed) getLogger().debug("replay subject choice={}", replaySubjectChoice());
+    if (changed) {
+        mReplaySubjectEntityMissingTicks    = 0;
+        mReplaySubjectEntityMissingLastTick = -1;
+        getLogger().debug("replay subject choice={}", replaySubjectChoice());
+    }
     rebindReplaySubject();
+}
+
+std::optional<int64_t> ReplaySession::parseEntityChoice(std::string_view choice) {
+    if (!choice.starts_with(EntityChoicePrefix)) return std::nullopt;
+    choice.remove_prefix(EntityChoicePrefix.size());
+    int64_t value{};
+    auto const [end, error] = std::from_chars(choice.data(), choice.data() + choice.size(), value);
+    if (error != std::errc{} || end != choice.data() + choice.size()) return std::nullopt;
+    return value;
+}
+
+std::optional<ActorUniqueID> ReplaySession::resolveReplaySubjectId(std::string const& choice) const {
+    if (choice.empty()) return mRecordedLocalPlayerId;
+    if (auto const raw = parseEntityChoice(choice)) return ActorUniqueID{*raw};
+    std::lock_guard lock(mReplayPlayersMutex);
+    auto const      it = mReplayPlayers.find(choice);
+    if (it == mReplayPlayers.end()) return std::nullopt;
+    return it->second.id;
+}
+
+void ReplaySession::refreshReplayEntityList() {
+    std::vector<ReplayEntityInfo> entities;
+    if (mReplayPlayer) {
+        auto& level = mReplayPlayer->getLevel();
+        std::unordered_map<int64_t, std::string> playerUuids;
+        {
+            std::lock_guard lock(mReplayPlayersMutex);
+            for (auto const& [uuid, record] : mReplayPlayers) playerUuids.emplace(record.id.rawID, uuid);
+        }
+        // Every recorded add, not only the actors that moved: a mob standing still has no render key yet.
+        entities.reserve(mRecordedEntityIds.size());
+        for (auto const& id : mRecordedEntityIds) {
+            Actor* actor = level.fetchEntity(id, false);
+            if (!actor || actor == mReplayPlayer || actor->isRemoved() || !actor->isAlive()) continue;
+            bool const player = actor->isPlayer();
+            if (!player && !actor->hasCategory(ActorCategory::Mob)) continue;
+            ReplayEntityInfo info;
+            info.player = player;
+            if (player && mRecordedLocalPlayerId && *mRecordedLocalPlayerId == id) {
+                info.recorder = true; // the empty choice
+            } else if (player) {
+                auto const uuid = playerUuids.find(id.rawID);
+                if (uuid == playerUuids.end()) continue;
+                info.choice = uuid->second;
+            } else {
+                info.choice = entityChoice(id.rawID);
+            }
+            info.label = plainNameTag(actor->getNameTag());
+            if (info.label.empty()) info.label = entityTypeLabel(*actor);
+            auto const position = actor->getPosition();
+            auto const& box     = actor->getAABB();
+            info.x              = position.x;
+            info.y              = player ? box.min.y : position.y;
+            info.z              = position.z;
+            info.height         = box.max.y - box.min.y;
+            if (!std::isfinite(info.x) || !std::isfinite(info.y) || !std::isfinite(info.z)) continue;
+            if (!std::isfinite(info.height) || info.height <= 0.0f) info.height = 1.0f;
+            entities.push_back(std::move(info));
+        }
+        auto const observer   = mReplayPlayer->getPosition();
+        auto const distanceSq = [&observer](ReplayEntityInfo const& entity) {
+            float const dx = entity.x - observer.x;
+            float const dy = entity.y - observer.y;
+            float const dz = entity.z - observer.z;
+            return dx * dx + dy * dy + dz * dz;
+        };
+        std::sort(entities.begin(), entities.end(), [&](ReplayEntityInfo const& a, ReplayEntityInfo const& b) {
+            return distanceSq(a) < distanceSq(b);
+        });
+    }
+    std::lock_guard lock(mReplayEntitiesMutex);
+    mReplayEntities = std::move(entities);
+}
+
+std::vector<ReplaySession::ReplayEntityInfo> ReplaySession::replayEntities() const {
+    std::lock_guard lock(mReplayEntitiesMutex);
+    return mReplayEntities;
+}
+
+std::string ReplaySession::replaySubjectLabel(std::string const& choice) const {
+    {
+        std::lock_guard lock(mReplayEntitiesMutex);
+        for (auto const& entity : mReplayEntities) {
+            if (entity.choice == choice) return entity.label;
+        }
+    }
+    std::lock_guard lock(mReplayPlayersMutex);
+    if (auto const it = mReplayPlayers.find(choice); it != mReplayPlayers.end() && !it->second.name.empty()) {
+        return it->second.name;
+    }
+    return choice;
 }
 
 void ReplaySession::applyObserverSkin(SerializedSkinRef const& skin) {
@@ -1057,6 +1197,7 @@ void ReplaySession::rebindReplaySubject() {
     bool              recorder = false;
     std::string       name;
     std::string       uuid;
+    auto const        entityRaw = parseEntityChoice(choice);
     if (choice.empty()) {
         if (!mRecordedLocalPlayerId) {
             loseSubject("");
@@ -1064,6 +1205,8 @@ void ReplaySession::rebindReplaySubject() {
         }
         id       = *mRecordedLocalPlayerId;
         recorder = true;
+    } else if (entityRaw) {
+        id = ActorUniqueID{*entityRaw};
     } else {
         std::lock_guard lock(mReplayPlayersMutex);
         auto const      it = mReplayPlayers.find(choice);
@@ -1085,27 +1228,62 @@ void ReplaySession::rebindReplaySubject() {
             break;
         }
     }
-    Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
-    if (!actor || actor == mReplayPlayer) {
+    // A followed entity that stays gone hands the view back to the recorder, as Flashback does when its target dies.
+    auto const loseEntity = [&]() {
         loseSubject(choice);
+        // A seek catch-up replays the entity's add later; only played ticks count toward the grace.
+        if (mSeekTargetTick >= 0 || isSeekPending()) return;
+        if (mReplaySubjectEntityMissingLastTick == mCurrentTick) return;
+        mReplaySubjectEntityMissingLastTick = mCurrentTick;
+        if (++mReplaySubjectEntityMissingTicks < EntitySubjectGraceTicks) return;
+        getLogger().debug(
+            "replay subject entity gone choice={} tick={} missingTicks={} fallback=recorder",
+            choice,
+            mCurrentTick,
+            mReplaySubjectEntityMissingTicks
+        );
+        setReplaySubjectChoice({});
+    };
+    Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+    if (!actor || actor == mReplayPlayer || (entityRaw && (actor->isRemoved() || !actor->isAlive()))) {
+        if (entityRaw) loseEntity();
+        else loseSubject(choice);
         return;
     }
     auto const renderKey = replayEntityRenderKey(actor->getLevel(), id);
     if (!renderKey) {
-        loseSubject(choice);
+        if (entityRaw) loseEntity();
+        else loseSubject(choice);
         return;
     }
+    mReplaySubjectEntityMissingTicks    = 0;
+    mReplaySubjectEntityMissingLastTick = -1;
     if (!mEntityRenderKeys.contains(id)) {
         auto const pose = replayRenderPose(*actor);
         mEntityRenderKeys.insert_or_assign(id, *renderKey);
         visuals::queueReplayEntityPose(*renderKey, pose, pose);
     }
-    bool const changed = !visuals::isReplaySubject(*renderKey) || visuals::isReplaySubjectRecorder() != recorder;
+    bool const  player    = actor->isPlayer();
+    float const eyeHeight = player ? 0.0f : entityEyeHeight(*actor);
+    bool const  changed   = !visuals::isReplaySubject(*renderKey) || visuals::isReplaySubjectRecorder() != recorder
+                        || visuals::isReplaySubjectPlayer() != player;
     visuals::setReplaySubjectRecorder(recorder);
+    visuals::setReplaySubjectEntity(player, eyeHeight);
     visuals::setReplaySubject(*renderKey);
     mReplaySubjectGapChoice.clear();
     if (!changed) return;
-    getLogger().debug("replay subject bound recorder={} name={} uuid={}", recorder, name, uuid);
+    if (!player) {
+        if (name.empty()) name = plainNameTag(actor->getNameTag());
+        getLogger().debug(
+            "replay subject bound entity={} type={} name={} eyeHeight={:.2f}",
+            id.rawID,
+            actor->getTypeName(),
+            name,
+            eyeHeight
+        );
+    } else {
+        getLogger().debug("replay subject bound recorder={} name={} uuid={}", recorder, name, uuid);
+    }
     bool applied = false;
     if (actor->isPlayer()) {
         auto&       subject = static_cast<Player&>(*actor);
@@ -1128,19 +1306,13 @@ void ReplaySession::rebindReplaySubject() {
 
 void ReplaySession::updateReplaySubjectPosture(bool snap) {
     if (!mReplayPlayer || !visuals::hasReplaySubject()) return;
-    std::string const choice = replaySubjectChoice();
-    ActorUniqueID     id;
-    if (choice.empty()) {
-        if (!mRecordedLocalPlayerId) return;
-        id = *mRecordedLocalPlayerId;
-    } else {
-        std::lock_guard lock(mReplayPlayersMutex);
-        auto const it = mReplayPlayers.find(choice);
-        if (it == mReplayPlayers.end()) return;
-        id = it->second.id;
-    }
-    Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+    auto const resolved = resolveReplaySubjectId(replaySubjectChoice());
+    if (!resolved) return;
+    ActorUniqueID const id    = *resolved;
+    Actor*              actor = mReplayPlayer->getLevel().fetchEntity(id, false);
     if (!actor || actor == mReplayPlayer) return;
+    // A growing baby or a resized slime changes its eyes; players use the recorded or measured offsets instead.
+    if (!actor->isPlayer()) visuals::setReplaySubjectEntity(false, entityEyeHeight(*actor));
     visuals::noteReplaySubjectPosture(
         mCurrentTick,
         snap,
@@ -1796,6 +1968,7 @@ void ReplaySession::tick() {
 
         refreshReplayPlayerRoster();
         refreshReplaySubjectBinding();
+        refreshReplayEntityList();
 
         if (mSeekTargetTick >= 0) {
             auto const deadline = std::chrono::steady_clock::now() + SeekCatchUpBudget;
@@ -2969,7 +3142,9 @@ ReplaySession::followedPlayerChunkCenter(DimensionType const& snapshotDimension)
     if (choice.empty() || !mReplayPlayer) return std::nullopt;
 
     ActorUniqueID id;
-    {
+    if (auto const raw = parseEntityChoice(choice)) {
+        id = ActorUniqueID{*raw};
+    } else {
         std::lock_guard lock(mReplayPlayersMutex);
         auto const      it = mReplayPlayers.find(choice);
         if (it == mReplayPlayers.end() || it->second.recorder || !it->second.present) return std::nullopt;
