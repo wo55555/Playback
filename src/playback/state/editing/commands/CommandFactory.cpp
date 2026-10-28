@@ -22,6 +22,9 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createTrimSequence(const st
 std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteSequenceSegment(const std::string& id) {
     return std::make_unique<DeleteSequenceSegment>(id);
 }
+std::unique_ptr<model::IEditCommand> CommandFactory::createMergeSequenceSegment(const std::string& id, bool withNext) {
+    return std::make_unique<MergeSequenceSegment>(id, withNext);
+}
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createBindSequenceToCamera(const std::string& id, const std::string& cameraId) {
     return std::make_unique<BindSequenceToCamera>(id, cameraId);
