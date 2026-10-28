@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace playback::state {
 
@@ -23,12 +24,21 @@ struct ProjectPersistenceState {
     std::string error;
 };
 
+struct ReplayPlayerView {
+    std::string uuid;
+    std::string name;
+    bool        recorder{};
+    bool        present{};
+};
+
 struct EditorState {
     bool                                                         replayVisible{};
     bool                                                         editorVisible{};
     bool                                                         hudVisible{};
     bool                                                         paused{};
     bool                                                         followingRecordedPlayer{};
+    std::string                                                  replaySubjectChoice;
+    std::vector<ReplayPlayerView>                                replayPlayers;
     float                                                        playbackSpeed{1.0f};
     int                                                          currentTick{};
     int                                                          totalTicks{};

@@ -17,6 +17,7 @@ public:
     static std::unique_ptr<model::IEditCommand> createSplitSequence(int atTick);
     static std::unique_ptr<model::IEditCommand> createTrimSequence(const std::string& id, int start, int end);
     static std::unique_ptr<model::IEditCommand> createDeleteSequenceSegment(const std::string& id);
+    static std::unique_ptr<model::IEditCommand> createMergeSequenceSegment(const std::string& id, bool withNext);
     static std::unique_ptr<model::IEditCommand>
     createBindSequenceToCamera(const std::string& id, const std::string& cameraId);
     static std::unique_ptr<model::IEditCommand> createSplitWorldActor(int tick);

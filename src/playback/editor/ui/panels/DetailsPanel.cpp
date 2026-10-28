@@ -1,4 +1,4 @@
-#include "DetailsPanel.h"
+﻿#include "DetailsPanel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/PropertyControls.h"
@@ -584,7 +584,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
                 ImGui::TableNextColumn();
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::BeginCombo("##interpolation", interpolationName(key->second.interpolationType).c_str())) {
+                if (widgets::beginCombo("##interpolation", interpolationName(key->second.interpolationType).c_str())) {
                     for (int index = 0; index < 8; ++index) {
                         auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
                         if (ImGui::Selectable(interpolationName(value).c_str(), index == interpolation)) {
@@ -595,7 +595,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                             submit(std::move(action));
                         }
                     }
-                    ImGui::EndCombo();
+                    widgets::endCombo();
                 }
                 ImGui::EndTable();
             }

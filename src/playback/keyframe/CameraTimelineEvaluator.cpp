@@ -37,13 +37,15 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
     std::optional<std::string>            cameraOverride,
     std::optional<std::string>            cameraFallback,
     bool                                  holdLastKeyframe,
-    std::vector<int>                      dimensionTransitionTicks
+    std::vector<int>                      dimensionTransitionTicks,
+    FirstPersonSampler                    firstPersonSampler
 )
 : mProject(std::move(project)),
   mCameraOverride(std::move(cameraOverride)),
   mCameraFallback(std::move(cameraFallback)),
   mHoldLastKeyframe(holdLastKeyframe),
-  mDimensionTransitionTicks(std::move(dimensionTransitionTicks)) {
+  mDimensionTransitionTicks(std::move(dimensionTransitionTicks)),
+  mFirstPersonSampler(std::move(firstPersonSampler)) {
     std::erase_if(mDimensionTransitionTicks, [this](int tick) { return tick < 0 || tick > mProject.totalTicks; });
     std::sort(mDimensionTransitionTicks.begin(), mDimensionTransitionTicks.end());
     mDimensionTransitionTicks.erase(
@@ -92,31 +94,45 @@ size_t CameraTimelineEvaluator::dimensionSegmentForTick(long double tick) const 
     return static_cast<size_t>(std::distance(mDimensionTransitionTicks.begin(), boundary));
 }
 
-state::editing::model::CameraEntity const* CameraTimelineEvaluator::cameraForTick(int64_t tick) const {
-    if (mProject.cameras.empty()) return nullptr;
+namespace {
 
-    auto findCamera = [&](std::string const& id) -> state::editing::model::CameraEntity const* {
-        if (id.empty()) return nullptr;
-        auto const match = std::ranges::find(mProject.cameras, id, &state::editing::model::CameraEntity::id);
-        return match == mProject.cameras.end() || !isKeyframeCamera(*match) ? nullptr : &*match;
-    };
+state::editing::model::CameraEntity const*
+findKeyframeCamera(state::editing::model::EditorStateExt const& project, std::string_view id) {
+    if (id.empty()) return nullptr;
+    auto const match = std::ranges::find(project.cameras, id, &state::editing::model::CameraEntity::id);
+    return match == project.cameras.end() || !isKeyframeCamera(*match) ? nullptr : &*match;
+}
 
-    if (mCameraOverride && !mCameraOverride->empty()) {
-        if (auto const* camera = findCamera(*mCameraOverride)) return camera;
-    }
+bool isFirstPersonId(std::string_view id) noexcept { return id == state::editing::model::kFirstPersonCameraId; }
 
-    for (auto const& segment : mProject.sequence) {
-        if (tick < segment.startTick || tick >= segment.endTick || segment.cameraId.empty()) continue;
-        if (auto const* camera = findCamera(segment.cameraId)) return camera;
-        break;
-    }
+} // namespace
 
+state::editing::model::CameraEntity const* CameraTimelineEvaluator::fallbackCamera() const {
     if (mCameraFallback) {
-        if (auto const* camera = findCamera(*mCameraFallback)) return camera;
+        if (auto const* camera = findKeyframeCamera(mProject, *mCameraFallback)) return camera;
     }
     auto const firstRenderable = std::ranges::find_if(mProject.cameras, isKeyframeCamera);
     return firstRenderable == mProject.cameras.end() ? nullptr : &*firstRenderable;
 }
+
+CameraTimelineEvaluator::CameraChoice CameraTimelineEvaluator::cameraForTick(int64_t tick) const {
+    if (mCameraOverride && !mCameraOverride->empty()) {
+        if (isFirstPersonId(*mCameraOverride)) return {nullptr, true};
+        if (auto const* camera = findKeyframeCamera(mProject, *mCameraOverride)) return {camera, false};
+    }
+
+    for (auto const& segment : mProject.sequence) {
+        if (tick < segment.startTick || tick >= segment.endTick || segment.cameraId.empty()) continue;
+        if (isFirstPersonId(segment.cameraId)) return {nullptr, true};
+        if (auto const* camera = findKeyframeCamera(mProject, segment.cameraId)) return {camera, false};
+        break;
+    }
+
+    if (mCameraFallback && isFirstPersonId(*mCameraFallback)) return {nullptr, true};
+    return {fallbackCamera(), false};
+}
+
+bool CameraTimelineEvaluator::isFirstPersonAt(int64_t tick) const { return cameraForTick(tick).firstPerson; }
 
 std::optional<CameraRenderState>
 CameraTimelineEvaluator::sampleCamera(state::editing::model::CameraEntity const& camera, long double tick) const {
@@ -144,7 +160,17 @@ CameraTimelineEvaluator::sampleCamera(state::editing::model::CameraEntity const&
 
 std::optional<CameraTimelineEvaluation> CameraTimelineEvaluator::sample(visuals::ReplaySampleTime const& time) const {
     if (!time.isValid()) return std::nullopt;
-    auto const* camera = cameraForTick(time.floorTick());
+    auto choice = cameraForTick(time.floorTick());
+    if (choice.firstPerson) {
+        if (mFirstPersonSampler) {
+            if (auto state = mFirstPersonSampler(time)) {
+                return CameraTimelineEvaluation{*state, std::string{state::editing::model::kFirstPersonCameraId}};
+            }
+        }
+        // The recorded player has no pose here (before it spawned, between dimensions): keep a keyframed view.
+        choice.camera = fallbackCamera();
+    }
+    auto const* camera = choice.camera;
     if (!camera) return std::nullopt;
     auto state = sampleCamera(*camera, time.value());
     return state ? std::optional<CameraTimelineEvaluation>{{*state, camera->id}} : std::nullopt;

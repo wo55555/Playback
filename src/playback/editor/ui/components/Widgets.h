@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "imgui.h"
 
@@ -66,6 +66,24 @@ bool dropdownChip(
 
 // Width the chip will occupy, for callers that centre a group of controls.
 [[nodiscard]] float dropdownChipWidth(char const* label, char const* icon = nullptr);
+
+// Opens `popupId` pinned under the last item instead of at the mouse; call right after the trigger item.
+void openAnchoredPopup(char const* popupId);
+// Same, pinned under an explicit screen rectangle (a drawn timeline segment rather than an ImGui item).
+void openAnchoredPopup(char const* popupId, ImVec2 anchorMin, ImVec2 anchorMax);
+
+// Width of the control the popup was anchored to, or 0 when this window did not open it.
+[[nodiscard]] float anchoredPopupTriggerWidth(char const* popupId);
+
+// Begins a popup opened with openAnchoredPopup, padded like a menu; call endAnchoredPopup only when it returns true.
+bool beginAnchoredPopup(char const* popupId);
+void endAnchoredPopup();
+
+// ImGui::BeginMenu / BeginCombo with the same menu padding; pair with endMenu / endCombo only when they return true.
+bool beginMenu(char const* label, bool enabled = true);
+void endMenu();
+bool beginCombo(char const* id, char const* preview);
+void endCombo();
 
 // Draws the shared "no active project" placeholder.
 void noActiveProjectPlaceholder();

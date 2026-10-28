@@ -23,6 +23,25 @@ bool deleteSegment(std::vector<model::SequenceSegment>& segments, size_t index, 
     segments.erase(segments.begin() + static_cast<std::ptrdiff_t>(index));
     return true;
 }
+bool mergeWithNeighbour(std::vector<model::SequenceSegment>& segments, const std::string& segmentId, bool withNext) {
+    auto it = std::find_if(segments.begin(), segments.end(), [&](auto const& segment) {
+        return segment.id == segmentId;
+    });
+    if (it == segments.end() || it->locked) return false;
+    if (withNext) {
+        auto const next = std::next(it);
+        if (next == segments.end() || next->locked) return false;
+        it->endTick = next->endTick;
+        segments.erase(next);
+        return true;
+    }
+    if (it == segments.begin()) return false;
+    auto const previous = std::prev(it);
+    if (previous->locked) return false;
+    previous->endTick = it->endTick;
+    segments.erase(it);
+    return true;
+}
 bool trimSegment(
     std::vector<model::SequenceSegment>& segments,
     const std::string&                   segmentId,

@@ -588,20 +588,28 @@ bool isReplaySubject(EntityRenderKey const& key) noexcept {
 
 void setReplaySubjectHidden(SubjectHideReason reason, bool hidden) {
     auto const bit = static_cast<uint8_t>(reason);
-    if (hidden) gSubjectHidden.fetch_or(bit, std::memory_order_acq_rel);
-    else gSubjectHidden.fetch_and(static_cast<uint8_t>(~bit), std::memory_order_acq_rel);
-    if (reason != SubjectHideReason::Session && !hidden) {
+    constexpr auto viewMask = static_cast<uint8_t>(SubjectHideReason::Follow)
+                            | static_cast<uint8_t>(SubjectHideReason::Export)
+                            | static_cast<uint8_t>(SubjectHideReason::Preview);
+    uint8_t const previous = hidden ? gSubjectHidden.fetch_or(bit, std::memory_order_acq_rel)
+                                    : gSubjectHidden.fetch_and(static_cast<uint8_t>(~bit), std::memory_order_acq_rel);
+    uint8_t const current  = hidden ? static_cast<uint8_t>(previous | bit) : static_cast<uint8_t>(previous & ~bit);
+    // The sleep fade belongs to the recorded view; it restarts once nothing drives the camera from the subject.
+    if (reason != SubjectHideReason::Session && !hidden && (current & viewMask) == 0) {
         gSubjectViewWeight.store(0.0f, std::memory_order_relaxed);
         gSubjectSleepTicks.store(0.0f, std::memory_order_relaxed);
     }
 }
 
-bool isReplaySubjectFollowed() {
-    return (gSubjectHidden.load(std::memory_order_acquire) & static_cast<uint8_t>(SubjectHideReason::Follow)) != 0;
+bool isReplaySubjectHiddenFor(SubjectHideReason reason) {
+    return (gSubjectHidden.load(std::memory_order_acquire) & static_cast<uint8_t>(reason)) != 0;
 }
 
+bool isReplaySubjectFollowed() { return isReplaySubjectHiddenFor(SubjectHideReason::Follow); }
+
 bool isReplaySubjectViewDriven() {
-    constexpr auto mask = static_cast<uint8_t>(SubjectHideReason::Follow) | static_cast<uint8_t>(SubjectHideReason::Export);
+    constexpr auto mask = static_cast<uint8_t>(SubjectHideReason::Follow) | static_cast<uint8_t>(SubjectHideReason::Export)
+                        | static_cast<uint8_t>(SubjectHideReason::Preview);
     return (gSubjectHidden.load(std::memory_order_acquire) & mask) != 0;
 }
 

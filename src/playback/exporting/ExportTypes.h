@@ -67,10 +67,8 @@ struct ExportSettings {
     uint32_t convergenceFrames{0};
     // Experimental: hand out client ticks as soon as the export asks instead of waiting for the 20 Hz game timer.
     bool accelerateClient{false};
-    // Render from the recorded player's eyes instead of the camera timeline; the timeline is the fallback while the
-    // recorded player has no pose.
-    bool firstPerson{false};
-    // Empty selects the recorded local player. Any other value is that replay player's UUID.
+    // Whose eyes to use while a first-person timeline segment is active. Empty selects the recorded local player.
+    // The timeline decides when; this is who. One subject covers the whole export.
     std::string firstPersonSubject;
     // MP4 only; the defaults are what the writer used before these were configurable.
     VideoEncodeSpeed encodeSpeed{VideoEncodeSpeed::Quality};

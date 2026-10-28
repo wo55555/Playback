@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "playback/editor/ui/PanelContext.h"
 #include "playback/editor/ui/components/Animator.h"
@@ -8,6 +8,7 @@
 
 #include "imgui.h"
 
+#include <optional>
 #include <string>
 
 namespace playback::editor::ui {
@@ -63,6 +64,19 @@ private:
     // In/out markers for the export range, drawn over the canvas and draggable by their handles.
     void drawExportRange(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale, bool allowInput);
 
+    // Camera-switch lane: each segment names the camera (or first person) that renders over its range.
+    void drawSequenceLane(
+        PanelContext const&  ctx,
+        Layout const&        layout,
+        TimelineScale const& scale,
+        float                top,
+        float                bottom,
+        bool                 allowInput,
+        bool&                clickConsumed
+    );
+    void drawSequenceSegmentMenu(PanelContext const& ctx);
+    void drawContextMenus(PanelContext const& ctx);
+
     void drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput);
     void drawTitleLabel(PanelContext const& ctx, float height);
     void drawTransportGroup(PanelContext const& ctx, int displayTick, float width);
@@ -90,6 +104,26 @@ private:
     float mRangeDragOriginX{};
     float mRangeDragOriginScroll{};
     float mRangeDragOriginZoom{1.0f};
+    // Sequence edge drag: the segment whose start (or end) follows the mouse until release.
+    std::string mSequenceDragId;
+    bool        mSequenceDragEnd{};
+    int         mSequenceDragTick{-1};
+    // Segment the bind menu was opened for; kept separately so the menu survives selection changes.
+    int         mSequenceMenuTick{-1};
+    // Right-click menus. The tick is captured when the menu opens so it does not follow the cursor.
+    std::string                                           mKeyframeMenuCameraId;
+    int                                                   mKeyframeMenuTick{-1};
+    int                                                   mKeyframeMenuTickEdit{-1};
+    std::optional<state::editing::model::CameraKeyframe>  mKeyframeClipboard;
+    std::string                                           mLaneMenuCameraId;
+    int                                                   mLaneMenuTick{-1};
+    std::string                                           mTrackMenuCameraId;
+    bool                                                  mTrackMenuSequence{};
+    int                                                   mRulerMenuTick{-1};
+    std::string mSequenceMenuSegmentId;
+    ImVec2      mSequenceMenuMin{};
+    ImVec2      mSequenceMenuMax{};
+    bool        mOpenSubjectPicker{false};
 };
 
 } // namespace playback::editor::ui

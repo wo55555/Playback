@@ -79,19 +79,23 @@ void noteReplaySubjectPosture(int64_t tick, bool snap, ReplaySubjectPosture cons
 
 // Independent reasons to hide the subject's model; it stays hidden while any is set.
 // Session only owns the render hooks for the whole replay and never hides anything (hooking is slow).
+// Export and Preview are set per frame while a first-person sequence segment renders.
 enum class SubjectHideReason : uint8_t {
     Export  = 1,
     Follow  = 2,
     Session = 4,
+    Preview = 8,
 };
 
 // While hidden, the subject's model is not drawn by any render scope (a first-person view sits inside it).
 void setReplaySubjectHidden(SubjectHideReason reason, bool hidden);
 
+[[nodiscard]] bool isReplaySubjectHiddenFor(SubjectHideReason reason);
+
 // True while the follow view owns the camera (the observer sits on the recorded player).
 [[nodiscard]] bool isReplaySubjectFollowed();
 
-// True while the subject's view drives the camera: follow preview or first-person export.
+// True while the subject's view drives the camera: follow preview or a first-person segment (preview or export).
 [[nodiscard]] bool isReplaySubjectViewDriven();
 
 // True for the actor the active render scope on this thread is hiding.
