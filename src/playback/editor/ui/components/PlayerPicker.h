@@ -30,4 +30,15 @@ bool drawPlayerPicker(
     PlayerPickerResult&                     result
 );
 
+// The same search and list drawn inline at the available width, for the inspector. Returns true on a pick.
+// `focusSearch` puts the caret in the search box this frame (the segment menu jumping here).
+bool drawPlayerList(
+    char const*                             listId,
+    PlayerPickerMode                        mode,
+    std::span<state::ReplayPlayerView const> players,
+    std::string_view                        current,
+    bool                                    focusSearch,
+    PlayerPickerResult&                     result
+);
+
 } // namespace playback::editor::ui
