@@ -76,7 +76,8 @@ void openAnchoredPopup(char const* popupId, ImVec2 anchorMin, ImVec2 anchorMax);
 [[nodiscard]] float anchoredPopupTriggerWidth(char const* popupId);
 
 // Begins a popup opened with openAnchoredPopup, padded like a menu; call endAnchoredPopup only when it returns true.
-bool beginAnchoredPopup(char const* popupId);
+// `minWidth` widens it past the trigger (a list of names under a narrow chip); it never goes off screen.
+bool beginAnchoredPopup(char const* popupId, float minWidth = 0.0f);
 void endAnchoredPopup();
 
 // ImGui::BeginMenu / BeginCombo with the same menu padding; pair with endMenu / endCombo only when they return true.
