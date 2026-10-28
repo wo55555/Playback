@@ -62,6 +62,7 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::ResetUiScale,            "playback.editor.resetUiScale",     '0',          true,  true,  false},
     {EditorKeybind::ToggleViewportMaximized, "playback.editor.maximizeViewport", 'F',          true,  true,  false},
     {EditorKeybind::NamedOnly,               "playback.editor.toggleUI",         VK_F1,        false, false, false},
+    {EditorKeybind::ToggleFollowPerspective, "playback.editor.togglePerspective", VK_F5,       false, false, false},
 };
 
 [[nodiscard]] bool modifiersMatch(KeyBinding const& binding, bool ctrl, bool shift, bool alt) {
@@ -108,6 +109,8 @@ constexpr KeyBinding kBindings[] = {
         return ImGuiKey_RightBracket;
     case VK_F1:
         return ImGuiKey_F1;
+    case VK_F5:
+        return ImGuiKey_F5;
     default:
         return ImGuiKey_None;
     }
@@ -150,6 +153,8 @@ constexpr KeyBinding kBindings[] = {
         return "]";
     case VK_F1:
         return "F1";
+    case VK_F5:
+        return "F5";
     default:
         return {};
     }
