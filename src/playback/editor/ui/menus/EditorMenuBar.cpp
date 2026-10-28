@@ -468,6 +468,7 @@ void EditorMenuBar::drawShortcutDialog() {
                 "playback.refactorEditor.shortcuts.speed"_tr()
             );
             shortcutRow("Shift", "playback.refactorEditor.shortcuts.stopFollow"_tr());
+            shortcutRow("F5", "playback.refactorEditor.shortcuts.togglePerspective"_tr());
             ImGui::EndTable();
         }
         ImGui::Spacing();
