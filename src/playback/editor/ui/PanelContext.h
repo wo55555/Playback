@@ -37,6 +37,8 @@ public:
     [[nodiscard]] virtual float videoAspectRatio() const            = 0;
     virtual void                setVideoAspectRatio(float ratio)    = 0;
     virtual void                openExportDialog()                  = 0;
+    // Shows the selected camera-switch segment in the inspector with its subject search focused.
+    virtual void                focusFirstPersonSubject()           = 0;
 
     // The export range is owned by the export dialog but drawn on the timeline as in/out markers.
     [[nodiscard]] virtual int exportStartTick() const      = 0;

@@ -121,9 +121,6 @@ private:
     bool                                                  mTrackMenuSequence{};
     int                                                   mRulerMenuTick{-1};
     std::string mSequenceMenuSegmentId;
-    ImVec2      mSequenceMenuMin{};
-    ImVec2      mSequenceMenuMax{};
-    bool        mOpenSubjectPicker{false};
 };
 
 } // namespace playback::editor::ui
