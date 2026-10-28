@@ -466,6 +466,7 @@ void EditorMenuBar::drawShortcutDialog() {
                 shortcutPair(input::EditorKeybind::DecreaseSpeed, input::EditorKeybind::IncreaseSpeed),
                 "playback.refactorEditor.shortcuts.speed"_tr()
             );
+            shortcutRow("Shift", "playback.refactorEditor.shortcuts.stopFollow"_tr());
             ImGui::EndTable();
         }
         ImGui::Spacing();
