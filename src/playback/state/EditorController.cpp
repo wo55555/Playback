@@ -384,6 +384,7 @@ void EditorController::publishState(bool hudVisible) {
     state.hudVisible              = hudVisible;
     state.paused                  = session.isPaused();
     state.followingRecordedPlayer = session.isFollowingRecordedPlayer();
+    state.followThirdPerson       = session.isFollowThirdPerson();
     state.replaySubjectChoice     = session.replaySubjectChoice();
     auto const replayPlayers      = session.replayPlayers();
     state.replayPlayers.reserve(replayPlayers.size());
@@ -596,6 +597,9 @@ void EditorController::tick(bool hudVisible) {
         case EditorActionType::SetFollowRecordedPlayer:
             if (action.value) session.setReplaySubjectChoice(action.id);
             session.setFollowRecordedPlayer(action.value);
+            break;
+        case EditorActionType::SetFollowThirdPerson:
+            session.setFollowThirdPerson(action.value);
             break;
         case EditorActionType::SetReplaySubjectChoice: {
             bool legal = action.id.empty();
