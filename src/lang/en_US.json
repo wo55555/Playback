@@ -183,6 +183,7 @@
                 "nameLabel": "Name",
                 "keyframesLabel": "Keyframes",
                 "enabled": "Enabled",
+                "locked": "Locked",
                 "unbindCamera": "Unbind Camera",
                 "addKeyframeAtPlayhead": "Add Keyframe at Playhead",
                 "tickValue": "Tick {}",
@@ -378,6 +379,11 @@
                 "setOutPoint": "Set out point",
                 "clearExportRange": "Clear export range",
                 "previewCamera": "Preview this camera",
+                "applyKeyframe": "Move view to this keyframe",
+                "renameTrack": "Name (Enter to apply)",
+                "lockTrack": "Lock track",
+                "unlockTrack": "Unlock track",
+                "clearKeyframes": "Clear keyframes ({})",
                 "deleteTrack": "Delete track"
             },
             "viewport": {
