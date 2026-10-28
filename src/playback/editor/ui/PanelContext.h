@@ -26,6 +26,10 @@ public:
     [[nodiscard]] virtual bool isCameraPathVisible() const = 0;
     virtual bool               deleteSelection()           = 0;
     virtual bool               addKeyframeAtPlayhead()     = 0;
+    virtual bool               selectAllKeyframes()        = 0;
+    virtual bool               copySelection()             = 0;
+    virtual bool               pasteAtPlayhead()           = 0;
+    virtual bool               addMarkerAtPlayhead()       = 0;
 
     // View preferences the inspector's settings page edits; they live in the panels that consume them.
     [[nodiscard]] virtual bool  isInfoOverlayVisible() const        = 0;
