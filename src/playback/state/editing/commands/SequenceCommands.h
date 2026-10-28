@@ -71,6 +71,20 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
+class MergeSequenceSegment final : public model::IEditCommand {
+public:
+    MergeSequenceSegment(std::string id, bool withNext);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mId;
+    bool                                 mWithNext{};
+    std::optional<model::EditorStateExt> mBefore;
+};
+
 class BindSequenceToCamera final : public model::IEditCommand {
 public:
     BindSequenceToCamera(std::string id, std::string cameraId);
