@@ -67,6 +67,14 @@ enum class EditorActionType {
     SetPreviewCamera,
     ClearPreviewCamera,
     MoveViewToKeyframe,
+    MoveCameraKeyframes,
+    DeleteCameraKeyframes,
+    SetKeyframesInterpolation,
+    AddCameraKeyframes,
+    AddMarker,
+    DeleteMarker,
+    MoveMarker,
+    RenameMarker,
 };
 
 struct EditorAction {
@@ -87,6 +95,8 @@ struct EditorAction {
     // Set only when pasting a copied keyframe. An empty value captures the live camera, as before.
     std::optional<editing::model::CameraKeyframe> keyframe;
     std::map<std::string, std::string>       details;
+    // Batch keyframe edits (multi-select move / delete / interpolation / paste).
+    std::vector<editing::model::KeyframeRef> keyframeRefs;
 };
 
 } // namespace playback::state
