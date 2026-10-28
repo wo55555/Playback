@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "imgui.h"
 
@@ -84,6 +84,9 @@ constexpr int kTrackPaletteSize = static_cast<int>(sizeof(kTrackPalette) / sizeo
 }
 constexpr int kTrackFillAlpha         = 0x2e;
 constexpr int kTrackFillSelectedAlpha = 0x52;
+// Camera-switch segments: first person is not a camera track, so it takes a colour outside the palette.
+constexpr ImU32 kFirstPersonSegment = IM_COL32(0xf2, 0x7a, 0x3c, 0xff);
+constexpr ImU32 kAutoSegment        = IM_COL32(0x5a, 0x5a, 0x5a, 0xff);
 
 // Inspector surfaces.
 constexpr ImU32 kInspectorHeader = IM_COL32(0x1e, 0x1e, 0x1e, 0xff);

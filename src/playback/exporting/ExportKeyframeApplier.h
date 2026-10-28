@@ -19,9 +19,8 @@ public:
 
     void configure(
         state::editing::model::EditorStateExt const& project,
-        std::optional<std::string>                   cameraFallback      = std::nullopt,
-        bool                                         firstPerson         = false,
-        std::string                                  firstPersonSubject  = {}
+        std::optional<std::string>                   cameraFallback     = std::nullopt,
+        std::string                                  firstPersonSubject = {}
     );
     void reset();
 
