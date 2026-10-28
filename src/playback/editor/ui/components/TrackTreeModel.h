@@ -11,7 +11,8 @@ struct EditorStateExt;
 
 namespace playback::editor::ui {
 
-enum class TrackRowKind { Camera };
+// Sequence is the camera-switch lane: it decides which camera (or first person) renders over each range.
+enum class TrackRowKind { Sequence, Camera };
 
 struct TrackTreeRow {
     TrackRowKind kind;
