@@ -4,6 +4,8 @@
 #include "playback/state/editing/CameraBindingOps.h"
 
 #include <algorithm>
+#include <map>
+#include <set>
 #include <utility>
 
 namespace playback::state::editing::command {
@@ -328,5 +330,99 @@ void SetCameraKeyframeFov::execute(model::EditorStateExt& state) {
 
 void        SetCameraKeyframeFov::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string SetCameraKeyframeFov::label() const { return "Set Keyframe FOV"; }
+
+MoveKeyframes::MoveKeyframes(std::vector<model::KeyframeRef> refs, int delta) : mRefs(std::move(refs)), mDelta(delta) {}
+
+void MoveKeyframes::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    if (mRefs.empty() || mDelta == 0) return;
+
+    std::map<std::string, std::set<int>> moving;
+    for (auto const& ref : mRefs) moving[ref.cameraId].insert(ref.tick);
+
+    for (auto const& [cameraId, ticks] : moving) {
+        auto const* camera = findCamera(state, cameraId);
+        if (!camera || camera->locked) return;
+        for (int const tick : ticks) {
+            int const target = tick + mDelta;
+            if (!camera->keysByTick.contains(tick) || target < 0 || target > state.totalTicks) return;
+            if (camera->keysByTick.contains(target) && !ticks.contains(target)) return;
+        }
+    }
+
+    auto before = state;
+    for (auto const& [cameraId, ticks] : moving) {
+        auto*                                camera = findCamera(state, cameraId);
+        std::vector<std::pair<int, model::CameraKeyframe>> lifted;
+        for (int const tick : ticks) {
+            auto node = camera->keysByTick.extract(tick);
+            lifted.emplace_back(tick + mDelta, std::move(node.mapped()));
+        }
+        for (auto& [tick, key] : lifted) camera->keysByTick.emplace(tick, std::move(key));
+    }
+    mBefore = std::move(before);
+}
+
+void        MoveKeyframes::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string MoveKeyframes::label() const { return "Move Keyframes"; }
+
+DeleteKeyframes::DeleteKeyframes(std::vector<model::KeyframeRef> refs) : mRefs(std::move(refs)) {}
+
+void DeleteKeyframes::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked) continue;
+        changed |= camera->keysByTick.erase(ref.tick) > 0;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        DeleteKeyframes::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string DeleteKeyframes::label() const { return "Delete Keyframes"; }
+
+SetKeyframesInterpolation::SetKeyframesInterpolation(
+    std::vector<model::KeyframeRef> refs,
+    model::CameraInterpolationType  interpolation
+)
+: mRefs(std::move(refs)),
+  mInterpolation(interpolation) {}
+
+void SetKeyframesInterpolation::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked) continue;
+        auto const key = camera->keysByTick.find(ref.tick);
+        if (key == camera->keysByTick.end() || key->second.interpolationType == mInterpolation) continue;
+        key->second.interpolationType = mInterpolation;
+        changed                       = true;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        SetKeyframesInterpolation::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframesInterpolation::label() const { return "Set Keyframes Interpolation"; }
+
+AddKeyframes::AddKeyframes(std::vector<model::KeyframeRef> refs) : mRefs(std::move(refs)) {}
+
+void AddKeyframes::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked || !ref.pose || ref.tick < 0 || ref.tick > state.totalTicks) continue;
+        changed |= camera->keysByTick.emplace(ref.tick, *ref.pose).second;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        AddKeyframes::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string AddKeyframes::label() const { return "Paste Keyframes"; }
 
 } // namespace playback::state::editing::command
