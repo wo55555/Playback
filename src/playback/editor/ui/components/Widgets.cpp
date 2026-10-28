@@ -1,4 +1,4 @@
-#include "playback/editor/ui/components/Widgets.h"
+﻿#include "playback/editor/ui/components/Widgets.h"
 
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/iconfont.h"
@@ -8,10 +8,12 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace playback::editor::ui::widgets {
 
@@ -412,6 +414,107 @@ bool dropdownChip(char const* id, char const* label, char const* tooltip, bool e
 
     itemTooltip(tooltip);
     return clicked;
+}
+
+namespace {
+
+struct PopupAnchor {
+    ImVec2 min;
+    ImVec2 max;
+    ImVec2 size; // Last measured popup size, so a menu that would run off screen can flip above its trigger.
+};
+
+std::unordered_map<ImGuiID, PopupAnchor>& popupAnchors() {
+    static std::unordered_map<ImGuiID, PopupAnchor> anchors;
+    return anchors;
+}
+
+[[nodiscard]] ImVec2 menuWindowPadding() { return {10.0f * metrics::scale(), 6.0f * metrics::scale()}; }
+
+void pushMenuItemSpacing() {
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {10.0f * metrics::scale(), 6.0f * metrics::scale()});
+}
+
+} // namespace
+
+void openAnchoredPopup(char const* popupId) {
+    openAnchoredPopup(popupId, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+}
+
+void openAnchoredPopup(char const* popupId, ImVec2 anchorMin, ImVec2 anchorMax) {
+    popupAnchors()[ImGui::GetID(popupId)] = PopupAnchor{anchorMin, anchorMax, {}};
+    ImGui::OpenPopup(popupId);
+}
+
+float anchoredPopupTriggerWidth(char const* popupId) {
+    auto const anchor = popupAnchors().find(ImGui::GetID(popupId));
+    if (anchor == popupAnchors().end()) return 0.0f;
+    return std::max(0.0f, anchor->second.max.x - anchor->second.min.x);
+}
+
+bool beginAnchoredPopup(char const* popupId) {
+    ImGuiID const id     = ImGui::GetID(popupId);
+    auto&         store  = popupAnchors();
+    auto const    anchor = store.find(id);
+    if (anchor != store.end() && ImGui::IsPopupOpen(popupId)) {
+        auto const* viewport = ImGui::GetMainViewport();
+        float const gap      = 2.0f * metrics::scale();
+        float const width    = anchor->second.max.x - anchor->second.min.x;
+        ImVec2 const size    = anchor->second.size;
+        ImVec2 const workMin = viewport->WorkPos;
+        ImVec2 const workMax{viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y};
+        ImVec2       pos{anchor->second.min.x, anchor->second.max.y + gap};
+        // Menus near the bottom edge (the timeline transport) open upwards rather than off screen.
+        if (size.y > 0.0f && pos.y + size.y > workMax.y && anchor->second.min.y - gap - size.y >= workMin.y) {
+            pos.y = anchor->second.min.y - gap - size.y;
+        }
+        if (size.x > 0.0f && pos.x + size.x > workMax.x) pos.x = std::max(workMin.x, workMax.x - size.x);
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSizeConstraints({width, 0.0f}, {FLT_MAX, FLT_MAX});
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, menuWindowPadding());
+    bool const open = ImGui::BeginPopup(popupId);
+    ImGui::PopStyleVar();
+    if (!open) {
+        if (anchor != store.end() && !ImGui::IsPopupOpen(popupId)) store.erase(anchor);
+        return false;
+    }
+    if (anchor != store.end()) anchor->second.size = ImGui::GetWindowSize();
+    pushMenuItemSpacing();
+    return true;
+}
+
+void endAnchoredPopup() {
+    ImGui::PopStyleVar();
+    ImGui::EndPopup();
+}
+
+bool beginMenu(char const* label, bool enabled) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, menuWindowPadding());
+    bool const open = ImGui::BeginMenu(label, enabled);
+    ImGui::PopStyleVar();
+    if (open) pushMenuItemSpacing();
+    return open;
+}
+
+void endMenu() {
+    ImGui::PopStyleVar();
+    ImGui::EndMenu();
+}
+
+bool beginCombo(char const* id, char const* preview) {
+    // Combo popups take their horizontal padding from FramePadding.x to line up with the preview text.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, menuWindowPadding());
+    ImGui::PushStyleVarX(ImGuiStyleVar_FramePadding, menuWindowPadding().x);
+    bool const open = ImGui::BeginCombo(id, preview);
+    ImGui::PopStyleVar(2);
+    if (open) pushMenuItemSpacing();
+    return open;
+}
+
+void endCombo() {
+    ImGui::PopStyleVar();
+    ImGui::EndCombo();
 }
 
 void noActiveProjectPlaceholder() {
