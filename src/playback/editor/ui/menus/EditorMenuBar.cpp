@@ -1,12 +1,13 @@
-#include "EditorMenuBar.h"
+﻿#include "EditorMenuBar.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
-#include "playback/replay/ReplaySession.h"
+#include "playback/state/editing/models/SequenceSegment.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -19,6 +20,7 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -265,7 +267,8 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
     mExportAdvancedOpen     = false;
     mExportScrollToAdvanced = false;
     mExportBodyHeight       = 0.0f;
-    mExportDialogOpen       = true;
+    mExportDialogOpen         = true;
+    mExportSubjectInitialised = false;
 }
 
 void EditorMenuBar::markExportPoint(bool isIn, int tick, int totalTicks) {
@@ -302,7 +305,7 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
     auto const  deleteShortcut = input::KeyMap::displayString(input::EditorKeybind::DeleteSelection);
     auto const  saveShortcut   = input::KeyMap::displayString(input::EditorKeybind::SaveProject);
     if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
+        if (widgets::beginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
             ImGui::MenuItem("playback.refactorEditor.menu.openReplay"_tr().c_str(), nullptr, false, false);
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.saveProject"_tr().c_str(),
@@ -333,10 +336,10 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
             if (ImGui::MenuItem("playback.refactorEditor.menu.exit"_tr().c_str(), "Esc (hold)")) {
                 ctx.submitAction({playback::state::EditorActionType::StopReplay});
             }
-            ImGui::EndMenu();
+            widgets::endMenu();
         }
 
-        if (ImGui::BeginMenu("playback.refactorEditor.menu.edit"_tr().c_str())) {
+        if (widgets::beginMenu("playback.refactorEditor.menu.edit"_tr().c_str())) {
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.undo"_tr().c_str(),
                     undoShortcut.c_str(),
@@ -363,10 +366,10 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                 (void)ctx.commands.deleteSelection();
             }
             ImGui::MenuItem("playback.refactorEditor.menu.selectAll"_tr().c_str(), "Ctrl+A", false, false);
-            ImGui::EndMenu();
+            widgets::endMenu();
         }
 
-        if (ImGui::BeginMenu("playback.refactorEditor.menu.view"_tr().c_str())) {
+        if (widgets::beginMenu("playback.refactorEditor.menu.view"_tr().c_str())) {
             bool const viewEnabled = state.editorVisible && !exportActive;
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.cameraPath"_tr().c_str(),
@@ -409,15 +412,15 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                 )) {
                 ctx.commands.toggleViewportMaximized();
             }
-            ImGui::EndMenu();
+            widgets::endMenu();
         }
 
-        if (ImGui::BeginMenu("playback.refactorEditor.menu.help"_tr().c_str())) {
+        if (widgets::beginMenu("playback.refactorEditor.menu.help"_tr().c_str())) {
             if (ImGui::MenuItem("playback.refactorEditor.menu.shortcuts"_tr().c_str())) mShortcutDialogOpen = true;
             ImGui::MenuItem("playback.refactorEditor.menu.documentation"_tr().c_str(), nullptr, false, false);
             ImGui::Separator();
             ImGui::MenuItem("playback.refactorEditor.menu.about"_tr().c_str(), nullptr, false, false);
-            ImGui::EndMenu();
+            widgets::endMenu();
         }
 
         ImGui::EndMenuBar();
@@ -576,6 +579,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     );
     ImGui::PopStyleVar(2);
     if (dialogVisible) {
+        if (!mExportSubjectInitialised) {
+            mExportFirstPersonSubject = state.replaySubjectChoice;
+            mExportSubjectInitialised = true;
+        }
         std::string const custom                   = "playback.refactorEditor.export.custom"_tr();
         char const*       fpsOptions[]             = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
         constexpr int     fpsValues[]              = {30, 60, 120};
@@ -604,7 +611,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         for (std::string const& label :
              {"playback.refactorEditor.export.convergenceFrames"_tr(),
               "playback.refactorEditor.export.accelerateClient"_tr(),
-              "playback.refactorEditor.export.firstPerson"_tr(),
               "playback.refactorEditor.export.encodeSpeed"_tr(),
               "playback.refactorEditor.export.crf"_tr()}) {
             hintedLabelWidth =
@@ -815,9 +821,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         if (mExportAccelerateClient) {
             advancedSummary.push_back("playback.refactorEditor.export.advancedSummaryAccelerate"_tr());
         }
-        if (mExportFirstPerson) {
-            advancedSummary.push_back("playback.refactorEditor.export.advancedSummaryFirstPerson"_tr());
-        }
         mExportAdvancedOpen = collapseHeader(
             "##export-advanced",
             "playback.refactorEditor.export.advanced"_tr().c_str(),
@@ -831,6 +834,14 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             mExportScrollToAdvanced = false;
         }
         if (mExportAdvancedOpen) {
+            bool const hasFirstPersonSegment =
+                state.project
+                && std::ranges::any_of(state.project->sequence, [](auto const& segment) {
+                       return segment.cameraId == state::editing::model::kFirstPersonCameraId;
+                   });
+            bool   openExportPlayers = false;
+            ImVec2 exportPlayerAnchorMin{};
+            ImVec2 exportPlayerAnchorMax{};
             // Indented group with a hairline down its left edge; tables give back the indent so values stay aligned.
             float const advancedTop = ImGui::GetCursorScreenPos().y;
             float const advancedX   = ImGui::GetCursorScreenPos().x;
@@ -878,51 +889,45 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     fieldWidth
                 );
                 propertyLabel(
-                    "playback.refactorEditor.export.firstPerson"_tr().c_str(),
+                    "playback.refactorEditor.export.firstPersonSubject"_tr().c_str(),
                     "playback.refactorEditor.export.firstPersonHint"_tr().c_str()
                 );
-                auto const players = replay::ReplaySession::getInstance().replayPlayers();
-                std::string preview = "playback.refactorEditor.export.firstPersonOff"_tr();
-                if (mExportFirstPerson) {
-                    preview = "playback.refactorEditor.export.firstPersonRecorder"_tr();
-                    if (!mExportFirstPersonSubject.empty()) {
-                        preview = mExportFirstPersonSubject;
-                        for (auto const& player : players) {
-                            if (player.uuid != mExportFirstPersonSubject) continue;
-                            preview = player.name.empty() ? player.uuid : player.name;
-                            break;
-                        }
-                    }
+                std::string const subjectLabel =
+                    playerSubjectLabel(state.replayPlayers, mExportFirstPersonSubject);
+                ImGui::BeginDisabled(!hasFirstPersonSegment);
+                if (widgets::dropdownChip(
+                        "export-subject",
+                        subjectLabel.c_str(),
+                        hasFirstPersonSegment
+                            ? nullptr
+                            : "playback.refactorEditor.export.firstPersonNoSegment"_tr().c_str(),
+                        hasFirstPersonSegment
+                    )) {
+                    openExportPlayers     = true;
+                    exportPlayerAnchorMin = ImGui::GetItemRectMin();
+                    exportPlayerAnchorMax = ImGui::GetItemRectMax();
                 }
-                if (ImGui::BeginCombo("##export-first-person", preview.c_str())) {
-                    if (ImGui::Selectable(
-                            "playback.refactorEditor.export.firstPersonOff"_tr().c_str(),
-                            !mExportFirstPerson
-                        )) {
-                        mExportFirstPerson = false;
-                        mExportFirstPersonSubject.clear();
-                    }
-                    bool const recorderSelected = mExportFirstPerson && mExportFirstPersonSubject.empty();
-                    if (ImGui::Selectable(
-                            "playback.refactorEditor.export.firstPersonRecorder"_tr().c_str(),
-                            recorderSelected
-                        )) {
-                        mExportFirstPerson         = true;
-                        mExportFirstPersonSubject.clear();
-                    }
-                    for (auto const& player : players) {
-                        if (player.recorder || !player.present) continue;
-                        bool const        selected = mExportFirstPerson && mExportFirstPersonSubject == player.uuid;
-                        std::string const shown    = player.name.empty() ? player.uuid : player.name;
-                        std::string const label    = shown + "##" + player.uuid;
-                        if (ImGui::Selectable(label.c_str(), selected)) {
-                            mExportFirstPerson         = true;
-                            mExportFirstPersonSubject  = player.uuid;
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
+                ImGui::EndDisabled();
                 ImGui::EndTable();
+            }
+            if (openExportPlayers) {
+                widgets::openAnchoredPopup(
+                    "##export-player-picker",
+                    exportPlayerAnchorMin,
+                    exportPlayerAnchorMax
+                );
+            }
+            PlayerPickerResult exportPick;
+            if (drawPlayerPicker(
+                    "##export-player-picker",
+                    PlayerPickerMode::ExportSubject,
+                    state.replayPlayers,
+                    mExportFirstPersonSubject,
+                    false,
+                    exportPick
+                )
+                && exportPick.picked) {
+                mExportFirstPersonSubject = std::move(exportPick.uuid);
             }
 
             subHeader("playback.refactorEditor.export.advancedExperimental"_tr().c_str(), 8.0f);
@@ -984,8 +989,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.convergenceFrames = static_cast<uint32_t>(std::max(0, mExportConvergenceFrames));
         previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         previewSettings.videoCrf    = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
-        previewSettings.accelerateClient = mExportAccelerateClient;
-        previewSettings.firstPerson        = mExportFirstPerson;
+        previewSettings.accelerateClient   = mExportAccelerateClient;
         previewSettings.firstPersonSubject = mExportFirstPersonSubject;
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;

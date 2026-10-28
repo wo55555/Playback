@@ -1,10 +1,11 @@
-#include "CameraRenderHooks.h"
+﻿#include "CameraRenderHooks.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/input/EditorInput.h"
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
 
 #include "ll/api/memory/Hook.h"
@@ -563,6 +564,11 @@ void syncPausedParkedCamera(replay::ReplaySession& replay) noexcept {
     gPausedFov = sample->state.fov;
 }
 
+void setPreviewSubjectHidden(bool hidden) noexcept {
+    if (visuals::isReplaySubjectHiddenFor(visuals::SubjectHideReason::Preview) == hidden) return;
+    visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Preview, hidden);
+}
+
 keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept {
     auto& replay = replay::ReplaySession::getInstance();
 
@@ -628,6 +634,8 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto const existing = keyframe::currentCameraTimelineRenderContext();
     if (existing && existing->source == keyframe::CameraTimelineSource::Export) {
+        // The export hides the subject per frame itself; a preview hide left over would leak into its camera cuts.
+        setPreviewSubjectHidden(false);
         // The offline clock already writes the sample fraction into the native alpha.
         integration::pushReplayPartial(std::nullopt);
         (void)applyCameraEcs(*existing);
@@ -646,10 +654,24 @@ LL_TYPE_INSTANCE_HOOK(
     struct FollowCameraReset {
         ~FollowCameraReset() { gFollowCamera.reset(); }
     } followCameraReset;
+    // A first-person sequence segment renders from inside the subject, paused or not, so it hides for these frames.
+    bool const firstPerson = [&] {
+        if (replay.isFollowingRecordedPlayer()) return false;
+        auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
+        auto const time     = replay.getCameraRenderSampleTime();
+        return timeline && time && timeline->isFirstPersonAt(time->floorTick());
+    }();
+    setPreviewSubjectHidden(firstPerson);
+    if (firstPerson) {
+        // Like the follow view, the hand and sleep-vignette hooks read the weight sampled at entity time.
+        auto time = replay.getEntityRenderSampleTime();
+        if (!time) time = replay.getCameraRenderSampleTime();
+        if (time) (void)visuals::sampleReplaySubjectViewWeight(*time);
+    }
     auto pose = [&]() -> std::unique_ptr<visuals::ScopedReplayEntityPose> {
         auto time = replay.getEntityRenderSampleTime();
         // Tick 0 has no entity sample yet, but the followed player must already be hidden and its hands drawn.
-        if (!time && replay.isFollowingRecordedPlayer()) time = replay.getCameraRenderSampleTime();
+        if (!time && (replay.isFollowingRecordedPlayer() || firstPerson)) time = replay.getCameraRenderSampleTime();
         return time ? replay.createReplayEntityRenderScope(*time) : nullptr;
     }();
 
@@ -904,6 +926,7 @@ bool hookCameraRender(bool enable) {
             gNextConsumeSlot    = 0;
         }
         keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Preview);
+        setPreviewSubjectHidden(false);
         if (state.finalView && ReplayCameraViewRenderObjectHook::unhook()) state.finalView = false;
         if (state.setupCamera && ReplayCameraSetupHook::unhook()) state.setupCamera = false;
         if (state.fovWithoutGameplay && ReplayCameraFovWithoutGameplayHook::unhook()) {
