@@ -14,6 +14,10 @@ public:
 
     [[nodiscard]] InspectorPage page() const { return mPage; }
     void                        setPage(InspectorPage page) { mPage = page; }
+    void                        focusFirstPersonSubject() {
+        mPage               = InspectorPage::Selection;
+        mFocusSubjectSearch = true;
+    }
 
 private:
     void drawRail(PanelContext const& ctx, float width, float height);
@@ -29,10 +33,12 @@ private:
     bool drawCamera(PanelContext const& ctx);
     bool drawKeyframe(PanelContext const& ctx);
     bool drawMarker(PanelContext const& ctx);
+    bool drawSequenceSegment(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
 
     InspectorPage        mPage{InspectorPage::Selection};
     std::optional<float> mPistonDurationDraft;
+    bool                 mFocusSubjectSearch{false};
 };
 
 } // namespace playback::editor::ui
