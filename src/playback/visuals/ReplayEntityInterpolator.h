@@ -57,6 +57,12 @@ void setReplaySubjectRecorder(bool recorder) noexcept;
 
 [[nodiscard]] bool isReplaySubjectRecorder() noexcept;
 
+// A non-player subject (any followed entity) records its feet, so the view adds its eye height and looks along its
+// head yaw. It gets no hand and no HUD. Reset to a player by clearing the subject.
+void setReplaySubjectEntity(bool player, float eyeHeight) noexcept;
+
+[[nodiscard]] bool isReplaySubjectPlayer() noexcept;
+
 [[nodiscard]] bool hasReplaySubject() noexcept;
 
 // Flags of the followed replay actor, read once per replay tick. Other players have no recorded camera
