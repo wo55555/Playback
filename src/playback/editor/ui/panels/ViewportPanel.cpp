@@ -106,7 +106,16 @@ ViewportPanel::pickEntityAt(PanelContext const& ctx, ImVec2 const& mouse) const 
 }
 
 void ViewportPanel::drawEntityPickMenu(PanelContext const& ctx) {
-    if (!ImGui::BeginPopup("##viewport-entity-menu")) return;
+    float const scale = metrics::scale();
+    ImVec4      bg    = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
+    bg.w *= 0.86f;
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, bg);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {14.0f * scale, 10.0f * scale});
+    bool const open = ImGui::BeginPopup("##viewport-entity-menu");
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    if (!open) return;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {10.0f * scale, 8.0f * scale});
     auto&      session   = replay::ReplaySession::getInstance();
     bool const following = ctx.state.followingRecordedPlayer;
     if (mPickedEntity) {
@@ -123,6 +132,7 @@ void ViewportPanel::drawEntityPickMenu(PanelContext const& ctx) {
         ctx.selection.clear();
         ctx.submitAction({EditorActionType::ClearPreviewCamera});
     }
+    ImGui::PopStyleVar();
     ImGui::EndPopup();
 }
 
