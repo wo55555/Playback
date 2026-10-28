@@ -37,6 +37,7 @@ struct EditorState {
     bool                                                         hudVisible{};
     bool                                                         paused{};
     bool                                                         followingRecordedPlayer{};
+    bool                                                         followThirdPerson{};
     std::string                                                  replaySubjectChoice;
     std::vector<ReplayPlayerView>                                replayPlayers;
     float                                                        playbackSpeed{1.0f};

@@ -456,7 +456,8 @@ LL_TYPE_INSTANCE_HOOK(
     int                       w,
     int                       h
 ) {
-    if (isReplaySubjectViewDriven() && replaySubjectViewWeight() > 0.0f) {
+    bool const thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
+    if (isReplaySubjectViewDriven() && !thirdPersonFollow && replaySubjectViewWeight() > 0.0f) {
         float const progress = std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
         float const alpha    = SleepFadeTargetA * progress;
         if (alpha > 0.0f) {

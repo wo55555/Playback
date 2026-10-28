@@ -201,9 +201,9 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     ImVec2      playerAnchorMax{};
     std::string cameraLabel = "playback.refactorEditor.viewport.freeCamera"_tr();
     if (following) {
-        cameraLabel = "playback.refactorEditor.viewport.followSubject"_tr(
-            playerSubjectLabel(state.replayPlayers, state.replaySubjectChoice)
-        );
+        auto const subject = playerSubjectLabel(state.replayPlayers, state.replaySubjectChoice);
+        cameraLabel        = state.followThirdPerson ? "playback.refactorEditor.viewport.followSubjectThird"_tr(subject)
+                                                     : "playback.refactorEditor.viewport.followSubject"_tr(subject);
     } else if (project && selectedCamera) {
         auto const camera =
             std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
@@ -280,6 +280,17 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
                 }
             }
             ImGui::EndMenu();
+        }
+        // Only the follow view has a third person; free and keyframed cameras always render first person.
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.viewport.thirdPerson"_tr().c_str(),
+                "F5",
+                following && state.followThirdPerson,
+                following
+            )) {
+            EditorAction action{EditorActionType::SetFollowThirdPerson};
+            action.value = !state.followThirdPerson;
+            ctx.submitAction(std::move(action));
         }
         widgets::endAnchoredPopup();
     }

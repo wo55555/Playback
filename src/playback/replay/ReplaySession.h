@@ -171,6 +171,7 @@ private:
     std::optional<keyframe::CameraRenderState>  mPausedPreviewPose;
     uint64_t                                    mPausedPreviewSeekCount{};
     std::atomic<bool>                           mFollowRecordedPlayer{false};
+    std::atomic<bool>                           mFollowThirdPerson{false};
     bool                                        mTeleportToSubjectPending{false};
     std::optional<keyframe::CameraRenderState>  mFollowHeldPose;
     bool                                        mFollowExitParkPending{false};
@@ -501,6 +502,14 @@ public:
 
     // Keeps the observer on the recorded player's first-person view until the user takes over or picks a camera.
     void setFollowRecordedPlayer(bool follow);
+
+    // Pulls the follow camera behind the recorded player, like Flashback's F5 while spectating. Only honoured while
+    // following; leaving the follow view (free camera, preview camera, export) always returns to first person.
+    void setFollowThirdPerson(bool thirdPerson);
+
+    [[nodiscard]] bool isFollowThirdPerson() const noexcept {
+        return mFollowThirdPerson.load(std::memory_order_acquire);
+    }
 
     struct ReplayPlayerInfo {
         std::string uuid;

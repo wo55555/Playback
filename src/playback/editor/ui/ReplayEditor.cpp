@@ -366,6 +366,14 @@ void ReplayEditor::handleKeyboardShortcuts() {
         submitAction({playback::state::EditorActionType::AddFreeCamera});
         return;
     }
+    if (input::KeyMap::pressed(EditorKeybind::ToggleFollowPerspective)) {
+        if (state().followingRecordedPlayer) {
+            playback::state::EditorAction action{playback::state::EditorActionType::SetFollowThirdPerson};
+            action.value = !state().followThirdPerson;
+            submitAction(std::move(action));
+        }
+        return;
+    }
     if (input::KeyMap::pressed(EditorKeybind::SelectCamera1)) {
         (void)selectCameraByIndex(0);
         return;

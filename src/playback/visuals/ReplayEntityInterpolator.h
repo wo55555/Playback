@@ -101,6 +101,12 @@ void setReplaySubjectHidden(SubjectHideReason reason, bool hidden);
 // True while the follow view owns the camera (the observer sits on the recorded player).
 [[nodiscard]] bool isReplaySubjectFollowed();
 
+// While set, the follow view sits behind the subject: its model is drawn and the first-person hand is not.
+void setReplaySubjectThirdPerson(bool thirdPerson);
+
+// The third-person choice, unless the subject is asleep (its recorded bed view is first person).
+[[nodiscard]] bool isReplaySubjectThirdPerson();
+
 // True while the subject's view drives the camera: follow preview or a first-person segment (preview or export).
 [[nodiscard]] bool isReplaySubjectViewDriven();
 

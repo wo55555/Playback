@@ -140,6 +140,8 @@
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
+#include "mc/world/phys/HitResult.h"
+#include "mc/world/phys/HitResultType.h"
 
 
 #include "snappy.h"
@@ -446,6 +448,45 @@ struct InjectionReset {
 };
 
 float decodeRotationByte(uchar value) { return static_cast<float>(static_cast<schar>(value)) * (360.0f / 256.0f); }
+
+// Like vanilla third person: back along the view ray from the eyes, stopping short of the first camera-blocking block.
+keyframe::CameraRenderState thirdPersonFollowPose(Player& observer, keyframe::CameraRenderState state) {
+    constexpr float Distance     = 4.0f;
+    constexpr float WallMargin   = 0.2f;
+    constexpr float DegToRadians = 0.017453292519943295f;
+    float const     yaw          = state.yaw * DegToRadians;
+    float const     pitch        = state.pitch * DegToRadians;
+    // Opposite of the view direction {-sin(yaw)cos(pitch), -sin(pitch), cos(yaw)cos(pitch)}.
+    float const backX = std::sin(yaw) * std::cos(pitch);
+    float const backY = std::sin(pitch);
+    float const backZ = -std::cos(yaw) * std::cos(pitch);
+    Vec3 const  eye{state.x, state.y, state.z};
+    Vec3 const  target{eye.x + backX * Distance, eye.y + backY * Distance, eye.z + backZ * Distance};
+
+    float      distance = Distance;
+    auto const hit      = observer.getDimensionBlockSource().clip(
+        eye,
+        target,
+        false,
+        ShapeType::CollisionForCamera,
+        static_cast<int>(Distance) + 1,
+        false,
+        false,
+        nullptr,
+        [](BlockSource const&, Block const&, bool) { return true; },
+        false
+    );
+    if (hit.mType == HitResultType::Tile) {
+        float const dx = hit.mPos.x - eye.x;
+        float const dy = hit.mPos.y - eye.y;
+        float const dz = hit.mPos.z - eye.z;
+        distance       = std::clamp(std::sqrt(dx * dx + dy * dy + dz * dz) - WallMargin, 0.0f, Distance);
+    }
+    state.x = eye.x + backX * distance;
+    state.y = eye.y + backY * distance;
+    state.z = eye.z + backZ * distance;
+    return state;
+}
 
 void forceFirstPersonCamera() {
     auto client = ll::service::getClientInstance();
@@ -848,11 +889,23 @@ void ReplaySession::setFollowRecordedPlayer(bool follow) {
     // The camera sits inside the recorded player while following, so its own model would fill the view.
     // The hide and hand hooks stay installed for the whole replay; (un)hooking them here froze the game for seconds.
     visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Follow, follow);
+    if (!follow) {
+        mFollowThirdPerson.store(false, std::memory_order_release);
+        visuals::setReplaySubjectThirdPerson(false);
+    }
     mLastObserverServerSyncChunk.reset();
     mPausedPreviewPose.reset();
     // The server copy only moved on chunk changes while following; park it so its next correction does not snap back.
     mFollowExitParkPending = !follow;
     getLogger().debug("Observer {} the recorded player", follow ? "follows" : "stopped following");
+}
+
+void ReplaySession::setFollowThirdPerson(bool thirdPerson) {
+    if (thirdPerson && !isFollowingRecordedPlayer()) thirdPerson = false;
+    if (mFollowThirdPerson.exchange(thirdPerson, std::memory_order_acq_rel) == thirdPerson) return;
+    visuals::setReplaySubjectThirdPerson(thirdPerson);
+    mFollowHeldPose.reset();
+    getLogger().debug("Follow view switched to {} person", thirdPerson ? "third" : "first");
 }
 
 void ReplaySession::parkObserverAfterFollow() {
@@ -1417,7 +1470,7 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
     // The tick stops while chunks or a snapshot stream in, but frames keep coming: keep the last pose.
     if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return mFollowHeldPose;
 
-    auto const state = sampleSubjectFollowState();
+    auto state = sampleSubjectFollowState();
     if (!state) return mFollowHeldPose;
     cancelNativeMovementInterpolation(
         *mReplayPlayer,
@@ -1425,6 +1478,11 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
         Vec2{state->pitch, state->yaw},
         state->yaw
     );
+    // The observer stays on the eyes so chunks and the server copy follow; only the drawn camera moves back.
+    // The sample above refreshed the sleep weight, so a subject in bed already reads as first person here.
+    if (isFollowThirdPerson() && visuals::isReplaySubjectThirdPerson()) {
+        state = thirdPersonFollowPose(*mReplayPlayer, *state);
+    }
     mFollowHeldPose = state;
     return state;
 }

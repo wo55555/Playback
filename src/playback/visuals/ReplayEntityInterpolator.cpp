@@ -81,6 +81,8 @@ std::atomic_bool     gSubjectIsRecorder{true};
 std::atomic_bool     gSubjectIsPlayer{true};
 std::atomic<float>   gSubjectEyeHeight{0.0f}; // feet to eyes of a non-player subject
 std::atomic_uint8_t  gSubjectHidden{0};
+// A third-person follow view sits behind the subject, so the follow reason no longer hides its model.
+std::atomic_bool     gSubjectThirdPerson{false};
 std::atomic<float>   gSubjectViewWeight{0.0f}; // blend of the recorded sleeping view at the last followed sample
 std::atomic<float>   gSubjectSleepTicks{0.0f}; // consecutive sleeping ticks at the last followed sample
 
@@ -354,7 +356,13 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
         state->actors.reserve(targets.size());
 
         // Frames right after a dimension switch have no committed poses yet; the hidden subject must still be hidden.
-        auto const subject = gSubjectHidden.load(std::memory_order_acquire) != 0 ? subjectKey() : std::nullopt;
+        uint8_t hiddenMask = gSubjectHidden.load(std::memory_order_acquire);
+        if (isReplaySubjectThirdPerson()) {
+            hiddenMask &= static_cast<uint8_t>(
+                ~(static_cast<uint8_t>(SubjectHideReason::Follow) | static_cast<uint8_t>(SubjectHideReason::Session))
+            );
+        }
+        auto const subject = hiddenMask != 0 ? subjectKey() : std::nullopt;
         for (auto const& target : targets) {
             // A despawned or unloaded entity must not cost the rest of the frame its interpolation.
             if (!target.actor) continue;
@@ -619,6 +627,16 @@ bool isReplaySubjectHiddenFor(SubjectHideReason reason) {
 }
 
 bool isReplaySubjectFollowed() { return isReplaySubjectHiddenFor(SubjectHideReason::Follow); }
+
+void setReplaySubjectThirdPerson(bool thirdPerson) {
+    gSubjectThirdPerson.store(thirdPerson, std::memory_order_release);
+}
+
+// Vanilla drops to first person in bed, so the recorded sleeping view overrides the third-person choice.
+bool isReplaySubjectThirdPerson() {
+    return gSubjectThirdPerson.load(std::memory_order_acquire)
+        && gSubjectViewWeight.load(std::memory_order_relaxed) <= 0.0f;
+}
 
 bool isReplaySubjectViewDriven() {
     constexpr auto mask = static_cast<uint8_t>(SubjectHideReason::Follow) | static_cast<uint8_t>(SubjectHideReason::Export)
