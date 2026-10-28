@@ -1,9 +1,9 @@
-#include "ViewportPanel.h"
+﻿#include "ViewportPanel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
-#include "playback/replay/ReplaySession.h"
+#include "playback/editor/ui/components/PlayerPicker.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -94,10 +94,15 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     ImGui::SetCursorPos({metrics::gutter(), (height - metrics::iconButton()) * 0.5f});
 
     auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
-    bool const  following      = state.followingRecordedPlayer;
-    std::string cameraLabel    = "playback.refactorEditor.viewport.freeCamera"_tr();
+    bool const  following        = state.followingRecordedPlayer;
+    bool        openPlayerPicker = false;
+    ImVec2      playerAnchorMin{};
+    ImVec2      playerAnchorMax{};
+    std::string cameraLabel = "playback.refactorEditor.viewport.freeCamera"_tr();
     if (following) {
-        cameraLabel = "playback.refactorEditor.viewport.followPlayer"_tr();
+        cameraLabel = "playback.refactorEditor.viewport.followSubject"_tr(
+            playerSubjectLabel(state.replayPlayers, state.replaySubjectChoice)
+        );
     } else if (project && selectedCamera) {
         auto const camera =
             std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
@@ -110,9 +115,11 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             project != nullptr,
             selectedCamera ? ICON_CAMERA : nullptr
         )) {
-        ImGui::OpenPopup("##viewport-camera-menu");
+        widgets::openAnchoredPopup("##viewport-camera-menu");
     }
-    if (ImGui::BeginPopup("##viewport-camera-menu")) {
+    playerAnchorMin = ImGui::GetItemRectMin();
+    playerAnchorMax = ImGui::GetItemRectMax();
+    if (widgets::beginAnchoredPopup("##viewport-camera-menu")) {
         if (ImGui::MenuItem(
                 "playback.refactorEditor.viewport.freeCamera"_tr().c_str(),
                 nullptr,
@@ -142,36 +149,34 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             )) {
             ctx.submitAction({EditorActionType::TeleportToRecordedPlayer});
         }
-        if (ImGui::BeginMenu("playback.refactorEditor.viewport.firstPerson"_tr().c_str(), state.replayVisible)) {
-            auto&      session = replay::ReplaySession::getInstance();
-            auto const choice  = session.replaySubjectChoice();
-            auto const players = session.replayPlayers();
-            bool const recorderSelected = following && choice.empty();
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.viewport.followRecorder"_tr().c_str(),
-                    nullptr,
-                    recorderSelected
-                )) {
-                EditorAction action{EditorActionType::SetFollowRecordedPlayer};
-                action.value = !recorderSelected;
-                ctx.submitAction(std::move(action));
-            }
-            // The identity table keeps people from earlier segments. List only whoever is spawned now,
-            // the same way Flashback's player list reads the live connection instead of a historical roster.
-            for (auto const& player : players) {
-                if (player.recorder || !player.present) continue;
-                bool const        selected = following && choice == player.uuid;
-                std::string const label    = player.name.empty() ? player.uuid : player.name;
-                if (ImGui::MenuItem(label.c_str(), nullptr, selected)) {
-                    EditorAction action{EditorActionType::SetFollowRecordedPlayer};
-                    action.value = !selected;
-                    action.id    = player.uuid;
-                    ctx.submitAction(std::move(action));
-                }
-            }
-            ImGui::EndMenu();
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.viewport.firstPerson"_tr().c_str(),
+                nullptr,
+                following,
+                state.replayVisible
+            )) {
+            ImGui::CloseCurrentPopup();
+            openPlayerPicker = true;
         }
-        ImGui::EndPopup();
+        widgets::endAnchoredPopup();
+    }
+    if (openPlayerPicker) widgets::openAnchoredPopup("##viewport-player-picker", playerAnchorMin, playerAnchorMax);
+    PlayerPickerResult playerPick;
+    if (drawPlayerPicker(
+            "##viewport-player-picker",
+            PlayerPickerMode::Follow,
+            state.replayPlayers,
+            state.replaySubjectChoice,
+            following,
+            playerPick
+        )) {
+        EditorAction action{EditorActionType::SetFollowRecordedPlayer};
+        if (playerPick.stop) action.value = false;
+        else {
+            action.value = true;
+            action.id    = std::move(playerPick.uuid);
+        }
+        ctx.submitAction(std::move(action));
     }
 
     ImGui::SameLine(0.0f, metrics::gutter());
@@ -183,15 +188,15 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             aspectText,
             "playback.refactorEditor.viewport.aspectTooltip"_tr().c_str()
         )) {
-        ImGui::OpenPopup("##viewport-aspect-menu");
+        widgets::openAnchoredPopup("##viewport-aspect-menu");
     }
-    if (ImGui::BeginPopup("##viewport-aspect-menu")) {
+    if (widgets::beginAnchoredPopup("##viewport-aspect-menu")) {
         for (auto const& preset : kAspectPresets) {
             bool const current = std::abs(preset.ratio - mVideoAspectRatio) < 0.01f;
             // Routed through the editor so the choice reaches the persisted layout preferences.
             if (ImGui::MenuItem(preset.label, nullptr, current)) ctx.commands.setVideoAspectRatio(preset.ratio);
         }
-        ImGui::EndPopup();
+        widgets::endAnchoredPopup();
     }
 
     ImGui::SameLine(0.0f, metrics::gutter() * 2.0f);
