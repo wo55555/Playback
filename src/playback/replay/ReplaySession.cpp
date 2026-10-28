@@ -684,6 +684,7 @@ void ReplaySession::clearReplayData() {
     setFollowRecordedPlayer(false);
     mFollowExitParkPending       = false;
     mTeleportToSubjectPending    = false;
+    mPendingObserverPark.reset();
     mObserverServerPositionDirty = false;
     mLastObserverServerSyncChunk.reset();
     mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
@@ -1549,8 +1550,18 @@ void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 co
 
 void ReplaySession::updateObserverPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
-    if (updateSubjectFollow()) return;
+    if (updateSubjectFollow()) {
+        mPendingObserverPark.reset();
+        return;
+    }
     parkObserverAfterFollow();
+    if (mPendingObserverPark && mNetworkHandler && isReplayWorldReady() && !mPendingSnapshotApply
+        && !isSeekPending() && !mPendingReplayDimension
+        && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+        auto const pose = *std::exchange(mPendingObserverPark, std::nullopt);
+        parkObserverAtPose(pose);
+        return;
+    }
     if (mIsPaused) {
         if (!mPendingReplayDimension) updatePausedObserverPreview();
         return;

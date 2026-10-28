@@ -43,6 +43,9 @@ public:
     createSetCameraKeyframeRotation(const std::string& id, int tick, model::Vec3 rotation);
     static std::unique_ptr<model::IEditCommand> createSetCameraKeyframeFov(const std::string& id, int tick, float fov);
     static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
+    static std::unique_ptr<model::IEditCommand> createSetCameraLocked(const std::string& id, bool locked);
+    static std::unique_ptr<model::IEditCommand> createRenameCamera(const std::string& id, const std::string& name);
+    static std::unique_ptr<model::IEditCommand> createClearCameraKeyframes(const std::string& id);
     static std::unique_ptr<model::IEditCommand>
     createSetSubActorDetails(const std::string& id, model::AgentDetails details);
 };
