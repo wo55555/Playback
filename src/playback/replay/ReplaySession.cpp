@@ -729,6 +729,8 @@ bool ReplaySession::setPaused(bool paused) {
     // Hold the fraction the preview stopped at, so resuming continues from the same pose instead of the tick boundary.
     if (paused) mFrozenPreviewPartial.store(previewPartialTick(), std::memory_order_release);
     mIsPaused = paused;
+    // Pausing parks the observer and resuming hands it to the timeline or the player; neither keeps the old pose.
+    mObserverPreviewInRange = false;
     if (!paused) {
         mPausedPreviewPose.reset();
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
@@ -739,11 +741,16 @@ bool ReplaySession::setPaused(bool paused) {
     getLogger().debug("Replay {} at tick {}", paused ? "paused" : "playing", mCurrentTick);
     if (paused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive && wasPreviewing) {
         parkReplayCameraAtPreview();
-    } else if (paused && mReplayPlayer && mReplayWorldJoined) {
+    } else if (mReplayPlayer && mReplayWorldJoined) {
         auto const position = mReplayPlayer->getPosition();
         auto const rotation = mReplayPlayer->getRotation();
-        cancelNativeMovementInterpolation(*mReplayPlayer, position, rotation, rotation.y);
-        if (mObserverServerPositionDirty) syncObserverServerPosition(position, rotation);
+        if (paused) {
+            cancelNativeMovementInterpolation(*mReplayPlayer, position, rotation, rotation.y);
+            if (mObserverServerPositionDirty) syncObserverServerPosition(position, rotation);
+        } else if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+            // The epoch bump dropped any sync still queued (such as the one an export end sends); resend it.
+            syncObserverServerPosition(position, rotation);
+        }
     }
     return true;
 }
@@ -810,11 +817,37 @@ void ReplaySession::setFollowRecordedPlayer(bool follow) {
 }
 
 void ReplaySession::parkObserverAfterFollow() {
-    if (!std::exchange(mFollowExitParkPending, false)) return;
-    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler || mPendingReplayDimension) return;
-    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return;
-    auto const pose = mFollowHeldPose ? mFollowHeldPose : sampleSubjectFollowState();
-    if (pose) parkObserverAtPose(*pose);
+    if (!mFollowExitParkPending) return;
+    // An export drives the observer and syncs it when it ends; a dimension change teleports it on both sides.
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || mPendingReplayDimension) {
+        mFollowExitParkPending = false;
+        return;
+    }
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
+    mFollowExitParkPending = false;
+    if (auto const pose = mFollowHeldPose ? mFollowHeldPose : sampleSubjectFollowState()) {
+        parkObserverAtPose(*pose);
+        return;
+    }
+    // No pose to park at (a seek is streaming in): pin the server to where following left the client.
+    auto const position = mReplayPlayer->getPosition();
+    auto const rotation = mReplayPlayer->getRotation();
+    syncObserverServerPosition(position, rotation);
+}
+
+// The preview moved the server copy only on chunk changes; once it stops driving the observer, pin the server.
+void ReplaySession::releasePreviewObserver() {
+    mLastObserverServerSyncChunk.reset();
+    if (!std::exchange(mObserverPreviewInRange, false)) return;
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
+    teleportReplayPlayer(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
+    cancelNativeMovementInterpolation(
+        *mReplayPlayer,
+        mLastObserverPreviewFeet,
+        mLastObserverPreviewRotation,
+        mLastObserverPreviewRotation.y
+    );
+    syncObserverServerPosition(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
 }
 
 namespace {
@@ -1294,32 +1327,23 @@ void ReplaySession::updateObserverPreview() {
     }
     if (mPendingReplayDimension) return;
     if (!mNetworkHandler) return;
-    if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return;
+    if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+        releasePreviewObserver();
+        return;
+    }
     auto const time = getCameraRenderSampleTime();
     if (!time) return;
     // Republishing (a track was toggled or edited) invalidates the cached pose, unlike merely leaving the range.
     auto const timelineGeneration = keyframe::previewTimelineGeneration();
     if (mObserverPreviewGeneration != timelineGeneration) {
         mObserverPreviewGeneration = timelineGeneration;
-        mObserverPreviewInRange    = false;
-        mLastObserverServerSyncChunk.reset();
+        releasePreviewObserver();
     }
 
     auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
     if (!sample) {
         // Leaving the range: pin the observer and server to the last in-range pose.
-        if (mObserverPreviewInRange) {
-            mObserverPreviewInRange = false;
-            teleportReplayPlayer(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
-            cancelNativeMovementInterpolation(
-                *mReplayPlayer,
-                mLastObserverPreviewFeet,
-                mLastObserverPreviewRotation,
-                mLastObserverPreviewRotation.y
-            );
-            syncObserverServerPosition(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
-        }
-        mLastObserverServerSyncChunk.reset();
+        releasePreviewObserver();
         return;
     }
     mObserverPreviewInRange = true;
