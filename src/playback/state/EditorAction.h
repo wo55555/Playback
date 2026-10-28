@@ -35,6 +35,7 @@ enum class EditorActionType {
     TeleportToRecordedPlayer,
     SetFollowRecordedPlayer,
     SetReplaySubjectChoice,
+    SetFollowThirdPerson,
     UndoEditorEdit,
     RedoEditorEdit,
     AddFreeCamera,
