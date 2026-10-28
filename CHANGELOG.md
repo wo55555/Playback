@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added a camera switch track to the editor timeline. Each segment uses the auto camera, a keyframed camera or the first-person view of the chosen player, and preview and export follow it. Segments can be split, merged, rebound and deleted from their right-click menu.
+- Added a searchable player list for choosing the first-person subject in the viewport, the timeline and the export dialog. Selecting a camera switch segment shows its range, camera and the full-width player list in the inspector.
+- Added right-click menus for keyframes, empty lanes, track headers and the ruler on the timeline.
+- Tapping Shift on its own while following a player now stops following.
+
+### Changed
+
+- Dropdowns, popups and context menus in the editor now open under the control that opened them, with menu padding.
+
 ## [0.3.3-mc26.20] - 2026-10-11
 
 ### Added
