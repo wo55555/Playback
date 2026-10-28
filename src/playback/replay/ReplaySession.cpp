@@ -609,6 +609,7 @@ void ReplaySession::clearReplayData() {
     mObserverPreviewInRange  = false;
     mPausedPreviewPose.reset();
     setFollowRecordedPlayer(false);
+    mFollowExitParkPending       = false;
     mTeleportToSubjectPending    = false;
     mObserverServerPositionDirty = false;
     mLastObserverServerSyncChunk.reset();
@@ -810,7 +811,17 @@ void ReplaySession::setFollowRecordedPlayer(bool follow) {
     visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Follow, follow);
     mLastObserverServerSyncChunk.reset();
     mPausedPreviewPose.reset();
+    // The server copy only moved on chunk changes while following; park it so its next correction does not snap back.
+    mFollowExitParkPending = !follow;
     getLogger().debug("Observer {} the recorded player", follow ? "follows" : "stopped following");
+}
+
+void ReplaySession::parkObserverAfterFollow() {
+    if (!std::exchange(mFollowExitParkPending, false)) return;
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler || mPendingReplayDimension) return;
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return;
+    auto const pose = mFollowHeldPose ? mFollowHeldPose : sampleSubjectFollowState();
+    if (pose) parkObserverAtPose(*pose);
 }
 
 namespace {
@@ -1283,6 +1294,7 @@ void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 co
 void ReplaySession::updateObserverPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
     if (updateSubjectFollow()) return;
+    parkObserverAfterFollow();
     if (mIsPaused) {
         if (!mPendingReplayDimension) updatePausedObserverPreview();
         return;
