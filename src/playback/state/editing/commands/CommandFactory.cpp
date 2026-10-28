@@ -91,6 +91,16 @@ CommandFactory::createSetCameraKeyframeFov(const std::string& id, int tick, floa
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraEnabled(const std::string& id, bool enabled) {
     return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::Enabled, enabled);
 }
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraLocked(const std::string& id, bool locked) {
+    return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::Locked, locked);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createRenameCamera(const std::string& id, const std::string& name) {
+    return std::make_unique<RenameCamera>(id, name);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createClearCameraKeyframes(const std::string& id) {
+    return std::make_unique<ClearCameraKeyframes>(id);
+}
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetSubActorDetails(const std::string& id, model::AgentDetails details) {
     return std::make_unique<SetSubActorDetails>(id, std::move(details));

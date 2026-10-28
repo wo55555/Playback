@@ -57,12 +57,16 @@ enum class EditorActionType {
     SetKeyframeRotation,
     SetKeyframeFov,
     SetCameraEnabled,
+    SetCameraLocked,
+    RenameCamera,
+    ClearCameraKeyframes,
     DeleteCamera,
     UnbindCamera,
     CreateBindingCamera,
     SetSubActorDetails,
     SetPreviewCamera,
     ClearPreviewCamera,
+    MoveViewToKeyframe,
 };
 
 struct EditorAction {

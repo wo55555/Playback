@@ -333,6 +333,15 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SetCameraEnabled:
         mCommandStack.push(CommandFactory::createSetCameraEnabled(action.id, action.value), mProject);
         break;
+    case EditorActionType::SetCameraLocked:
+        mCommandStack.push(CommandFactory::createSetCameraLocked(action.id, action.value), mProject);
+        break;
+    case EditorActionType::RenameCamera:
+        mCommandStack.push(CommandFactory::createRenameCamera(action.id, action.name), mProject);
+        break;
+    case EditorActionType::ClearCameraKeyframes:
+        mCommandStack.push(CommandFactory::createClearCameraKeyframes(action.id), mProject);
+        break;
     case EditorActionType::DeleteCamera:
         mCommandStack.push(CommandFactory::createDeleteCamera(action.id), mProject);
         break;
@@ -358,6 +367,28 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
         break;
+    case EditorActionType::MoveViewToKeyframe: {
+        auto const camera = std::ranges::find(mProject.cameras, action.id, &state::editing::model::CameraEntity::id);
+        if (camera == mProject.cameras.end()) break;
+        auto const key = camera->keysByTick.find(action.tick);
+        if (key == camera->keysByTick.end()) break;
+        auto& session = replay::ReplaySession::getInstance();
+        session.setFollowRecordedPlayer(false);
+        mPreviewCameraId.reset();
+        auto const& pose = key->second;
+        session.requestParkObserver(
+            keyframe::CameraRenderState{
+                pose.position.x,
+                pose.position.y,
+                pose.position.z,
+                pose.yaw,
+                pose.pitch,
+                pose.roll,
+                pose.fov,
+            }
+        );
+        break;
+    }
     default:
         break;
     }

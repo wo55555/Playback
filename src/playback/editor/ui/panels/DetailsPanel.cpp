@@ -541,6 +541,13 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                 action.value = enabled;
                 submit(std::move(action));
             }
+            bool locked = camera->locked;
+            if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+                EditorAction action{EditorActionType::SetCameraLocked};
+                action.id    = camera->id;
+                action.value = locked;
+                submit(std::move(action));
+            }
             ImGui::BeginDisabled(camera->locked);
             if (!camera->bindingEntityUuid.empty()) {
                 property::separator();

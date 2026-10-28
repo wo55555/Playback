@@ -197,7 +197,7 @@ void SetCameraTrackState::execute(model::EditorStateExt& state) {
         return;
     }
 
-    bool* target = &camera->enabled;
+    bool* target = mProperty == Property::Locked ? &camera->locked : &camera->enabled;
     if (*target == mValue) {
         mBefore.reset();
         return;
@@ -209,7 +209,43 @@ void SetCameraTrackState::execute(model::EditorStateExt& state) {
 
 void SetCameraTrackState::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 
-std::string SetCameraTrackState::label() const { return "Set Camera Track Enabled"; }
+std::string SetCameraTrackState::label() const {
+    return mProperty == Property::Locked ? "Set Camera Track Locked" : "Set Camera Track Enabled";
+}
+
+RenameCamera::RenameCamera(std::string cameraId, std::string name)
+: mCameraId(std::move(cameraId)),
+  mName(std::move(name)) {}
+
+void RenameCamera::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked || mName.empty() || camera->name == mName) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore      = state;
+    camera->name = mName;
+}
+
+void        RenameCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string RenameCamera::label() const { return "Rename Camera"; }
+
+ClearCameraKeyframes::ClearCameraKeyframes(std::string cameraId) : mCameraId(std::move(cameraId)) {}
+
+void ClearCameraKeyframes::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked || camera->keysByTick.empty()) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore = state;
+    camera->keysByTick.clear();
+}
+
+void        ClearCameraKeyframes::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string ClearCameraKeyframes::label() const { return "Clear Camera Keyframes"; }
 
 SetCameraKeyframePosition::SetCameraKeyframePosition(std::string cameraId, int tick, model::Vec3 position)
 : mCameraId(std::move(cameraId)),

@@ -917,6 +917,19 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             }
 
             if (ImGui::MenuItem("playback.refactorEditor.timeline.seekHere"_tr().c_str())) seekTo(ctx, mKeyframeMenuTick);
+            // Flashback's "Apply": the free camera jumps to this keyframe's pose without touching the track.
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeline.applyKeyframe"_tr().c_str(),
+                    nullptr,
+                    false,
+                    ctx.state.replayVisible
+                )) {
+                ctx.selection.clear();
+                EditorAction action{EditorActionType::MoveViewToKeyframe};
+                action.id   = camera->id;
+                action.tick = mKeyframeMenuTick;
+                ctx.submitAction(std::move(action));
+            }
             if (ImGui::MenuItem(
                     "playback.refactorEditor.timeline.previewCamera"_tr().c_str(),
                     nullptr,
@@ -1001,37 +1014,93 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             if (!camera) {
                 ImGui::CloseCurrentPopup();
             } else {
-            if (ImGui::MenuItem(
-                    (camera->enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
-                                     : "playback.refactorEditor.timeline.enableTrack"_tr())
-                        .c_str()
-                )) {
-                EditorAction action{EditorActionType::SetCameraEnabled};
-                action.id    = camera->id;
-                action.value = !camera->enabled;
-                ctx.submitAction(std::move(action));
-            }
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.timeline.previewCamera"_tr().c_str(),
-                    nullptr,
-                    false,
-                    state::editing::model::isCameraRenderable(*camera)
-                )) {
-                EditorAction action{EditorActionType::SetPreviewCamera};
-                action.id = camera->id;
-                ctx.submitAction(std::move(action));
-            }
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.timeline.deleteTrack"_tr().c_str(),
-                    nullptr,
-                    false,
-                    !camera->locked && project->cameras.size() > 1
-                )) {
-                EditorAction action{EditorActionType::DeleteCamera};
-                action.id = camera->id;
-                ctx.submitAction(std::move(action));
-                ctx.selection.clear();
-            }
+                bool const editable = !camera->locked;
+                if (mRenameCameraId != camera->id) {
+                    mRenameCameraId = camera->id;
+                    mRenameBuffer   = {};
+                    camera->name.copy(mRenameBuffer.data(), mRenameBuffer.size() - 1);
+                }
+                ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.renameTrack"_tr().c_str());
+                ImGui::SetNextItemWidth(160.0f * metrics::scale());
+                ImGui::BeginDisabled(!editable);
+                bool const renameEntered = ImGui::InputText(
+                    "##timeline-track-rename",
+                    mRenameBuffer.data(),
+                    mRenameBuffer.size(),
+                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll
+                );
+                bool const renameCommitted = renameEntered || ImGui::IsItemDeactivatedAfterEdit();
+                ImGui::EndDisabled();
+                if (editable && renameCommitted) {
+                    std::string name = mRenameBuffer.data();
+                    auto const  first = name.find_first_not_of(" \t");
+                    name = first == std::string::npos ? std::string{} : name.substr(first, name.find_last_not_of(" \t") - first + 1);
+                    if (!name.empty() && name != camera->name) {
+                        EditorAction action{EditorActionType::RenameCamera};
+                        action.id   = camera->id;
+                        action.name = std::move(name);
+                        ctx.submitAction(std::move(action));
+                    }
+                    mRenameCameraId.clear();
+                    if (renameEntered) ImGui::CloseCurrentPopup();
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem(
+                        (camera->enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
+                                         : "playback.refactorEditor.timeline.enableTrack"_tr())
+                            .c_str()
+                    )) {
+                    EditorAction action{EditorActionType::SetCameraEnabled};
+                    action.id    = camera->id;
+                    action.value = !camera->enabled;
+                    ctx.submitAction(std::move(action));
+                }
+                if (ImGui::MenuItem(
+                        (camera->locked ? "playback.refactorEditor.timeline.unlockTrack"_tr()
+                                        : "playback.refactorEditor.timeline.lockTrack"_tr())
+                            .c_str()
+                    )) {
+                    EditorAction action{EditorActionType::SetCameraLocked};
+                    action.id    = camera->id;
+                    action.value = !camera->locked;
+                    ctx.submitAction(std::move(action));
+                }
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.previewCamera"_tr().c_str(),
+                        nullptr,
+                        false,
+                        state::editing::model::isCameraRenderable(*camera)
+                    )) {
+                    EditorAction action{EditorActionType::SetPreviewCamera};
+                    action.id = camera->id;
+                    ctx.submitAction(std::move(action));
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.clearKeyframes"_tr(camera->keysByTick.size()).c_str(),
+                        nullptr,
+                        false,
+                        editable && !camera->keysByTick.empty()
+                    )) {
+                    EditorAction action{EditorActionType::ClearCameraKeyframes};
+                    action.id = camera->id;
+                    ctx.submitAction(std::move(action));
+                    if (auto const* selected = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
+                        selected && selected->trackId == camera->id) {
+                        ctx.selection.select(state::editing::model::SelectedCamera{camera->id});
+                    }
+                }
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.deleteTrack"_tr().c_str(),
+                        nullptr,
+                        false,
+                        editable && project->cameras.size() > 1
+                    )) {
+                    EditorAction action{EditorActionType::DeleteCamera};
+                    action.id = camera->id;
+                    ctx.submitAction(std::move(action));
+                    ctx.selection.clear();
+                }
             }
         }
         widgets::endAnchoredPopup();

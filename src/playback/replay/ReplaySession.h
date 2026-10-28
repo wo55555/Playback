@@ -173,6 +173,7 @@ private:
     std::atomic<bool>                           mFollowRecordedPlayer{false};
     std::atomic<bool>                           mFollowThirdPerson{false};
     bool                                        mTeleportToSubjectPending{false};
+    std::optional<keyframe::CameraRenderState>  mPendingObserverPark;
     std::optional<keyframe::CameraRenderState>  mFollowHeldPose;
     bool                                        mFollowExitParkPending{false};
     std::atomic<uint64_t>                       mSeekFinishCount{0};
@@ -499,6 +500,9 @@ public:
 
     // Moves the observer onto the recorded player once, as soon as the replay world and the player's pose are ready.
     void requestTeleportToRecordedPlayer() noexcept { mTeleportToSubjectPending = true; }
+
+    // Parks the free observer at a pose once the replay world can take it (a keyframe's "move view here").
+    void requestParkObserver(keyframe::CameraRenderState const& pose) { mPendingObserverPark = pose; }
 
     // Keeps the observer on the recorded player's first-person view until the user takes over or picks a camera.
     void setFollowRecordedPlayer(bool follow);
