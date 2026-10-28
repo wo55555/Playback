@@ -401,6 +401,7 @@ private:
 
     void parkObserverAtPose(keyframe::CameraRenderState const& pose);
     void parkObserverAfterFollow();
+    void releasePreviewObserver();
 
     void updatePausedObserverPreview();
 
