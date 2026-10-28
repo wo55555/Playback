@@ -209,6 +209,14 @@ bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(fra
 
 bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(frameContext()); }
 
+bool ReplayEditor::selectAllKeyframes() { return mTimelinePanel.selectAllKeyframes(frameContext()); }
+
+bool ReplayEditor::copySelection() { return mTimelinePanel.copySelection(frameContext()); }
+
+bool ReplayEditor::pasteAtPlayhead() { return mTimelinePanel.pasteAtPlayhead(frameContext()); }
+
+bool ReplayEditor::addMarkerAtPlayhead() { return mTimelinePanel.addMarkerAtPlayhead(frameContext()); }
+
 bool ReplayEditor::selectCameraByIndex(std::size_t index) {
     auto const project = state().project;
     if (!project || index >= project->cameras.size()) return false;
@@ -332,6 +340,34 @@ void ReplayEditor::handleKeyboardShortcuts() {
 
     if (mViewportMaximized && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         mViewportMaximized = false;
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ClearSelection)) {
+        mSelection.clear();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SelectAll)) {
+        (void)selectAllKeyframes();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::Copy)) {
+        (void)copySelection();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::Paste)) {
+        (void)pasteAtPlayhead();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::InsertMarker)) {
+        (void)addMarkerAtPlayhead();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::PreviousMarker, true)) {
+        mTimelinePanel.seekAdjacentMarker(frameContext(), false);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::NextMarker, true)) {
+        mTimelinePanel.seekAdjacentMarker(frameContext(), true);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SaveProject)) {
