@@ -59,6 +59,7 @@ public:
     [[nodiscard]] float videoAspectRatio() const override { return mVideoAspectRatio; }
     void                setVideoAspectRatio(float ratio) override;
     void                openExportDialog() override;
+    void                focusFirstPersonSubject() override { mDetailsPanel.focusFirstPersonSubject(); }
     [[nodiscard]] int   exportStartTick() const override { return mMenuBar.exportStartTick(); }
     [[nodiscard]] int   exportEndTick() const override { return mMenuBar.exportEndTick(); }
     void                setExportStartTick(int tick) override { mMenuBar.setExportStartTick(tick); }

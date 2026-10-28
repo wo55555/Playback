@@ -244,33 +244,53 @@ std::string playerSubjectLabel(std::span<state::ReplayPlayerView const> players,
     return "playback.refactorEditor.playerPicker.unnamed"_tr() + "  " + uuidPrefix(uuid);
 }
 
-bool drawPlayerPicker(
-    char const*                              popupId,
-    PlayerPickerMode                         mode,
+namespace {
+
+constexpr int kPopupRows    = 9;
+constexpr int kEmbeddedRows = 10;
+
+// Width that fits the longest row, so the popup grows to the names instead of the trigger.
+[[nodiscard]] float preferredContentWidth(std::span<state::ReplayPlayerView const> players) {
+    float const scale   = metrics::scale();
+    float const iconBox = metrics::iconButton();
+    float       widest =
+        ImGui::CalcTextSize("playback.refactorEditor.playerPicker.searchHint"_tr().c_str()).x + iconBox * 2.0f;
+    auto const rows = buildRows(players, {}, true);
+    for (auto const& row : rows) {
+        float width = ImGui::CalcTextSize(row.label.c_str()).x + 16.0f * scale + iconBox;
+        if (!row.hint.empty()) width += 8.0f * scale + ImGui::CalcTextSize(row.hint.c_str()).x;
+        widest = std::max(widest, width);
+    }
+    if (static_cast<int>(rows.size()) > kPopupRows) widest += ImGui::GetStyle().ScrollbarSize;
+    return widest;
+}
+
+struct ListOptions {
+    PlayerPickerMode mode{PlayerPickerMode::Follow};
+    bool             following{};
+    bool             popup{};
+    // Resets the highlight to the current subject and puts the caret in the search box.
+    bool             appearing{};
+    bool             focusSearch{};
+    int              maxRows{kPopupRows};
+};
+
+// Search row plus list. Shared by the anchored popup and the inspector's embedded list.
+void drawListBody(
+    PickerUi&                                ui,
     std::span<state::ReplayPlayerView const> players,
     std::string_view                         current,
-    bool                                     following,
+    ListOptions const&                       options,
     PlayerPickerResult&                      result
 ) {
-    result           = {};
-    ImGuiID const id = ImGui::GetID(popupId);
-    auto&         ui = pickerUi()[id];
-
-    float const font  = metrics::font();
-    float const scale = metrics::scale();
-    float const width = std::clamp(widgets::anchoredPopupTriggerWidth(popupId), font * 20.0f, font * 28.0f);
-    ImGui::SetNextWindowSizeConstraints({width, 0.0f}, {width, FLT_MAX});
-    if (!widgets::beginAnchoredPopup(popupId)) {
-        pickerUi().erase(id);
-        return false;
-    }
-
-    bool const appearing = ImGui::IsWindowAppearing();
+    float const scale     = metrics::scale();
+    bool const  appearing = options.appearing;
     if (appearing) {
-        ui.search[0]  = '\0';
-        ui.highlight  = -1;
-        ImGui::SetKeyboardFocusHere();
+        ui.highlight = -1;
+        if (options.popup) ui.search[0] = '\0';
     }
+    // An inspector list only takes the keyboard when asked, so editor shortcuts keep working.
+    if ((options.popup && appearing) || options.focusSearch) ImGui::SetKeyboardFocusHere();
 
     float const rowHeight = metrics::subRow();
     float const inner     = std::max(1.0f, ImGui::GetContentRegionAvail().x);
@@ -310,7 +330,7 @@ bool drawPlayerPicker(
         &edit
     );
     ImGui::PopStyleColor(3);
-    bool const escape = ImGui::IsKeyPressed(ImGuiKey_Escape);
+    bool const escape = options.popup && ImGui::IsKeyPressed(ImGuiKey_Escape);
     if (hasQuery && escape) {
         // EscapeClearsAll already emptied the buffer. Swallow this press so the popup stays open.
     } else if (!hasQuery && escape) {
@@ -364,15 +384,19 @@ bool drawPlayerPicker(
         }
     }
 
-    float const listHeight = std::min(rowHeight * 9.0f, rowHeight * static_cast<float>(std::max<size_t>(1, rows.size() + (currentMissing ? 1 : 0))));
+    size_t const visibleRows = std::max<size_t>(1, rows.size() + (currentMissing ? 1 : 0));
+    float const  listHeight =
+        rowHeight * static_cast<float>(std::min<size_t>(static_cast<size_t>(options.maxRows), visibleRows));
     ImGui::BeginChild("##player-picker-list", {inner, std::max(rowHeight, listHeight)}, false, ImGuiWindowFlags_None);
-    auto* listDraw = ImGui::GetWindowDrawList();
+    auto*       listDraw = ImGui::GetWindowDrawList();
+    // The child's own width, so rows stop short of its scrollbar.
+    float const rowWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
 
     auto const drawRow = [&](Row const& row, int index, bool pinned) {
         ImVec2 const minimum = ImGui::GetCursorScreenPos();
-        ImVec2 const maximum{minimum.x + inner, minimum.y + rowHeight};
+        ImVec2 const maximum{minimum.x + rowWidth, minimum.y + rowHeight};
         ImGui::PushID(index);
-        bool const pressed = ImGui::InvisibleButton("##player-row", {inner, rowHeight});
+        bool const pressed = ImGui::InvisibleButton("##player-row", {rowWidth, rowHeight});
         bool const hovered = ImGui::IsItemHovered();
         ImGui::PopID();
         bool const selected = !pinned && index == highlightedRow;
@@ -384,10 +408,16 @@ bool drawPlayerPicker(
         ImU32 const color = row.selectable ? theme::kText : theme::kTextDim;
         float const textY = widgets::textYForCentre(minimum.y + rowHeight * 0.5f, row.label.c_str());
         float       textX = minimum.x + 8.0f * scale;
-        listDraw->PushClipRect(minimum, maximum, true);
+        // Text stops before the check mark; a name that still does not fit shows in full on hover.
+        float const textRight = maximum.x - iconBox;
+        float const needed    = ImGui::CalcTextSize(row.label.c_str()).x
+                           + (row.hint.empty() ? 0.0f : 8.0f * scale + ImGui::CalcTextSize(row.hint.c_str()).x);
+        bool const  clipped   = textX + needed > textRight;
+        listDraw->PushClipRect(minimum, {textRight, maximum.y}, true);
         listDraw->AddText({textX, textY}, color, row.label.c_str());
         textX += ImGui::CalcTextSize(row.label.c_str()).x + 8.0f * scale;
         if (!row.hint.empty()) listDraw->AddText({textX, textY}, theme::kTextDim, row.hint.c_str());
+        listDraw->PopClipRect();
         if (active) {
             widgets::drawIconAtCentre(
                 listDraw,
@@ -396,9 +426,10 @@ bool drawPlayerPicker(
                 theme::kAccent
             );
         }
-        listDraw->PopClipRect();
-        if (!pinned && !row.selectable && hovered) {
-            widgets::hoverTooltip("playback.refactorEditor.playerPicker.absentHint"_tr().c_str());
+        if (hovered && (clipped || (!pinned && !row.selectable))) {
+            std::string tip = row.hint.empty() ? row.label : row.label + "  " + row.hint;
+            if (!pinned && !row.selectable) tip += "\n" + "playback.refactorEditor.playerPicker.absentHint"_tr();
+            widgets::hoverTooltip(tip.c_str());
         }
         if (edit.move != 0 && selected) ImGui::SetScrollHereY(0.5f);
         if (!pinned && pressed && row.selectable) {
@@ -428,8 +459,9 @@ bool drawPlayerPicker(
         }
         if (row.kind == Row::Kind::Note) {
             float const noteY = widgets::textYForCentre(ImGui::GetCursorScreenPos().y + rowHeight * 0.5f, row.label.c_str());
-            float const noteX = ImGui::GetCursorScreenPos().x + std::max(0.0f, (inner - ImGui::CalcTextSize(row.label.c_str()).x) * 0.5f);
-            ImGui::Dummy({inner, rowHeight});
+            float const noteX = ImGui::GetCursorScreenPos().x
+                              + std::max(0.0f, (rowWidth - ImGui::CalcTextSize(row.label.c_str()).x) * 0.5f);
+            ImGui::Dummy({rowWidth, rowHeight});
             listDraw->AddText({noteX, noteY}, theme::kTextDim, row.label.c_str());
             continue;
         }
@@ -437,7 +469,7 @@ bool drawPlayerPicker(
     }
     ImGui::EndChild();
 
-    if (mode == PlayerPickerMode::Follow && following) {
+    if (options.mode == PlayerPickerMode::Follow && options.following) {
         ImGui::Separator();
         if (ImGui::Selectable("playback.refactorEditor.playerPicker.stopFollow"_tr().c_str(), false)) {
             result.stop = true;
@@ -448,10 +480,69 @@ bool drawPlayerPicker(
         result.picked = true;
         result.uuid   = rows[static_cast<size_t>(highlightedRow)].uuid;
     }
+}
+
+} // namespace
+
+bool drawPlayerPicker(
+    char const*                              popupId,
+    PlayerPickerMode                         mode,
+    std::span<state::ReplayPlayerView const> players,
+    std::string_view                         current,
+    bool                                     following,
+    PlayerPickerResult&                      result
+) {
+    result           = {};
+    ImGuiID const id = ImGui::GetID(popupId);
+
+    // Wide enough for the longest name, never narrower than the trigger, capped to a third of the screen.
+    float const font     = metrics::font();
+    float const viewport = ImGui::GetMainViewport()->WorkSize.x;
+    float const padding  = ImGui::GetStyle().WindowPadding.x * 2.0f + 20.0f * metrics::scale();
+    float const ceiling  = std::max(font * 22.0f, viewport * 0.34f);
+    float const width    = std::clamp(
+        std::max(widgets::anchoredPopupTriggerWidth(popupId), preferredContentWidth(players) + padding),
+        font * 22.0f,
+        ceiling
+    );
+    if (!widgets::beginAnchoredPopup(popupId, width)) {
+        pickerUi().erase(id);
+        return false;
+    }
+
+    ListOptions options;
+    options.mode      = mode;
+    options.following = following;
+    options.popup     = true;
+    options.appearing = ImGui::IsWindowAppearing();
+    options.maxRows   = kPopupRows;
+    drawListBody(pickerUi()[id], players, current, options, result);
     if (result.picked || result.stop) ImGui::CloseCurrentPopup();
 
     widgets::endAnchoredPopup();
     return result.picked || result.stop;
+}
+
+bool drawPlayerList(
+    char const*                              listId,
+    PlayerPickerMode                         mode,
+    std::span<state::ReplayPlayerView const> players,
+    std::string_view                         current,
+    bool                                     focusSearch,
+    PlayerPickerResult&                      result
+) {
+    result                 = {};
+    ImGuiID const id       = ImGui::GetID(listId);
+    auto [entry, inserted] = pickerUi().try_emplace(id);
+    ImGui::PushID(listId);
+    ListOptions options;
+    options.mode        = mode;
+    options.appearing   = inserted || focusSearch;
+    options.focusSearch = focusSearch;
+    options.maxRows     = kEmbeddedRows;
+    drawListBody(entry->second, players, current, options, result);
+    ImGui::PopID();
+    return result.picked;
 }
 
 } // namespace playback::editor::ui

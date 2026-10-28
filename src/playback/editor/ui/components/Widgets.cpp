@@ -452,14 +452,17 @@ float anchoredPopupTriggerWidth(char const* popupId) {
     return std::max(0.0f, anchor->second.max.x - anchor->second.min.x);
 }
 
-bool beginAnchoredPopup(char const* popupId) {
+bool beginAnchoredPopup(char const* popupId, float minWidth) {
     ImGuiID const id     = ImGui::GetID(popupId);
     auto&         store  = popupAnchors();
     auto const    anchor = store.find(id);
     if (anchor != store.end() && ImGui::IsPopupOpen(popupId)) {
-        auto const* viewport = ImGui::GetMainViewport();
-        float const gap      = 2.0f * metrics::scale();
-        float const width    = anchor->second.max.x - anchor->second.min.x;
+        auto const*  viewport = ImGui::GetMainViewport();
+        float const  gap      = 2.0f * metrics::scale();
+        float const  width    = std::min(
+            std::max(anchor->second.max.x - anchor->second.min.x, minWidth),
+            std::max(1.0f, viewport->WorkSize.x)
+        );
         ImVec2 const size    = anchor->second.size;
         ImVec2 const workMin = viewport->WorkPos;
         ImVec2 const workMax{viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y};
@@ -468,7 +471,9 @@ bool beginAnchoredPopup(char const* popupId) {
         if (size.y > 0.0f && pos.y + size.y > workMax.y && anchor->second.min.y - gap - size.y >= workMin.y) {
             pos.y = anchor->second.min.y - gap - size.y;
         }
-        if (size.x > 0.0f && pos.x + size.x > workMax.x) pos.x = std::max(workMin.x, workMax.x - size.x);
+        // The known minimum width keeps the first frame on screen before the real size is measured.
+        float const right = std::max(size.x, width);
+        if (pos.x + right > workMax.x) pos.x = std::max(workMin.x, workMax.x - right);
         ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
         ImGui::SetNextWindowSizeConstraints({width, 0.0f}, {FLT_MAX, FLT_MAX});
     }

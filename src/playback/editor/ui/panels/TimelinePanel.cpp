@@ -802,8 +802,6 @@ void TimelinePanel::drawSequenceLane(
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) ctx.submitAction({EditorActionType::ClearPreviewCamera});
             mSequenceMenuSegmentId = segment.id;
             mSequenceMenuTick      = std::clamp(scale.tickAt(mouse.x), 0, ctx.state.totalTicks);
-            mSequenceMenuMin       = minimum;
-            mSequenceMenuMax       = maximum;
             widgets::openAnchoredPopup("##sequence-segment-menu", minimum, maximum);
         }
     }
@@ -1066,36 +1064,11 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
 }
 
 void TimelinePanel::drawSequenceSegmentMenu(PanelContext const& ctx) {
-    auto const drawSubjectPicker = [&] {
-        if (mOpenSubjectPicker) {
-            widgets::openAnchoredPopup("##timeline-subject-picker", mSequenceMenuMin, mSequenceMenuMax);
-            mOpenSubjectPicker = false;
-        }
-        PlayerPickerResult picked;
-        if (!drawPlayerPicker(
-                "##timeline-subject-picker",
-                PlayerPickerMode::SegmentSubject,
-                ctx.state.replayPlayers,
-                ctx.state.replaySubjectChoice,
-                false,
-                picked
-            )
-            || !picked.picked) {
-            return;
-        }
-        EditorAction action{EditorActionType::SetReplaySubjectChoice};
-        action.id = std::move(picked.uuid);
-        ctx.submitAction(std::move(action));
-    };
-    if (!widgets::beginAnchoredPopup("##sequence-segment-menu")) {
-        drawSubjectPicker();
-        return;
-    }
+    if (!widgets::beginAnchoredPopup("##sequence-segment-menu")) return;
     auto const project = ctx.state.project;
     if (!project) {
         ImGui::CloseCurrentPopup();
         widgets::endAnchoredPopup();
-        drawSubjectPicker();
         return;
     }
     auto const segment =
@@ -1104,7 +1077,6 @@ void TimelinePanel::drawSequenceSegmentMenu(PanelContext const& ctx) {
     if (segment == project->sequence.end()) {
         ImGui::CloseCurrentPopup();
         widgets::endAnchoredPopup();
-        drawSubjectPicker();
         return;
     }
 
@@ -1138,14 +1110,11 @@ void TimelinePanel::drawSequenceSegmentMenu(PanelContext const& ctx) {
         if (ImGui::IsItemHovered()) {
             widgets::hoverTooltip("playback.refactorEditor.timeline.subjectShared"_tr().c_str());
         }
-        if (ImGui::MenuItem(
-                "playback.refactorEditor.timeline.changeSubject"_tr().c_str(),
-                nullptr,
-                false,
-                editable
-            )) {
+        // The subject list lives in the inspector, where it has room for full names.
+        if (ImGui::MenuItem("playback.refactorEditor.timeline.changeSubject"_tr().c_str())) {
             ImGui::CloseCurrentPopup();
-            mOpenSubjectPicker = true;
+            ctx.selection.select(state::editing::model::SelectedSequenceSegment{segment->id});
+            ctx.commands.focusFirstPersonSubject();
         }
     }
     if (!project->cameras.empty()) ImGui::Separator();
@@ -1210,7 +1179,6 @@ void TimelinePanel::drawSequenceSegmentMenu(PanelContext const& ctx) {
         ctx.selection.clear();
     }
     widgets::endAnchoredPopup();
-    drawSubjectPicker();
 }
 
 void TimelinePanel::drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput) {
