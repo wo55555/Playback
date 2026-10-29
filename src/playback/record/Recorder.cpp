@@ -2018,7 +2018,7 @@ void Recorder::ensureRecordedItemRegistry(Level& level) {
             auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ItemRegistryPacket);
             if (!packet) throw std::runtime_error("Unable to create the item registry packet");
             *static_cast<ItemRegistryPacket&>(*packet).mItems = ItemData::fromItemRegistry(level.getItemRegistry());
-            mRecordingSyntheticItemRegistry = true;
+            mRecordingSyntheticItemRegistry                   = true;
             recordConfigurationPacket(*packet, describePacketLifecycle(MinecraftPacketIds::ItemRegistryPacket));
             mRecordingSyntheticItemRegistry = false;
         } catch (std::exception const& error) {
