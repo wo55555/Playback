@@ -7,9 +7,10 @@
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
-#include "mc-external/IOptionRegistry.h"
+#include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/game/ClientInputCallbacks.h"
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/gui/controls/UIControl.h"
 #include "mc/client/gui/controls/renderers/HudVignetteRenderer.h"
 #include "mc/client/gui/screens/InGamePlayScreen.h"
 #include "mc/client/player/LocalPlayer.h"
@@ -28,6 +29,7 @@
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/item/ItemStack.h"
 
 #include <Windows.h>
@@ -139,8 +141,8 @@ public:
       mInvisible(subject.getStatusFlag(ActorFlags::Invisible)),
       mHiddenWhenInvisible(subject.getStatusFlag(ActorFlags::HiddenWhenInvisible)) {
         if (mOuter) {
-            mSubject.setStatusFlag(ActorFlags::Invisible, false);
-            mSubject.setStatusFlag(ActorFlags::HiddenWhenInvisible, false);
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::Invisible, false);
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::HiddenWhenInvisible, false);
 
             // The scope leaves the subject's movement in place; with bobbing off it must read as standing still.
             mStateVector = mSubject.mBuiltInComponents->mStateVectorComponent.get();
@@ -156,8 +158,8 @@ public:
         --gPassDepth;
         if (mOuter) {
             if (mStateVector) mStateVector->mPosDelta = mPosDelta;
-            mSubject.setStatusFlag(ActorFlags::HiddenWhenInvisible, mHiddenWhenInvisible);
-            mSubject.setStatusFlag(ActorFlags::Invisible, mInvisible);
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::HiddenWhenInvisible, mHiddenWhenInvisible);
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::Invisible, mInvisible);
         }
     }
 
@@ -185,16 +187,7 @@ LL_TYPE_INSTANCE_HOOK(HandGameTypeHook, ll::memory::HookPriority::High, Player, 
     return origin();
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    HandShowHook,
-    ll::memory::HookPriority::High,
-    InGamePlayScreen,
-    &InGamePlayScreen::_showHand,
-    bool
-) {
-    auto const shown = origin();
-    return shown || subjectPlayer() != nullptr;
-}
+// 26.51 no longer exports InGamePlayScreen::_showHand (26.20: !hideHand && !isSpectator(local player)).
 
 LL_TYPE_INSTANCE_HOOK(
     HandItemInHandHook,
@@ -228,84 +221,22 @@ LL_TYPE_INSTANCE_HOOK(
     &ItemInHandRenderer::renderFirstPerson,
     void,
     BaseActorRenderContext& context,
+    Matrix const&           prevProj,
     ItemContextFlags        itemFlags
 ) {
     auto* subject = subjectPlayer();
     if (!subject) {
-        origin(context, itemFlags);
+        origin(context, prevProj, itemFlags);
         return;
     }
     if (subjectSleepSuppressesHand()) return;
     syncRenderer(*this, *subject);
     ScopedHandPass pass(*subject);
-    origin(context, itemFlags);
+    origin(context, prevProj, itemFlags);
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    HandHandsHook,
-    ll::memory::HookPriority::High,
-    ItemInHandRenderer,
-    &ItemInHandRenderer::_renderFirstPersonHandsAndAttachables,
-    void,
-    BaseActorRenderContext& context,
-    Player&                 player
-) {
-    origin(context, handPlayer(player));
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    HandMainHandHook,
-    ll::memory::HookPriority::High,
-    ItemInHandRenderer,
-    &ItemInHandRenderer::_renderItemInMainHand,
-    void,
-    BaseActorRenderContext& context,
-    Player&                 player,
-    float                   inverseArmHeight,
-    float                   attackValue,
-    float                   unknown
-) {
-    origin(context, handPlayer(player), inverseArmHeight, attackValue, unknown);
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    HandOffhandHook,
-    ll::memory::HookPriority::High,
-    ItemInHandRenderer,
-    &ItemInHandRenderer::_renderItemInOffhand,
-    void,
-    BaseActorRenderContext& context,
-    Player&                 player,
-    float                   a,
-    float                   b,
-    float                   c
-) {
-    origin(context, handPlayer(player), a, b, c);
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    HandShouldRenderOffhandHook,
-    ll::memory::HookPriority::High,
-    ItemInHandRenderer,
-    &ItemInHandRenderer::_shouldRenderOffhandItem,
-    bool,
-    Player& player
-) {
-    return origin(handPlayer(player));
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    HandMainhandItemHook,
-    ll::memory::HookPriority::High,
-    ItemInHandRenderer,
-    &ItemInHandRenderer::renderMainhandItem,
-    void,
-    BaseActorRenderContext& context,
-    Player&                 player,
-    ItemContextFlags        itemFlags
-) {
-    origin(context, handPlayer(player), itemFlags);
-}
+// 26.51 no longer exports _renderFirstPersonHandsAndAttachables, _renderItemInMainHand/_renderItemInOffhand,
+// _shouldRenderOffhandItem and renderMainhandItem; their hooks only passed the player through unchanged.
 
 LL_TYPE_INSTANCE_HOOK(
     HandOffhandItemHook,
@@ -404,15 +335,9 @@ LL_TYPE_INSTANCE_HOOK(
     origin(view, alpha);
 }
 
-// Client RVA span of the screen-overlay renderers (fire, in-block); every other caller keeps the observer.
-constexpr uintptr_t OverlayCallerBegin = 0x1DCC5B0;
-constexpr uintptr_t OverlayCallerEnd   = 0x1DD1D82;
-
-bool isOverlayCaller(void* returnAddress) {
-    static auto const base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    auto const        rva  = reinterpret_cast<uintptr_t>(returnAddress) - base;
-    return rva >= OverlayCallerBegin && rva < OverlayCallerEnd;
-}
+// No caller range is configured for the screen-overlay renderers (fire, in-block) on 1.26.51, so the overlays keep
+// the observer.
+bool isOverlayCaller(void*) { return false; }
 
 // Follow mode parks the observer on the subject, so only the overlays are redirected; the render list and name tags
 // keep the observer.
@@ -429,7 +354,9 @@ LL_TYPE_INSTANCE_HOOK(
     if (!subject || !isOverlayCaller(_ReturnAddress())) return actor;
     // The scope overlay reads LocalPlayer-only members, which a remote subject lacks; it follows the observer via
     // isScoping.
-    return !subject->isScoping() && !subject->isUsingItem() ? subject : actor;
+    // 26.51 no longer exports Player::isUsingItem; it reported a non-empty mItemInUse item.
+    bool const usingItem = !subject->mItemInUse->mItem->isNull();
+    return !subject->isScoping() && !usingItem ? subject : actor;
 }
 
 // Vanilla darkens a sleeping player's screen with PlayerSleepFadeEffectSystem::Fade, which runs the registry-context
@@ -448,27 +375,31 @@ LL_TYPE_INSTANCE_HOOK(
     SleepVignetteHook,
     ll::memory::HookPriority::High,
     HudVignetteRenderer,
-    &HudVignetteRenderer::_renderVignette,
-    bool,
+    &HudVignetteRenderer::$render,
+    void,
     MinecraftUIRenderContext& renderContext,
     IClientInstance&          client,
-    float                     undergroundness,
-    int                       w,
-    int                       h
+    UIControl&                owner,
+    int                       pass
 ) {
+    // 26.51 no longer exports _renderVignette; the fill uses the vignette control's own size.
+    auto const size = owner.mSize.get();
+    float const w   = size.x;
+    float const h   = size.y;
     bool const thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
     if (isReplaySubjectViewDriven() && !thirdPersonFollow && replaySubjectViewWeight() > 0.0f) {
         float const progress = std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
         float const alpha    = SleepFadeTargetA * progress;
         if (alpha > 0.0f) {
-            renderContext.fillRectangle(
-                RectangleArea(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), false),
-                mce::Color(SleepFadeRed, SleepFadeGreen, SleepFadeBlue, 1.0f),
-                alpha
-            );
+            RectangleArea area{};
+            area._x0 = 0.0f;
+            area._x1 = w;
+            area._y0 = 0.0f;
+            area._y1 = h;
+            renderContext.fillRectangle(area, mce::Color(SleepFadeRed, SleepFadeGreen, SleepFadeBlue, 1.0f), alpha);
         }
     }
-    return origin(renderContext, client, undergroundness, w, h);
+    origin(renderContext, client, owner, pass);
 }
 
 // The recorded perspective is first person; a toggle while following would be undone by the follow loop anyway.
@@ -491,31 +422,8 @@ LL_TYPE_INSTANCE_HOOK(PlayerIsScopingHook, ll::memory::HookPriority::High, Playe
     return scoping || !subject || subject == this ? scoping : subject->isScoping();
 }
 
-// The screen overlay reads these LocalPlayer-only fields from the remote subject, whose smaller object yields heap
-// garbage.
-float neutralPortalTime(LocalPlayer const& self, float raw) {
-    return static_cast<Player const&>(self).isLocalPlayer() ? raw : 0.0f;
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    PortalEffectTimeHook,
-    ll::memory::HookPriority::High,
-    LocalPlayer,
-    &LocalPlayer::getPortalEffectTime,
-    float
-) {
-    return neutralPortalTime(*this, origin());
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    OPortalEffectTimeHook,
-    ll::memory::HookPriority::High,
-    LocalPlayer,
-    &LocalPlayer::getOPortalEffectTime,
-    float
-) {
-    return neutralPortalTime(*this, origin());
-}
+// 26.51 no longer exports LocalPlayer::getPortalEffectTime/getOPortalEffectTime. Their guards only mattered while the
+// overlay received the remote subject, which isOverlayCaller no longer allows.
 
 // Vanilla grows the distortion 0.0066667 per tick while nausea lasts over 60 ticks and fades it 0.05 per tick.
 struct NauseaRamp {
@@ -596,21 +504,13 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
         if (installed) return;
         gHeights.reset();
         slots = {
-            makeSlot<HandShowHook>("showHand"),
             makeSlot<HandGameTypeHook>("gameType"),
             makeSlot<HandItemInHandHook>("itemInHand"),
             makeSlot<HandRenderFirstPersonHook>("renderFirstPerson"),
-            makeSlot<HandHandsHook>("hands"),
-            makeSlot<HandMainHandHook>("mainHand"),
-            makeSlot<HandOffhandHook>("offhand"),
-            makeSlot<HandShouldRenderOffhandHook>("shouldRenderOffhand"),
-            makeSlot<HandMainhandItemHook>("mainhandItem"),
             makeSlot<HandOffhandItemHook>("offhandItem"),
             makeSlot<HandMiniMapHook>("miniMap"),
             makeSlot<CameraTargetHook>("cameraTarget"),
             makeSlot<BobViewHook>("bobView"),
-            makeSlot<PortalEffectTimeHook>("portalEffectTime"),
-            makeSlot<OPortalEffectTimeHook>("oPortalEffectTime"),
             makeSlot<PortalDataHook>("portalData"),
             makeSlot<PlayerIsScopingHook>("isScoping"),
             makeSlot<SleepVignetteHook>("sleepVignette"),
