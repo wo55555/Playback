@@ -31,11 +31,20 @@ bool             gSurvivalUiOk{};
 // answers into the HUD controller's own flags, so the screen model keeps the observer's real answer.
 bool isHudFlagCaller(void*) { return false; }
 
-// Only while the view follows the recorded player, and only once its game mode is known.
+// While a replay subject is on screen. Another player's unknown or spectator mode still shows the survival HUD,
+// because the observer itself is a spectator and would otherwise hide the hotbar.
 std::optional<GameType> drivenGameType() {
     // A followed mob has no hotbar or hearts to show; the spectator observer's own HUD stays.
     if (!isReplaySubjectViewDriven() || !isReplaySubjectPlayer()) return std::nullopt;
     int const value = gGameType.load(std::memory_order_acquire);
+    if (!isReplaySubjectRecorder()) {
+        if (value == UnknownGameType) return GameType::Survival;
+        auto const mode = static_cast<GameType>(value);
+        if (mode == GameType::Spectator || mode == GameType::Default || mode == GameType::Undefined) {
+            return GameType::Survival;
+        }
+        return mode;
+    }
     if (value == UnknownGameType) return std::nullopt;
     return static_cast<GameType>(value);
 }
