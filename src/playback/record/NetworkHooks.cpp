@@ -24,6 +24,8 @@
 #include "mc/network/packet/AvailableActorIdentifiersPacket.h"
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/PlayerSkinPacket.h"
+#include "mc/network/packet/ItemData.h"
+#include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
@@ -67,6 +69,7 @@ struct NetworkHookState {
     bool resourcePacksInfo{};
     bool resourcePackStack{};
     bool startGame{};
+    bool itemRegistry{};
     bool actorIdentifiers{};
     bool completion{};
     bool packetObserver{};
@@ -97,10 +100,12 @@ struct NetworkHookState {
             && !updateBlockSynced && !updateSubChunkBlocks && !addPlayer && !playerList && !playerSkin;
     }
 
-    [[nodiscard]] bool resourceHandlersInstalled() const { return resourcePacksInfo && resourcePackStack && startGame; }
+    [[nodiscard]] bool resourceHandlersInstalled() const {
+        return resourcePacksInfo && resourcePackStack && startGame && itemRegistry;
+    }
 
     [[nodiscard]] bool resourceHandlersRemoved() const {
-        return !resourcePacksInfo && !resourcePackStack && !startGame;
+        return !resourcePacksInfo && !resourcePackStack && !startGame && !itemRegistry;
     }
 };
 
@@ -434,6 +439,38 @@ LL_TYPE_INSTANCE_HOOK(
     replaySession.applyRecordedBlockRegistry();
 }
 
+// The server's own table carries the data-driven item versions and components (icons) that a table rebuilt from the
+// client registry loses. The client builds its registry from the first table only, so during replay the local
+// world's table is swapped for the recorded one.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackItemRegistryHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&  source,
+    ItemRegistryPacket const& packet
+) {
+    auto& replaySession = ReplaySession::getInstance();
+    if (!replaySession.isIsolatingReplayWorld()) {
+        Recorder::getInstance().recordGamePacket(packet);
+        origin(source, packet);
+        return;
+    }
+    if (replaySession.isInjectingPacket(&packet)) {
+        origin(source, packet);
+        return;
+    }
+
+    auto recorded = replaySession.takeRecordedItemRegistry();
+    if (!recorded) {
+        origin(source, packet);
+        return;
+    }
+    origin(source, *recorded);
+    replaySession.logRecordedItemRegistryApplied(*recorded);
+}
+
 // Materials are only baked inside this pass, so the recorded blocks must be registered before it runs.
 LL_TYPE_INSTANCE_HOOK(
     PlaybackRenderFinalizerHook,
@@ -522,6 +559,7 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo)
             && installNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack)
             && installNetworkHook<PlaybackStartGameHook>(state.startGame)
+            && installNetworkHook<PlaybackItemRegistryHook>(state.itemRegistry)
             && installNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers)
             && installNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion)
             && installNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver)
@@ -562,6 +600,7 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver);
         removeNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion);
         removeNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers);
+        removeNetworkHook<PlaybackItemRegistryHook>(state.itemRegistry);
         removeNetworkHook<PlaybackStartGameHook>(state.startGame);
         removeNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack);
         removeNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo);
