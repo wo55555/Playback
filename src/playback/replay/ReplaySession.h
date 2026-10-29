@@ -34,6 +34,7 @@ class MinecraftScreenModel;
 class Player;
 class SerializedSkinRef;
 class CompoundTag;
+class ItemRegistryPacket;
 class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
 class StartGamePacket;
@@ -299,6 +300,9 @@ private:
     std::shared_ptr<StartGamePacket const> mReplayStartGame;
     bool                                   mRecordedBlockRegistryApplied{};
 
+    std::atomic<std::shared_ptr<ItemRegistryPacket const>> mReplayItemRegistry;
+    std::atomic_bool                                       mRecordedItemRegistryApplied{};
+
 public:
     bool mIsProcessingSnapshot = false;
 
@@ -374,6 +378,8 @@ private:
     void releaseReplayResourcePacks();
 
     void prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
+
+    void prepareRecordedItemRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
 
     size_t preloadRecordedBlockGeometry(std::vector<ServerBlockProperty> const& properties);
 
@@ -625,6 +631,12 @@ public:
     }
 
     void applyRecordedBlockRegistry();
+
+    // The client builds its item registry once, from the first ItemRegistryPacket it handles. The local world's
+    // packet is swapped for the recorded one; returns null when there is none or it was already handed out.
+    [[nodiscard]] std::shared_ptr<ItemRegistryPacket const> takeRecordedItemRegistry();
+
+    void logRecordedItemRegistryApplied(ItemRegistryPacket const& packet) const;
 
     [[nodiscard]] bool shouldIsolateChunkPackets() const;
 
