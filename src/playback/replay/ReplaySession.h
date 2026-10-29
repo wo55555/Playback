@@ -39,6 +39,7 @@ class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
 class StartGamePacket;
 struct DimensionArguments;
+struct FollowedHudMirror;
 struct ServerBlockProperty;
 enum class MinecraftPacketIds : int;
 
@@ -307,6 +308,8 @@ private:
     std::mutex       mReplayItemRegistryMutex;
     std::string      mReplayItemRegistryPayload;
     std::atomic_bool mRecordedItemRegistryApplied{};
+    // Observer hotbar saved while another player's HUD is shown, so the recorder's slots can be put back.
+    std::unique_ptr<FollowedHudMirror> mFollowedHudMirror;
 
 public:
     bool mIsProcessingSnapshot = false;
@@ -452,6 +455,8 @@ private:
     void refreshReplayPlayerRoster();
     void restoreObserverSkin();
     void applyObserverSkin(::SerializedSkinRef const& skin);
+    void syncFollowedPlayerHud();
+    void restoreFollowedPlayerHud();
     void rebindReplaySubject();
     void refreshReplaySubjectBinding();
     // Actor id the current choice names: the recorder, a player uuid or an "entity:" id.
