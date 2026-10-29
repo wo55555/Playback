@@ -48,6 +48,13 @@ BarrierState& barrierState() {
 }
 
 thread_local MultiPlayerLevel* tickBoundaryLevel{};
+// Nonzero while this thread holds captureMutex. Draining chunk tasks can re-enter level join.
+thread_local int captureHoldDepth{};
+
+void endCaptureHold() noexcept {
+    --captureHoldDepth;
+    barrierState().captureMutex.unlock();
+}
 
 MultiPlayerLevel* getCurrentLevel() {
     auto level = ll::service::getMultiPlayerLevel();
@@ -286,7 +293,7 @@ ChunkMutationBarrier::CaptureGuard::~CaptureGuard() noexcept { release(); }
 void ChunkMutationBarrier::CaptureGuard::release() noexcept {
     if (!mAcquired) return;
 
-    barrierState().captureMutex.unlock();
+    endCaptureHold();
     mAcquired = false;
 }
 
@@ -298,11 +305,12 @@ ChunkMutationBarrier::CaptureGuard ChunkMutationBarrier::capture(std::chrono::mi
     auto failed = [&] { return CaptureGuard(false, std::chrono::steady_clock::now() - started); };
     if (!tickBoundaryLevel) return failed();
     if (!state.captureMutex.try_lock_until(deadline)) return failed();
+    ++captureHoldDepth;
 
     auto binding = readBinding();
     if (!binding.level || !binding.manager || !binding.group || !captureContextMatches(binding)
         || !drainTargetGroups(binding, deadline)) {
-        state.captureMutex.unlock();
+        endCaptureHold();
         return failed();
     }
 
@@ -317,7 +325,8 @@ void ChunkMutationBarrier::setActiveLevel(MultiPlayerLevel* level) {
         manager             = currentManager.get();
     }
 
-    std::lock_guard captureLock(state.captureMutex);
+    std::unique_lock captureLock(state.captureMutex, std::defer_lock);
+    if (captureHoldDepth == 0) captureLock.lock();
     std::lock_guard bindingLock(state.bindingMutex);
 
     if (state.activeLevel != level) {
