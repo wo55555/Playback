@@ -50,6 +50,7 @@
 #include "mc/network/packet/DimensionDataPacket.h"
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
+#include "mc/world/item/registry/ItemRegistryManager.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
@@ -85,10 +86,10 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/item/registry/ItemRegistryRef.h"
 #include "mc/world/level/ActorRuntimeIDManager.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/DimensionManager.h"
-#include "mc/world/item/registry/ItemRegistryRef.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
 #include "mc/world/level/block/Block.h"
@@ -114,6 +115,7 @@
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
+
 
 #include "snappy.h"
 #include "uuid.h"
@@ -462,6 +464,10 @@ bool ReplaySession::start(std::filesystem::path filePath) {
 }
 
 void ReplaySession::clearReplayData() {
+    {
+        std::lock_guard lock(mReplayItemRegistryMutex);
+        mReplayItemRegistryPayload.clear();
+    }
     mReplayDimensionProfile.store({}, std::memory_order_release);
     mStopRequested.store(false, std::memory_order_release);
     mRequestedSeekTick.store(-1, std::memory_order_release);
@@ -1480,47 +1486,79 @@ void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedG
 }
 
 void ReplaySession::prepareRecordedItemRegistry(std::vector<PlaybackSerializedGamePacket> const& packets) {
-    mReplayItemRegistry.store(nullptr, std::memory_order_release);
+    std::lock_guard lock(mReplayItemRegistryMutex);
+    mReplayItemRegistryPayload.clear();
     mRecordedItemRegistryApplied.store(false, std::memory_order_release);
 
-    PlaybackSerializedGamePacket const* serialized = nullptr;
     for (auto it = packets.rbegin(); it != packets.rend(); ++it) {
-        if (it->mPacketId == static_cast<int32_t>(MinecraftPacketIds::ItemRegistryPacket)) {
-            serialized = &*it;
-            break;
-        }
-    }
-    if (!serialized) {
-        getLogger().warn("Replay has no item registry; custom items in this recording stay unresolved");
+        if (it->mPacketId != static_cast<int32_t>(MinecraftPacketIds::ItemRegistryPacket)) continue;
+        mReplayItemRegistryPayload = it->mPayload;
         return;
     }
+    getLogger().warn("Replay has no item registry; custom items in this recording stay unresolved");
+}
 
-    try {
+std::shared_ptr<ItemRegistryPacket const> ReplaySession::takeRecordedItemRegistry() {
+    std::string payload;
+    {
+        std::lock_guard lock(mReplayItemRegistryMutex);
+        payload.swap(mReplayItemRegistryPayload);
+    }
+    if (payload.empty()) return nullptr;
+
+    auto restore = [&] {
+        std::lock_guard lock(mReplayItemRegistryMutex);
+        if (mReplayItemRegistryPayload.empty()) mReplayItemRegistryPayload = std::move(payload);
+    };
+    auto decode = [&]() -> std::shared_ptr<ItemRegistryPacket const> {
         auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ItemRegistryPacket);
         if (!packet) throw std::runtime_error("Unable to create a recorded item registry packet");
 
-        ReadOnlyBinaryStream stream(serialized->mPayload, false);
+        ReadOnlyBinaryStream stream(payload, false);
         if (!packet->read(stream) || !stream.ensureReadCompleted()) {
             throw std::runtime_error("Unable to decode the recorded item registry");
         }
-        mReplayItemRegistry.store(std::static_pointer_cast<ItemRegistryPacket>(packet), std::memory_order_release);
+        mRecordedItemRegistryApplied.store(true, std::memory_order_release);
+        return std::static_pointer_cast<ItemRegistryPacket const>(std::move(packet));
+    };
+
+    // ItemRegistryPacket::read locks the thread-local item registry and asserts when that lock fails. Replay start
+    // is still the main menu, so the bytes stay stored until this hook. The join dispatcher has already installed
+    // that registry; if it has not, keep the bytes for a later packet instead of crashing.
+    try {
+        if (ItemRegistryManager::getItemRegistry().mWeakRegistry.expired()) {
+            auto client = ll::service::getClientInstance();
+            if (!client) {
+                restore();
+                getLogger().error("Unable to decode the recorded item registry because the client is unavailable");
+                return nullptr;
+            }
+            auto registry = client->getItemRegistry();
+            if (registry.mWeakRegistry.expired()) {
+                restore();
+                getLogger().error(
+                    "Unable to decode the recorded item registry because the client item registry is not ready"
+                );
+                return nullptr;
+            }
+            ItemRegistryManager::ScopedItemRegistry scope(registry.mWeakRegistry);
+            return decode();
+        }
+        return decode();
     } catch (std::exception const& exception) {
         getLogger().error("Unable to prepare the recorded item registry: {}", exception.what());
     } catch (...) {
         getLogger().error("Unable to prepare the recorded item registry");
     }
-}
-
-std::shared_ptr<ItemRegistryPacket const> ReplaySession::takeRecordedItemRegistry() {
-    auto packet = mReplayItemRegistry.exchange(nullptr, std::memory_order_acq_rel);
-    if (packet) mRecordedItemRegistryApplied.store(true, std::memory_order_release);
-    return packet;
+    return nullptr;
 }
 
 void ReplaySession::logRecordedItemRegistryApplied(ItemRegistryPacket const& packet) const {
     auto client = ll::service::getClientInstance();
     if (!client) return;
     auto const registry = client->getItemRegistry();
+    // lookupByName locks the ref and asserts when it is empty.
+    if (registry.mWeakRegistry.expired()) return;
 
     int custom   = 0;
     int resolved = 0;
@@ -1530,12 +1568,8 @@ void ReplaySession::logRecordedItemRegistryApplied(ItemRegistryPacket const& pac
         ++custom;
         if (registry.lookupByName(HashedString{name})) ++resolved;
     }
-    getLogger().info(
-        "Registered recorded item ids items={} custom={} resolved={}",
-        packet.mItems->size(),
-        custom,
-        resolved
-    );
+    getLogger()
+        .info("Registered recorded item ids items={} custom={} resolved={}", packet.mItems->size(), custom, resolved);
 }
 
 void ReplaySession::applyRecordedBlockRegistry() {
