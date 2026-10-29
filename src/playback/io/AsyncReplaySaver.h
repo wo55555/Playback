@@ -41,7 +41,7 @@ struct PlaybackSerializedGamePacket {
 };
 
 struct PlaybackSnapshotContext {
-    static constexpr int32_t FormatVersion = 2;
+    static constexpr int32_t FormatVersion = 1;
 
     int32_t dimensionId{};
     int32_t dimensionMinHeight{};
