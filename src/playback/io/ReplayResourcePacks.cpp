@@ -22,11 +22,12 @@
 #include "mc/world/level/PackInstanceId.h"
 #include "mc/resources/CompositePackSource.h"
 #include "mc/resources/DirectoryPackSource.h"
-#include "mc/resources/PackManifest.h"
+#include "mc/resources/Pack.h"
 #include "mc/resources/PackSourceFactory.h"
 #include "mc/resources/RepositorySources.h"
 #include "mc/resources/ResourcePack.h"
 #include "mc/resources/ResourcePackRepository.h"
+#include "mc/scripting/modules/PackManifest.h"
 
 #include "xxhash.h"
 #include "zip.h"
@@ -306,6 +307,13 @@ ZipPackResult zipPackDirectory(
     }
     result.status = ZipPackStatus::Ok;
     return result;
+}
+
+// 26.51 no longer exports ResourcePack::getManifest; the manifest lives on the pack behind the impl.
+PackManifest const& manifestOf(ResourcePack const& pack) {
+    auto const& impl     = *pack.mImpl;
+    auto const& resource = *impl.mPack;
+    return *resource.mManifest;
 }
 
 // Reads the uuid_version key from a pack's manifest.json header.
@@ -608,15 +616,15 @@ ServerPackSnapshot collectServerPacks(std::vector<PlaybackSerializedGamePacket> 
     ServerPackSnapshot result;
     auto               info = decodeLatestPacksInfo(configurationPackets);
     auto               client = ll::service::getClientInstance();
-    if (!info || info->mData->mResourcePacks->empty() || !client) return result;
+    if (!info || info->mResourcePacks->empty() || !client) return result;
 
     std::unordered_set<std::string> announced;
-    for (auto const& pack : *info->mData->mResourcePacks) announced.insert(packKey(*pack.mPackIdVersion));
+    for (auto const& pack : *info->mResourcePacks) announced.insert(packKey(*pack.mPackIdVersion));
 
     auto& repository = client->getResourcePackRepository();
     std::unordered_map<std::string, ServerPackSource> loaded;
     repository.forEachPack([&](ResourcePack const& pack) {
-        auto const& manifest = pack.getManifest();
+        auto const& manifest = manifestOf(pack);
         if (manifest.mPackType != PackType::Resources) return;
         auto key = packKey(*manifest.mIdentity);
         if (!announced.contains(key)) return;
@@ -631,7 +639,7 @@ ServerPackSnapshot collectServerPacks(std::vector<PlaybackSerializedGamePacket> 
         };
     });
 
-    for (auto const& pack : *info->mData->mResourcePacks) {
+    for (auto const& pack : *info->mResourcePacks) {
         auto key = packKey(*pack.mPackIdVersion);
         if (auto it = loaded.find(key); it != loaded.end()) {
             result.announced.push_back(it->second);
@@ -774,7 +782,7 @@ size_t completeServerPacks(std::filesystem::path const& recordDir) {
 
 std::optional<std::filesystem::path> mountReplayPacks(
     IResourcePackRepository&     repository,
-    PacksInfoData const&         info,
+    ResourcePacksInfoPacketPayload const& info,
     std::filesystem::path const& replayFile
 ) {
     auto startedAt = std::chrono::steady_clock::now();
@@ -875,7 +883,7 @@ std::optional<std::filesystem::path> mountReplayPacks(
     std::vector<std::pair<std::string, std::filesystem::path>> notEmbedded;
     size_t                                                     removed = 0;
     repo._removePacksIf([&](ResourcePack const& pack) {
-        auto const& manifest = pack.getManifest();
+        auto const& manifest = manifestOf(pack);
         if (!isCacheOrigin(manifest.mPackOrigin) || manifest.mPackType != PackType::Resources) return false;
         auto key = packKey(*manifest.mIdentity);
         if (!index.keys.contains(key) && announced.contains(key)) {

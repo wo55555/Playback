@@ -72,6 +72,7 @@
 #include "mc/util/VarIntDataOutput.h"
 #include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
+#include "mc/world/actor/player/Inventory.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/PlayerInventory.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
@@ -178,9 +179,11 @@ std::shared_ptr<Packet> makeHudSlotPacket(ContainerID container, int slot, ItemS
 }
 
 std::shared_ptr<Packet> makeHudSelectedSlotPacket(Player& player) {
-    return std::make_shared<PlayerHotbarPacket>(
-        PlayerHotbarPacketPayload(static_cast<uint>(player.getSelectedItemSlot()), ContainerID::Inventory, true)
-    );
+    auto packet               = std::make_shared<PlayerHotbarPacket>();
+    packet->mSelectedSlot     = static_cast<uint>(player.getSelectedItemSlot());
+    packet->mShouldSelectSlot = true;
+    packet->mContainerId      = ContainerID::Inventory;
+    return packet;
 }
 
 // Only what the HUD draws; exhaustion and the like change every tick and would bloat the recording.
@@ -198,11 +201,16 @@ std::shared_ptr<Packet> makeHudAttributePacket(Player& player, ActorRuntimeID ru
     handles.reserve(attributes.size());
     for (auto const* attribute : attributes) {
         auto const instance = player.getAttribute(*attribute);
-        if (instance.mPtr) handles.push_back(instance.mPtr->getHandle());
+        if (!instance.mPtr) continue;
+        AttributeInstanceHandle handle;
+        handle.mAttributeID = attribute->mIDValue;
+        handles.push_back(handle);
     }
-    auto packet        = std::make_shared<UpdateAttributesPacket>(player, handles);
-    packet->mRuntimeId = runtimeId;
-    return packet;
+    // The payload is a prvalue so it initializes the by-value parameter in place; AttributeModifier has no exported
+    // copy constructor, so make_shared's forwarding copy would not link.
+    return std::shared_ptr<UpdateAttributesPacket>(new UpdateAttributesPacket(
+        UpdateAttributesPacketPayload(runtimeId, *player.getAttributes(), handles, PlayerInputTick{})
+    ));
 }
 
 std::shared_ptr<Packet> makeHudGameTypePacket(Player& player, ActorUniqueID target) {
@@ -1424,7 +1432,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
             appendEntityPacket(*makeHudSlotPacket(
                 ContainerID::Inventory,
                 slot,
-                finalPlayer->getSupplies().getItem(slot, ContainerID::Inventory)
+                finalPlayer->getInventory().getItem(slot)
             ));
         }
         for (int slot = 0; slot < HudArmorSlots; ++slot) {
@@ -1916,7 +1924,7 @@ bool Recorder::writeLocalPlayerState() {
         auto const packet = makeHudSlotPacket(
             ContainerID::Inventory,
             slot,
-            localPlayer->getSupplies().getItem(slot, ContainerID::Inventory)
+            localPlayer->getInventory().getItem(slot)
         );
         recordChanged(*packet, mLastLocalHudPackets[static_cast<size_t>(slot)]);
     }
