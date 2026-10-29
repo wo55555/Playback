@@ -242,8 +242,11 @@ private:
     std::recursive_mutex mRecordedBlockRegistryMutex;
     bool                 mRecordedBlockRegistryApplied{};
 
-    std::atomic<std::shared_ptr<ItemRegistryPacket const>> mReplayItemRegistry;
-    std::atomic_bool                                       mRecordedItemRegistryApplied{};
+    // Decoded when the local world's item packet arrives. Reading it at replay start asserts: the packet locks
+    // the thread item registry, which is empty on the main menu.
+    std::mutex       mReplayItemRegistryMutex;
+    std::string      mReplayItemRegistryPayload;
+    std::atomic_bool mRecordedItemRegistryApplied{};
 
 public:
     bool mIsProcessingSnapshot = false;
