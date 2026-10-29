@@ -293,6 +293,7 @@ private:
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
     bool                                                        mReplayCachedResourcePacksLoaded{};
+    std::optional<std::filesystem::path>                        mMountedReplayPacks;
 
     std::shared_ptr<StartGamePacket const> mReplayStartGame;
     bool                                   mRecordedBlockRegistryApplied{};

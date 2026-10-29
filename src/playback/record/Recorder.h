@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "playback/io/AsyncReplaySaver.h"
+#include "playback/io/ReplayResourcePacks.h"
 #include "playback/packet/PlaybackSetEquipmentPacket.h"
 #include "playback/utils/container/LinkedHashMap.h"
 #include "playback/visuals/ReplayThumbnail.h"
@@ -21,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -101,7 +103,8 @@ private:
         int32_t       maxHeight{};
         std::string   name;
     };
-    std::unique_ptr<AsyncReplaySaver> mAsyncReplaySaver;
+    std::unique_ptr<AsyncReplaySaver>           mAsyncReplaySaver;
+    std::unique_ptr<playback::io::packs::PackEmbedWorker> mPackWorker;
 
     std::vector<std::shared_ptr<LevelChunkPacket>>            mSnapshotLevelChunks;
     std::vector<std::shared_ptr<SubChunkPacket>>              mSnapshotSubChunks;
@@ -152,6 +155,10 @@ private:
     bool mCurrentChunkForcePlaySnapshot = false;
     bool mThumbnailCaptureRequested     = false;
     bool mPendingDimensionSnapshot      = false;
+
+    // Zips the finished recording off the client thread; embedded resource packs make this take tens of seconds.
+    // Declared last so it is joined before the rest of the recorder is destroyed.
+    std::jthread mExportThread;
 
 private:
     static constexpr int RECORD_CHUNK_TICKS      = 20 * 60 * 5;
@@ -209,6 +216,9 @@ public:
     void start();
     void pause();
     void stop();
+
+    // Blocks until the last stopped recording has been written to its replay file.
+    void waitForExport();
 
     void setThumbnailCaptureProvider(visuals::ReplayThumbnailCaptureProvider* provider) {
         mThumbnailCaptureProvider.store(provider, std::memory_order_release);

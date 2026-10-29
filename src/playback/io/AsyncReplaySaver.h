@@ -214,6 +214,9 @@ public:
 
     [[nodiscard]] bool isRunning() const { return mRunning; }
 
+    // Fixed after construction, so other threads may read it while the saver runs.
+    [[nodiscard]] std::filesystem::path const& getRecordPath() const { return mRecordPath; }
+
     [[nodiscard]] bool hasError() const;
 
     [[nodiscard]] std::optional<std::string> getError() const;
