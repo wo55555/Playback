@@ -4,6 +4,7 @@
 #include "playback/action/Action.h"
 #include "playback/editor/input/EditorInput.h"
 #include "playback/integration/OptiPistonBridge.h"
+#include "playback/io/ReplayResourcePacks.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/runtime/ClientTickHooks.h"
@@ -2362,6 +2363,12 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
         auto keys = info->mData->collectKeys();
         mReplayCachedResourcePacksLoaded = true;
         repository.addCachedResourcePacks(&keys);
+        // Packs embedded in the replay take over from the local download cache; old replays keep using the cache.
+        try {
+            mMountedReplayPacks = io::packs::mountReplayPacks(repository, *info->mData, mReplayFilePath);
+        } catch (std::exception const& exception) {
+            getLogger().warn("Unable to mount embedded resource packs, using the local cache: {}", exception.what());
+        }
     }
 
     if (!serializedStack) return true;
@@ -2675,14 +2682,19 @@ void ReplaySession::releaseReplayResourcePacks() {
     if (!mReplayCachedResourcePacksLoaded) return;
     mReplayCachedResourcePacksLoaded = false;
 
-    auto client = ll::service::getClientInstance();
-    if (!client) return;
-    try {
-        client->getResourcePackRepository().removePacksLoadedFromCache();
-    } catch (std::exception const& exception) {
-        getLogger().error("Unable to release replay resource packs loaded from cache: {}", exception.what());
-    } catch (...) {
-        getLogger().error("Unable to release replay resource packs loaded from cache");
+    if (auto client = ll::service::getClientInstance()) {
+        try {
+            client->getResourcePackRepository().removePacksLoadedFromCache();
+        } catch (std::exception const& exception) {
+            getLogger().error("Unable to release replay resource packs loaded from cache: {}", exception.what());
+        } catch (...) {
+            getLogger().error("Unable to release replay resource packs loaded from cache");
+        }
+    }
+    // The cache sources pointing at the mount are gone now, so its files can be deleted.
+    if (mMountedReplayPacks) {
+        io::packs::removeMountedPacks(*mMountedReplayPacks);
+        mMountedReplayPacks.reset();
     }
 }
 
