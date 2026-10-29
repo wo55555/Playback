@@ -15,7 +15,7 @@
 struct zip;
 
 class IResourcePackRepository;
-struct PacksInfoData;
+struct ResourcePacksInfoPacketPayload;
 
 namespace playback::io::packs {
 
@@ -99,8 +99,8 @@ private:
 // the replay lacks, as the only cache pack source. Returns nullopt when the replay embeds no packs.
 [[nodiscard]] std::optional<std::filesystem::path> mountReplayPacks(
     IResourcePackRepository&     repository,
-    PacksInfoData const&         info,
-    std::filesystem::path const& replayFile
+    ResourcePacksInfoPacketPayload const& info,
+    std::filesystem::path const&          replayFile
 );
 
 // Keeps the extraction in the cache for the next load of the same replay, or deletes it.

@@ -27,19 +27,9 @@ bool             gCreativeOk{};
 bool             gSpectatorOk{};
 bool             gSurvivalUiOk{};
 
-// Client RVAs (1.26.20.04) of the two functions that copy the screen model's creative / spectator answers into the
-// HUD controller's own flags (HudScreenController::_getDirtyFlag and the initial setup). Every other caller of the
-// screen model keeps the observer's real answer.
-constexpr uintptr_t DirtyFlagBegin  = 0x2E9D150;
-constexpr uintptr_t DirtyFlagEnd    = 0x2E9D304;
-constexpr uintptr_t FlagSetupBegin  = 0x2E87140;
-constexpr uintptr_t FlagSetupEnd    = 0x2E884A0;
-
-bool isHudFlagCaller(void* returnAddress) {
-    static auto const base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    auto const        rva  = reinterpret_cast<uintptr_t>(returnAddress) - base;
-    return (rva >= DirtyFlagBegin && rva < DirtyFlagEnd) || (rva >= FlagSetupBegin && rva < FlagSetupEnd);
-}
+// No caller range is configured on 1.26.51 for the functions that copy the screen model's creative / spectator
+// answers into the HUD controller's own flags, so the screen model keeps the observer's real answer.
+bool isHudFlagCaller(void*) { return false; }
 
 // Only while the view follows the recorded player, and only once its game mode is known.
 std::optional<GameType> drivenGameType() {

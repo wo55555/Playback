@@ -175,7 +175,8 @@ LL_TYPE_INSTANCE_HOOK(
     // Level::tick bumps the tick counter after _subTick; actors such as lingering clouds time their particles by it.
     NativeLevelTickScope nativeTick([this] {
         origin();
-        getLevelData().incrementTick();
+        // 26.51 no longer exports LevelData::incrementTick, so bump the counter it advances directly.
+        ++getLevelData().mCurrentTick->tickID;
     });
     tickPlayback();
 }

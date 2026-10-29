@@ -11,8 +11,10 @@
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/effect/EffectDuration.h"
 #include "mc/world/effect/MobEffect.h"
+#include "mc/world/effect/MobEffectIds.h"
 #include "mc/world/effect/MobEffectInstance.h"
 
 #include <algorithm>
@@ -26,6 +28,10 @@
 namespace playback::visuals {
 
 namespace {
+
+void setActorStatusFlag(Actor& actor, ActorFlags flag, bool value) {
+    SynchedActorDataAccess::setActorFlag(actor.getEntityContext(), flag, value);
+}
 
 struct EntityRenderKeyHash {
     size_t operator()(EntityRenderKey const& key) const noexcept {
@@ -106,9 +112,9 @@ int64_t steadyNs() noexcept {
 }
 
 void publishSubjectNausea(Actor const& subject, long double tick) {
-    auto*       confusion = MobEffect::CONFUSION();
+    auto*       confusion = MobEffect::mMobEffects()[MobEffectIds::Confusion].get();
     auto const* effect    = confusion ? subject.getEffect(*confusion) : nullptr;
-    int const   duration  = effect ? effect->getDuration().mValue : 0;
+    int const   duration  = effect ? effect->mDuration->mValue : 0;
     gNauseaPresent.store(effect != nullptr, std::memory_order_relaxed);
     gNauseaDuration.store(duration, std::memory_order_relaxed);
     gNauseaActive.store(effect && (duration == -1 || duration > 60), std::memory_order_relaxed);
@@ -269,8 +275,8 @@ struct ScopedReplayEntityPose::State {
     ~State() {
         if (gActiveState == this) gActiveState = previous;
         if (hidden) {
-            hidden->actor->setStatusFlag(ActorFlags::HiddenWhenInvisible, hidden->hiddenWhenInvisible);
-            hidden->actor->setStatusFlag(ActorFlags::Invisible, hidden->invisible);
+            setActorStatusFlag(*hidden->actor, ActorFlags::HiddenWhenInvisible, hidden->hiddenWhenInvisible);
+            setActorStatusFlag(*hidden->actor, ActorFlags::Invisible, hidden->invisible);
         }
         for (auto state = actors.rbegin(); state != actors.rend(); ++state) {
             state->stateVector->mPos      = state->statePosition;
@@ -373,8 +379,8 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                     target.actor->getStatusFlag(ActorFlags::Invisible),
                     target.actor->getStatusFlag(ActorFlags::HiddenWhenInvisible),
                 };
-                target.actor->setStatusFlag(ActorFlags::Invisible, true);
-                target.actor->setStatusFlag(ActorFlags::HiddenWhenInvisible, true);
+                setActorStatusFlag(*target.actor, ActorFlags::Invisible, true);
+                setActorStatusFlag(*target.actor, ActorFlags::HiddenWhenInvisible, true);
                 publishSubjectNausea(*target.actor, sample.value());
             }
 

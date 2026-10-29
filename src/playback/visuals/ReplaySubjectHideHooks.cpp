@@ -18,7 +18,6 @@ namespace playback::visuals {
 namespace {
 
 using RenderBasic  = void (ActorRenderDispatcher::*)(BaseActorRenderContext&, Actor&, bool);
-using RenderPosRot = void (ActorRenderDispatcher::*)(BaseActorRenderContext&, Actor&, Vec3 const&, Vec2 const&, bool);
 using RenderCamera =
     void (ActorRenderDispatcher::*)(BaseActorRenderContext&, Actor&, Vec3 const&, Vec3 const&, Vec2 const&, bool);
 
@@ -34,22 +33,6 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     if (isReplayEntityHiddenInScope(entity) && !isReplayFirstPersonHandPass()) return;
     origin(context, entity, ignoreLighting);
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    SubjectHideRenderPosRotHook,
-    ll::memory::HookPriority::Lowest,
-    ActorRenderDispatcher,
-    static_cast<RenderPosRot>(&ActorRenderDispatcher::render),
-    void,
-    BaseActorRenderContext& context,
-    Actor&                  entity,
-    Vec3 const&             pos,
-    Vec2 const&             rot,
-    bool                    ignoreLighting
-) {
-    if (isReplayEntityHiddenInScope(entity) && !isReplayFirstPersonHandPass()) return;
-    origin(context, entity, pos, rot, ignoreLighting);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -73,7 +56,7 @@ LL_TYPE_INSTANCE_HOOK(
 
 void hookReplaySubjectHide(bool enable, SubjectHideReason owner) {
     static bool    installed = false;
-    static bool    basic{}, posRot{}, camera{};
+    static bool    basic{}, camera{};
     static uint8_t owners = 0;
 
     auto const bit = static_cast<uint8_t>(owner);
@@ -84,18 +67,16 @@ void hookReplaySubjectHide(bool enable, SubjectHideReason owner) {
         if (installed) return;
         auto const begin = std::chrono::steady_clock::now();
         basic            = SubjectHideRenderBasicHook::hook() == 0;
-        posRot           = SubjectHideRenderPosRotHook::hook() == 0;
         camera           = SubjectHideRenderCameraHook::hook() == 0;
         installed        = true;
         Playback::getInstance().getSelf().getLogger().debug(
             "Replay subject hide hooks installed in {} ms",
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count()
         );
-        if (!basic || !posRot || !camera) {
+        if (!basic || !camera) {
             Playback::getInstance().getSelf().getLogger().warn(
-                "Replay subject hide hooks incomplete (basic={}, posRot={}, camera={})",
+                "Replay subject hide hooks incomplete (basic={}, camera={})",
                 basic,
-                posRot,
                 camera
             );
         }
@@ -104,7 +85,6 @@ void hookReplaySubjectHide(bool enable, SubjectHideReason owner) {
 
     if (!installed || owners != 0) return;
     if (basic) SubjectHideRenderBasicHook::unhook();
-    if (posRot) SubjectHideRenderPosRotHook::unhook();
     if (camera) SubjectHideRenderCameraHook::unhook();
     installed = false;
 }
