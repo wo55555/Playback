@@ -68,6 +68,13 @@
 #include "mc/network/packet/DimensionDataPacket.h"
 #include "mc/network/packet/InventoryContentPacket.h"
 #include "mc/network/packet/InventorySlotPacket.h"
+#include "mc/network/packet/MobEquipmentPacket.h"
+#include "mc/network/packet/PlayerHotbarPacket.h"
+#include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
+#include "mc/world/actor/player/Inventory.h"
+#include "mc/world/actor/player/PlayerInventory.h"
+#include "mc/world/attribute/AttributeData.h"
+#include "mc/world/item/ItemStack.h"
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/world/item/registry/ItemRegistryManager.h"
@@ -181,6 +188,36 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+// Complete before ReplaySession's destructor so the saved hotbar can be freed.
+struct FollowedHudMirror {
+    bool                       active{};
+    ::ActorUniqueID            subjectId{};
+    int                        savedSelected{};
+    int                        writtenSelected{-1};
+    std::array<::ItemStack, 9> savedHotbar{};
+    std::array<::ItemStack, 9> writtenHotbar{};
+    std::array<::ItemStack, 4> savedArmor{};
+    std::array<::ItemStack, 4> writtenArmor{};
+    ::ItemStack                savedOffhand{};
+    ::ItemStack                writtenOffhand{};
+    // Recorded HUD packets arrive after the mirror has written, so they are kept here instead of applied.
+    size_t                     diverted{};
+    // The recorder's health, hunger and experience, put back on the observer when the mirror ends. AttributeData
+    // cannot be copied (AttributeModifier's copy constructor is not exported), so only the values are kept.
+    struct SavedAttribute {
+        ::HashedString name;
+        float          current{};
+        float          min{};
+        float          max{};
+        float          defaultValue{};
+        float          defaultMin{};
+        float          defaultMax{};
+    };
+    std::vector<SavedAttribute> savedAttributes;
+    // Set when the mirror starts or the followed player changes, so every slot is written once.
+    bool                        forceWrite{};
+};
 
 namespace playback::replay {
 using namespace playback::action;
@@ -325,6 +362,73 @@ void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) 
     }
 }
 
+// The attributes the HUD draws: hearts, absorption, hunger, saturation and the experience bar.
+std::array<Attribute const*, 6> hudAttributes() {
+    return {
+        &SharedAttributes::HEALTH(),
+        &SharedAttributes::ABSORPTION(),
+        &Player::HUNGER(),
+        &Player::SATURATION(),
+        &Player::LEVEL(),
+        &Player::EXPERIENCE(),
+    };
+}
+
+std::optional<FollowedHudMirror::SavedAttribute> readHudAttribute(Actor& actor, Attribute const& attribute) {
+    auto const  instance = actor.getAttributes()->getInstance(attribute);
+    auto const* value    = instance.mPtr;
+    if (!value || value == &BaseAttributeMap::mInvalidInstance()) return std::nullopt;
+    return FollowedHudMirror::SavedAttribute{
+        *attribute.mName,
+        value->mCurrentValue,
+        value->mCurrentMinValue,
+        value->mCurrentMaxValue,
+        value->mDefaultValue,
+        value->mDefaultMinValue,
+        value->mDefaultMaxValue,
+    };
+}
+
+void writeHudAttribute(Player& observer, FollowedHudMirror::SavedAttribute const& value) {
+    auto const& attribute = Attribute::getByName(value.name);
+    if (*attribute.mName != value.name) return;
+    auto& attributes = *observer.getAttributes();
+    auto  instance   = attributes.getMutableInstance(attribute);
+    if (!instance.mPtr || instance.mPtr == &BaseAttributeMap::mInvalidInstance()) return;
+    // Built from the live instance so the modifiers stay; only the values are replaced.
+    AttributeData data{*instance.mPtr};
+    data.mCurrentValue    = value.current;
+    data.mMinValue        = value.min;
+    data.mMaxValue        = value.max;
+    data.mDefaultValue    = value.defaultValue;
+    data.mDefaultMinValue = value.defaultMin;
+    data.mDefaultMaxValue = value.defaultMax;
+    if (value.name == *SharedAttributes::HEALTH().mName && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
+    AttributeModificationContext context{};
+    context.mAttributeMap = &attributes;
+    BaseAttributeMap::updateAttribute(data, instance, context);
+}
+
+// While another player's HUD is shown, the recorder's attribute updates are kept for the restore instead of applied.
+void keepRecordedAttributes(FollowedHudMirror& mirror, UpdateAttributesPacket const& packet) {
+    for (auto const& data : *packet.mAttributeData) {
+        auto const found = std::find_if(mirror.savedAttributes.begin(), mirror.savedAttributes.end(), [&](auto& kept) {
+            return kept.name == *data.mName;
+        });
+        FollowedHudMirror::SavedAttribute value{
+            *data.mName,
+            data.mCurrentValue,
+            data.mMinValue,
+            data.mMaxValue,
+            data.mDefaultValue,
+            data.mDefaultMinValue,
+            data.mDefaultMaxValue,
+        };
+        if (found != mirror.savedAttributes.end()) *found = std::move(value);
+        else mirror.savedAttributes.push_back(std::move(value));
+    }
+}
+
 // Bedrock's WalkDistComponent advances by exactly the horizontal distance moved (measured live, ratio 1.000).
 constexpr float WalkDistancePerBlock = 1.0f;
 
@@ -341,6 +445,14 @@ void tickReplayItemUse(Actor& actor) {
 
 // Tick of the last real step written into each player's PlayerBobComponent. A tick with no movement decays it.
 std::unordered_map<int64_t, int> gReplayHandBobTick;
+
+// A remote player's inventory is never sent to clients; only the held item and its hotbar slot are (MobEquipment).
+// The slots seen so far are kept per runtime id so a followed player's hotbar can be shown.
+struct ReplayHotbar {
+    std::array<ItemStack, 9> items{};
+    int                      selected{-1};
+};
+std::unordered_map<uint64_t, ReplayHotbar> gReplayHotbars;
 
 // PlayerTickBobSystem (1.26.20.04): the held map sways from this component. A remote player never runs that system.
 void updateReplayHandBob(Actor& actor, float horizontalSpeed) {
@@ -551,6 +663,85 @@ void popReplayContainerScreen() {
     getLogger().info("containerPreview pop screen={}", name);
 }
 
+bool sameHudStack(ItemStack const& left, ItemStack const& right) {
+    if (left.isNull() || right.isNull()) return left.isNull() && right.isNull();
+    return left.getId() == right.getId() && left.hasSameAuxValue(right) && left.mCount == right.mCount
+        && left.hasSameUserData(right);
+}
+
+constexpr std::array<SharedTypes::Legacy::ArmorSlot, 4> HudArmorSlots{
+    SharedTypes::Legacy::ArmorSlot::Head,
+    SharedTypes::Legacy::ArmorSlot::Torso,
+    SharedTypes::Legacy::ArmorSlot::Legs,
+    SharedTypes::Legacy::ArmorSlot::Feet,
+};
+
+// While another player's HUD is shown, the recorded local player's inventory packets describe the observer. Keeping
+// them in the mirror's saved slots lets the restore put the recorder's items back, instead of writing them now.
+bool divertRecordedHudPacket(Packet& packet, FollowedHudMirror& mirror) {
+    auto const level = ll::service::getMultiPlayerLevel();
+    auto const toItem = [&](NetworkItemStackDescriptor const& descriptor) {
+        return ItemStack::fromDescriptor(descriptor, level->getBlockPalette(), true);
+    };
+
+    switch (packet.getId()) {
+    case MinecraftPacketIds::InventorySlot: {
+        if (!level) return true;
+        auto&     slotPacket = static_cast<InventorySlotPacket&>(packet);
+        int const slot       = static_cast<int>(slotPacket.mSlot);
+        if (slotPacket.mInventoryId == ContainerID::Inventory && slot >= 0 && slot < 9) {
+            mirror.savedHotbar[static_cast<size_t>(slot)] = toItem(*slotPacket.mItem);
+        } else if (slotPacket.mInventoryId == ContainerID::Armor && slot >= 0 && slot < 4) {
+            mirror.savedArmor[static_cast<size_t>(slot)] = toItem(*slotPacket.mItem);
+        } else if (slotPacket.mInventoryId == ContainerID::Offhand && slot == 0) {
+            mirror.savedOffhand = toItem(*slotPacket.mItem);
+        }
+        ++mirror.diverted;
+        return true;
+    }
+    case MinecraftPacketIds::InventoryContent: {
+        if (!level) return true;
+        auto& content = static_cast<InventoryContentPacket&>(packet);
+        auto& slots   = *content.mSlots;
+        if (content.mInventoryId == ContainerID::Inventory) {
+            int const count = std::min(static_cast<int>(slots.size()), 9);
+            for (int slot = 0; slot < count; ++slot) {
+                mirror.savedHotbar[static_cast<size_t>(slot)] = toItem(slots[static_cast<size_t>(slot)]);
+            }
+        } else if (content.mInventoryId == ContainerID::Armor) {
+            int const count = std::min(static_cast<int>(slots.size()), 4);
+            for (int slot = 0; slot < count; ++slot) {
+                mirror.savedArmor[static_cast<size_t>(slot)] = toItem(slots[static_cast<size_t>(slot)]);
+            }
+        } else if (content.mInventoryId == ContainerID::Offhand && !slots.empty()) {
+            mirror.savedOffhand = toItem(slots.front());
+        }
+        ++mirror.diverted;
+        return true;
+    }
+    case MinecraftPacketIds::PlayerHotbar: {
+        auto const& hotbar = static_cast<PlayerHotbarPacket const&>(packet);
+        if (hotbar.mContainerId == ContainerID::Inventory && hotbar.mShouldSelectSlot) {
+            mirror.savedSelected = std::clamp(static_cast<int>(hotbar.mSelectedSlot), 0, 8);
+        }
+        ++mirror.diverted;
+        return true;
+    }
+    case MinecraftPacketIds::PlayerEquipment: {
+        auto& equipment = static_cast<MobEquipmentPacket&>(packet);
+        if (equipment.mRuntimeId->rawID != record::RecordedPlayerRuntimeIdValue) return false;
+        if (equipment.mContainerId != ContainerID::Inventory || !level) return true;
+        int const slot = std::clamp(static_cast<int>(equipment.mSlot), 0, 8);
+        mirror.savedHotbar[static_cast<size_t>(slot)] = toItem(*equipment.mItem);
+        mirror.savedSelected                          = std::clamp(static_cast<int>(equipment.mSelectedSlot), 0, 8);
+        ++mirror.diverted;
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
 } // namespace
 
 ReplaySession::ReplaySession()  = default;
@@ -663,6 +854,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
 }
 
 void ReplaySession::clearReplayData() {
+    restoreFollowedPlayerHud();
     restoreObserverSkin();
     {
         std::lock_guard lock(mReplayItemRegistryMutex);
@@ -769,6 +961,7 @@ void ReplaySession::clearReplayData() {
     mRecordedEntityIds.clear();
     mRecordedLocalPlayerId.reset();
     gReplayHandBobTick.clear();
+    gReplayHotbars.clear();
     clearReplayPlayers(true);
     visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
@@ -1259,10 +1452,171 @@ void ReplaySession::restoreObserverSkin() {
     getLogger().debug("replay observer skin restored");
 }
 
+void ReplaySession::restoreFollowedPlayerHud() {
+    if (!mFollowedHudMirror || !mFollowedHudMirror->active) {
+        mFollowedHudMirror.reset();
+        return;
+    }
+    auto* observer = mReplayPlayer;
+    auto  mirror   = std::move(mFollowedHudMirror);
+    if (!observer) return;
+
+    auto& inventory = observer->getInventory();
+    for (int slot = 0; slot < 9; ++slot) inventory.setItem(slot, mirror->savedHotbar[static_cast<size_t>(slot)]);
+    for (size_t index = 0; index < HudArmorSlots.size(); ++index) {
+        observer->setArmor(HudArmorSlots[index], mirror->savedArmor[index]);
+    }
+    observer->setOffhandSlot(mirror->savedOffhand);
+    if (observer->mInventory) (void)observer->mInventory->selectSlot(mirror->savedSelected, ContainerID::Inventory);
+    for (auto const& attribute : mirror->savedAttributes) writeHudAttribute(*observer, attribute);
+    getLogger().debug(
+        "replay hud restored selected={} attributes={} diverted={}",
+        mirror->savedSelected,
+        mirror->savedAttributes.size(),
+        mirror->diverted
+    );
+}
+
+void ReplaySession::syncFollowedPlayerHud() {
+    if (!mReplayPlayer) {
+        restoreFollowedPlayerHud();
+        return;
+    }
+    bool const showOther = visuals::isReplaySubjectViewDriven() && visuals::hasReplaySubject()
+                        && !visuals::isReplaySubjectRecorder();
+    if (!showOther) {
+        restoreFollowedPlayerHud();
+        if (visuals::isReplaySubjectViewDriven() && visuals::isReplaySubjectRecorder() && mRecordedLocalPlayerId) {
+            Actor* recorded = mReplayPlayer->getLevel().fetchEntity(*mRecordedLocalPlayerId, false);
+            if (recorded && recorded->isPlayer()) {
+                visuals::setReplayHudGameType(static_cast<int>(static_cast<Player*>(recorded)->getPlayerGameType()));
+            }
+        }
+        return;
+    }
+
+    std::string const choice = replaySubjectChoice();
+    if (choice.empty()) {
+        restoreFollowedPlayerHud();
+        return;
+    }
+    ActorUniqueID id;
+    std::string   name;
+    {
+        std::lock_guard lock(mReplayPlayersMutex);
+        auto const      found = mReplayPlayers.find(choice);
+        if (found == mReplayPlayers.end() || !found->second.present || found->second.recorder) {
+            restoreFollowedPlayerHud();
+            return;
+        }
+        id   = found->second.id;
+        name = found->second.name;
+    }
+    Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+    if (!actor || actor == mReplayPlayer || !actor->isPlayer()) {
+        restoreFollowedPlayerHud();
+        return;
+    }
+
+    auto& subject = static_cast<Player&>(*actor);
+    auto  mode    = subject.getPlayerGameType();
+    if (mode == GameType::Spectator || mode == GameType::Default || mode == GameType::Undefined) {
+        mode = GameType::Survival;
+    }
+    visuals::setReplayHudGameType(static_cast<int>(mode));
+
+    if (!mFollowedHudMirror) mFollowedHudMirror = std::make_unique<FollowedHudMirror>();
+    auto& mirror    = *mFollowedHudMirror;
+    auto& inventory = mReplayPlayer->getInventory();
+    if (!mirror.active || mirror.subjectId != id) {
+        if (mirror.active) {
+            for (auto& written : mirror.writtenHotbar) written = ItemStack{};
+            for (auto& written : mirror.writtenArmor) written = ItemStack{};
+            mirror.writtenOffhand  = ItemStack{};
+            mirror.writtenSelected = -1;
+        } else {
+            for (int slot = 0; slot < 9; ++slot) mirror.savedHotbar[static_cast<size_t>(slot)] = inventory.getItem(slot);
+            for (size_t index = 0; index < HudArmorSlots.size(); ++index) {
+                mirror.savedArmor[index] = mReplayPlayer->getArmor(HudArmorSlots[index]);
+            }
+            mirror.savedOffhand  = mReplayPlayer->getOffhandSlot();
+            mirror.savedSelected = mReplayPlayer->getSelectedItemSlot();
+            mirror.savedAttributes.clear();
+            for (auto const* attribute : hudAttributes()) {
+                if (auto value = readHudAttribute(*mReplayPlayer, *attribute)) {
+                    mirror.savedAttributes.push_back(std::move(*value));
+                }
+            }
+        }
+        mirror.subjectId  = id;
+        mirror.active     = true;
+        mirror.forceWrite = true;
+        getLogger().debug("replay hud mirrored name={}", name);
+    } else {
+        // Anything that changed the observer behind the mirror's back is the recorder's own state; keep it for the
+        // restore.
+        for (int slot = 0; slot < 9; ++slot) {
+            auto const& live = inventory.getItem(slot);
+            if (!sameHudStack(live, mirror.writtenHotbar[static_cast<size_t>(slot)])) {
+                mirror.savedHotbar[static_cast<size_t>(slot)] = live;
+            }
+        }
+        for (size_t index = 0; index < HudArmorSlots.size(); ++index) {
+            auto const& live = mReplayPlayer->getArmor(HudArmorSlots[index]);
+            if (!sameHudStack(live, mirror.writtenArmor[index])) mirror.savedArmor[index] = live;
+        }
+        auto const& offhand = mReplayPlayer->getOffhandSlot();
+        if (!sameHudStack(offhand, mirror.writtenOffhand)) mirror.savedOffhand = offhand;
+        int const selected = mReplayPlayer->getSelectedItemSlot();
+        if (selected != mirror.writtenSelected) mirror.savedSelected = selected;
+    }
+
+    // A remote player's own inventory only ever holds what the vanilla handler put there, and its selected slot stays
+    // 0, so the hotbar is rebuilt from the recorded MobEquipment slots. The held item is always the latest truth.
+    // Rewriting an unchanged slot every tick resets the slot's render state and makes the hotbar flicker.
+    bool const          force   = std::exchange(mirror.forceWrite, false);
+    auto const          tracked = gReplayHotbars.find(subject.getRuntimeID().rawID);
+    ReplayHotbar const* hotbar  = tracked == gReplayHotbars.end() ? nullptr : &tracked->second;
+    int const           selected =
+        std::clamp(hotbar && hotbar->selected >= 0 ? hotbar->selected : subject.getSelectedItemSlot(), 0, 8);
+    auto& subjectInventory = subject.getInventory();
+    for (int slot = 0; slot < 9; ++slot) {
+        ItemStack item = subjectInventory.getItem(slot);
+        if (item.isNull() && hotbar) item = hotbar->items[static_cast<size_t>(slot)];
+        if (slot == selected) item = subject.getCarriedItem();
+        if (force || !sameHudStack(item, inventory.getItem(slot))) inventory.setItem(slot, item);
+        mirror.writtenHotbar[static_cast<size_t>(slot)] = item;
+    }
+    for (size_t index = 0; index < HudArmorSlots.size(); ++index) {
+        ItemStack item = subject.getArmor(HudArmorSlots[index]);
+        if (force || !sameHudStack(item, mReplayPlayer->getArmor(HudArmorSlots[index]))) {
+            mReplayPlayer->setArmor(HudArmorSlots[index], item);
+        }
+        mirror.writtenArmor[index] = item;
+    }
+    ItemStack offhand = subject.getOffhandSlot();
+    if (force || !sameHudStack(offhand, mReplayPlayer->getOffhandSlot())) mReplayPlayer->setOffhandSlot(offhand);
+    mirror.writtenOffhand = offhand;
+    if ((force || mReplayPlayer->getSelectedItemSlot() != selected) && mReplayPlayer->mInventory) {
+        (void)mReplayPlayer->mInventory->selectSlot(selected, ContainerID::Inventory);
+    }
+    mirror.writtenSelected = selected;
+
+    // Hearts, hunger and the experience bar are drawn from the observer's attributes.
+    for (auto const* attribute : hudAttributes()) {
+        auto const wanted = readHudAttribute(subject, *attribute);
+        if (!wanted) continue;
+        auto const shown = readHudAttribute(*mReplayPlayer, *attribute);
+        if (!force && shown && shown->current == wanted->current && shown->max == wanted->max) continue;
+        writeHudAttribute(*mReplayPlayer, *wanted);
+    }
+}
+
 void ReplaySession::rebindReplaySubject() {
     auto const loseSubject = [this](std::string const& missing) {
         visuals::setReplaySubject(std::nullopt);
         restoreObserverSkin();
+        restoreFollowedPlayerHud();
         if (missing.empty() || mReplaySubjectGapChoice == missing) return;
         mReplaySubjectGapChoice = missing;
         getLogger().debug("replay subject pending choice={} reason=missing", missing);
@@ -2010,13 +2364,7 @@ void ReplaySession::tick() {
         forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
         updateContainerPreview();
-        if (mReplayPlayer && mRecordedLocalPlayerId) {
-            // Recordings without the game type packet still carry the mode on the recorded player actor.
-            Actor* recorded = mReplayPlayer->getLevel().fetchEntity(*mRecordedLocalPlayerId, false);
-            if (recorded && recorded->isPlayer()) {
-                (void)visuals::offerReplayHudGameType(static_cast<int>(static_cast<Player*>(recorded)->getPlayerGameType()));
-            }
-        }
+        syncFollowedPlayerHud();
 
         if (mPendingSnapshotApply) {
             if (mPendingReplayDimension) return;
@@ -2328,6 +2676,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mRecordedEntityIds.clear();
     mRecordedLocalPlayerId.reset();
     gReplayHandBobTick.clear();
+    gReplayHotbars.clear();
     clearReplayPlayers(true);
     visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
@@ -3268,6 +3617,7 @@ void ReplaySession::resetDimensionScopedReplayState() {
     mCenterChunkPositions.clear();
     mRecordedEntityIds.clear();
     gReplayHandBobTick.clear();
+    gReplayHotbars.clear();
     clearReplayPlayers(false);
     mRecordedLocalPlayerId.reset();
     visuals::setReplaySubject(std::nullopt);
@@ -4954,6 +5304,13 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
+
+    // The recorded local player's inventory packets land on the observer, which is what the HUD draws. While another
+    // player's HUD is shown they would overwrite it, so they update the saved slots the restore puts back instead.
+    if (mFollowedHudMirror && mFollowedHudMirror->active && divertRecordedHudPacket(*packet, *mFollowedHudMirror)) {
+        return true;
+    }
+
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 
     if (mReplayPlayer) {
@@ -5063,10 +5420,28 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     case MinecraftPacketIds::RemoveObjective:
         mReplayObjectiveNames.erase(*static_cast<RemoveObjectivePacket const&>(*packet).mObjectiveName);
         break;
+    case MinecraftPacketIds::PlayerEquipment: {
+        auto const& equipment = static_cast<MobEquipmentPacket const&>(*packet);
+        if (equipment.mContainerId != ContainerID::Inventory) break;
+        if (equipment.mRuntimeId->rawID == record::RecordedPlayerRuntimeIdValue) break;
+        auto const level = ll::service::getMultiPlayerLevel();
+        if (!level) break;
+        int const slot = equipment.mSlot;
+        if (slot < 0 || slot >= 9) break;
+        auto& hotbar                            = gReplayHotbars[equipment.mRuntimeId->rawID];
+        hotbar.items[static_cast<size_t>(slot)] =
+            ItemStack::fromDescriptor(*equipment.mItem, level->getBlockPalette(), true);
+        hotbar.selected = std::clamp(static_cast<int>(equipment.mSelectedSlot), 0, 8);
+        break;
+    }
     case MinecraftPacketIds::UpdateAttributes: {
         auto& attributes = static_cast<UpdateAttributesPacket&>(*packet);
         if (mReplayPlayer && attributes.mRuntimeId->rawID == record::RecordedPlayerRuntimeIdValue) {
-            mirrorRecordedAttributes(*mReplayPlayer, attributes);
+            if (mFollowedHudMirror && mFollowedHudMirror->active) {
+                keepRecordedAttributes(*mFollowedHudMirror, attributes);
+            } else {
+                mirrorRecordedAttributes(*mReplayPlayer, attributes);
+            }
         }
         break;
     }
@@ -5157,6 +5532,7 @@ bool ReplaySession::clearRecordedEntities() {
     visuals::setReplaySubject(std::nullopt);
     clearReplayPlayers(false);
     gReplayHandBobTick.clear();
+    gReplayHotbars.clear();
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     if (mRecordedEntityIds.empty()) return true;
