@@ -49,6 +49,8 @@
 #include "mc/network/packet/BlockEventPacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
+#include "mc/network/packet/ItemData.h"
+#include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
@@ -87,6 +89,7 @@
 #include "mc/world/level/ActorRuntimeIDManager.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/DimensionManager.h"
+#include "mc/world/item/registry/ItemRegistryRef.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
 #include "mc/world/level/block/Block.h"
@@ -398,6 +401,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             throw std::runtime_error("Unable to prepare the recorded resource-pack configuration");
         }
         prepareRecordedBlockRegistry(configurationPackets);
+        prepareRecordedItemRegistry(configurationPackets);
         auto const& context = mSnapshotContexts.front();
 
         LevelSettings settings;
@@ -1479,6 +1483,65 @@ void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedG
     } catch (...) {
         getLogger().error("Unable to prepare the recorded block registry");
     }
+}
+
+void ReplaySession::prepareRecordedItemRegistry(std::vector<PlaybackSerializedGamePacket> const& packets) {
+    mReplayItemRegistry.store(nullptr, std::memory_order_release);
+    mRecordedItemRegistryApplied.store(false, std::memory_order_release);
+
+    PlaybackSerializedGamePacket const* serialized = nullptr;
+    for (auto it = packets.rbegin(); it != packets.rend(); ++it) {
+        if (it->mPacketId == static_cast<int32_t>(MinecraftPacketIds::ItemRegistryPacket)) {
+            serialized = &*it;
+            break;
+        }
+    }
+    if (!serialized) {
+        getLogger().warn("Replay has no item registry; custom items in this recording stay unresolved");
+        return;
+    }
+
+    try {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ItemRegistryPacket);
+        if (!packet) throw std::runtime_error("Unable to create a recorded item registry packet");
+
+        ReadOnlyBinaryStream stream(serialized->mPayload, false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            throw std::runtime_error("Unable to decode the recorded item registry");
+        }
+        mReplayItemRegistry.store(std::static_pointer_cast<ItemRegistryPacket>(packet), std::memory_order_release);
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to prepare the recorded item registry: {}", exception.what());
+    } catch (...) {
+        getLogger().error("Unable to prepare the recorded item registry");
+    }
+}
+
+std::shared_ptr<ItemRegistryPacket const> ReplaySession::takeRecordedItemRegistry() {
+    auto packet = mReplayItemRegistry.exchange(nullptr, std::memory_order_acq_rel);
+    if (packet) mRecordedItemRegistryApplied.store(true, std::memory_order_release);
+    return packet;
+}
+
+void ReplaySession::logRecordedItemRegistryApplied(ItemRegistryPacket const& packet) const {
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    auto const registry = client->getItemRegistry();
+
+    int custom   = 0;
+    int resolved = 0;
+    for (auto const& item : *packet.mItems) {
+        auto const& name = item.mName->getString();
+        if (name.starts_with("minecraft:")) continue;
+        ++custom;
+        if (registry.lookupByName(HashedString{name})) ++resolved;
+    }
+    getLogger().info(
+        "Registered recorded item ids items={} custom={} resolved={}",
+        packet.mItems->size(),
+        custom,
+        resolved
+    );
 }
 
 void ReplaySession::applyRecordedBlockRegistry() {
@@ -3365,6 +3428,11 @@ bool ReplaySession::applyPendingSnapshotLocalPlayer() {
 bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
     // Keep UI packets for a future first-person handler and let the replay world own client chunk publishing.
     if (shouldIgnoreReplayPacket(packetId)) return true;
+    // The client registry is built once; the recorded table already went in at login in place of the local one.
+    if (packetId == MinecraftPacketIds::ItemRegistryPacket
+        && mRecordedItemRegistryApplied.load(std::memory_order_acquire)) {
+        return true;
+    }
 
     auto packet = MinecraftPackets::createPacket(packetId);
     if (!packet || !mNetworkHandler || !packet->mHandler) {
