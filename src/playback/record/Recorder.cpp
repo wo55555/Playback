@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
 #include "playback/io/AsyncReplaySaver.h"
+#include "playback/io/ReplayResourcePacks.h"
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/record/ChunkMutationBarrier.h"
@@ -598,6 +599,10 @@ void Recorder::saveRecording() {
     mState = State::Idle;
 
     if (saverError || replayPath.empty()) {
+        if (mPackWorker) {
+            mPackWorker->cancel();
+            mPackWorker.reset();
+        }
         getLogger().error(
             "Failed to save recording: {}",
             saverError.value_or("the replay saver did not return a completed recording path")
@@ -613,16 +618,43 @@ void Recorder::saveRecording() {
         return;
     }
 
+    // Only one export at a time, so this one cannot pick the file name of a zip that is still being written.
+    waitForExport();
     auto  outputPath        = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
     auto* thumbnailProvider = mThumbnailCaptureProvider.load(std::memory_order_acquire);
     if (!mThumbnailCaptureRequested || !thumbnailProvider
         || !thumbnailProvider->saveReplayThumbnail(replayPath / "icon.png")) {
         getLogger().warn("Unable to save replay thumbnail for {}", replayPath);
     }
-    if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
-        getLogger().error("Failed to save replay data after recording stopped");
-        return;
-    }
+    bool const completePacks = Playback::getInstance().getConfig().record.embedServerPacks;
+    auto       packWorker    = std::move(mPackWorker);
+    mExportThread = std::jthread([replayPath, outputPath, completePacks, packWorker = std::move(packWorker)]() mutable {
+        auto const startedAt = std::chrono::steady_clock::now();
+        try {
+            if (packWorker) {
+                packWorker->finish();
+                packWorker.reset();
+            }
+            if (completePacks) (void)packs::completeServerPacks(replayPath);
+            if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
+                getLogger().error("Failed to save replay data after recording stopped");
+                return;
+            }
+            getLogger().info(
+                "Exported replay {} in {:.1f} ms",
+                outputPath.filename(),
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startedAt).count()
+            );
+        } catch (std::exception const& exception) {
+            getLogger().error("Failed to save replay data after recording stopped: {}", exception.what());
+        } catch (...) {
+            getLogger().error("Failed to save replay data after recording stopped");
+        }
+    });
+}
+
+void Recorder::waitForExport() {
+    if (mExportThread.joinable()) mExportThread.join();
 }
 
 void Recorder::logRecordedGamePacketSummary() const {
@@ -655,6 +687,11 @@ void Recorder::logRecordedGamePacketSummary() const {
 
 void Recorder::resetStateForNewRecording() {
     mAsyncReplaySaver = std::make_unique<AsyncReplaySaver>();
+    if (Playback::getInstance().getConfig().record.embedServerPacks) {
+        mPackWorker = std::make_unique<packs::PackEmbedWorker>(mAsyncReplaySaver->getRecordPath());
+    } else {
+        mPackWorker.reset();
+    }
 
     mMetadata.chunks.clear();
     mMetadata.totalTicks  = 0;
@@ -1503,6 +1540,12 @@ bool Recorder::writeSnapshot() {
         return false;
     }
 
+    // Packs are zipped on their own thread so the replay writer is not stalled by thousands of small files.
+    if (mPackWorker) {
+        auto packs = packs::collectServerPacks(mSnapshotConfigurationPackets);
+        if (!packs.announced.empty()) mPackWorker->submit(std::move(packs));
+    }
+
     if (!mSnapshotConfigurationPackets.empty()
         && !mAsyncReplaySaver->writeConfigurationPackets(std::move(mSnapshotConfigurationPackets))) {
         auto error = mAsyncReplaySaver->getError();
@@ -2171,6 +2214,10 @@ void Recorder::failRecording(std::string_view reason) { cancelRecording(reason);
 
 void Recorder::cancelRecording(std::string_view reason) {
     getLogger().error("Recording cancelled: {}", reason);
+    if (mPackWorker) {
+        mPackWorker->cancel();
+        mPackWorker.reset();
+    }
     if (mAsyncReplaySaver) {
         mAsyncReplaySaver->cancel();
         mAsyncReplaySaver.reset();
