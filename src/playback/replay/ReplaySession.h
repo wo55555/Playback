@@ -34,10 +34,12 @@ class MinecraftScreenModel;
 class Player;
 class SerializedSkinRef;
 class CompoundTag;
+class ItemRegistryPacket;
 class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
 class StartGamePacket;
 struct DimensionArguments;
+struct FollowedHudMirror;
 enum class MinecraftPacketIds : int;
 
 namespace playback::replay {
@@ -298,6 +300,14 @@ private:
     std::shared_ptr<StartGamePacket const> mReplayStartGame;
     bool                                   mRecordedBlockRegistryApplied{};
 
+    // Decoded when the local world's item packet arrives. Reading it at replay start asserts: the packet locks
+    // the thread item registry, which is empty on the main menu.
+    std::mutex       mReplayItemRegistryMutex;
+    std::string      mReplayItemRegistryPayload;
+    std::atomic_bool mRecordedItemRegistryApplied{};
+    // Observer hotbar saved while another player's HUD is shown, so the recorder's slots can be put back.
+    std::unique_ptr<FollowedHudMirror> mFollowedHudMirror;
+
 public:
     bool mIsProcessingSnapshot = false;
 
@@ -374,6 +384,8 @@ private:
 
     void prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
 
+    void prepareRecordedItemRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
+
     size_t preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties);
 
     size_t injectRecordedBlockMaterialComponents(std::vector<std::pair<std::string, CompoundTag>> const& properties);
@@ -440,6 +452,8 @@ private:
     void refreshReplayPlayerRoster();
     void restoreObserverSkin();
     void applyObserverSkin(::SerializedSkinRef const& skin);
+    void syncFollowedPlayerHud();
+    void restoreFollowedPlayerHud();
     void rebindReplaySubject();
     void refreshReplaySubjectBinding();
     // Actor id the current choice names: the recorder, a player uuid or an "entity:" id.
@@ -624,6 +638,12 @@ public:
     }
 
     void applyRecordedBlockRegistry();
+
+    // The client builds its item registry once, from the first ItemRegistryPacket it handles. The local world's
+    // packet is swapped for the recorded one; returns null when there is none or it was already handed out.
+    [[nodiscard]] std::shared_ptr<ItemRegistryPacket const> takeRecordedItemRegistry();
+
+    void logRecordedItemRegistryApplied(ItemRegistryPacket const& packet) const;
 
     [[nodiscard]] bool shouldIsolateChunkPackets() const;
 

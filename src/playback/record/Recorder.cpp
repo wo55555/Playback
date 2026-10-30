@@ -35,6 +35,8 @@
 #include "mc/network/packet/ClientboundMapItemDataPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
 #include "mc/network/packet/InventorySlotPacket.h"
+#include "mc/network/packet/ItemData.h"
+#include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/LevelSoundEventPacket.h"
@@ -784,6 +786,21 @@ void Recorder::resetStateForNewRecording() {
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mPendingGamePackets.clear();
         mRecordedGamePacketCounts.clear();
+        // A registry built from the previous session's level must not be reused after a server change.
+        if (mItemRegistrySource == ItemRegistrySource::Synthetic) {
+            auto const itemRegistryId = static_cast<int32_t>(MinecraftPacketIds::ItemRegistryPacket);
+            std::erase_if(mConfigurationPackets, [itemRegistryId](auto const& cached) {
+                return cached.mPacketId == itemRegistryId;
+            });
+            mConfigurationPacketIndices.clear();
+            for (size_t index = 0; index < mConfigurationPackets.size(); ++index) {
+                mConfigurationPacketIndices.insert_or_assign(mConfigurationPackets[index].mPacketId, index);
+            }
+            mItemRegistrySource         = ItemRegistrySource::None;
+            mItemRegistryItems          = 0;
+            mItemRegistryCustom         = 0;
+            mItemRegistryComponentBased = 0;
+        }
     }
     {
         std::scoped_lock lock(mPendingPortableChunksMutex);
@@ -1251,6 +1268,8 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
             mSnapshotFailure = "Unable to create snapshot weather packets";
             return SnapshotCaptureResult::Failed;
         }
+
+        ensureRecordedItemRegistry(level);
 
         auto actors = level.getRuntimeActorList();
 
@@ -1954,11 +1973,64 @@ void Recorder::recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallba
     }
 }
 
+void Recorder::ensureRecordedItemRegistry(Level& level) {
+    auto const packetId = static_cast<int32_t>(MinecraftPacketIds::ItemRegistryPacket);
+    bool       recorded = false;
+    {
+        std::scoped_lock lock(mPendingGamePacketsMutex);
+        recorded = mConfigurationPacketIndices.contains(packetId);
+    }
+    if (!recorded) {
+        // Fallback for sessions joined before recording hooks were installed. It lacks the server's item components.
+        try {
+            auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ItemRegistryPacket);
+            if (!packet) throw std::runtime_error("Unable to create the item registry packet");
+            *static_cast<ItemRegistryPacket&>(*packet).mItems = ItemData::fromItemRegistry(level.getItemRegistry());
+            mRecordingSyntheticItemRegistry                   = true;
+            recordConfigurationPacket(*packet, describePacketLifecycle(MinecraftPacketIds::ItemRegistryPacket));
+            mRecordingSyntheticItemRegistry = false;
+        } catch (std::exception const& error) {
+            mRecordingSyntheticItemRegistry = false;
+            getLogger().error("Unable to record the item registry: {}", error.what());
+        } catch (...) {
+            mRecordingSyntheticItemRegistry = false;
+            getLogger().error("Unable to record the item registry");
+        }
+    }
+
+    char const* source = "none";
+    if (mItemRegistrySource == ItemRegistrySource::Original) source = "original";
+    else if (mItemRegistrySource == ItemRegistrySource::Synthetic) source = "synthetic";
+    getLogger().info(
+        "Recorded item registry items={} custom={} componentBased={} source={}",
+        mItemRegistryItems,
+        mItemRegistryCustom,
+        mItemRegistryComponentBased,
+        source
+    );
+}
+
 void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSemantics const& semantics) {
     try {
         if (!semantics.isConfiguration()) return;
 
         auto const packetType = packet.getId();
+
+        if (packetType == MinecraftPacketIds::ItemRegistryPacket) {
+            int total          = 0;
+            int custom         = 0;
+            int componentBased = 0;
+            for (auto const& item : *static_cast<ItemRegistryPacket const&>(packet).mItems) {
+                ++total;
+                if (!item.mName->getString().starts_with("minecraft:")) ++custom;
+                if (static_cast<bool>(item.mIsComponentBased)) ++componentBased;
+            }
+            mItemRegistryItems          = total;
+            mItemRegistryCustom         = custom;
+            mItemRegistryComponentBased = componentBased;
+            mItemRegistrySource =
+                mRecordingSyntheticItemRegistry ? ItemRegistrySource::Synthetic : ItemRegistrySource::Original;
+        }
 
         PlaybackBuffer stream;
         packet.write(stream);
@@ -1969,6 +2041,11 @@ void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSe
         if (semantics.startsConfigurationEpoch) {
             mConfigurationPackets.clear();
             mConfigurationPacketIndices.clear();
+            // The cached item table went with the epoch; a later synthetic one must not inherit its label.
+            mItemRegistrySource         = ItemRegistrySource::None;
+            mItemRegistryItems          = 0;
+            mItemRegistryCustom         = 0;
+            mItemRegistryComponentBased = 0;
         }
 
         if (semantics.supersedes) {
