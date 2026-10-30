@@ -252,10 +252,6 @@ private:
     std::string                                         mReplaySubjectChoice;
     // Choice that already logged "not in this snapshot", so a missing player does not spam every tick.
     std::string                                         mReplaySubjectGapChoice;
-    // Played ticks an entity choice has had no actor. Like Flashback, a removed entity hands the view back to the
-    // recorder after a short grace; a re-add with the same id inside it binds again.
-    int                                                 mReplaySubjectEntityMissingTicks{0};
-    int                                                 mReplaySubjectEntityMissingLastTick{-1};
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     bool                                                        mLevelSimFrozen{false};
     // Item-use duration each recorded player had after the last replay tick; the client ticks it between ticks too.
