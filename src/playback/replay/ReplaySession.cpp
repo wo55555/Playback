@@ -116,6 +116,8 @@
 #include "mc/world/attribute/AttributeData.h"
 #include "mc/world/attribute/AttributeInstance.h"
 #include "mc/world/attribute/AttributeInstanceConstRef.h"
+#include "mc/world/attribute/AttributeInstanceRef.h"
+#include "mc/world/attribute/AttributeModificationContext.h"
 #include "mc/world/attribute/AttributeModifier.h"
 #include "mc/world/attribute/BaseAttributeMap.h"
 #include "mc/world/attribute/SharedAttributes.h"
@@ -307,10 +309,14 @@ void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
 // are copied onto it. Health never drops below 1: a dead local player would open the death screen.
 void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
     auto&             attributes = *observer.getAttributes();
-    std::string const health     = SharedAttributes::HEALTH().getName().getString();
+    std::string const health     = SharedAttributes::HEALTH().mName->getString();
+    AttributeModificationContext context{};
+    context.mAttributeMap = &attributes;
     for (auto& data : *packet.mAttributeData) {
         if (data.mName->getString() == health && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
-        attributes.updateOrCreateAttribute(data);
+        auto instance = attributes.getMutableInstance(*data.mName);
+        if (!instance.mPtr || instance.mPtr == &BaseAttributeMap::mInvalidInstance()) continue;
+        BaseAttributeMap::updateAttribute(data, instance, context);
     }
 }
 
@@ -1160,7 +1166,7 @@ void ReplaySession::refreshReplayEntityList() {
         entities.reserve(mRecordedEntityIds.size());
         for (auto const& id : mRecordedEntityIds) {
             Actor* actor = level.fetchEntity(id, false);
-            if (!actor || actor == mReplayPlayer || actor->isRemoved() || !actor->isAlive()) continue;
+            if (!actor || actor == mReplayPlayer || actor->mRemoved || !actor->isAlive()) continue;
             bool const player = actor->isPlayer();
             if (!player && !actor->hasCategory(ActorCategory::Mob)) continue;
             ReplayEntityInfo info;
@@ -1223,8 +1229,11 @@ std::string ReplaySession::replaySubjectLabel(std::string const& choice) const {
 void ReplaySession::applyObserverSkin(SerializedSkinRef const& skin) {
     if (!mReplayPlayer || !skin.mSkinImpl) return;
     if (!mObserverOriginalSkin) {
-        auto const& current = mReplayPlayer->getSkin();
-        if (current.mSkinImpl) mObserverOriginalSkin = std::make_unique<SerializedSkinRef>(current);
+        auto const& current = mReplayPlayer->mSkin;
+        if (current && current->mSkinImpl) {
+            mObserverOriginalSkin  = std::make_unique<SerializedSkinRef>();
+            *mObserverOriginalSkin = *current;
+        }
     }
     mReplayPlayer->updateSkin(skin, static_cast<int>(mReplayPlayer->getClientSubId()));
     mObserverSkinApplied = true;
@@ -1305,7 +1314,7 @@ void ReplaySession::rebindReplaySubject() {
         setReplaySubjectChoice({});
     };
     Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
-    if (!actor || actor == mReplayPlayer || (entityRaw && (actor->isRemoved() || !actor->isAlive()))) {
+    if (!actor || actor == mReplayPlayer || (entityRaw && (actor->mRemoved || !actor->isAlive()))) {
         if (entityRaw) loseEntity();
         else loseSubject(choice);
         return;
@@ -1353,9 +1362,9 @@ void ReplaySession::rebindReplaySubject() {
             applyObserverSkin(*entry->second.mSkin);
             getLogger().debug("replay observer skin applied name={} uuid={}", name, uuid);
             applied = true;
-        } else if (subject.getSkin().mSkinImpl) {
+        } else if (auto const& subjectSkin = subject.mSkin; subjectSkin && subjectSkin->mSkinImpl) {
             // The player list can lag the actor. The actor skin is what third person already draws.
-            applyObserverSkin(subject.getSkin());
+            applyObserverSkin(*subjectSkin);
             getLogger().debug("replay observer skin applied from actor name={} uuid={}", name, uuid);
             applied = true;
         }
@@ -2365,7 +2374,7 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
         repository.addCachedResourcePacks(&keys);
         // Packs embedded in the replay take over from the local download cache; old replays keep using the cache.
         try {
-            mMountedReplayPacks = io::packs::mountReplayPacks(repository, *info->mData, mReplayFilePath);
+            mMountedReplayPacks = io::packs::mountReplayPacks(repository, info->toPacksInfoData(), mReplayFilePath);
         } catch (std::exception const& exception) {
             getLogger().warn("Unable to mount embedded resource packs, using the local cache: {}", exception.what());
         }
@@ -4827,7 +4836,9 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         auto& mapPacket = static_cast<ClientboundMapItemDataPacket&>(*packet);
         if (!mapPacket.mMapPixels->empty()) {
             auto& level = mReplayPlayer->getLevel();
-            for (auto const& id : *mapPacket.mMapIds) {
+            std::vector<ActorUniqueID> ids{*mapPacket.mMapId};
+            ids.insert(ids.end(), mapPacket.mCreationMapIds->begin(), mapPacket.mCreationMapIds->end());
+            for (auto const& id : ids) {
                 if (level.getMapSavedData(id)) continue;
                 (void)level.createMapSavedData(
                     id,
@@ -4862,13 +4873,12 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             }
         } else if (!subject.empty() && packetId == MinecraftPacketIds::PlayerList) {
             auto const& playerList = static_cast<PlayerListPacket const&>(*packet);
-            if (playerList.mAction == PlayerListPacketType::Add) {
-                for (auto const& entry : *playerList.mEntries) {
-                    if (entry.mUUID->asString() != subject || !entry.mSkin->mSkinImpl) continue;
-                    applyObserverSkin(*entry.mSkin);
-                    getLogger().debug("replay observer skin refreshed uuid={}", subject);
-                    break;
-                }
+            for (auto const& entry : *playerList.mEntries) {
+                auto const* addEntry = std::get_if<PlayerListPacketPayload::AddEntry>(&entry);
+                if (!addEntry || addEntry->mUUID->asString() != subject || !addEntry->mSkin->mSkinImpl) continue;
+                applyObserverSkin(*addEntry->mSkin);
+                getLogger().debug("replay observer skin refreshed uuid={}", subject);
+                break;
             }
         }
     }
@@ -4877,7 +4887,9 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         auto& map   = static_cast<ClientboundMapItemDataPacket&>(*packet);
         auto& level = mReplayPlayer->getLevel();
         if (!map.mMapPixels->empty()) {
-            for (auto const& id : *map.mMapIds) {
+            std::vector<ActorUniqueID> ids{*map.mMapId};
+            ids.insert(ids.end(), map.mCreationMapIds->begin(), map.mCreationMapIds->end());
+            for (auto const& id : ids) {
                 auto* saved = level.getMapSavedData(id);
                 if (!saved) {
                     saved = &level.createMapSavedData(
@@ -4887,7 +4899,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                         static_cast<int>(map.mScale)
                     );
                 }
-                if (saved->getPixels().size() == 0) map.applyToMap(*saved, false);
+                if (saved->mPixels->empty()) map.applyToMap(*saved, false);
             }
         }
     }

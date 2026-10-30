@@ -22,7 +22,8 @@
 #include "mc/world/level/PackInstanceId.h"
 #include "mc/resources/CompositePackSource.h"
 #include "mc/resources/DirectoryPackSource.h"
-#include "mc/resources/PackManifest.h"
+#include "mc/resources/Pack.h"
+#include "mc/scripting/modules/PackManifest.h"
 #include "mc/resources/PackSourceFactory.h"
 #include "mc/resources/RepositorySources.h"
 #include "mc/resources/ResourcePack.h"
@@ -608,15 +609,15 @@ ServerPackSnapshot collectServerPacks(std::vector<PlaybackSerializedGamePacket> 
     ServerPackSnapshot result;
     auto               info = decodeLatestPacksInfo(configurationPackets);
     auto               client = ll::service::getClientInstance();
-    if (!info || info->mData->mResourcePacks->empty() || !client) return result;
+    if (!info || info->mResourcePacks->empty() || !client) return result;
 
     std::unordered_set<std::string> announced;
-    for (auto const& pack : *info->mData->mResourcePacks) announced.insert(packKey(*pack.mPackIdVersion));
+    for (auto const& pack : *info->mResourcePacks) announced.insert(packKey(*pack.mPackIdVersion));
 
     auto& repository = client->getResourcePackRepository();
     std::unordered_map<std::string, ServerPackSource> loaded;
     repository.forEachPack([&](ResourcePack const& pack) {
-        auto const& manifest = pack.getManifest();
+        auto const& manifest = *pack.mPack.get()->mManifest.get();
         if (manifest.mPackType != PackType::Resources) return;
         auto key = packKey(*manifest.mIdentity);
         if (!announced.contains(key)) return;
@@ -631,7 +632,7 @@ ServerPackSnapshot collectServerPacks(std::vector<PlaybackSerializedGamePacket> 
         };
     });
 
-    for (auto const& pack : *info->mData->mResourcePacks) {
+    for (auto const& pack : *info->mResourcePacks) {
         auto key = packKey(*pack.mPackIdVersion);
         if (auto it = loaded.find(key); it != loaded.end()) {
             result.announced.push_back(it->second);
@@ -875,7 +876,7 @@ std::optional<std::filesystem::path> mountReplayPacks(
     std::vector<std::pair<std::string, std::filesystem::path>> notEmbedded;
     size_t                                                     removed = 0;
     repo._removePacksIf([&](ResourcePack const& pack) {
-        auto const& manifest = pack.getManifest();
+        auto const& manifest = *pack.mPack.get()->mManifest.get();
         if (!isCacheOrigin(manifest.mPackOrigin) || manifest.mPackType != PackType::Resources) return false;
         auto key = packKey(*manifest.mIdentity);
         if (!index.keys.contains(key) && announced.contains(key)) {

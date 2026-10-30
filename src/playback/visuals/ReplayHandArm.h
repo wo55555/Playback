@@ -20,7 +20,8 @@ struct HandArm {
 
 inline bool sameHandItem(ItemStack const& a, ItemStack const& b) {
     // matchesItem also differs when a raised shield's blocking tick changes; native keeps the hand up.
-    return a.isNull() ? b.isNull() : !b.isNull() && a.sameItemAndAux(b);
+    // 26.40 has no sameItemAndAux; compare the item id and aux value it combined.
+    return a.isNull() ? b.isNull() : !b.isNull() && a.getId() == b.getId() && a.hasSameAuxValue(b);
 }
 
 inline void snapHandArm(HandArm& arm, ItemStack const& item, int slot) {

@@ -12,7 +12,9 @@
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
 #include "mc/world/effect/EffectDuration.h"
+#include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/effect/MobEffect.h"
+#include "mc/world/effect/MobEffectIds.h"
 #include "mc/world/effect/MobEffectInstance.h"
 
 #include <algorithm>
@@ -106,9 +108,9 @@ int64_t steadyNs() noexcept {
 }
 
 void publishSubjectNausea(Actor const& subject, long double tick) {
-    auto*       confusion = MobEffect::CONFUSION();
-    auto const* effect    = confusion ? subject.getEffect(*confusion) : nullptr;
-    int const   duration  = effect ? effect->getDuration().mValue : 0;
+    // 26.40 has no MobEffect::CONFUSION accessor; look the effect up by id.
+    auto const* effect = subject.getEffect(static_cast<uint>(MobEffectIds::Confusion));
+    int const   duration  = effect ? effect->mDuration->mValue : 0;
     gNauseaPresent.store(effect != nullptr, std::memory_order_relaxed);
     gNauseaDuration.store(duration, std::memory_order_relaxed);
     gNauseaActive.store(effect && (duration == -1 || duration > 60), std::memory_order_relaxed);
@@ -269,8 +271,9 @@ struct ScopedReplayEntityPose::State {
     ~State() {
         if (gActiveState == this) gActiveState = previous;
         if (hidden) {
-            hidden->actor->setStatusFlag(ActorFlags::HiddenWhenInvisible, hidden->hiddenWhenInvisible);
-            hidden->actor->setStatusFlag(ActorFlags::Invisible, hidden->invisible);
+            auto& context = hidden->actor->getEntityContext();
+            SynchedActorDataAccess::setActorFlag(context, ActorFlags::HiddenWhenInvisible, hidden->hiddenWhenInvisible);
+            SynchedActorDataAccess::setActorFlag(context, ActorFlags::Invisible, hidden->invisible);
         }
         for (auto state = actors.rbegin(); state != actors.rend(); ++state) {
             state->stateVector->mPos      = state->statePosition;
@@ -373,8 +376,9 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                     target.actor->getStatusFlag(ActorFlags::Invisible),
                     target.actor->getStatusFlag(ActorFlags::HiddenWhenInvisible),
                 };
-                target.actor->setStatusFlag(ActorFlags::Invisible, true);
-                target.actor->setStatusFlag(ActorFlags::HiddenWhenInvisible, true);
+                auto& context = target.actor->getEntityContext();
+                SynchedActorDataAccess::setActorFlag(context, ActorFlags::Invisible, true);
+                SynchedActorDataAccess::setActorFlag(context, ActorFlags::HiddenWhenInvisible, true);
                 publishSubjectNausea(*target.actor, sample.value());
             }
 
