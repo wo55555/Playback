@@ -535,10 +535,14 @@ LL_TYPE_INSTANCE_HOOK(PlayerIsScopingHook, ll::memory::HookPriority::High, Playe
     return scoping || !subject || subject == this ? scoping : subject->isScoping();
 }
 
+// The followed subject's portal warp, computed once per frame by PortalDataHook and read by the overlay getters.
+std::atomic<float> gPortalLevel{0.0f};
+
 // The screen overlay reads these LocalPlayer-only fields from the remote subject, whose smaller object yields heap
-// garbage.
+// garbage. Feed it the subject's replayed portal ramp instead.
 float neutralPortalTime(LocalPlayer const& self, float raw) {
-    return static_cast<Player const&>(self).isLocalPlayer() ? raw : 0.0f;
+    if (static_cast<Player const&>(self).isLocalPlayer()) return raw;
+    return gPortalLevel.load(std::memory_order_relaxed);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -569,7 +573,15 @@ struct NauseaRamp {
     float       level{};
 };
 
+// A nether portal adds 0.0125 per tick and fades 0.05. It is not the nausea effect.
+struct PortalRamp {
+    bool        valid{};
+    long double tick{};
+    float       level{};
+};
+
 NauseaRamp       gNausea;
+PortalRamp       gPortal;
 std::atomic_bool gNauseaDistorting{false};
 
 float advanceNausea(SubjectNauseaSample const& sample) {
@@ -584,7 +596,28 @@ float advanceNausea(SubjectNauseaSample const& sample) {
     return ramp.level;
 }
 
+float advancePortal(SubjectNauseaSample const& sample) {
+    auto& ramp = gPortal;
+    // A seek backwards must not keep a warp that belongs to a later tick.
+    if (!ramp.valid || sample.tick < ramp.tick) ramp.level = 0.0f;
+    else {
+        float const ticks = static_cast<float>(std::clamp<long double>(sample.tick - ramp.tick, 0.0L, 8.0L));
+        ramp.level        = std::clamp(ramp.level + (sample.insidePortal ? 0.0125f : -0.05f) * ticks, 0.0f, 1.0f);
+    }
+    ramp.valid = true;
+    ramp.tick  = sample.tick;
+    return ramp.level;
+}
+
+void resetWarp() {
+    gNausea = NauseaRamp{};
+    gPortal = PortalRamp{};
+    gPortalLevel.store(0.0f, std::memory_order_relaxed);
+    gNauseaDistorting.store(false, std::memory_order_release);
+}
+
 // The distortion reads the observer's own effects, which have none; follow mode feeds it the subject's nausea.
+// A portal uses the same data at 20 per tick; nausea, when it is warping, stays at 7 and hides the purple screen.
 LL_TYPE_INSTANCE_HOOK(
     PortalDataHook,
     ll::memory::HookPriority::High,
@@ -595,17 +628,20 @@ LL_TYPE_INSTANCE_HOOK(
     auto       data   = origin();
     auto const sample = sampleReplaySubjectNausea();
     if (!sample) {
-        gNausea = NauseaRamp{};
-        gNauseaDistorting.store(false, std::memory_order_release);
+        resetWarp();
         return data;
     }
-    float const level = advanceNausea(*sample);
+    float const nausea = advanceNausea(*sample);
+    float const portal = sample->present ? 0.0f : advancePortal(*sample);
+    gPortalLevel.store(portal, std::memory_order_relaxed);
+    float const level = std::max(nausea, portal);
     gNauseaDistorting.store(level > 0.0f && data.has_value(), std::memory_order_release);
     if (level <= 0.0f || !data) return data;
     data->mTime = std::max(data->mTime, level);
     // The game spins by speed * (frame alpha + client tick), a clock that keeps running while the replay is paused.
-    // Nausea spins at 7 per tick; drive it from the replay time so a pause freezes it and a seek rewinds it.
-    data->mRotation = static_cast<float>(7.0L * sample->tick);
+    // Confusion keeps the slow wobble for the whole effect, including its fade. A portal alone spins faster.
+    float const speed = sample->present ? 7.0f : 20.0f;
+    data->mRotation   = static_cast<float>(static_cast<long double>(speed) * sample->tick);
     return data;
 }
 
