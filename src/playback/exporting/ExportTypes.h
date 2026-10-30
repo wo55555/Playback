@@ -73,6 +73,8 @@ struct ExportSettings {
     // MP4 only; the defaults are what the writer used before these were configurable.
     VideoEncodeSpeed encodeSpeed{VideoEncodeSpeed::Quality};
     uint32_t         videoCrf{18};
+    // Capture game audio during export: muxed into MP4, written as a sidecar .wav for PNG sequences.
+    bool audio{true};
 };
 
 enum class ExportError : uint8_t {
