@@ -3,8 +3,11 @@
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
 #include "playback/io/AsyncReplaySaver.h"
+#include "playback/io/ReplayResourcePacks.h"
+#include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/record/ChunkMutationBarrier.h"
+#include "playback/utils/MapItemId.h"
 #include "playback/utils/PathUtils.h"
 
 #include "ll/api/service/Bedrock.h"
@@ -19,6 +22,8 @@
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/entity/components/VanillaOffsetComponent.h"
+#include "mc/entity/systems/VanillaOffsetSystem.h"
 #include "mc/network/MinecraftPacketIds.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/Packet.h"
@@ -31,7 +36,9 @@
 #include "mc/network/packet/ChangeEntityScore.h"
 #include "mc/network/packet/ChangeFakePlayerScore.h"
 #include "mc/network/packet/ChangePlayerScore.h"
+#include "mc/network/packet/ClientboundMapItemDataPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
+#include "mc/network/packet/InventorySlotPacket.h"
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
@@ -41,6 +48,7 @@
 #include "mc/network/packet/MobEffectPacket.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
 #include "mc/network/packet/PlayerActionPacket.h"
+#include "mc/network/packet/PlayerHotbarPacket.h"
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/PlayerListPacketType.h"
 #include "mc/network/packet/PlayerSkinPacket.h"
@@ -64,10 +72,21 @@
 #include "mc/util/VarIntDataOutput.h"
 #include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
+#include "mc/world/actor/player/Inventory.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/player/PlayerInventory.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/state/PropertyComponent.h"
+#include "mc/world/attribute/Attribute.h"
+#include "mc/world/attribute/AttributeData.h"
+#include "mc/world/attribute/AttributeInstance.h"
+#include "mc/world/attribute/AttributeInstanceConstRef.h"
+#include "mc/world/attribute/AttributeInstanceHandle.h"
+#include "mc/world/attribute/AttributeModifier.h"
+#include "mc/world/attribute/SharedAttributes.h"
 #include "mc/world/effect/MobEffectInstance.h"
+#include "mc/world/item/ItemStack.h"
+#include "mc/world/item/MapItem.h"
 #include "mc/world/item/SaveContextFactory.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/Level.h"
@@ -77,6 +96,7 @@
 #include "mc/world/level/chunk/LevelChunk.h"
 #include "mc/world/level/chunk/SubChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
+#include "mc/world/level/saveddata/maps/MapItemSavedData.h"
 #include "mc/world/level/storage/LevelData.h"
 #include "mc/world/scores/DisplayObjective.h"
 #include "mc/world/scores/Objective.h"
@@ -122,7 +142,7 @@ using namespace playback::io;
 
 namespace {
 
-constexpr ActorRuntimeID RecordedPlayerRuntimeId{uint64_t{1} << 62};
+constexpr ActorRuntimeID RecordedPlayerRuntimeId{RecordedPlayerRuntimeIdValue};
 
 // A dimension change floods the engine task groups, and a missed snapshot there cancels the whole recording.
 constexpr auto DimensionChangeBarrierTimeout = std::chrono::milliseconds{15000};
@@ -142,6 +162,72 @@ struct NetworkPacketFilter {
 };
 
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
+
+// The replay observer's HUD and inventory screen read its own slots. The whole player inventory is recorded, not
+// just the hotbar, so the backpack rows match the recording. HudCacheSize must fit Recorder.h mLastLocalHudPackets.
+constexpr int    HudHotbarSlots  = 36;
+constexpr int    HudArmorSlots   = 4;
+constexpr size_t HudArmorKey     = HudHotbarSlots;
+constexpr size_t HudOffhandKey   = HudArmorKey + HudArmorSlots;
+constexpr size_t HudAttributeKey = HudOffhandKey + 1;
+constexpr size_t HudSelectedKey  = HudAttributeKey + 1;
+constexpr size_t HudCacheSize    = HudSelectedKey + 1;
+static_assert(HudCacheSize <= 48);
+
+std::shared_ptr<Packet> makeHudSlotPacket(ContainerID container, int slot, ItemStack const& item) {
+    return std::make_shared<InventorySlotPacket>(InventorySlotPacketPayload(container, slot, item));
+}
+
+std::shared_ptr<Packet> makeHudSelectedSlotPacket(Player& player) {
+    auto packet               = std::make_shared<PlayerHotbarPacket>();
+    packet->mSelectedSlot     = static_cast<uint>(player.getSelectedItemSlot());
+    packet->mShouldSelectSlot = true;
+    packet->mContainerId      = ContainerID::Inventory;
+    return packet;
+}
+
+// Only what the HUD draws; exhaustion and the like change every tick and would bloat the recording.
+std::shared_ptr<Packet> makeHudAttributePacket(Player& player, ActorRuntimeID runtimeId) {
+    // AttributeData cannot be copied or moved from here, so the SDK constructor builds the entries from handles.
+    auto const attributes = {
+        &SharedAttributes::HEALTH(),
+        &SharedAttributes::ABSORPTION(),
+        &Player::HUNGER(),
+        &Player::SATURATION(),
+        &Player::LEVEL(),
+        &Player::EXPERIENCE(),
+    };
+    std::vector<AttributeInstanceHandle> handles;
+    handles.reserve(attributes.size());
+    for (auto const* attribute : attributes) {
+        auto const instance = player.getAttribute(*attribute);
+        if (!instance.mPtr) continue;
+        AttributeInstanceHandle handle;
+        handle.mAttributeID = attribute->mIDValue;
+        handles.push_back(handle);
+    }
+    // The payload is a prvalue so it initializes the by-value parameter in place; AttributeModifier has no exported
+    // copy constructor, so make_shared's forwarding copy would not link.
+    return std::shared_ptr<UpdateAttributesPacket>(new UpdateAttributesPacket(
+        UpdateAttributesPacketPayload(runtimeId, *player.getAttributes(), handles, PlayerInputTick{})
+    ));
+}
+
+std::shared_ptr<Packet> makeHudGameTypePacket(Player& player, ActorUniqueID target) {
+    auto packet             = std::make_shared<UpdatePlayerGameTypePacket>();
+    packet->mPlayerGameType = player.getPlayerGameType();
+    packet->mTargetPlayer   = target;
+    packet->mTick           = PlayerInputTick{};
+    return packet;
+}
+
+std::optional<int64_t> heldMapId(ItemStack const& item) { return utils::readMapUuid(item); }
+
+// The replay level only has the map data its recorded map packets carried, so a held map is written out in full.
+std::unique_ptr<Packet> makeHeldMapPacket(Player& player, int64_t mapId) {
+    auto* data = player.getLevel().getMapSavedData(ActorUniqueID{mapId});
+    return data ? data->getFullDataPacket() : nullptr;
+}
 
 bool isSuccessfulSubChunkResult(SubChunkPacket::SubChunkRequestResult result) {
     return result == SubChunkPacket::SubChunkRequestResult::Success
@@ -454,6 +540,38 @@ PlaybackMeta metaFromJson(nlohmann::ordered_json const& json) {
     return meta;
 }
 
+// The vanilla camera sits below the entity position while sneaking or swimming; the replayed actor has no such state.
+PlaybackCameraSample captureLocalCameraSample(LocalPlayer& player) {
+    Vec3 offset{0.0f, 0.0f, 0.0f};
+    if (player.getEntityContext().hasComponent<VanillaOffsetComponent>()) {
+        auto const camera   = VanillaOffsetSystem::getCameraPosition(player, 1.0f);
+        auto const position = player.getPosition();
+        offset              = {camera.x - position.x, camera.y - position.y, camera.z - position.z};
+    }
+    PlaybackCameraSample sample{offset.x, offset.y, offset.z, latestRenderedFov()};
+    // While sleeping the vanilla camera detaches from the entity, so its absolute pose is recorded instead.
+    if (player.isSleeping()) {
+        bool foreignCamera = false;
+        if (auto client = ll::service::getClientInstance()) {
+            auto* cameraActor = client->getCameraActor();
+            foreignCamera     = cameraActor && cameraActor != &player;
+        }
+        // The sleep camera system overrides every preset's pose, so a third-person sleep still carries the bed view;
+        // only a /camera view is not the player's own.
+        if (!foreignCamera) {
+            if (auto const view = keyframe::captureClientCamera()) {
+                sample.hasView   = true;
+                sample.viewX     = view->x;
+                sample.viewY     = view->y;
+                sample.viewZ     = view->z;
+                sample.viewYaw   = view->yaw;
+                sample.viewPitch = view->pitch;
+            }
+        }
+    }
+    return sample;
+}
+
 } // namespace
 
 PlaybackMeta PlaybackMeta::fromJson(std::string_view json) {
@@ -558,6 +676,10 @@ void Recorder::saveRecording() {
     mState = State::Idle;
 
     if (saverError || replayPath.empty()) {
+        if (mPackWorker) {
+            mPackWorker->cancel();
+            mPackWorker.reset();
+        }
         getLogger().error(
             "Failed to save recording: {}",
             saverError.value_or("the replay saver did not return a completed recording path")
@@ -573,16 +695,43 @@ void Recorder::saveRecording() {
         return;
     }
 
+    // Only one export at a time, so this one cannot pick the file name of a zip that is still being written.
+    waitForExport();
     auto  outputPath        = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
     auto* thumbnailProvider = mThumbnailCaptureProvider.load(std::memory_order_acquire);
     if (!mThumbnailCaptureRequested || !thumbnailProvider
         || !thumbnailProvider->saveReplayThumbnail(replayPath / "icon.png")) {
         getLogger().warn("Unable to save replay thumbnail for {}", replayPath);
     }
-    if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
-        getLogger().error("Failed to save replay data after recording stopped");
-        return;
-    }
+    bool const completePacks = Playback::getInstance().getConfig().record.embedServerPacks;
+    auto       packWorker    = std::move(mPackWorker);
+    mExportThread = std::jthread([replayPath, outputPath, completePacks, packWorker = std::move(packWorker)]() mutable {
+        auto const startedAt = std::chrono::steady_clock::now();
+        try {
+            if (packWorker) {
+                packWorker->finish();
+                packWorker.reset();
+            }
+            if (completePacks) (void)packs::completeServerPacks(replayPath);
+            if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
+                getLogger().error("Failed to save replay data after recording stopped");
+                return;
+            }
+            getLogger().info(
+                "Exported replay {} in {:.1f} ms",
+                outputPath.filename(),
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startedAt).count()
+            );
+        } catch (std::exception const& exception) {
+            getLogger().error("Failed to save replay data after recording stopped: {}", exception.what());
+        } catch (...) {
+            getLogger().error("Failed to save replay data after recording stopped");
+        }
+    });
+}
+
+void Recorder::waitForExport() {
+    if (mExportThread.joinable()) mExportThread.join();
 }
 
 void Recorder::logRecordedGamePacketSummary() const {
@@ -615,6 +764,11 @@ void Recorder::logRecordedGamePacketSummary() const {
 
 void Recorder::resetStateForNewRecording() {
     mAsyncReplaySaver = std::make_unique<AsyncReplaySaver>();
+    if (Playback::getInstance().getConfig().record.embedServerPacks) {
+        mPackWorker = std::make_unique<packs::PackEmbedWorker>(mAsyncReplaySaver->getRecordPath());
+    } else {
+        mPackWorker.reset();
+    }
 
     mMetadata.chunks.clear();
     mMetadata.totalTicks  = 0;
@@ -643,6 +797,9 @@ void Recorder::resetStateForNewRecording() {
     mLastLocalPlayerDataPacket.reset();
     mLastLocalPlayerEquipmentPacket.reset();
     mLastLocalPlayerSwingTime.reset();
+    mLastLocalHudPackets.fill(std::nullopt);
+    mLastLocalGameTypePacket.reset();
+    mLastLocalHeldMapIds.fill(std::nullopt);
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mPendingGamePackets.clear();
@@ -703,8 +860,8 @@ void Recorder::endTick(bool close) {
         auto const currentDimensionId = localPlayer->getDimensionId();
 
         // Finish the client tick in the old chunk before snapshotting the state produced by that tick.
-        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeTickBoundary()
-            || !finishCurrentChunk(close)) {
+        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
+            || !writeTickBoundary() || !finishCurrentChunk(close)) {
             return;
         }
         if (close) return;
@@ -743,15 +900,16 @@ void Recorder::endTick(bool close) {
             return;
         }
 
-        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeTickBoundary()
-            || !finishCurrentChunk(false) || !writeSnapshot() || !commitChunkSnapshot(elapsed, barrierWait)) {
+        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
+            || !writeTickBoundary() || !finishCurrentChunk(false) || !writeSnapshot()
+            || !commitChunkSnapshot(elapsed, barrierWait)) {
             return;
         }
         return;
     }
 
     if (!writeInitialSnapshotIfNeeded() || !writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements()
-        || !writeTickBoundary()) {
+        || !writeLocalCameraOffset() || !writeTickBoundary()) {
         return;
     }
     if (close && !finishCurrentChunk(true)) return;
@@ -764,6 +922,7 @@ void Recorder::resetChunkSnapshot() {
     mSnapshotEntityPackets.clear();
     mSnapshotLocalPlayerPayload.reset();
     mSnapshotView.reset();
+    mSnapshotCamera.reset();
     mSnapshotDimension.reset();
     mSnapshotFailure.clear();
 }
@@ -831,6 +990,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
     auto const& position = localPlayer->getPosition();
     auto const& rotation = localPlayer->getRotation();
     auto const  view     = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
+    auto const  camera   = captureLocalCameraSample(*localPlayer);
     auto const  center   = SubChunkPos{
         static_cast<int>(std::floor(view.x / 16.0f)),
         static_cast<int>(std::floor(view.y / 16.0f)),
@@ -1132,42 +1292,89 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
 
         auto actors = level.getRuntimeActorList();
 
-        std::vector<Player*> snapshotPlayers{finalPlayer};
-        snapshotPlayers.reserve(actors.size() + 1);
+        // Identity (the menu) is everyone the client already lists, plus any spawned player the list missed.
+        // Spawn packets are only for living players in this dimension. One write point, no second pass.
+        std::vector<Player*>    spawnPlayers;
+        std::unordered_set<int64_t> spawnIds;
+        std::unordered_set<int64_t> deadIds;
+        int                     runtimePlayers = 0;
+        auto const              considerSpawn  = [&](Player& player, bool fromRuntimeList) {
+            if (&player == finalPlayer || player.getDimensionId() != dimension) return;
+            auto const uniqueId = player.getOrCreateUniqueID().rawID;
+            if (!player.isAlive()) {
+                deadIds.insert(uniqueId);
+                return;
+            }
+            if (!spawnIds.insert(uniqueId).second) return;
+            spawnPlayers.push_back(&player);
+            if (fromRuntimeList) ++runtimePlayers;
+        };
         for (auto* actor : actors) {
-            if (!actor || actor == finalPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
-            if (actor->isPlayer()) snapshotPlayers.emplace_back(static_cast<Player*>(actor));
+            if (!actor || !actor->isPlayer()) continue;
+            considerSpawn(static_cast<Player&>(*actor), true);
         }
-        if (!snapshotPlayers.empty()) {
+        level.forEachPlayer([&](Player& player) {
+            considerSpawn(player, false);
+            return true;
+        });
+
+        auto const playerUniqueId = finalPlayer->getOrCreateUniqueID();
+        auto const playerUuid     = finalPlayer->getUuid().asString();
+        std::vector<PlayerListEntry>     identity;
+        std::unordered_map<std::string, size_t> identityIndex;
+        auto const hasSkin = [](PlayerListEntry const& entry) {
+            return static_cast<bool>(entry.mSkin->mSkinImpl);
+        };
+        std::unordered_map<std::string, Player const*> playersByUuid;
+        playersByUuid.emplace(playerUuid, finalPlayer);
+        level.forEachPlayer([&](Player& player) {
+            playersByUuid.emplace(player.getUuid().asString(), &player);
+            return true;
+        });
+        auto const upsertIdentity = [&](PlayerListEntry entry) {
+            // The level's player list can hold an entry whose skin has not arrived yet; the replay drops such
+            // entries, so fall back to the skin the player actor is already rendering with.
+            if (!entry.mSkin->isValid()) {
+                auto const source = playersByUuid.find(entry.mUUID->asString());
+                if (source != playersByUuid.end()) {
+                    if (auto const& ownSkin = source->second->mSkin; ownSkin && ownSkin->isValid()) {
+                        // SerializedSkinRef's copy constructor is not exported; it only shares the skin handle.
+                        entry.mSkin->mSkinImpl = ownSkin->mSkinImpl;
+                    }
+                }
+            }
+            auto const entryId = entry.mId->rawID;
+            if (entry.mUUID->asString() == playerUuid || (entryId != 0 && entryId == playerUniqueId.rawID)) {
+                entry.mId   = *mRecordedLocalPlayerId;
+                entry.mUUID = *mRecordedLocalPlayerUuid;
+                entry.mXUID->clear();
+                entry.mPlatformOnlineId->clear();
+            }
+            auto const key = entry.mUUID->asString();
+            if (key.empty()) return;
+            auto const found = identityIndex.find(key);
+            if (found == identityIndex.end()) {
+                identityIndex.emplace(key, identity.size());
+                identity.push_back(std::move(entry));
+                return;
+            }
+            auto& existing = identity[found->second];
+            if (!hasSkin(existing) && hasSkin(entry)) existing = std::move(entry);
+        };
+        for (auto const& listed : level.getPlayerList()) upsertIdentity(PlayerListEntry(listed.second));
+        upsertIdentity(PlayerListEntry(*finalPlayer));
+        for (auto const* player : spawnPlayers) upsertIdentity(PlayerListEntry(*player));
+
+        if (!identity.empty()) {
             auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::PlayerList);
             if (!packet) {
                 mSnapshotFailure = "Unable to create the entity snapshot player list packet";
                 return SnapshotCaptureResult::Failed;
             }
 
-            auto&       playerListPacket = static_cast<PlayerListPacket&>(*packet);
-            auto const& playerList       = level.getPlayerList();
-            playerListPacket.mEntries->reserve(snapshotPlayers.size());
-            for (auto const* player : snapshotPlayers) {
-                auto            entry = playerList.find(player->getUuid());
-                PlayerListEntry snapshotEntry =
-                    entry != playerList.end() ? PlayerListEntry(entry->second) : PlayerListEntry(*player);
-                // The level's player list can hold an entry whose skin has not arrived yet; the replay drops such
-                // entries, so fall back to the skin the player actor is already rendering with.
-                if (!snapshotEntry.mSkin->isValid()) {
-                    if (auto const& ownSkin = player->mSkin; ownSkin && ownSkin->isValid()) {
-                        // SerializedSkinRef's copy constructor is not exported; it only shares the skin handle.
-                        snapshotEntry.mSkin->mSkinImpl = ownSkin->mSkinImpl;
-                    }
-                }
-                if (player == finalPlayer) {
-                    snapshotEntry.mId   = *mRecordedLocalPlayerId;
-                    snapshotEntry.mUUID = *mRecordedLocalPlayerUuid;
-                    snapshotEntry.mXUID->clear();
-                    snapshotEntry.mPlatformOnlineId->clear();
-                }
-                playerListPacket.mEntries->emplace_back(std::move(snapshotEntry));
-            }
+            auto& playerListPacket = static_cast<PlayerListPacket&>(*packet);
+            playerListPacket.mEntries->reserve(identity.size());
+            for (auto& entry : identity) playerListPacket.mEntries->emplace_back(std::move(entry));
             appendEntityPacket(playerListPacket);
         }
 
@@ -1220,14 +1427,55 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
             return SnapshotCaptureResult::Failed;
         }
 
+        // The observer's HUD state: a seek restores it from the snapshot instead of waiting for the next change.
+        for (int slot = 0; slot < HudHotbarSlots; ++slot) {
+            appendEntityPacket(*makeHudSlotPacket(
+                ContainerID::Inventory,
+                slot,
+                finalPlayer->getInventory().getItem(slot)
+            ));
+        }
+        for (int slot = 0; slot < HudArmorSlots; ++slot) {
+            appendEntityPacket(*makeHudSlotPacket(
+                ContainerID::Armor,
+                slot,
+                finalPlayer->getArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(slot))
+            ));
+        }
+        appendEntityPacket(*makeHudSlotPacket(ContainerID::Offhand, 0, finalPlayer->getOffhandSlot()));
+        appendEntityPacket(*makeHudSelectedSlotPacket(*finalPlayer));
+        appendEntityPacket(*makeHudAttributePacket(*finalPlayer, *mRecordedLocalPlayerRuntimeId));
+        appendEntityPacket(*makeHudGameTypePacket(*finalPlayer, *mRecordedLocalPlayerId));
+        for (auto const* item : {&finalPlayer->getCarriedItem(), &finalPlayer->getOffhandSlot()}) {
+            auto const mapId = heldMapId(*item);
+            if (!mapId) continue;
+            if (auto mapPacket = makeHeldMapPacket(*finalPlayer, *mapId)) appendEntityPacket(*mapPacket);
+        }
+
+        std::unordered_set<int64_t> serializedPlayers;
         for (auto* actor : actors) {
             if (!actor || actor == finalPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
+            if (actor->isPlayer()) continue;
 
             auto packet = actor->tryCreateAddActorPacket();
             if (!packet) continue;
             appendEntityPacket(*packet);
             if (!appendActorState(*actor, actor->getRuntimeID())) return SnapshotCaptureResult::Failed;
         }
+        for (auto* player : spawnPlayers) {
+            AddPlayerPacket packet(*player);
+            serializedPlayers.insert(player->getOrCreateUniqueID().rawID);
+            appendEntityPacket(packet);
+            if (!appendActorState(*player, player->getRuntimeID())) return SnapshotCaptureResult::Failed;
+        }
+        getLogger().debug(
+            "replay snapshot players runtime={} listed={} serialized={} deadSkipped={} identity={}",
+            runtimePlayers,
+            static_cast<int>(spawnPlayers.size()),
+            static_cast<int>(serializedPlayers.size()),
+            static_cast<int>(deadIds.size()),
+            static_cast<int>(identity.size())
+        );
 
         auto&                                scoreboard = level.getScoreboard();
         std::unordered_set<Objective const*> displayedObjectives;
@@ -1295,6 +1543,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         mSnapshotConfigurationPackets = mConfigurationPackets;
     }
     mSnapshotView       = view;
+    mSnapshotCamera     = camera;
     mSnapshotDimension  = SnapshotDimension{dimension, dimensionMinHeight, dimensionMaxHeight, *dimensionObject.mName};
     mRecordingDimension = dimension;
 
@@ -1306,6 +1555,7 @@ bool Recorder::commitChunkSnapshot(
     std::chrono::steady_clock::duration barrierWait
 ) {
     mSnapshotView.reset();
+    mSnapshotCamera.reset();
     mSnapshotDimension.reset();
     mLongestSnapshotStall = std::max(mLongestSnapshotStall, captureElapsed);
     mNeedsInitialSnapshot = false;
@@ -1381,10 +1631,13 @@ bool Recorder::writeSnapshot() {
         failRecording("Replay saver is not initialized while writing a snapshot");
         return false;
     }
-    if (!mSnapshotView || !mSnapshotDimension) {
+    if (!mSnapshotView || !mSnapshotCamera || !mSnapshotDimension) {
         failRecording("Replay snapshot context is unavailable");
         return false;
     }
+
+    // NaN would never compare equal to its own copy when the replay re-reads the context.
+    auto const finiteOrZero = [](float value) { return std::isfinite(value) ? value : 0.0f; };
 
     PlaybackSnapshotContext context;
     context.dimensionId        = mSnapshotDimension->id.mValue;
@@ -1395,6 +1648,16 @@ bool Recorder::writeSnapshot() {
     context.z                  = mSnapshotView->z;
     context.yaw                = mSnapshotView->yaw;
     context.pitch              = mSnapshotView->pitch;
+    context.cameraOffsetX      = finiteOrZero(mSnapshotCamera->x);
+    context.cameraOffsetY      = finiteOrZero(mSnapshotCamera->y);
+    context.cameraOffsetZ      = finiteOrZero(mSnapshotCamera->z);
+    context.fov                = finiteOrZero(mSnapshotCamera->fov);
+    context.hasView            = mSnapshotCamera->hasView;
+    context.viewX              = finiteOrZero(mSnapshotCamera->viewX);
+    context.viewY              = finiteOrZero(mSnapshotCamera->viewY);
+    context.viewZ              = finiteOrZero(mSnapshotCamera->viewZ);
+    context.viewYaw            = finiteOrZero(mSnapshotCamera->viewYaw);
+    context.viewPitch          = finiteOrZero(mSnapshotCamera->viewPitch);
     context.dimensionName      = mSnapshotDimension->name;
     if (!mAsyncReplaySaver->submit([context](ReplayWriter& writer) {
             writer.startSnapshot();
@@ -1406,6 +1669,12 @@ bool Recorder::writeSnapshot() {
         auto error = mAsyncReplaySaver->getError();
         failRecording(error.value_or("Unable to queue the replay snapshot context"));
         return false;
+    }
+
+    // Packs are zipped on their own thread so the replay writer is not stalled by thousands of small files.
+    if (mPackWorker) {
+        auto packs = packs::collectServerPacks(mSnapshotConfigurationPackets);
+        if (!packs.announced.empty()) mPackWorker->submit(std::move(packs));
     }
 
     if (!mSnapshotConfigurationPackets.empty()
@@ -1583,6 +1852,43 @@ bool Recorder::writeEntityMovements() {
     return true;
 }
 
+bool Recorder::writeLocalCameraOffset() {
+    if (!mAsyncReplaySaver) {
+        failRecording("Replay saver is not initialized while writing the local camera offset");
+        return false;
+    }
+
+    auto  clientInstance = ll::service::getClientInstance();
+    auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+    if (!localPlayer) {
+        failRecording("The local player is not ready while writing the local camera offset");
+        return false;
+    }
+
+    auto const sample = captureLocalCameraSample(*localPlayer);
+
+    if (!mAsyncReplaySaver->submit([sample](ReplayWriter& writer) {
+            auto& action = ActionLocalCameraOffset::getInstance();
+            writer.startAction(action);
+            writer.mStream.writeFloat(sample.x, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.y, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.z, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.fov, nullptr, nullptr);
+            writer.mStream.writeBool(sample.hasView, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewX, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewY, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewZ, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewYaw, nullptr, nullptr);
+            writer.mStream.writeFloat(sample.viewPitch, nullptr, nullptr);
+            writer.finishAction(action);
+        })) {
+        auto error = mAsyncReplaySaver->getError();
+        failRecording(error.value_or("Unable to queue the local camera offset"));
+        return false;
+    }
+    return true;
+}
+
 bool Recorder::writeLocalPlayerState() {
     auto  clientInstance = ll::service::getClientInstance();
     auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
@@ -1594,9 +1900,10 @@ bool Recorder::writeLocalPlayerState() {
     auto recordChanged = [this](Packet const& packet, std::optional<std::string>& previous) {
         PlaybackBuffer serialized;
         packet.write(serialized);
-        if (previous && *previous == serialized.mBuffer) return;
+        if (previous && *previous == serialized.mBuffer) return false;
         previous = serialized.mBuffer;
         recordGamePacket(packet);
+        return true;
     };
 
     auto&              entityContext = localPlayer->getEntityContext();
@@ -1610,6 +1917,45 @@ bool Recorder::writeLocalPlayerState() {
     mLastLocalPlayerEquipmentPacket = std::move(equipment);
     for (auto const& packet : equipmentPackets) {
         recordGamePacket(*packet);
+    }
+
+    // The replay observer's HUD reads its own hotbar, armor, attributes and game mode, so they are recorded as well.
+    for (int slot = 0; slot < HudHotbarSlots; ++slot) {
+        auto const packet = makeHudSlotPacket(
+            ContainerID::Inventory,
+            slot,
+            localPlayer->getInventory().getItem(slot)
+        );
+        recordChanged(*packet, mLastLocalHudPackets[static_cast<size_t>(slot)]);
+    }
+    for (int slot = 0; slot < HudArmorSlots; ++slot) {
+        auto const packet = makeHudSlotPacket(
+            ContainerID::Armor,
+            slot,
+            localPlayer->getArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(slot))
+        );
+        recordChanged(*packet, mLastLocalHudPackets[HudArmorKey + static_cast<size_t>(slot)]);
+    }
+    recordChanged(
+        *makeHudSlotPacket(ContainerID::Offhand, 0, localPlayer->getOffhandSlot()),
+        mLastLocalHudPackets[HudOffhandKey]
+    );
+    recordChanged(*makeHudSelectedSlotPacket(*localPlayer), mLastLocalHudPackets[HudSelectedKey]);
+    recordChanged(
+        *makeHudAttributePacket(*localPlayer, *mRecordedLocalPlayerRuntimeId),
+        mLastLocalHudPackets[HudAttributeKey]
+    );
+    if (mRecordedLocalPlayerId) {
+        recordChanged(*makeHudGameTypePacket(*localPlayer, *mRecordedLocalPlayerId), mLastLocalGameTypePacket);
+    }
+
+    for (size_t hand = 0; hand < mLastLocalHeldMapIds.size(); ++hand) {
+        auto const& item  = hand == 0 ? localPlayer->getCarriedItem() : localPlayer->getOffhandSlot();
+        auto const  mapId = heldMapId(item);
+        if (mapId == mLastLocalHeldMapIds[hand]) continue;
+        mLastLocalHeldMapIds[hand] = mapId;
+        if (!mapId) continue;
+        if (auto mapPacket = makeHeldMapPacket(*localPlayer, *mapId)) recordGamePacket(*mapPacket);
     }
 
     bool const swinging  = localPlayer->mSwinging;
@@ -2068,6 +2414,10 @@ void Recorder::failRecording(std::string_view reason) { cancelRecording(reason);
 
 void Recorder::cancelRecording(std::string_view reason) {
     getLogger().error("Recording cancelled: {}", reason);
+    if (mPackWorker) {
+        mPackWorker->cancel();
+        mPackWorker.reset();
+    }
     if (mAsyncReplaySaver) {
         mAsyncReplaySaver->cancel();
         mAsyncReplaySaver.reset();
@@ -2086,6 +2436,9 @@ void Recorder::cancelRecording(std::string_view reason) {
     mLastLocalPlayerDataPacket.reset();
     mLastLocalPlayerEquipmentPacket.reset();
     mLastLocalPlayerSwingTime.reset();
+    mLastLocalHudPackets.fill(std::nullopt);
+    mLastLocalGameTypePacket.reset();
+    mLastLocalHeldMapIds.fill(std::nullopt);
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mPendingGamePackets.clear();

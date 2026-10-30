@@ -34,6 +34,7 @@ public:
     void draw(playback::state::EditorState const& state, SubmitAction const& submit);
 
     void handleKeyboardShortcuts();
+    void updateFollowExitTap();
 
     [[nodiscard]] playback::state::EditorState const&          state() const;
     [[nodiscard]] state::editing::model::SelectionModel const& selection() const { return mSelection; }
@@ -48,6 +49,10 @@ public:
     [[nodiscard]] bool isCameraPathVisible() const override { return mCameraPathVisible; }
     bool               deleteSelection() override;
     bool               addKeyframeAtPlayhead() override;
+    bool               selectAllKeyframes() override;
+    bool               copySelection() override;
+    bool               pasteAtPlayhead() override;
+    bool               addMarkerAtPlayhead() override;
     bool               selectCameraByIndex(std::size_t index);
 
     [[nodiscard]] bool  isInfoOverlayVisible() const override { return mViewportPanel.isInfoOverlayVisible(); }
@@ -59,6 +64,7 @@ public:
     [[nodiscard]] float videoAspectRatio() const override { return mVideoAspectRatio; }
     void                setVideoAspectRatio(float ratio) override;
     void                openExportDialog() override;
+    void                focusFirstPersonSubject() override { mDetailsPanel.focusFirstPersonSubject(); }
     [[nodiscard]] int   exportStartTick() const override { return mMenuBar.exportStartTick(); }
     [[nodiscard]] int   exportEndTick() const override { return mMenuBar.exportEndTick(); }
     void                setExportStartTick(int tick) override { mMenuBar.setExportStartTick(tick); }
@@ -96,6 +102,7 @@ private:
     state::editing::model::SelectionModel mSelection;
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
+    bool  mFollowExitTapArmed{false};
     float mExitHoldSeconds{};
 
     float       mDetailsWidthRatio{0.28f};

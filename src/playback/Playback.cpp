@@ -17,6 +17,11 @@
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
+#include "playback/visuals/ReplayContainerKeepOpenHook.h"
+#include "playback/visuals/ReplayEntityInterpolator.h"
+#include "playback/visuals/ReplayFirstPersonHandHooks.h"
+#include "playback/visuals/ReplayHudHooks.h"
+#include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -80,6 +85,7 @@ void Playback::registerActions() {
     registry.registerAction(std::make_unique<action::ActionConfigurationPacket>());
     registry.registerAction(std::make_unique<action::ActionGamePacket>());
     registry.registerAction(std::make_unique<action::ActionMoveEntities>());
+    registry.registerAction(std::make_unique<action::ActionLocalCameraOffset>());
 }
 
 bool Playback::hook() {
@@ -197,6 +203,11 @@ bool Playback::unhook() {
         getSelf().getLogger().error("Unable to remove export-scoped offline render hooks during shutdown");
         return false;
     }
+    // The replay session installs these for its whole lifetime; release them with the mod.
+    visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Session);
+    visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Session);
+    visuals::releaseReplayContainerKeepOpen();
+    visuals::releaseReplayHudHooks();
     if (!exporting::hookIdleDetection(false)) {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = record::hookNetwork(true);
@@ -314,6 +325,7 @@ bool Playback::disable() {
 
     exporting::applyExportEcoMode(false);
     record::Recorder::getInstance().stop();
+    record::Recorder::getInstance().waitForExport();
     if (!unhook()) {
         logger.error("Playback cannot disable because its runtime hooks could not be removed safely");
         return false;

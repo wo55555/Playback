@@ -19,12 +19,15 @@ public:
 
     void configure(
         state::editing::model::EditorStateExt const& project,
-        std::optional<std::string>                   cameraFallback = std::nullopt
+        std::optional<std::string>                   cameraFallback     = std::nullopt,
+        std::string                                  firstPersonSubject = {}
     );
     void reset();
 
 private:
     keyframe::CameraTimelineHandle mTimeline;
+    bool                           mSubjectChoiceSaved{false};
+    std::string                    mSavedSubjectChoice;
 };
 
 } // namespace playback::exporting

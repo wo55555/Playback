@@ -75,6 +75,14 @@ public:
     // Drops the selection when the object it points at is gone, e.g. after reloading a project.
     void pruneInvalid(EditorStateExt const& state);
 
+    // Multi-keyframe selection. The primary selection stays a SelectedKeyframe (the most recently
+    // picked one) and the set always contains it; selecting anything else empties the set.
+    void                                               setKeyframes(std::vector<SelectedKeyframe> keys);
+    void                                               toggleKeyframe(SelectedKeyframe key);
+    [[nodiscard]] bool                                 isKeyframeSelected(std::string const& trackId, int tick) const;
+    [[nodiscard]] std::vector<SelectedKeyframe> const& keyframes() const { return mKeyframes; }
+    [[nodiscard]] std::size_t                          keyframeCount() const { return mKeyframes.size(); }
+
     template <typename T>
     [[nodiscard]] const T* getAs() const {
         if (!mSelection) return nullptr;
@@ -82,7 +90,8 @@ public:
     }
 
 private:
-    std::optional<Selection> mSelection;
+    std::optional<Selection>      mSelection;
+    std::vector<SelectedKeyframe> mKeyframes;
 };
 
 } // namespace playback::state::editing::model
