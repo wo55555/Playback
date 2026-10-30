@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,6 +48,10 @@ private:
 
 void publishCameraTimeline(CameraTimelineSource source, CameraTimelineHandle timeline);
 void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const& expected = {});
+
+// Takes precedence over the published timeline; returning nullopt falls through to it. An empty function clears it.
+using CameraSampleOverride = std::function<std::optional<CameraRenderState>(visuals::ReplaySampleTime const&)>;
+void setCameraSampleOverride(CameraTimelineSource source, CameraSampleOverride provider);
 
 [[nodiscard]] CameraTimelineHandle currentCameraTimeline(CameraTimelineSource source) noexcept;
 

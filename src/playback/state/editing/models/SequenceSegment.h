@@ -3,8 +3,12 @@
 #include "MathTypes.h"
 
 #include <string>
+#include <string_view>
 
 namespace playback::state::editing::model {
+
+// Reserved camera id a segment binds to for the recorded player's own view; no CameraEntity carries it.
+inline constexpr std::string_view kFirstPersonCameraId = "__first_person__";
 
 struct SequenceSegment {
     std::string id;

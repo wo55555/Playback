@@ -7,6 +7,10 @@
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
+#include "playback/state/editing/models/SequenceSegment.h"
+#include "playback/visuals/ReplayEntityInterpolator.h"
+#include "playback/visuals/ReplayFirstPersonHandHooks.h"
+#include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/memory/Hook.h"
 
@@ -305,6 +309,13 @@ LL_TYPE_INSTANCE_HOOK(
             ScopedTimerOverride                         timerOverride(timer, sample->sample);
             ScopedRenderSample                          renderSample(sample->token, sample->renderSerial);
             keyframe::ScopedCameraTimelineRenderContext cameraContext(sample->cameraContext);
+            // A first-person segment renders from inside the subject, so its model hides for exactly these frames.
+            bool const firstPerson = sample->cameraContext && sample->cameraContext->sample
+                                  && sample->cameraContext->sample->cameraId
+                                         == state::editing::model::kFirstPersonCameraId;
+            visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Export, firstPerson);
+            // The hand and sleep-vignette hooks read the view weight sampled for the frame being drawn.
+            if (firstPerson) (void)visuals::sampleReplaySubjectViewWeight(sample->sample.replayTime);
             auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
             poseApplied = pose != nullptr;
 
@@ -397,6 +408,8 @@ bool hookOfflineRenderClock(bool enable) {
 
     auto removeAll = [&] {
         gHookInstalled.store(false, std::memory_order_release);
+        visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Export);
+        visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Export);
         resetOfflineRenderClock();
         reportSceneRetries();
         (void)setOfflineRenderClientBoost(false);
@@ -412,6 +425,8 @@ bool hookOfflineRenderClock(bool enable) {
         bool const ready = state.clock && state.gameFrame;
         gHookInstalled.store(ready, std::memory_order_release);
         if (ready) {
+            visuals::hookReplaySubjectHide(true, visuals::SubjectHideReason::Export);
+            visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Export);
             gInitialCameraSampleLogged.store(false, std::memory_order_release);
             gMissingCameraSampleLogged.store(false, std::memory_order_release);
             return true;

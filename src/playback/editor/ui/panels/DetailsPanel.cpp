@@ -1,6 +1,7 @@
-#include "DetailsPanel.h"
+﻿#include "DetailsPanel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/PropertyControls.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
@@ -22,8 +23,6 @@ using namespace playback::state;
 using namespace ll::i18n_literals;
 
 namespace {
-
-constexpr int kTicksPerSecond = 20;
 
 template <typename T>
 T const* findById(std::vector<T> const& values, std::string const& id) {
@@ -178,10 +177,14 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     } else if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
         auto const* camera = findById(project->cameras, selectedCamera->cameraId);
         subject            = camera ? camera->name : "playback.refactorEditor.details.camera"_tr();
+    } else if (selection.keyframeCount() > 1) {
+        subject = "playback.refactorEditor.details.keyframesSelected"_tr(selection.keyframeCount());
     } else if (selection.getAs<state::editing::model::SelectedKeyframe>()) {
         subject = "playback.refactorEditor.details.cameraKeyframe"_tr();
     } else if (selection.getAs<state::editing::model::SelectedMarker>()) {
         subject = "playback.refactorEditor.details.marker"_tr();
+    } else if (selection.getAs<state::editing::model::SelectedSequenceSegment>()) {
+        subject = "playback.refactorEditor.details.sequenceSegment"_tr();
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
@@ -189,15 +192,116 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawWorldActorSegment(ctx)) return;
     if (drawSubActor(ctx)) return;
     if (drawCamera(ctx)) return;
+    if (drawKeyframes(ctx)) return;
     if (drawKeyframe(ctx)) return;
     if (drawMarker(ctx)) return;
+    if (drawSequenceSegment(ctx)) return;
+    mFocusSubjectSearch = false;
     drawOverview(ctx);
+}
+
+bool DetailsPanel::drawSequenceSegment(PanelContext const& ctx) {
+    using state::editing::model::kFirstPersonCameraId;
+    auto const* selected = ctx.selection.getAs<state::editing::model::SelectedSequenceSegment>();
+    if (!selected) return false;
+    auto const project = ctx.state.project;
+    auto const* segment = findById(project->sequence, selected->segmentId);
+    if (!segment) {
+        mFocusSubjectSearch = false;
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.sequenceSegmentMissing"_tr().c_str());
+        return true;
+    }
+
+    bool const  firstPerson = segment->cameraId == kFirstPersonCameraId;
+    auto const  camera      = std::ranges::find(project->cameras, segment->cameraId, &state::editing::model::CameraEntity::id);
+    std::string cameraLabel = "playback.refactorEditor.timeline.autoCamera"_tr();
+    if (firstPerson) cameraLabel = "playback.refactorEditor.timeline.firstPersonCamera"_tr();
+    else if (!segment->cameraId.empty() && camera != project->cameras.end()) cameraLabel = camera->name;
+
+    if (property::beginSection("playback.refactorEditor.details.sequenceSegment"_tr().c_str())) {
+        ImGui::TextUnformatted(
+            "playback.refactorEditor.details.range"_tr(formatTick(segment->startTick), formatTick(segment->endTick))
+                .c_str()
+        );
+        ImGui::TextUnformatted(
+            "playback.refactorEditor.details.duration"_tr(segment->endTick - segment->startTick).c_str()
+        );
+        property::separator();
+
+        auto const bind = [&](std::string cameraId) {
+            EditorAction action{EditorActionType::BindSequenceCamera};
+            action.id          = segment->id;
+            action.secondaryId = std::move(cameraId);
+            ctx.submitAction(std::move(action));
+        };
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.sequenceCameraHeader"_tr().c_str());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::BeginDisabled(segment->locked);
+        if (widgets::beginCombo("##sequence-camera", cameraLabel.c_str())) {
+            if (ImGui::Selectable("playback.refactorEditor.timeline.autoCamera"_tr().c_str(), segment->cameraId.empty())) {
+                bind({});
+            }
+            if (ImGui::Selectable("playback.refactorEditor.timeline.firstPersonCamera"_tr().c_str(), firstPerson)) {
+                bind(std::string{kFirstPersonCameraId});
+            }
+            if (!project->cameras.empty()) ImGui::Separator();
+            for (auto const& entry : project->cameras) {
+                ImGui::PushID(entry.id.c_str());
+                if (ImGui::Selectable(entry.name.c_str(), segment->cameraId == entry.id)) bind(entry.id);
+                ImGui::PopID();
+            }
+            widgets::endCombo();
+        }
+        ImGui::EndDisabled();
+        if (segment->locked) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.segmentLocked"_tr().c_str());
+        }
+        property::endSection();
+    }
+
+    if (!firstPerson) {
+        mFocusSubjectSearch = false;
+        return true;
+    }
+
+    // The subject is one replay-wide choice, so it stays editable even on a locked segment.
+    if (property::beginSection("playback.refactorEditor.details.firstPersonSubject"_tr().c_str())) {
+        std::string const current = playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replaySubjectChoice);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.currentSubject"_tr().c_str());
+        ImGui::SameLine();
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(current.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.subjectShared"_tr().c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+
+        if (mFocusSubjectSearch) ImGui::SetScrollHereY(0.0f);
+        PlayerPickerResult picked;
+        if (drawPlayerList(
+                "##inspector-subject-list",
+                PlayerPickerMode::SegmentSubject,
+                ctx.state.replayPlayers,
+                ctx.state.replaySubjectChoice,
+                mFocusSubjectSearch,
+                picked
+            )) {
+            EditorAction action{EditorActionType::SetReplaySubjectChoice};
+            action.id = std::move(picked.uuid);
+            ctx.submitAction(std::move(action));
+        }
+        property::endSection();
+    }
+    mFocusSubjectSearch = false;
+    return true;
 }
 
 bool DetailsPanel::drawWorldActor(PanelContext const& ctx) {
     auto const  project   = ctx.state.project;
     auto const& selection = ctx.selection;
-    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         if (property::beginSection("playback.refactorEditor.details.worldActor"_tr().c_str())) {
@@ -437,6 +541,13 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                 action.value = enabled;
                 submit(std::move(action));
             }
+            bool locked = camera->locked;
+            if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+                EditorAction action{EditorActionType::SetCameraLocked};
+                action.id    = camera->id;
+                action.value = locked;
+                submit(std::move(action));
+            }
             ImGui::BeginDisabled(camera->locked);
             if (!camera->bindingEntityUuid.empty()) {
                 property::separator();
@@ -473,6 +584,72 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
         return true;
     }
     return false;
+}
+
+bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
+    auto const& selection = ctx.selection;
+    if (selection.keyframeCount() <= 1) return false;
+    auto const project = ctx.state.project;
+
+    std::vector<state::editing::model::KeyframeRef> refs;
+    std::optional<int>                              shared;
+    bool                                            mixed   = false;
+    int                                             tracks  = 0;
+    std::string                                     lastTrack;
+    for (auto const& entry : selection.keyframes()) {
+        refs.push_back({entry.trackId, entry.tick, std::nullopt});
+        if (entry.trackId != lastTrack) {
+            ++tracks;
+            lastTrack = entry.trackId;
+        }
+        auto const* camera = findById(project->cameras, entry.trackId);
+        if (!camera) continue;
+        auto const key = camera->keysByTick.find(entry.tick);
+        if (key == camera->keysByTick.end()) continue;
+        int const type = static_cast<int>(key->second.interpolationType);
+        if (!shared) shared = type;
+        else if (*shared != type) mixed = true;
+    }
+
+    if (property::beginSection("playback.refactorEditor.details.multiKeyframe"_tr().c_str())) {
+        property::textRow(
+            "playback.refactorEditor.details.keyframeCount"_tr().c_str(),
+            std::to_string(selection.keyframeCount()).c_str()
+        );
+        property::textRow("playback.refactorEditor.details.trackCount"_tr().c_str(), std::to_string(tracks).c_str());
+        property::separator();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1.0f);
+        std::string const preview =
+            mixed || !shared ? "playback.refactorEditor.details.mixed"_tr()
+                             : interpolationName(static_cast<state::editing::model::CameraInterpolationType>(*shared));
+        if (widgets::beginCombo("##batch-interpolation", preview.c_str())) {
+            for (int index = 0; index < 8; ++index) {
+                auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+                if (ImGui::Selectable(interpolationName(value).c_str(), !mixed && shared == index)) {
+                    EditorAction action{EditorActionType::SetKeyframesInterpolation};
+                    action.keyframeRefs = refs;
+                    action.kind         = index;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+            widgets::endCombo();
+        }
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.details.deleteKeyframes"_tr(selection.keyframeCount()).c_str()
+            )) {
+            EditorAction action{EditorActionType::DeleteCameraKeyframes};
+            action.keyframeRefs = std::move(refs);
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.multiKeyframeHint"_tr().c_str());
+        property::endSection();
+    }
+    return true;
 }
 
 bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
@@ -584,7 +761,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
                 ImGui::TableNextColumn();
                 ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::BeginCombo("##interpolation", interpolationName(key->second.interpolationType).c_str())) {
+                if (widgets::beginCombo("##interpolation", interpolationName(key->second.interpolationType).c_str())) {
                     for (int index = 0; index < 8; ++index) {
                         auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
                         if (ImGui::Selectable(interpolationName(value).c_str(), index == interpolation)) {
@@ -595,7 +772,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                             submit(std::move(action));
                         }
                     }
-                    ImGui::EndCombo();
+                    widgets::endCombo();
                 }
                 ImGui::EndTable();
             }
@@ -629,12 +806,72 @@ bool DetailsPanel::drawMarker(PanelContext const& ctx) {
             return true;
         }
         if (property::beginSection("playback.refactorEditor.details.marker"_tr().c_str())) {
-            property::textRow("playback.refactorEditor.details.nameLabel"_tr().c_str(), marker->label.c_str());
-            property::textRow("playback.refactorEditor.details.tick"_tr().c_str(), formatTick(marker->tick).c_str());
-            ImGui::BeginDisabled();
-            if (property::actionButton("playback.refactorEditor.details.deleteMarker"_tr().c_str(), false)) {}
-            ImGui::EndDisabled();
-            ImGui::TextDisabled("%s", "playback.refactorEditor.details.markerNotWired"_tr().c_str());
+            if (mMarkerLabelId != marker->id || !mMarkerLabelEditing) {
+                mMarkerLabelId     = marker->id;
+                mMarkerLabelBuffer = {};
+                marker->label.copy(mMarkerLabelBuffer.data(), mMarkerLabelBuffer.size() - 1);
+            }
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {4.0f, 5.0f});
+            if (ImGui::BeginTable(
+                    "##marker-properties",
+                    2,
+                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+                )) {
+                ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+                ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.nameLabel"_tr().c_str());
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::InputText("##marker-label", mMarkerLabelBuffer.data(), mMarkerLabelBuffer.size());
+                mMarkerLabelEditing = ImGui::IsItemActive();
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    std::string label = mMarkerLabelBuffer.data();
+                    if (!label.empty() && label != marker->label) {
+                        EditorAction action{EditorActionType::RenameMarker};
+                        action.id   = marker->id;
+                        action.name = std::move(label);
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+
+                int tick = marker->tick;
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::InputInt("##marker-tick", &tick, 0, 0);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    tick = std::clamp(tick, 0, ctx.state.totalTicks);
+                    if (tick != marker->tick) {
+                        EditorAction action{EditorActionType::MoveMarker};
+                        action.id   = marker->id;
+                        action.tick = tick;
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", formatTick(marker->tick).c_str());
+                ImGui::EndTable();
+            }
+            ImGui::PopStyleVar();
+            property::separator();
+            if (property::actionButton("playback.refactorEditor.timeline.seekToMarker"_tr().c_str())) {
+                ctx.commands.seekTo(marker->tick);
+            }
+            if (property::actionButton("playback.refactorEditor.details.deleteMarker"_tr().c_str())) {
+                EditorAction action{EditorActionType::DeleteMarker};
+                action.id = marker->id;
+                ctx.submitAction(std::move(action));
+                ctx.selection.clear();
+            }
             property::endSection();
         }
         return true;

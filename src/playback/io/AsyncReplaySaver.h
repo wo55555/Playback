@@ -51,6 +51,18 @@ struct PlaybackSnapshotContext {
     float   z{};
     float   yaw{};
     float   pitch{};
+    // Camera position minus entity position, and the rendered FOV in degrees, at the snapshot tick.
+    float cameraOffsetX{};
+    float cameraOffsetY{};
+    float cameraOffsetZ{};
+    float fov{};
+    // Absolute game camera pose, only present while the vanilla camera is detached from the entity (sleeping).
+    bool  hasView{};
+    float viewX{};
+    float viewY{};
+    float viewZ{};
+    float viewYaw{};
+    float viewPitch{};
     // Custom dimensions have ids outside VanillaDimensions, so the name is the only way to resolve them.
     std::string dimensionName;
 
@@ -201,6 +213,9 @@ public:
     void cancel();
 
     [[nodiscard]] bool isRunning() const { return mRunning; }
+
+    // Fixed after construction, so other threads may read it while the saver runs.
+    [[nodiscard]] std::filesystem::path const& getRecordPath() const { return mRecordPath; }
 
     [[nodiscard]] bool hasError() const;
 
