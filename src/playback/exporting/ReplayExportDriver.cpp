@@ -4,12 +4,16 @@
 #include "ExportEcoMode.h"
 
 #include "playback/Playback.h"
+#include "playback/audio/ExportAudioCapture.h"
+#include "playback/audio/ExportAudioMuxer.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <system_error>
 #include <utility>
 
 namespace playback::exporting {
@@ -117,6 +121,7 @@ bool ReplayExportDriver::start(
         fail(ExportError::InvalidSettings, "The export plan was not retained by the coordinator");
         return false;
     }
+    if (mPlan->settings.audio) playback::audio::exportcap::exportBegin(mPlan->settings);
 
     bool const previousPaused = mReplay.isPaused();
     if (!mReplay.setPaused(true)) {
@@ -177,6 +182,22 @@ void ReplayExportDriver::tick() try {
     auto const coordinatorStatus = mCoordinator.status();
     if (mPhase == Phase::Finalizing || mPhase == Phase::Cancelling) {
         if (coordinatorStatus.state == ExportState::Completed) {
+            // The video file is final at this point; close the sidecar WAV and mux audio into the MP4 if applicable.
+            playback::audio::exportcap::finalizeSidecar();
+            // capturing() is already false here: finish() runs exportEnd() before the Completed state is reached.
+            // Gate the mux on the sidecar having real audio data instead, which survives exportEnd().
+            auto const sidecar = playback::audio::exportcap::sidecarPath();
+            std::error_code sidecarEc;
+            bool const    hasAudio =
+                mPlan && mPlan->settings.audio && !sidecar.empty()
+                && std::filesystem::file_size(sidecar, sidecarEc) > 44 && !sidecarEc;
+            if (hasAudio) {
+                if (mPlan->settings.format == ExportFormat::Mp4Video) {
+                    playback::audio::exportmux::muxIntoMp4(mPlan->outputPath, sidecar);
+                } else {
+                    getLogger().info("Export audio written to {}", sidecar);
+                }
+            }
             restoreReplayState();
             setExportActivityActive(false);
             mPhase = Phase::Completed;
@@ -449,6 +470,8 @@ void ReplayExportDriver::fail(ExportError error, std::string message) {
 }
 
 void ReplayExportDriver::restoreReplayState() {
+    // exportEnd is idempotent and must run on every exit path (success, cancel, fault); this is the common funnel.
+    playback::audio::exportcap::exportEnd();
     if (!mPreviousPaused) return;
     bool const previousPaused = *mPreviousPaused;
     mPreviousPaused.reset();
