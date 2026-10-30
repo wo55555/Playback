@@ -26,6 +26,7 @@
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/entity/components/AbilitiesComponent.h"
 #include "mc/entity/components/ActorGameTypeComponent.h"
+#include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
@@ -47,6 +48,7 @@
 #include <cstdint>
 #include <cstring>
 #include <intrin.h>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -137,6 +139,119 @@ bool viewBobbingEnabled() {
     auto client = ll::service::getClientInstance();
     return client && client->getOptions().getBobView();
 }
+
+float wrapDegrees(float degrees) {
+    degrees = std::fmod(degrees, 360.0f);
+    if (degrees >= 180.0f) degrees -= 360.0f;
+    if (degrees < -180.0f) degrees += 360.0f;
+    return degrees;
+}
+
+// InGamePlayScreen::_renderItemInHand sways the hand on a spring driven by the player's turn rate when view
+// bobbing is on: angleVel = clamp(0.8 angleVel + 0.2 turn / dt, +-50), then substeps of at
+// most 1/120 s of vel += (-900 hand - 42 vel + 90 angleVel) h, hand += h vel; a velocity of 1000 resets it. dt comes
+// from a wall clock clamped to 0.2 s and the turn from the observer, which only turns with the subject in live follow
+// and ignores pause, seek and the export clock. The same spring runs here on the subject in replay time instead.
+struct HandSway {
+    Player const* subject{};
+    long double   tick{-1.0L};
+    Vec2          rotation{};
+    Vec2          angleVel{};
+    Vec2          hand{};
+    Vec2          vel{};
+    // Native clock minus steady_clock, in seconds; the smallest observed value is the closest to the true offset.
+    double        clockOffset{std::numeric_limits<double>::infinity()};
+};
+
+HandSway gSway;
+
+constexpr long double HandSwayResetTicks  = 20.0L;
+constexpr double      HandSwayClockMargin = 0.001;
+
+void stepHandSway(HandSway& sway, Vec2 rotation, float dt) {
+    Vec2 const turn{wrapDegrees(rotation.x - sway.rotation.x), wrapDegrees(rotation.y - sway.rotation.y)};
+    sway.rotation   = rotation;
+    sway.angleVel.x = std::clamp(sway.angleVel.x * 0.8f + turn.x / dt * 0.2f, -50.0f, 50.0f);
+    sway.angleVel.y = std::clamp(sway.angleVel.y * 0.8f + turn.y / dt * 0.2f, -50.0f, 50.0f);
+    for (float left = dt; left > 0.0f;) {
+        float const h  = std::min(1.0f / 120.0f, left);
+        left          -= h;
+        sway.vel.x    += (sway.hand.x * -900.0f + sway.vel.x * -42.0f + sway.angleVel.x * 90.0f) * h;
+        sway.vel.y    += (sway.hand.y * -900.0f + sway.vel.y * -42.0f + sway.angleVel.y * 90.0f) * h;
+        sway.hand.x   += h * sway.vel.x;
+        sway.hand.y   += h * sway.vel.y;
+    }
+    if (std::abs(sway.vel.x) >= 1000.0f || std::abs(sway.vel.y) >= 1000.0f) sway.vel = Vec2{};
+}
+
+double steadySeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Writes the replay spring into the native fields so the native update only adds a negligible step: the observer's
+// rotation is held still for the call and the native clock is set about 1 ms back, so the turn and dt are ~0.
+class ScopedHandSway {
+public:
+    ScopedHandSway(InGamePlayScreen& screen, Player& observer, Player& subject)
+    : mScreen(screen),
+      mRotation(observer.mBuiltInComponents->mActorRotationComponent.get()) {
+        auto*      subjectRotation = subject.mBuiltInComponents->mActorRotationComponent.get();
+        auto const sample          = sampleReplaySubjectNausea(); // stamped with the subject's sample time
+        if (!mRotation || !subjectRotation || !sample || !viewBobbingEnabled()) {
+            mRotation    = nullptr;
+            gSway.tick   = -1.0L;
+            return;
+        }
+
+        auto&      sway     = gSway;
+        Vec2 const rotation = subjectRotation->mRot.get();
+        if (sway.subject != &subject || sway.tick < 0.0L || sample->tick < sway.tick
+            || sample->tick - sway.tick > HandSwayResetTicks) {
+            sway.subject  = &subject;
+            sway.rotation = rotation;
+            sway.angleVel = Vec2{};
+            sway.hand     = Vec2{};
+            sway.vel      = Vec2{};
+        } else if (sample->tick > sway.tick) {
+            stepHandSway(sway, rotation, std::min(static_cast<float>((sample->tick - sway.tick) / 20.0L), 0.2f));
+        }
+        sway.tick = sample->tick;
+
+        mSavedPrevious      = mRotation->mRotPrev.get();
+        mRotation->mRotPrev = mRotation->mRot.get();
+        mStart              = steadySeconds();
+        // The first pass only measures the native clock; its own sway update runs unchanged.
+        if (std::isfinite(sway.clockOffset)) {
+            screen.mLastHandRotation   = sway.hand;
+            screen.mLastHandVel        = Vec2{};
+            screen.mLastPlayerAngleVel = Vec2{};
+            screen.mLastPlayerRotation = mRotation->mRot.get();
+            // A negative native dt is replaced by 0.2 s, so the margin covers the offset's measurement error.
+            screen.mLastTime           = mStart + sway.clockOffset - HandSwayClockMargin;
+        }
+        mWrittenTime = screen.mLastTime;
+    }
+
+    ~ScopedHandSway() {
+        if (!mRotation) return;
+        mRotation->mRotPrev = mSavedPrevious;
+        // Only a native update stamps the clock; a skipped one would leave the written value and skew the offset.
+        double const stamped = mScreen.mLastTime;
+        if (stamped == mWrittenTime) return;
+        double const offset = stamped - mStart;
+        if (std::isfinite(offset)) gSway.clockOffset = std::min(gSway.clockOffset, offset);
+    }
+
+    ScopedHandSway(ScopedHandSway const&)            = delete;
+    ScopedHandSway& operator=(ScopedHandSway const&) = delete;
+
+private:
+    InGamePlayScreen&       mScreen;
+    ActorRotationComponent* mRotation{};
+    Vec2                    mSavedPrevious{};
+    double                  mStart{};
+    double                  mWrittenTime{};
+};
 
 // The scope hides the subject with Invisible flags; its hands must render without them.
 class ScopedHandPass {
@@ -245,6 +360,7 @@ LL_TYPE_INSTANCE_HOOK(
     player.setOffhandSlot(subject->getOffhandSlot());
     ScopedHandPass         pass(*subject);
     ScopedObserverGameType gameType(player, *subject);
+    ScopedHandSway         sway(*this, player, *subject);
     origin(screenContext, player);
     player.setCarriedItem(savedCarried);
     player.setOffhandSlot(savedOffhand);
