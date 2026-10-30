@@ -30,7 +30,7 @@ struct Policy {
     std::function<bool(bool enable)> deferEnable;
     // SoundSystemFMOD::setOutputDevice (slot 4, setDriver + setOutput). Return true to swallow; deviceId is 16 bytes.
     std::function<bool(void const* deviceId)> deferSetOutputDevice;
-    // Ore UI stream pause helper (0x49AF080) busy-waits on Channel::getPosition, which never advances without a mixer
+    // Ore UI stream pause helper (0x6E8B410) busy-waits on Channel::getPosition, which never advances without a mixer
     // thread. Return true to skip it.
     std::function<bool()> skipStreamPauseWait;
 };
