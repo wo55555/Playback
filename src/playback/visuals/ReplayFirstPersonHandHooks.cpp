@@ -21,6 +21,7 @@
 #include "mc/deps/core/math/Color.h"
 #include "mc/deps/core/math/Matrix.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
+#include "mc/entity/components/ActorGameTypeComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/deps/input/RectangleArea.h"
 #include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
@@ -187,7 +188,32 @@ LL_TYPE_INSTANCE_HOOK(HandGameTypeHook, ll::memory::HookPriority::High, Player, 
     return origin();
 }
 
-// 26.51 no longer exports InGamePlayScreen::_showHand (26.20: !hideHand && !isSpectator(local player)).
+// 26.51 inlines _showHand into _renderItemInHand: the hand is skipped when the local player's ActorGameTypeComponent
+// reads Spectator, or Default under a Spectator level default (1.26.51.01). The observer is a spectator, so the
+// component reports the subject's mode for the call.
+class ScopedObserverGameType {
+public:
+    ScopedObserverGameType(Player& observer, Player& subject)
+    : mComponent(observer.getEntityContext().tryGetComponent<ActorGameTypeComponent>()) {
+        if (!mComponent) return;
+        mSaved      = mComponent->mGameType;
+        auto const type = subject.getPlayerGameType();
+        mComponent->mGameType =
+            type != GameType::Spectator && type != GameType::Default && type != GameType::Undefined ? type
+                                                                                                    : GameType::Survival;
+    }
+
+    ~ScopedObserverGameType() {
+        if (mComponent) mComponent->mGameType = mSaved;
+    }
+
+    ScopedObserverGameType(ScopedObserverGameType const&)            = delete;
+    ScopedObserverGameType& operator=(ScopedObserverGameType const&) = delete;
+
+private:
+    ActorGameTypeComponent* mComponent;
+    GameType                mSaved{};
+};
 
 LL_TYPE_INSTANCE_HOOK(
     HandItemInHandHook,
@@ -208,7 +234,8 @@ LL_TYPE_INSTANCE_HOOK(
     ItemStack const savedOffhand = player.getOffhandSlot();
     player.setCarriedItem(subject->getCarriedItem());
     player.setOffhandSlot(subject->getOffhandSlot());
-    ScopedHandPass pass(*subject);
+    ScopedHandPass         pass(*subject);
+    ScopedObserverGameType gameType(player, *subject);
     origin(screenContext, player);
     player.setCarriedItem(savedCarried);
     player.setOffhandSlot(savedOffhand);
@@ -264,14 +291,12 @@ LL_TYPE_INSTANCE_HOOK(
     origin(context, handPlayer(player), inOffhand);
 }
 
-// LevelRendererPlayer::bobView reads its bob from IClientInstance::getCameraEntity, the observer while following
-// (1.26.20.04): WalkDistComponent, PlayerBobComponent and an interpolated Actor float pair at +0x3B4/+0x3B8 (tilt).
+// LevelRendererPlayer::bobView reads its bob from IClientInstance::getCameraEntity, the observer while following:
+// WalkDistComponent, PlayerBobComponent and the interpolated Mob::mOTilt / mTilt pair.
 // The subject's values stand in for one call so the first-person view and the held map sway with the recorded walk.
-constexpr size_t BobTiltOffset = 0x3B4;
-
 class ScopedObserverBob {
 public:
-    ScopedObserverBob(Actor& observer, Actor& subject) {
+    ScopedObserverBob(Mob& observer, Mob& subject) : mObserver(observer) {
         auto& to   = observer.getEntityContext();
         auto& from = subject.getEntityContext();
         mWalk      = to.tryGetComponent<WalkDistComponent>();
@@ -282,32 +307,35 @@ public:
             mWalk = nullptr;
             return;
         }
-        mTilt      = reinterpret_cast<float*>(reinterpret_cast<std::byte*>(&observer) + BobTiltOffset);
-        mSavedWalk = *mWalk;
-        mSavedBob  = *mBob;
-        std::memcpy(mSavedTilt, mTilt, sizeof(mSavedTilt));
-        *mWalk = *walk;
-        *mBob  = *bob;
-        std::memcpy(mTilt, reinterpret_cast<std::byte const*>(&subject) + BobTiltOffset, sizeof(mSavedTilt));
+        mSavedWalk  = *mWalk;
+        mSavedBob   = *mBob;
+        mSavedOTilt = observer.mOTilt;
+        mSavedTilt  = observer.mTilt;
+        *mWalk          = *walk;
+        *mBob           = *bob;
+        observer.mOTilt = subject.mOTilt;
+        observer.mTilt  = subject.mTilt;
     }
 
     ~ScopedObserverBob() {
         if (!mWalk) return;
-        *mWalk = mSavedWalk;
-        *mBob  = mSavedBob;
-        std::memcpy(mTilt, mSavedTilt, sizeof(mSavedTilt));
+        *mWalk           = mSavedWalk;
+        *mBob            = mSavedBob;
+        mObserver.mOTilt = mSavedOTilt;
+        mObserver.mTilt  = mSavedTilt;
     }
 
     ScopedObserverBob(ScopedObserverBob const&)            = delete;
     ScopedObserverBob& operator=(ScopedObserverBob const&) = delete;
 
 private:
+    Mob&                mObserver;
     WalkDistComponent*  mWalk{};
     PlayerBobComponent* mBob{};
-    float*              mTilt{};
     WalkDistComponent   mSavedWalk{};
     PlayerBobComponent  mSavedBob{};
-    float               mSavedTilt[2]{};
+    float               mSavedOTilt{};
+    float               mSavedTilt{};
 };
 
 LL_TYPE_INSTANCE_HOOK(
@@ -335,9 +363,23 @@ LL_TYPE_INSTANCE_HOOK(
     origin(view, alpha);
 }
 
-// No caller range is configured for the screen-overlay renderers (fire, in-block) on 1.26.51, so the overlays keep
-// the observer.
-bool isOverlayCaller(void*) { return false; }
+uintptr_t functionStart(void* address) {
+    DWORD64 imageBase = 0;
+    auto*   entry     = RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(address), &imageBase, nullptr);
+    return entry ? static_cast<uintptr_t>(imageBase + entry->BeginAddress) : 0;
+}
+
+// On 1.26.51.01 the fire and in-block overlays are inlined into _renderLevelPrep. _renderTransparentFirstPerson3DObjects
+// stays on the observer: its portal overlay reads LocalPlayer-only fields inline, past the end of a remote player, and
+// it hands its actor to _renderItemInHand, which copies the subject's items onto the observer itself.
+bool isOverlayCaller(void* returnAddress) {
+    static uintptr_t const levelPrep =
+        reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderLevelPrep));
+    static uintptr_t const firstPersonObjects =
+        reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_shouldRenderFirstPersonObjects));
+    auto const start = functionStart(returnAddress);
+    return start != 0 && (start == levelPrep || start == firstPersonObjects);
+}
 
 // Follow mode parks the observer on the subject, so only the overlays are redirected; the render list and name tags
 // keep the observer.
