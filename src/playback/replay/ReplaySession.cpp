@@ -265,6 +265,9 @@ visuals::EntityRenderPosition replayRenderPosition(Vec3 const& position) {
     return {position.x, position.y, position.z};
 }
 
+// Played ticks a missing entity subject keeps its choice before the view returns to the recorder.
+constexpr int EntitySubjectGraceTicks = 20;
+
 // First line of a name tag without its § formatting codes.
 std::string plainNameTag(std::string const& tag) {
     std::string out;
@@ -1223,6 +1226,8 @@ void ReplaySession::clearReplayPlayers(bool clearChoice) {
     mReplayPlayers.clear();
     mReplaySubjectChoice.clear();
     mReplaySubjectGapChoice.clear();
+    mReplaySubjectEntityMissingTicks    = 0;
+    mReplaySubjectEntityMissingLastTick = -1;
     {
         std::lock_guard entitiesLock(mReplayEntitiesMutex);
         mReplayEntities.clear();
@@ -1331,7 +1336,11 @@ void ReplaySession::setReplaySubjectChoice(std::string uuid) {
         changed              = mReplaySubjectChoice != uuid;
         mReplaySubjectChoice = std::move(uuid);
     }
-    if (changed) getLogger().debug("replay subject choice={}", replaySubjectChoice());
+    if (changed) {
+        mReplaySubjectEntityMissingTicks    = 0;
+        mReplaySubjectEntityMissingLastTick = -1;
+        getLogger().debug("replay subject choice={}", replaySubjectChoice());
+    }
     rebindReplaySubject();
 }
 
@@ -1658,17 +1667,36 @@ void ReplaySession::rebindReplaySubject() {
             break;
         }
     }
-    // A followed entity that dies or is removed keeps the choice; a player respawning with the same id binds again.
+    // A followed entity that stays gone hands the view back to the recorder.
+    auto const loseEntity = [&]() {
+        loseSubject(choice);
+        // A seek catch-up replays the entity's add later; only played ticks count toward the grace.
+        if (mSeekTargetTick >= 0 || isSeekPending()) return;
+        if (mReplaySubjectEntityMissingLastTick == mCurrentTick) return;
+        mReplaySubjectEntityMissingLastTick = mCurrentTick;
+        if (++mReplaySubjectEntityMissingTicks < EntitySubjectGraceTicks) return;
+        getLogger().debug(
+            "replay subject entity gone choice={} tick={} missingTicks={} fallback=recorder",
+            choice,
+            mCurrentTick,
+            mReplaySubjectEntityMissingTicks
+        );
+        setReplaySubjectChoice({});
+    };
     Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
     if (!actor || actor == mReplayPlayer || (entityRaw && (actor->mRemoved || !actor->isAlive()))) {
-        loseSubject(choice);
+        if (entityRaw) loseEntity();
+        else loseSubject(choice);
         return;
     }
     auto const renderKey = replayEntityRenderKey(actor->getLevel(), id);
     if (!renderKey) {
-        loseSubject(choice);
+        if (entityRaw) loseEntity();
+        else loseSubject(choice);
         return;
     }
+    mReplaySubjectEntityMissingTicks    = 0;
+    mReplaySubjectEntityMissingLastTick = -1;
     if (!mEntityRenderKeys.contains(id)) {
         auto const pose = replayRenderPose(*actor);
         mEntityRenderKeys.insert_or_assign(id, *renderKey);
