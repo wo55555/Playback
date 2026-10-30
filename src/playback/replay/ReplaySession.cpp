@@ -393,7 +393,7 @@ void writeHudAttribute(Player& observer, FollowedHudMirror::SavedAttribute const
     auto const& attribute = Attribute::getByName(value.name);
     if (*attribute.mName != value.name) return;
     auto& attributes = *observer.getAttributes();
-    auto  instance   = attributes.getMutableInstance(attribute);
+    auto  instance   = attributes.getMutableInstance(*attribute.mName);
     if (!instance.mPtr || instance.mPtr == &BaseAttributeMap::mInvalidInstance()) return;
     // Built from the live instance so the modifiers stay; only the values are replaced.
     AttributeData data{*instance.mPtr};
