@@ -252,6 +252,9 @@ private:
     std::string                                         mReplaySubjectChoice;
     // Choice that already logged "not in this snapshot", so a missing player does not spam every tick.
     std::string                                         mReplaySubjectGapChoice;
+    // Played ticks an entity choice has been missing. A player choice is not counted.
+    int                                                         mReplaySubjectEntityMissingTicks{0};
+    int                                                         mReplaySubjectEntityMissingLastTick{-1};
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
     bool                                                        mLevelSimFrozen{false};
     // Item-use duration each recorded player had after the last replay tick; the client ticks it between ticks too.
