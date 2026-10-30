@@ -101,6 +101,7 @@ std::atomic_bool    gNauseaPresent{false};
 std::atomic_bool    gNauseaActive{false};
 std::atomic_int     gNauseaDuration{0};
 std::atomic<double> gNauseaTick{0.0};
+std::atomic_bool    gNauseaInsidePortal{false};
 
 int64_t steadyNs() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -115,6 +116,7 @@ void publishSubjectNausea(Actor const& subject, long double tick) {
     gNauseaDuration.store(duration, std::memory_order_relaxed);
     gNauseaActive.store(effect && (duration == -1 || duration > 60), std::memory_order_relaxed);
     gNauseaTick.store(static_cast<double>(tick), std::memory_order_relaxed);
+    gNauseaInsidePortal.store(subject.isInsidePortal(), std::memory_order_relaxed);
     gNauseaStamp.store(steadyNs(), std::memory_order_release);
 }
 
@@ -346,6 +348,7 @@ std::optional<SubjectNauseaSample> sampleReplaySubjectNausea() {
         gNauseaDuration.load(std::memory_order_relaxed),
         gNauseaActive.load(std::memory_order_relaxed),
         static_cast<long double>(gNauseaTick.load(std::memory_order_relaxed)),
+        gNauseaInsidePortal.load(std::memory_order_relaxed),
     };
 }
 
