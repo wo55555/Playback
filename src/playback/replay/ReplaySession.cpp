@@ -379,7 +379,7 @@ std::array<Attribute const*, 6> hudAttributes() {
 }
 
 std::optional<FollowedHudMirror::SavedAttribute> readHudAttribute(Actor& actor, Attribute const& attribute) {
-    auto const  instance = actor.getAttributes()->getInstance(attribute);
+    auto const  instance = actor.getAttribute(attribute);
     auto const* value    = instance.mPtr;
     if (!value || value == &BaseAttributeMap::mInvalidInstance()) return std::nullopt;
     return FollowedHudMirror::SavedAttribute{
@@ -396,8 +396,11 @@ std::optional<FollowedHudMirror::SavedAttribute> readHudAttribute(Actor& actor, 
 void writeHudAttribute(Player& observer, FollowedHudMirror::SavedAttribute const& value) {
     auto const& attribute = Attribute::getByName(value.name);
     if (*attribute.mName != value.name) return;
-    auto& attributes = *observer.getAttributes();
-    auto  instance   = attributes.getMutableInstance(attribute);
+    // 26.10 only exports the const getAttributes, and getMutableInstance takes the attribute id.
+    auto* component = observer.getEntityContext().tryGetComponent<AttributesComponent>().as_ptr();
+    if (!component) return;
+    auto& attributes = *component->mAttributes;
+    auto  instance   = attributes.getMutableInstance(attribute.mIDValue);
     if (!instance.mPtr || instance.mPtr == &BaseAttributeMap::mInvalidInstance()) return;
     // Built from the live instance so the modifiers stay; only the values are replaced.
     AttributeData data{*instance.mPtr};
