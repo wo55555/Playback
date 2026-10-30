@@ -24,8 +24,6 @@ using namespace ll::i18n_literals;
 
 namespace {
 
-constexpr int kTicksPerSecond = 20;
-
 template <typename T>
 T const* findById(std::vector<T> const& values, std::string const& id) {
     auto const it = std::find_if(values.begin(), values.end(), [&id](T const& value) { return value.id == id; });
@@ -304,7 +302,6 @@ bool DetailsPanel::drawSequenceSegment(PanelContext const& ctx) {
 bool DetailsPanel::drawWorldActor(PanelContext const& ctx) {
     auto const  project   = ctx.state.project;
     auto const& selection = ctx.selection;
-    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         if (property::beginSection("playback.refactorEditor.details.worldActor"_tr().c_str())) {
