@@ -30,7 +30,7 @@ struct Policy {
     std::function<bool(bool enable)> deferEnable;
     // SoundSystemFMOD::setOutputDevice (slot 4, setDriver + setOutput). Return true to swallow; deviceId is 16 bytes.
     std::function<bool(void const* deviceId)> deferSetOutputDevice;
-    // Ore UI stream pause helper (0x49AF080) busy-waits on Channel::getPosition, which never advances without a mixer
+    // Ore UI stream pause helper (slot 66) busy-waits on Channel::getPosition, which never advances without a mixer
     // thread. Return true to skip it.
     std::function<bool()> skipStreamPauseWait;
 };
@@ -42,7 +42,7 @@ using OrigUpdateFn = int (*)(void* system);
 OrigUpdateFn origUpdateFn();
 void*        currentSystem();
 
-// SoundSystemFMOD::update(float) hook (vtable slot 53). The game layer's per-frame audio tick: it unpause channels,
+// SoundSystemFMOD::update(float) hook (vtable slot 56). The game layer's per-frame audio tick: it unpause channels,
 // submits 3D listeners, and cleans up dead sounds on top of the bare FMOD System::update. The export must drive this
 // (not the bare update) so channels actually play.
 using OrigUpdateFloatFn = void (*)(void* soundSystem, float dt);
