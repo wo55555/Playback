@@ -22,7 +22,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <mutex>
 #include <numbers>
 #include <string>
@@ -31,7 +30,7 @@ namespace playback::audio::probe {
 
 namespace {
 
-// FMOD 2.02.30 (fmod.dll in 1.26.20.04); the C handle and the C++ object are the same pointer.
+// FMOD 2.02.30 (fmod.dll in 1.26.51.01); the C handle and the C++ object are the same pointer.
 struct FmodVector {
     float x, y, z;
 };
@@ -128,29 +127,28 @@ int            gListenerLines = 0;
 
 int gTopologyLines = 0;
 
-// SoundSystemFMOD::update(float) on 1.26.20.04. Gate the game-layer audio tick.
-constexpr uintptr_t UpdateFloatRva          = 0x49AD650;
-constexpr uintptr_t SoundSystemFmodVtableRva = 0xAEE7FE0;
-constexpr size_t    UpdateFloatVtableSlot   = 53;
-void*               gUpdateFloatTarget = nullptr;
+// SoundSystemFMOD::update(float) on 1.26.51.01. Gate the game-layer audio tick.
+constexpr uintptr_t UpdateFloatRva           = 0xB3B7630;
+constexpr uintptr_t SoundSystemFmodVtableRva = 0xEAD0DC0;
+constexpr size_t    UpdateFloatVtableSlot    = 56;
+void*               gUpdateFloatTarget       = nullptr;
 ll::memory::FuncPtr gOriginalUpdateFloat{};
 bool                gUpdateFloatInstalled{};
 std::atomic<void*>  gSoundSystem{nullptr};
 std::atomic<bool>   gGateUpdateFloat{false};
 thread_local bool   gDrivingUpdateFloat = false;
 
-// Calls that would fight the export for the FMOD output while it runs NOSOUND_NRT (1.26.20.04 RVAs, same vtable).
+// Calls that would fight the export for the FMOD output while it runs NOSOUND_NRT (1.26.51.01 RVAs, same vtable).
 constexpr size_t    SetOutputDeviceVtableSlot = 4; // setDriver(guid match) + setOutput(AUTODETECT)
-constexpr uintptr_t SetOutputDeviceRva        = 0x49A5DA0;
+constexpr uintptr_t SetOutputDeviceRva        = 0xB3B1520;
 constexpr size_t    EnableVtableSlot          = 6; // mixerSuspend / mixerResume
-constexpr uintptr_t EnableRva                 = 0x49A6B10;
-// Ore UI stream pause: System::update once, then spins on Channel::getPosition. Not virtual; reached only through the
-// SoundEngine thunk below (add rcx,18h; jmp rel32), which doubles as the build check.
-constexpr uintptr_t StreamPauseRva      = 0x49AF080;
-constexpr uintptr_t StreamPauseThunkRva = 0x606600;
-using EnableFn          = void (*)(void* soundSystem, bool enable);
-using SetOutputDeviceFn = void (*)(void* soundSystem, void const* deviceId);
-using StreamPauseFn     = uint64_t (*)(void* soundSystem, uint64_t key);
+constexpr uintptr_t EnableRva                 = 0xB3B2650;
+// Ore UI stream pause: System::update once, then spins on Channel::getPosition.
+constexpr size_t    StreamPauseVtableSlot = 67;
+constexpr uintptr_t StreamPauseRva        = 0xB3B9EC0;
+using EnableFn                            = void (*)(void* soundSystem, bool enable);
+using SetOutputDeviceFn                   = void (*)(void* soundSystem, void const* deviceId);
+using StreamPauseFn                       = uint64_t (*)(void* soundSystem, uint64_t key);
 struct GuardHook {
     void*               target{};
     ll::memory::FuncPtr original{};
@@ -444,9 +442,7 @@ int setListenerDetour(
 Bucket computeBucket() {
     auto&      replay    = replay::ReplaySession::getInstance();
     bool const exporting = exporting::isExportActivityActive();
-    // This version line has no isSeekPending(). getCurrentTick() returns the pending target while a seek is queued,
-    // so a difference from the applied tick is the public equivalent. A seek aimed at the tick already showing is missed.
-    bool const seeking   = replay.isActive() && replay.getCurrentTick() != replay.getAppliedReplayTick();
+    bool const seeking   = replay.isActive() && replay.isSeekPending();
     if (exporting) return seeking ? ExportSeeking : ExportRunning;
     if (!replay.isActive()) return Normal;
     if (seeking) return ReplaySeeking;
@@ -546,7 +542,7 @@ void logListener(ClientInstance& client, Bucket bucket) {
         "player=({:.3f},{:.3f},{:.3f}) rot=(pitch {:.2f}, yaw {:.2f}) delta=({:.3f},{:.3f},{:.3f}) lookDot={:.4f} "
         "exportCamera={}",
         BucketNames[bucket],
-        false, // no first-person follow on this version line
+        replay.isActive() && replay.isFollowingRecordedPlayer(),
         replay.isActive() ? replay.getAppliedReplayTick() : -1,
         sample.listener,
         sample.calls,
@@ -614,31 +610,11 @@ void* resolveSoundSystemSlot(size_t slotIndex, uintptr_t fnRva, char const* name
     }
     uintptr_t const slot = *reinterpret_cast<uintptr_t const*>(base + slotRva);
     if (slot != base + fnRva) {
-        logger().warn("Audio probe: {} vtable slot mismatch (slot rva=0x{:X}); unsupported game build", name, slot - base);
+        logger()
+            .warn("Audio probe: {} vtable slot mismatch (slot rva=0x{:X}); unsupported game build", name, slot - base);
         return nullptr;
     }
     return reinterpret_cast<void*>(slot);
-}
-
-// The stream pause thunk is checked before hooking so an unexpected game build is rejected.
-void* resolveStreamPause() {
-    auto const base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    auto const size = gameImageSize(base);
-    if (StreamPauseThunkRva + 9 > size || StreamPauseRva >= size) return nullptr;
-    auto const*                       thunk    = reinterpret_cast<uint8_t const*>(base + StreamPauseThunkRva);
-    constexpr std::array<uint8_t, 5> Expected{0x48, 0x83, 0xC1, 0x18, 0xE9};
-    if (std::memcmp(thunk, Expected.data(), Expected.size()) != 0) {
-        logger().warn("Audio probe: stream pause thunk bytes differ; unsupported game build");
-        return nullptr;
-    }
-    int32_t rel = 0;
-    std::memcpy(&rel, thunk + 5, sizeof(rel));
-    uintptr_t const target = base + StreamPauseThunkRva + 9 + intptr_t(rel);
-    if (target != base + StreamPauseRva) {
-        logger().warn("Audio probe: stream pause thunk target mismatch (rva=0x{:X})", target - base);
-        return nullptr;
-    }
-    return reinterpret_cast<void*>(target);
 }
 
 } // namespace
@@ -715,14 +691,22 @@ bool install() {
         gApi.getMasterChannelGroup != nullptr,
         gApi.soundGetName != nullptr
     );
-    // SoundSystemFMOD::update(float) hook is required for export audio (drives unpause); warn but don't block the probe.
-    gUpdateFloatTarget = resolveSoundSystemSlot(UpdateFloatVtableSlot, UpdateFloatRva, "update(float)");
-    bool const updateFloat =
-        installHook(gUpdateFloatTarget, &updateFloatDetour, gOriginalUpdateFloat, gUpdateFloatInstalled, "update(float)");
-    if (!updateFloat) logger().warn("Audio probe: SoundSystemFMOD::update(float) hook failed; export audio will not unpause");
-    gEnableHook.target          = resolveSoundSystemSlot(EnableVtableSlot, EnableRva, "enable");
-    gSetOutputDeviceHook.target = resolveSoundSystemSlot(SetOutputDeviceVtableSlot, SetOutputDeviceRva, "setOutputDevice");
-    gStreamPauseHook.target     = resolveStreamPause();
+    // SoundSystemFMOD::update(float) hook is required for export audio (drives unpause); warn but don't block the
+    // probe.
+    gUpdateFloatTarget     = resolveSoundSystemSlot(UpdateFloatVtableSlot, UpdateFloatRva, "update(float)");
+    bool const updateFloat = installHook(
+        gUpdateFloatTarget,
+        &updateFloatDetour,
+        gOriginalUpdateFloat,
+        gUpdateFloatInstalled,
+        "update(float)"
+    );
+    if (!updateFloat)
+        logger().warn("Audio probe: SoundSystemFMOD::update(float) hook failed; export audio will not unpause");
+    gEnableHook.target = resolveSoundSystemSlot(EnableVtableSlot, EnableRva, "enable");
+    gSetOutputDeviceHook.target =
+        resolveSoundSystemSlot(SetOutputDeviceVtableSlot, SetOutputDeviceRva, "setOutputDevice");
+    gStreamPauseHook.target = resolveSoundSystemSlot(StreamPauseVtableSlot, StreamPauseRva, "stream pause");
     bool const guards =
         installHook(gEnableHook.target, &enableDetour, gEnableHook.original, gEnableHook.installed, "enable")
         & installHook(
