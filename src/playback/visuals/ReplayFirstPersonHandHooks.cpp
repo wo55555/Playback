@@ -19,16 +19,18 @@
 #include "mc/client/renderer/screen/MinecraftUIRenderContext.h"
 #include "mc/deps/core/math/Color.h"
 #include "mc/deps/core/math/Matrix.h"
-#include "mc/deps/vanilla_components/PlayerBobComponent.h"
-#include "mc/entity/components/WalkDistComponent.h"
 #include "mc/deps/input/RectangleArea.h"
 #include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
+#include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
+#include "mc/entity/components/WalkDistComponent.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/Mob.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/item/ItemStack.h"
+
 
 #include <Windows.h>
 #include <algorithm>
@@ -333,14 +335,12 @@ LL_TYPE_INSTANCE_HOOK(
     origin(context, handPlayer(player), inOffhand);
 }
 
-// LevelRendererPlayer::bobView reads its bob from IClientInstance::getCameraEntity, the observer while following
-// (1.26.20.04): WalkDistComponent, PlayerBobComponent and an interpolated Actor float pair at +0x3B4/+0x3B8 (tilt).
+// LevelRendererPlayer::bobView reads its bob from IClientInstance::getCameraEntity, the observer while following:
+// WalkDistComponent, PlayerBobComponent and the interpolated Mob::mOTilt / mTilt pair.
 // The subject's values stand in for one call so the first-person view and the held map sway with the recorded walk.
-constexpr size_t BobTiltOffset = 0x3B4;
-
 class ScopedObserverBob {
 public:
-    ScopedObserverBob(Actor& observer, Actor& subject) {
+    ScopedObserverBob(Mob& observer, Mob& subject) : mObserver(observer) {
         auto& to   = observer.getEntityContext();
         auto& from = subject.getEntityContext();
         mWalk      = to.tryGetComponent<WalkDistComponent>();
@@ -351,32 +351,35 @@ public:
             mWalk = nullptr;
             return;
         }
-        mTilt      = reinterpret_cast<float*>(reinterpret_cast<std::byte*>(&observer) + BobTiltOffset);
-        mSavedWalk = *mWalk;
-        mSavedBob  = *mBob;
-        std::memcpy(mSavedTilt, mTilt, sizeof(mSavedTilt));
-        *mWalk = *walk;
-        *mBob  = *bob;
-        std::memcpy(mTilt, reinterpret_cast<std::byte const*>(&subject) + BobTiltOffset, sizeof(mSavedTilt));
+        mSavedWalk      = *mWalk;
+        mSavedBob       = *mBob;
+        mSavedOTilt     = observer.mOTilt;
+        mSavedTilt      = observer.mTilt;
+        *mWalk          = *walk;
+        *mBob           = *bob;
+        observer.mOTilt = subject.mOTilt;
+        observer.mTilt  = subject.mTilt;
     }
 
     ~ScopedObserverBob() {
         if (!mWalk) return;
-        *mWalk = mSavedWalk;
-        *mBob  = mSavedBob;
-        std::memcpy(mTilt, mSavedTilt, sizeof(mSavedTilt));
+        *mWalk           = mSavedWalk;
+        *mBob            = mSavedBob;
+        mObserver.mOTilt = mSavedOTilt;
+        mObserver.mTilt  = mSavedTilt;
     }
 
     ScopedObserverBob(ScopedObserverBob const&)            = delete;
     ScopedObserverBob& operator=(ScopedObserverBob const&) = delete;
 
 private:
+    Mob&                mObserver;
     WalkDistComponent*  mWalk{};
     PlayerBobComponent* mBob{};
-    float*              mTilt{};
     WalkDistComponent   mSavedWalk{};
     PlayerBobComponent  mSavedBob{};
-    float               mSavedTilt[2]{};
+    float               mSavedOTilt{};
+    float               mSavedTilt{};
 };
 
 LL_TYPE_INSTANCE_HOOK(
@@ -404,14 +407,54 @@ LL_TYPE_INSTANCE_HOOK(
     origin(view, alpha);
 }
 
-// Client RVA span of the screen-overlay renderers (fire, in-block); every other caller keeps the observer.
-constexpr uintptr_t OverlayCallerBegin = 0x1DCC5B0;
-constexpr uintptr_t OverlayCallerEnd   = 0x1DD1D82;
+RUNTIME_FUNCTION const* functionEntry(uintptr_t address, uintptr_t& imageBase) {
+    DWORD64 base  = 0;
+    auto*   entry = RtlLookupFunctionEntry(static_cast<DWORD64>(address), &base, nullptr);
+    imageBase     = static_cast<uintptr_t>(base);
+    return entry;
+}
 
+uintptr_t functionStart(uintptr_t address) {
+    uintptr_t base  = 0;
+    auto*     entry = functionEntry(address, base);
+    return entry ? base + entry->BeginAddress : 0;
+}
+
+// Targets of the direct `call rel32` instructions in a function body.
+std::vector<uintptr_t> directCallees(uintptr_t function) {
+    std::vector<uintptr_t> callees;
+    uintptr_t              base  = 0;
+    auto*                  entry = function ? functionEntry(function, base) : nullptr;
+    if (!entry || base + entry->BeginAddress != function) return callees;
+    auto const*  code = reinterpret_cast<uint8_t const*>(function);
+    size_t const size = entry->EndAddress - entry->BeginAddress;
+    for (size_t i = 0; i + 5 <= size; ++i) {
+        if (code[i] != 0xE8) continue;
+        int32_t displacement;
+        std::memcpy(&displacement, code + i + 1, sizeof(displacement));
+        auto const target = function + i + 5 + static_cast<intptr_t>(displacement);
+        if (functionStart(target) == target) callees.push_back(target);
+    }
+    std::sort(callees.begin(), callees.end());
+    callees.erase(std::unique(callees.begin(), callees.end()), callees.end());
+    return callees;
+}
+
+// The screen-overlay renderers (fire, in-block, portal, scope); every other caller keeps the observer. 1.26.20.04 draws
+// fire and in-block from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
 bool isOverlayCaller(void* returnAddress) {
-    static auto const base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    auto const        rva  = reinterpret_cast<uintptr_t>(returnAddress) - base;
-    return rva >= OverlayCallerBegin && rva < OverlayCallerEnd;
+    static uintptr_t const levelPrep =
+        reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderLevelPrep));
+    static uintptr_t const firstPersonObjects =
+        reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_shouldRenderFirstPersonObjects));
+    static uintptr_t const transparentObjects = reinterpret_cast<uintptr_t>(
+        ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderTransparentFirstPerson3DObjects)
+    );
+    static std::vector<uintptr_t> const levelPrepCallees = directCallees(levelPrep);
+    auto const                          start            = functionStart(reinterpret_cast<uintptr_t>(returnAddress));
+    if (start == 0) return false;
+    if (start == levelPrep || start == firstPersonObjects || start == transparentObjects) return true;
+    return std::binary_search(levelPrepCallees.begin(), levelPrepCallees.end(), start);
 }
 
 // Follow mode parks the observer on the subject, so only the overlays are redirected; the render list and name tags
@@ -437,12 +480,12 @@ LL_TYPE_INSTANCE_HOOK(
 // 0 to 0.863 over 5 s and holds while the player sleeps; PlayerSleepFadeEffectSystem::Wakeup clears it instantly.
 // The observer never sleeps, so that component stays idle during a replay. The recorded sleep ticks drive the same
 // curve here, drawn as a full-screen fill from the HUD vignette pass (1.26.20.04).
-constexpr float SleepFadeSeconds   = 5.0f;
-constexpr float SleepFadeTargetA   = 0.863f;
-constexpr float SleepFadeTickRate  = 20.0f;
-constexpr float SleepFadeRed       = 16.0f / 255.0f;
-constexpr float SleepFadeGreen     = 16.0f / 255.0f;
-constexpr float SleepFadeBlue      = 32.0f / 255.0f;
+constexpr float SleepFadeSeconds  = 5.0f;
+constexpr float SleepFadeTargetA  = 0.863f;
+constexpr float SleepFadeTickRate = 20.0f;
+constexpr float SleepFadeRed      = 16.0f / 255.0f;
+constexpr float SleepFadeGreen    = 16.0f / 255.0f;
+constexpr float SleepFadeBlue     = 32.0f / 255.0f;
 
 LL_TYPE_INSTANCE_HOOK(
     SleepVignetteHook,
@@ -458,8 +501,9 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     bool const thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
     if (isReplaySubjectViewDriven() && !thirdPersonFollow && replaySubjectViewWeight() > 0.0f) {
-        float const progress = std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
-        float const alpha    = SleepFadeTargetA * progress;
+        float const progress =
+            std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
+        float const alpha = SleepFadeTargetA * progress;
         if (alpha > 0.0f) {
             renderContext.fillRectangle(
                 RectangleArea(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), false),
