@@ -444,7 +444,9 @@ int setListenerDetour(
 Bucket computeBucket() {
     auto&      replay    = replay::ReplaySession::getInstance();
     bool const exporting = exporting::isExportActivityActive();
-    bool const seeking   = replay.isActive() && replay.isSeekPending();
+    // This version line has no isSeekPending(). getCurrentTick() returns the pending target while a seek is queued,
+    // so a difference from the applied tick is the public equivalent. A seek aimed at the tick already showing is missed.
+    bool const seeking   = replay.isActive() && replay.getCurrentTick() != replay.getAppliedReplayTick();
     if (exporting) return seeking ? ExportSeeking : ExportRunning;
     if (!replay.isActive()) return Normal;
     if (seeking) return ReplaySeeking;
@@ -544,7 +546,7 @@ void logListener(ClientInstance& client, Bucket bucket) {
         "player=({:.3f},{:.3f},{:.3f}) rot=(pitch {:.2f}, yaw {:.2f}) delta=({:.3f},{:.3f},{:.3f}) lookDot={:.4f} "
         "exportCamera={}",
         BucketNames[bucket],
-        replay.isActive() && replay.isFollowingRecordedPlayer(),
+        false, // no first-person follow on this version line
         replay.isActive() ? replay.getAppliedReplayTick() : -1,
         sample.listener,
         sample.calls,
