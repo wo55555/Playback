@@ -108,7 +108,7 @@ int64_t steadyNs() noexcept {
 void publishSubjectNausea(Actor const& subject, long double tick) {
     auto*       confusion = MobEffect::CONFUSION();
     auto const* effect    = confusion ? subject.getEffect(*confusion) : nullptr;
-    int const   duration  = effect ? effect->getDuration().mValue : 0;
+    int const   duration  = effect ? effect->mDuration->mValue : 0;
     gNauseaPresent.store(effect != nullptr, std::memory_order_relaxed);
     gNauseaDuration.store(duration, std::memory_order_relaxed);
     gNauseaActive.store(effect && (duration == -1 || duration > 60), std::memory_order_relaxed);

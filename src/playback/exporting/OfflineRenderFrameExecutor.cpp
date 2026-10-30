@@ -15,8 +15,7 @@
 #include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
 #include "mc/deps/renderer/ViewportInfo.h"
 #include "mc/entity/components/DimensionStateComponent.h"
-#include "mc/entity/systems/ClientLoadingProgressTickingSystem.h"
-#include "mc/entity/systems/DimensionStateSystem.h"
+#include "mc/entity/components/LoadingStateComponent.h"
 
 #include <cmath>
 #include <limits>
@@ -333,17 +332,20 @@ bool OfflineRenderFrameExecutor::forceFinishDimensionLoading() const {
     auto client = ll::service::getClientInstance();
     auto player = client ? client->getLocalPlayer() : nullptr;
     if (!player) return false;
-    auto& context     = player->getEntityContext();
-    bool  dimensionOk = DimensionStateSystem::isDimensionReady(context);
-    auto  loading     = ClientLoadingProgressTickingSystem::getLoadingState(context);
-    if (dimensionOk && ClientLoadingProgressTickingSystem::hasFinishedLoading(context)) return false;
+    // 26.10 does not export the DimensionStateSystem / loading-state helpers; edit the components they wrapped.
+    auto& context      = player->getEntityContext();
+    auto* dimension    = context.tryGetComponent<DimensionStateComponent>().as_ptr();
+    auto* loadingState = context.tryGetComponent<LoadingStateComponent>().as_ptr();
+    bool  dimensionOk  = !dimension || dimension->mDimensionState == DimensionStateComponent::DimensionState::Ready;
+    auto  loading      = loadingState ? loadingState->mLoadingState : LoadingState::Done;
+    if (dimensionOk && loading == LoadingState::Done) return false;
     getLogger().warn(
         "Forcing the native dimension loading to finish: dimensionReady={}, loadingState={}",
         dimensionOk,
         static_cast<int>(loading)
     );
-    DimensionStateSystem::setDimensionState(context, DimensionStateComponent::DimensionState::Ready);
-    ClientLoadingProgressTickingSystem::setLoadingState(context, LoadingState::Done);
+    if (dimension) dimension->mDimensionState = DimensionStateComponent::DimensionState::Ready;
+    if (loadingState) loadingState->mLoadingState = LoadingState::Done;
     return true;
 }
 

@@ -22,6 +22,7 @@
 #include "mc/world/level/PackInstanceId.h"
 #include "mc/resources/CompositePackSource.h"
 #include "mc/resources/DirectoryPackSource.h"
+#include "mc/resources/Pack.h"
 #include "mc/resources/PackManifest.h"
 #include "mc/resources/PackSourceFactory.h"
 #include "mc/resources/RepositorySources.h"
@@ -616,7 +617,7 @@ ServerPackSnapshot collectServerPacks(std::vector<PlaybackSerializedGamePacket> 
     auto& repository = client->getResourcePackRepository();
     std::unordered_map<std::string, ServerPackSource> loaded;
     repository.forEachPack([&](ResourcePack const& pack) {
-        auto const& manifest = pack.getManifest();
+        auto const& manifest = *pack.mPack.get()->mManifest.get();
         if (manifest.mPackType != PackType::Resources) return;
         auto key = packKey(*manifest.mIdentity);
         if (!announced.contains(key)) return;
@@ -741,7 +742,7 @@ size_t completeServerPacks(std::filesystem::path const& recordDir) {
 
         std::error_code ec;
         std::filesystem::create_directories(root, ec);
-        auto copied = 0uz;
+        size_t copied = 0;
         for (auto const& directory : (*server)["cacheDirectories"]) {
             if (missing.empty()) break;
             if (!directory.is_string()) continue;
@@ -874,16 +875,18 @@ std::optional<std::filesystem::path> mountReplayPacks(
     // Packs the replay does not carry still come from the local cache, copied so the two sources never overlap.
     std::vector<std::pair<std::string, std::filesystem::path>> notEmbedded;
     size_t                                                     removed = 0;
-    repo._removePacksIf([&](ResourcePack const& pack) {
-        auto const& manifest = pack.getManifest();
-        if (!isCacheOrigin(manifest.mPackOrigin) || manifest.mPackType != PackType::Resources) return false;
+    // 26.10 does not export _removePacksIf: collect first, then drop every cache-loaded pack. The sources rebuilt
+    // below reload the cache packs that are not resource packs.
+    repo.forEachPack([&](ResourcePack const& pack) {
+        auto const& manifest = *pack.mPack.get()->mManifest.get();
+        if (!isCacheOrigin(manifest.mPackOrigin) || manifest.mPackType != PackType::Resources) return;
         auto key = packKey(*manifest.mIdentity);
         if (!index.keys.contains(key) && announced.contains(key)) {
             notEmbedded.emplace_back(folderFor(key), fromUtf8(manifest.mLocation->getFullPath().value));
         }
         ++removed;
-        return true;
     });
+    repo.removePacksLoadedFromCache();
 
     size_t fromLocalCache = 0;
     for (auto const& [folder, directory] : notEmbedded) {

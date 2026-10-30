@@ -1,4 +1,4 @@
-﻿#include "ReplaySession.h"
+#include "ReplaySession.h"
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
@@ -113,6 +113,7 @@
 #include "mc/world/attribute/AttributeData.h"
 #include "mc/world/attribute/AttributeInstance.h"
 #include "mc/world/attribute/AttributeInstanceConstRef.h"
+#include "mc/entity/components/AttributesComponent.h"
 #include "mc/world/attribute/AttributeModifier.h"
 #include "mc/world/attribute/BaseAttributeMap.h"
 #include "mc/world/attribute/SharedAttributes.h"
@@ -253,7 +254,9 @@ std::string entityTypeLabel(Actor const& actor) {
 
 // Feet to eyes. A mob's position is its feet, unlike a player's.
 float entityEyeHeight(Actor const& actor) {
-    float const eye = actor.getEyePos().y - actor.getPosition().y;
+    // 26.10 does not export Actor::getEyePos; the eyes attach point is the same anchor.
+    float const eye =
+        actor.getAttachPos(SharedTypes::Legacy::ActorLocation::Eyes).y - actor.getPosition().y;
     if (std::isfinite(eye) && eye > 0.05f && eye < 64.0f) return eye;
     auto const& box    = actor.getAABB();
     float const height = box.max.y - box.min.y;
@@ -308,8 +311,11 @@ void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
 // The HUD draws health, hunger, armor and experience from the observer's own attributes, so the recorded player's
 // are copied onto it. Health never drops below 1: a dead local player would open the death screen.
 void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
-    auto&             attributes = *observer.getAttributes();
-    std::string const health     = SharedAttributes::HEALTH().getName().getString();
+    // 26.10 only exports the const getAttributes; the map it returns lives in AttributesComponent.
+    auto* component = observer.getEntityContext().tryGetComponent<AttributesComponent>().as_ptr();
+    if (!component) return;
+    auto&             attributes = *component->mAttributes;
+    std::string const health     = SharedAttributes::HEALTH().mName->getString();
     for (auto& data : *packet.mAttributeData) {
         if (data.mName->getString() == health && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
         attributes.updateOrCreateAttribute(data);
@@ -1162,7 +1168,7 @@ void ReplaySession::refreshReplayEntityList() {
         entities.reserve(mRecordedEntityIds.size());
         for (auto const& id : mRecordedEntityIds) {
             Actor* actor = level.fetchEntity(id, false);
-            if (!actor || actor == mReplayPlayer || actor->isRemoved() || !actor->isAlive()) continue;
+            if (!actor || actor == mReplayPlayer || actor->mRemoved || !actor->isAlive()) continue;
             bool const player = actor->isPlayer();
             if (!player && !actor->hasCategory(ActorCategory::Mob)) continue;
             ReplayEntityInfo info;
@@ -1225,8 +1231,11 @@ std::string ReplaySession::replaySubjectLabel(std::string const& choice) const {
 void ReplaySession::applyObserverSkin(SerializedSkinRef const& skin) {
     if (!mReplayPlayer || !skin.mSkinImpl) return;
     if (!mObserverOriginalSkin) {
-        auto const& current = mReplayPlayer->getSkin();
-        if (current.mSkinImpl) mObserverOriginalSkin = std::make_unique<SerializedSkinRef>(current);
+        auto const& current = mReplayPlayer->mSkin;
+        if (current && current->mSkinImpl) {
+            mObserverOriginalSkin  = std::make_unique<SerializedSkinRef>();
+            *mObserverOriginalSkin = *current;
+        }
     }
     mReplayPlayer->updateSkin(skin, static_cast<int>(mReplayPlayer->getClientSubId()));
     mObserverSkinApplied = true;
@@ -1307,7 +1316,7 @@ void ReplaySession::rebindReplaySubject() {
         setReplaySubjectChoice({});
     };
     Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
-    if (!actor || actor == mReplayPlayer || (entityRaw && (actor->isRemoved() || !actor->isAlive()))) {
+    if (!actor || actor == mReplayPlayer || (entityRaw && (actor->mRemoved || !actor->isAlive()))) {
         if (entityRaw) loseEntity();
         else loseSubject(choice);
         return;
@@ -1355,9 +1364,9 @@ void ReplaySession::rebindReplaySubject() {
             applyObserverSkin(*entry->second.mSkin);
             getLogger().debug("replay observer skin applied name={} uuid={}", name, uuid);
             applied = true;
-        } else if (subject.getSkin().mSkinImpl) {
+        } else if (auto const& subjectSkin = subject.mSkin; subjectSkin && subjectSkin->mSkinImpl) {
             // The player list can lag the actor. The actor skin is what third person already draws.
-            applyObserverSkin(subject.getSkin());
+            applyObserverSkin(*subjectSkin);
             getLogger().debug("replay observer skin applied from actor name={} uuid={}", name, uuid);
             applied = true;
         }
@@ -3341,8 +3350,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             ++skippedDimensionPackets;
             noteSkippedReplayChunk(
                 true,
-                packetDimension.mValue,
-                replayDimension->getDimensionId().mValue,
+                packetDimension.id,
+                replayDimension->getDimensionId().id,
                 mCurrentTick
             );
             continue;
@@ -3414,8 +3423,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             ++skippedDimensionPackets;
             noteSkippedReplayChunk(
                 false,
-                packetDimension.mValue,
-                replayDimension->getDimensionId().mValue,
+                packetDimension.id,
+                replayDimension->getDimensionId().id,
                 mCurrentTick
             );
             continue;
@@ -3599,7 +3608,7 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         "{}|{}|{}|{}|{}|{}|{}",
         followCenter ? "follow" : "snapshot",
         followSubject,
-        replayDimension->getDimensionId().mValue,
+        replayDimension->getDimensionId().id,
         centerX,
         centerZ,
         snapshotChunkX,
@@ -3611,7 +3620,7 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             "replay chunk center center={} subject={} dimension={} centerChunk={},{} snapshotChunk={},{} planned={} injected={} skipped={}",
             followCenter ? "follow" : "snapshot",
             followSubject.empty() ? "-" : followSubject,
-            replayDimension->getDimensionId().mValue,
+            replayDimension->getDimensionId().id,
             centerX,
             centerZ,
             snapshotChunkX,
@@ -4877,7 +4886,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                         static_cast<int>(map.mScale)
                     );
                 }
-                if (saved->getPixels().size() == 0) map.applyToMap(*saved, false);
+                if (saved->mPixels->empty()) map.applyToMap(*saved, false);
             }
         }
     }
@@ -5161,8 +5170,8 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
         if (packetDimension != replayDimension->getDimensionId()) {
             noteSkippedReplayChunk(
                 true,
-                packetDimension.mValue,
-                replayDimension->getDimensionId().mValue,
+                packetDimension.id,
+                replayDimension->getDimensionId().id,
                 mCurrentTick
             );
             return true;
@@ -5196,8 +5205,8 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
         if (packetDimension != replayDimension->getDimensionId()) {
             noteSkippedReplayChunk(
                 false,
-                packetDimension.mValue,
-                replayDimension->getDimensionId().mValue,
+                packetDimension.id,
+                replayDimension->getDimensionId().id,
                 mCurrentTick
             );
             return true;

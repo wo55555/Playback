@@ -7,7 +7,7 @@
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
-#include "mc-external/IOptionRegistry.h"
+#include "mc/client/options/IOptions.h"
 #include "mc/client/game/ClientInputCallbacks.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/controls/renderers/HudVignetteRenderer.h"
@@ -438,20 +438,20 @@ std::vector<uintptr_t> directCallees(uintptr_t function) {
     return callees;
 }
 
-// The screen-overlay renderers (fire, in-block, portal, scope); every other caller keeps the observer. 1.26.20.04 draws
-// fire and in-block from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
+// The screen-overlay renderers (fire, in-block, scope); every other caller keeps the observer. 1.26.20.04 draws fire
+// and in-block from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
+// _renderTransparentFirstPerson3DObjects stays on the observer: 26.10 does not export the LocalPlayer portal-time
+// getters that guarded its portal overlay against a remote subject, and it hands its actor to _renderItemInHand,
+// which copies the subject's items onto the observer itself.
 bool isOverlayCaller(void* returnAddress) {
     static uintptr_t const levelPrep =
         reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderLevelPrep));
     static uintptr_t const firstPersonObjects =
         reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_shouldRenderFirstPersonObjects));
-    static uintptr_t const transparentObjects = reinterpret_cast<uintptr_t>(
-        ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderTransparentFirstPerson3DObjects)
-    );
     static std::vector<uintptr_t> const levelPrepCallees = directCallees(levelPrep);
     auto const start = functionStart(reinterpret_cast<uintptr_t>(returnAddress));
     if (start == 0) return false;
-    if (start == levelPrep || start == firstPersonObjects || start == transparentObjects) return true;
+    if (start == levelPrep || start == firstPersonObjects) return true;
     return std::binary_search(levelPrepCallees.begin(), levelPrepCallees.end(), start);
 }
 
@@ -470,7 +470,9 @@ LL_TYPE_INSTANCE_HOOK(
     if (!subject || !isOverlayCaller(_ReturnAddress())) return actor;
     // The scope overlay reads LocalPlayer-only members, which a remote subject lacks; it follows the observer via
     // isScoping.
-    return !subject->isScoping() && !subject->isUsingItem() ? subject : actor;
+    // 26.10 does not export Player::isUsingItem; it reported a non-empty mItemInUse item.
+    bool const usingItem = !subject->mItemInUse->mItem->isNull();
+    return !subject->isScoping() && !usingItem ? subject : actor;
 }
 
 // Vanilla darkens a sleeping player's screen with PlayerSleepFadeEffectSystem::Fade, which runs the registry-context
@@ -532,31 +534,8 @@ LL_TYPE_INSTANCE_HOOK(PlayerIsScopingHook, ll::memory::HookPriority::High, Playe
     return scoping || !subject || subject == this ? scoping : subject->isScoping();
 }
 
-// The screen overlay reads these LocalPlayer-only fields from the remote subject, whose smaller object yields heap
-// garbage.
-float neutralPortalTime(LocalPlayer const& self, float raw) {
-    return static_cast<Player const&>(self).isLocalPlayer() ? raw : 0.0f;
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    PortalEffectTimeHook,
-    ll::memory::HookPriority::High,
-    LocalPlayer,
-    &LocalPlayer::getPortalEffectTime,
-    float
-) {
-    return neutralPortalTime(*this, origin());
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    OPortalEffectTimeHook,
-    ll::memory::HookPriority::High,
-    LocalPlayer,
-    &LocalPlayer::getOPortalEffectTime,
-    float
-) {
-    return neutralPortalTime(*this, origin());
-}
+// 26.10 does not export LocalPlayer::getPortalEffectTime/getOPortalEffectTime. Their guards only mattered while the
+// overlay received the remote subject, which isOverlayCaller no longer allows.
 
 // Vanilla grows the distortion 0.0066667 per tick while nausea lasts over 60 ticks and fades it 0.05 per tick.
 struct NauseaRamp {
@@ -650,8 +629,6 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             makeSlot<HandMiniMapHook>("miniMap"),
             makeSlot<CameraTargetHook>("cameraTarget"),
             makeSlot<BobViewHook>("bobView"),
-            makeSlot<PortalEffectTimeHook>("portalEffectTime"),
-            makeSlot<OPortalEffectTimeHook>("oPortalEffectTime"),
             makeSlot<PortalDataHook>("portalData"),
             makeSlot<PlayerIsScopingHook>("isScoping"),
             makeSlot<SleepVignetteHook>("sleepVignette"),
