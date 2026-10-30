@@ -4,15 +4,11 @@
 #include "playback/Playback.h"
 
 #include "ll/api/memory/Hook.h"
+#include "mc/client/gui/DirtyFlag.h"
 #include "mc/client/gui/screens/controllers/HudScreenController.h"
-#include "mc/client/gui/screens/models/ClientInstanceScreenModel.h"
-#include "mc/client/gui/screens/models/MinecraftScreenModel.h"
 #include "mc/world/level/GameType.h"
 
-#include <Windows.h>
 #include <atomic>
-#include <cstdint>
-#include <intrin.h>
 #include <optional>
 
 namespace playback::visuals {
@@ -23,23 +19,8 @@ constexpr int UnknownGameType = -1;
 
 std::atomic<int> gGameType{UnknownGameType};
 bool             gInstalled = false;
-bool             gCreativeOk{};
-bool             gSpectatorOk{};
+bool             gTickOk{};
 bool             gSurvivalUiOk{};
-
-// Client RVAs (1.26.20.04) of the two functions that copy the screen model's creative / spectator answers into the
-// HUD controller's own flags (HudScreenController::_getDirtyFlag and the initial setup). Every other caller of the
-// screen model keeps the observer's real answer.
-constexpr uintptr_t DirtyFlagBegin  = 0x2E9D150;
-constexpr uintptr_t DirtyFlagEnd    = 0x2E9D304;
-constexpr uintptr_t FlagSetupBegin  = 0x2E87140;
-constexpr uintptr_t FlagSetupEnd    = 0x2E884A0;
-
-bool isHudFlagCaller(void* returnAddress) {
-    static auto const base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    auto const        rva  = reinterpret_cast<uintptr_t>(returnAddress) - base;
-    return (rva >= DirtyFlagBegin && rva < DirtyFlagEnd) || (rva >= FlagSetupBegin && rva < FlagSetupEnd);
-}
 
 // Only while the view follows the recorded player, and only once its game mode is known.
 std::optional<GameType> drivenGameType() {
@@ -50,33 +31,30 @@ std::optional<GameType> drivenGameType() {
     return static_cast<GameType>(value);
 }
 
+// The tick copies the screen model's creative / spectator answers into mIsCreative / mIsSpectator; those flags drive
+// the HUD bindings. Overwrite them after the copy. When the replay stops, the next tick sees the observer's answer
+// differ from the value left here and rewrites and dirties it itself.
 LL_TYPE_INSTANCE_HOOK(
-    HudScreenModelCreativeHook,
+    HudTickHook,
     ll::memory::HookPriority::High,
-    MinecraftScreenModel,
-    &MinecraftScreenModel::isCreative,
-    bool
+    HudScreenController,
+    &HudScreenController::$tick,
+    ui::DirtyFlag
 ) {
-    bool const value = origin();
+    auto       flags = origin();
     auto const mode  = drivenGameType();
-    if (!mode || !isHudFlagCaller(_ReturnAddress())) return value;
-    return *mode == GameType::Creative;
+    if (!mode) return flags;
+    bool const creative  = *mode == GameType::Creative;
+    bool const spectator = *mode == GameType::Spectator;
+    if (mIsCreative != creative || mIsSpectator != spectator) {
+        mIsCreative  = creative;
+        mIsSpectator = spectator;
+        flags = static_cast<ui::DirtyFlag>(static_cast<uint>(flags) | static_cast<uint>(ui::DirtyFlag::UpdateBinds));
+    }
+    return flags;
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    HudScreenModelSpectatorHook,
-    ll::memory::HookPriority::High,
-    MinecraftScreenModel,
-    &MinecraftScreenModel::isSpectator,
-    bool
-) {
-    bool const value = origin();
-    auto const mode  = drivenGameType();
-    if (!mode || !isHudFlagCaller(_ReturnAddress())) return value;
-    return *mode == GameType::Spectator;
-}
-
-// Vanilla asks the local player directly, so the screen model hooks above cannot reach this answer.
+// Vanilla asks the local player directly, so the tick hook above cannot reach this answer.
 LL_TYPE_INSTANCE_HOOK(
     HudShowSurvivalUiHook,
     ll::memory::HookPriority::High,
@@ -95,30 +73,23 @@ LL_TYPE_INSTANCE_HOOK(
 void installReplayHudHooks() {
     if (gInstalled) return;
     gInstalled    = true;
-    gCreativeOk   = HudScreenModelCreativeHook::hook() == 0;
-    gSpectatorOk  = HudScreenModelSpectatorHook::hook() == 0;
+    gTickOk       = HudTickHook::hook() == 0;
     gSurvivalUiOk = HudShowSurvivalUiHook::hook() == 0;
     auto& logger  = Playback::getInstance().getSelf().getLogger();
-    if (gCreativeOk && gSpectatorOk && gSurvivalUiOk) {
+    if (gTickOk && gSurvivalUiOk) {
         logger.debug("Replay HUD hooks installed");
     } else {
-        logger.warn(
-            "Replay HUD hooks incomplete: isCreative={} isSpectator={} showSurvivalUi={}",
-            gCreativeOk,
-            gSpectatorOk,
-            gSurvivalUiOk
-        );
+        logger.warn("Replay HUD hooks incomplete: tick={} showSurvivalUi={}", gTickOk, gSurvivalUiOk);
     }
 }
 
 void releaseReplayHudHooks() {
     gGameType.store(UnknownGameType, std::memory_order_release);
     if (!gInstalled) return;
-    if (gCreativeOk) HudScreenModelCreativeHook::unhook();
-    if (gSpectatorOk) HudScreenModelSpectatorHook::unhook();
+    if (gTickOk) HudTickHook::unhook();
     if (gSurvivalUiOk) HudShowSurvivalUiHook::unhook();
-    gCreativeOk = gSpectatorOk = gSurvivalUiOk = false;
-    gInstalled                                 = false;
+    gTickOk = gSurvivalUiOk = false;
+    gInstalled              = false;
 }
 
 void setReplayHudGameType(int gameType) { gGameType.store(gameType, std::memory_order_release); }
