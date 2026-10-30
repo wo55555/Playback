@@ -2,6 +2,8 @@
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
+#include "playback/audio/AudioProbe.h"
+#include "playback/audio/ExportAudioCapture.h"
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
@@ -111,6 +113,10 @@ bool Playback::hook() {
             "Unable to install the GUI scale override; exports will leave the UI scale to the game"
         );
     }
+    if (audio::probe::install()) {
+        // Export-audio capture registers its policy callbacks on the probe; no additional hooks are installed.
+        (void)audio::exportcap::install();
+    }
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -207,6 +213,8 @@ bool Playback::unhook() {
         return false;
     }
 
+    audio::exportcap::uninstall();
+    audio::probe::uninstall();
     screen::hookMainMenu(false);
     getEventListeners().clear();
     impl->mLevelId.clear();
