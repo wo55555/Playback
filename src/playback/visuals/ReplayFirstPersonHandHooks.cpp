@@ -7,12 +7,12 @@
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
-#include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/game/ClientInputCallbacks.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/controls/UIControl.h"
 #include "mc/client/gui/controls/renderers/HudVignetteRenderer.h"
 #include "mc/client/gui/screens/InGamePlayScreen.h"
+#include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
@@ -20,21 +20,26 @@
 #include "mc/client/renderer/screen/MinecraftUIRenderContext.h"
 #include "mc/deps/core/math/Color.h"
 #include "mc/deps/core/math/Matrix.h"
-#include "mc/deps/vanilla_components/PlayerBobComponent.h"
-#include "mc/entity/components/ActorGameTypeComponent.h"
-#include "mc/entity/components/WalkDistComponent.h"
 #include "mc/deps/input/RectangleArea.h"
 #include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
+#include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
+#include "mc/entity/components/AbilitiesComponent.h"
+#include "mc/entity/components/ActorGameTypeComponent.h"
+#include "mc/entity/components/WalkDistComponent.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/player/AbilitiesIndex.h"
+#include "mc/world/actor/player/Ability.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/item/ItemStack.h"
 
+
 #include <Windows.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -159,7 +164,11 @@ public:
         --gPassDepth;
         if (mOuter) {
             if (mStateVector) mStateVector->mPosDelta = mPosDelta;
-            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::HiddenWhenInvisible, mHiddenWhenInvisible);
+            SynchedActorDataAccess::setActorFlag(
+                mSubject.getEntityContext(),
+                ActorFlags::HiddenWhenInvisible,
+                mHiddenWhenInvisible
+            );
             SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::Invisible, mInvisible);
         }
     }
@@ -196,11 +205,11 @@ public:
     ScopedObserverGameType(Player& observer, Player& subject)
     : mComponent(observer.getEntityContext().tryGetComponent<ActorGameTypeComponent>()) {
         if (!mComponent) return;
-        mSaved      = mComponent->mGameType;
-        auto const type = subject.getPlayerGameType();
-        mComponent->mGameType =
-            type != GameType::Spectator && type != GameType::Default && type != GameType::Undefined ? type
-                                                                                                    : GameType::Survival;
+        mSaved                = mComponent->mGameType;
+        auto const type       = subject.getPlayerGameType();
+        mComponent->mGameType = type != GameType::Spectator && type != GameType::Default && type != GameType::Undefined
+                                  ? type
+                                  : GameType::Survival;
     }
 
     ~ScopedObserverGameType() {
@@ -307,10 +316,10 @@ public:
             mWalk = nullptr;
             return;
         }
-        mSavedWalk  = *mWalk;
-        mSavedBob   = *mBob;
-        mSavedOTilt = observer.mOTilt;
-        mSavedTilt  = observer.mTilt;
+        mSavedWalk      = *mWalk;
+        mSavedBob       = *mBob;
+        mSavedOTilt     = observer.mOTilt;
+        mSavedTilt      = observer.mTilt;
         *mWalk          = *walk;
         *mBob           = *bob;
         observer.mOTilt = subject.mOTilt;
@@ -369,9 +378,10 @@ uintptr_t functionStart(void* address) {
     return entry ? static_cast<uintptr_t>(imageBase + entry->BeginAddress) : 0;
 }
 
-// On 1.26.51.01 the fire and in-block overlays are inlined into _renderLevelPrep. _renderTransparentFirstPerson3DObjects
-// stays on the observer: its portal overlay reads LocalPlayer-only fields inline, past the end of a remote player, and
-// it hands its actor to _renderItemInHand, which copies the subject's items onto the observer itself.
+// On 1.26.51.01 the fire and in-block overlays are inlined into _renderLevelPrep.
+// _renderTransparentFirstPerson3DObjects stays on the observer: its portal overlay reads LocalPlayer-only fields
+// inline, past the end of a remote player, and it hands its actor to _renderItemInHand, which copies the subject's
+// items onto the observer itself.
 bool isOverlayCaller(void* returnAddress) {
     static uintptr_t const levelPrep =
         reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderLevelPrep));
@@ -406,12 +416,12 @@ LL_TYPE_INSTANCE_HOOK(
 // 0 to 0.863 over 5 s and holds while the player sleeps; PlayerSleepFadeEffectSystem::Wakeup clears it instantly.
 // The observer never sleeps, so that component stays idle during a replay. The recorded sleep ticks drive the same
 // curve here, drawn as a full-screen fill from the HUD vignette pass (1.26.20.04).
-constexpr float SleepFadeSeconds   = 5.0f;
-constexpr float SleepFadeTargetA   = 0.863f;
-constexpr float SleepFadeTickRate  = 20.0f;
-constexpr float SleepFadeRed       = 16.0f / 255.0f;
-constexpr float SleepFadeGreen     = 16.0f / 255.0f;
-constexpr float SleepFadeBlue      = 32.0f / 255.0f;
+constexpr float SleepFadeSeconds  = 5.0f;
+constexpr float SleepFadeTargetA  = 0.863f;
+constexpr float SleepFadeTickRate = 20.0f;
+constexpr float SleepFadeRed      = 16.0f / 255.0f;
+constexpr float SleepFadeGreen    = 16.0f / 255.0f;
+constexpr float SleepFadeBlue     = 32.0f / 255.0f;
 
 LL_TYPE_INSTANCE_HOOK(
     SleepVignetteHook,
@@ -425,13 +435,14 @@ LL_TYPE_INSTANCE_HOOK(
     int                       pass
 ) {
     // 26.51 no longer exports _renderVignette; the fill uses the vignette control's own size.
-    auto const size = owner.mSize.get();
-    float const w   = size.x;
-    float const h   = size.y;
-    bool const thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
+    auto const  size              = owner.mSize.get();
+    float const w                 = size.x;
+    float const h                 = size.y;
+    bool const  thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
     if (isReplaySubjectViewDriven() && !thirdPersonFollow && replaySubjectViewWeight() > 0.0f) {
-        float const progress = std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
-        float const alpha    = SleepFadeTargetA * progress;
+        float const progress =
+            std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
+        float const alpha = SleepFadeTargetA * progress;
         if (alpha > 0.0f) {
             RectangleArea area{};
             area._x0 = 0.0f;
@@ -464,8 +475,9 @@ LL_TYPE_INSTANCE_HOOK(PlayerIsScopingHook, ll::memory::HookPriority::High, Playe
     return scoping || !subject || subject == this ? scoping : subject->isScoping();
 }
 
-// 26.51 no longer exports LocalPlayer::getPortalEffectTime/getOPortalEffectTime. Their guards only mattered while the
-// overlay received the remote subject, which isOverlayCaller no longer allows.
+// 26.51 inlines the portal and in-block overlays into $_renderTransparentFirstPerson3DObjects and reads the observer.
+// A remote subject is shorter than those LocalPlayer fields, so the actor pointer stays the observer and the two
+// values it tests are written for the call only.
 
 // Vanilla grows the distortion 0.0066667 per tick while nausea lasts over 60 ticks and fades it 0.05 per tick.
 struct NauseaRamp {
@@ -475,7 +487,15 @@ struct NauseaRamp {
     float       level{};
 };
 
+// A nether portal adds 0.0125 per tick and fades 0.05. It is not the nausea effect.
+struct PortalRamp {
+    bool        valid{};
+    long double tick{};
+    float       level{};
+};
+
 NauseaRamp       gNausea;
+PortalRamp       gPortal;
 std::atomic_bool gNauseaDistorting{false};
 
 float advanceNausea(SubjectNauseaSample const& sample) {
@@ -490,7 +510,27 @@ float advanceNausea(SubjectNauseaSample const& sample) {
     return ramp.level;
 }
 
+float advancePortal(SubjectNauseaSample const& sample) {
+    auto& ramp = gPortal;
+    // A seek backwards must not keep a warp that belongs to a later tick.
+    if (!ramp.valid || sample.tick < ramp.tick) ramp.level = 0.0f;
+    else {
+        float const ticks = static_cast<float>(std::clamp<long double>(sample.tick - ramp.tick, 0.0L, 8.0L));
+        ramp.level        = std::clamp(ramp.level + (sample.insidePortal ? 0.0125f : -0.05f) * ticks, 0.0f, 1.0f);
+    }
+    ramp.valid = true;
+    ramp.tick  = sample.tick;
+    return ramp.level;
+}
+
+void resetWarp() {
+    gNausea = NauseaRamp{};
+    gPortal = PortalRamp{};
+    gNauseaDistorting.store(false, std::memory_order_release);
+}
+
 // The distortion reads the observer's own effects, which have none; follow mode feeds it the subject's nausea.
+// A portal uses the same data at 20 per tick; nausea, when it is warping, stays at 7 and hides the purple screen.
 LL_TYPE_INSTANCE_HOOK(
     PortalDataHook,
     ll::memory::HookPriority::High,
@@ -501,18 +541,181 @@ LL_TYPE_INSTANCE_HOOK(
     auto       data   = origin();
     auto const sample = sampleReplaySubjectNausea();
     if (!sample) {
-        gNausea = NauseaRamp{};
-        gNauseaDistorting.store(false, std::memory_order_release);
+        resetWarp();
         return data;
     }
-    float const level = advanceNausea(*sample);
+    float const nausea = advanceNausea(*sample);
+    float const portal = sample->present ? 0.0f : advancePortal(*sample);
+    float const level  = std::max(nausea, portal);
     gNauseaDistorting.store(level > 0.0f && data.has_value(), std::memory_order_release);
     if (level <= 0.0f || !data) return data;
     data->mTime = std::max(data->mTime, level);
     // The game spins by speed * (frame alpha + client tick), a clock that keeps running while the replay is paused.
-    // Nausea spins at 7 per tick; drive it from the replay time so a pause freezes it and a seek rewinds it.
-    data->mRotation = static_cast<float>(7.0L * sample->tick);
+    // Confusion keeps the slow wobble for the whole effect, including its fade. A portal alone spins faster.
+    float const speed = sample->present ? 7.0f : 20.0f;
+    data->mRotation   = static_cast<float>(static_cast<long double>(speed) * sample->tick);
     return data;
+}
+
+// Writes the subject's portal time onto the observer and clears NoClip for one vanilla overlay call, then restores
+// both.
+struct ScopedObserverOverlay {
+    LocalPlayer*        player{};
+    float               portal{};
+    float               oldPortal{};
+    bool                abilities{};
+    std::array<bool, 6> noclip{};
+
+    ScopedObserverOverlay(LocalPlayer& local, float level) : player(&local) {
+        portal                   = local.mPortalEffectTime;
+        oldPortal                = local.mOPortalEffectTime;
+        local.mPortalEffectTime  = level;
+        local.mOPortalEffectTime = level;
+        if (auto* component = local.getEntityContext().tryGetComponent<AbilitiesComponent>().as_ptr()) {
+            abilities    = true;
+            auto& layers = component->mAbilities->mLayers.get();
+            for (size_t i = 0; i < layers.size() && i < noclip.size(); ++i) {
+                auto& ability            = layers[i].mAbilities.get()[static_cast<size_t>(AbilitiesIndex::NoClip)];
+                noclip[i]                = ability.mValue->mBoolVal;
+                ability.mValue->mBoolVal = false;
+            }
+        }
+    }
+
+    ~ScopedObserverOverlay() {
+        if (!player) return;
+        player->mPortalEffectTime  = portal;
+        player->mOPortalEffectTime = oldPortal;
+        if (!abilities) return;
+        if (auto* component = player->getEntityContext().tryGetComponent<AbilitiesComponent>().as_ptr()) {
+            auto& layers = component->mAbilities->mLayers.get();
+            for (size_t i = 0; i < layers.size() && i < noclip.size(); ++i) {
+                layers[i].mAbilities.get()[static_cast<size_t>(AbilitiesIndex::NoClip)].mValue->mBoolVal = noclip[i];
+            }
+        }
+    }
+};
+
+// MC 1.26.51.01. The block overlay samples this actor's render position. Prologue-checked so a game update misses
+// instead of hooking the wrong function.
+constexpr uintptr_t OverlayEyeSampleRva    = 0x28A5230;
+constexpr uint8_t   OverlayEyeSampleHead[] = {
+    0x41,
+    0x56,
+    0x56,
+    0x57,
+    0x53,
+    0x48,
+    0x83,
+    0xEC,
+    0x58,
+    0x0F,
+    0x29,
+    0x7C,
+    0x24,
+    0x40,
+    0x0F,
+    0x29,
+};
+
+using OverlayEyeSampleFn = float* (*)(float* out, Actor* actor, float partial);
+
+OverlayEyeSampleFn  gOverlayEyeSampleOriginal{};
+void*               gOverlayEyeSampleTarget{};
+thread_local bool   gOverlaySample = false;
+thread_local Actor* gOverlayLocal  = nullptr;
+
+// The observer's own render offset sits on a block face and the overlay strobes. 26.20 sampled the subject.
+float* overlayEyeSampleDetour(float* out, Actor* actor, float partial) {
+    if (gOverlaySample && actor && actor == gOverlayLocal) {
+        if (auto* subject = subjectPlayer()) return gOverlayEyeSampleOriginal(out, subject, partial);
+    }
+    return gOverlayEyeSampleOriginal(out, actor, partial);
+}
+
+bool installOverlayEyeSampleHook() {
+    if (gOverlayEyeSampleTarget) return true;
+    auto const base   = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    auto*      target = reinterpret_cast<void*>(base + OverlayEyeSampleRva);
+    if (std::memcmp(target, OverlayEyeSampleHead, sizeof(OverlayEyeSampleHead)) != 0) {
+        Playback::getInstance().getSelf().getLogger().warn("replay overlay eye sample hook skipped: prologue mismatch");
+        return false;
+    }
+    int const code = ll::memory::hook(
+        target,
+        reinterpret_cast<ll::memory::FuncPtr>(&overlayEyeSampleDetour),
+        reinterpret_cast<ll::memory::FuncPtr*>(&gOverlayEyeSampleOriginal),
+        ll::memory::HookPriority::High
+    );
+    if (code != 0) {
+        Playback::getInstance().getSelf().getLogger().warn("replay overlay eye sample hook failed code={}", code);
+        return false;
+    }
+    gOverlayEyeSampleTarget = target;
+    return true;
+}
+
+void removeOverlayEyeSampleHook() {
+    if (!gOverlayEyeSampleTarget) return;
+    ll::memory::unhook(gOverlayEyeSampleTarget, reinterpret_cast<ll::memory::FuncPtr>(&overlayEyeSampleDetour));
+    gOverlayEyeSampleTarget   = nullptr;
+    gOverlayEyeSampleOriginal = nullptr;
+}
+
+struct ScopedOverlaySample {
+    explicit ScopedOverlaySample(Actor* local) {
+        gOverlayLocal  = local;
+        gOverlaySample = true;
+    }
+
+    ~ScopedOverlaySample() {
+        gOverlaySample = false;
+        gOverlayLocal  = nullptr;
+    }
+};
+
+// The flame quads call Actor::isOnFire on the camera actor. The observer is never burning; the subject is.
+LL_TYPE_INSTANCE_HOOK(OverlayOnFireHook, ll::memory::HookPriority::High, Actor, &Actor::$isOnFire, bool) {
+    if (gOverlaySample && this == gOverlayLocal) {
+        if (auto* subject = subjectPlayer(); subject && static_cast<Actor*>(subject) != this)
+            return subject->isOnFire();
+    }
+    return origin();
+}
+
+// The purple warp and the buried-block texture both draw here. Redirecting its actor reads past a remote player.
+LL_TYPE_INSTANCE_HOOK(
+    TransparentOverlayHook,
+    ll::memory::HookPriority::High,
+    InGamePlayScreen,
+    &InGamePlayScreen::$_renderTransparentFirstPerson3DObjects,
+    void,
+    ScreenContext& screenContext,
+    LevelRenderer& levelRenderer
+) {
+    bool const firstPerson = (isReplaySubjectFollowed() || isReplaySubjectHiddenFor(SubjectHideReason::Export))
+                          && !isReplaySubjectThirdPerson();
+    auto* subject = firstPerson ? replayHiddenActorInScope() : nullptr;
+    if (!subject) {
+        origin(screenContext, levelRenderer);
+        return;
+    }
+    auto const sample = sampleReplaySubjectNausea();
+    if (!sample) {
+        resetWarp();
+        origin(screenContext, levelRenderer);
+        return;
+    }
+    float const portal = sample->present ? 0.0f : advancePortal(*sample);
+    auto        client = ll::service::getClientInstance();
+    auto*       local  = client ? client->getLocalPlayer() : nullptr;
+    if (!local) {
+        origin(screenContext, levelRenderer);
+        return;
+    }
+    ScopedObserverOverlay overlay(*local, portal);
+    ScopedOverlaySample   sampleScope(local);
+    origin(screenContext, levelRenderer);
 }
 
 struct HookSlot {
@@ -554,6 +757,8 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             makeSlot<CameraTargetHook>("cameraTarget"),
             makeSlot<BobViewHook>("bobView"),
             makeSlot<PortalDataHook>("portalData"),
+            makeSlot<TransparentOverlayHook>("transparentOverlay"),
+            makeSlot<OverlayOnFireHook>("onFire"),
             makeSlot<PlayerIsScopingHook>("isScoping"),
             makeSlot<SleepVignetteHook>("sleepVignette"),
             makeSlot<TogglePerspectiveHook>("togglePerspective"),
@@ -564,7 +769,8 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             slot.ok   = slot.hook();
             complete &= slot.ok;
         }
-        installed = true;
+        complete  &= installOverlayEyeSampleHook();
+        installed  = true;
         Playback::getInstance().getSelf().getLogger().debug(
             "Replay first-person hand hooks installed in {} ms",
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count()
@@ -574,6 +780,7 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             for (auto const& slot : slots) {
                 if (!slot.ok) missing += std::string(" ") + slot.name;
             }
+            if (!gOverlayEyeSampleTarget) missing += " eyeSample";
             Playback::getInstance().getSelf().getLogger().warn("Replay first-person hand hooks incomplete:{}", missing);
         }
         return;
@@ -583,6 +790,7 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
     for (auto& slot : slots) {
         if (slot.ok) slot.unhook();
     }
+    removeOverlayEyeSampleHook();
     slots.clear();
     gHeights.reset();
     installed = false;
