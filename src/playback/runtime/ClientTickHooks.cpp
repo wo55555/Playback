@@ -1,6 +1,7 @@
 ﻿#include "ClientTickHooks.h"
 
 #include "playback/Playback.h"
+#include "playback/audio/AudioProbe.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
 #include "playback/exporting/ExportEcoMode.h"
@@ -144,6 +145,7 @@ LL_TYPE_INSTANCE_HOOK(
     }
     editor::tickReplayUI(hudVisible);
     replay.tryFinalizeWorldCleanup();
+    audio::probe::onClientUpdate(*this);
     return result;
 }
 
