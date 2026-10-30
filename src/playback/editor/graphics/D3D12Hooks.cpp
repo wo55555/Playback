@@ -586,9 +586,7 @@ constexpr size_t RenderItemStride = 8388608u / 65536u;
 constexpr uint32_t SharedVertexDeclIndex  = 4;
 constexpr uint32_t InvalidVertexDeclIndex = 0xFFFFu;
 
-// 26.40 shipped bgfx::Frame as an empty stub, so this used to walk to the counter by hand-computed 26.20 offsets.
-// 26.51 declares the whole layout, so read the real member instead: the stale offsets pointed ~98 MB past the end
-// of a ~32 MB frame and faulted on uncommitted memory.
+// Read the declared member: hand-computed 26.20 offsets point past the end of the smaller 26.51 frame and fault.
 uint32_t readRenderItemCount(bgfx::Frame const* render) {
     if (!render) return 0;
     return static_cast<uint32_t>(render->m_numRenderItems);
