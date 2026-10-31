@@ -9,7 +9,9 @@
                 "description": "控制回放录制",
                 "started": "已开始录制",
                 "paused": "已暂停录制",
-                "stopped": "已结束录制"
+                "stopped": "已结束录制",
+                "rate": "第一人称视角录制频率：每秒 {} 次（20 = 仅每 tick）",
+                "rateSet": "第一人称视角录制频率已设为每秒 {} 次，下次开始录制时生效"
             }
         },
         "replayBrowser": {
