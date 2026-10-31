@@ -20,6 +20,7 @@
 #include "mc/deps/core/math/Color.h"
 #include "mc/deps/core/math/Matrix.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
+#include "mc/entity/components/ActorGameTypeComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/deps/input/RectangleArea.h"
@@ -300,6 +301,32 @@ LL_TYPE_INSTANCE_HOOK(HandGameTypeHook, ll::memory::HookPriority::High, Player, 
     return origin();
 }
 
+// The hand gate inside _renderItemInHand reads the local player's ActorGameTypeComponent: Spectator,
+// or Default under a Spectator level default, hides the hand. The component reports the subject's mode for the call.
+class ScopedObserverGameType {
+public:
+    ScopedObserverGameType(Player& observer, Player& subject)
+    : mComponent(observer.getEntityContext().tryGetComponent<ActorGameTypeComponent>().as_ptr()) {
+        if (!mComponent) return;
+        mSaved                = mComponent->mGameType;
+        auto const type       = subject.getPlayerGameType();
+        mComponent->mGameType = type != GameType::Spectator && type != GameType::Default && type != GameType::Undefined
+                                  ? type
+                                  : GameType::Survival;
+    }
+
+    ~ScopedObserverGameType() {
+        if (mComponent) mComponent->mGameType = mSaved;
+    }
+
+    ScopedObserverGameType(ScopedObserverGameType const&)            = delete;
+    ScopedObserverGameType& operator=(ScopedObserverGameType const&) = delete;
+
+private:
+    ActorGameTypeComponent* mComponent;
+    GameType                mSaved{};
+};
+
 LL_TYPE_INSTANCE_HOOK(
     HandShowHook,
     ll::memory::HookPriority::High,
@@ -331,6 +358,7 @@ LL_TYPE_INSTANCE_HOOK(
     player.setCarriedItem(subject->getCarriedItem());
     player.setOffhandSlot(subject->getOffhandSlot());
     ScopedHandPass pass(*subject);
+    ScopedObserverGameType gameType(player, *subject);
     ScopedHandSway sway(*this, player, *subject);
     origin(screenContext, player);
     player.setCarriedItem(savedCarried);
