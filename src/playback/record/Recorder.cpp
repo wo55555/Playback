@@ -599,6 +599,15 @@ void Recorder::start() {
         return;
     }
 
+    // The pending recording still owns the pack worker that a new recording would replace, so it is saved first.
+    if (hasPendingRecording()) {
+        if (!savePendingRecording({})) {
+            getLogger().error("Unable to save the finished recording; keeping it until it is saved or deleted");
+            return;
+        }
+        getLogger().info("Saved the unnamed finished recording before starting a new one");
+    }
+
     resetStateForNewRecording();
     mRecordedLocalPlayerId        = RecordedPlayerUniqueId;
     mRecordedLocalPlayerRuntimeId = RecordedPlayerRuntimeId;
@@ -623,23 +632,87 @@ void Recorder::pause() {
 }
 
 void Recorder::stop() {
+    if (hasPendingRecording() && !savePendingRecording({})) {
+        getLogger().error("Unsaved replay data was left at {}", mPendingRecordPath);
+        clearPendingRecording();
+    }
+    if (!closeRecording()) return;
+    auto replayPath = finishSaver();
+    if (replayPath.empty()) return;
+    if (!exportRecording(replayPath, currentReplayTimestampName(), {})) {
+        getLogger().error("Failed to save replay data after recording stopped");
+    }
+}
+
+void Recorder::discard() {
+    auto const state = mState.load();
+    if (state != State::Recording && state != State::Paused) return;
+    getLogger().info("Recording discarded");
+    abortRecording();
+}
+
+bool Recorder::finishToPending() {
+    if (hasPendingRecording()) return false;
+    if (!closeRecording()) return false;
+    auto replayPath = finishSaver();
+    if (replayPath.empty()) return false;
+    mPendingRecordPath    = std::move(replayPath);
+    mPendingRecordingName = currentReplayTimestampName();
+    mHasPendingRecording.store(true, std::memory_order_release);
+    return true;
+}
+
+bool Recorder::savePendingRecording(std::string_view name) {
+    if (!hasPendingRecording()) return false;
+    auto const  first = name.find_first_not_of(" \t");
+    auto const  last  = name.find_last_not_of(" \t");
+    std::string trimmed =
+        first == std::string_view::npos ? std::string{} : std::string(name.substr(first, last - first + 1));
+    if (!exportRecording(mPendingRecordPath, trimmed.empty() ? mPendingRecordingName : trimmed, trimmed)) {
+        getLogger().error("Failed to save the finished recording");
+        return false;
+    }
+    clearPendingRecording();
+    return true;
+}
+
+void Recorder::discardPendingRecording() {
+    if (!hasPendingRecording()) return;
+    if (mPackWorker) {
+        mPackWorker->cancel();
+        mPackWorker.reset();
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(mPendingRecordPath, ec);
+    if (ec) getLogger().error("Failed to delete discarded replay data {}: {}", mPendingRecordPath, ec.message());
+    else getLogger().info("Finished recording deleted");
+    clearPendingRecording();
+}
+
+void Recorder::clearPendingRecording() {
+    mPendingRecordPath.clear();
+    mPendingRecordingName.clear();
+    mHasPendingRecording.store(false, std::memory_order_release);
+}
+
+bool Recorder::closeRecording() {
     State state = mState.exchange(State::Closing);
     if (state == State::Idle) {
         mState = State::Idle;
-        return;
+        return false;
     }
     if (state == State::Closing) {
-        return;
+        return false;
     }
 
     endTick(true);
-    if (mState.load() != State::Closing) return;
+    if (mState.load() != State::Closing) return false;
     if (mNeedsInitialSnapshot.load(std::memory_order_acquire)) {
         auto reason = mSnapshotFailure.empty()
                         ? std::string("Recording stopped before the initial replay snapshot was ready")
                         : "Recording stopped without an initial replay snapshot: " + mSnapshotFailure;
         cancelRecording(reason);
-        return;
+        return false;
     }
     logRecordedGamePacketSummary();
     getLogger().debug(
@@ -649,14 +722,14 @@ void Recorder::stop() {
         mWrittenTicks,
         mLocalViewSamples
     );
-    saveRecording();
+    return true;
 }
 
-void Recorder::saveRecording() {
+std::filesystem::path Recorder::finishSaver() {
     if (!mAsyncReplaySaver) {
         getLogger().error("Failed to stop recording because replay saver is not initialized");
         mState = State::Idle;
-        return;
+        return {};
     }
 
     auto replayPath = mAsyncReplaySaver->finish();
@@ -673,28 +746,40 @@ void Recorder::saveRecording() {
             "Failed to save recording: {}",
             saverError.value_or("the replay saver did not return a completed recording path")
         );
-        return;
+        return {};
     }
 
-    auto            replayDir = utils::PathUtils::getReplaysDir();
-    std::error_code ec;
-    std::filesystem::create_directories(replayDir, ec);
-    if (ec) {
-        getLogger().error("Error while trying to create replay folder: {}", ec.message());
-        return;
-    }
-
-    // Only one export at a time, so this one cannot pick the file name of a zip that is still being written.
-    waitForExport();
-    auto  outputPath        = replayDir / findAvailableReplayName(replayDir, currentReplayTimestampName());
     auto* thumbnailProvider = mThumbnailCaptureProvider.load(std::memory_order_acquire);
     if (!mThumbnailCaptureRequested || !thumbnailProvider
         || !thumbnailProvider->saveReplayThumbnail(replayPath / "icon.png")) {
         getLogger().warn("Unable to save replay thumbnail for {}", replayPath);
     }
+    return replayPath;
+}
+
+bool Recorder::exportRecording(
+    std::filesystem::path const& replayPath,
+    std::string const&           fileBaseName,
+    std::string_view             metaName
+) {
+    auto            replayDir = utils::PathUtils::getReplaysDir();
+    std::error_code ec;
+    std::filesystem::create_directories(replayDir, ec);
+    if (ec) {
+        getLogger().error("Error while trying to create replay folder: {}", ec.message());
+        return false;
+    }
+
+    // Only one export at a time, so this one cannot pick the file name of a zip that is still being written.
+    waitForExport();
+    auto       outputPath    = replayDir / findAvailableReplayName(replayDir, fileBaseName);
     bool const completePacks = Playback::getInstance().getConfig().record.embedServerPacks;
     auto       packWorker    = std::move(mPackWorker);
-    mExportThread = std::jthread([replayPath, outputPath, completePacks, packWorker = std::move(packWorker)]() mutable {
+    mExportThread            = std::jthread([replayPath,
+                                  outputPath,
+                                  completePacks,
+                                  name       = std::string(metaName),
+                                  packWorker = std::move(packWorker)]() mutable {
         auto const startedAt = std::chrono::steady_clock::now();
         try {
             if (packWorker) {
@@ -702,7 +787,7 @@ void Recorder::saveRecording() {
                 packWorker.reset();
             }
             if (completePacks) (void)packs::completeServerPacks(replayPath);
-            if (!ReplayExporter::exportReplay(replayPath, outputPath, "")) {
+            if (!ReplayExporter::exportReplay(replayPath, outputPath, name)) {
                 getLogger().error("Failed to save replay data after recording stopped");
                 return;
             }
@@ -717,6 +802,7 @@ void Recorder::saveRecording() {
             getLogger().error("Failed to save replay data after recording stopped");
         }
     });
+    return true;
 }
 
 void Recorder::waitForExport() {
@@ -775,6 +861,7 @@ void Recorder::resetStateForNewRecording() {
     mOpenChunkHasData              = false;
     mCurrentChunkForcePlaySnapshot = false;
     mThumbnailCaptureRequested     = false;
+    mThumbnailRequestTick          = 0;
     mPendingDimensionSnapshot      = false;
     mNeedsInitialSnapshot          = true;
     mDimensionTransitionPending    = false;
@@ -1289,11 +1376,11 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
 
         // Identity (the menu) is everyone the client already lists, plus any spawned player the list missed.
         // Spawn packets are only for living players in this dimension. One write point, no second pass.
-        std::vector<Player*>    spawnPlayers;
+        std::vector<Player*>        spawnPlayers;
         std::unordered_set<int64_t> spawnIds;
         std::unordered_set<int64_t> deadIds;
-        int                     runtimePlayers = 0;
-        auto const              considerSpawn  = [&](Player& player, bool fromRuntimeList) {
+        int                         runtimePlayers = 0;
+        auto const                  considerSpawn  = [&](Player& player, bool fromRuntimeList) {
             if (&player == finalPlayer || player.getDimensionId() != dimension) return;
             auto const uniqueId = player.getOrCreateUniqueID().rawID;
             if (!player.isAlive()) {
@@ -1313,9 +1400,9 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
             return true;
         });
 
-        auto const playerUniqueId = finalPlayer->getOrCreateUniqueID();
-        auto const playerUuid     = finalPlayer->getUuid().asString();
-        std::vector<PlayerListEntry>     identity;
+        auto const                              playerUniqueId = finalPlayer->getOrCreateUniqueID();
+        auto const                              playerUuid     = finalPlayer->getUuid().asString();
+        std::vector<PlayerListEntry>            identity;
         std::unordered_map<std::string, size_t> identityIndex;
         auto const hasSkin = [](PlayerListEntry const& entry) { return static_cast<bool>(entry.mSkin->mSkinImpl); };
         auto const upsertIdentity = [&](PlayerListEntry entry) {
@@ -1348,7 +1435,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
                 return SnapshotCaptureResult::Failed;
             }
 
-            auto& playerListPacket = static_cast<PlayerListPacket&>(*packet);
+            auto& playerListPacket   = static_cast<PlayerListPacket&>(*packet);
             playerListPacket.mAction = PlayerListPacketType::Add;
             playerListPacket.mEntries->reserve(identity.size());
             for (auto& entry : identity) playerListPacket.mEntries->emplace_back(std::move(entry));
@@ -1694,6 +1781,7 @@ bool Recorder::writeTickBoundary() {
             if (auto* provider = mThumbnailCaptureProvider.load(std::memory_order_acquire)) {
                 provider->requestReplayThumbnailCapture();
                 mThumbnailCaptureRequested = true;
+                mThumbnailRequestTick      = mWrittenTicks;
             }
         }
     }
@@ -2502,6 +2590,10 @@ void Recorder::failRecording(std::string_view reason) { cancelRecording(reason);
 
 void Recorder::cancelRecording(std::string_view reason) {
     getLogger().error("Recording cancelled: {}", reason);
+    abortRecording();
+}
+
+void Recorder::abortRecording() {
     if (mPackWorker) {
         mPackWorker->cancel();
         mPackWorker.reset();

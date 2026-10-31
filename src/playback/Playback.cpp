@@ -16,6 +16,7 @@
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
+#include "playback/screen/RecordControlsHooks.h"
 #include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
@@ -116,6 +117,7 @@ bool Playback::hook() {
         // Export-audio capture registers its policy callbacks on the probe; no additional hooks are installed.
         (void)audio::exportcap::install();
     }
+    screen::hookRecordControls(true);
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -218,6 +220,7 @@ bool Playback::unhook() {
 
     audio::exportcap::uninstall();
     audio::probe::uninstall();
+    screen::hookRecordControls(false);
     screen::hookMainMenu(false);
     getEventListeners().clear();
     impl->mLevelId.clear();
