@@ -8,6 +8,9 @@ namespace playback::editor {
 
 [[nodiscard]] bool hookReplayUI(bool enable);
 
+// Whether the ImGui UI layer is hooked and able to draw record dialogs outside replay mode.
+[[nodiscard]] bool isReplayUiHooked();
+
 [[nodiscard]] bool isReplayBrowserVisible();
 
 void tickReplayExportBeforeClientUpdate();

@@ -8,6 +8,7 @@
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/screen/RecordDialogs.h"
 
 #include "ll/api/memory/Hook.h"
 
@@ -140,6 +141,7 @@ LL_TYPE_INSTANCE_HOOK(
                   && !isShowingProgressScreen() && !isShowingWorldProgressScreen();
     }
     editor::tickReplayUI(hudVisible);
+    screen::tickRecordDialogs();
     replay.tryFinalizeWorldCleanup();
     audio::probe::onClientUpdate(*this);
     return result;
