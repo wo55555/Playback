@@ -694,6 +694,7 @@ public:
 
     void handleMoveEntities(PlaybackBuffer& data);
     void handleLocalCameraOffset(PlaybackBuffer& data);
+    void handleLocalViewSamples(PlaybackBuffer& data);
 
 private:
     ReplaySession();

@@ -145,4 +145,17 @@ public:
     }
 };
 
+// Recorded local player view between the previous and this tick, one sample per rendered frame: a count, then the
+// partial tick (0 to 1, exclusive), pitch and yaw. Written only for ticks whose view did not turn in a straight line.
+struct ActionLocalViewSamples : Action {
+    ActionLocalViewSamples() : Action("local_view_samples") {}
+    void handle(replay::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionLocalViewSamples& getInstance() {
+        static ActionLocalViewSamples instance;
+        return instance;
+    }
+};
+
 } // namespace playback::action
