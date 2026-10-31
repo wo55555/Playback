@@ -13,6 +13,7 @@
 #include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
 #include "playback/screen/select_replay/SelectReplayScreen.h"
+#include "playback/screen/RecordDialogs.h"
 #include "playback/state/EditorContext.h"
 #include "playback/visuals/ReplayThumbnail.h"
 
@@ -244,6 +245,8 @@ struct ImGuiRenderer::Impl {
     uint32_t                                exportCaptureDownsample{1};
     uint32_t                                exportCaptureReopenCapacity{};
     EditorContext*                          editorContext{};
+    // Set by renderInternal (render thread) so the D3D11/D3D12 draw paths below see it.
+    bool                                    recordDialogActive{};
     IDXGISwapChain*                         swapChain{};
     ComPtr<IDXGISwapChain3>                 swapChain3;
     ComPtr<ID3D12Device>                    device;
@@ -774,7 +777,8 @@ struct ImGuiRenderer::Impl {
 
         ImGui_ImplDX11_NewFrame();
         input::syncFrame();
-        bool const blockGameInput = state.browser.visible || exporting::isExportActive(state.exportStatus.state);
+        bool const blockGameInput =
+            state.browser.visible || recordDialogActive || exporting::isExportActive(state.exportStatus.state);
         beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, blockGameInput);
         ImGui::NewFrame();
         beginThumbnailFrame();
@@ -798,6 +802,7 @@ struct ImGuiRenderer::Impl {
                 setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
         }
+        playback::screen::drawRecordDialogs();
         endReplayMouseFrame(getSwapChainWindow(sc));
         ImGui::Render();
         thumbnailLoader.endFrame();
@@ -822,7 +827,7 @@ struct ImGuiRenderer::Impl {
             d3d11Context->ClearRenderTargetView(rtv, OpaqueBlack);
         } else {
             d3d11Context->OMSetRenderTargets(1, &rtv, nullptr);
-            if (!state.browser.visible && !exporting::isExportActive(state.exportStatus.state)) {
+            if (!state.browser.visible && !recordDialogActive && !exporting::isExportActive(state.exportStatus.state)) {
                 float clearColor[]{0.055f, 0.055f, 0.065f, 1};
                 d3d11Context->ClearRenderTargetView(rtv, clearColor);
             }
@@ -1456,7 +1461,9 @@ bool ImGuiRenderer::renderInternal(
     bool const browserOpen   = allowUi && state.browser.visible;
     bool const exportOverlay = allowUi && exporting::isExportActive(state.exportStatus.state);
     bool const editorOpen    = allowUi && state.editorVisible;
-    bool const uiActive      = browserOpen || editorOpen || (forceExportOverlay && exportOverlay);
+    bool const recordDialog  = allowUi && playback::screen::isRecordDialogVisible();
+    p.recordDialogActive     = recordDialog;
+    bool const uiActive      = browserOpen || editorOpen || recordDialog || (forceExportOverlay && exportOverlay);
     if (allowUi) input::setUiVisible(uiActive);
     if (!forceExportOverlay || !exportOverlay) p.resetExportSurface();
 
@@ -1584,7 +1591,8 @@ bool ImGuiRenderer::renderInternal(
         ImGui_ImplDX12_NewFrame();
         // Forward MCBE key events to ImGui keyboard state
         input::syncFrame();
-        bool const blockGameInput = state.browser.visible || exporting::isExportActive(state.exportStatus.state);
+        bool const blockGameInput =
+            state.browser.visible || p.recordDialogActive || exporting::isExportActive(state.exportStatus.state);
         beginReplayMouseFrame(io.DisplaySize.x, io.DisplaySize.y, blockGameInput);
         ImGui::NewFrame();
         p.beginThumbnailFrame();
@@ -1612,6 +1620,7 @@ bool ImGuiRenderer::renderInternal(
                 setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
         }
+        playback::screen::drawRecordDialogs();
         endReplayMouseFrame(getSwapChainWindow(swapChain));
         ImGui::Render();
         p.thumbnailLoader.endFrame();
@@ -1708,7 +1717,7 @@ bool ImGuiRenderer::renderInternal(
             f.commandList->ResourceBarrier(1, &surfaceBarrier);
         } else {
             f.commandList->OMSetRenderTargets(1, &f.rtv, FALSE, nullptr);
-            if (!browserOpen && !exportOverlay) {
+            if (!browserOpen && !p.recordDialogActive && !exportOverlay) {
                 float cc[]{0.055f, 0.055f, 0.065f, 1};
                 f.commandList->ClearRenderTargetView(f.rtv, cc, 0, nullptr);
             }

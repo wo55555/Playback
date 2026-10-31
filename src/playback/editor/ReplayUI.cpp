@@ -20,9 +20,12 @@ using namespace playback::state;
 namespace {
 EditorContext    gContext;
 EditorController gController{gContext};
+std::atomic_bool gUiHooked{false};
 } // namespace
 
 bool hookReplayUIRendererInit(bool enable) { return editor::graphics::hookRendererInit(enable); }
+
+bool isReplayUiHooked() { return gUiHooked.load(std::memory_order_acquire); }
 
 bool hookReplayUI(bool enable) {
     if (enable) {
@@ -58,9 +61,11 @@ bool hookReplayUI(bool enable) {
                 "Replay mouse hook unavailable; timeline may not be interactive"
             );
         }
+        gUiHooked.store(true, std::memory_order_release);
         return true;
     }
 
+    gUiHooked.store(false, std::memory_order_release);
     editor::graphics::setReplayUIActive(false);
     editor::graphics::setReplayMouseInputActive(false);
     record::Recorder::getInstance().setThumbnailCaptureProvider(nullptr);

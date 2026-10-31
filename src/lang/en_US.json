@@ -11,7 +11,30 @@
                 "paused": "Recording paused",
                 "stopped": "Recording stopped",
                 "rate": "First-person view recording rate: {} per second (20 = per tick only)",
-                "rateSet": "First-person view recording rate set to {} per second; applies to the next recording"
+                "rateSet": "First-person view recording rate set to {} per second; applies to the next recording",
+                "indicatorShown": "Recording indicator shown",
+                "indicatorHidden": "Recording indicator hidden"
+            }
+        },
+        "recordControls": {
+            "start": "Start Recording",
+            "pause": "Pause Recording",
+            "resume": "Resume Recording",
+            "stop": "Finish Recording",
+            "recording": "REC",
+            "paused": "Paused",
+            "dialog": {
+                "confirmCancelTitle": "Discard Recording?",
+                "confirmCancelMessage": "The current recording will be permanently deleted.",
+                "keep": "Keep",
+                "discard": "Discard",
+                "saveTitle": "Save Recording",
+                "saveDescription": "Enter a name for the saved recording. Leave it empty to use the timestamp.",
+                "save": "Save",
+                "delete": "Delete",
+                "confirmDeleteTitle": "Delete Saved Recording?",
+                "confirmDeleteMessage": "The pending recording will be permanently deleted.",
+                "back": "Back"
             }
         },
         "replayBrowser": {
