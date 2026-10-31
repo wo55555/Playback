@@ -1,5 +1,6 @@
 ﻿#include "Command.h"
 
+#include "playback/Playback.h"
 #include "playback/configuration/Config.h"
 #include "playback/record/Recorder.h"
 
@@ -11,6 +12,11 @@
 #include "mc/server/commands/CommandOutput.h"
 
 namespace playback::runtime::command {
+
+// Command parameters are reflected by name, which needs a type with linkage.
+struct RecordRateParam {
+    int rate;
+};
 
 void registerRecordCommand(configuration::CommandConfigStruct& config) {
     using namespace ll::i18n_literals;
@@ -44,6 +50,19 @@ void registerRecordCommand(configuration::CommandConfigStruct& config) {
 
         output.success("playback.command.record.stopped"_tr());
     });
+
+    recordCommand.overload().text("rate").execute([](CommandOrigin const&, CommandOutput& output) {
+        int const rate = Playback::getInstance().getConfig().record.localPlayerUpdatesPerSecond;
+        output.success("playback.command.record.rate"_tr(rate));
+    });
+
+    recordCommand.overload<RecordRateParam>().text("rate").required("rate").execute(
+        [](CommandOrigin const&, CommandOutput& output, RecordRateParam const& param) {
+            int const rate = configuration::clampLocalPlayerUpdatesPerSecond(param.rate);
+            Playback::getInstance().getConfig().record.localPlayerUpdatesPerSecond = rate;
+            output.success("playback.command.record.rateSet"_tr(rate));
+        }
+    );
 }
 
 } // namespace playback::runtime::command
