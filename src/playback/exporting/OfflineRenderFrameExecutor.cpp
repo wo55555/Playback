@@ -77,7 +77,7 @@ bool OfflineRenderFrameExecutor::open(
     std::optional<std::string>                   cameraFallback
 ) {
     close();
-    mKeyframes.configure(project, std::move(cameraFallback), settings.firstPersonSubject);
+    mKeyframes.configure(project, std::move(cameraFallback));
     if (!configureClientThrottling() || !configureRenderSize(settings)) {
         restoreClientThrottling();
         mKeyframes.reset();
