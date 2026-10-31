@@ -1,0 +1,151 @@
+{
+  "namespace": "hud",
+  "playback_record_indicator": {
+    "type": "image",
+    "texture": "textures/ui/hud_tip_text_background",
+    "visible": false,
+    "alpha": 0.7,
+    "layer": 31,
+    "anchor_from": "top_right",
+    "anchor_to": "top_right",
+    "offset": [
+      -4,
+      4
+    ],
+    "size": [
+      "100%c + 8px",
+      "100%c + 6px"
+    ],
+    "controls": [
+      {
+        "content": {
+          "type": "stack_panel",
+          "orientation": "horizontal",
+          "size": [
+            "100%c",
+            10
+          ],
+          "layer": 1,
+          "controls": [
+            {
+              "icon_panel": {
+                "type": "panel",
+                "size": [
+                  8,
+                  "100%"
+                ],
+                "controls": [
+                  {
+                    "recording_icon": {
+                      "type": "image",
+                      "texture": "textures/ui/red_dot",
+                      "size": [
+                        7,
+                        8
+                      ],
+                      "bindings": [
+                        {
+                          "binding_name": "#playback_record_is_recording",
+                          "binding_name_override": "#visible"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "paused_icon": {
+                      "type": "image",
+                      "texture": "textures/ui/pause_icon",
+                      "size": [
+                        6,
+                        8
+                      ],
+                      "bindings": [
+                        {
+                          "binding_name": "#playback_record_is_paused",
+                          "binding_name_override": "#visible"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "icon_gap": {
+                "type": "panel",
+                "size": [
+                  4,
+                  "100%"
+                ]
+              }
+            },
+            {
+              "status_text": {
+                "type": "label",
+                "text": "#playback_record_status_text",
+                "color": "$body_text_color",
+                "shadow": true,
+                "size": [
+                  "default",
+                  "default"
+                ],
+                "anchor_from": "left_middle",
+                "anchor_to": "left_middle",
+                "bindings": [
+                  {
+                    "binding_name": "#playback_record_status_text"
+                  }
+                ]
+              }
+            },
+            {
+              "text_gap": {
+                "type": "panel",
+                "size": [
+                  6,
+                  "100%"
+                ]
+              }
+            },
+            {
+              "time_text": {
+                "type": "label",
+                "text": "#playback_record_time_text",
+                "color": "$body_text_color",
+                "shadow": true,
+                "size": [
+                  "default",
+                  "default"
+                ],
+                "anchor_from": "left_middle",
+                "anchor_to": "left_middle",
+                "bindings": [
+                  {
+                    "binding_name": "#playback_record_time_text"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "bindings": [
+      {
+        "binding_name": "#playback_record_indicator_visible",
+        "binding_name_override": "#visible"
+      }
+    ]
+  },
+  "root_panel": {
+    "modifications": [
+      {
+        "array_name": "controls",
+        "operation": "insert_back",
+        "value": {
+          "playback_record_indicator@hud.playback_record_indicator": {}
+        }
+      }
+    ]
+  }
+}
