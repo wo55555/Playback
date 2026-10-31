@@ -11,7 +11,30 @@
                 "paused": "已暂停录制",
                 "stopped": "已结束录制",
                 "rate": "第一人称视角录制频率：每秒 {} 次（20 = 仅每 tick）",
-                "rateSet": "第一人称视角录制频率已设为每秒 {} 次，下次开始录制时生效"
+                "rateSet": "第一人称视角录制频率已设为每秒 {} 次，下次开始录制时生效",
+                "indicatorShown": "已显示录制指示器",
+                "indicatorHidden": "已隐藏录制指示器"
+            }
+        },
+        "recordControls": {
+            "start": "开始录制",
+            "pause": "暂停录制",
+            "resume": "继续录制",
+            "stop": "结束录制",
+            "recording": "录制中",
+            "paused": "已暂停",
+            "dialog": {
+                "confirmCancelTitle": "放弃录制？",
+                "confirmCancelMessage": "当前录制内容将被永久删除。",
+                "keep": "保留",
+                "discard": "放弃",
+                "saveTitle": "保存录制",
+                "saveDescription": "为保存的录制输入名称，留空则使用时间戳。",
+                "save": "保存",
+                "delete": "删除",
+                "confirmDeleteTitle": "删除待保存的录制？",
+                "confirmDeleteMessage": "待保存的录制内容将被永久删除。",
+                "back": "返回"
             }
         },
         "replayBrowser": {
