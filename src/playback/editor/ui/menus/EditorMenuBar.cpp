@@ -3,11 +3,9 @@
 #include "playback/Playback.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
-#include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
-#include "playback/state/editing/models/SequenceSegment.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -20,7 +18,6 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
-#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -267,8 +264,7 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
     mExportAdvancedOpen     = false;
     mExportScrollToAdvanced = false;
     mExportBodyHeight       = 0.0f;
-    mExportDialogOpen         = true;
-    mExportSubjectInitialised = false;
+    mExportDialogOpen       = true;
 }
 
 void EditorMenuBar::markExportPoint(bool isIn, int tick, int totalTicks) {
@@ -635,10 +631,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     );
     ImGui::PopStyleVar(2);
     if (dialogVisible) {
-        if (!mExportSubjectInitialised) {
-            mExportFirstPersonSubject = state.replaySubjectChoice;
-            mExportSubjectInitialised = true;
-        }
         std::string const custom                   = "playback.refactorEditor.export.custom"_tr();
         char const*       fpsOptions[]             = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
         constexpr int     fpsValues[]              = {30, 60, 120};
@@ -890,14 +882,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             mExportScrollToAdvanced = false;
         }
         if (mExportAdvancedOpen) {
-            bool const hasFirstPersonSegment =
-                state.project
-                && std::ranges::any_of(state.project->sequence, [](auto const& segment) {
-                       return segment.cameraId == state::editing::model::kFirstPersonCameraId;
-                   });
-            bool   openExportPlayers = false;
-            ImVec2 exportPlayerAnchorMin{};
-            ImVec2 exportPlayerAnchorMax{};
             // Indented group with a hairline down its left edge; tables give back the indent so values stay aligned.
             float const advancedTop = ImGui::GetCursorScreenPos().y;
             float const advancedX   = ImGui::GetCursorScreenPos().x;
@@ -944,46 +928,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     static_cast<int>(exporting::MaxExportConvergenceFrames),
                     fieldWidth
                 );
-                propertyLabel(
-                    "playback.refactorEditor.export.firstPersonSubject"_tr().c_str(),
-                    "playback.refactorEditor.export.firstPersonHint"_tr().c_str()
-                );
-                std::string const subjectLabel =
-                    playerSubjectLabel(state.replayPlayers, mExportFirstPersonSubject);
-                ImGui::BeginDisabled(!hasFirstPersonSegment);
-                if (widgets::dropdownChip(
-                        "export-subject",
-                        subjectLabel.c_str(),
-                        hasFirstPersonSegment
-                            ? nullptr
-                            : "playback.refactorEditor.export.firstPersonNoSegment"_tr().c_str(),
-                        hasFirstPersonSegment
-                    )) {
-                    openExportPlayers     = true;
-                    exportPlayerAnchorMin = ImGui::GetItemRectMin();
-                    exportPlayerAnchorMax = ImGui::GetItemRectMax();
-                }
-                ImGui::EndDisabled();
                 ImGui::EndTable();
-            }
-            if (openExportPlayers) {
-                widgets::openAnchoredPopup(
-                    "##export-player-picker",
-                    exportPlayerAnchorMin,
-                    exportPlayerAnchorMax
-                );
-            }
-            PlayerPickerResult exportPick;
-            if (drawPlayerPicker(
-                    "##export-player-picker",
-                    PlayerPickerMode::ExportSubject,
-                    state.replayPlayers,
-                    mExportFirstPersonSubject,
-                    false,
-                    exportPick
-                )
-                && exportPick.picked) {
-                mExportFirstPersonSubject = std::move(exportPick.uuid);
             }
 
             subHeader("playback.refactorEditor.export.advancedExperimental"_tr().c_str(), 8.0f);
@@ -1045,8 +990,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.convergenceFrames = static_cast<uint32_t>(std::max(0, mExportConvergenceFrames));
         previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         previewSettings.videoCrf    = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
-        previewSettings.accelerateClient   = mExportAccelerateClient;
-        previewSettings.firstPersonSubject = mExportFirstPersonSubject;
+        previewSettings.accelerateClient = mExportAccelerateClient;
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
 
