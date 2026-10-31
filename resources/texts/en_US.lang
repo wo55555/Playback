@@ -1,1 +1,4 @@
 playback.ui.replays=Replays
+playback.recordControls.tooltip.toggle=Start, pause or resume recording
+playback.recordControls.tooltip.finish=Finish recording
+playback.recordControls.tooltip.cancel=Cancel recording
