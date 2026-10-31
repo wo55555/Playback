@@ -115,7 +115,7 @@ private:
         int32_t       maxHeight{};
         std::string   name;
     };
-    std::unique_ptr<AsyncReplaySaver>           mAsyncReplaySaver;
+    std::unique_ptr<AsyncReplaySaver>                     mAsyncReplaySaver;
     std::unique_ptr<playback::io::packs::PackEmbedWorker> mPackWorker;
 
     std::vector<std::shared_ptr<LevelChunkPacket>> mSnapshotLevelChunks;
@@ -174,15 +174,20 @@ private:
     std::atomic_bool                                      mDimensionTransitionPending = false;
     std::atomic<int>                                      mDimensionTransitionTargetId{0};
 
-    int mChunkIndex          = 0;
-    int mTicksInCurrentChunk = 0;
-    int mWrittenTicks        = 0;
+    int mChunkIndex           = 0;
+    int mTicksInCurrentChunk  = 0;
+    int mWrittenTicks         = 0;
+    int mThumbnailRequestTick = 0;
 
     bool mHasOpenChunk                  = false;
     bool mOpenChunkHasData              = false;
     bool mCurrentChunkForcePlaySnapshot = false;
     bool mThumbnailCaptureRequested     = false;
     bool mPendingDimensionSnapshot      = false;
+
+    std::filesystem::path mPendingRecordPath;
+    std::string           mPendingRecordingName;
+    std::atomic_bool      mHasPendingRecording = false;
 
     // Zips the finished recording off the client thread; embedded resource packs make this take tens of seconds.
     // Declared last so it is joined before the rest of the recorder is destroyed.
@@ -191,6 +196,8 @@ private:
 private:
     static constexpr int RECORD_CHUNK_TICKS      = 20 * 60 * 5;
     static constexpr int THUMBNAIL_CAPTURE_TICKS = 20;
+    // The armed capture takes the next presented frame; this leaves room for slow frames.
+    static constexpr int THUMBNAIL_SETTLE_TICKS = 10;
 
     [[nodiscard]] SnapshotCaptureResult
     captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait, std::chrono::milliseconds barrierTimeout);
@@ -224,7 +231,20 @@ private:
 
     void cancelRecording(std::string_view reason);
 
-    void saveRecording();
+    void abortRecording();
+
+    // Ends the recording up to a finished temp folder; false when nothing usable was recorded.
+    [[nodiscard]] bool closeRecording();
+
+    [[nodiscard]] std::filesystem::path finishSaver();
+
+    [[nodiscard]] bool exportRecording(
+        std::filesystem::path const& replayPath,
+        std::string const&           fileBaseName,
+        std::string_view             metaName
+    );
+
+    void clearPendingRecording();
 
     void logRecordedGamePacketSummary() const;
 
@@ -246,9 +266,31 @@ public:
 
     [[nodiscard]] bool isPaused() const { return mState.load() == State::Paused; }
 
+    // Client thread only; true until the recording thumbnail frame has been taken, so overlays can stay out of it.
+    [[nodiscard]] bool isThumbnailPending() const {
+        if (mState.load() != State::Recording || !mThumbnailCaptureProvider.load(std::memory_order_acquire)) {
+            return false;
+        }
+        return !mThumbnailCaptureRequested || mWrittenTicks < mThumbnailRequestTick + THUMBNAIL_SETTLE_TICKS;
+    }
+    // Client thread only; stops advancing while paused.
+    [[nodiscard]] int recordedTicks() const { return mWrittenTicks; }
+
     void start();
     void pause();
+    // Saves directly under a timestamp name, including a recording still waiting for a name.
     void stop();
+    // Stops and deletes everything recorded so far.
+    void discard();
+
+    // Stops but keeps the data until savePendingRecording or discardPendingRecording.
+    [[nodiscard]] bool finishToPending();
+    [[nodiscard]] bool hasPendingRecording() const { return mHasPendingRecording.load(std::memory_order_acquire); }
+    // Client thread only.
+    [[nodiscard]] std::string const& pendingRecordingName() const { return mPendingRecordingName; }
+    // An empty name keeps the timestamp name; false keeps the data pending.
+    [[nodiscard]] bool savePendingRecording(std::string_view name);
+    void               discardPendingRecording();
 
     // Blocks until the last stopped recording has been written to its replay file.
     void waitForExport();
