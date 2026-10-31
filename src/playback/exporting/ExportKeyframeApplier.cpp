@@ -16,8 +16,7 @@ ExportKeyframeApplier::~ExportKeyframeApplier() { reset(); }
 
 void ExportKeyframeApplier::configure(
     state::editing::model::EditorStateExt const& project,
-    std::optional<std::string>                   cameraFallback,
-    std::string                                  firstPersonSubject
+    std::optional<std::string>                   cameraFallback
 ) {
     reset();
     auto const firstPersonSegments = std::ranges::count(
@@ -30,27 +29,9 @@ void ExportKeyframeApplier::configure(
         return;
     }
     if (firstPersonSegments > 0) {
-        auto& session       = replay::ReplaySession::getInstance();
-        mSavedSubjectChoice = session.replaySubjectChoice();
+        // The export plays the editor's subject; restore it afterwards in case the replay dropped it mid-export.
+        mSavedSubjectChoice = replay::ReplaySession::getInstance().replaySubjectChoice();
         mSubjectChoiceSaved = true;
-        // An entity subject is rebound by the session tick and falls back to the recorder once it is gone.
-        bool legal = firstPersonSubject.empty() || replay::ReplaySession::parseEntityChoice(firstPersonSubject);
-        if (!legal) {
-            for (auto const& player : session.replayPlayers()) {
-                if (player.uuid == firstPersonSubject && player.present) {
-                    legal = true;
-                    break;
-                }
-            }
-        }
-        if (!legal) {
-            Playback::getInstance().getSelf().getLogger().warn(
-                "Export first-person subject ignored uuid={}",
-                firstPersonSubject
-            );
-            firstPersonSubject.clear();
-        }
-        session.setReplaySubjectChoice(std::move(firstPersonSubject));
     }
     size_t keyframeCount = 0;
     for (auto const& camera : project.cameras) keyframeCount += camera.keysByTick.size();
