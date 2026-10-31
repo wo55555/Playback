@@ -11,6 +11,7 @@
 #include "mc/client/network/ClientNetworkHandler.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
 #include "mc/client/player/LocalPlayer.h"
+#include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/network/NetworkIdentifier.h"
 #include "mc/network/NetworkStatistics.h"
@@ -22,14 +23,14 @@
 #include "mc/network/packet/AvailableActorIdentifiersPacket.h"
 #include "mc/network/packet/InventoryContentPacket.h"
 #include "mc/network/packet/InventorySlotPacket.h"
-#include "mc/network/packet/MobEquipmentPacket.h"
-#include "mc/network/packet/PlayerHotbarPacket.h"
-#include "mc/network/packet/PlayerListPacket.h"
-#include "mc/network/packet/PlayerSkinPacket.h"
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
+#include "mc/network/packet/MobEquipmentPacket.h"
+#include "mc/network/packet/PlayerHotbarPacket.h"
+#include "mc/network/packet/PlayerListPacket.h"
+#include "mc/network/packet/PlayerSkinPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
@@ -47,6 +48,7 @@
 #include "mc/world/level/block/registry/BlockTypeRegistry.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
+
 
 
 #include <atomic>
@@ -87,6 +89,7 @@ struct NetworkHookState {
     bool updateSubChunkBlocks{};
     bool renderFinalizer{};
     bool renderedFov{};
+    bool localViewFrame{};
     bool inventorySlot{};
     bool inventoryContent{};
     bool playerHotbar{};
@@ -577,6 +580,19 @@ LL_TYPE_INSTANCE_HOOK(
     return fov;
 }
 
+// The local player turns its view once per frame (input is applied while rendering) but moves once per tick.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackLocalViewFrameHook,
+    ll::memory::HookPriority::Normal,
+    GameRenderer,
+    &GameRenderer::renderCurrentFrame,
+    void,
+    float partialTick
+) {
+    origin(partialTick);
+    Recorder::getInstance().recordLocalViewFrame(partialTick);
+}
+
 template <class Hook>
 bool installNetworkHook(bool& installed) {
     if (!installed) installed = Hook::hook() == 0;
@@ -595,13 +611,13 @@ bool hookNetwork(bool enable) {
         return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
             && state.resourceHandlersInstalled() && state.actorIdentifiers && state.completion && state.packetObserver
             && state.packetSender && state.addActor && state.addItemActor && state.fastPathHandlersInstalled()
-            && state.renderFinalizer && state.renderedFov && state.hudHandlersInstalled();
+            && state.renderFinalizer && state.renderedFov && state.localViewFrame && state.hudHandlersInstalled();
     };
     auto noneInstalled = [&] {
         return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime
             && state.resourceHandlersRemoved() && !state.actorIdentifiers && !state.completion && !state.packetObserver
             && !state.packetSender && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved()
-            && !state.renderFinalizer && !state.renderedFov && state.hudHandlersRemoved();
+            && !state.renderFinalizer && !state.renderedFov && !state.localViewFrame && state.hudHandlersRemoved();
     };
     auto installAll = [&] {
         return installNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor)
@@ -630,6 +646,7 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks)
             && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer)
             && installNetworkHook<PlaybackRenderedFovHook>(state.renderedFov)
+            && installNetworkHook<PlaybackLocalViewFrameHook>(state.localViewFrame)
             && installNetworkHook<PlaybackInventorySlotHook>(state.inventorySlot)
             && installNetworkHook<PlaybackInventoryContentHook>(state.inventoryContent)
             && installNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar)
@@ -640,6 +657,7 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar);
         removeNetworkHook<PlaybackInventoryContentHook>(state.inventoryContent);
         removeNetworkHook<PlaybackInventorySlotHook>(state.inventorySlot);
+        removeNetworkHook<PlaybackLocalViewFrameHook>(state.localViewFrame);
         removeNetworkHook<PlaybackRenderedFovHook>(state.renderedFov);
         removeNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
         removeNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks);

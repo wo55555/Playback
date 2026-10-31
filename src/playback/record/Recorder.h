@@ -99,6 +99,12 @@ class Recorder {
 private:
     enum class State { Idle, Recording, Paused, Closing };
     enum class SnapshotCaptureResult { Success, NotReady, Failed };
+    // Local player view after one rendered frame; fraction is the frame's partial tick after the previous tick.
+    struct LocalViewFrame {
+        float fraction{};
+        float pitch{};
+        float yaw{};
+    };
     struct SnapshotDimension {
         DimensionType id{};
         int32_t       minHeight{};
@@ -142,6 +148,15 @@ private:
     std::optional<PlaybackView>           mSnapshotView;
     std::optional<PlaybackCameraSample>   mSnapshotCamera;
     std::optional<SnapshotDimension>      mSnapshotDimension;
+
+    // Frames rendered since the last tick; the view turns per frame while the rest of the pose moves per tick.
+    std::mutex                    mLocalViewMutex;
+    std::vector<LocalViewFrame>   mLocalViewFrames;
+    bool                          mLocalViewGap{true}; // frames were missed since the last tick
+    std::optional<LocalViewFrame> mLocalViewPrevious;  // view at the last tick
+    uint64_t                      mLocalViewTicks{};   // ticks that wrote samples
+    uint64_t                      mLocalViewSamples{};
+    int                           mLocalViewRate{20}; // samples per second, fixed when the recording starts
 
     std::optional<DimensionType>        mRecordingDimension;
     std::string                         mSnapshotFailure;
@@ -191,6 +206,9 @@ private:
 
     [[nodiscard]] bool writeEntityMovements();
     [[nodiscard]] bool writeLocalCameraOffset();
+    [[nodiscard]] bool writeLocalViewSamples();
+    // Ticks passed without writing the view, so the buffered frames no longer belong to the next tick.
+    void discardLocalViewFrames();
 
     [[nodiscard]] bool writeLocalPlayerState();
 
@@ -242,6 +260,9 @@ public:
     void recordGamePacket(Packet const& packet);
 
     void recordCompletedChunk(ChunkPos const& pos, Dimension const& dimension);
+
+    // Called after every rendered frame with the frame's partial tick.
+    void recordLocalViewFrame(float alpha);
 
     void endTick(bool close);
 
