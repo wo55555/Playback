@@ -8,7 +8,7 @@
 
 namespace playback::editor::ui {
 
-enum class PlayerPickerMode { Follow, ExportSubject, SegmentSubject };
+enum class PlayerPickerMode { Follow, SegmentSubject };
 
 struct PlayerPickerResult {
     bool        picked{};
@@ -16,7 +16,7 @@ struct PlayerPickerResult {
     std::string uuid;
 };
 
-// Empty uuid is the recorder. Shared by the viewport chip, the segment menu, and the export dialog.
+// Empty uuid is the recorder. Shared by the viewport chip and the segment menu.
 [[nodiscard]] std::string playerSubjectLabel(std::span<state::ReplayPlayerView const> players, std::string_view uuid);
 
 // Draws an anchored popup opened by the caller. Fills `result` and returns true only when the user
