@@ -660,6 +660,13 @@ void Recorder::stop() {
         return;
     }
     logRecordedGamePacketSummary();
+    getLogger().debug(
+        "Recorded local view samples: rate={} ticks={}/{} samples={}",
+        mLocalViewRate,
+        mLocalViewTicks,
+        mWrittenTicks,
+        mLocalViewSamples
+    );
     saveRecording();
 }
 
@@ -791,6 +798,12 @@ void Recorder::resetStateForNewRecording() {
     mDimensionTransitionPending    = false;
     mDimensionTransitionTargetId   = 0;
     mLastEntityMovements.clear();
+    discardLocalViewFrames();
+    mLocalViewTicks   = 0;
+    mLocalViewSamples = 0;
+    mLocalViewRate    = configuration::clampLocalPlayerUpdatesPerSecond(
+        Playback::getInstance().getConfig().record.localPlayerUpdatesPerSecond
+    );
     mRecordedLocalPlayerId.reset();
     mRecordedLocalPlayerRuntimeId.reset();
     mRecordedLocalPlayerUuid.reset();
@@ -842,6 +855,7 @@ void Recorder::endTick(bool close) {
     bool  dimensionChanged = false;
     if (mRecordingDimension) {
         if (!localPlayer) {
+            discardLocalViewFrames();
             if (!close && mDimensionTransitionPending.load(std::memory_order_acquire)) {
                 if (!flushGamePackets() || !writeTickBoundary()) return;
                 return;
@@ -861,7 +875,7 @@ void Recorder::endTick(bool close) {
 
         // Finish the client tick in the old chunk before snapshotting the state produced by that tick.
         if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
-            || !writeTickBoundary() || !finishCurrentChunk(close)) {
+            || !writeLocalViewSamples() || !writeTickBoundary() || !finishCurrentChunk(close)) {
             return;
         }
         if (close) return;
@@ -901,7 +915,7 @@ void Recorder::endTick(bool close) {
         }
 
         if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
-            || !writeTickBoundary() || !finishCurrentChunk(false) || !writeSnapshot()
+            || !writeLocalViewSamples() || !writeTickBoundary() || !finishCurrentChunk(false) || !writeSnapshot()
             || !commitChunkSnapshot(elapsed, barrierWait)) {
             return;
         }
@@ -909,7 +923,7 @@ void Recorder::endTick(bool close) {
     }
 
     if (!writeInitialSnapshotIfNeeded() || !writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements()
-        || !writeLocalCameraOffset() || !writeTickBoundary()) {
+        || !writeLocalCameraOffset() || !writeLocalViewSamples() || !writeTickBoundary()) {
         return;
     }
     if (close && !finishCurrentChunk(true)) return;
@@ -1884,6 +1898,126 @@ bool Recorder::writeLocalCameraOffset() {
         })) {
         auto error = mAsyncReplaySaver->getError();
         failRecording(error.value_or("Unable to queue the local camera offset"));
+        return false;
+    }
+    return true;
+}
+
+namespace {
+
+// Frames buffered while no tick runs (single-player pause menu, a hitch); beyond it the tick's frames are discarded.
+constexpr size_t MaxBufferedLocalViewFrames = 512;
+// Degrees a frame must leave the straight line between the two ticks for that tick to store its frames.
+constexpr float LocalViewCurveThreshold = 0.01f;
+
+} // namespace
+
+void Recorder::recordLocalViewFrame(float alpha) {
+    if (mLocalViewRate <= 20 || mState.load(std::memory_order_acquire) != State::Recording) {
+        std::scoped_lock lock(mLocalViewMutex);
+        mLocalViewFrames.clear();
+        mLocalViewGap = true;
+        return;
+    }
+
+    auto             clientInstance = ll::service::getClientInstance();
+    auto*            localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+    std::scoped_lock lock(mLocalViewMutex);
+    if (!localPlayer || mLocalViewFrames.size() >= MaxBufferedLocalViewFrames) {
+        mLocalViewGap = true;
+        return;
+    }
+    auto const rotation = localPlayer->getRotation();
+    if (!std::isfinite(alpha) || !std::isfinite(rotation.x) || !std::isfinite(rotation.y)) return;
+    mLocalViewFrames.push_back({alpha, rotation.x, rotation.y});
+}
+
+void Recorder::discardLocalViewFrames() {
+    std::scoped_lock lock(mLocalViewMutex);
+    mLocalViewFrames.clear();
+    mLocalViewGap = true;
+    mLocalViewPrevious.reset();
+}
+
+bool Recorder::writeLocalViewSamples() {
+    if (!mAsyncReplaySaver) {
+        failRecording("Replay saver is not initialized while writing the local view samples");
+        return false;
+    }
+
+    auto  clientInstance = ll::service::getClientInstance();
+    auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
+    if (!localPlayer || mLocalViewRate <= 20) {
+        discardLocalViewFrames();
+        return true;
+    }
+
+    std::vector<LocalViewFrame>   frames;
+    std::optional<LocalViewFrame> previous;
+    bool                          gap{};
+    auto const                    rotation = localPlayer->getRotation();
+    LocalViewFrame const          current{1.0f, rotation.x, rotation.y};
+    {
+        std::scoped_lock lock(mLocalViewMutex);
+        frames.swap(mLocalViewFrames);
+        gap      = std::exchange(mLocalViewGap, false);
+        previous = std::exchange(mLocalViewPrevious, current);
+    }
+    if (gap || !previous || frames.empty()) return true;
+
+    // A frame rendered exactly on a tick repeats that tick's pose.
+    std::erase_if(frames, [](LocalViewFrame const& frame) {
+        return !(frame.fraction > 0.0f && frame.fraction < 1.0f);
+    });
+    std::stable_sort(frames.begin(), frames.end(), [](auto const& a, auto const& b) {
+        return a.fraction < b.fraction;
+    });
+    frames.erase(
+        std::unique(
+            frames.begin(),
+            frames.end(),
+            [](auto const& a, auto const& b) { return a.fraction == b.fraction; }
+        ),
+        frames.end()
+    );
+
+    float const yawSpan = std::remainder(current.yaw - previous->yaw, 360.0f);
+    bool const  curved  = std::ranges::any_of(frames, [&](LocalViewFrame const& frame) {
+        float const lineYaw   = previous->yaw + yawSpan * frame.fraction;
+        float const linePitch = std::lerp(previous->pitch, current.pitch, frame.fraction);
+        return std::abs(std::remainder(frame.yaw - lineYaw, 360.0f)) > LocalViewCurveThreshold
+            || std::abs(frame.pitch - linePitch) > LocalViewCurveThreshold;
+    });
+    if (!curved) return true;
+
+    // Keep the frame nearest each evenly spaced point inside the tick.
+    int const                   slots = mLocalViewRate / 20;
+    std::vector<LocalViewFrame> picked;
+    picked.reserve(static_cast<size_t>(slots - 1));
+    for (int slot = 1; slot < slots; ++slot) {
+        float const target  = static_cast<float>(slot) / static_cast<float>(slots);
+        auto const  nearest = std::ranges::min_element(frames, {}, [&](LocalViewFrame const& frame) {
+            return std::abs(frame.fraction - target);
+        });
+        if (picked.empty() || picked.back().fraction != nearest->fraction) picked.push_back(*nearest);
+    }
+    frames = std::move(picked);
+    ++mLocalViewTicks;
+    mLocalViewSamples += frames.size();
+
+    if (!mAsyncReplaySaver->submit([frames = std::move(frames)](ReplayWriter& writer) {
+            auto& action = ActionLocalViewSamples::getInstance();
+            writer.startAction(action);
+            writer.mStream.writeVarInt(static_cast<int>(frames.size()), nullptr, nullptr);
+            for (auto const& frame : frames) {
+                writer.mStream.writeFloat(frame.fraction, nullptr, nullptr);
+                writer.mStream.writeFloat(frame.pitch, nullptr, nullptr);
+                writer.mStream.writeFloat(frame.yaw, nullptr, nullptr);
+            }
+            writer.finishAction(action);
+        })) {
+        auto error = mAsyncReplaySaver->getError();
+        failRecording(error.value_or("Unable to queue the local view samples"));
         return false;
     }
     return true;
