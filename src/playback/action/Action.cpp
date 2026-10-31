@@ -39,4 +39,8 @@ void ActionLocalCameraOffset::handle(replay::ReplaySession& session, PlaybackBuf
     session.handleLocalCameraOffset(data);
 }
 
+void ActionLocalViewSamples::handle(replay::ReplaySession& session, PlaybackBuffer& data) {
+    session.handleLocalViewSamples(data);
+}
+
 } // namespace playback::action
