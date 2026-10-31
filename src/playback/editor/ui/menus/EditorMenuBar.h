@@ -38,8 +38,6 @@ private:
     int                   mExportWarmupFrames{60};
     int                   mExportConvergenceFrames{0};
     bool                  mExportAccelerateClient{false};
-    std::string           mExportFirstPersonSubject;
-    bool                  mExportSubjectInitialised{false};
     int                   mExportEncodeSpeed{0};
     int                   mExportCrf{18};
     bool                  mExportAdvancedOpen{false};
