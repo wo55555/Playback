@@ -9,7 +9,9 @@
                 "description": "Control replay recording",
                 "started": "Recording started",
                 "paused": "Recording paused",
-                "stopped": "Recording stopped"
+                "stopped": "Recording stopped",
+                "rate": "First-person view recording rate: {} per second (20 = per tick only)",
+                "rateSet": "First-person view recording rate set to {} per second; applies to the next recording"
             }
         },
         "replayBrowser": {
