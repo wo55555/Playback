@@ -67,6 +67,13 @@ struct PendingCameraOffset {
     CameraOffsetSample current{};
 };
 
+// Frame samples of one entity for the pose interval ending at tick.
+struct LocalViewHistory {
+    EntityRenderKey              key{};
+    int64_t                      tick{};
+    std::vector<LocalViewSample> samples; // sorted by fraction, all inside (0, 1)
+};
+
 using EntityPoseMap = std::unordered_map<EntityRenderKey, EntityPoseHistory, EntityRenderKeyHash>;
 
 std::atomic<std::shared_ptr<EntityPoseMap const>>                           gEntityPoses;
@@ -74,6 +81,8 @@ std::atomic<std::shared_ptr<CameraOffsetHistory const>>                     gCam
 std::mutex                                                                  gPendingMutex;
 std::unordered_map<EntityRenderKey, PendingEntityPose, EntityRenderKeyHash> gPending;
 std::optional<PendingCameraOffset>                                          gPendingCameraOffset;
+std::atomic<std::shared_ptr<LocalViewHistory const>>                        gLocalView;
+std::optional<LocalViewHistory>                                             gPendingLocalView;
 
 constexpr uint64_t   kNoSubject = std::numeric_limits<uint64_t>::max();
 std::atomic_uint64_t gSubject{kNoSubject};
@@ -153,6 +162,40 @@ EntityRenderPose samplePose(EntityPoseHistory const& history, ReplaySampleTime c
     };
 }
 
+// Replaces the straight-line pitch and yaw with the recorded frames when the sample falls in their tick.
+void applyLocalView(
+    EntityRenderPose&        pose,
+    LocalViewHistory const*  view,
+    EntityRenderKey const&   key,
+    EntityPoseHistory const& history,
+    ReplaySampleTime const&  sample
+) noexcept {
+    if (!view || !(view->key == key) || view->samples.empty()) return;
+    int64_t const start  = std::max<int64_t>(0, view->tick - 1);
+    float const   amount = static_cast<float>(sample.value() - static_cast<long double>(start));
+    if (!(amount > 0.0f && amount < 1.0f)) return;
+
+    auto const from             = samplePose(history, ReplaySampleTime{start, 1});
+    auto const to               = samplePose(history, ReplaySampleTime{view->tick, 1});
+    float      previousFraction = 0.0f;
+    float      previousPitch    = from.pitch;
+    float      previousYaw      = from.yaw;
+    for (auto const& frame : view->samples) {
+        if (amount <= frame.fraction) {
+            float const local = (amount - previousFraction) / (frame.fraction - previousFraction);
+            pose.pitch        = interpolateAngle(previousPitch, frame.pitch, local);
+            pose.yaw          = interpolateAngle(previousYaw, frame.yaw, local);
+            return;
+        }
+        previousFraction = frame.fraction;
+        previousPitch    = frame.pitch;
+        previousYaw      = frame.yaw;
+    }
+    float const local = (amount - previousFraction) / (1.0f - previousFraction);
+    pose.pitch        = interpolateAngle(previousPitch, to.pitch, local);
+    pose.yaw          = interpolateAngle(previousYaw, to.yaw, local);
+}
+
 CameraOffsetSample sampleCameraOffset(CameraOffsetHistory const& history, ReplaySampleTime const& sample) noexcept {
     auto const time = sample.value();
     if (time <= static_cast<long double>(history.previousTick)) return history.previous;
@@ -171,7 +214,10 @@ CameraOffsetSample sampleCameraOffset(CameraOffsetHistory const& history, Replay
         previous.fov > 0.0f && current.fov > 0.0f ? std::lerp(previous.fov, current.fov, amount) : current.fov;
     std::optional<EntityRenderPose> view = current.view ? current.view : previous.view;
     // Entering or leaving the view fades its weight instead of switching on a tick boundary.
-    float viewWeight = previous.view && current.view ? 1.0f : current.view ? amount : previous.view ? 1.0f - amount : 0.0f;
+    float viewWeight = previous.view && current.view ? 1.0f
+                     : current.view                  ? amount
+                     : previous.view                 ? 1.0f - amount
+                                                     : 0.0f;
     if (previous.view && current.view) {
         auto const& a = *previous.view;
         auto const& b = *current.view;
@@ -352,6 +398,7 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
 
     try {
         auto const poses = gEntityPoses.load(std::memory_order_acquire);
+        auto const localView = gLocalView.load(std::memory_order_acquire);
         auto       state = std::make_unique<ScopedReplayEntityPose::State>();
         state->actors.reserve(targets.size());
 
@@ -394,7 +441,8 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
 
             // A passenger is positioned by its vehicle, so only its rotation may be interpolated.
             bool const positioned = !target.actor->isRiding();
-            auto const sampled    = samplePose(history->second, sample);
+            auto       sampled    = samplePose(history->second, sample);
+            applyLocalView(sampled, localView.get(), target.key, history->second, sample);
             state->actors.emplace_back(
                 ScopedReplayEntityPose::State::ActorState{
                     stateVector,
@@ -478,15 +526,24 @@ void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, Entit
 void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov, std::optional<EntityRenderPose> view) {
     if (!finite(offset)) return;
     if (view && !finite(*view)) view.reset();
-    CameraOffsetSample const sample{
-        offset,
-        std::isfinite(fov) && fov > 1.0f && fov < 179.0f ? fov : 0.0f,
-        view,
-        view ? 1.0f : 0.0f
-    };
+    CameraOffsetSample const
+        sample{offset, std::isfinite(fov) && fov > 1.0f && fov < 179.0f ? fov : 0.0f, view, view ? 1.0f : 0.0f};
     std::scoped_lock         lock(gPendingMutex);
     if (gPendingCameraOffset) gPendingCameraOffset->current = sample;
     else gPendingCameraOffset = PendingCameraOffset{sample, sample};
+}
+
+void queueReplayLocalViewSamples(EntityRenderKey key, std::vector<LocalViewSample> samples) {
+    std::erase_if(samples, [](LocalViewSample const& value) {
+        return !(value.fraction > 0.0f && value.fraction < 1.0f) || !std::isfinite(value.pitch)
+            || !std::isfinite(value.yaw);
+    });
+    std::ranges::stable_sort(samples, {}, &LocalViewSample::fraction);
+    auto const duplicates = std::ranges::unique(samples, {}, &LocalViewSample::fraction);
+    samples.erase(duplicates.begin(), duplicates.end());
+    std::scoped_lock lock(gPendingMutex);
+    if (samples.empty()) gPendingLocalView.reset();
+    else gPendingLocalView = LocalViewHistory{key, 0, std::move(samples)};
 }
 
 void commitReplayEntityPoses(int64_t tick) {
@@ -505,6 +562,17 @@ void commitReplayEntityPoses(int64_t tick) {
         );
         gPendingCameraOffset.reset();
     }
+    // Each tick replaces the frames; a tick without them interpolates in a straight line.
+    if (gPendingLocalView) {
+        gPendingLocalView->tick = tick;
+        gLocalView.store(
+            std::make_shared<LocalViewHistory const>(std::move(*gPendingLocalView)),
+            std::memory_order_release
+        );
+        gPendingLocalView.reset();
+    } else if (gLocalView.load(std::memory_order_acquire)) {
+        gLocalView.store({}, std::memory_order_release);
+    }
     if (gPending.empty()) return;
 
     auto const current = gEntityPoses.load(std::memory_order_acquire);
@@ -522,6 +590,10 @@ void commitReplayEntityPoses(int64_t tick) {
 void removeReplayEntityPose(EntityRenderKey key) {
     std::scoped_lock lock(gPendingMutex);
     gPending.erase(key);
+    if (gPendingLocalView && gPendingLocalView->key == key) gPendingLocalView.reset();
+    if (auto const view = gLocalView.load(std::memory_order_acquire); view && view->key == key) {
+        gLocalView.store({}, std::memory_order_release);
+    }
     auto const current = gEntityPoses.load(std::memory_order_acquire);
     if (!current || !current->contains(key)) return;
     auto next = std::make_shared<EntityPoseMap>(*current);
@@ -534,6 +606,8 @@ void clearReplayEntityPoses() {
     gPending.clear();
     gPendingCameraOffset.reset();
     gCameraOffset.store({}, std::memory_order_release);
+    gPendingLocalView.reset();
+    gLocalView.store({}, std::memory_order_release);
     gEntityPoses.store({}, std::memory_order_release);
 }
 
@@ -587,9 +661,7 @@ float replaySubjectPostureViewWeight() noexcept { return gPostureViewWeight.load
 
 float replaySubjectPostureSleepTicks() noexcept { return gPostureSleepTicks.load(std::memory_order_relaxed); }
 
-void setReplaySubjectRecorder(bool recorder) noexcept {
-    gSubjectIsRecorder.store(recorder, std::memory_order_release);
-}
+void setReplaySubjectRecorder(bool recorder) noexcept { gSubjectIsRecorder.store(recorder, std::memory_order_release); }
 
 bool isReplaySubjectRecorder() noexcept { return gSubjectIsRecorder.load(std::memory_order_acquire); }
 
@@ -639,7 +711,8 @@ bool isReplaySubjectThirdPerson() {
 }
 
 bool isReplaySubjectViewDriven() {
-    constexpr auto mask = static_cast<uint8_t>(SubjectHideReason::Follow) | static_cast<uint8_t>(SubjectHideReason::Export)
+    constexpr auto mask = static_cast<uint8_t>(SubjectHideReason::Follow)
+                        | static_cast<uint8_t>(SubjectHideReason::Export)
                         | static_cast<uint8_t>(SubjectHideReason::Preview);
     return (gSubjectHidden.load(std::memory_order_acquire) & mask) != 0;
 }
@@ -651,7 +724,10 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
 
     std::optional<EntityRenderPose> found;
     if (auto const poses = gEntityPoses.load(std::memory_order_acquire)) {
-        if (auto const entry = poses->find(key); entry != poses->end()) found = samplePose(entry->second, sample);
+        if (auto const entry = poses->find(key); entry != poses->end()) {
+            found = samplePose(entry->second, sample);
+            applyLocalView(*found, gLocalView.load(std::memory_order_acquire).get(), key, entry->second, sample);
+        }
     }
     if (!found) {
         // The seeded pose stays pending until the first tick commits it.

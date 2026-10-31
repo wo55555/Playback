@@ -45,6 +45,17 @@ class ScopedReplayEntityPose;
 createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, ReplaySampleTime const& sample);
 
 void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, EntityRenderPose current);
+
+// The recorded local player's view at one rendered frame between two ticks; fraction is the partial tick.
+struct LocalViewSample {
+    float fraction{};
+    float pitch{};
+    float yaw{};
+};
+
+// Per-frame view of the recorded local player for the tick the next commitReplayEntityPoses commits. Its pitch and yaw
+// follow these samples instead of the straight line between the two ticks.
+void queueReplayLocalViewSamples(EntityRenderKey key, std::vector<LocalViewSample> samples);
 void commitReplayEntityPoses(int64_t tick);
 void removeReplayEntityPose(EntityRenderKey key);
 void clearReplayEntityPoses();
