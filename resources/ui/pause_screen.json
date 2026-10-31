@@ -1,0 +1,264 @@
+{
+  "namespace": "pause",
+  "playback_record_toggle_icon": {
+    "type": "panel",
+    "size": [
+      16,
+      16
+    ],
+    "layer": 3,
+    "controls": [
+      {
+        "start@pause.playback_record_start_icon": {
+          "bindings": [
+            {
+              "binding_name": "#playback_record_idle",
+              "binding_name_override": "#visible",
+              "binding_type": "global"
+            }
+          ]
+        }
+      },
+      {
+        "pause@pause.playback_record_pause_icon": {
+          "bindings": [
+            {
+              "binding_name": "#playback_record_recording",
+              "binding_name_override": "#visible",
+              "binding_type": "global"
+            }
+          ]
+        }
+      },
+      {
+        "resume@pause.playback_record_resume_icon": {
+          "bindings": [
+            {
+              "binding_name": "#playback_record_paused",
+              "binding_name_override": "#visible",
+              "binding_type": "global"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "playback_record_start_icon": {
+    "type": "image",
+    "texture": "textures/ui/playback/record_start",
+    "size": [
+      16,
+      16
+    ],
+    "layer": 3
+  },
+  "playback_record_resume_icon": {
+    "type": "image",
+    "texture": "textures/ui/playback/record_resume",
+    "size": [
+      16,
+      16
+    ],
+    "layer": 3
+  },
+  "playback_record_pause_icon": {
+    "type": "image",
+    "texture": "textures/ui/playback/record_pause",
+    "size": [
+      16,
+      16
+    ],
+    "layer": 3
+  },
+  "playback_record_finish_icon": {
+    "type": "image",
+    "texture": "textures/ui/playback/record_finish",
+    "size": [
+      16,
+      16
+    ],
+    "layer": 3
+  },
+  "playback_record_cancel_icon": {
+    "type": "image",
+    "texture": "textures/ui/playback/record_cancel",
+    "size": [
+      16,
+      16
+    ],
+    "layer": 3
+  },
+  "playback_record_toggle_button@common_buttons.light_content_button": {
+    "size": [
+      24,
+      24
+    ],
+    "$button_pressed_offset": [
+      0,
+      0
+    ],
+    "$pressed_button_name": "button.playback_record_toggle",
+    "$button_content": "pause.playback_record_toggle_icon",
+    "$pressed_alpha": 0.65
+  },
+  "playback_record_finish_button@common_buttons.light_content_button": {
+    "size": [
+      24,
+      24
+    ],
+    "$button_pressed_offset": [
+      0,
+      0
+    ],
+    "$pressed_button_name": "button.playback_record_finish",
+    "$button_content": "pause.playback_record_finish_icon",
+    "$pressed_alpha": 0.65
+  },
+  "playback_record_cancel_button@common_buttons.light_content_button": {
+    "size": [
+      24,
+      24
+    ],
+    "$button_pressed_offset": [
+      0,
+      0
+    ],
+    "$pressed_button_name": "button.playback_record_cancel",
+    "$button_content": "pause.playback_record_cancel_icon",
+    "$pressed_alpha": 0.65
+  },
+  "playback_record_toggle_with_tooltip": {
+    "type": "panel",
+    "size": [
+      24,
+      24
+    ],
+    "controls": [
+      {
+        "button@pause.playback_record_toggle_button": {}
+      },
+      {
+        "tooltip_trigger@pause.icon_button_tooltip_trigger": {
+          "$tooltip_text": "playback.recordControls.tooltip.toggle"
+        }
+      }
+    ]
+  },
+  "playback_record_finish_with_tooltip": {
+    "type": "panel",
+    "size": [
+      24,
+      24
+    ],
+    "controls": [
+      {
+        "button@pause.playback_record_finish_button": {}
+      },
+      {
+        "tooltip_trigger@pause.icon_button_tooltip_trigger": {
+          "$tooltip_text": "playback.recordControls.tooltip.finish"
+        }
+      }
+    ]
+  },
+  "playback_record_cancel_with_tooltip": {
+    "type": "panel",
+    "size": [
+      24,
+      24
+    ],
+    "controls": [
+      {
+        "button@pause.playback_record_cancel_button": {}
+      },
+      {
+        "tooltip_trigger@pause.icon_button_tooltip_trigger": {
+          "$tooltip_text": "playback.recordControls.tooltip.cancel"
+        }
+      }
+    ]
+  },
+  "playback_record_row_slot": {
+    "type": "panel",
+    "size": [
+      "100%c + 4px",
+      32
+    ],
+    "$playback_slot_binding|default": "#playback_record_controls_visible",
+    "bindings": [
+      {
+        "binding_name": "$playback_slot_binding",
+        "binding_name_override": "#visible",
+        "binding_type": "global"
+      }
+    ]
+  },
+  "playback_record_row_padding": {
+    "type": "panel",
+    "size": [
+      "2%",
+      0
+    ],
+    "$playback_slot_binding|default": "#playback_record_controls_visible",
+    "bindings": [
+      {
+        "binding_name": "$playback_slot_binding",
+        "binding_name_override": "#visible",
+        "binding_type": "global"
+      }
+    ]
+  },
+  "smaller_buttons_panel/stacked_column": {
+    "modifications": [
+      {
+        "array_name": "controls",
+        "operation": "insert_before",
+        "control_name": "fill_3",
+        "value": [
+          {
+            "playback_record_toggle_slot@pause.playback_record_row_slot": {
+              "controls": [
+                {
+                  "toggle@pause.playback_record_toggle_with_tooltip": {}
+                }
+              ]
+            }
+          },
+          {
+            "playback_record_toggle_padding@pause.playback_record_row_padding": {}
+          },
+          {
+            "playback_record_finish_slot@pause.playback_record_row_slot": {
+              "$playback_slot_binding": "#playback_record_active",
+              "controls": [
+                {
+                  "finish@pause.playback_record_finish_with_tooltip": {}
+                }
+              ]
+            }
+          },
+          {
+            "playback_record_finish_padding@pause.playback_record_row_padding": {
+              "$playback_slot_binding": "#playback_record_active"
+            }
+          },
+          {
+            "playback_record_cancel_slot@pause.playback_record_row_slot": {
+              "$playback_slot_binding": "#playback_record_active",
+              "controls": [
+                {
+                  "cancel@pause.playback_record_cancel_with_tooltip": {}
+                }
+              ]
+            }
+          },
+          {
+            "playback_record_cancel_padding@pause.playback_record_row_padding": {
+              "$playback_slot_binding": "#playback_record_active"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

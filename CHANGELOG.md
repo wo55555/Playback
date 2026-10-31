@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added multi-select for keyframes: Ctrl+click, box select on empty canvas and Ctrl+A. Selected keyframes move, delete, copy, paste and change interpolation together.
 - Holding Shift while dragging snaps to keyframes, markers, segment edges, the playhead and the export range.
 - Markers can be added with M or from the ruler menu, dragged, renamed and deleted. `[` and `]` jump between them.
+- Added recording controls to the small icon row of the pause menu: start or resume, pause, finish and cancel.
+- Finishing a recording shows a save dialog with a name input that defaults to the timestamp, plus save and delete actions. Deleting and cancelling ask for confirmation first. Escape cannot dismiss the save dialog, so a finished recording cannot be dropped by accident. Starting a new recording while one is still waiting for a name saves it under its timestamp name first.
+- Added a top-right recording indicator that shows the recording state and elapsed time. `/record indicator [on|off]` shows or hides it. It never appears in replays, the editor, exported videos or recording thumbnails.
 
 ### Changed
 
