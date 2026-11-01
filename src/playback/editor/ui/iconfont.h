@@ -54,6 +54,7 @@ namespace Playback::ReplayEditor::Icons {
 #define ICON_RESET        "\ue148" // rotate-ccw
 #define ICON_CAMERA       "\ue1a5" // video
 #define ICON_VIDEO        "\ue1a5" // video
+#define ICON_USER         "\ue19f" // user
 #define ICON_SETTINGS     "\ue30b" // cog
 #define ICON_REFRESH      "\ue145" // refresh-cw
 #define ICON_HELP         "\ue082" // help-circle

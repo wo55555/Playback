@@ -13,19 +13,12 @@ namespace playback::state::editing::command {
 
 class CommandFactory {
 public:
-    static std::unique_ptr<model::IEditCommand> createAddCameraSequence();
-    static std::unique_ptr<model::IEditCommand> createDeleteCameraSequence();
-    static std::unique_ptr<model::IEditCommand> createSplitSequence(int atTick);
-    static std::unique_ptr<model::IEditCommand> createTrimSequence(const std::string& id, int start, int end);
-    static std::unique_ptr<model::IEditCommand> createDeleteSequenceSegment(const std::string& id);
-    static std::unique_ptr<model::IEditCommand> createMergeSequenceSegment(const std::string& id, bool withNext);
-    static std::unique_ptr<model::IEditCommand>
-    createBindSequenceToCamera(const std::string& id, const std::string& cameraId);
     static std::unique_ptr<model::IEditCommand> createSplitWorldActor(int tick);
     static std::unique_ptr<model::IEditCommand> createTrimWorldActor(const std::string& id, int start, int end);
 
     static std::unique_ptr<model::IEditCommand> createRippleDeleteWorldActorSegment(const std::string& id);
-    static std::unique_ptr<model::IEditCommand> createAddFreeCamera(const std::string& name);
+    static std::unique_ptr<model::IEditCommand>
+    createAddFreeCamera(const std::string& name, model::CameraTrackKind kind);
     static std::unique_ptr<model::IEditCommand> createDeleteCamera(const std::string& id);
     static std::unique_ptr<model::IEditCommand>
     createCreateBindingCamera(const std::string& id, const std::string& name);
@@ -43,6 +36,8 @@ public:
     static std::unique_ptr<model::IEditCommand>
     createSetCameraKeyframeRotation(const std::string& id, int tick, model::Vec3 rotation);
     static std::unique_ptr<model::IEditCommand> createSetCameraKeyframeFov(const std::string& id, int tick, float fov);
+    static std::unique_ptr<model::IEditCommand>
+    createSetCameraKeyframeSubject(const std::string& id, int tick, const std::string& subject);
     static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
     static std::unique_ptr<model::IEditCommand> createSetCameraLocked(const std::string& id, bool locked);
     static std::unique_ptr<model::IEditCommand> createRenameCamera(const std::string& id, const std::string& name);

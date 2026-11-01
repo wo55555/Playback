@@ -7,7 +7,6 @@
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
-#include "playback/state/editing/models/SequenceSegment.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
@@ -309,11 +308,14 @@ LL_TYPE_INSTANCE_HOOK(
             ScopedTimerOverride                         timerOverride(timer, sample->sample);
             ScopedRenderSample                          renderSample(sample->token, sample->renderSerial);
             keyframe::ScopedCameraTimelineRenderContext cameraContext(sample->cameraContext);
-            // A first-person segment renders from inside the subject, so its model hides for exactly these frames.
-            bool const firstPerson = sample->cameraContext && sample->cameraContext->sample
-                                  && sample->cameraContext->sample->cameraId
-                                         == state::editing::model::kFirstPersonCameraId;
+            // A first-person track renders from inside the subject, so its model hides for exactly these frames.
+            // A third-person track keeps the model, like vanilla F5.
+            auto const kind = sample->cameraContext && sample->cameraContext->sample
+                                ? sample->cameraContext->sample->kind
+                                : state::editing::model::CameraTrackKind::Keyframe;
+            bool const firstPerson = kind == state::editing::model::CameraTrackKind::FirstPerson;
             visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Export, firstPerson);
+            visuals::setReplaySubjectThirdPerson(kind == state::editing::model::CameraTrackKind::ThirdPerson);
             // The hand and sleep-vignette hooks read the view weight sampled for the frame being drawn.
             if (firstPerson) (void)visuals::sampleReplaySubjectViewWeight(sample->sample.replayTime);
             auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
