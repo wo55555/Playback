@@ -1,7 +1,5 @@
 ﻿#include "CameraBindingOps.h"
 
-#include "SequenceOps.h"
-
 #include "ll/api/i18n/I18n.h"
 
 #include <algorithm>
@@ -33,9 +31,11 @@ model::SubActor* findSubActor(model::EditorStateExt& state, std::string const& i
 }
 
 // Counting cameras would reuse a name after a delete, so probe upwards until the name is free.
-std::string defaultCameraName(model::EditorStateExt const& state) {
+std::string defaultCameraName(model::EditorStateExt const& state, model::CameraTrackKind kind) {
     for (size_t next = state.cameras.size() + 1;; ++next) {
-        auto name = "playback.refactorEditor.defaults.camera"_tr(next);
+        auto name = kind == model::CameraTrackKind::FirstPerson ? "playback.refactorEditor.defaults.firstPersonCamera"_tr(next)
+                  : kind == model::CameraTrackKind::ThirdPerson ? "playback.refactorEditor.defaults.thirdPersonCamera"_tr(next)
+                                                                : "playback.refactorEditor.defaults.camera"_tr(next);
         if (std::none_of(state.cameras.begin(), state.cameras.end(), [&name](auto const& camera) {
                 return camera.name == name;
             })) {
@@ -46,10 +46,11 @@ std::string defaultCameraName(model::EditorStateExt const& state) {
 } // namespace
 
 
-std::string addFreeCamera(model::EditorStateExt& state, std::string const& name) {
+std::string addFreeCamera(model::EditorStateExt& state, std::string const& name, model::CameraTrackKind kind) {
     model::CameraEntity camera;
     camera.id   = makeCameraId(state);
-    camera.name = name.empty() ? defaultCameraName(state) : name;
+    camera.kind = kind;
+    camera.name = name.empty() ? defaultCameraName(state, kind) : name;
     state.cameras.push_back(camera);
     return camera.id;
 }
@@ -100,7 +101,6 @@ bool deleteCamera(model::EditorStateExt& state, std::string const& cameraId) {
             actor.boundCameraIds.end()
         );
     }
-    SequenceOps::clearDanglingRefs(state.sequence, cameraId);
     state.cameras.erase(it);
     return true;
 }

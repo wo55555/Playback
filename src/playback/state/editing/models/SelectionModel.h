@@ -1,7 +1,6 @@
 ﻿#pragma once
 
 #include "CameraKeyframe.h"
-#include "SequenceSegment.h"
 #include "SubActor.h"
 #include "Track.h"
 
@@ -34,10 +33,6 @@ struct SelectedTransition {
     std::string transitionId;
 };
 
-struct SelectedSequence {};
-struct SelectedSequenceSegment {
-    std::string segmentId;
-};
 struct SelectedWorldActor {};
 struct SelectedWorldActorSegment {
     std::string segmentId;
@@ -55,8 +50,6 @@ using Selection = std::variant<
     SelectedMarker,
     SelectedTrack,
     SelectedTransition,
-    SelectedSequence,
-    SelectedSequenceSegment,
     SelectedWorldActor,
     SelectedWorldActorSegment,
     SelectedSubActor,
