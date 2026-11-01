@@ -25,8 +25,6 @@ public:
 
 private:
     keyframe::CameraTimelineHandle mTimeline;
-    bool                           mSubjectChoiceSaved{false};
-    std::string                    mSavedSubjectChoice;
 };
 
 } // namespace playback::exporting

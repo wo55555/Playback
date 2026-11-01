@@ -39,6 +39,8 @@ struct EditorState {
     bool                                                         followingRecordedPlayer{};
     bool                                                         followThirdPerson{};
     std::string                                                  replaySubjectChoice;
+    // The camera track under the playhead, if any.
+    std::string                                                  activeCameraId;
     std::vector<ReplayPlayerView>                                replayPlayers;
     float                                                        playbackSpeed{1.0f};
     int                                                          currentTick{};
