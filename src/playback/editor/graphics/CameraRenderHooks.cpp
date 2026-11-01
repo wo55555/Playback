@@ -574,8 +574,8 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept 
 
     auto const clear = [] { keyframe::setPreviewCameraApplied(false); };
 
-    // Following leaves the camera to the vanilla view from the observer parked on the recorded player.
-    if (replay.isFollowingRecordedPlayer()) {
+    // Following (the user's or a person camera track's) leaves the camera to the observer parked on the subject.
+    if (replay.isFollowViewActive()) {
         gPausedAppliedPose.reset();
         gPausedFov.reset();
         gParkedObserverCamera.reset();
@@ -654,24 +654,12 @@ LL_TYPE_INSTANCE_HOOK(
     struct FollowCameraReset {
         ~FollowCameraReset() { gFollowCamera.reset(); }
     } followCameraReset;
-    // A first-person sequence segment renders from inside the subject, paused or not, so it hides for these frames.
-    bool const firstPerson = [&] {
-        if (replay.isFollowingRecordedPlayer()) return false;
-        auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
-        auto const time     = replay.getCameraRenderSampleTime();
-        return timeline && time && timeline->isFirstPersonAt(time->floorTick());
-    }();
-    setPreviewSubjectHidden(firstPerson);
-    if (firstPerson) {
-        // Like the follow view, the hand and sleep-vignette hooks read the weight sampled at entity time.
-        auto time = replay.getEntityRenderSampleTime();
-        if (!time) time = replay.getCameraRenderSampleTime();
-        if (time) (void)visuals::sampleReplaySubjectViewWeight(*time);
-    }
+    // Person camera tracks render through the follow view, which hides the subject itself.
+    setPreviewSubjectHidden(false);
     auto pose = [&]() -> std::unique_ptr<visuals::ScopedReplayEntityPose> {
         auto time = replay.getEntityRenderSampleTime();
         // Tick 0 has no entity sample yet, but the followed player must already be hidden and its hands drawn.
-        if (!time && (replay.isFollowingRecordedPlayer() || firstPerson)) time = replay.getCameraRenderSampleTime();
+        if (!time && replay.isFollowViewActive()) time = replay.getCameraRenderSampleTime();
         return time ? replay.createReplayEntityRenderScope(*time) : nullptr;
     }();
 

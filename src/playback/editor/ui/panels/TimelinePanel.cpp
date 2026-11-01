@@ -130,10 +130,6 @@ void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward)
         }
     };
 
-    for (auto const& segment : project->sequence) {
-        consider(segment.startTick);
-        consider(segment.endTick);
-    }
     for (auto const& segment : project->worldActor.segments) {
         consider(segment.startTick);
         consider(segment.endTick);
@@ -215,10 +211,6 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
         action.type = EditorActionType::DeleteCameraKeyframe;
         action.id   = selectedKeyframe->trackId;
         action.tick = selectedKeyframe->tick;
-    } else if (auto const* selectedSegment = ctx.selection.getAs<state::editing::model::SelectedSequenceSegment>();
-               selectedSegment && project->sequence.size() > 1) {
-        action.type = EditorActionType::DeleteSequenceSegment;
-        action.id   = selectedSegment->segmentId;
     } else {
         return false;
     }
@@ -361,10 +353,6 @@ int TimelinePanel::snapToEditPoints(
     }
     for (auto const& marker : project->markers) {
         if (marker.id != skipMarkerId) consider(marker.tick);
-    }
-    for (auto const& segment : project->sequence) {
-        consider(segment.startTick);
-        consider(segment.endTick);
     }
     if (includePlayhead) consider(mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick);
     if (includeExportRange) {
@@ -634,17 +622,18 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         widgets::openAnchoredPopup("##timeline-add-menu");
     if (widgets::beginAnchoredPopup("##timeline-add-menu")) {
         // An empty name lets the ops layer pick the next free localized default.
-        if (ImGui::MenuItem("playback.refactorEditor.details.addFreeCamera"_tr().c_str())) {
-            ctx.submitAction({EditorActionType::AddFreeCamera});
-        }
-        // One switch lane per project: it spans the replay and is split into per-camera ranges.
-        if (ImGui::MenuItem(
-                "playback.refactorEditor.timeline.addSequenceTrack"_tr().c_str(),
-                nullptr,
-                false,
-                project && project->sequence.empty()
-            )) {
-            ctx.submitAction({EditorActionType::AddCameraSequence});
+        // The action kind picks the track kind: keyframe, first person or third person.
+        std::string const labels[] = {
+            "playback.refactorEditor.details.addFreeCamera"_tr(),
+            "playback.refactorEditor.timeline.addFirstPersonTrack"_tr(),
+            "playback.refactorEditor.timeline.addThirdPersonTrack"_tr(),
+        };
+        for (int kind = 0; kind < static_cast<int>(std::size(labels)); ++kind) {
+            if (ImGui::MenuItem(labels[kind].c_str())) {
+                EditorAction action{EditorActionType::AddFreeCamera};
+                action.kind = kind;
+                ctx.submitAction(std::move(action));
+            }
         }
         widgets::endAnchoredPopup();
     }
@@ -686,8 +675,6 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
 
     auto const* selectedCamera   = ctx.selection.getAs<state::editing::model::SelectedCamera>();
     auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
-    bool const  sequenceSelected = ctx.selection.getAs<state::editing::model::SelectedSequence>()
-                               || ctx.selection.getAs<state::editing::model::SelectedSequenceSegment>();
     float       rowY             = layout.bodyTop - mScrollY;
     for (auto const& row : mTrackTree.rows()) {
         float const rowBottom = rowY + row.height;
@@ -695,11 +682,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             rowY = rowBottom;
             continue;
         }
-        bool const sequenceRow = row.kind == TrackRowKind::Sequence;
-        bool const selected    = sequenceRow ? sequenceSelected
-                                             : !row.cameraId.empty()
-                                            && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
-                                                || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId));
+        bool const selected = !row.cameraId.empty()
+                           && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
+                               || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId));
 
         ImGui::SetCursorScreenPos({listLeft, rowY});
         ImGui::InvisibleButton(("##track-row-" + row.id).c_str(), {listW, row.height});
@@ -726,9 +711,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 1.0f
             );
         }
-        ImU32 const swatch = sequenceRow  ? theme::kAccent
-                           : row.enabled ? theme::trackColor(row.cameraIndex)
-                                         : theme::kTrackDisabled;
+        ImU32 const swatch = row.enabled ? theme::trackColor(row.cameraIndex) : theme::kTrackDisabled;
         drawList->AddRectFilled(
             {listLeft, rowY},
             {listLeft + metrics::trackSwatch(), rowBottom},
@@ -739,43 +722,19 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         float       labelX = listLeft + indent;
 
         ImU32 const textColor = row.enabled ? theme::kText : theme::kTextDim;
-        std::string label     = sequenceRow ? "playback.refactorEditor.timeline.sequenceTrack"_tr() : row.name;
+        std::string const& label = row.name;
         // Text centres on the fractional row, then the icon centres on the text's optical middle.
         float const rowCentre = (rowY + rowBottom) * 0.5f;
         float const textY     = widgets::textYForCentre(rowCentre, label.c_str());
         float const iconBox   = metrics::iconGlyph();
         widgets::drawIconAtCentre(
             drawList,
-            sequenceRow ? ICON_TRANSITION : ICON_CAMERA,
+            row.trackKind == state::editing::model::CameraTrackKind::Keyframe ? ICON_CAMERA : ICON_USER,
             {labelX + iconBox * 0.5f, widgets::textInkCentre(textY, label.c_str())},
             textColor
         );
         labelX += iconBox + metrics::gutter() * 0.5f;
         drawList->AddText({labelX, textY}, textColor, label.c_str());
-
-        if (sequenceRow) {
-            float const  controlWidth = metrics::iconGlyph();
-            float const  deleteX      = listLeft + listW - controlWidth - metrics::gutter();
-            ImVec2 const mouse        = ImGui::GetMousePos();
-            bool const   deleteHovered = contains({deleteX, rowY}, {deleteX + controlWidth, rowBottom}, mouse);
-            if (deleteHovered) widgets::hoverTooltip("playback.refactorEditor.timeline.deleteSequenceTrack"_tr().c_str());
-            if (allowInput && deleteHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                ctx.submitAction({EditorActionType::DeleteCameraSequence});
-                ctx.selection.clear();
-            } else if (clicked) {
-                ctx.selection.select(state::editing::model::SelectedSequence{});
-            } else if (rowRightClicked && !deleteHovered) {
-                ctx.selection.select(state::editing::model::SelectedSequence{});
-                mTrackMenuSequence = true;
-                widgets::openAnchoredPopup("##timeline-track-menu");
-            }
-            widgets::drawIconAtCentre(
-                drawList,
-                ICON_TRASH,
-                {deleteX + controlWidth * 0.5f, rowCentre},
-                deleteHovered ? theme::kIconHighlight : theme::kIconInactive
-            );
-        }
 
         if (row.kind == TrackRowKind::Camera) {
             float const  controlWidth = metrics::iconGlyph();
@@ -816,7 +775,6 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             } else if (rowRightClicked && mouse.x < eyeX) {
                 ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
                 mTrackMenuCameraId = row.cameraId;
-                mTrackMenuSequence = false;
                 widgets::openAnchoredPopup("##timeline-track-menu");
             }
         }
@@ -947,139 +905,6 @@ void TimelinePanel::drawExportRange(
     else ctx.commands.setExportEndTick(std::max(dragged, inTick));
 }
 
-void TimelinePanel::drawSequenceLane(
-    PanelContext const&  ctx,
-    Layout const&        layout,
-    TimelineScale const& scale,
-    float                top,
-    float                bottom,
-    bool                 allowInput,
-    bool&                clickConsumed
-) {
-    auto const project = ctx.state.project;
-    if (!project || project->sequence.empty()) return;
-    auto const& segments = project->sequence;
-    auto*       drawList = ImGui::GetWindowDrawList();
-    ImVec2 const mouse   = ImGui::GetMousePos();
-    float const  inset   = 3.0f * metrics::scale();
-    float const  edgeHit = 4.0f * metrics::scale();
-    bool const   inLane  = mouse.y >= top + inset && mouse.y <= bottom - inset && mouse.x >= layout.canvasLeft
-                        && mouse.x <= layout.fullMax.x;
-    auto const* selected = ctx.selection.getAs<state::editing::model::SelectedSequenceSegment>();
-
-    if (!allowInput) mSequenceDragId.clear();
-    // Only the boundary between two segments moves; the outer ends are pinned to the replay start and end.
-    auto const dragIndex = [&]() -> int {
-        if (mSequenceDragId.empty()) return -1;
-        auto const it = std::ranges::find(segments, mSequenceDragId, &state::editing::model::SequenceSegment::id);
-        return it == segments.end() || std::next(it) == segments.end() ? -1
-                                                                         : static_cast<int>(it - segments.begin());
-    }();
-    if (dragIndex < 0) mSequenceDragId.clear();
-
-    auto const boundaryTick = [&](size_t index, bool end) {
-        int tick = end ? segments[index].endTick : segments[index].startTick;
-        if (dragIndex >= 0) {
-            if (end && static_cast<int>(index) == dragIndex) tick = mSequenceDragTick;
-            if (!end && static_cast<int>(index) == dragIndex + 1) tick = mSequenceDragTick;
-        }
-        return tick;
-    };
-
-    bool hoverEdge = false;
-    for (size_t index = 0; index < segments.size(); ++index) {
-        auto const& segment = segments[index];
-        float const left    = std::max(layout.canvasLeft, scale.xAt(static_cast<float>(boundaryTick(index, false))));
-        float const right   = std::min(layout.fullMax.x, scale.xAt(static_cast<float>(boundaryTick(index, true))));
-        if (right <= left) continue;
-
-        std::string label;
-        ImU32       color = theme::kAutoSegment;
-        if (segment.cameraId == state::editing::model::kFirstPersonCameraId) {
-            label = "playback.refactorEditor.timeline.firstPersonCamera"_tr();
-            color = theme::kFirstPersonSegment;
-        } else if (auto const camera =
-                       std::ranges::find(project->cameras, segment.cameraId, &state::editing::model::CameraEntity::id);
-                   !segment.cameraId.empty() && camera != project->cameras.end()) {
-            label = camera->name;
-            color = camera->enabled ? theme::trackColor(static_cast<int>(camera - project->cameras.begin()))
-                                    : theme::kTrackDisabled;
-        } else {
-            label = "playback.refactorEditor.timeline.autoCamera"_tr();
-        }
-
-        bool const  isSelected = selected && selected->segmentId == segment.id;
-        float const amount     = mAnimator.animate("sequence-selected", segment.id, isSelected ? 1.0f : 0.0f);
-        ImVec2 const minimum{left + 1.0f, top + inset};
-        ImVec2 const maximum{right - 1.0f, bottom - inset};
-        float const  rounding = 3.0f * metrics::scale();
-        drawList->AddRectFilled(
-            minimum,
-            maximum,
-            lerpColor(theme::withAlpha(color, 0x70), theme::withAlpha(color, 0xb0), amount),
-            rounding
-        );
-        drawList->AddRect(
-            minimum,
-            maximum,
-            lerpColor(theme::withAlpha(color, 0xd0), theme::kIconHighlight, amount),
-            rounding,
-            0,
-            1.0f
-        );
-        float const textY = widgets::textYForCentre((top + bottom) * 0.5f, label.c_str());
-        drawList->PushClipRect(minimum, maximum, true);
-        drawList->AddText({minimum.x + metrics::gutter(), textY}, theme::kText, label.c_str());
-        drawList->PopClipRect();
-
-        // The right edge of every segment but the last is a shared boundary that trims both neighbours.
-        bool const movable = index + 1 < segments.size() && !segment.locked && !segments[index + 1].locked;
-        bool const nearEdge = movable && inLane && std::abs(mouse.x - right) <= edgeHit;
-        if (nearEdge || (dragIndex == static_cast<int>(index))) {
-            hoverEdge = true;
-            drawList->AddLine({right, top + inset}, {right, bottom - inset}, theme::kIconHighlight, 2.0f);
-        }
-        if (allowInput && !clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && nearEdge) {
-            clickConsumed     = true;
-            mSequenceDragId   = segment.id;
-            mSequenceDragEnd  = true;
-            mSequenceDragTick = segment.endTick;
-            continue;
-        }
-        bool const overSegment = allowInput && !clickConsumed && inLane && mouse.x > left && mouse.x < right;
-        bool const openMenu    = overSegment
-                              && ((ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !nearEdge)
-                                  || ImGui::IsMouseClicked(ImGuiMouseButton_Right));
-        if (openMenu) {
-            clickConsumed = true;
-            ctx.selection.select(state::editing::model::SelectedSequenceSegment{segment.id});
-            // The preview follows the switch lane only while no single camera is pinned.
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) ctx.submitAction({EditorActionType::ClearPreviewCamera});
-            mSequenceMenuSegmentId = segment.id;
-            mSequenceMenuTick      = std::clamp(scale.tickAt(mouse.x), 0, ctx.state.totalTicks);
-            widgets::openAnchoredPopup("##sequence-segment-menu", minimum, maximum);
-        }
-    }
-    if (hoverEdge) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-
-    if (dragIndex < 0) return;
-    auto const& left  = segments[static_cast<size_t>(dragIndex)];
-    auto const& right = segments[static_cast<size_t>(dragIndex) + 1];
-    int         tick  = std::clamp(scale.tickAt(mouse.x), 0, ctx.state.totalTicks);
-    if (mSnapEnabled) tick = static_cast<int>(std::round(static_cast<float>(tick) / kTicksPerSecond)) * kTicksPerSecond;
-    // Both neighbours keep at least one tick.
-    mSequenceDragTick = std::clamp(tick, left.startTick + 1, std::max(left.startTick + 1, right.endTick - 1));
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) return;
-    if (mSequenceDragTick != left.endTick) {
-        EditorAction action{EditorActionType::TrimSequence};
-        action.id   = left.id;
-        action.tick = left.startTick;
-        action.kind = mSequenceDragTick;
-        ctx.submitAction(std::move(action));
-    }
-    mSequenceDragId.clear();
-}
-
 void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
     auto const project = ctx.state.project;
     using CameraInterpolationType = state::editing::model::CameraInterpolationType;
@@ -1194,7 +1019,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     "playback.refactorEditor.timeline.applyKeyframe"_tr().c_str(),
                     nullptr,
                     false,
-                    ctx.state.replayVisible
+                    ctx.state.replayVisible && camera->kind == state::editing::model::CameraTrackKind::Keyframe
                 )) {
                 ctx.selection.clear();
                 EditorAction action{EditorActionType::MoveViewToKeyframe};
@@ -1207,6 +1032,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     nullptr,
                     false,
                     state::editing::model::isCameraRenderable(*camera)
+                        && camera->kind == state::editing::model::CameraTrackKind::Keyframe
                 )) {
                 EditorAction action{EditorActionType::SetPreviewCamera};
                 action.id = camera->id;
@@ -1273,12 +1099,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
     }
 
     if (widgets::beginAnchoredPopup("##timeline-track-menu")) {
-        if (mTrackMenuSequence) {
-            if (ImGui::MenuItem("playback.refactorEditor.timeline.deleteSequenceTrack"_tr().c_str())) {
-                ctx.submitAction({EditorActionType::DeleteCameraSequence});
-                ctx.selection.clear();
-            }
-        } else {
+        {
             state::editing::model::CameraEntity const* camera = nullptr;
             if (project) {
                 auto const found =
@@ -1344,6 +1165,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                         nullptr,
                         false,
                         state::editing::model::isCameraRenderable(*camera)
+                            && camera->kind == state::editing::model::CameraTrackKind::Keyframe
                     )) {
                     EditorAction action{EditorActionType::SetPreviewCamera};
                     action.id = camera->id;
@@ -1456,124 +1278,6 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
         }
         widgets::endAnchoredPopup();
     }
-}
-
-void TimelinePanel::drawSequenceSegmentMenu(PanelContext const& ctx) {
-    if (!widgets::beginAnchoredPopup("##sequence-segment-menu")) return;
-    auto const project = ctx.state.project;
-    if (!project) {
-        ImGui::CloseCurrentPopup();
-        widgets::endAnchoredPopup();
-        return;
-    }
-    auto const segment =
-        std::ranges::find(project->sequence, mSequenceMenuSegmentId, &state::editing::model::SequenceSegment::id);
-    // An undo can remove the segment while its menu is open.
-    if (segment == project->sequence.end()) {
-        ImGui::CloseCurrentPopup();
-        widgets::endAnchoredPopup();
-        return;
-    }
-
-    auto const bind = [&](std::string cameraId) {
-        EditorAction action{EditorActionType::BindSequenceCamera};
-        action.id          = segment->id;
-        action.secondaryId = std::move(cameraId);
-        ctx.submitAction(std::move(action));
-    };
-    bool const editable = !segment->locked;
-    ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.sequenceCameraHeader"_tr().c_str());
-    if (ImGui::MenuItem(
-            "playback.refactorEditor.timeline.autoCamera"_tr().c_str(),
-            nullptr,
-            segment->cameraId.empty(),
-            editable
-        )) {
-        bind({});
-    }
-    if (ImGui::MenuItem(
-            "playback.refactorEditor.timeline.firstPersonCamera"_tr().c_str(),
-            nullptr,
-            segment->cameraId == state::editing::model::kFirstPersonCameraId,
-            editable
-        )) {
-        bind(std::string{state::editing::model::kFirstPersonCameraId});
-    }
-    if (segment->cameraId == state::editing::model::kFirstPersonCameraId) {
-        std::string const subject = playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replaySubjectChoice);
-        ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.firstPersonSubject"_tr(subject).c_str());
-        if (ImGui::IsItemHovered()) {
-            widgets::hoverTooltip("playback.refactorEditor.timeline.subjectShared"_tr().c_str());
-        }
-        // The subject list lives in the inspector, where it has room for full names.
-        if (ImGui::MenuItem("playback.refactorEditor.timeline.changeSubject"_tr().c_str())) {
-            ImGui::CloseCurrentPopup();
-            ctx.selection.select(state::editing::model::SelectedSequenceSegment{segment->id});
-            ctx.commands.focusFirstPersonSubject();
-        }
-    }
-    if (!project->cameras.empty()) ImGui::Separator();
-    for (auto const& camera : project->cameras) {
-        ImGui::PushID(camera.id.c_str());
-        if (ImGui::MenuItem(camera.name.c_str(), nullptr, segment->cameraId == camera.id, editable)) bind(camera.id);
-        ImGui::PopID();
-    }
-
-    ImGui::Separator();
-    int const  playhead = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
-    bool const canSplit = std::ranges::any_of(project->sequence, [&](auto const& value) {
-        return playhead > value.startTick && playhead < value.endTick && !value.locked;
-    });
-    bool const canSplitHere =
-        editable && mSequenceMenuTick > segment->startTick && mSequenceMenuTick < segment->endTick;
-    if (ImGui::MenuItem("playback.refactorEditor.timeline.splitHere"_tr().c_str(), nullptr, false, canSplitHere)) {
-        EditorAction action{EditorActionType::SplitSequence};
-        action.tick = mSequenceMenuTick;
-        ctx.submitAction(std::move(action));
-    }
-    auto const index = static_cast<size_t>(segment - project->sequence.begin());
-    bool const canMergePrevious = index > 0 && editable && !project->sequence[index - 1].locked;
-    bool const canMergeNext =
-        index + 1 < project->sequence.size() && editable && !project->sequence[index + 1].locked;
-    if (ImGui::MenuItem(
-            "playback.refactorEditor.timeline.mergeWithPrevious"_tr().c_str(),
-            nullptr,
-            false,
-            canMergePrevious
-        )) {
-        EditorAction action{EditorActionType::MergeSequenceSegment};
-        action.id = segment->id;
-        ctx.submitAction(std::move(action));
-        ctx.selection.clear();
-    }
-    if (ImGui::MenuItem(
-            "playback.refactorEditor.timeline.mergeWithNext"_tr().c_str(),
-            nullptr,
-            false,
-            canMergeNext
-        )) {
-        EditorAction action{EditorActionType::MergeSequenceSegment};
-        action.id   = segment->id;
-        action.kind = 1;
-        ctx.submitAction(std::move(action));
-    }
-    if (ImGui::MenuItem("playback.refactorEditor.timeline.splitAtPlayhead"_tr().c_str(), nullptr, false, canSplit)) {
-        EditorAction action{EditorActionType::SplitSequence};
-        action.tick = playhead;
-        ctx.submitAction(std::move(action));
-    }
-    if (ImGui::MenuItem(
-            "playback.refactorEditor.timeline.deleteSegment"_tr().c_str(),
-            nullptr,
-            false,
-            editable && project->sequence.size() > 1
-        )) {
-        EditorAction action{EditorActionType::DeleteSequenceSegment};
-        action.id = segment->id;
-        ctx.submitAction(std::move(action));
-        ctx.selection.clear();
-    }
-    widgets::endAnchoredPopup();
 }
 
 void TimelinePanel::drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput) {
@@ -1963,12 +1667,6 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         drawList->AddLine({layout.canvasLeft, rowBottom}, {layout.fullMax.x, rowBottom}, IM_COL32(0, 0, 0, 64));
         ++bandIndex;
 
-        if (row.kind == TrackRowKind::Sequence) {
-            drawSequenceLane(ctx, layout, scale, y, rowBottom, allowInput, clickConsumed);
-            y = rowBottom;
-            continue;
-        }
-
         if (row.cameraIndex >= 0 && row.cameraIndex < static_cast<int>(project->cameras.size())) {
             auto const& camera = project->cameras[row.cameraIndex];
             bool const  cameraSelected =
@@ -2105,7 +1803,6 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
 
     drawTrackGrid(ctx, layout, scale);
     drawExportRange(ctx, layout, scale, allowInput);
-    drawSequenceSegmentMenu(ctx);
     drawContextMenus(ctx);
 
     // Shift snaps a drag onto nearby edit points; otherwise the whole-second grid applies when enabled.

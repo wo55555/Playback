@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added a camera switch track to the editor timeline. Each segment uses the auto camera, a keyframed camera or the first-person view of the chosen player, and preview and export follow it. Segments can be split, merged, rebound and deleted from their right-click menu.
-- Added a searchable player list for choosing the first-person subject in the viewport and the timeline. Export uses the subject chosen there. Selecting a camera switch segment shows its range, camera and the full-width player list in the inspector.
+- Added first-person and third-person camera tracks next to keyframe tracks. A person track views a replay player from its first key to its last, and each key picks the player from the inspector's searchable list. Where tracks overlap, the highest track in the list plays, in preview and in export. The viewport camera chip names the track that is playing.
+- Added a searchable player list for choosing which player to follow in the viewport.
 - Added right-click menus for keyframes, empty lanes, track headers and the ruler on the timeline.
 - Tapping Shift on its own while following a player now stops following.
-- Added a third-person follow view, toggled with F5 or from the viewport camera menu. A sleeping subject still shows its first-person bed view.
+- Added a third-person follow view, toggled with F5 while following a player. A sleeping subject still shows its first-person bed view.
 - Camera tracks can be renamed, locked and cleared from their right-click menu, and a keyframe's menu can move the free camera to its pose.
 - Added multi-select for keyframes: Ctrl+click, box select on empty canvas and Ctrl+A. Selected keyframes move, delete, copy, paste and change interpolation together.
 - Holding Shift while dragging snaps to keyframes, markers, segment edges, the playhead and the export range.
@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The camera path overlay and the paused camera glyph only show for keyframe tracks.
+- The camera switch track was removed; switch track data in earlier editor projects is dropped. The project format version stays at `1`.
 - Dropdowns, popups and context menus in the editor now open under the control that opened them, with menu padding.
 
 ## [0.3.3-mc26.20] - 2026-10-11
