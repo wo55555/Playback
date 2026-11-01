@@ -60,6 +60,10 @@ enum class ReplayExportTickState : uint8_t { Unavailable, Waiting, Ready, Invali
 
 enum class ReplayExportTimelinePhase : uint8_t { Inactive, Initializing, Continuous };
 
+// None: no camera track under the playhead. Keyframe: a keyframe track drives the camera. Person: a first- or
+// third-person track follows its subject.
+enum class PreviewShotMode : uint8_t { None, Keyframe, Person };
+
 struct ReplayCameraViewpoint {
     float x{};
     float y{};
@@ -175,6 +179,12 @@ private:
     uint64_t                                    mPausedPreviewSeekCount{};
     std::atomic<bool>                           mFollowRecordedPlayer{false};
     std::atomic<bool>                           mFollowThirdPerson{false};
+    // The camera track the preview is on: a keyframe track suspends the user's follow, a person track follows its
+    // subject in its place.
+    std::atomic<PreviewShotMode>                mPreviewShotMode{PreviewShotMode::None};
+    std::atomic<bool>                           mShotThirdPerson{false};
+    bool                                        mFollowViewApplied{false};
+    bool                                        mFollowViewThirdApplied{false};
     bool                                        mTeleportToSubjectPending{false};
     std::optional<keyframe::CameraRenderState>  mPendingObserverPark;
     std::optional<keyframe::CameraRenderState>  mFollowHeldPose;
@@ -250,6 +260,8 @@ private:
     mutable std::mutex                                  mReplayPlayersMutex;
     std::unordered_map<std::string, ReplayPlayerRecord> mReplayPlayers;
     std::string                                         mReplaySubjectChoice;
+    // The subject a person camera track names; overrides the user's choice while set.
+    std::optional<std::string>                          mShotSubject;
     // Choice that already logged "not in this snapshot", so a missing player does not spam every tick.
     std::string                                         mReplaySubjectGapChoice;
     // Played ticks an entity choice has had no actor. A removed entity hands the view back to the
@@ -457,6 +469,11 @@ private:
     void restoreFollowedPlayerHud();
     void rebindReplaySubject();
     void refreshReplaySubjectBinding();
+    // Points the follow view at the preview camera track under the playhead. Export drives its own shots.
+    void updatePreviewShot();
+    void clearPreviewShot();
+    // Applies the hide and perspective state of the effective follow view when it changes.
+    void applyFollowView();
     // Actor id the current choice names: the recorder, a player uuid or an "entity:" id.
     [[nodiscard]] std::optional<ActorUniqueID> resolveReplaySubjectId(std::string const& choice) const;
     // Game-thread snapshot of the actors the editor can pick, read by the UI under its own mutex.
@@ -531,6 +548,26 @@ public:
         return mFollowThirdPerson.load(std::memory_order_acquire);
     }
 
+    // The follow view actually shown: a person camera track, or the user's follow when no track is active.
+    [[nodiscard]] bool isFollowViewActive() const noexcept {
+        auto const mode = mPreviewShotMode.load(std::memory_order_acquire);
+        return mode == PreviewShotMode::Person
+            || (mode == PreviewShotMode::None && mFollowRecordedPlayer.load(std::memory_order_acquire));
+    }
+
+    [[nodiscard]] bool isFollowViewThirdPerson() const noexcept {
+        return mPreviewShotMode.load(std::memory_order_acquire) == PreviewShotMode::Person
+                 ? mShotThirdPerson.load(std::memory_order_acquire)
+                 : mFollowThirdPerson.load(std::memory_order_acquire);
+    }
+
+    // Pins `subject` (empty is the recorder) as the replay subject for a person camera track; nullopt hands the
+    // subject back to the user's choice.
+    void setShotSubject(std::optional<std::string> subject);
+
+    // Pulls an eye pose back behind the subject like vanilla F5, stopping short of walls.
+    [[nodiscard]] keyframe::CameraRenderState thirdPersonView(keyframe::CameraRenderState const& eye) const;
+
     struct ReplayPlayerInfo {
         std::string uuid;
         std::string name;
@@ -541,7 +578,11 @@ public:
     // Empty uuid selects the recorded local player. The choice survives a seek and a missing actor.
     void setReplaySubjectChoice(std::string uuid);
 
+    // The subject actually bound: a person camera track's subject, else the user's choice.
     [[nodiscard]] std::string replaySubjectChoice() const;
+
+    // The user's own choice, shown by the pickers.
+    [[nodiscard]] std::string userReplaySubjectChoice() const;
 
     [[nodiscard]] std::vector<ReplayPlayerInfo> replayPlayers() const;
 

@@ -2,34 +2,11 @@
 
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
-#include "playback/state/editing/commands/SequenceCommands.h"
 #include "playback/state/editing/commands/SubActorCommands.h"
 #include "playback/state/editing/commands/WorldActorCommands.h"
 
 namespace playback::state::editing::command {
 
-std::unique_ptr<model::IEditCommand> CommandFactory::createAddCameraSequence() {
-    return std::make_unique<AddCameraSequence>();
-}
-std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteCameraSequence() {
-    return std::make_unique<DeleteCameraSequence>();
-}
-std::unique_ptr<model::IEditCommand> CommandFactory::createSplitSequence(int atTick) {
-    return std::make_unique<SplitSequenceAtPlayhead>(atTick);
-}
-std::unique_ptr<model::IEditCommand> CommandFactory::createTrimSequence(const std::string& id, int start, int end) {
-    return std::make_unique<TrimSequenceSegment>(id, start, end);
-}
-std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteSequenceSegment(const std::string& id) {
-    return std::make_unique<DeleteSequenceSegment>(id);
-}
-std::unique_ptr<model::IEditCommand> CommandFactory::createMergeSequenceSegment(const std::string& id, bool withNext) {
-    return std::make_unique<MergeSequenceSegment>(id, withNext);
-}
-std::unique_ptr<model::IEditCommand>
-CommandFactory::createBindSequenceToCamera(const std::string& id, const std::string& cameraId) {
-    return std::make_unique<BindSequenceToCamera>(id, cameraId);
-}
 std::unique_ptr<model::IEditCommand> CommandFactory::createSplitWorldActor(int tick) {
     return std::make_unique<SplitWorldActorAtPlayhead>(tick);
 }
@@ -40,8 +17,9 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createTrimWorldActor(const 
 std::unique_ptr<model::IEditCommand> CommandFactory::createRippleDeleteWorldActorSegment(const std::string& id) {
     return std::make_unique<RippleDeleteWorldActorSeg>(id);
 }
-std::unique_ptr<model::IEditCommand> CommandFactory::createAddFreeCamera(const std::string& name) {
-    return std::make_unique<AddFreeCamera>(name);
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createAddFreeCamera(const std::string& name, model::CameraTrackKind kind) {
+    return std::make_unique<AddFreeCamera>(name, kind);
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteCamera(const std::string& id) {
     return std::make_unique<DeleteCamera>(id);
@@ -88,6 +66,10 @@ CommandFactory::createSetCameraKeyframeRotation(const std::string& id, int tick,
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetCameraKeyframeFov(const std::string& id, int tick, float fov) {
     return std::make_unique<SetCameraKeyframeFov>(id, tick, fov);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetCameraKeyframeSubject(const std::string& id, int tick, const std::string& subject) {
+    return std::make_unique<SetCameraKeyframeSubject>(id, tick, subject);
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraEnabled(const std::string& id, bool enabled) {
     return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::Enabled, enabled);

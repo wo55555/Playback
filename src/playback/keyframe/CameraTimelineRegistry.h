@@ -17,8 +17,9 @@ enum class CameraTimelineSource : uint8_t { Preview, Export };
 using CameraTimelineHandle = std::shared_ptr<CameraTimelineEvaluator const>;
 
 struct CameraTimelineSample {
-    CameraRenderState state;
-    std::string       cameraId;
+    CameraRenderState                      state;
+    std::string                            cameraId;
+    state::editing::model::CameraTrackKind kind{state::editing::model::CameraTrackKind::Keyframe};
 };
 
 using CameraTimelineAppliedFlag = std::shared_ptr<std::atomic_bool>;
@@ -48,10 +49,6 @@ private:
 
 void publishCameraTimeline(CameraTimelineSource source, CameraTimelineHandle timeline);
 void clearCameraTimeline(CameraTimelineSource source, CameraTimelineHandle const& expected = {});
-
-// Takes precedence over the published timeline; returning nullopt falls through to it. An empty function clears it.
-using CameraSampleOverride = std::function<std::optional<CameraRenderState>(visuals::ReplaySampleTime const&)>;
-void setCameraSampleOverride(CameraTimelineSource source, CameraSampleOverride provider);
 
 [[nodiscard]] CameraTimelineHandle currentCameraTimeline(CameraTimelineSource source) noexcept;
 
