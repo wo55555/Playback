@@ -69,7 +69,7 @@ private:
 
 class AddFreeCamera final : public model::IEditCommand {
 public:
-    explicit AddFreeCamera(std::string name);
+    AddFreeCamera(std::string name, model::CameraTrackKind kind);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -77,6 +77,7 @@ public:
 
 private:
     std::string                          mName;
+    model::CameraTrackKind               mKind;
     std::optional<model::EditorStateExt> mBefore;
 };
 
@@ -251,6 +252,21 @@ private:
     std::string                          mCameraId;
     int                                  mTick;
     float                                mFov;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetCameraKeyframeSubject final : public model::IEditCommand {
+public:
+    SetCameraKeyframeSubject(std::string cameraId, int tick, std::string subject);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    std::string                          mSubject;
     std::optional<model::EditorStateExt> mBefore;
 };
 

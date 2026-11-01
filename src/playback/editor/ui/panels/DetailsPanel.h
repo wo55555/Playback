@@ -16,10 +16,6 @@ public:
 
     [[nodiscard]] InspectorPage page() const { return mPage; }
     void                        setPage(InspectorPage page) { mPage = page; }
-    void                        focusFirstPersonSubject() {
-        mPage               = InspectorPage::Selection;
-        mFocusSubjectSearch = true;
-    }
 
 private:
     void drawRail(PanelContext const& ctx, float width, float height);
@@ -36,12 +32,10 @@ private:
     bool drawKeyframes(PanelContext const& ctx);
     bool drawKeyframe(PanelContext const& ctx);
     bool drawMarker(PanelContext const& ctx);
-    bool drawSequenceSegment(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
 
     InspectorPage        mPage{InspectorPage::Selection};
     std::optional<float> mPistonDurationDraft;
-    bool                 mFocusSubjectSearch{false};
     // The label field edits a local copy so typing is not overwritten by the project each frame.
     std::string           mMarkerLabelId;
     std::array<char, 128> mMarkerLabelBuffer{};

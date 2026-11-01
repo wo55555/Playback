@@ -120,7 +120,7 @@ void ViewportPanel::drawEntityPickMenu(PanelContext const& ctx) {
     bool const following = ctx.state.followingRecordedPlayer;
     if (mPickedEntity) {
         auto const& entity   = *mPickedEntity;
-        bool const  selected = following && session.replaySubjectChoice() == entity.choice;
+        bool const  selected = following && session.userReplaySubjectChoice() == entity.choice;
         std::string const label =
             "playback.refactorEditor.viewport.followEntity"_tr(entityMenuLabel(entity)) + "##pick-follow";
         if (ImGui::MenuItem(label.c_str(), nullptr, selected)) submitFollow(ctx, entity.choice);
@@ -199,22 +199,36 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     bool        openPlayerPicker = false;
     ImVec2      playerAnchorMin{};
     ImVec2      playerAnchorMax{};
+    // The track that owns the playhead names the view, as on the timeline; follow and free camera fill the gaps.
+    state::editing::model::CameraEntity const* activeCamera = nullptr;
+    if (project && !state.activeCameraId.empty()) {
+        auto const camera =
+            std::ranges::find(project->cameras, state.activeCameraId, &state::editing::model::CameraEntity::id);
+        if (camera != project->cameras.end()) activeCamera = &*camera;
+    }
     std::string cameraLabel = "playback.refactorEditor.viewport.freeCamera"_tr();
-    if (following) {
+    char const* cameraIcon  = nullptr;
+    if (activeCamera) {
+        cameraLabel = activeCamera->name;
+        cameraIcon  = activeCamera->kind == state::editing::model::CameraTrackKind::Keyframe ? ICON_CAMERA : ICON_USER;
+    } else if (following) {
         auto const subject = playerSubjectLabel(state.replayPlayers, state.replaySubjectChoice);
         cameraLabel        = state.followThirdPerson ? "playback.refactorEditor.viewport.followSubjectThird"_tr(subject)
                                                      : "playback.refactorEditor.viewport.followSubject"_tr(subject);
     } else if (project && selectedCamera) {
         auto const camera =
             std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
-        if (camera != project->cameras.end()) cameraLabel = camera->name;
+        if (camera != project->cameras.end()) {
+            cameraLabel = camera->name;
+            cameraIcon  = ICON_CAMERA;
+        }
     }
     if (widgets::dropdownChip(
             "viewport-camera",
             cameraLabel.c_str(),
             "playback.refactorEditor.viewport.cameraTooltip"_tr().c_str(),
             project != nullptr,
-            selectedCamera ? ICON_CAMERA : nullptr
+            cameraIcon
         )) {
         widgets::openAnchoredPopup("##viewport-camera-menu");
     }
@@ -231,7 +245,9 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         }
         if (project && !project->cameras.empty()) ImGui::Separator();
         if (project) {
+            // Person tracks have no pose of their own to preview; they play from the timeline.
             for (auto const& camera : project->cameras) {
+                if (camera.kind != state::editing::model::CameraTrackKind::Keyframe) continue;
                 bool const current = !following && selectedCamera && selectedCamera->cameraId == camera.id;
                 if (ImGui::MenuItem(camera.name.c_str(), nullptr, current)) {
                     ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
@@ -280,17 +296,6 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
                 }
             }
             ImGui::EndMenu();
-        }
-        // Only the follow view has a third person; free and keyframed cameras always render first person.
-        if (ImGui::MenuItem(
-                "playback.refactorEditor.viewport.thirdPerson"_tr().c_str(),
-                "F5",
-                following && state.followThirdPerson,
-                following
-            )) {
-            EditorAction action{EditorActionType::SetFollowThirdPerson};
-            action.value = !state.followThirdPerson;
-            ctx.submitAction(std::move(action));
         }
         widgets::endAnchoredPopup();
     }

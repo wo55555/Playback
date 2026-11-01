@@ -110,7 +110,8 @@ json toJson(CameraKeyframe const& key) {
         {"fov",               key.fov                                },
         {"interpolationType", static_cast<int>(key.interpolationType)},
         {"bezierCtrl1",       toJson(key.bezierCtrl1)                },
-        {"bezierCtrl2",       toJson(key.bezierCtrl2)                }
+        {"bezierCtrl2",       toJson(key.bezierCtrl2)                },
+        {"subject",           key.subject                            }
     };
 }
 
@@ -129,6 +130,7 @@ CameraKeyframe keyframeFrom(json const& node) {
     );
     key.bezierCtrl1 = vec2From(node, "bezierCtrl1", key.bezierCtrl1);
     key.bezierCtrl2 = vec2From(node, "bezierCtrl2", key.bezierCtrl2);
+    key.subject     = stringOr(node, "subject");
     return key;
 }
 
@@ -143,6 +145,7 @@ json toJson(CameraEntity const& camera) {
     json result{
         {"id",                camera.id               },
         {"name",              camera.name             },
+        {"kind",              static_cast<int>(camera.kind)},
         {"enabled",           camera.enabled          },
         {"locked",            camera.locked           },
         {"bindingEntityUuid", camera.bindingEntityUuid},
@@ -173,6 +176,7 @@ CameraEntity cameraFrom(json const& node) {
     CameraEntity camera;
     camera.id                = stringOr(node, "id");
     camera.name              = stringOr(node, "name");
+    camera.kind = enumOr(node, "kind", camera.kind, static_cast<int>(CameraTrackKind::ThirdPerson));
     camera.enabled           = boolOr(node, "enabled", true);
     camera.locked            = boolOr(node, "locked", false);
     camera.bindingEntityUuid = stringOr(node, "bindingEntityUuid");
@@ -202,28 +206,6 @@ CameraEntity cameraFrom(json const& node) {
         };
     }
     return camera;
-}
-
-json toJson(SequenceSegment const& segment) {
-    return {
-        {"id",        segment.id           },
-        {"startTick", segment.startTick    },
-        {"endTick",   segment.endTick      },
-        {"cameraId",  segment.cameraId     },
-        {"color",     toJson(segment.color)},
-        {"locked",    segment.locked       }
-    };
-}
-
-SequenceSegment sequenceSegmentFrom(json const& node) {
-    SequenceSegment segment;
-    segment.id        = stringOr(node, "id");
-    segment.startTick = intOr(node, "startTick", 0);
-    segment.endTick   = intOr(node, "endTick", 0);
-    segment.cameraId  = stringOr(node, "cameraId");
-    segment.color     = colorFrom(node, "color", segment.color);
-    segment.locked    = boolOr(node, "locked", false);
-    return segment;
 }
 
 json toJson(WorldActorSegment const& segment) {
@@ -386,9 +368,6 @@ std::string serializeProject(model::EditorStateExt const& project) {
     auto cameras = json::array();
     for (auto const& camera : project.cameras) cameras.push_back(toJson(camera));
 
-    auto sequence = json::array();
-    for (auto const& segment : project.sequence) sequence.push_back(toJson(segment));
-
     auto worldSegments = json::array();
     for (auto const& segment : project.worldActor.segments) worldSegments.push_back(toJson(segment));
 
@@ -413,7 +392,6 @@ std::string serializeProject(model::EditorStateExt const& project) {
         {"fps",                 project.fps                },
         {"activeVideoTrackIdx", project.activeVideoTrackIdx},
         {"cameras",             std::move(cameras)         },
-        {"sequence",            std::move(sequence)        },
         {"worldActor",
          json{
              {"id", project.worldActor.id},
@@ -459,11 +437,6 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
     if (auto const* cameras = arrayAt(document, "cameras")) {
         for (auto const& entry : *cameras) {
             if (entry.is_object()) loaded.cameras.push_back(cameraFrom(entry));
-        }
-    }
-    if (auto const* sequence = arrayAt(document, "sequence")) {
-        for (auto const& entry : *sequence) {
-            if (entry.is_object()) loaded.sequence.push_back(sequenceSegmentFrom(entry));
         }
     }
     if (auto const* worldActor = objectAt(document, "worldActor")) {
