@@ -4,6 +4,7 @@
 #include "playback/state/editing/CameraBindingOps.h"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <set>
 #include <utility>
@@ -23,11 +24,11 @@ void restore(std::optional<model::EditorStateExt> const& before, model::EditorSt
 
 } // namespace
 
-AddFreeCamera::AddFreeCamera(std::string name) : mName(std::move(name)) {}
+AddFreeCamera::AddFreeCamera(std::string name, model::CameraTrackKind kind) : mName(std::move(name)), mKind(kind) {}
 
 void AddFreeCamera::execute(model::EditorStateExt& state) {
     auto before = state;
-    if (CameraBindingOps::addFreeCamera(state, mName).empty()) {
+    if (CameraBindingOps::addFreeCamera(state, mName, mKind).empty()) {
         mBefore.reset();
         return;
     }
@@ -101,6 +102,12 @@ void AddKeyframe::execute(model::EditorStateExt& state) {
     if (mCaptured) key = *mCaptured;
     else if (!camera->keysByTick.empty()) key = camera->keysByTick.rbegin()->second;
     else if (auto captured = keyframe::captureClientCamera()) key.fov = captured->fov;
+    if (camera->kind == model::CameraTrackKind::Keyframe) {
+        key.subject.clear();
+    } else if (auto const previous = camera->keysByTick.lower_bound(tick); previous != camera->keysByTick.begin()) {
+        // A person track keeps viewing the same player until a key says otherwise.
+        key.subject = std::prev(previous)->second.subject;
+    }
     camera->keysByTick.emplace(tick, std::move(key));
 }
 
@@ -330,6 +337,31 @@ void SetCameraKeyframeFov::execute(model::EditorStateExt& state) {
 
 void        SetCameraKeyframeFov::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string SetCameraKeyframeFov::label() const { return "Set Keyframe FOV"; }
+
+SetCameraKeyframeSubject::SetCameraKeyframeSubject(std::string cameraId, int tick, std::string subject)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mSubject(std::move(subject)) {}
+
+void SetCameraKeyframeSubject::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked || camera->kind == model::CameraTrackKind::Keyframe) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end() || key->second.subject == mSubject) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore             = state;
+    key->second.subject = mSubject;
+}
+
+void        SetCameraKeyframeSubject::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraKeyframeSubject::label() const { return "Set Keyframe Subject"; }
 
 MoveKeyframes::MoveKeyframes(std::vector<model::KeyframeRef> refs, int delta) : mRefs(std::move(refs)), mDelta(delta) {}
 

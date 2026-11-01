@@ -902,6 +902,7 @@ void ReplaySession::clearReplayData() {
     mPlaybackTickAccumulator = 0.0f;
     mObserverPreviewInRange  = false;
     mPausedPreviewPose.reset();
+    clearPreviewShot();
     setFollowRecordedPlayer(false);
     mFollowExitParkPending       = false;
     mTeleportToSubjectPending    = false;
@@ -1107,28 +1108,97 @@ void ReplaySession::updatePausedObserverPreview() {
     parkObserverAtPose(sample->state);
 }
 
+void ReplaySession::applyFollowView() {
+    bool const active = isFollowViewActive();
+    bool const third  = active && isFollowViewThirdPerson();
+    if (active != mFollowViewApplied) {
+        mFollowViewApplied = active;
+        // The camera sits inside the followed player, so its own model would fill the view. The hide and hand
+        // hooks stay installed for the whole replay; (un)hooking them here froze the game for seconds.
+        visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Follow, active);
+        mLastObserverServerSyncChunk.reset();
+        mPausedPreviewPose.reset();
+        // The server copy only moved on chunk changes while following; park it so its next correction does not
+        // snap back.
+        mFollowExitParkPending = !active;
+    }
+    if (third != mFollowViewThirdApplied) {
+        mFollowViewThirdApplied = third;
+        visuals::setReplaySubjectThirdPerson(third);
+        mFollowHeldPose.reset();
+    }
+}
+
 void ReplaySession::setFollowRecordedPlayer(bool follow) {
     if (mFollowRecordedPlayer.exchange(follow, std::memory_order_acq_rel) == follow) return;
-    // The camera sits inside the recorded player while following, so its own model would fill the view.
-    // The hide and hand hooks stay installed for the whole replay; (un)hooking them here froze the game for seconds.
-    visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Follow, follow);
-    if (!follow) {
-        mFollowThirdPerson.store(false, std::memory_order_release);
-        visuals::setReplaySubjectThirdPerson(false);
-    }
-    mLastObserverServerSyncChunk.reset();
-    mPausedPreviewPose.reset();
-    // The server copy only moved on chunk changes while following; park it so its next correction does not snap back.
-    mFollowExitParkPending = !follow;
+    if (!follow) mFollowThirdPerson.store(false, std::memory_order_release);
+    applyFollowView();
     getLogger().debug("Observer {} the recorded player", follow ? "follows" : "stopped following");
 }
 
 void ReplaySession::setFollowThirdPerson(bool thirdPerson) {
     if (thirdPerson && !isFollowingRecordedPlayer()) thirdPerson = false;
     if (mFollowThirdPerson.exchange(thirdPerson, std::memory_order_acq_rel) == thirdPerson) return;
-    visuals::setReplaySubjectThirdPerson(thirdPerson);
-    mFollowHeldPose.reset();
+    applyFollowView();
     getLogger().debug("Follow view switched to {} person", thirdPerson ? "third" : "first");
+}
+
+void ReplaySession::setShotSubject(std::optional<std::string> subject) {
+    {
+        std::lock_guard lock(mReplayPlayersMutex);
+        if (mShotSubject == subject) return;
+        mShotSubject = std::move(subject);
+    }
+    mReplaySubjectEntityMissingTicks    = 0;
+    mReplaySubjectEntityMissingLastTick = -1;
+    rebindReplaySubject();
+}
+
+void ReplaySession::clearPreviewShot() {
+    mPreviewShotMode.store(PreviewShotMode::None, std::memory_order_release);
+    mShotThirdPerson.store(false, std::memory_order_release);
+    setShotSubject(std::nullopt);
+    applyFollowView();
+}
+
+// The highest camera track under the playhead owns the view. A keyframe track suspends the
+// user's follow; a person track follows its subject; with no track the user's follow comes back.
+void ReplaySession::updatePreviewShot() {
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return;
+    using state::editing::model::CameraTrackKind;
+    auto                       mode = PreviewShotMode::None;
+    std::optional<std::string> subject;
+    bool                       third = false;
+    // Player input owns the camera while captured, as it does over a paused keyframe track.
+    if (!editor::input::isGameInputCaptured()) {
+        if (auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+            auto const time = getCameraRenderSampleTime();
+            auto const shot = timeline->shotAt(time ? time->floorTick() : getCurrentTick());
+            if (shot && shot.kind() == CameraTrackKind::Keyframe) {
+                mode = PreviewShotMode::Keyframe;
+            } else if (shot) {
+                mode    = PreviewShotMode::Person;
+                subject = shot.subject;
+                third   = shot.kind() == CameraTrackKind::ThirdPerson;
+            }
+        }
+    }
+    mShotThirdPerson.store(third, std::memory_order_release);
+    if (mPreviewShotMode.exchange(mode, std::memory_order_acq_rel) != mode) {
+        getLogger().debug(
+            "preview shot mode={} subject={} third={} tick={}",
+            static_cast<int>(mode),
+            subject.value_or(""),
+            third,
+            mCurrentTick
+        );
+    }
+    setShotSubject(std::move(subject));
+    applyFollowView();
+}
+
+keyframe::CameraRenderState ReplaySession::thirdPersonView(keyframe::CameraRenderState const& eye) const {
+    return mReplayPlayer ? thirdPersonFollowPose(*mReplayPlayer, eye) : eye;
 }
 
 void ReplaySession::parkObserverAfterFollow() {
@@ -1226,6 +1296,7 @@ void ReplaySession::clearReplayPlayers(bool clearChoice) {
     }
     mReplayPlayers.clear();
     mReplaySubjectChoice.clear();
+    mShotSubject.reset();
     mReplaySubjectGapChoice.clear();
     mReplaySubjectEntityMissingTicks    = 0;
     mReplaySubjectEntityMissingLastTick = -1;
@@ -1307,6 +1378,11 @@ void ReplaySession::refreshReplayPlayerRoster() {
 }
 
 std::string ReplaySession::replaySubjectChoice() const {
+    std::lock_guard lock(mReplayPlayersMutex);
+    return mShotSubject ? *mShotSubject : mReplaySubjectChoice;
+}
+
+std::string ReplaySession::userReplaySubjectChoice() const {
     std::lock_guard lock(mReplayPlayersMutex);
     return mReplaySubjectChoice;
 }
@@ -1779,13 +1855,12 @@ void ReplaySession::refreshReplaySubjectBinding() {
 
 // Teleports the viewer to the local player: a pending request lands once, following repeats per frame.
 bool ReplaySession::updateSubjectFollow() {
-    bool following = isFollowingRecordedPlayer();
     // Player input owns the camera, and a started export drives it from the export timeline.
     bool const exporting = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
-    if (following && (editor::input::isGameInputCaptured() || exporting)) {
+    if (isFollowingRecordedPlayer() && (editor::input::isGameInputCaptured() || exporting)) {
         setFollowRecordedPlayer(false);
-        following = false;
     }
+    bool const following = !exporting && isFollowViewActive();
     if (exporting) mTeleportToSubjectPending = false;
     if (!following && !mTeleportToSubjectPending) return false;
 
@@ -1850,7 +1925,7 @@ std::optional<keyframe::CameraRenderState> ReplaySession::sampleSubjectFollowSta
 
 // Server corrections land during the client update, after the previous frame's pin; pin again right before drawing.
 std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRender() {
-    if (!isFollowingRecordedPlayer() || !mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler
+    if (!isFollowViewActive() || !mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler
         || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || mPendingReplayDimension) {
         mFollowHeldPose.reset();
         return std::nullopt;
@@ -1868,7 +1943,7 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
     );
     // The observer stays on the eyes so chunks and the server copy follow; only the drawn camera moves back.
     // The sample above refreshed the sleep weight, so a subject in bed already reads as first person here.
-    if (isFollowThirdPerson() && visuals::isReplaySubjectThirdPerson()) {
+    if (isFollowViewThirdPerson() && visuals::isReplaySubjectThirdPerson()) {
         state = thirdPersonFollowPose(*mReplayPlayer, *state);
     }
     mFollowHeldPose = state;
@@ -1937,6 +2012,7 @@ void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 co
 
 void ReplaySession::updateObserverPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
+    updatePreviewShot();
     if (updateSubjectFollow()) {
         mPendingObserverPark.reset();
         return;
@@ -2040,6 +2116,7 @@ bool ReplaySession::beginExportTimeline(int startTick) {
     // The export warm-up waits for a menu-free scene, so a preview from before the export must not stay open.
     closeContainerPreview("exportBegin");
     popReplayContainerScreen();
+    clearPreviewShot();
     setFollowRecordedPlayer(false);
     mTeleportToSubjectPending = false;
     startTick                 = std::clamp(startTick, 0, getTotalTicks());
@@ -5215,7 +5292,8 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         } else if (playerList.mAction == PlayerListPacketType::Remove) {
             // Leaving the tab list means the player left the server; the view goes back to the recorder. A player
             // who is only out of range or in another dimension keeps the choice and binds again on the next AddPlayer.
-            std::string const choice      = replaySubjectChoice();
+            // A camera track's subject leaving only unbinds it; the track itself still names that player.
+            std::string const choice      = userReplaySubjectChoice();
             bool              subjectLeft = false;
             for (auto const& entry : entries) {
                 auto const uuid = entry.mUUID->asString();
