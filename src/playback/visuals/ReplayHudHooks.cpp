@@ -103,9 +103,4 @@ void releaseReplayHudHooks() {
 
 void setReplayHudGameType(int gameType) { gGameType.store(gameType, std::memory_order_release); }
 
-bool offerReplayHudGameType(int gameType) {
-    int expected = UnknownGameType;
-    return gGameType.compare_exchange_strong(expected, gameType, std::memory_order_acq_rel);
-}
-
 } // namespace playback::visuals
