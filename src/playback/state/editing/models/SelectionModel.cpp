@@ -72,10 +72,7 @@ std::vector<std::string> SelectionModel::selectedIds() const {
                 return {sel.trackId};
             } else if constexpr (std::is_same_v<T, SelectedTransition>) {
                 return {sel.transitionId};
-            } else if constexpr (std::is_same_v<T, SelectedSequence>) {
-                return {"sequence"};
-            } else if constexpr (std::is_same_v<T, SelectedSequenceSegment>
-                                 || std::is_same_v<T, SelectedWorldActorSegment>) {
+            } else if constexpr (std::is_same_v<T, SelectedWorldActorSegment>) {
                 return {sel.segmentId};
             } else if constexpr (std::is_same_v<T, SelectedWorldActor>) {
                 return {"worldActor"};
@@ -133,10 +130,6 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
             } else if constexpr (std::is_same_v<T, SelectedSubActor>) {
                 return std::ranges::any_of(state.worldActor.subActors, [&](auto const& actor) {
                     return actor.id == sel.subActorId;
-                });
-            } else if constexpr (std::is_same_v<T, SelectedSequenceSegment>) {
-                return std::ranges::any_of(state.sequence, [&](auto const& segment) {
-                    return segment.id == sel.segmentId;
                 });
             }
             return true;

@@ -1,7 +1,6 @@
 ﻿#pragma once
 
 #include "CameraEntity.h"
-#include "SequenceSegment.h"
 #include "Track.h"
 #include "WorldActor.h"
 
@@ -19,9 +18,8 @@ struct EditorStateExt {
     bool  playing{};
     float playbackSpeed{1.0f};
 
-    std::vector<SequenceSegment> sequence;
-    WorldActor                   worldActor;
-    std::vector<CameraEntity>    cameras;
+    WorldActor                worldActor;
+    std::vector<CameraEntity> cameras;
 
     std::vector<Track> videoTracks;
     int                activeVideoTrackIdx{};

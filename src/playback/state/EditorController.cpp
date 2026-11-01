@@ -5,7 +5,6 @@
 #include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/ClientCameraCapture.h"
-#include "playback/keyframe/FirstPersonView.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/CameraBindingOps.h"
 #include "playback/state/editing/ProjectStore.h"
@@ -63,29 +62,19 @@ void EditorController::setRendererAvailable(bool available) {
 }
 
 void EditorController::publishCameraTimeline() {
-    bool const firstPersonSegment = std::ranges::any_of(mProject.sequence, [](auto const& segment) {
-        return segment.cameraId == state::editing::model::kFirstPersonCameraId;
-    });
-    if (mProject.cameras.empty() && !firstPersonSegment) {
+    if (mProject.cameras.empty()) {
         keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
         return;
     }
     auto dimensionTransitionTicks = replay::ReplaySession::getInstance().getDimensionTransitionTicks();
+    // No subject sampler: the replay session follows a person track's subject natively, like the user's follow.
     keyframe::publishCameraTimeline(
         keyframe::CameraTimelineSource::Preview,
         std::make_shared<keyframe::CameraTimelineEvaluator>(
             mProject,
             mPreviewCameraId,
-            std::nullopt,
             false,
-            std::move(dimensionTransitionTicks),
-            [](visuals::ReplaySampleTime const& time) -> std::optional<keyframe::CameraRenderState> {
-                // Like the follow view: the entity pose trails the camera by one tick, so sample a tick back.
-                auto entityTime = time;
-                if (time.floorTick() >= 1) entityTime.numerator -= time.denominator;
-                if (auto state = keyframe::sampleRecordedPlayerView(entityTime)) return state;
-                return keyframe::sampleRecordedPlayerView(time);
-            }
+            std::move(dimensionTransitionTicks)
         )
     );
 }
@@ -159,7 +148,7 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     mProject             = {};
     mProject.projectPath = std::string(replayPath);
     mProject.totalTicks  = totalTicks;
-    state::editing::CameraBindingOps::addFreeCamera(mProject, {});
+    state::editing::CameraBindingOps::addFreeCamera(mProject, {}, state::editing::model::CameraTrackKind::Keyframe);
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
     mPreviewCameraId.reset();
@@ -190,7 +179,9 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
     loaded.projectPath           = mProject.projectPath;
     loaded.totalTicks            = mProject.totalTicks;
     loaded.worldActor.totalTicks = mProject.totalTicks;
-    if (loaded.cameras.empty()) state::editing::CameraBindingOps::addFreeCamera(loaded, {});
+    if (loaded.cameras.empty()) {
+        state::editing::CameraBindingOps::addFreeCamera(loaded, {}, state::editing::model::CameraTrackKind::Keyframe);
+    }
     if (loaded.worldActor.segments.empty()) {
         loaded.worldActor.segments.push_back({"worldActor", 0, mProject.totalTicks, 0});
     }
@@ -240,30 +231,13 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::RedoEditorEdit:
         (void)mCommandStack.redo(mProject);
         break;
-    case EditorActionType::AddFreeCamera:
-        mCommandStack.push(CommandFactory::createAddFreeCamera(action.name), mProject);
+    case EditorActionType::AddFreeCamera: {
+        auto const kind = action.kind == 1 ? state::editing::model::CameraTrackKind::FirstPerson
+                        : action.kind == 2 ? state::editing::model::CameraTrackKind::ThirdPerson
+                                           : state::editing::model::CameraTrackKind::Keyframe;
+        mCommandStack.push(CommandFactory::createAddFreeCamera(action.name, kind), mProject);
         break;
-    case EditorActionType::AddCameraSequence:
-        mCommandStack.push(CommandFactory::createAddCameraSequence(), mProject);
-        break;
-    case EditorActionType::DeleteCameraSequence:
-        mCommandStack.push(CommandFactory::createDeleteCameraSequence(), mProject);
-        break;
-    case EditorActionType::SplitSequence:
-        mCommandStack.push(CommandFactory::createSplitSequence(action.tick), mProject);
-        break;
-    case EditorActionType::TrimSequence:
-        mCommandStack.push(CommandFactory::createTrimSequence(action.id, action.tick, action.kind), mProject);
-        break;
-    case EditorActionType::DeleteSequenceSegment:
-        mCommandStack.push(CommandFactory::createDeleteSequenceSegment(action.id), mProject);
-        break;
-    case EditorActionType::MergeSequenceSegment:
-        mCommandStack.push(CommandFactory::createMergeSequenceSegment(action.id, action.kind != 0), mProject);
-        break;
-    case EditorActionType::BindSequenceCamera:
-        mCommandStack.push(CommandFactory::createBindSequenceToCamera(action.id, action.secondaryId), mProject);
-        break;
+    }
     case EditorActionType::SplitWorldActor:
         mCommandStack.push(CommandFactory::createSplitWorldActor(action.tick), mProject);
         break;
@@ -283,6 +257,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         }
         if (auto captured = captureCameraKeyframe()) {
             logger().debug("Captured camera keyframe (camera={}, tick={})", action.id, action.tick);
+            // A person track's first key views whoever the user follows; later keys keep the previous subject.
+            captured->subject = replay::ReplaySession::getInstance().userReplaySubjectChoice();
             mCommandStack.push(
                 CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)),
                 mProject
@@ -329,6 +305,12 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::SetKeyframeFov:
         mCommandStack.push(CommandFactory::createSetCameraKeyframeFov(action.id, action.tick, action.speed), mProject);
+        break;
+    case EditorActionType::SetKeyframeSubject:
+        mCommandStack.push(
+            CommandFactory::createSetCameraKeyframeSubject(action.id, action.tick, action.secondaryId),
+            mProject
+        );
         break;
     case EditorActionType::SetCameraEnabled:
         mCommandStack.push(CommandFactory::createSetCameraEnabled(action.id, action.value), mProject);
@@ -388,7 +370,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
         if (std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
-                return camera.id == action.id && state::editing::model::isCameraRenderable(camera);
+                return camera.id == action.id && state::editing::model::isCameraRenderable(camera)
+                    && camera.kind == state::editing::model::CameraTrackKind::Keyframe;
             })) {
             mPreviewCameraId = action.id;
         }
@@ -424,7 +407,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     }
 
     if (mPreviewCameraId && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
-            return camera.id == *mPreviewCameraId && state::editing::model::isCameraRenderable(camera);
+            return camera.id == *mPreviewCameraId && state::editing::model::isCameraRenderable(camera)
+                && camera.kind == state::editing::model::CameraTrackKind::Keyframe;
         })) {
         mPreviewCameraId.reset();
     }
@@ -446,7 +430,7 @@ void EditorController::publishState(bool hudVisible) {
     state.paused                  = session.isPaused();
     state.followingRecordedPlayer = session.isFollowingRecordedPlayer();
     state.followThirdPerson       = session.isFollowThirdPerson();
-    state.replaySubjectChoice     = session.replaySubjectChoice();
+    state.replaySubjectChoice     = session.userReplaySubjectChoice();
     auto const replayPlayers      = session.replayPlayers();
     state.replayPlayers.reserve(replayPlayers.size());
     for (auto const& player : replayPlayers) {
@@ -476,6 +460,9 @@ void EditorController::publishState(bool hudVisible) {
     mProject.playbackSpeed           = state.playbackSpeed;
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
     state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
+    if (state.cameraTimeline) {
+        if (auto const shot = state.cameraTimeline->shotAt(state.currentTick)) state.activeCameraId = shot.camera->id;
+    }
     state.canUndo                    = mCommandStack.canUndo();
     state.canRedo                    = mCommandStack.canRedo();
     state.persistence.dirty          = state.editorVisible && isProjectDirty();
