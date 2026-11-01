@@ -181,27 +181,33 @@ void registerHudIndicator(HudScreenController& ctrl) {
 
 } // namespace
 
+// This SDK does not export the controllers' _registerEventHandlers; register once their constructors have run.
 LL_TYPE_INSTANCE_HOOK(
     PauseRecordControlsHook,
     ll::memory::HookPriority::Normal,
     PauseScreenController,
-    &PauseScreenController::_registerEventHandlers,
-    void
+    &PauseScreenController::$ctor,
+    void*,
+    std::shared_ptr<PauseScreenModel> model,
+    bool                              overlaySocialDrawerOnce
 ) {
-    origin();
+    auto* result = origin(std::move(model), overlaySocialDrawerOnce);
     registerPauseControls(*this);
+    return result;
 }
 
 LL_TYPE_INSTANCE_HOOK(
     HudRecordIndicatorBindHook,
     ll::memory::HookPriority::Normal,
     HudScreenController,
-    &HudScreenController::_registerEventHandlers,
-    void
+    &HudScreenController::$ctor,
+    void*,
+    std::shared_ptr<ClientInstanceScreenModel> model
 ) {
-    origin();
+    auto* result = origin(std::move(model));
     registerHudIndicator(*this);
     gLastHudSignature = -1;
+    return result;
 }
 
 LL_TYPE_INSTANCE_HOOK(
