@@ -29,6 +29,9 @@ struct CameraKeyframe {
     CameraInterpolationType interpolationType{CameraInterpolationType::Smooth};
     Vec2                    bezierCtrl1{0.42f, 0.0f};
     Vec2                    bezierCtrl2{0.58f, 1.0f};
+
+    // First- and third-person tracks only: the replay player viewed from this key on. Empty means the recorder.
+    std::string subject;
 };
 
 // Addresses one keyframe in a batch edit. `pose` is only filled when pasting.

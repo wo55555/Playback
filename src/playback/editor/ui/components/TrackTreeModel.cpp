@@ -42,12 +42,9 @@ void TrackTreeModel::setSearch(std::string_view query) { mSearch = query; }
 
 void TrackTreeModel::rebuild(const EditorStateExt& state) {
     mRows.clear();
-    mRows.reserve(state.cameras.size() + 1);
+    mRows.reserve(state.cameras.size());
 
     float const cameraHeight = metrics::cameraRow();
-
-    // The switch lane stays on top regardless of the search, since it is what the export renders.
-    if (!state.sequence.empty()) mRows.push_back({TrackRowKind::Sequence, "sequence", {}, {}, -1, cameraHeight});
 
     // Cameras are the only editable tracks; the world and marker rows had nothing to show.
     for (int index = 0; index < static_cast<int>(state.cameras.size()); ++index) {
@@ -61,7 +58,8 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
              index,
              cameraHeight,
              camera.locked,
-             camera.enabled}
+             camera.enabled,
+             camera.kind}
         );
     }
 }
