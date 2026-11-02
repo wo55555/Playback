@@ -26,6 +26,10 @@ public:
     [[nodiscard]] virtual bool isCameraPathVisible() const = 0;
     virtual bool               deleteSelection()           = 0;
     virtual bool               addKeyframeAtPlayhead()     = 0;
+    virtual bool               selectAllKeyframes()        = 0;
+    virtual bool               copySelection()             = 0;
+    virtual bool               pasteAtPlayhead()           = 0;
+    virtual bool               addMarkerAtPlayhead()       = 0;
 
     // View preferences the inspector's settings page edits; they live in the panels that consume them.
     [[nodiscard]] virtual bool  isInfoOverlayVisible() const        = 0;
@@ -37,6 +41,7 @@ public:
     [[nodiscard]] virtual float videoAspectRatio() const            = 0;
     virtual void                setVideoAspectRatio(float ratio)    = 0;
     virtual void                openExportDialog()                  = 0;
+    // Shows the selected camera-switch segment in the inspector with its subject search focused.
 
     // The export range is owned by the export dialog but drawn on the timeline as in/out markers.
     [[nodiscard]] virtual int exportStartTick() const      = 0;

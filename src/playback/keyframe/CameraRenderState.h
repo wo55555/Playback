@@ -10,6 +10,8 @@ struct CameraRenderState {
     float pitch{};
     float roll{};
     float fov{70.0f};
+
+    bool operator==(CameraRenderState const&) const = default;
 };
 
 } // namespace playback::keyframe

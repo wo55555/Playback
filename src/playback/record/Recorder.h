@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "playback/io/AsyncReplaySaver.h"
+#include "playback/io/ReplayResourcePacks.h"
 #include "playback/packet/PlaybackSetEquipmentPacket.h"
 #include "playback/utils/container/LinkedHashMap.h"
 #include "playback/visuals/ReplayThumbnail.h"
@@ -11,6 +12,7 @@
 #include "mc/world/level/ChunkPos.h"
 #include "mc/world/level/dimension/DimensionType.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -20,10 +22,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+class Level;
 class LevelChunkPacket;
 class SubChunkPacket;
 class Packet;
@@ -34,6 +38,10 @@ struct PacketLifecycleSemantics;
 }
 
 namespace playback::record {
+
+// IDs every recording stores the local player under.
+inline constexpr uint64_t RecordedPlayerRuntimeIdValue = uint64_t{1} << 62;
+inline constexpr int64_t  RecordedPlayerUniqueIdValue  = std::numeric_limits<int64_t>::max() - 1024;
 
 using playback::io::AsyncReplaySaver;
 using playback::io::PlaybackBuffer;
@@ -48,6 +56,21 @@ struct PlaybackView {
     float z     = 0.0f;
     float yaw   = 0.0f;
     float pitch = 0.0f;
+};
+
+// Camera position minus entity position, and the rendered FOV in degrees.
+struct PlaybackCameraSample {
+    float x   = 0.0f;
+    float y   = 0.0f;
+    float z   = 0.0f;
+    float fov = 0.0f;
+    // Absolute game camera pose, only captured while the vanilla camera is not bound to the entity (sleeping).
+    bool  hasView   = false;
+    float viewX     = 0.0f;
+    float viewY     = 0.0f;
+    float viewZ     = 0.0f;
+    float viewYaw   = 0.0f;
+    float viewPitch = 0.0f;
 };
 
 struct PlaybackChunkMeta {
@@ -75,21 +98,35 @@ class Recorder {
 private:
     enum class State { Idle, Recording, Paused, Closing };
     enum class SnapshotCaptureResult { Success, NotReady, Failed };
+    // Local player view after one rendered frame; fraction is the frame's partial tick after the previous tick.
+    struct LocalViewFrame {
+        float fraction{};
+        float pitch{};
+        float yaw{};
+    };
     struct SnapshotDimension {
         DimensionType id{};
         int32_t       minHeight{};
         int32_t       maxHeight{};
         std::string   name;
     };
-    std::unique_ptr<AsyncReplaySaver> mAsyncReplaySaver;
+    std::unique_ptr<AsyncReplaySaver>                     mAsyncReplaySaver;
+    std::unique_ptr<playback::io::packs::PackEmbedWorker> mPackWorker;
 
-    std::vector<std::shared_ptr<LevelChunkPacket>>            mSnapshotLevelChunks;
-    std::vector<std::shared_ptr<SubChunkPacket>>              mSnapshotSubChunks;
-    std::vector<PlaybackSerializedGamePacket>                 mSnapshotConfigurationPackets;
-    std::vector<PlaybackSerializedGamePacket>                 mSnapshotEntityPackets;
-    std::optional<std::string>                                mSnapshotLocalPlayerPayload;
-    std::vector<PlaybackSerializedGamePacket>                 mConfigurationPackets;
-    std::unordered_map<int32_t, size_t>                       mConfigurationPacketIndices;
+    std::vector<std::shared_ptr<LevelChunkPacket>> mSnapshotLevelChunks;
+    std::vector<std::shared_ptr<SubChunkPacket>>   mSnapshotSubChunks;
+    std::vector<PlaybackSerializedGamePacket>      mSnapshotConfigurationPackets;
+    std::vector<PlaybackSerializedGamePacket>      mSnapshotEntityPackets;
+    std::optional<std::string>                     mSnapshotLocalPlayerPayload;
+    std::vector<PlaybackSerializedGamePacket>      mConfigurationPackets;
+    std::unordered_map<int32_t, size_t>            mConfigurationPacketIndices;
+    // Original login packet wins. A synthesized registry is dropped when the next recording starts.
+    enum class ItemRegistrySource : uint8_t { None, Original, Synthetic };
+    ItemRegistrySource                                        mItemRegistrySource{ItemRegistrySource::None};
+    int                                                       mItemRegistryItems{};
+    int                                                       mItemRegistryCustom{};
+    int                                                       mItemRegistryComponentBased{};
+    bool                                                      mRecordingSyntheticItemRegistry{false};
     std::vector<PlaybackSerializedGamePacket>                 mPendingGamePackets;
     mutable std::mutex                                        mPendingGamePacketsMutex;
     std::unordered_map<int32_t, std::unordered_set<ChunkPos>> mPendingPortableChunks;
@@ -102,8 +139,23 @@ private:
     std::optional<std::string>                                mLastLocalPlayerDataPacket;
     std::optional<PlaybackSetEquipmentPacket>                 mLastLocalPlayerEquipmentPacket;
     std::optional<int>                                        mLastLocalPlayerSwingTime;
-    std::optional<PlaybackView>                               mSnapshotView;
-    std::optional<SnapshotDimension>                          mSnapshotDimension;
+    // Inventory slots 0-35, armor, offhand, attributes and the selected slot. Must stay >= Recorder.cpp HudCacheSize.
+    std::array<std::optional<std::string>, 48> mLastLocalHudPackets;
+    std::optional<std::string>                 mLastLocalGameTypePacket;
+    // Map id whose full data was last written for the main hand and the offhand.
+    std::array<std::optional<int64_t>, 2> mLastLocalHeldMapIds;
+    std::optional<PlaybackView>           mSnapshotView;
+    std::optional<PlaybackCameraSample>   mSnapshotCamera;
+    std::optional<SnapshotDimension>      mSnapshotDimension;
+
+    // Frames rendered since the last tick; the view turns per frame while the rest of the pose moves per tick.
+    std::mutex                    mLocalViewMutex;
+    std::vector<LocalViewFrame>   mLocalViewFrames;
+    bool                          mLocalViewGap{true}; // frames were missed since the last tick
+    std::optional<LocalViewFrame> mLocalViewPrevious;  // view at the last tick
+    uint64_t                      mLocalViewTicks{};   // ticks that wrote samples
+    uint64_t                      mLocalViewSamples{};
+    int                           mLocalViewRate{20}; // samples per second, fixed when the recording starts
 
     std::optional<DimensionType>        mRecordingDimension;
     std::string                         mSnapshotFailure;
@@ -117,9 +169,10 @@ private:
     std::atomic_bool                                      mDimensionTransitionPending = false;
     std::atomic<int>                                      mDimensionTransitionTargetId{0};
 
-    int mChunkIndex          = 0;
-    int mTicksInCurrentChunk = 0;
-    int mWrittenTicks        = 0;
+    int mChunkIndex           = 0;
+    int mTicksInCurrentChunk  = 0;
+    int mWrittenTicks         = 0;
+    int mThumbnailRequestTick = 0;
 
     bool mHasOpenChunk                  = false;
     bool mOpenChunkHasData              = false;
@@ -127,9 +180,19 @@ private:
     bool mThumbnailCaptureRequested     = false;
     bool mPendingDimensionSnapshot      = false;
 
+    std::filesystem::path mPendingRecordPath;
+    std::string           mPendingRecordingName;
+    std::atomic_bool      mHasPendingRecording = false;
+
+    // Zips the finished recording off the client thread; embedded resource packs make this take tens of seconds.
+    // Declared last so it is joined before the rest of the recorder is destroyed.
+    std::jthread mExportThread;
+
 private:
     static constexpr int RECORD_CHUNK_TICKS      = 20 * 60 * 5;
     static constexpr int THUMBNAIL_CAPTURE_TICKS = 20;
+    // The armed capture takes the next presented frame; this leaves room for slow frames.
+    static constexpr int THUMBNAIL_SETTLE_TICKS = 10;
 
     [[nodiscard]] SnapshotCaptureResult
     captureChunkSnapshot(std::chrono::steady_clock::duration& barrierWait, std::chrono::milliseconds barrierTimeout);
@@ -150,6 +213,10 @@ private:
     [[nodiscard]] bool flushGamePackets();
 
     [[nodiscard]] bool writeEntityMovements();
+    [[nodiscard]] bool writeLocalCameraOffset();
+    [[nodiscard]] bool writeLocalViewSamples();
+    // Ticks passed without writing the view, so the buffered frames no longer belong to the next tick.
+    void discardLocalViewFrames();
 
     [[nodiscard]] bool writeLocalPlayerState();
 
@@ -159,7 +226,20 @@ private:
 
     void cancelRecording(std::string_view reason);
 
-    void saveRecording();
+    void abortRecording();
+
+    // Ends the recording up to a finished temp folder; false when nothing usable was recorded.
+    [[nodiscard]] bool closeRecording();
+
+    [[nodiscard]] std::filesystem::path finishSaver();
+
+    [[nodiscard]] bool exportRecording(
+        std::filesystem::path const& replayPath,
+        std::string const&           fileBaseName,
+        std::string_view             metaName
+    );
+
+    void clearPendingRecording();
 
     void logRecordedGamePacketSummary() const;
 
@@ -168,6 +248,8 @@ private:
     void resetChunkSnapshot();
 
     void recordConfigurationPacket(Packet const& packet, PacketLifecycleSemantics const& semantics);
+
+    void ensureRecordedItemRegistry(::Level& level);
 
 public:
     Recorder();
@@ -179,9 +261,34 @@ public:
 
     [[nodiscard]] bool isPaused() const { return mState.load() == State::Paused; }
 
+    // Client thread only; true until the recording thumbnail frame has been taken, so overlays can stay out of it.
+    [[nodiscard]] bool isThumbnailPending() const {
+        if (mState.load() != State::Recording || !mThumbnailCaptureProvider.load(std::memory_order_acquire)) {
+            return false;
+        }
+        return !mThumbnailCaptureRequested || mWrittenTicks < mThumbnailRequestTick + THUMBNAIL_SETTLE_TICKS;
+    }
+    // Client thread only; stops advancing while paused.
+    [[nodiscard]] int recordedTicks() const { return mWrittenTicks; }
+
     void start();
     void pause();
+    // Saves directly under a timestamp name, including a recording still waiting for a name.
     void stop();
+    // Stops and deletes everything recorded so far.
+    void discard();
+
+    // Stops but keeps the data until savePendingRecording or discardPendingRecording.
+    [[nodiscard]] bool finishToPending();
+    [[nodiscard]] bool hasPendingRecording() const { return mHasPendingRecording.load(std::memory_order_acquire); }
+    // Client thread only.
+    [[nodiscard]] std::string const& pendingRecordingName() const { return mPendingRecordingName; }
+    // An empty name keeps the timestamp name; false keeps the data pending.
+    [[nodiscard]] bool savePendingRecording(std::string_view name);
+    void               discardPendingRecording();
+
+    // Blocks until the last stopped recording has been written to its replay file.
+    void waitForExport();
 
     void setThumbnailCaptureProvider(visuals::ReplayThumbnailCaptureProvider* provider) {
         mThumbnailCaptureProvider.store(provider, std::memory_order_release);
@@ -196,6 +303,9 @@ public:
     void recordGamePacket(Packet const& packet);
 
     void recordCompletedChunk(ChunkPos const& pos, Dimension const& dimension);
+
+    // Called after every rendered frame with the frame's partial tick.
+    void recordLocalViewFrame(float alpha);
 
     void endTick(bool close);
 
@@ -219,5 +329,9 @@ public:
 };
 
 [[nodiscard]] bool hookNetwork(bool);
+
+// Last FOV (degrees) the renderer used for the player's view while recording hooks were installed; 0 before the first
+// frame.
+[[nodiscard]] float latestRenderedFov() noexcept;
 
 } // namespace playback::record

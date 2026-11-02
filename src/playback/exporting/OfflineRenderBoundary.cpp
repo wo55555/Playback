@@ -20,6 +20,7 @@ constexpr auto     ReplayTickWaitTimeout = std::chrono::seconds{2};
 constexpr auto     RenderWaitTimeout     = std::chrono::seconds{30};
 constexpr auto     RenderWaitLogInterval = std::chrono::seconds{2};
 constexpr auto     WarmupSceneTimeout    = std::chrono::seconds{30};
+constexpr auto     ForcedLoadingDelay    = std::chrono::seconds{5}; // Flashback also force-closes screens after 5 s.
 constexpr uint32_t StableWarmupFrames    = 3;
 
 bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
@@ -272,6 +273,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         runtime::endOfflineReplayTickGate();
         mTickGateOpen                  = false;
         mTickGateSuspendedForDimension = true;
+        mDimensionLoadingForced        = false;
         mWarmupStableFrames            = 0;
         mWarmupStartedAt               = {};
         mWarmupLastLoggedAt            = {};
@@ -310,6 +312,9 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
             auto const now = std::chrono::steady_clock::now();
             if (mWarmupStartedAt == std::chrono::steady_clock::time_point{}) mWarmupStartedAt = now;
             if (!mExecutor.isUiStable()) {
+                if (!mDimensionLoadingForced && now - mWarmupStartedAt > ForcedLoadingDelay) {
+                    mDimensionLoadingForced = mExecutor.forceFinishDimensionLoading();
+                }
                 if (now - mWarmupStartedAt > WarmupSceneTimeout) {
                     fault(
                         OfflineRenderBoundaryError::ReplayUnavailable,

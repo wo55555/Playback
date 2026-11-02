@@ -1,4 +1,4 @@
-#include "TrackTreeModel.h"
+﻿#include "TrackTreeModel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/state/editing/models/EditorStateExt.h"
@@ -58,7 +58,8 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
              index,
              cameraHeight,
              camera.locked,
-             camera.enabled}
+             camera.enabled,
+             camera.kind}
         );
     }
 }

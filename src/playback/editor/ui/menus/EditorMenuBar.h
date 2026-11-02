@@ -1,8 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include "playback/editor/ui/PanelContext.h"
 
 #include <array>
+#include <string>
 
 namespace playback::editor::ui {
 
