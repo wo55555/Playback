@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "playback/keyframe/CameraRenderState.h"
 #include "playback/record/Recorder.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
@@ -31,11 +32,14 @@ class Actor;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
 class Player;
+class SerializedSkinRef;
 class CompoundTag;
+class ItemRegistryPacket;
 class ResourcePacksInfoPacket;
 class ResourcePackStackPacket;
 class StartGamePacket;
 struct DimensionArguments;
+struct FollowedHudMirror;
 enum class MinecraftPacketIds : int;
 
 namespace playback::replay {
@@ -54,6 +58,10 @@ using SteadyTimePoint = std::chrono::steady_clock::time_point;
 enum class ReplayExportTickState : uint8_t { Unavailable, Waiting, Ready, Invalid, Failed };
 
 enum class ReplayExportTimelinePhase : uint8_t { Inactive, Initializing, Continuous };
+
+// None: no camera track under the playhead. Keyframe: a keyframe track drives the camera. Person: a first- or
+// third-person track follows its subject.
+enum class PreviewShotMode : uint8_t { None, Keyframe, Person };
 
 struct ReplayCameraViewpoint {
     float x{};
@@ -155,6 +163,8 @@ private:
     int                                  mSeekTargetTick{-1};
     bool                                 mExportSeekRequested{};
     bool                                 mSnapMovementDuringSeek{};
+    bool                                 mSeekParticlesCleared{};
+    bool                                 mSeekParticlesStale{};
     ReplayExportTimelinePhase            mExportTimelinePhase{ReplayExportTimelinePhase::Inactive};
     int                                  mExportTargetTick{-1};
     std::optional<ReplayCameraViewpoint> mExportCameraViewpoint;
@@ -164,6 +174,21 @@ private:
     std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
 
     bool                                        mObserverPreviewInRange{false};
+    std::optional<keyframe::CameraRenderState>  mPausedPreviewPose;
+    uint64_t                                    mPausedPreviewSeekCount{};
+    std::atomic<bool>                           mFollowRecordedPlayer{false};
+    std::atomic<bool>                           mFollowThirdPerson{false};
+    // The camera track the preview is on: a keyframe track suspends the user's follow, a person track follows its
+    // subject in its place.
+    std::atomic<PreviewShotMode>                mPreviewShotMode{PreviewShotMode::None};
+    std::atomic<bool>                           mShotThirdPerson{false};
+    bool                                        mFollowViewApplied{false};
+    bool                                        mFollowViewThirdApplied{false};
+    bool                                        mTeleportToSubjectPending{false};
+    std::optional<keyframe::CameraRenderState>  mPendingObserverPark;
+    std::optional<keyframe::CameraRenderState>  mFollowHeldPose;
+    bool                                        mFollowExitParkPending{false};
+    std::atomic<uint64_t>                       mSeekFinishCount{0};
     uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
     ::Vec2                                      mLastObserverPreviewRotation{};
@@ -220,10 +245,41 @@ private:
     std::unordered_map<int32_t, std::string>                    mAppliedConfigurationPackets;
     std::unordered_set<int32_t>                                 mUnknownConfigurationPackets;
     std::unordered_set<ActorUniqueID>                           mRecordedEntityIds;
+    std::optional<ActorUniqueID>                                mRecordedLocalPlayerId;
+    struct ReplayPlayerRecord {
+        ActorUniqueID id;
+        std::string   name;
+        bool          recorder{};
+        // False means the identity is known but no player actor is in the current dimension.
+        bool          present{};
+    };
+    // Copied before the first observer skin swap and restored when the follow binding drops.
+    std::unique_ptr<::SerializedSkinRef> mObserverOriginalSkin;
+    bool                                mObserverSkinApplied{false};
+    mutable std::mutex                                  mReplayPlayersMutex;
+    std::unordered_map<std::string, ReplayPlayerRecord> mReplayPlayers;
+    std::string                                         mReplaySubjectChoice;
+    // The subject a person camera track names; overrides the user's choice while set.
+    std::optional<std::string>                          mShotSubject;
+    // Choice that already logged "not in this snapshot", so a missing player does not spam every tick.
+    std::string                                         mReplaySubjectGapChoice;
+    // Played ticks an entity choice has had no actor. A removed entity hands the view back to the
+    // recorder after a short grace; a re-add with the same id inside it binds again.
+    int                                                 mReplaySubjectEntityMissingTicks{0};
+    int                                                 mReplaySubjectEntityMissingLastTick{-1};
     std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> mEntityRenderKeys;
-    std::unordered_set<std::string>                             mReplayObjectiveNames;
-    std::unordered_set<ChunkPos>                                mCenterChunkPositions;
-    std::unordered_map<ChunkPos, size_t>                        mRemainingSubChunkPacketsByColumn;
+    bool                                                        mLevelSimFrozen{false};
+    // Item-use duration each recorded player had after the last replay tick; the client ticks it between ticks too.
+    struct HeldItemUse {
+        void const* item{};
+        int         duration{};
+    };
+    std::unordered_map<ActorUniqueID, HeldItemUse> mHeldItemUse;
+    std::unordered_set<std::string>                mReplayObjectiveNames;
+    std::unordered_set<ChunkPos>                   mCenterChunkPositions;
+    // Last replay-chunk-center log signature, so identical plans do not log again.
+    std::string                                    mChunkCenterLogKey;
+    std::unordered_map<ChunkPos, size_t>           mRemainingSubChunkPacketsByColumn;
 
     std::unordered_map<ChunkPos, std::shared_ptr<LevelChunk>> mRetainedReplayChunks;
 
@@ -231,12 +287,38 @@ private:
     Player*                             mReplayPlayer   = nullptr;
     LegacyClientNetworkHandler*         mNetworkHandler = nullptr;
 
+    // The container screen the replay world opened for the followed player.
+    struct ContainerPreview {
+        int id{};
+        int type{};
+        int openTick{};
+    };
+    std::optional<ContainerPreview> mContainerPreview;
+
+    // Open/close intervals seen while reading actions, so a seek can show the container that is open at its landing.
+    struct RecordedContainer {
+        int         id{};
+        int         openTick{};
+        int         closeTick{-1};
+        std::string payload;
+    };
+    std::vector<RecordedContainer> mRecordedContainers;
+
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
     bool                                                        mReplayCachedResourcePacksLoaded{};
+    std::optional<std::filesystem::path>                        mMountedReplayPacks;
 
     std::shared_ptr<StartGamePacket const> mReplayStartGame;
     bool                                   mRecordedBlockRegistryApplied{};
+
+    // Decoded when the local world's item packet arrives. Reading it at replay start asserts: the packet locks
+    // the thread item registry, which is empty on the main menu.
+    std::mutex       mReplayItemRegistryMutex;
+    std::string      mReplayItemRegistryPayload;
+    std::atomic_bool mRecordedItemRegistryApplied{};
+    // Observer hotbar saved while another player's HUD is shown, so the recorder's slots can be put back.
+    std::unique_ptr<FollowedHudMirror> mFollowedHudMirror;
 
 public:
     bool mIsProcessingSnapshot = false;
@@ -258,6 +340,15 @@ private:
     void completeReplayDimensionTransition();
 
     void resetDimensionScopedReplayState();
+
+    struct FollowedChunkCenter {
+        std::string subject;
+        float       x{};
+        float       z{};
+    };
+
+    // Live actor of the camera's current non-recorder subject, only when that actor is in this snapshot's dimension.
+    [[nodiscard]] std::optional<FollowedChunkCenter> followedPlayerChunkCenter(DimensionType const& snapshotDimension);
 
     [[nodiscard]] bool prepareChunkInjectionPlan(PlaybackView const& view);
 
@@ -282,11 +373,30 @@ private:
     [[nodiscard]] bool
     applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer = false);
 
+    // Tracks the recorded container state; true when the packet was consumed (open/close), false to apply it normally.
+    [[nodiscard]] bool trackContainerUiPacket(MinecraftPacketIds packetId, std::string_view payload);
+
+    bool dispatchUiPacket(std::shared_ptr<Packet> packet);
+
+    void openContainerPreview(std::string_view payload, int openTick);
+
+    void closeContainerPreview(char const* reason);
+
+    void updateContainerPreview();
+
+    // Last record whose half-open interval [openTick, closeTick) contains tick. Unread closes stay open.
+    [[nodiscard]] RecordedContainer const* recordedContainerOpenAt(int tick) const;
+
+    // Brings the preview in line with the recorded container after a seek landed.
+    void syncContainerPreviewAfterSeek();
+
     [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
 
     void releaseReplayResourcePacks();
 
     void prepareRecordedBlockRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
+
+    void prepareRecordedItemRegistry(std::vector<PlaybackSerializedGamePacket> const& packets);
 
     size_t preloadRecordedBlockGeometry(std::vector<std::pair<std::string, CompoundTag>> const& properties);
 
@@ -307,6 +417,18 @@ private:
     [[nodiscard]] bool refreshReplayPlayer();
 
     void parkReplayCameraAtPreview();
+
+    void parkObserverAtPose(keyframe::CameraRenderState const& pose);
+    void parkObserverAfterFollow();
+    void releasePreviewObserver();
+
+    void updatePausedObserverPreview();
+
+    // Parks the observer on the recorded player for a pending teleport or while following; true if following.
+    [[nodiscard]] bool updateSubjectFollow();
+
+    // Where the observer must sit to see through the recorded player's eyes right now.
+    [[nodiscard]] std::optional<keyframe::CameraRenderState> sampleSubjectFollowState();
 
     // Align the server authority with the client so a paused replay isn't pulled back.
     void syncObserverServerPosition(::Vec3 const& feetPosition, ::Vec2 const& rotation);
@@ -329,6 +451,35 @@ private:
 
     [[nodiscard]] bool advanceReplayTick(bool stopAtEnd);
 
+    void syncLevelSimPause(bool freeze);
+
+    void holdItemUseBetweenTicks();
+
+    void rememberReplayPlayer(std::string uuid, std::string name, ActorUniqueID id, bool recorder);
+    void noteReplayIdentity(std::string uuid, std::string name, ActorUniqueID id, bool recorder);
+    void forgetReplayIdentity(std::string const& uuid);
+    void markReplayPlayerAbsent(ActorUniqueID id);
+    void clearReplayPlayers(bool clearChoice);
+    // Updates who is spawned. Identities from the player list stay until a player-list remove.
+    void refreshReplayPlayerRoster();
+    void restoreObserverSkin();
+    void applyObserverSkin(::SerializedSkinRef const& skin);
+    void syncFollowedPlayerHud();
+    void restoreFollowedPlayerHud();
+    void rebindReplaySubject();
+    void refreshReplaySubjectBinding();
+    // Points the follow view at the preview camera track under the playhead. Export drives its own shots.
+    void updatePreviewShot();
+    void clearPreviewShot();
+    // Applies the hide and perspective state of the effective follow view when it changes.
+    void applyFollowView();
+    // Actor id the current choice names: the recorder, a player uuid or an "entity:" id.
+    [[nodiscard]] std::optional<ActorUniqueID> resolveReplaySubjectId(std::string const& choice) const;
+    // Game-thread snapshot of the actors the editor can pick, read by the UI under its own mutex.
+    void refreshReplayEntityList();
+    // Reads the followed actor's flags once per replay tick. snap drops the smoothed eye offset immediately.
+    void updateReplaySubjectPosture(bool snap);
+
 public:
     bool start(std::filesystem::path filePath);
     void stop();
@@ -349,6 +500,13 @@ public:
 
     [[nodiscard]] bool isPaused() const { return mIsPaused; }
 
+    [[nodiscard]] bool isSeekPending() const noexcept {
+        return mSeekTargetTick >= 0 || mRequestedSeekTick.load(std::memory_order_acquire) >= 0;
+    }
+
+    // Lets a paused preview reapply its camera when a seek lands on the tick it already shows.
+    [[nodiscard]] uint64_t seekFinishCount() const noexcept { return mSeekFinishCount.load(std::memory_order_acquire); }
+
     [[nodiscard]] bool hasJoinedReplayWorld() const { return mReplayWorldJoined; }
 
     // True once the snapshot and chunks are in and no transition is pending; gates the editor UI.
@@ -367,6 +525,94 @@ public:
     // Preview drives the observer (the camera) per frame at the render partial tick.
 
     void updateObserverPreview();
+
+    // Chunk streaming, snapshot applies and seeks hold the last pose instead of exposing the stale observer.
+    // While following, re-pins the observer just before the frame is drawn; returns the pose the camera must use.
+    [[nodiscard]] std::optional<keyframe::CameraRenderState> pinFollowObserverForRender();
+
+    // Moves the observer onto the recorded player once, as soon as the replay world and the player's pose are ready.
+    void requestTeleportToRecordedPlayer() noexcept { mTeleportToSubjectPending = true; }
+
+    // Parks the free observer at a pose once the replay world can take it (a keyframe's "move view here").
+    void requestParkObserver(keyframe::CameraRenderState const& pose) { mPendingObserverPark = pose; }
+
+    // Keeps the observer on the recorded player's first-person view until the user takes over or picks a camera.
+    void setFollowRecordedPlayer(bool follow);
+
+    // Pulls the follow camera behind the recorded player. Only honoured while
+    // following; leaving the follow view (free camera, preview camera, export) always returns to first person.
+    void setFollowThirdPerson(bool thirdPerson);
+
+    [[nodiscard]] bool isFollowThirdPerson() const noexcept {
+        return mFollowThirdPerson.load(std::memory_order_acquire);
+    }
+
+    // The follow view actually shown: a person camera track, or the user's follow when no track is active.
+    [[nodiscard]] bool isFollowViewActive() const noexcept {
+        auto const mode = mPreviewShotMode.load(std::memory_order_acquire);
+        return mode == PreviewShotMode::Person
+            || (mode == PreviewShotMode::None && mFollowRecordedPlayer.load(std::memory_order_acquire));
+    }
+
+    [[nodiscard]] bool isFollowViewThirdPerson() const noexcept {
+        return mPreviewShotMode.load(std::memory_order_acquire) == PreviewShotMode::Person
+                 ? mShotThirdPerson.load(std::memory_order_acquire)
+                 : mFollowThirdPerson.load(std::memory_order_acquire);
+    }
+
+    // Pins `subject` (empty is the recorder) as the replay subject for a person camera track; nullopt hands the
+    // subject back to the user's choice.
+    void setShotSubject(std::optional<std::string> subject);
+
+    // Pulls an eye pose back behind the subject like vanilla F5, stopping short of walls.
+    [[nodiscard]] keyframe::CameraRenderState thirdPersonView(keyframe::CameraRenderState const& eye) const;
+
+    struct ReplayPlayerInfo {
+        std::string uuid;
+        std::string name;
+        bool        recorder{};
+        bool        present{};
+    };
+
+    // Empty uuid selects the recorded local player. The choice survives a seek and a missing actor.
+    void setReplaySubjectChoice(std::string uuid);
+
+    // The subject actually bound: a person camera track's subject, else the user's choice.
+    [[nodiscard]] std::string replaySubjectChoice() const;
+
+    // The user's own choice, shown by the pickers.
+    [[nodiscard]] std::string userReplaySubjectChoice() const;
+
+    [[nodiscard]] std::vector<ReplayPlayerInfo> replayPlayers() const;
+
+    // Choice string that follows one replay entity. Player uuids never carry this prefix.
+    static constexpr std::string_view EntityChoicePrefix = "entity:";
+
+    [[nodiscard]] static std::string entityChoice(int64_t rawId) {
+        return std::string{EntityChoicePrefix} + std::to_string(rawId);
+    }
+
+    [[nodiscard]] static std::optional<int64_t> parseEntityChoice(std::string_view choice);
+
+    struct ReplayEntityInfo {
+        std::string choice; // entityChoice(id), a player's uuid, or empty for the recorder
+        std::string label;
+        bool        player{};
+        bool        recorder{};
+        float       x{}, y{}, z{};    // feet
+        float       height{};         // collision box height
+    };
+
+    // Living mobs and players in the replay, observer excluded, nearest to the observer first, as of the last
+    // replay tick.
+    [[nodiscard]] std::vector<ReplayEntityInfo> replayEntities() const;
+
+    // Display label of a choice: the player's name, the entity's label, or the choice itself.
+    [[nodiscard]] std::string replaySubjectLabel(std::string const& choice) const;
+
+    [[nodiscard]] bool isFollowingRecordedPlayer() const noexcept {
+        return mFollowRecordedPlayer.load(std::memory_order_acquire);
+    }
 
     [[nodiscard]] int getCurrentTick() const {
         int const requestedTick = mRequestedSeekTick.load(std::memory_order_acquire);
@@ -434,6 +680,12 @@ public:
 
     void applyRecordedBlockRegistry();
 
+    // The client builds its item registry once, from the first ItemRegistryPacket it handles. The local world's
+    // packet is swapped for the recorded one; returns null when there is none or it was already handed out.
+    [[nodiscard]] std::shared_ptr<ItemRegistryPacket const> takeRecordedItemRegistry();
+
+    void logRecordedItemRegistryApplied(ItemRegistryPacket const& packet) const;
+
     [[nodiscard]] bool shouldIsolateChunkPackets() const;
 
     [[nodiscard]] bool shouldSuppressNativeChunk(ChunkPos const& pos, DimensionType packetDimension) const;
@@ -481,10 +733,15 @@ public:
     void handleGamePacket(PlaybackBuffer& data);
 
     void handleMoveEntities(PlaybackBuffer& data);
+    void handleLocalCameraOffset(PlaybackBuffer& data);
+    void handleLocalViewSamples(PlaybackBuffer& data);
 
 private:
     ReplaySession();
     ~ReplaySession();
+
+    mutable std::mutex            mReplayEntitiesMutex;
+    std::vector<ReplayEntityInfo> mReplayEntities;
 
 public:
     [[nodiscard]] static ReplaySession& getInstance() {

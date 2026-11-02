@@ -9,8 +9,13 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/GuiData.h"
+#include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/GameRenderer.h"
+#include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
+#include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
 #include "mc/deps/renderer/ViewportInfo.h"
+#include "mc/entity/components/DimensionStateComponent.h"
+#include "mc/entity/components/LoadingStateComponent.h"
 
 #include <cmath>
 #include <limits>
@@ -321,6 +326,27 @@ bool OfflineRenderFrameExecutor::isUiStable() const {
     return client && replay.isActive() && replay.hasJoinedReplayWorld() && !replay.isDimensionTransitionPending()
         && client->isInWorldAndNotShowingAnyMenuScreens() && !client->isShowingLoadingScreen()
         && !client->isShowingProgressScreen() && !client->isShowingWorldProgressScreen();
+}
+
+bool OfflineRenderFrameExecutor::forceFinishDimensionLoading() const {
+    auto client = ll::service::getClientInstance();
+    auto player = client ? client->getLocalPlayer() : nullptr;
+    if (!player) return false;
+    // 26.10 does not export the DimensionStateSystem / loading-state helpers; edit the components they wrapped.
+    auto& context      = player->getEntityContext();
+    auto* dimension    = context.tryGetComponent<DimensionStateComponent>().as_ptr();
+    auto* loadingState = context.tryGetComponent<LoadingStateComponent>().as_ptr();
+    bool  dimensionOk  = !dimension || dimension->mDimensionState == DimensionStateComponent::DimensionState::Ready;
+    auto  loading      = loadingState ? loadingState->mLoadingState : LoadingState::Done;
+    if (dimensionOk && loading == LoadingState::Done) return false;
+    getLogger().warn(
+        "Forcing the native dimension loading to finish: dimensionReady={}, loadingState={}",
+        dimensionOk,
+        static_cast<int>(loading)
+    );
+    if (dimension) dimension->mDimensionState = DimensionStateComponent::DimensionState::Ready;
+    if (loadingState) loadingState->mLoadingState = LoadingState::Done;
+    return true;
 }
 
 void OfflineRenderFrameExecutor::fail(std::string message) { mMessage = std::move(message); }

@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include "playback/state/editing/models/CameraEntity.h"
+
 #include <set>
 #include <string>
 #include <string_view>
@@ -14,14 +16,15 @@ namespace playback::editor::ui {
 enum class TrackRowKind { Camera };
 
 struct TrackTreeRow {
-    TrackRowKind kind;
-    std::string  id;
-    std::string  name;
-    std::string  cameraId;
-    int          cameraIndex{-1};
-    float        height{};
-    bool         locked{};
-    bool         enabled{true};
+    TrackRowKind                           kind;
+    std::string                            id;
+    std::string                            name;
+    std::string                            cameraId;
+    int                                    cameraIndex{-1};
+    float                                  height{};
+    bool                                   locked{};
+    bool                                   enabled{true};
+    state::editing::model::CameraTrackKind trackKind{state::editing::model::CameraTrackKind::Keyframe};
 };
 
 class TrackTreeModel {

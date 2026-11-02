@@ -1,4 +1,4 @@
-{
+﻿{
     "playback": {
         "command": {
             "playback": {
@@ -9,7 +9,32 @@
                 "description": "Control replay recording",
                 "started": "Recording started",
                 "paused": "Recording paused",
-                "stopped": "Recording stopped"
+                "stopped": "Recording stopped",
+                "rate": "First-person view recording rate: {} per second (20 = per tick only)",
+                "rateSet": "First-person view recording rate set to {} per second; applies to the next recording",
+                "indicatorShown": "Recording indicator shown",
+                "indicatorHidden": "Recording indicator hidden"
+            }
+        },
+        "recordControls": {
+            "start": "Start Recording",
+            "pause": "Pause Recording",
+            "resume": "Resume Recording",
+            "stop": "Finish Recording",
+            "recording": "REC",
+            "paused": "Paused",
+            "dialog": {
+                "confirmCancelTitle": "Discard Recording?",
+                "confirmCancelMessage": "The current recording will be permanently deleted.",
+                "keep": "Keep",
+                "discard": "Discard",
+                "saveTitle": "Save Recording",
+                "saveDescription": "Enter a name for the saved recording. Leave it empty to use the timestamp.",
+                "save": "Save",
+                "delete": "Delete",
+                "confirmDeleteTitle": "Delete Saved Recording?",
+                "confirmDeleteMessage": "The pending recording will be permanently deleted.",
+                "back": "Back"
             }
         },
         "replayBrowser": {
@@ -125,7 +150,9 @@
                 "undo": "Undo",
                 "redo": "Redo",
                 "delete": "Delete",
-                "selectAll": "Select All",
+                "selectAll": "Select All Keyframes",
+                "copy": "Copy Keyframes",
+                "paste": "Paste Keyframes at Playhead",
                 "shortcuts": "Keyboard Shortcuts",
                 "documentation": "Documentation",
                 "about": "About"
@@ -160,6 +187,7 @@
                 "splitAtPlayhead": "Split at Playhead",
                 "rippleDelete": "Ripple Delete",
                 "segmentLocked": "Segment is locked.",
+                "keyframeSubject": "Subject",
                 "subActor": "Sub Actor",
                 "subActors": "Sub Actors",
                 "subActorMissing": "Sub actor no longer exists.",
@@ -179,6 +207,7 @@
                 "nameLabel": "Name",
                 "keyframesLabel": "Keyframes",
                 "enabled": "Enabled",
+                "locked": "Locked",
                 "unbindCamera": "Unbind Camera",
                 "addKeyframeAtPlayhead": "Add Keyframe at Playhead",
                 "tickValue": "Tick {}",
@@ -194,7 +223,13 @@
                 "marker": "Marker",
                 "markerMissing": "Marker no longer exists.",
                 "deleteMarker": "Delete Marker",
-                "markerNotWired": "Marker editing is not yet wired to the backend.",
+                "keyframesSelected": "{} keyframes selected",
+                "multiKeyframe": "Keyframes",
+                "keyframeCount": "Keyframes",
+                "trackCount": "Tracks",
+                "mixed": "(mixed)",
+                "deleteKeyframes": "Delete {} keyframes",
+                "multiKeyframeHint": "Drag any selected keyframe to move them all. Ctrl+click adds or removes one.",
                 "addFreeCamera": "Add Free Camera",
                 "interpolationType": {
                     "smooth": "Smooth",
@@ -309,6 +344,8 @@
                 "seekTicks": "Seek 1 tick",
                 "editPoints": "Previous / next edit point",
                 "speed": "Slower / faster",
+                "stopFollow": "While following in first person: stop following (tap alone)",
+                "togglePerspective": "While following a player: toggle first / third person",
                 "undoRedo": "Undo / Redo",
                 "saveProject": "Save project",
                 "keyframe": "Add camera keyframe",
@@ -319,6 +356,13 @@
                 "zoomReset": "Zoom timeline to fit",
                 "exportRange": "Mark export in / out point",
                 "delete": "Delete selected item",
+                "selectAll": "Select all keyframes",
+                "boxSelect": "Add to selection / box select keyframes",
+                "clearSelection": "Clear selection",
+                "copyPaste": "Copy keyframes / paste at playhead",
+                "shiftSnap": "Snap to keyframes, markers and playhead while dragging",
+                "insertMarker": "Add marker at playhead",
+                "markers": "Previous / next marker",
                 "export": "Open export settings",
                 "viewport": "Maximize / restore viewport",
                 "uiScale": "Smaller / larger interface",
@@ -328,7 +372,7 @@
             "timeline": {
                 "searchTracks": "Search tracks",
                 "snap": "Snap",
-                "snapTooltip": "Snap keyframes to whole seconds",
+                "snapTooltip": "Snap keyframes to whole seconds. Hold Shift while dragging to snap to keyframes, markers and the playhead.",
                 "addTrack": "Add track",
                 "maximize": "Maximize viewport (Ctrl+Shift+F)",
                 "restore": "Restore viewport (Esc)",
@@ -345,10 +389,42 @@
                 "nextTick": "Next tick",
                 "title": "Timeline",
                 "trackCount": "{} cameras",
-                "speedTooltip": "Playback speed"
+                "speedTooltip": "Playback speed",
+                "addFirstPersonTrack": "Add first-person track",
+                "addThirdPersonTrack": "Add third-person track",
+                "copyKeyframe": "Copy keyframe",
+                "pasteKeyframe": "Paste keyframe",
+                "copyKeyframes": "Copy {} keyframes",
+                "pasteKeyframes": "Paste {} keyframes",
+                "addMarker": "Add Marker at Playhead",
+                "addMarkerHere": "Add marker here",
+                "renameMarker": "Name (Enter to apply)",
+                "deleteMarker": "Delete marker",
+                "seekToMarker": "Move playhead to marker",
+                "addKeyframeHere": "Add keyframe here",
+                "seekHere": "Move playhead here",
+                "setTick": "Tick",
+                "setInPoint": "Set in point",
+                "setOutPoint": "Set out point",
+                "clearExportRange": "Clear export range",
+                "previewCamera": "Preview this camera",
+                "applyKeyframe": "Move view to this keyframe",
+                "renameTrack": "Name (Enter to apply)",
+                "lockTrack": "Lock track",
+                "unlockTrack": "Unlock track",
+                "clearKeyframes": "Clear keyframes ({})",
+                "deleteTrack": "Delete track"
             },
             "viewport": {
                 "freeCamera": "Free camera",
+                "teleportToPlayer": "Teleport to recorded player",
+                "followPlayer": "Follow recorded player",
+                "firstPerson": "First person…",
+                "followSubject": "First person: {}",
+                "nearbyEntities": "Nearby entities",
+                "followEntity": "First person: {}",
+                "noEntityHere": "No entity here",
+                "followSubjectThird": "Third person: {}",
                 "cameraTooltip": "Preview camera",
                 "aspectTooltip": "Aspect ratio",
                 "autoPreview": "Auto preview",
@@ -356,6 +432,17 @@
                 "infoOverlay": "Info overlay",
                 "position": "Position",
                 "rotation": "Rotation"
+            },
+            "playerPicker": {
+                "searchHint": "Search name or UUID",
+                "recorder": "Recorder",
+                "present": "Present players",
+                "absent": "Not present",
+                "absentHint": "Seek to when this player is present to select them",
+                "unnamed": "Unnamed player",
+                "noMatch": "No matching players",
+                "noPlayers": "No other players present",
+                "stopFollow": "Stop following"
             },
             "inspector": {
                 "selection": "Selection",
@@ -378,7 +465,10 @@
                 "optiPistonHint": "Saved to OptiPiston's config; also applies outside replays."
             },
             "defaults": {
-                "camera": "Camera {}"
+                "camera": "Camera {}",
+                "firstPersonCamera": "First person {}",
+                "thirdPersonCamera": "Third person {}",
+                "marker": "Marker {}"
             }
         }
     }

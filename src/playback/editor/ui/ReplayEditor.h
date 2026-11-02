@@ -34,6 +34,7 @@ public:
     void draw(playback::state::EditorState const& state, SubmitAction const& submit);
 
     void handleKeyboardShortcuts();
+    void updateFollowExitTap();
 
     [[nodiscard]] playback::state::EditorState const&          state() const;
     [[nodiscard]] state::editing::model::SelectionModel const& selection() const { return mSelection; }
@@ -48,6 +49,10 @@ public:
     [[nodiscard]] bool isCameraPathVisible() const override { return mCameraPathVisible; }
     bool               deleteSelection() override;
     bool               addKeyframeAtPlayhead() override;
+    bool               selectAllKeyframes() override;
+    bool               copySelection() override;
+    bool               pasteAtPlayhead() override;
+    bool               addMarkerAtPlayhead() override;
     bool               selectCameraByIndex(std::size_t index);
 
     [[nodiscard]] bool  isInfoOverlayVisible() const override { return mViewportPanel.isInfoOverlayVisible(); }
@@ -96,6 +101,7 @@ private:
     state::editing::model::SelectionModel mSelection;
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
+    bool  mFollowExitTapArmed{false};
     float mExitHoldSeconds{};
 
     float       mDetailsWidthRatio{0.28f};

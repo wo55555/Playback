@@ -4,6 +4,8 @@
 #include "FfmpegVideoWriter.h"
 #include "PngSequenceWriter.h"
 
+#include "playback/audio/ExportAudioCapture.h"
+
 #include <mutex>
 #include <utility>
 
@@ -181,7 +183,10 @@ FrameWriterSubmitResult ExportCoordinator::trySubmit(visuals::CapturedFrame& fra
         return FrameWriterSubmitResult::Failed;
     }
 
-    auto const result       = writer->trySubmit(frame);
+    auto const result = writer->trySubmit(frame);
+    // Advance the export audio ledger exactly once per accepted frame (warmup/convergence never reach here).
+    if (result == FrameWriterSubmitResult::Accepted)
+        playback::audio::exportcap::onFrameAccepted(frame.ticket.frameIndex);
     auto const writerStatus = writer->status();
     bool       writerFailed = result == FrameWriterSubmitResult::Failed || writerStatus.error != ExportError::None;
     {
