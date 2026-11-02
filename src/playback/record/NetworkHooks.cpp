@@ -11,15 +11,26 @@
 #include "mc/client/network/ClientNetworkHandler.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
 #include "mc/client/player/LocalPlayer.h"
+#include "mc/client/renderer/game/GameRenderer.h"
+#include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/network/NetworkIdentifier.h"
 #include "mc/network/NetworkStatistics.h"
 #include "mc/network/Packet.h"
 #include "mc/network/packet/ActorEventPacket.h"
 #include "mc/network/packet/AddActorPacket.h"
 #include "mc/network/packet/AddItemActorPacket.h"
+#include "mc/network/packet/AddPlayerPacket.h"
 #include "mc/network/packet/AvailableActorIdentifiersPacket.h"
+#include "mc/network/packet/InventoryContentPacket.h"
+#include "mc/network/packet/InventorySlotPacket.h"
+#include "mc/network/packet/ItemData.h"
+#include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
+#include "mc/network/packet/MobEquipmentPacket.h"
+#include "mc/network/packet/PlayerHotbarPacket.h"
+#include "mc/network/packet/PlayerListPacket.h"
+#include "mc/network/packet/PlayerSkinPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
@@ -39,6 +50,8 @@
 #include "mc/world/level/dimension/DimensionArguments.h"
 
 
+
+#include <atomic>
 #include <utility>
 #include <variant>
 
@@ -57,12 +70,16 @@ struct NetworkHookState {
     bool resourcePacksInfo{};
     bool resourcePackStack{};
     bool startGame{};
+    bool itemRegistry{};
     bool actorIdentifiers{};
     bool completion{};
     bool packetObserver{};
     bool packetSender{};
     bool addActor{};
     bool addItemActor{};
+    bool addPlayer{};
+    bool playerList{};
+    bool playerSkin{};
     bool removeActor{};
     bool takeItemActor{};
     bool actorEvent{};
@@ -71,21 +88,37 @@ struct NetworkHookState {
     bool updateBlockSynced{};
     bool updateSubChunkBlocks{};
     bool renderFinalizer{};
+    bool renderedFov{};
+    bool localViewFrame{};
+    bool inventorySlot{};
+    bool inventoryContent{};
+    bool playerHotbar{};
+    bool mobEquipment{};
+
+    [[nodiscard]] bool hudHandlersInstalled() const {
+        return inventorySlot && inventoryContent && playerHotbar && mobEquipment;
+    }
+
+    [[nodiscard]] bool hudHandlersRemoved() const {
+        return !inventorySlot && !inventoryContent && !playerHotbar && !mobEquipment;
+    }
 
     [[nodiscard]] bool fastPathHandlersInstalled() const {
         return removeActor && takeItemActor && actorEvent && levelEvent && updateBlock && updateBlockSynced
-            && updateSubChunkBlocks;
+            && updateSubChunkBlocks && addPlayer && playerList && playerSkin;
     }
 
     [[nodiscard]] bool fastPathHandlersRemoved() const {
         return !removeActor && !takeItemActor && !actorEvent && !levelEvent && !updateBlock && !updateBlockSynced
-            && !updateSubChunkBlocks;
+            && !updateSubChunkBlocks && !addPlayer && !playerList && !playerSkin;
     }
 
-    [[nodiscard]] bool resourceHandlersInstalled() const { return resourcePacksInfo && resourcePackStack && startGame; }
+    [[nodiscard]] bool resourceHandlersInstalled() const {
+        return resourcePacksInfo && resourcePackStack && startGame && itemRegistry;
+    }
 
     [[nodiscard]] bool resourceHandlersRemoved() const {
-        return !resourcePacksInfo && !resourcePackStack && !startGame;
+        return !resourcePacksInfo && !resourcePackStack && !startGame && !itemRegistry;
     }
 };
 
@@ -94,7 +127,11 @@ NetworkHookState& networkHookState() {
     return state;
 }
 
+std::atomic<float> gRenderedFov{0.0f};
+
 } // namespace
+
+float latestRenderedFov() noexcept { return gRenderedFov.load(std::memory_order_relaxed); }
 
 LL_TYPE_INSTANCE_HOOK(
     PlaybackPacketReceivedHook,
@@ -238,6 +275,10 @@ LL_TYPE_INSTANCE_HOOK(
     }
 
 PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackRemoveActorHook, LegacyClientNetworkHandler, RemoveActorPacket)
+// The statistics observer did not keep these during a match whose tab list still grew. Record the handler copy.
+PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackAddPlayerHook, LegacyClientNetworkHandler, AddPlayerPacket)
+PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackPlayerListHook, LegacyClientNetworkHandler, PlayerListPacket)
+PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackPlayerSkinHook, LegacyClientNetworkHandler, PlayerSkinPacket)
 PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackTakeItemActorHook, ClientNetworkHandler, TakeItemActorPacket)
 PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackActorEventHook, ClientNetworkHandler, ActorEventPacket)
 PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackLevelEventHook, ClientNetworkHandler, LevelEventPacket)
@@ -354,6 +395,65 @@ LL_TYPE_INSTANCE_HOOK(
     origin(source, packet);
 }
 
+// The replay world's own server keeps resyncing the observer's inventory, which overwrites the HUD the replay shows.
+// Only recorded (injected) inventory packets may reach the observer while the replay world is isolated.
+bool dropLocalHudPacket(Packet const* packet) {
+    auto& replaySession = replay::ReplaySession::getInstance();
+    return replaySession.isIsolatingReplayWorld() && !replaySession.isInjectingPacket(packet);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackInventorySlotHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&   source,
+    InventorySlotPacket const& packet
+) {
+    if (dropLocalHudPacket(&packet)) return;
+    origin(source, packet);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackInventoryContentHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&      source,
+    InventoryContentPacket const& packet
+) {
+    if (dropLocalHudPacket(&packet)) return;
+    origin(source, packet);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackPlayerHotbarHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&  source,
+    PlayerHotbarPacket const& packet
+) {
+    if (dropLocalHudPacket(&packet)) return;
+    origin(source, packet);
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackMobEquipmentHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&            source,
+    std::shared_ptr<MobEquipmentPacket> packet // NOLINT
+) {
+    if (packet && dropLocalHudPacket(packet.get())) return;
+    origin(source, std::move(packet));
+}
+
 LL_TYPE_INSTANCE_HOOK(
     PlaybackResourcePackStackHook,
     ll::memory::HookPriority::Normal,
@@ -397,6 +497,38 @@ LL_TYPE_INSTANCE_HOOK(
     replaySession.applyRecordedBlockRegistry();
 }
 
+// The server's own table carries the data-driven item versions and components (icons) that a table rebuilt from the
+// client registry loses. The client builds its registry from the first table only, so during replay the local
+// world's table is swapped for the recorded one.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackItemRegistryHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&  source,
+    ItemRegistryPacket const& packet
+) {
+    auto& replaySession = ReplaySession::getInstance();
+    if (!replaySession.isIsolatingReplayWorld()) {
+        Recorder::getInstance().recordGamePacket(packet);
+        origin(source, packet);
+        return;
+    }
+    if (replaySession.isInjectingPacket(&packet)) {
+        origin(source, packet);
+        return;
+    }
+
+    auto recorded = replaySession.takeRecordedItemRegistry();
+    if (!recorded) {
+        origin(source, packet);
+        return;
+    }
+    origin(source, *recorded);
+    replaySession.logRecordedItemRegistryApplied(*recorded);
+}
+
 // Materials are only baked inside this pass, so the recorded blocks must be registered before it runs.
 LL_TYPE_INSTANCE_HOOK(
     PlaybackRenderFinalizerHook,
@@ -432,6 +564,35 @@ LL_TYPE_INSTANCE_HOOK(
     replay::ReplaySession::getInstance().onLevelChunkHandled(pos, dimension);
 }
 
+// The renderer smooths the FOV per frame (option FOV times the sprint/potion modifier); the final value is what replays
+// need.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackRenderedFovHook,
+    ll::memory::HookPriority::Lowest,
+    LevelRendererPlayer,
+    &LevelRendererPlayer::getFov,
+    float,
+    float amount,
+    bool  enableVariableFov
+) {
+    float const fov = origin(amount, enableVariableFov);
+    if (enableVariableFov) gRenderedFov.store(fov, std::memory_order_relaxed);
+    return fov;
+}
+
+// The local player turns its view once per frame (input is applied while rendering) but moves once per tick.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackLocalViewFrameHook,
+    ll::memory::HookPriority::Normal,
+    GameRenderer,
+    &GameRenderer::renderCurrentFrame,
+    void,
+    float partialTick
+) {
+    origin(partialTick);
+    Recorder::getInstance().recordLocalViewFrame(partialTick);
+}
+
 template <class Hook>
 bool installNetworkHook(bool& installed) {
     if (!installed) installed = Hook::hook() == 0;
@@ -450,13 +611,13 @@ bool hookNetwork(bool enable) {
         return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
             && state.resourceHandlersInstalled() && state.actorIdentifiers && state.completion && state.packetObserver
             && state.packetSender && state.addActor && state.addItemActor && state.fastPathHandlersInstalled()
-            && state.renderFinalizer;
+            && state.renderFinalizer && state.renderedFov && state.localViewFrame && state.hudHandlersInstalled();
     };
     auto noneInstalled = [&] {
         return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime
             && state.resourceHandlersRemoved() && !state.actorIdentifiers && !state.completion && !state.packetObserver
             && !state.packetSender && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved()
-            && !state.renderFinalizer;
+            && !state.renderFinalizer && !state.renderedFov && !state.localViewFrame && state.hudHandlersRemoved();
     };
     auto installAll = [&] {
         return installNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor)
@@ -466,12 +627,16 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo)
             && installNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack)
             && installNetworkHook<PlaybackStartGameHook>(state.startGame)
+            && installNetworkHook<PlaybackItemRegistryHook>(state.itemRegistry)
             && installNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers)
             && installNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion)
             && installNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver)
             && installNetworkHook<PlaybackPacketSentHook>(state.packetSender)
             && installNetworkHook<PlaybackAddActorHook>(state.addActor)
             && installNetworkHook<PlaybackAddItemActorHook>(state.addItemActor)
+            && installNetworkHook<PlaybackAddPlayerHook>(state.addPlayer)
+            && installNetworkHook<PlaybackPlayerListHook>(state.playerList)
+            && installNetworkHook<PlaybackPlayerSkinHook>(state.playerSkin)
             && installNetworkHook<PlaybackRemoveActorHook>(state.removeActor)
             && installNetworkHook<PlaybackTakeItemActorHook>(state.takeItemActor)
             && installNetworkHook<PlaybackActorEventHook>(state.actorEvent)
@@ -479,9 +644,21 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackUpdateBlockHook>(state.updateBlock)
             && installNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced)
             && installNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks)
-            && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
+            && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer)
+            && installNetworkHook<PlaybackRenderedFovHook>(state.renderedFov)
+            && installNetworkHook<PlaybackLocalViewFrameHook>(state.localViewFrame)
+            && installNetworkHook<PlaybackInventorySlotHook>(state.inventorySlot)
+            && installNetworkHook<PlaybackInventoryContentHook>(state.inventoryContent)
+            && installNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar)
+            && installNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment);
     };
     auto removeAll = [&] {
+        removeNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment);
+        removeNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar);
+        removeNetworkHook<PlaybackInventoryContentHook>(state.inventoryContent);
+        removeNetworkHook<PlaybackInventorySlotHook>(state.inventorySlot);
+        removeNetworkHook<PlaybackLocalViewFrameHook>(state.localViewFrame);
+        removeNetworkHook<PlaybackRenderedFovHook>(state.renderedFov);
         removeNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
         removeNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks);
         removeNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced);
@@ -490,12 +667,16 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackActorEventHook>(state.actorEvent);
         removeNetworkHook<PlaybackTakeItemActorHook>(state.takeItemActor);
         removeNetworkHook<PlaybackRemoveActorHook>(state.removeActor);
+        removeNetworkHook<PlaybackPlayerSkinHook>(state.playerSkin);
+        removeNetworkHook<PlaybackPlayerListHook>(state.playerList);
+        removeNetworkHook<PlaybackAddPlayerHook>(state.addPlayer);
         removeNetworkHook<PlaybackAddItemActorHook>(state.addItemActor);
         removeNetworkHook<PlaybackAddActorHook>(state.addActor);
         removeNetworkHook<PlaybackPacketSentHook>(state.packetSender);
         removeNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver);
         removeNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion);
         removeNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers);
+        removeNetworkHook<PlaybackItemRegistryHook>(state.itemRegistry);
         removeNetworkHook<PlaybackStartGameHook>(state.startGame);
         removeNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack);
         removeNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo);

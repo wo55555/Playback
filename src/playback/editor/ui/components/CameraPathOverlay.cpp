@@ -247,6 +247,12 @@ void drawCameraGlyph(
     painter.flush();
 }
 
+// Person tracks view a replay player, so they have no path of their own to draw.
+bool isKeyframePath(state::editing::model::CameraEntity const& camera) {
+    return camera.enabled && !camera.keysByTick.empty()
+        && camera.kind == state::editing::model::CameraTrackKind::Keyframe;
+}
+
 struct NeighborTicks {
     int lastLast{-1};
     int last{-1};
@@ -262,7 +268,7 @@ NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, i
     bool       hasLast   = false;
     bool       hasNext   = false;
     for (auto const& camera : timeline.cameras()) {
-        if (!camera.enabled || camera.keysByTick.empty()) continue;
+        if (!isKeyframePath(camera)) continue;
         auto const nextIt = camera.keysByTick.upper_bound(currentTick);
         if (nextIt != camera.keysByTick.begin()) {
             int const tick = std::prev(nextIt)->first;
@@ -284,7 +290,7 @@ NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, i
     bool hasLastLast = false;
     bool hasNextNext = false;
     for (auto const& camera : timeline.cameras()) {
-        if (!camera.enabled || camera.keysByTick.empty()) continue;
+        if (!isKeyframePath(camera)) continue;
         if (hasLast) {
             auto const it = camera.keysByTick.lower_bound(window.last);
             if (it != camera.keysByTick.begin()) {
@@ -312,7 +318,7 @@ NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, i
 
 bool holdAt(keyframe::CameraTimelineEvaluator const& timeline, int tick) {
     for (auto const& camera : timeline.cameras()) {
-        if (!camera.enabled) continue;
+        if (!isKeyframePath(camera)) continue;
         auto const it = camera.keysByTick.find(tick);
         if (it != camera.keysByTick.end()) {
             return it->second.interpolationType == state::editing::model::CameraInterpolationType::Hold;
@@ -351,7 +357,7 @@ void CameraPathOverlay::rebuild(keyframe::CameraTimelineHandle const& timeline, 
 
     auto addMarker = [&](int tick, float opacity) {
         if (tick < 0) return;
-        auto const sample = timeline->sample({tick, 1});
+        auto const sample = timeline->sampleKeyframePath({tick, 1});
         if (!sample || !finite(sample->state)) return;
         mMarkers.push_back(
             Marker{
@@ -403,8 +409,9 @@ void CameraPathOverlay::advanceBuild() {
             continue;
         }
         int64_t const duration = static_cast<int64_t>(line.toTick) - line.fromTick;
-        auto const    sample =
-            mTimeline->sample({static_cast<int64_t>(line.fromTick) * line.steps + duration * index, line.steps});
+        auto const    sample = mTimeline->sampleKeyframePath(
+            {static_cast<int64_t>(line.fromTick) * line.steps + duration * index, line.steps}
+        );
         line.points.push_back(
             sample ? ::glm::vec3{sample->state.x, sample->state.y, sample->state.z}
                    : ::glm::vec3{std::numeric_limits<float>::quiet_NaN()}
@@ -450,7 +457,11 @@ void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImD
         if (marker.dimensionSegment != dimension) continue;
         drawCameraGlyph(painter, marker.pose, aspect, fade(theme::kCameraPath, marker.opacity), kGlyphThickness);
     }
-    if (ctx.state.paused) {
+    // The playhead glyph marks a keyframe camera's pose; person tracks and the follow view show the player itself.
+    auto const shot         = timeline->shotAt(ctx.state.currentTick);
+    bool const keyframeView = shot ? shot.kind() == state::editing::model::CameraTrackKind::Keyframe
+                                   : !ctx.state.followingRecordedPlayer;
+    if (ctx.state.paused && keyframeView) {
         // Reuse the render frame's sample time so the glyph matches the pose the camera was drawn with.
         auto const time =
             ctx.cameraProjection->sampleTime.value_or(visuals::ReplaySampleTime{ctx.state.currentTick, 1});

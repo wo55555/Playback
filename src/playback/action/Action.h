@@ -132,4 +132,30 @@ public:
     }
 };
 
+// Camera offset from the recorded local player's position (sneak/swim eye drop) plus the rendered FOV in degrees, four
+// floats per tick; the snapshot context carries the same values for the snapshot tick.
+struct ActionLocalCameraOffset : Action {
+    ActionLocalCameraOffset() : Action("local_camera_offset") {}
+    void handle(replay::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionLocalCameraOffset& getInstance() {
+        static ActionLocalCameraOffset instance;
+        return instance;
+    }
+};
+
+// Recorded local player view between the previous and this tick, one sample per rendered frame: a count, then the
+// partial tick (0 to 1, exclusive), pitch and yaw. Written only for ticks whose view did not turn in a straight line.
+struct ActionLocalViewSamples : Action {
+    ActionLocalViewSamples() : Action("local_view_samples") {}
+    void handle(replay::ReplaySession& replaySession, PlaybackBuffer& data) override;
+
+public:
+    [[nodiscard]] static ActionLocalViewSamples& getInstance() {
+        static ActionLocalViewSamples instance;
+        return instance;
+    }
+};
+
 } // namespace playback::action

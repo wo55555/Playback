@@ -32,6 +32,9 @@ struct OfflineReplayTickPacing {
 
 [[nodiscard]] bool hookClientTick(bool enable);
 
+// Runs one native level tick from inside a replay tick; false when no client level tick is in progress.
+bool runNativeLevelTick();
+
 [[nodiscard]] bool beginOfflineReplayTickGate();
 void               endOfflineReplayTickGate();
 

@@ -28,11 +28,11 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::Redo,                    "playback.editor.redo",             'Z',          true,  true,  false},
     {EditorKeybind::DeleteSelection,         "playback.editor.delete",           VK_DELETE,    false, false, false},
     {EditorKeybind::DeleteSelection,         "playback.editor.delete",           VK_BACK,      false, false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.selectAll",        'A',          true,  false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.cancel",           VK_ESCAPE,    false, false, false},
+    {EditorKeybind::SelectAll,               "playback.editor.selectAll",        'A',          true,  false, false},
+    {EditorKeybind::ClearSelection,          "playback.editor.cancel",           VK_ESCAPE,    false, false, false},
     {EditorKeybind::NamedOnly,               "playback.editor.cut",              'X',          true,  false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.copy",             'C',          true,  false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.paste",            'V',          true,  false, false},
+    {EditorKeybind::Copy,                    "playback.editor.copy",             'C',          true,  false, false},
+    {EditorKeybind::Paste,                   "playback.editor.paste",            'V',          true,  false, false},
     {EditorKeybind::TogglePlayback,          "playback.editor.playPause",        VK_SPACE,     false, false, false},
     {EditorKeybind::JumpStart,               "playback.editor.jumpStart",        VK_HOME,      false, false, false},
     {EditorKeybind::JumpEnd,                 "playback.editor.jumpEnd",          VK_END,       false, false, false},
@@ -51,9 +51,9 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::SelectCamera3,           "playback.editor.camera3",          '3',          false, false, false},
     {EditorKeybind::MarkExportIn,            "playback.editor.setInPoint",       'I',          false, false, false},
     {EditorKeybind::MarkExportOut,           "playback.editor.setOutPoint",      'O',          false, false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.insertMarker",     'M',          false, false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.jumpPrevMarker",   VK_OEM_4,     false, false, false},
-    {EditorKeybind::NamedOnly,               "playback.editor.jumpNextMarker",   VK_OEM_6,     false, false, false},
+    {EditorKeybind::InsertMarker,            "playback.editor.insertMarker",     'M',          false, false, false},
+    {EditorKeybind::PreviousMarker,          "playback.editor.jumpPrevMarker",   VK_OEM_4,     false, false, false},
+    {EditorKeybind::NextMarker,              "playback.editor.jumpNextMarker",   VK_OEM_6,     false, false, false},
     {EditorKeybind::ZoomInTimeline,          "playback.editor.zoomInTimeline",   VK_OEM_PLUS,  false, false, false},
     {EditorKeybind::ZoomOutTimeline,         "playback.editor.zoomOutTimeline",  VK_OEM_MINUS, false, false, false},
     {EditorKeybind::ResetTimelineZoom,       "playback.editor.resetZoom",        VK_OEM_5,     false, false, false},
@@ -62,6 +62,7 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::ResetUiScale,            "playback.editor.resetUiScale",     '0',          true,  true,  false},
     {EditorKeybind::ToggleViewportMaximized, "playback.editor.maximizeViewport", 'F',          true,  true,  false},
     {EditorKeybind::NamedOnly,               "playback.editor.toggleUI",         VK_F1,        false, false, false},
+    {EditorKeybind::ToggleFollowPerspective, "playback.editor.togglePerspective", VK_F5,       false, false, false},
 };
 
 [[nodiscard]] bool modifiersMatch(KeyBinding const& binding, bool ctrl, bool shift, bool alt) {
@@ -108,6 +109,8 @@ constexpr KeyBinding kBindings[] = {
         return ImGuiKey_RightBracket;
     case VK_F1:
         return ImGuiKey_F1;
+    case VK_F5:
+        return ImGuiKey_F5;
     default:
         return ImGuiKey_None;
     }
@@ -150,6 +153,8 @@ constexpr KeyBinding kBindings[] = {
         return "]";
     case VK_F1:
         return "F1";
+    case VK_F5:
+        return "F5";
     default:
         return {};
     }

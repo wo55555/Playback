@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace playback::state {
 
@@ -23,11 +24,24 @@ struct ProjectPersistenceState {
     std::string error;
 };
 
+struct ReplayPlayerView {
+    std::string uuid;
+    std::string name;
+    bool        recorder{};
+    bool        present{};
+};
+
 struct EditorState {
     bool                                                         replayVisible{};
     bool                                                         editorVisible{};
     bool                                                         hudVisible{};
     bool                                                         paused{};
+    bool                                                         followingRecordedPlayer{};
+    bool                                                         followThirdPerson{};
+    std::string                                                  replaySubjectChoice;
+    // The camera track under the playhead, if any.
+    std::string                                                  activeCameraId;
+    std::vector<ReplayPlayerView>                                replayPlayers;
     float                                                        playbackSpeed{1.0f};
     int                                                          currentTick{};
     int                                                          totalTicks{};

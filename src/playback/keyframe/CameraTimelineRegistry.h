@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -16,8 +17,9 @@ enum class CameraTimelineSource : uint8_t { Preview, Export };
 using CameraTimelineHandle = std::shared_ptr<CameraTimelineEvaluator const>;
 
 struct CameraTimelineSample {
-    CameraRenderState state;
-    std::string       cameraId;
+    CameraRenderState                      state;
+    std::string                            cameraId;
+    state::editing::model::CameraTrackKind kind{state::editing::model::CameraTrackKind::Keyframe};
 };
 
 using CameraTimelineAppliedFlag = std::shared_ptr<std::atomic_bool>;

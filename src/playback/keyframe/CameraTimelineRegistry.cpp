@@ -14,13 +14,13 @@ struct Binding {
     CameraTimelineHandle timeline;
 };
 
-std::atomic<std::shared_ptr<Binding const>>    gPreview;
-std::atomic<std::shared_ptr<Binding const>>    gExport;
-std::atomic<CameraTimelineRenderContextHandle> gPreviewRenderContext;
-std::atomic<CameraTimelineRenderContextHandle> gExportRenderContext;
-thread_local CameraTimelineRenderContextHandle gRenderContext;
-std::atomic_bool                               gPreviewWasApplied{};
-std::atomic_uint64_t                           gPreviewGeneration{};
+std::atomic<std::shared_ptr<Binding const>>              gPreview;
+std::atomic<std::shared_ptr<Binding const>>              gExport;
+std::atomic<CameraTimelineRenderContextHandle>           gPreviewRenderContext;
+std::atomic<CameraTimelineRenderContextHandle>           gExportRenderContext;
+thread_local CameraTimelineRenderContextHandle           gRenderContext;
+std::atomic_bool                                         gPreviewWasApplied{};
+std::atomic_uint64_t                                     gPreviewGeneration{};
 
 std::mutex                       gPreviewPoseMutex;
 std::optional<CameraRenderState> gLastPreviewPose;
@@ -95,7 +95,7 @@ std::optional<CameraTimelineSample> sampleCameraTimeline(
         auto const evaluation =
             cameraId.empty() ? current->timeline->sample(time) : current->timeline->sampleCameraById(cameraId, time);
         if (!evaluation) return std::nullopt;
-        return CameraTimelineSample{evaluation->state, evaluation->cameraId};
+        return CameraTimelineSample{evaluation->state, evaluation->cameraId, evaluation->kind};
     } catch (...) {
         return std::nullopt;
     }

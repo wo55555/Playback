@@ -1,22 +1,26 @@
 ﻿#include "ClientTickHooks.h"
 
 #include "playback/Playback.h"
+#include "playback/audio/AudioProbe.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
 #include "playback/exporting/ExportEcoMode.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/screen/RecordDialogs.h"
 
 #include "ll/api/memory/Hook.h"
 
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/SceneType.h"
 #include "mc/client/multiplayer/MultiPlayerLevel.h"
+#include "mc/world/level/storage/LevelData.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -46,6 +50,16 @@ struct OfflineTickClaim {
 std::atomic_bool     gClientTickHooksInstalled{false};
 std::mutex           gOfflineTickGateMutex;
 OfflineTickGateState gOfflineTickGate;
+
+// Set while the replay tick runs after the native level tick, so a seek can tick the level in step with its ticks.
+thread_local std::function<void()> gNativeLevelTick;
+
+struct NativeLevelTickScope {
+    explicit NativeLevelTickScope(std::function<void()> tick) { gNativeLevelTick = std::move(tick); }
+    ~NativeLevelTickScope() { gNativeLevelTick = nullptr; }
+    NativeLevelTickScope(NativeLevelTickScope const&)            = delete;
+    NativeLevelTickScope& operator=(NativeLevelTickScope const&) = delete;
+};
 
 void tickPlayback() {
     switch (playback::Playback::getInstance().getMode()) {
@@ -127,7 +141,9 @@ LL_TYPE_INSTANCE_HOOK(
                   && !isShowingProgressScreen() && !isShowingWorldProgressScreen();
     }
     editor::tickReplayUI(hudVisible);
+    screen::tickRecordDialogs();
     replay.tryFinalizeWorldCleanup();
+    audio::probe::onClientUpdate(*this);
     return result;
 }
 
@@ -156,7 +172,19 @@ LL_TYPE_INSTANCE_HOOK(
 
     origin();
     [[maybe_unused]] auto tickBoundary = ChunkMutationBarrier::enterTickBoundary(*this);
+    // Level::tick bumps the tick counter after _subTick; actors such as lingering clouds time their particles by it.
+    NativeLevelTickScope nativeTick([this] {
+        origin();
+        // 26.10 does not export LevelData::incrementTick.
+        ++getLevelData().mCurrentTick->tickID;
+    });
     tickPlayback();
+}
+
+bool runNativeLevelTick() {
+    if (!gNativeLevelTick) return false;
+    gNativeLevelTick();
+    return true;
 }
 
 bool hookClientTick(bool enable) {

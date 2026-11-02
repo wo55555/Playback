@@ -36,6 +36,14 @@ enum class EditorKeybind : uint8_t {
     MarkExportIn,
     MarkExportOut,
     TogglePlayback,
+    ToggleFollowPerspective,
+    SelectAll,
+    ClearSelection,
+    Copy,
+    Paste,
+    InsertMarker,
+    PreviousMarker,
+    NextMarker,
     NamedOnly,
 };
 

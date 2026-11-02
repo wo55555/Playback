@@ -1,6 +1,7 @@
-#include "DetailsPanel.h"
+﻿#include "DetailsPanel.h"
 
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/PropertyControls.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
@@ -22,8 +23,6 @@ using namespace playback::state;
 using namespace ll::i18n_literals;
 
 namespace {
-
-constexpr int kTicksPerSecond = 20;
 
 template <typename T>
 T const* findById(std::vector<T> const& values, std::string const& id) {
@@ -178,6 +177,8 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     } else if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
         auto const* camera = findById(project->cameras, selectedCamera->cameraId);
         subject            = camera ? camera->name : "playback.refactorEditor.details.camera"_tr();
+    } else if (selection.keyframeCount() > 1) {
+        subject = "playback.refactorEditor.details.keyframesSelected"_tr(selection.keyframeCount());
     } else if (selection.getAs<state::editing::model::SelectedKeyframe>()) {
         subject = "playback.refactorEditor.details.cameraKeyframe"_tr();
     } else if (selection.getAs<state::editing::model::SelectedMarker>()) {
@@ -189,6 +190,7 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawWorldActorSegment(ctx)) return;
     if (drawSubActor(ctx)) return;
     if (drawCamera(ctx)) return;
+    if (drawKeyframes(ctx)) return;
     if (drawKeyframe(ctx)) return;
     if (drawMarker(ctx)) return;
     drawOverview(ctx);
@@ -197,7 +199,6 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
 bool DetailsPanel::drawWorldActor(PanelContext const& ctx) {
     auto const  project   = ctx.state.project;
     auto const& selection = ctx.selection;
-    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
         if (property::beginSection("playback.refactorEditor.details.worldActor"_tr().c_str())) {
@@ -437,6 +438,13 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                 action.value = enabled;
                 submit(std::move(action));
             }
+            bool locked = camera->locked;
+            if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+                EditorAction action{EditorActionType::SetCameraLocked};
+                action.id    = camera->id;
+                action.value = locked;
+                submit(std::move(action));
+            }
             ImGui::BeginDisabled(camera->locked);
             if (!camera->bindingEntityUuid.empty()) {
                 property::separator();
@@ -475,6 +483,72 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
     return false;
 }
 
+bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
+    auto const& selection = ctx.selection;
+    if (selection.keyframeCount() <= 1) return false;
+    auto const project = ctx.state.project;
+
+    std::vector<state::editing::model::KeyframeRef> refs;
+    std::optional<int>                              shared;
+    bool                                            mixed   = false;
+    int                                             tracks  = 0;
+    std::string                                     lastTrack;
+    for (auto const& entry : selection.keyframes()) {
+        refs.push_back({entry.trackId, entry.tick, std::nullopt});
+        if (entry.trackId != lastTrack) {
+            ++tracks;
+            lastTrack = entry.trackId;
+        }
+        auto const* camera = findById(project->cameras, entry.trackId);
+        if (!camera) continue;
+        auto const key = camera->keysByTick.find(entry.tick);
+        if (key == camera->keysByTick.end()) continue;
+        int const type = static_cast<int>(key->second.interpolationType);
+        if (!shared) shared = type;
+        else if (*shared != type) mixed = true;
+    }
+
+    if (property::beginSection("playback.refactorEditor.details.multiKeyframe"_tr().c_str())) {
+        property::textRow(
+            "playback.refactorEditor.details.keyframeCount"_tr().c_str(),
+            std::to_string(selection.keyframeCount()).c_str()
+        );
+        property::textRow("playback.refactorEditor.details.trackCount"_tr().c_str(), std::to_string(tracks).c_str());
+        property::separator();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1.0f);
+        std::string const preview =
+            mixed || !shared ? "playback.refactorEditor.details.mixed"_tr()
+                             : interpolationName(static_cast<state::editing::model::CameraInterpolationType>(*shared));
+        if (widgets::beginCombo("##batch-interpolation", preview.c_str())) {
+            for (int index = 0; index < 8; ++index) {
+                auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+                if (ImGui::Selectable(interpolationName(value).c_str(), !mixed && shared == index)) {
+                    EditorAction action{EditorActionType::SetKeyframesInterpolation};
+                    action.keyframeRefs = refs;
+                    action.kind         = index;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+            widgets::endCombo();
+        }
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.details.deleteKeyframes"_tr(selection.keyframeCount()).c_str()
+            )) {
+            EditorAction action{EditorActionType::DeleteCameraKeyframes};
+            action.keyframeRefs = std::move(refs);
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.multiKeyframeHint"_tr().c_str());
+        property::endSection();
+    }
+    return true;
+}
+
 bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
     auto const  project   = ctx.state.project;
     auto const& selection = ctx.selection;
@@ -497,6 +571,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
             ImGui::TextUnformatted(camera->name.c_str());
             property::separator();
             ImGui::BeginDisabled(camera->locked);
+            bool const      person       = camera->kind != state::editing::model::CameraTrackKind::Keyframe;
             int const       originalTick = key->first;
             int             tick         = originalTick;
             constexpr float labelWidth   = 72.0f;
@@ -524,82 +599,114 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     submit(std::move(action));
                 }
 
-                float position[3] = {key->second.position.x, key->second.position.y, key->second.position.z};
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("%s", "playback.refactorEditor.details.position"_tr().c_str());
-                ImGui::TableNextColumn();
-                static constexpr std::array positionLabels{"X", "Y", "Z"};
-                static std::array const     positionColors{
-                    ImGui::ColorConvertU32ToFloat4(theme::kAxisX),
-                    ImGui::ColorConvertU32ToFloat4(theme::kAxisY),
-                    ImGui::ColorConvertU32ToFloat4(theme::kAxisZ),
-                };
-                if (vectorInput("position", position, positionLabels, &positionColors, "%.3f")
-                    && std::ranges::all_of(position, [](float value) { return std::isfinite(value); })) {
-                    EditorAction action{EditorActionType::SetKeyframePosition};
-                    action.id       = camera->id;
-                    action.tick     = originalTick;
-                    action.position = {position[0], position[1], position[2]};
-                    submit(std::move(action));
-                }
-
-                float rotation[3] = {key->second.yaw, key->second.pitch, key->second.roll};
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("%s", "playback.refactorEditor.details.rotation"_tr().c_str());
-                ImGui::TableNextColumn();
-                static constexpr std::array rotationLabels{"Yaw", "Pitch", "Roll"};
-                if (vectorInput("rotation", rotation, rotationLabels, nullptr, "%.2f")
-                    && std::ranges::all_of(rotation, [](float value) { return std::isfinite(value); })) {
-                    EditorAction action{EditorActionType::SetKeyframeRotation};
-                    action.id       = camera->id;
-                    action.tick     = originalTick;
-                    action.position = {rotation[0], rotation[1], rotation[2]};
-                    submit(std::move(action));
-                }
-
-                float fov = key->second.fov;
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("FOV");
-                ImGui::TableNextColumn();
-                ImGui::SetNextItemWidth(-1.0f);
-                ImGui::InputFloat("##fov", &fov, 0.0f, 0.0f, "%.2f°");
-                if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(fov)) {
-                    EditorAction action{EditorActionType::SetKeyframeFov};
-                    action.id    = camera->id;
-                    action.tick  = originalTick;
-                    action.speed = std::clamp(fov, 1.0f, 179.0f);
-                    submit(std::move(action));
-                }
-
-                int interpolation = static_cast<int>(key->second.interpolationType);
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
-                ImGui::TableNextColumn();
-                ImGui::SetNextItemWidth(-1.0f);
-                if (ImGui::BeginCombo("##interpolation", interpolationName(key->second.interpolationType).c_str())) {
-                    for (int index = 0; index < 8; ++index) {
-                        auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
-                        if (ImGui::Selectable(interpolationName(value).c_str(), index == interpolation)) {
-                            EditorAction action{EditorActionType::SetKeyframeInterpolation};
-                            action.id   = camera->id;
-                            action.tick = originalTick;
-                            action.kind = index;
-                            submit(std::move(action));
-                        }
+                // Person tracks only use their keys for range and subject; the view comes from the player.
+                if (!person) {
+                    float position[3] = {key->second.position.x, key->second.position.y, key->second.position.z};
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.position"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    static constexpr std::array positionLabels{"X", "Y", "Z"};
+                    static std::array const     positionColors{
+                        ImGui::ColorConvertU32ToFloat4(theme::kAxisX),
+                        ImGui::ColorConvertU32ToFloat4(theme::kAxisY),
+                        ImGui::ColorConvertU32ToFloat4(theme::kAxisZ),
+                    };
+                    if (vectorInput("position", position, positionLabels, &positionColors, "%.3f")
+                        && std::ranges::all_of(position, [](float value) { return std::isfinite(value); })) {
+                        EditorAction action{EditorActionType::SetKeyframePosition};
+                        action.id       = camera->id;
+                        action.tick     = originalTick;
+                        action.position = {position[0], position[1], position[2]};
+                        submit(std::move(action));
                     }
-                    ImGui::EndCombo();
+
+                    float rotation[3] = {key->second.yaw, key->second.pitch, key->second.roll};
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.rotation"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    static constexpr std::array rotationLabels{"Yaw", "Pitch", "Roll"};
+                    if (vectorInput("rotation", rotation, rotationLabels, nullptr, "%.2f")
+                        && std::ranges::all_of(rotation, [](float value) { return std::isfinite(value); })) {
+                        EditorAction action{EditorActionType::SetKeyframeRotation};
+                        action.id       = camera->id;
+                        action.tick     = originalTick;
+                        action.position = {rotation[0], rotation[1], rotation[2]};
+                        submit(std::move(action));
+                    }
+
+                    float fov = key->second.fov;
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("FOV");
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputFloat("##fov", &fov, 0.0f, 0.0f, "%.2f°");
+                    if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(fov)) {
+                        EditorAction action{EditorActionType::SetKeyframeFov};
+                        action.id    = camera->id;
+                        action.tick  = originalTick;
+                        action.speed = std::clamp(fov, 1.0f, 179.0f);
+                        submit(std::move(action));
+                    }
+
+                    int interpolation = static_cast<int>(key->second.interpolationType);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (widgets::beginCombo(
+                            "##interpolation",
+                            interpolationName(key->second.interpolationType).c_str()
+                        )) {
+                        for (int index = 0; index < 8; ++index) {
+                            auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+                            if (ImGui::Selectable(interpolationName(value).c_str(), index == interpolation)) {
+                                EditorAction action{EditorActionType::SetKeyframeInterpolation};
+                                action.id   = camera->id;
+                                action.tick = originalTick;
+                                action.kind = index;
+                                submit(std::move(action));
+                            }
+                        }
+                        widgets::endCombo();
+                    }
                 }
                 ImGui::EndTable();
             }
             ImGui::PopStyleVar();
+            if (person) {
+                // The subject holds from this key until the next key on the same track.
+                property::separator();
+                std::string const current = playerSubjectLabel(ctx.state.replayPlayers, key->second.subject);
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeSubject"_tr().c_str());
+                ImGui::SameLine();
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(current.c_str());
+                ImGui::PopTextWrapPos();
+                PlayerPickerResult picked;
+                if (drawPlayerList(
+                        "##keyframe-subject-list",
+                        PlayerPickerMode::SegmentSubject,
+                        ctx.state.replayPlayers,
+                        key->second.subject,
+                        false,
+                        picked
+                    )
+                    && picked.uuid != key->second.subject) {
+                    EditorAction action{EditorActionType::SetKeyframeSubject};
+                    action.id          = camera->id;
+                    action.tick        = originalTick;
+                    action.secondaryId = std::move(picked.uuid);
+                    submit(std::move(action));
+                }
+            }
             property::separator();
             if (property::actionButton("playback.refactorEditor.details.deleteKeyframe"_tr().c_str())) {
                 EditorAction action{EditorActionType::DeleteCameraKeyframe};
@@ -629,12 +736,72 @@ bool DetailsPanel::drawMarker(PanelContext const& ctx) {
             return true;
         }
         if (property::beginSection("playback.refactorEditor.details.marker"_tr().c_str())) {
-            property::textRow("playback.refactorEditor.details.nameLabel"_tr().c_str(), marker->label.c_str());
-            property::textRow("playback.refactorEditor.details.tick"_tr().c_str(), formatTick(marker->tick).c_str());
-            ImGui::BeginDisabled();
-            if (property::actionButton("playback.refactorEditor.details.deleteMarker"_tr().c_str(), false)) {}
-            ImGui::EndDisabled();
-            ImGui::TextDisabled("%s", "playback.refactorEditor.details.markerNotWired"_tr().c_str());
+            if (mMarkerLabelId != marker->id || !mMarkerLabelEditing) {
+                mMarkerLabelId     = marker->id;
+                mMarkerLabelBuffer = {};
+                marker->label.copy(mMarkerLabelBuffer.data(), mMarkerLabelBuffer.size() - 1);
+            }
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {4.0f, 5.0f});
+            if (ImGui::BeginTable(
+                    "##marker-properties",
+                    2,
+                    ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+                )) {
+                ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+                ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.nameLabel"_tr().c_str());
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::InputText("##marker-label", mMarkerLabelBuffer.data(), mMarkerLabelBuffer.size());
+                mMarkerLabelEditing = ImGui::IsItemActive();
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    std::string label = mMarkerLabelBuffer.data();
+                    if (!label.empty() && label != marker->label) {
+                        EditorAction action{EditorActionType::RenameMarker};
+                        action.id   = marker->id;
+                        action.name = std::move(label);
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+
+                int tick = marker->tick;
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::InputInt("##marker-tick", &tick, 0, 0);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    tick = std::clamp(tick, 0, ctx.state.totalTicks);
+                    if (tick != marker->tick) {
+                        EditorAction action{EditorActionType::MoveMarker};
+                        action.id   = marker->id;
+                        action.tick = tick;
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", formatTick(marker->tick).c_str());
+                ImGui::EndTable();
+            }
+            ImGui::PopStyleVar();
+            property::separator();
+            if (property::actionButton("playback.refactorEditor.timeline.seekToMarker"_tr().c_str())) {
+                ctx.commands.seekTo(marker->tick);
+            }
+            if (property::actionButton("playback.refactorEditor.details.deleteMarker"_tr().c_str())) {
+                EditorAction action{EditorActionType::DeleteMarker};
+                action.id = marker->id;
+                ctx.submitAction(std::move(action));
+                ctx.selection.clear();
+            }
             property::endSection();
         }
         return true;

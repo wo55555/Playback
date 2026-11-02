@@ -1,6 +1,7 @@
 ﻿#include "Recorder.h"
 
 #include "playback/Playback.h"
+#include "playback/io/ReplayResourcePacks.h"
 
 #include "zip.h"
 
@@ -159,6 +160,13 @@ bool ReplayExporter::exportReplay(
     auto iconPath = recordDir / "icon.png";
     if (closeZip && std::filesystem::exists(iconPath)) {
         closeZip = writeFileEntry(zip, iconPath, "icon.png");
+    }
+
+    if (closeZip) {
+        auto stats = playback::io::packs::writeReplayResourcePacks(zip, recordDir);
+        if (stats.packs > 0) {
+            getLogger().debug("Added {} resource packs ({} files, {} bytes) to the replay", stats.packs, stats.entries, stats.bytes);
+        }
     }
 
     if (closeZip) {

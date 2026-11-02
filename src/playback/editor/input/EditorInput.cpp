@@ -179,6 +179,8 @@ ImGuiKey vkToImGuiKey(uint32_t vk) {
         return ImGuiKey_KeypadAdd;
     case Keyboard::F1:
         return ImGuiKey_F1;
+    case Keyboard::F5:
+        return ImGuiKey_F5;
     default:
         return ImGuiKey_None;
     }

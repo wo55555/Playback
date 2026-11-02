@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "playback/editor/ui/PanelContext.h"
 #include "playback/editor/ui/components/Animator.h"
@@ -8,7 +8,12 @@
 
 #include "imgui.h"
 
+#include <array>
+#include <functional>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace playback::editor::ui {
 
@@ -21,6 +26,12 @@ public:
     void seekAdjacentEditPoint(PanelContext const& ctx, bool forward);
     bool addKeyframeAtPlayhead(PanelContext const& ctx);
     bool deleteSelection(PanelContext const& ctx);
+    bool selectAllKeyframes(PanelContext const& ctx);
+    // Copies the selected keyframes; paste keeps their spacing and lands the earliest one on the playhead.
+    bool copySelection(PanelContext const& ctx);
+    bool pasteAtPlayhead(PanelContext const& ctx);
+    bool addMarkerAtPlayhead(PanelContext const& ctx);
+    void seekAdjacentMarker(PanelContext const& ctx, bool forward);
     void zoomIn();
     void zoomOut();
     void resetZoom();
@@ -48,8 +59,39 @@ private:
         float  canvasWidth{};
     };
 
+    struct ClipboardKey {
+        std::string                           cameraId;
+        int                                   offset{};
+        state::editing::model::CameraKeyframe pose;
+    };
+
     void                      submitSeek(PanelContext const& ctx, int tick);
     [[nodiscard]] std::string resolveKeyframeTargetCamera(PanelContext const& ctx) const;
+    // Single-camera clips go to `targetCameraId` when given; multi-camera clips return to their own tracks.
+    bool pasteKeyframes(PanelContext const& ctx, int anchorTick, std::string const& targetCameraId);
+    // Shift-drag snapping onto keyframes, markers, the playhead, in/out and segment edges within a few pixels.
+    // The thing being dragged is excluded so it does not stick to its own position.
+    int  snapToEditPoints(
+        PanelContext const&                                 ctx,
+        int                                                 tick,
+        float                                               pixelsPerTick,
+        bool                                                includePlayhead,
+        bool                                                includeExportRange,
+        std::function<bool(std::string const&, int)> const& skipKey,
+        std::string_view                                    skipMarkerId
+    );
+    bool addMarkerAt(PanelContext const& ctx, int tick);
+    // Selections that point at objects an queued action has not created yet; applied once they exist.
+    void queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys);
+    void queueMarkerSelection(std::string markerId);
+    void applyPendingSelection(PanelContext const& ctx);
+    [[nodiscard]] std::string markerAt(
+        PanelContext const&  ctx,
+        Layout const&        layout,
+        TimelineScale const& scale,
+        ImVec2               mouse
+    ) const;
+    void drawMarkers(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale);
 
     void drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick, bool allowInput);
     void drawTrackHeaders(PanelContext const& ctx, Layout const& layout, bool allowInput);
@@ -62,6 +104,8 @@ private:
     void drawTrackGrid(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale);
     // In/out markers for the export range, drawn over the canvas and draggable by their handles.
     void drawExportRange(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale, bool allowInput);
+
+    void drawContextMenus(PanelContext const& ctx);
 
     void drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput);
     void drawTitleLabel(PanelContext const& ctx, float height);
@@ -90,6 +134,42 @@ private:
     float mRangeDragOriginX{};
     float mRangeDragOriginScroll{};
     float mRangeDragOriginZoom{1.0f};
+    // Right-click menus. The tick is captured when the menu opens so it does not follow the cursor.
+    std::string                                           mKeyframeMenuCameraId;
+    int                                                   mKeyframeMenuTick{-1};
+    int                                                   mKeyframeMenuTickEdit{-1};
+    bool                                                  mKeyframeMenuGroup{};
+    std::vector<ClipboardKey>                             mKeyframeClipboard;
+    std::string                                           mLaneMenuCameraId;
+    int                                                   mLaneMenuTick{-1};
+    std::string                                           mTrackMenuCameraId;
+    int                                                   mRulerMenuTick{-1};
+    // Inline rename field of the track menu; refilled whenever the menu targets another camera.
+    std::string                                           mRenameCameraId;
+    std::array<char, 128>                                 mRenameBuffer{};
+
+    // Grabbing a key that is part of a multi-selection moves the whole set by one delta.
+    bool mGroupDrag{};
+    int  mGroupDragDelta{};
+    // A press on empty canvas becomes a box select once it travels a few pixels; otherwise it is a click.
+    bool        mBoxPending{};
+    bool        mBoxSelecting{};
+    bool        mBoxAdditive{};
+    ImVec2      mBoxStart{};
+    std::string mBoxClickCameraId;
+    // Marker pins live in the ruler band: drag to move, right-click for the menu.
+    std::string           mMarkerDragId;
+    float                 mMarkerDragStartX{};
+    int                   mMarkerDragTick{-1};
+    bool                  mMarkerDragMoved{};
+    std::string           mMarkerMenuId;
+    std::string           mMarkerRenameId;
+    std::array<char, 128> mMarkerRenameBuffer{};
+    int                   mSnapGuideTick{-1};
+
+    std::vector<state::editing::model::SelectedKeyframe> mPendingKeySelection;
+    std::string                                          mPendingMarkerSelection;
+    int                                                  mPendingSelectionFrames{};
 };
 
 } // namespace playback::editor::ui
