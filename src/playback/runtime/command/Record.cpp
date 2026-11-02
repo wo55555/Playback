@@ -1,7 +1,9 @@
 ﻿#include "Command.h"
 
+#include "playback/Playback.h"
 #include "playback/configuration/Config.h"
 #include "playback/record/Recorder.h"
+#include "playback/screen/RecordControlsHooks.h"
 
 #include "ll/api/command/CommandHandle.h"
 #include "ll/api/command/CommandRegistrar.h"
@@ -11,6 +13,11 @@
 #include "mc/server/commands/CommandOutput.h"
 
 namespace playback::runtime::command {
+
+// Command parameters are reflected by name, which needs a type with linkage.
+struct RecordRateParam {
+    int rate;
+};
 
 void registerRecordCommand(configuration::CommandConfigStruct& config) {
     using namespace ll::i18n_literals;
@@ -44,6 +51,44 @@ void registerRecordCommand(configuration::CommandConfigStruct& config) {
 
         output.success("playback.command.record.stopped"_tr());
     });
+
+    recordCommand.overload().text("rate").execute([](CommandOrigin const&, CommandOutput& output) {
+        int const rate = Playback::getInstance().getConfig().record.localPlayerUpdatesPerSecond;
+        output.success("playback.command.record.rate"_tr(rate));
+    });
+
+    recordCommand.overload<RecordRateParam>().text("rate").required("rate").execute(
+        [](CommandOrigin const&, CommandOutput& output, RecordRateParam const& param) {
+            int const rate = configuration::clampLocalPlayerUpdatesPerSecond(param.rate);
+            Playback::getInstance().getConfig().record.localPlayerUpdatesPerSecond = rate;
+            output.success("playback.command.record.rateSet"_tr(rate));
+        }
+    );
+
+    auto reportIndicator = [](CommandOutput& output) {
+        output.success(
+            screen::isRecordingIndicatorEnabled() ? "playback.command.record.indicatorShown"_tr()
+                                                  : "playback.command.record.indicatorHidden"_tr()
+        );
+    };
+    recordCommand.overload().text("indicator").execute([reportIndicator](CommandOrigin const&, CommandOutput& output) {
+        screen::setRecordingIndicatorEnabled(!screen::isRecordingIndicatorEnabled());
+        reportIndicator(output);
+    });
+    recordCommand.overload()
+        .text("indicator")
+        .text("on")
+        .execute([reportIndicator](CommandOrigin const&, CommandOutput& output) {
+            screen::setRecordingIndicatorEnabled(true);
+            reportIndicator(output);
+        });
+    recordCommand.overload()
+        .text("indicator")
+        .text("off")
+        .execute([reportIndicator](CommandOrigin const&, CommandOutput& output) {
+            screen::setRecordingIndicatorEnabled(false);
+            reportIndicator(output);
+        });
 }
 
 } // namespace playback::runtime::command

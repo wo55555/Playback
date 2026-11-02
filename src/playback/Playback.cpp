@@ -2,6 +2,8 @@
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
+#include "playback/audio/AudioProbe.h"
+#include "playback/audio/ExportAudioCapture.h"
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
@@ -14,6 +16,12 @@
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
+#include "playback/screen/RecordControlsHooks.h"
+#include "playback/visuals/ReplayContainerKeepOpenHook.h"
+#include "playback/visuals/ReplayEntityInterpolator.h"
+#include "playback/visuals/ReplayFirstPersonHandHooks.h"
+#include "playback/visuals/ReplayHudHooks.h"
+#include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -76,6 +84,8 @@ void Playback::registerActions() {
     registry.registerAction(std::make_unique<action::ActionConfigurationPacket>());
     registry.registerAction(std::make_unique<action::ActionGamePacket>());
     registry.registerAction(std::make_unique<action::ActionMoveEntities>());
+    registry.registerAction(std::make_unique<action::ActionLocalCameraOffset>());
+    registry.registerAction(std::make_unique<action::ActionLocalViewSamples>());
 }
 
 bool Playback::hook() {
@@ -103,6 +113,11 @@ bool Playback::hook() {
     if (!impl->mCameraRenderInstalled) {
         getSelf().getLogger().warn("Unable to install camera render hooks; camera timelines are disabled");
     }
+    if (audio::probe::install()) {
+        // Export-audio capture registers its policy callbacks on the probe; no additional hooks are installed.
+        (void)audio::exportcap::install();
+    }
+    screen::hookRecordControls(true);
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -182,6 +197,11 @@ bool Playback::unhook() {
         getSelf().getLogger().error("Unable to remove export-scoped offline render hooks during shutdown");
         return false;
     }
+    // The replay session installs these for its whole lifetime; release them with the mod.
+    visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Session);
+    visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Session);
+    visuals::releaseReplayContainerKeepOpen();
+    visuals::releaseReplayHudHooks();
     if (!exporting::hookIdleDetection(false)) {
         bool uiRestored      = editor::hookReplayUI(true);
         bool networkRestored = record::hookNetwork(true);
@@ -198,6 +218,9 @@ bool Playback::unhook() {
         return false;
     }
 
+    audio::exportcap::uninstall();
+    audio::probe::uninstall();
+    screen::hookRecordControls(false);
     screen::hookMainMenu(false);
     getEventListeners().clear();
     impl->mLevelId.clear();
@@ -296,6 +319,7 @@ bool Playback::disable() {
 
     exporting::applyExportEcoMode(false);
     record::Recorder::getInstance().stop();
+    record::Recorder::getInstance().waitForExport();
     if (!unhook()) {
         logger.error("Playback cannot disable because its runtime hooks could not be removed safely");
         return false;

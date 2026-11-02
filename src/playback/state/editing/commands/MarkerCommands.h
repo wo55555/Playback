@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "playback/state/editing/models/EditorStateExt.h"
 #include "playback/state/editing/models/IEditCommand.h"
@@ -8,44 +8,53 @@
 
 namespace playback::state::editing::command {
 
-class AddCameraSequence final : public model::IEditCommand {
+// Adds a marker at `tick` unless one already sits there. An empty id picks the next free "marker_N".
+class AddMarker final : public model::IEditCommand {
 public:
+    AddMarker(std::string id, int tick, std::string label);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
     [[nodiscard]] std::string label() const override;
 
 private:
+    std::string                          mId;
+    int                                  mTick;
+    std::string                          mLabel;
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class DeleteCameraSequence final : public model::IEditCommand {
+class DeleteMarker final : public model::IEditCommand {
 public:
+    explicit DeleteMarker(std::string id);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
     [[nodiscard]] std::string label() const override;
 
 private:
+    std::string                          mId;
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class SplitSequenceAtPlayhead final : public model::IEditCommand {
+// Moves a marker; rejected when another marker already occupies the target tick.
+class MoveMarker final : public model::IEditCommand {
 public:
-    explicit SplitSequenceAtPlayhead(int tick);
+    MoveMarker(std::string id, int tick);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
     [[nodiscard]] std::string label() const override;
 
 private:
+    std::string                          mId;
     int                                  mTick;
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class TrimSequenceSegment final : public model::IEditCommand {
+class RenameMarker final : public model::IEditCommand {
 public:
-    TrimSequenceSegment(std::string id, int start, int end);
+    RenameMarker(std::string id, std::string label);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -53,36 +62,11 @@ public:
 
 private:
     std::string                          mId;
-    int                                  mStart;
-    int                                  mEnd;
+    std::string                          mLabel;
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class DeleteSequenceSegment final : public model::IEditCommand {
-public:
-    explicit DeleteSequenceSegment(std::string id);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mId;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
-class BindSequenceToCamera final : public model::IEditCommand {
-public:
-    BindSequenceToCamera(std::string id, std::string cameraId);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mId;
-    std::string                          mCameraId;
-    std::optional<model::EditorStateExt> mBefore;
-};
+// Next unused "marker_N" id for the project.
+[[nodiscard]] std::string nextMarkerId(model::EditorStateExt const& state);
 
 } // namespace playback::state::editing::command

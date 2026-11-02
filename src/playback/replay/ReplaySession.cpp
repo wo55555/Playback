@@ -2,10 +2,17 @@
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
+#include "playback/editor/input/EditorInput.h"
 #include "playback/integration/OptiPistonBridge.h"
+#include "playback/io/ReplayResourcePacks.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/packet/PacketLifecycle.h"
+#include "playback/runtime/ClientTickHooks.h"
+#include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
+#include "playback/visuals/ReplayFirstPersonHandHooks.h"
+#include "playback/visuals/ReplayHudHooks.h"
+#include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/service/Bedrock.h"
 #include "ll/api/service/TargetedBedrock.h"
@@ -14,6 +21,7 @@
 #include "mc-external/IOptionRegistry.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
+#include "mc/client/gui/screens/interfaces/ISceneStack.h"
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
 #include "mc/client/model/GeometryGroup.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
@@ -30,12 +38,17 @@
 #include "mc/deps/ecs/strict/StrictEntityContext.h"
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/IntTag.h"
+#include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
+#include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
+#include "mc/entity/components/ItemInUseComponent.h"
+#include "mc/entity/components/ItemInUseTicksDuringMovementComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/entity/components/WalkDistComponent.h"
 #include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
@@ -47,15 +60,26 @@
 #include "mc/network/packet/BlockActorDataPacket.h"
 #include "mc/network/packet/BlockEventPacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
+#include "mc/network/packet/ClientboundMapItemDataPacket.h"
+#include "mc/network/packet/ContainerClosePacket.h"
+#include "mc/network/packet/ContainerOpenPacket.h"
+#include "mc/network/packet/ContainerSetDataPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
+#include "mc/network/packet/InventoryContentPacket.h"
+#include "mc/network/packet/InventorySlotPacket.h"
+#include "mc/network/packet/ItemData.h"
+#include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
+#include "mc/network/packet/MobEquipmentPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
 #include "mc/network/packet/PackInfoData.h"
 #include "mc/network/packet/PlayerActionPacket.h"
 #include "mc/network/packet/PlayerActionType.h"
+#include "mc/network/packet/PlayerHotbarPacket.h"
 #include "mc/network/packet/PlayerListPacket.h"
 #include "mc/network/packet/PlayerListPacketType.h"
+#include "mc/network/packet/PlayerSkinPacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/RemoveObjectivePacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
@@ -64,8 +88,10 @@
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
+#include "mc/network/packet/UpdateAttributesPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
+#include "mc/network/packet/UpdatePlayerGameTypePacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/resources/MinEngineVersion.h"
@@ -73,13 +99,33 @@
 #include "mc/resources/ResourcePackManager.h"
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
+#include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
+#include "mc/world/actor/ActorCategory.h"
+#include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/player/Inventory.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/player/PlayerInventory.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
+#include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/attribute/Attribute.h"
+#include "mc/world/attribute/AttributeData.h"
+#include "mc/world/attribute/AttributeInstance.h"
+#include "mc/world/attribute/AttributeInstanceConstRef.h"
+#include "mc/world/attribute/AttributeInstanceRef.h"
+#include "mc/world/attribute/AttributeModificationContext.h"
+#include "mc/world/attribute/AttributeModifier.h"
+#include "mc/world/attribute/BaseAttributeMap.h"
+#include "mc/world/attribute/SharedAttributes.h"
+#include "mc/world/containers/managers/models/ContainerManagerModel.h"
+#include "mc/world/item/ItemStack.h"
+#include "mc/world/item/registry/ItemRegistryManager.h"
+#include "mc/world/item/registry/ItemRegistryRef.h"
 #include "mc/world/level/ActorRuntimeIDManager.h"
 #include "mc/world/level/BlockPalette.h"
+#include "mc/world/level/BlockSource.h"
 #include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
@@ -104,8 +150,12 @@
 #include "mc/world/level/chunk/SubChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
+#include "mc/world/level/saveddata/maps/MapItemSavedData.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
+#include "mc/world/phys/HitResult.h"
+#include "mc/world/phys/HitResultType.h"
+
 
 
 #include "snappy.h"
@@ -116,6 +166,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -128,8 +179,39 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
+
+// Complete before ReplaySession's destructor so the saved hotbar can be freed.
+struct FollowedHudMirror {
+    bool                       active{};
+    ::ActorUniqueID            subjectId{};
+    int                        savedSelected{};
+    int                        writtenSelected{-1};
+    std::array<::ItemStack, 9> savedHotbar{};
+    std::array<::ItemStack, 9> writtenHotbar{};
+    std::array<::ItemStack, 4> savedArmor{};
+    std::array<::ItemStack, 4> writtenArmor{};
+    ::ItemStack                savedOffhand{};
+    ::ItemStack                writtenOffhand{};
+    // Recorded HUD packets arrive after the mirror has written, so they are kept here instead of applied.
+    size_t                     diverted{};
+    // The recorder's health, hunger and experience, put back on the observer when the mirror ends. AttributeData
+    // cannot be copied (AttributeModifier's copy constructor is not exported), so only the values are kept.
+    struct SavedAttribute {
+        ::HashedString name;
+        float          current{};
+        float          min{};
+        float          max{};
+        float          defaultValue{};
+        float          defaultMin{};
+        float          defaultMax{};
+    };
+    std::vector<SavedAttribute> savedAttributes;
+    // Set when the mirror starts or the followed player changes, so every slot is written once.
+    bool                        forceWrite{};
+};
 
 namespace playback::replay {
 using namespace playback::action;
@@ -147,12 +229,12 @@ constexpr auto             SnapshotGamePacketBudget   = std::chrono::millisecond
 // Every client tick a seek spills into is one more frame of visible catch-up, so land it in as few as possible.
 constexpr auto       SeekCatchUpBudget = std::chrono::milliseconds(2000);
 constexpr std::array PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f};
+// A seek keeps only the particle events from this many ticks before its landing, and ticks the level once per replay
+// tick across them. Emitters such as lingering clouds are spawned by actor ticks and live about 27 ticks.
+constexpr int SeekParticleWindowTicks = 40;
 
 bool shouldIgnoreReplayPacket(MinecraftPacketIds packetId) {
     switch (packetId) {
-    case MinecraftPacketIds::ContainerOpen:
-    case MinecraftPacketIds::ContainerClose:
-    case MinecraftPacketIds::ClientboundCloseScreen:
     case MinecraftPacketIds::NetworkChunkPublisherUpdate:
     case MinecraftPacketIds::ChunkRadiusUpdated:
         return true;
@@ -175,6 +257,44 @@ std::optional<visuals::EntityRenderKey> replayEntityRenderKey(Level const& level
 
 visuals::EntityRenderPosition replayRenderPosition(Vec3 const& position) {
     return {position.x, position.y, position.z};
+}
+
+// Played ticks a missing entity subject keeps its choice before the view returns to the recorder.
+constexpr int EntitySubjectGraceTicks = 20;
+
+// First line of a name tag without its § formatting codes.
+std::string plainNameTag(std::string const& tag) {
+    std::string out;
+    out.reserve(tag.size());
+    for (size_t i = 0; i < tag.size(); ++i) {
+        char const c = tag[i];
+        if (c == '\n' || c == '\r') break;
+        // § is C2 A7 in UTF-8; the code that follows it is one ASCII character.
+        if (static_cast<unsigned char>(c) == 0xC2 && i + 1 < tag.size()
+            && static_cast<unsigned char>(tag[i + 1]) == 0xA7) {
+            i += 2;
+            continue;
+        }
+        out.push_back(c);
+    }
+    auto const first = out.find_first_not_of(' ');
+    if (first == std::string::npos) return {};
+    return out.substr(first, out.find_last_not_of(' ') - first + 1);
+}
+
+std::string entityTypeLabel(Actor const& actor) {
+    std::string type = actor.getTypeName();
+    if (type.starts_with("minecraft:")) type.erase(0, 10);
+    return type;
+}
+
+// Feet to eyes. A mob's position is its feet, unlike a player's.
+float entityEyeHeight(Actor const& actor) {
+    float const eye = actor.getEyePos().y - actor.getPosition().y;
+    if (std::isfinite(eye) && eye > 0.05f && eye < 64.0f) return eye;
+    auto const& box    = actor.getAABB();
+    float const height = box.max.y - box.min.y;
+    return std::isfinite(height) && height > 0.0f ? height * 0.85f : 0.0f;
 }
 
 visuals::EntityRenderPose replayRenderPose(Actor const& actor) {
@@ -222,12 +342,130 @@ void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
     }
 }
 
+// The HUD draws health, hunger, armor and experience from the observer's own attributes, so the recorded player's
+// are copied onto it. Health never drops below 1: a dead local player would open the death screen.
+void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
+    auto&             attributes = *observer.getAttributes();
+    std::string const health     = SharedAttributes::HEALTH().getName().getString();
+    for (auto& data : *packet.mAttributeData) {
+        if (data.mName->getString() == health && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
+        attributes.updateOrCreateAttribute(data);
+    }
+}
+
+// The attributes the HUD draws: hearts, absorption, hunger, saturation and the experience bar.
+std::array<Attribute const*, 6> hudAttributes() {
+    return {
+        &SharedAttributes::HEALTH(),
+        &SharedAttributes::ABSORPTION(),
+        &Player::HUNGER(),
+        &Player::SATURATION(),
+        &Player::LEVEL(),
+        &Player::EXPERIENCE(),
+    };
+}
+
+std::optional<FollowedHudMirror::SavedAttribute> readHudAttribute(Actor& actor, Attribute const& attribute) {
+    auto const  instance = actor.getAttributes()->getInstance(attribute);
+    auto const* value    = instance.mPtr;
+    if (!value || value == &BaseAttributeMap::mInvalidInstance()) return std::nullopt;
+    return FollowedHudMirror::SavedAttribute{
+        *attribute.mName,
+        value->mCurrentValue,
+        value->mCurrentMinValue,
+        value->mCurrentMaxValue,
+        value->mDefaultValue,
+        value->mDefaultMinValue,
+        value->mDefaultMaxValue,
+    };
+}
+
+void writeHudAttribute(Player& observer, FollowedHudMirror::SavedAttribute const& value) {
+    auto const& attribute = Attribute::getByName(value.name);
+    if (*attribute.mName != value.name) return;
+    auto& attributes = *observer.getAttributes();
+    auto  instance   = attributes.getMutableInstance(attribute);
+    if (!instance.mPtr || instance.mPtr == &BaseAttributeMap::mInvalidInstance()) return;
+    // Built from the live instance so the modifiers stay; only the values are replaced.
+    AttributeData data{*instance.mPtr};
+    data.mCurrentValue    = value.current;
+    data.mMinValue        = value.min;
+    data.mMaxValue        = value.max;
+    data.mDefaultValue    = value.defaultValue;
+    data.mDefaultMinValue = value.defaultMin;
+    data.mDefaultMaxValue = value.defaultMax;
+    if (value.name == *SharedAttributes::HEALTH().mName && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
+    AttributeModificationContext context{};
+    context.mAttributeMap = &attributes;
+    BaseAttributeMap::updateAttribute(data, instance, context);
+}
+
+// While another player's HUD is shown, the recorder's attribute updates are kept for the restore instead of applied.
+void keepRecordedAttributes(FollowedHudMirror& mirror, UpdateAttributesPacket const& packet) {
+    for (auto const& data : *packet.mAttributeData) {
+        auto const found = std::find_if(mirror.savedAttributes.begin(), mirror.savedAttributes.end(), [&](auto& kept) {
+            return kept.name == *data.mName;
+        });
+        FollowedHudMirror::SavedAttribute value{
+            *data.mName,
+            data.mCurrentValue,
+            data.mMinValue,
+            data.mMaxValue,
+            data.mDefaultValue,
+            data.mDefaultMinValue,
+            data.mDefaultMaxValue,
+        };
+        if (found != mirror.savedAttributes.end()) *found = std::move(value);
+        else mirror.savedAttributes.push_back(std::move(value));
+    }
+}
+
+// Bedrock's WalkDistComponent advances by exactly the horizontal distance moved (measured live, ratio 1.000).
+constexpr float WalkDistancePerBlock = 1.0f;
+
+// Items flagged to tick during movement (trident) are skipped by the normal use-duration system, and a replayed
+// player has no move request to drive the movement one.
+void tickReplayItemUse(Actor& actor) {
+    auto& context = actor.getEntityContext();
+    if (!context.hasComponent<ItemInUseTicksDuringMovementComponent>()) return;
+    if (auto inUse = context.tryGetComponent<ItemInUseComponent>()) {
+        int& remaining = inUse->mDuration;
+        if (remaining > 1) --remaining;
+    }
+}
+
+// Tick of the last real step written into each player's PlayerBobComponent. A tick with no movement decays it.
+std::unordered_map<int64_t, int> gReplayHandBobTick;
+
+// A remote player's inventory is never sent to clients; only the held item and its hotbar slot are (MobEquipment).
+// The slots seen so far are kept per runtime id so a followed player's hotbar can be shown.
+struct ReplayHotbar {
+    std::array<ItemStack, 9> items{};
+    int                      selected{-1};
+};
+std::unordered_map<uint64_t, ReplayHotbar> gReplayHotbars;
+
+// PlayerTickBobSystem (1.26.20.04): the held map sways from this component. A remote player never runs that system.
+void updateReplayHandBob(Actor& actor, float horizontalSpeed) {
+    auto& context = actor.getEntityContext();
+    auto  bob     = context.tryGetComponent<PlayerBobComponent>();
+    if (!bob) {
+        context.getRegistry().emplace<PlayerBobComponent>(context.mEntity);
+        bob = context.tryGetComponent<PlayerBobComponent>();
+        if (!bob) return;
+    }
+    float const target = actor.getStatusFlag(ActorFlags::Swimming) ? 0.0f : std::min(0.1f, horizontalSpeed);
+    bob->mBobPrev      = bob->mBob;
+    bob->mBob         += (target - bob->mBob) * 0.08f;
+}
+
 void applyReplayEntityMovement(
     Actor&                           actor,
     Vec3 const&                      position,
     visuals::EntityRenderPose const& previousPose,
     Vec2 const&                      rotation,
-    float                            headYaw
+    float                            headYaw,
+    int                              tick
 ) {
     Vec3 const previousPosition{
         previousPose.position.x,
@@ -244,6 +482,16 @@ void applyReplayEntityMovement(
     };
     if (auto walk = actor.mBuiltInComponents->mWalkAnimationComponent.get()) {
         HardcodedAnimationSystem::computeMovementThisTick(state, *walk);
+    }
+    // The native system needs a move request the replayed player never has; query.walk_distance drives the hand bob.
+    if (actor.isPlayer()) {
+        float const horizontal = std::hypot(state.mPosDelta->x, state.mPosDelta->z);
+        if (auto distance = actor.getEntityContext().tryGetComponent<WalkDistComponent>()) {
+            distance->mPrevious  = distance->mCurrent;
+            distance->mCurrent  += horizontal * WalkDistancePerBlock;
+        }
+        updateReplayHandBob(actor, horizontal);
+        gReplayHandBobTick[actor.getOrCreateUniqueID().rawID] = tick;
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
@@ -321,6 +569,45 @@ struct InjectionReset {
 
 float decodeRotationByte(uchar value) { return static_cast<float>(static_cast<schar>(value)) * (360.0f / 256.0f); }
 
+// Like vanilla third person: back along the view ray from the eyes, stopping short of the first camera-blocking block.
+keyframe::CameraRenderState thirdPersonFollowPose(Player& observer, keyframe::CameraRenderState state) {
+    constexpr float Distance     = 4.0f;
+    constexpr float WallMargin   = 0.2f;
+    constexpr float DegToRadians = 0.017453292519943295f;
+    float const     yaw          = state.yaw * DegToRadians;
+    float const     pitch        = state.pitch * DegToRadians;
+    // Opposite of the view direction {-sin(yaw)cos(pitch), -sin(pitch), cos(yaw)cos(pitch)}.
+    float const backX = std::sin(yaw) * std::cos(pitch);
+    float const backY = std::sin(pitch);
+    float const backZ = -std::cos(yaw) * std::cos(pitch);
+    Vec3 const  eye{state.x, state.y, state.z};
+    Vec3 const  target{eye.x + backX * Distance, eye.y + backY * Distance, eye.z + backZ * Distance};
+
+    float      distance = Distance;
+    auto const hit      = observer.getDimensionBlockSource().clip(
+        eye,
+        target,
+        false,
+        ShapeType::CollisionForCamera,
+        static_cast<int>(Distance) + 1,
+        false,
+        false,
+        nullptr,
+        [](BlockSource const&, Block const&, bool) { return true; },
+        false
+    );
+    if (hit.mType == HitResultType::Tile) {
+        float const dx = hit.mPos.x - eye.x;
+        float const dy = hit.mPos.y - eye.y;
+        float const dz = hit.mPos.z - eye.z;
+        distance       = std::clamp(std::sqrt(dx * dx + dy * dy + dz * dz) - WallMargin, 0.0f, Distance);
+    }
+    state.x = eye.x + backX * distance;
+    state.y = eye.y + backY * distance;
+    state.z = eye.z + backZ * distance;
+    return state;
+}
+
 void forceFirstPersonCamera() {
     auto client = ll::service::getClientInstance();
     if (!client) return;
@@ -339,8 +626,112 @@ void clearReplayParticles() {
     if (auto systems = renderer->mParticleSystemEngine.get()) systems->clear();
 }
 
+// The forced level ticks of a seek never tick the particle systems, which age by wall-clock time between their own
+// ticks, so backdate that clock by one replay tick and tick them here.
+void ageReplayParticles() {
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    auto* renderer = client->getLevelRenderer();
+    if (!renderer) return;
+    auto systems = renderer->mParticleSystemEngine.get();
+    if (!systems) return;
+
+    systems->mLastTickTime      = std::chrono::steady_clock::now() - std::chrono::milliseconds(50);
+    systems->mLastTickTimeValid = true;
+    systems->tick(1.0f, false);
+}
+
 // Server teleport lands one eye height above the request; compensate so the feet agree.
 constexpr float kServerEyeHeight = 1.62f;
+
+// ContainerClose does not dismiss the player inventory. Pop it by name so a screen opened later is left alone.
+void popReplayContainerScreen() {
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    auto const name = client->getTopScreenName();
+    if (name != "inventory_screen" && name != "crafting_screen") return;
+    client->getCurrentSceneStack()->schedulePopScreenWithExpectedNames(std::vector<std::string>{name});
+    getLogger().info("containerPreview pop screen={}", name);
+}
+
+bool sameHudStack(ItemStack const& left, ItemStack const& right) {
+    if (left.isNull() || right.isNull()) return left.isNull() && right.isNull();
+    return left.getId() == right.getId() && left.hasSameAuxValue(right) && left.mCount == right.mCount
+        && left.hasSameUserData(right);
+}
+
+constexpr std::array<SharedTypes::Legacy::ArmorSlot, 4> HudArmorSlots{
+    SharedTypes::Legacy::ArmorSlot::Head,
+    SharedTypes::Legacy::ArmorSlot::Torso,
+    SharedTypes::Legacy::ArmorSlot::Legs,
+    SharedTypes::Legacy::ArmorSlot::Feet,
+};
+
+// While another player's HUD is shown, the recorded local player's inventory packets describe the observer. Keeping
+// them in the mirror's saved slots lets the restore put the recorder's items back, instead of writing them now.
+bool divertRecordedHudPacket(Packet& packet, FollowedHudMirror& mirror) {
+    auto const level = ll::service::getMultiPlayerLevel();
+    auto const toItem = [&](NetworkItemStackDescriptor const& descriptor) {
+        return ItemStack::fromDescriptor(descriptor, level->getBlockPalette(), true);
+    };
+
+    switch (packet.getId()) {
+    case MinecraftPacketIds::InventorySlot: {
+        if (!level) return true;
+        auto&     slotPacket = static_cast<InventorySlotPacket&>(packet);
+        int const slot       = static_cast<int>(slotPacket.mSlot);
+        if (slotPacket.mInventoryId == ContainerID::Inventory && slot >= 0 && slot < 9) {
+            mirror.savedHotbar[static_cast<size_t>(slot)] = toItem(*slotPacket.mItem);
+        } else if (slotPacket.mInventoryId == ContainerID::Armor && slot >= 0 && slot < 4) {
+            mirror.savedArmor[static_cast<size_t>(slot)] = toItem(*slotPacket.mItem);
+        } else if (slotPacket.mInventoryId == ContainerID::Offhand && slot == 0) {
+            mirror.savedOffhand = toItem(*slotPacket.mItem);
+        }
+        ++mirror.diverted;
+        return true;
+    }
+    case MinecraftPacketIds::InventoryContent: {
+        if (!level) return true;
+        auto& content = static_cast<InventoryContentPacket&>(packet);
+        auto& slots   = *content.mSlots;
+        if (content.mInventoryId == ContainerID::Inventory) {
+            int const count = std::min(static_cast<int>(slots.size()), 9);
+            for (int slot = 0; slot < count; ++slot) {
+                mirror.savedHotbar[static_cast<size_t>(slot)] = toItem(slots[static_cast<size_t>(slot)]);
+            }
+        } else if (content.mInventoryId == ContainerID::Armor) {
+            int const count = std::min(static_cast<int>(slots.size()), 4);
+            for (int slot = 0; slot < count; ++slot) {
+                mirror.savedArmor[static_cast<size_t>(slot)] = toItem(slots[static_cast<size_t>(slot)]);
+            }
+        } else if (content.mInventoryId == ContainerID::Offhand && !slots.empty()) {
+            mirror.savedOffhand = toItem(slots.front());
+        }
+        ++mirror.diverted;
+        return true;
+    }
+    case MinecraftPacketIds::PlayerHotbar: {
+        auto const& hotbar = static_cast<PlayerHotbarPacket const&>(packet);
+        if (hotbar.mContainerId == ContainerID::Inventory && hotbar.mShouldSelectSlot) {
+            mirror.savedSelected = std::clamp(static_cast<int>(hotbar.mSelectedSlot), 0, 8);
+        }
+        ++mirror.diverted;
+        return true;
+    }
+    case MinecraftPacketIds::PlayerEquipment: {
+        auto& equipment = static_cast<MobEquipmentPacket&>(packet);
+        if (equipment.mRuntimeId->rawID != record::RecordedPlayerRuntimeIdValue) return false;
+        if (equipment.mContainerId != ContainerID::Inventory || !level) return true;
+        int const slot = std::clamp(static_cast<int>(equipment.mSlot), 0, 8);
+        mirror.savedHotbar[static_cast<size_t>(slot)] = toItem(*equipment.mItem);
+        mirror.savedSelected                          = std::clamp(static_cast<int>(equipment.mSelectedSlot), 0, 8);
+        ++mirror.diverted;
+        return true;
+    }
+    default:
+        return false;
+    }
+}
 
 } // namespace
 
@@ -371,6 +762,10 @@ bool ReplaySession::start(std::filesystem::path filePath) {
     }
 
     forceFirstPersonCamera();
+    // Installed once per replay (inert until the subject is hidden) so toggling follow never hooks anything.
+    visuals::hookReplaySubjectHide(true, visuals::SubjectHideReason::Session);
+    visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Session);
+    visuals::installReplayHudHooks();
 
     try {
         if (!init(std::move(filePath))) {
@@ -383,6 +778,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
             throw std::runtime_error("Unable to prepare the recorded resource-pack configuration");
         }
         prepareRecordedBlockRegistry(configurationPackets);
+        prepareRecordedItemRegistry(configurationPackets);
         auto const& context = mSnapshotContexts.front();
 
         LevelSettings settings;
@@ -449,6 +845,12 @@ bool ReplaySession::start(std::filesystem::path filePath) {
 }
 
 void ReplaySession::clearReplayData() {
+    restoreFollowedPlayerHud();
+    restoreObserverSkin();
+    {
+        std::lock_guard lock(mReplayItemRegistryMutex);
+        mReplayItemRegistryPayload.clear();
+    }
     mReplayDimensionProfile.store({}, std::memory_order_release);
     mStopRequested.store(false, std::memory_order_release);
     mRequestedSeekTick.store(-1, std::memory_order_release);
@@ -458,10 +860,18 @@ void ReplaySession::clearReplayData() {
     mWorldReady   = false;
     mReplayFailed = false;
     mInjectingPacket.store(nullptr, std::memory_order_release);
+    mContainerPreview.reset();
+    mRecordedContainers.clear();
+    visuals::setReplayContainerKeepOpen(false);
+    visuals::setReplayHudGameType(-1);
+    mLevelSimFrozen       = false;
+    mSeekParticlesCleared = false;
+    mSeekParticlesStale   = false;
     mChunkCompletionObserved.store(false, std::memory_order_release);
     mReplayDimension.store(nullptr, std::memory_order_release);
     mInitialSnapshotApplied  = false;
     mChunkInjectionPending   = false;
+    mChunkCenterLogKey.clear();
     mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mIsProcessingSnapshot    = false;
     mCurrentTick             = 0;
@@ -472,9 +882,15 @@ void ReplaySession::clearReplayData() {
     mExportTimelinePhase     = ReplayExportTimelinePhase::Inactive;
     mExportTargetTick        = -1;
     mExportCameraViewpoint.reset();
-    mPlaybackSpeed               = 1.0f;
-    mPlaybackTickAccumulator     = 0.0f;
-    mObserverPreviewInRange      = false;
+    mPlaybackSpeed           = 1.0f;
+    mPlaybackTickAccumulator = 0.0f;
+    mObserverPreviewInRange  = false;
+    mPausedPreviewPose.reset();
+    clearPreviewShot();
+    setFollowRecordedPlayer(false);
+    mFollowExitParkPending       = false;
+    mTeleportToSubjectPending    = false;
+    mPendingObserverPark.reset();
     mObserverServerPositionDirty = false;
     mLastObserverServerSyncChunk.reset();
     mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
@@ -535,6 +951,11 @@ void ReplaySession::clearReplayData() {
     mPendingSnapshotGamePackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
+    mRecordedLocalPlayerId.reset();
+    gReplayHandBobTick.clear();
+    gReplayHotbars.clear();
+    clearReplayPlayers(true);
+    visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     mReplayObjectiveNames.clear();
@@ -596,7 +1017,10 @@ bool ReplaySession::setPaused(bool paused) {
     // Hold the fraction the preview stopped at, so resuming continues from the same pose instead of the tick boundary.
     if (paused) mFrozenPreviewPartial.store(previewPartialTick(), std::memory_order_release);
     mIsPaused = paused;
+    // Pausing parks the observer and resuming hands it to the timeline or the player; neither keeps the old pose.
+    mObserverPreviewInRange = false;
     if (!paused) {
+        mPausedPreviewPose.reset();
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
         mObserverServerPositionDirty = false;
         mLastObserverServerSyncChunk.reset();
@@ -605,11 +1029,16 @@ bool ReplaySession::setPaused(bool paused) {
     getLogger().debug("Replay {} at tick {}", paused ? "paused" : "playing", mCurrentTick);
     if (paused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive && wasPreviewing) {
         parkReplayCameraAtPreview();
-    } else if (paused && mReplayPlayer && mReplayWorldJoined) {
+    } else if (mReplayPlayer && mReplayWorldJoined) {
         auto const position = mReplayPlayer->getPosition();
         auto const rotation = mReplayPlayer->getRotation();
-        cancelNativeMovementInterpolation(*mReplayPlayer, position, rotation, rotation.y);
-        if (mObserverServerPositionDirty) syncObserverServerPosition(position, rotation);
+        if (paused) {
+            cancelNativeMovementInterpolation(*mReplayPlayer, position, rotation, rotation.y);
+            if (mObserverServerPositionDirty) syncObserverServerPosition(position, rotation);
+        } else if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+            // The epoch bump dropped any sync still queued (such as the one an export end sends); resend it.
+            syncObserverServerPosition(position, rotation);
+        }
     }
     return true;
 }
@@ -625,14 +1054,881 @@ void ReplaySession::parkReplayCameraAtPreview() {
     if (!sample) return;
 
     auto const lastPose = keyframe::takeLastPreviewPose();
-    auto const pose     = lastPose.value_or(sample->state);
+    parkObserverAtPose(lastPose.value_or(sample->state));
+}
 
+void ReplaySession::parkObserverAtPose(keyframe::CameraRenderState const& pose) {
     Vec3 const feetPosition{pose.x, pose.y, pose.z};
     Vec2 const rotation{pose.pitch, pose.yaw};
     forceFirstPersonCamera();
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     syncObserverServerPosition(feetPosition, rotation);
+}
+
+// On a paused seek, park the observer at the pose sampled from the preview timeline.
+void ReplaySession::updatePausedObserverPreview() {
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || !mNetworkHandler) return;
+    if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return;
+    if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+        mPausedPreviewPose.reset();
+        return;
+    }
+    // Player input owns the camera; only a new seek or a changed sample takes it back.
+    if (editor::input::isGameInputCaptured()) return;
+
+    auto const time = getCameraRenderSampleTime();
+    if (!time) return;
+    auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
+    if (!sample) {
+        mPausedPreviewPose.reset();
+        return;
+    }
+
+    auto const seekCount = seekFinishCount();
+    if (mPausedPreviewPose == sample->state && mPausedPreviewSeekCount == seekCount) return;
+    mPausedPreviewPose      = sample->state;
+    mPausedPreviewSeekCount = seekCount;
+    parkObserverAtPose(sample->state);
+}
+
+void ReplaySession::applyFollowView() {
+    bool const active = isFollowViewActive();
+    bool const third  = active && isFollowViewThirdPerson();
+    if (active != mFollowViewApplied) {
+        mFollowViewApplied = active;
+        // The camera sits inside the followed player, so its own model would fill the view. The hide and hand
+        // hooks stay installed for the whole replay; (un)hooking them here froze the game for seconds.
+        visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Follow, active);
+        mLastObserverServerSyncChunk.reset();
+        mPausedPreviewPose.reset();
+        // The server copy only moved on chunk changes while following; park it so its next correction does not
+        // snap back.
+        mFollowExitParkPending = !active;
+    }
+    if (third != mFollowViewThirdApplied) {
+        mFollowViewThirdApplied = third;
+        visuals::setReplaySubjectThirdPerson(third);
+        mFollowHeldPose.reset();
+    }
+}
+
+void ReplaySession::setFollowRecordedPlayer(bool follow) {
+    if (mFollowRecordedPlayer.exchange(follow, std::memory_order_acq_rel) == follow) return;
+    if (!follow) mFollowThirdPerson.store(false, std::memory_order_release);
+    applyFollowView();
+    getLogger().debug("Observer {} the recorded player", follow ? "follows" : "stopped following");
+}
+
+void ReplaySession::setFollowThirdPerson(bool thirdPerson) {
+    if (thirdPerson && !isFollowingRecordedPlayer()) thirdPerson = false;
+    if (mFollowThirdPerson.exchange(thirdPerson, std::memory_order_acq_rel) == thirdPerson) return;
+    applyFollowView();
+    getLogger().debug("Follow view switched to {} person", thirdPerson ? "third" : "first");
+}
+
+void ReplaySession::setShotSubject(std::optional<std::string> subject) {
+    {
+        std::lock_guard lock(mReplayPlayersMutex);
+        if (mShotSubject == subject) return;
+        mShotSubject = std::move(subject);
+    }
+    mReplaySubjectEntityMissingTicks    = 0;
+    mReplaySubjectEntityMissingLastTick = -1;
+    rebindReplaySubject();
+}
+
+void ReplaySession::clearPreviewShot() {
+    mPreviewShotMode.store(PreviewShotMode::None, std::memory_order_release);
+    mShotThirdPerson.store(false, std::memory_order_release);
+    setShotSubject(std::nullopt);
+    applyFollowView();
+}
+
+// The highest camera track under the playhead owns the view. A keyframe track suspends the
+// user's follow; a person track follows its subject; with no track the user's follow comes back.
+void ReplaySession::updatePreviewShot() {
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return;
+    using state::editing::model::CameraTrackKind;
+    auto                       mode = PreviewShotMode::None;
+    std::optional<std::string> subject;
+    bool                       third = false;
+    // Player input owns the camera while captured, as it does over a paused keyframe track.
+    if (!editor::input::isGameInputCaptured()) {
+        if (auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+            auto const time = getCameraRenderSampleTime();
+            auto const shot = timeline->shotAt(time ? time->floorTick() : getCurrentTick());
+            if (shot && shot.kind() == CameraTrackKind::Keyframe) {
+                mode = PreviewShotMode::Keyframe;
+            } else if (shot) {
+                mode    = PreviewShotMode::Person;
+                subject = shot.subject;
+                third   = shot.kind() == CameraTrackKind::ThirdPerson;
+            }
+        }
+    }
+    mShotThirdPerson.store(third, std::memory_order_release);
+    if (mPreviewShotMode.exchange(mode, std::memory_order_acq_rel) != mode) {
+        getLogger().debug(
+            "preview shot mode={} subject={} third={} tick={}",
+            static_cast<int>(mode),
+            subject.value_or(""),
+            third,
+            mCurrentTick
+        );
+    }
+    setShotSubject(std::move(subject));
+    applyFollowView();
+}
+
+keyframe::CameraRenderState ReplaySession::thirdPersonView(keyframe::CameraRenderState const& eye) const {
+    return mReplayPlayer ? thirdPersonFollowPose(*mReplayPlayer, eye) : eye;
+}
+
+void ReplaySession::parkObserverAfterFollow() {
+    if (!mFollowExitParkPending) return;
+    // An export drives the observer and syncs it when it ends; a dimension change teleports it on both sides.
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || mPendingReplayDimension) {
+        mFollowExitParkPending = false;
+        return;
+    }
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
+    mFollowExitParkPending = false;
+    if (auto const pose = mFollowHeldPose ? mFollowHeldPose : sampleSubjectFollowState()) {
+        parkObserverAtPose(*pose);
+        return;
+    }
+    // No pose to park at (a seek is streaming in): pin the server to where following left the client.
+    auto const position = mReplayPlayer->getPosition();
+    auto const rotation = mReplayPlayer->getRotation();
+    syncObserverServerPosition(position, rotation);
+}
+
+// The preview moved the server copy only on chunk changes; once it stops driving the observer, pin the server.
+void ReplaySession::releasePreviewObserver() {
+    mLastObserverServerSyncChunk.reset();
+    if (!std::exchange(mObserverPreviewInRange, false)) return;
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) return;
+    teleportReplayPlayer(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
+    cancelNativeMovementInterpolation(
+        *mReplayPlayer,
+        mLastObserverPreviewFeet,
+        mLastObserverPreviewRotation,
+        mLastObserverPreviewRotation.y
+    );
+    syncObserverServerPosition(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
+}
+
+namespace {
+// Servers such as Hive append "\nLevel N" to name tags. Menus and logs need a single line.
+std::string firstNameLine(std::string name) {
+    if (auto const cut = name.find_first_of("\r\n"); cut != std::string::npos) name.resize(cut);
+    while (!name.empty() && name.back() == ' ') name.pop_back();
+    return name;
+}
+} // namespace
+
+void ReplaySession::rememberReplayPlayer(std::string uuid, std::string name, ActorUniqueID id, bool recorder) {
+    name = firstNameLine(std::move(name));
+    std::lock_guard lock(mReplayPlayersMutex);
+    auto const      found = mReplayPlayers.find(uuid);
+    if (found == mReplayPlayers.end()) {
+        mReplayPlayers.emplace(std::move(uuid), ReplayPlayerRecord{id, std::move(name), recorder, true});
+        return;
+    }
+    found->second.id       = id;
+    found->second.recorder = recorder;
+    found->second.present  = true;
+    if (!name.empty()) found->second.name = std::move(name);
+}
+
+void ReplaySession::noteReplayIdentity(std::string uuid, std::string name, ActorUniqueID id, bool recorder) {
+    name = firstNameLine(std::move(name));
+    std::lock_guard lock(mReplayPlayersMutex);
+    auto const      found = mReplayPlayers.find(uuid);
+    if (found == mReplayPlayers.end()) {
+        mReplayPlayers.emplace(std::move(uuid), ReplayPlayerRecord{id, std::move(name), recorder, false});
+        return;
+    }
+    found->second.id       = id;
+    found->second.recorder = recorder;
+    if (!name.empty()) found->second.name = std::move(name);
+}
+
+void ReplaySession::forgetReplayIdentity(std::string const& uuid) {
+    std::lock_guard lock(mReplayPlayersMutex);
+    mReplayPlayers.erase(uuid);
+}
+
+void ReplaySession::markReplayPlayerAbsent(ActorUniqueID id) {
+    std::lock_guard lock(mReplayPlayersMutex);
+    for (auto& [uuid, record] : mReplayPlayers) {
+        (void)uuid;
+        if (record.id == id) record.present = false;
+    }
+}
+
+void ReplaySession::clearReplayPlayers(bool clearChoice) {
+    restoreObserverSkin();
+    std::lock_guard lock(mReplayPlayersMutex);
+    if (!clearChoice) {
+        for (auto& [uuid, record] : mReplayPlayers) {
+            (void)uuid;
+            record.present = false;
+        }
+        return;
+    }
+    mReplayPlayers.clear();
+    mReplaySubjectChoice.clear();
+    mShotSubject.reset();
+    mReplaySubjectGapChoice.clear();
+    mReplaySubjectEntityMissingTicks    = 0;
+    mReplaySubjectEntityMissingLastTick = -1;
+    {
+        std::lock_guard entitiesLock(mReplayEntitiesMutex);
+        mReplayEntities.clear();
+    }
+    mObserverOriginalSkin.reset();
+    mObserverSkinApplied = false;
+}
+
+void ReplaySession::refreshReplayPlayerRoster() {
+    if (!mReplayPlayer || mPendingReplayDimension || mPendingSnapshotApply || mChunkInjectionPending) return;
+
+    auto const dimension = mReplayPlayer->getDimensionId();
+    auto const actors    = mReplayPlayer->getLevel().getRuntimeActorList();
+    struct LivePlayer {
+        ActorUniqueID id;
+        std::string   name;
+        bool          recorder{};
+    };
+    std::unordered_map<std::string, LivePlayer> live;
+    live.reserve(actors.size());
+    for (auto const* actor : actors) {
+        if (!actor || actor == mReplayPlayer || !actor->isPlayer()) continue;
+        if (actor->getDimensionId() != dimension) continue;
+        auto const* player = static_cast<Player const*>(actor);
+        std::string uuid   = player->getUuid().asString();
+        if (uuid.empty()) continue;
+        bool const recorder = mRecordedLocalPlayerId && actor->getOrCreateUniqueID() == *mRecordedLocalPlayerId;
+        live.insert_or_assign(
+            std::move(uuid),
+            LivePlayer{actor->getOrCreateUniqueID(), firstNameLine(actor->getNameTag()), recorder}
+        );
+    }
+
+    std::lock_guard lock(mReplayPlayersMutex);
+    bool            changed = false;
+    std::unordered_set<std::string> spawned;
+    spawned.reserve(live.size());
+    for (auto& [uuid, info] : live) {
+        spawned.insert(uuid);
+        auto const found = mReplayPlayers.find(uuid);
+        if (found == mReplayPlayers.end()) {
+            auto name = info.name.empty() ? uuid : std::move(info.name);
+            mReplayPlayers.emplace(uuid, ReplayPlayerRecord{info.id, std::move(name), info.recorder, true});
+            changed = true;
+            continue;
+        }
+        auto& record = found->second;
+        if (record.id != info.id || record.recorder != info.recorder || !record.present) changed = true;
+        record.id       = info.id;
+        record.recorder = info.recorder;
+        record.present  = true;
+        // The player list name is the identity; the name tag only fills a missing one.
+        bool const unnamed = record.name.empty() || record.name == uuid;
+        if (unnamed && !info.name.empty() && record.name != info.name) {
+            record.name = std::move(info.name);
+            changed     = true;
+        }
+    }
+    for (auto& [uuid, record] : mReplayPlayers) {
+        if (spawned.contains(uuid) || !record.present) continue;
+        record.present = false;
+        changed        = true;
+    }
+    if (!changed) return;
+    int present = 0;
+    for (auto const& [uuid, record] : mReplayPlayers) {
+        (void)uuid;
+        if (record.present) ++present;
+    }
+    getLogger().debug(
+        "replay player list refreshed present={} identity={} tick={}",
+        present,
+        mReplayPlayers.size(),
+        mCurrentTick
+    );
+}
+
+std::string ReplaySession::replaySubjectChoice() const {
+    std::lock_guard lock(mReplayPlayersMutex);
+    return mShotSubject ? *mShotSubject : mReplaySubjectChoice;
+}
+
+std::string ReplaySession::userReplaySubjectChoice() const {
+    std::lock_guard lock(mReplayPlayersMutex);
+    return mReplaySubjectChoice;
+}
+
+std::vector<ReplaySession::ReplayPlayerInfo> ReplaySession::replayPlayers() const {
+    std::vector<ReplayPlayerInfo> recorder;
+    std::vector<ReplayPlayerInfo> others;
+    {
+        std::lock_guard lock(mReplayPlayersMutex);
+        recorder.reserve(mReplayPlayers.size());
+        for (auto const& [uuid, record] : mReplayPlayers) {
+            ReplayPlayerInfo info{uuid, record.name, record.recorder, record.present};
+            if (record.recorder) recorder.push_back(std::move(info));
+            else others.push_back(std::move(info));
+        }
+    }
+    auto const byName = [](ReplayPlayerInfo const& a, ReplayPlayerInfo const& b) { return a.name < b.name; };
+    std::sort(recorder.begin(), recorder.end(), byName);
+    std::sort(others.begin(), others.end(), byName);
+    recorder.insert(recorder.end(), others.begin(), others.end());
+    return recorder;
+}
+
+void ReplaySession::setReplaySubjectChoice(std::string uuid) {
+    bool changed = false;
+    {
+        std::lock_guard lock(mReplayPlayersMutex);
+        changed              = mReplaySubjectChoice != uuid;
+        mReplaySubjectChoice = std::move(uuid);
+    }
+    if (changed) {
+        mReplaySubjectEntityMissingTicks    = 0;
+        mReplaySubjectEntityMissingLastTick = -1;
+        getLogger().debug("replay subject choice={}", replaySubjectChoice());
+    }
+    rebindReplaySubject();
+}
+
+std::optional<int64_t> ReplaySession::parseEntityChoice(std::string_view choice) {
+    if (!choice.starts_with(EntityChoicePrefix)) return std::nullopt;
+    choice.remove_prefix(EntityChoicePrefix.size());
+    int64_t value{};
+    auto const [end, error] = std::from_chars(choice.data(), choice.data() + choice.size(), value);
+    if (error != std::errc{} || end != choice.data() + choice.size()) return std::nullopt;
+    return value;
+}
+
+std::optional<ActorUniqueID> ReplaySession::resolveReplaySubjectId(std::string const& choice) const {
+    if (choice.empty()) return mRecordedLocalPlayerId;
+    if (auto const raw = parseEntityChoice(choice)) return ActorUniqueID{*raw};
+    std::lock_guard lock(mReplayPlayersMutex);
+    auto const      it = mReplayPlayers.find(choice);
+    if (it == mReplayPlayers.end()) return std::nullopt;
+    return it->second.id;
+}
+
+void ReplaySession::refreshReplayEntityList() {
+    std::vector<ReplayEntityInfo> entities;
+    if (mReplayPlayer) {
+        auto& level = mReplayPlayer->getLevel();
+        std::unordered_map<int64_t, std::string> playerUuids;
+        {
+            std::lock_guard lock(mReplayPlayersMutex);
+            for (auto const& [uuid, record] : mReplayPlayers) playerUuids.emplace(record.id.rawID, uuid);
+        }
+        // Every recorded add, not only the actors that moved: a mob standing still has no render key yet.
+        entities.reserve(mRecordedEntityIds.size());
+        for (auto const& id : mRecordedEntityIds) {
+            Actor* actor = level.fetchEntity(id, false);
+            if (!actor || actor == mReplayPlayer || actor->isRemoved() || !actor->isAlive()) continue;
+            bool const player = actor->isPlayer();
+            if (!player && !actor->hasCategory(ActorCategory::Mob)) continue;
+            ReplayEntityInfo info;
+            info.player = player;
+            if (player && mRecordedLocalPlayerId && *mRecordedLocalPlayerId == id) {
+                info.recorder = true; // the empty choice
+            } else if (player) {
+                auto const uuid = playerUuids.find(id.rawID);
+                if (uuid == playerUuids.end()) continue;
+                info.choice = uuid->second;
+            } else {
+                info.choice = entityChoice(id.rawID);
+            }
+            info.label = plainNameTag(actor->getNameTag());
+            if (info.label.empty()) info.label = entityTypeLabel(*actor);
+            auto const position = actor->getPosition();
+            auto const& box     = actor->getAABB();
+            info.x              = position.x;
+            info.y              = player ? box.min.y : position.y;
+            info.z              = position.z;
+            info.height         = box.max.y - box.min.y;
+            if (!std::isfinite(info.x) || !std::isfinite(info.y) || !std::isfinite(info.z)) continue;
+            if (!std::isfinite(info.height) || info.height <= 0.0f) info.height = 1.0f;
+            entities.push_back(std::move(info));
+        }
+        auto const observer   = mReplayPlayer->getPosition();
+        auto const distanceSq = [&observer](ReplayEntityInfo const& entity) {
+            float const dx = entity.x - observer.x;
+            float const dy = entity.y - observer.y;
+            float const dz = entity.z - observer.z;
+            return dx * dx + dy * dy + dz * dz;
+        };
+        std::sort(entities.begin(), entities.end(), [&](ReplayEntityInfo const& a, ReplayEntityInfo const& b) {
+            return distanceSq(a) < distanceSq(b);
+        });
+    }
+    std::lock_guard lock(mReplayEntitiesMutex);
+    mReplayEntities = std::move(entities);
+}
+
+std::vector<ReplaySession::ReplayEntityInfo> ReplaySession::replayEntities() const {
+    std::lock_guard lock(mReplayEntitiesMutex);
+    return mReplayEntities;
+}
+
+std::string ReplaySession::replaySubjectLabel(std::string const& choice) const {
+    {
+        std::lock_guard lock(mReplayEntitiesMutex);
+        for (auto const& entity : mReplayEntities) {
+            if (entity.choice == choice) return entity.label;
+        }
+    }
+    std::lock_guard lock(mReplayPlayersMutex);
+    if (auto const it = mReplayPlayers.find(choice); it != mReplayPlayers.end() && !it->second.name.empty()) {
+        return it->second.name;
+    }
+    return choice;
+}
+
+void ReplaySession::applyObserverSkin(SerializedSkinRef const& skin) {
+    if (!mReplayPlayer || !skin.mSkinImpl) return;
+    if (!mObserverOriginalSkin) {
+        auto const& current = mReplayPlayer->getSkin();
+        if (current.mSkinImpl) mObserverOriginalSkin = std::make_unique<SerializedSkinRef>(current);
+    }
+    mReplayPlayer->updateSkin(skin, static_cast<int>(mReplayPlayer->getClientSubId()));
+    mObserverSkinApplied = true;
+}
+
+void ReplaySession::restoreObserverSkin() {
+    if (!mObserverSkinApplied || !mReplayPlayer || !mObserverOriginalSkin || !mObserverOriginalSkin->mSkinImpl) {
+        mObserverSkinApplied = false;
+        return;
+    }
+    mReplayPlayer->updateSkin(*mObserverOriginalSkin, static_cast<int>(mReplayPlayer->getClientSubId()));
+    mObserverSkinApplied = false;
+    getLogger().debug("replay observer skin restored");
+}
+
+void ReplaySession::restoreFollowedPlayerHud() {
+    if (!mFollowedHudMirror || !mFollowedHudMirror->active) {
+        mFollowedHudMirror.reset();
+        return;
+    }
+    auto* observer = mReplayPlayer;
+    auto  mirror   = std::move(mFollowedHudMirror);
+    if (!observer) return;
+
+    auto& inventory = observer->getInventory();
+    for (int slot = 0; slot < 9; ++slot) inventory.setItem(slot, mirror->savedHotbar[static_cast<size_t>(slot)]);
+    for (size_t index = 0; index < HudArmorSlots.size(); ++index) {
+        observer->setArmor(HudArmorSlots[index], mirror->savedArmor[index]);
+    }
+    observer->setOffhandSlot(mirror->savedOffhand);
+    if (observer->mInventory) (void)observer->mInventory->selectSlot(mirror->savedSelected, ContainerID::Inventory);
+    for (auto const& attribute : mirror->savedAttributes) writeHudAttribute(*observer, attribute);
+    getLogger().debug(
+        "replay hud restored selected={} attributes={} diverted={}",
+        mirror->savedSelected,
+        mirror->savedAttributes.size(),
+        mirror->diverted
+    );
+}
+
+void ReplaySession::syncFollowedPlayerHud() {
+    if (!mReplayPlayer) {
+        restoreFollowedPlayerHud();
+        return;
+    }
+    bool const showOther =
+        visuals::isReplaySubjectViewDriven() && visuals::hasReplaySubject() && !visuals::isReplaySubjectRecorder();
+    if (!showOther) {
+        restoreFollowedPlayerHud();
+        if (visuals::isReplaySubjectViewDriven() && visuals::isReplaySubjectRecorder() && mRecordedLocalPlayerId) {
+            Actor* recorded = mReplayPlayer->getLevel().fetchEntity(*mRecordedLocalPlayerId, false);
+            if (recorded && recorded->isPlayer()) {
+                visuals::setReplayHudGameType(static_cast<int>(static_cast<Player*>(recorded)->getPlayerGameType()));
+            }
+        }
+        return;
+    }
+
+    std::string const choice = replaySubjectChoice();
+    if (choice.empty()) {
+        restoreFollowedPlayerHud();
+        return;
+    }
+    ActorUniqueID id;
+    std::string   name;
+    {
+        std::lock_guard lock(mReplayPlayersMutex);
+        auto const      found = mReplayPlayers.find(choice);
+        if (found == mReplayPlayers.end() || !found->second.present || found->second.recorder) {
+            restoreFollowedPlayerHud();
+            return;
+        }
+        id   = found->second.id;
+        name = found->second.name;
+    }
+    Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+    if (!actor || actor == mReplayPlayer || !actor->isPlayer()) {
+        restoreFollowedPlayerHud();
+        return;
+    }
+
+    auto& subject = static_cast<Player&>(*actor);
+    auto  mode    = subject.getPlayerGameType();
+    if (mode == GameType::Spectator || mode == GameType::Default || mode == GameType::Undefined) {
+        mode = GameType::Survival;
+    }
+    visuals::setReplayHudGameType(static_cast<int>(mode));
+
+    if (!mFollowedHudMirror) mFollowedHudMirror = std::make_unique<FollowedHudMirror>();
+    auto& mirror    = *mFollowedHudMirror;
+    auto& inventory = mReplayPlayer->getInventory();
+    if (!mirror.active || mirror.subjectId != id) {
+        if (mirror.active) {
+            for (auto& written : mirror.writtenHotbar) written = ItemStack{};
+            for (auto& written : mirror.writtenArmor) written = ItemStack{};
+            mirror.writtenOffhand  = ItemStack{};
+            mirror.writtenSelected = -1;
+        } else {
+            for (int slot = 0; slot < 9; ++slot)
+                mirror.savedHotbar[static_cast<size_t>(slot)] = inventory.getItem(slot);
+            for (size_t index = 0; index < HudArmorSlots.size(); ++index) {
+                mirror.savedArmor[index] = mReplayPlayer->getArmor(HudArmorSlots[index]);
+            }
+            mirror.savedOffhand  = mReplayPlayer->getOffhandSlot();
+            mirror.savedSelected = mReplayPlayer->getSelectedItemSlot();
+            mirror.savedAttributes.clear();
+            for (auto const* attribute : hudAttributes()) {
+                if (auto value = readHudAttribute(*mReplayPlayer, *attribute)) {
+                    mirror.savedAttributes.push_back(std::move(*value));
+                }
+            }
+        }
+        mirror.subjectId  = id;
+        mirror.active     = true;
+        mirror.forceWrite = true;
+        getLogger().debug("replay hud mirrored name={}", name);
+    } else {
+        // Anything that changed the observer behind the mirror's back is the recorder's own state; keep it for the
+        // restore.
+        for (int slot = 0; slot < 9; ++slot) {
+            auto const& live = inventory.getItem(slot);
+            if (!sameHudStack(live, mirror.writtenHotbar[static_cast<size_t>(slot)])) {
+                mirror.savedHotbar[static_cast<size_t>(slot)] = live;
+            }
+        }
+        for (size_t index = 0; index < HudArmorSlots.size(); ++index) {
+            auto const& live = mReplayPlayer->getArmor(HudArmorSlots[index]);
+            if (!sameHudStack(live, mirror.writtenArmor[index])) mirror.savedArmor[index] = live;
+        }
+        auto const& offhand = mReplayPlayer->getOffhandSlot();
+        if (!sameHudStack(offhand, mirror.writtenOffhand)) mirror.savedOffhand = offhand;
+        int const selected = mReplayPlayer->getSelectedItemSlot();
+        if (selected != mirror.writtenSelected) mirror.savedSelected = selected;
+    }
+
+    // A remote player's own inventory only ever holds what the vanilla handler put there, and its selected slot stays
+    // 0, so the hotbar is rebuilt from the recorded MobEquipment slots. The held item is always the latest truth.
+    // Rewriting an unchanged slot every tick resets the slot's render state and makes the hotbar flicker.
+    bool const          force   = std::exchange(mirror.forceWrite, false);
+    auto const          tracked = gReplayHotbars.find(subject.getRuntimeID().rawID);
+    ReplayHotbar const* hotbar  = tracked == gReplayHotbars.end() ? nullptr : &tracked->second;
+    int const           selected =
+        std::clamp(hotbar && hotbar->selected >= 0 ? hotbar->selected : subject.getSelectedItemSlot(), 0, 8);
+    auto& subjectInventory = subject.getInventory();
+    for (int slot = 0; slot < 9; ++slot) {
+        ItemStack item = subjectInventory.getItem(slot);
+        if (item.isNull() && hotbar) item = hotbar->items[static_cast<size_t>(slot)];
+        if (slot == selected) item = subject.getCarriedItem();
+        if (force || !sameHudStack(item, inventory.getItem(slot))) inventory.setItem(slot, item);
+        mirror.writtenHotbar[static_cast<size_t>(slot)] = item;
+    }
+    for (size_t index = 0; index < HudArmorSlots.size(); ++index) {
+        ItemStack item = subject.getArmor(HudArmorSlots[index]);
+        if (force || !sameHudStack(item, mReplayPlayer->getArmor(HudArmorSlots[index]))) {
+            mReplayPlayer->setArmor(HudArmorSlots[index], item);
+        }
+        mirror.writtenArmor[index] = item;
+    }
+    ItemStack offhand = subject.getOffhandSlot();
+    if (force || !sameHudStack(offhand, mReplayPlayer->getOffhandSlot())) mReplayPlayer->setOffhandSlot(offhand);
+    mirror.writtenOffhand = offhand;
+    if ((force || mReplayPlayer->getSelectedItemSlot() != selected) && mReplayPlayer->mInventory) {
+        (void)mReplayPlayer->mInventory->selectSlot(selected, ContainerID::Inventory);
+    }
+    mirror.writtenSelected = selected;
+
+    // Hearts, hunger and the experience bar are drawn from the observer's attributes.
+    for (auto const* attribute : hudAttributes()) {
+        auto const wanted = readHudAttribute(subject, *attribute);
+        if (!wanted) continue;
+        auto const shown = readHudAttribute(*mReplayPlayer, *attribute);
+        if (!force && shown && shown->current == wanted->current && shown->max == wanted->max) continue;
+        writeHudAttribute(*mReplayPlayer, *wanted);
+    }
+}
+
+void ReplaySession::rebindReplaySubject() {
+    auto const loseSubject = [this](std::string const& missing) {
+        visuals::setReplaySubject(std::nullopt);
+        restoreObserverSkin();
+        restoreFollowedPlayerHud();
+        if (missing.empty() || mReplaySubjectGapChoice == missing) return;
+        mReplaySubjectGapChoice = missing;
+        getLogger().debug("replay subject pending choice={} reason=missing", missing);
+    };
+    if (!mReplayPlayer) {
+        loseSubject("");
+        return;
+    }
+    std::string const choice = replaySubjectChoice();
+    ActorUniqueID     id;
+    bool              recorder = false;
+    std::string       name;
+    std::string       uuid;
+    auto const        entityRaw = parseEntityChoice(choice);
+    if (choice.empty()) {
+        if (!mRecordedLocalPlayerId) {
+            loseSubject("");
+            return;
+        }
+        id       = *mRecordedLocalPlayerId;
+        recorder = true;
+    } else if (entityRaw) {
+        id = ActorUniqueID{*entityRaw};
+    } else {
+        std::lock_guard lock(mReplayPlayersMutex);
+        auto const      it = mReplayPlayers.find(choice);
+        if (it == mReplayPlayers.end()) {
+            loseSubject(choice);
+            return;
+        }
+        id       = it->second.id;
+        recorder = it->second.recorder;
+        name     = it->second.name;
+        uuid     = it->first;
+    }
+    if (choice.empty()) {
+        std::lock_guard lock(mReplayPlayersMutex);
+        for (auto const& [playerUuid, record] : mReplayPlayers) {
+            if (record.id != id) continue;
+            name = record.name;
+            uuid = playerUuid;
+            break;
+        }
+    }
+    // A followed entity that stays gone hands the view back to the recorder.
+    auto const loseEntity = [&]() {
+        loseSubject(choice);
+        // A seek catch-up replays the entity's add later; only played ticks count toward the grace.
+        if (mSeekTargetTick >= 0 || isSeekPending()) return;
+        if (mReplaySubjectEntityMissingLastTick == mCurrentTick) return;
+        mReplaySubjectEntityMissingLastTick = mCurrentTick;
+        if (++mReplaySubjectEntityMissingTicks < EntitySubjectGraceTicks) return;
+        getLogger().debug(
+            "replay subject entity gone choice={} tick={} missingTicks={} fallback=recorder",
+            choice,
+            mCurrentTick,
+            mReplaySubjectEntityMissingTicks
+        );
+        setReplaySubjectChoice({});
+    };
+    Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+    if (!actor || actor == mReplayPlayer || (entityRaw && (actor->isRemoved() || !actor->isAlive()))) {
+        if (entityRaw) loseEntity();
+        else loseSubject(choice);
+        return;
+    }
+    auto const renderKey = replayEntityRenderKey(actor->getLevel(), id);
+    if (!renderKey) {
+        if (entityRaw) loseEntity();
+        else loseSubject(choice);
+        return;
+    }
+    mReplaySubjectEntityMissingTicks    = 0;
+    mReplaySubjectEntityMissingLastTick = -1;
+    if (!mEntityRenderKeys.contains(id)) {
+        auto const pose = replayRenderPose(*actor);
+        mEntityRenderKeys.insert_or_assign(id, *renderKey);
+        visuals::queueReplayEntityPose(*renderKey, pose, pose);
+    }
+    bool const  player    = actor->isPlayer();
+    float const eyeHeight = player ? 0.0f : entityEyeHeight(*actor);
+    bool const  changed   = !visuals::isReplaySubject(*renderKey) || visuals::isReplaySubjectRecorder() != recorder
+                        || visuals::isReplaySubjectPlayer() != player;
+    visuals::setReplaySubjectRecorder(recorder);
+    visuals::setReplaySubjectEntity(player, eyeHeight);
+    visuals::setReplaySubject(*renderKey);
+    mReplaySubjectGapChoice.clear();
+    if (!changed) return;
+    if (!player) {
+        if (name.empty()) name = plainNameTag(actor->getNameTag());
+        getLogger().debug(
+            "replay subject bound entity={} type={} name={} eyeHeight={:.2f}",
+            id.rawID,
+            actor->getTypeName(),
+            name,
+            eyeHeight
+        );
+    } else {
+        getLogger().debug("replay subject bound recorder={} name={} uuid={}", recorder, name, uuid);
+    }
+    bool applied = false;
+    if (actor->isPlayer()) {
+        auto&       subject = static_cast<Player&>(*actor);
+        auto const& entries = subject.getLevel().getPlayerList();
+        auto const  entry   = entries.find(subject.getUuid());
+        if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
+            applyObserverSkin(*entry->second.mSkin);
+            getLogger().debug("replay observer skin applied name={} uuid={}", name, uuid);
+            applied = true;
+        } else if (subject.getSkin().mSkinImpl) {
+            // The player list can lag the actor. The actor skin is what third person already draws.
+            applyObserverSkin(subject.getSkin());
+            getLogger().debug("replay observer skin applied from actor name={} uuid={}", name, uuid);
+            applied = true;
+        }
+    }
+    if (!applied) restoreObserverSkin();
+    updateReplaySubjectPosture(true);
+}
+
+void ReplaySession::updateReplaySubjectPosture(bool snap) {
+    if (!mReplayPlayer || !visuals::hasReplaySubject()) return;
+    auto const resolved = resolveReplaySubjectId(replaySubjectChoice());
+    if (!resolved) return;
+    ActorUniqueID const id    = *resolved;
+    Actor*              actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+    if (!actor || actor == mReplayPlayer) return;
+    // A growing baby or a resized slime changes its eyes; players use the recorded or measured offsets instead.
+    if (!actor->isPlayer()) visuals::setReplaySubjectEntity(false, entityEyeHeight(*actor));
+    visuals::noteReplaySubjectPosture(
+        mCurrentTick,
+        snap,
+        visuals::ReplaySubjectPosture{
+            actor->getStatusFlag(ActorFlags::Sneaking),
+            actor->getStatusFlag(ActorFlags::Swimming),
+            actor->getStatusFlag(ActorFlags::Crawling),
+            actor->getStatusFlag(ActorFlags::Sleeping),
+            actor->isSleeping(),
+        }
+    );
+}
+
+// A snapshot wipes every player, and the chosen one may spawn a tick later or be absent from that snapshot.
+void ReplaySession::refreshReplaySubjectBinding() {
+    if (!mReplayPlayer || mPendingReplayDimension || mPendingSnapshotApply || mChunkInjectionPending) return;
+    if (visuals::hasReplaySubject()) {
+        mReplaySubjectGapChoice.clear();
+        return;
+    }
+    rebindReplaySubject();
+}
+
+// Teleport the viewer to the target: a pending request lands once, following repeats per frame.
+bool ReplaySession::updateSubjectFollow() {
+    // Player input owns the camera, and a started export drives it from the export timeline.
+    bool const exporting = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
+    if (isFollowingRecordedPlayer() && (editor::input::isGameInputCaptured() || exporting)) {
+        setFollowRecordedPlayer(false);
+    }
+    bool const following = !exporting && isFollowViewActive();
+    if (exporting) mTeleportToSubjectPending = false;
+    if (!following && !mTeleportToSubjectPending) return false;
+
+    if (!mNetworkHandler || !isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return following;
+
+    auto const sampled = sampleSubjectFollowState();
+    if (!sampled) return following;
+    auto const& state    = *sampled;
+    auto const  position = Vec3{state.x, state.y, state.z};
+    bool const  oneShot  = std::exchange(mTeleportToSubjectPending, false);
+    if (oneShot && !following) {
+        parkObserverAtPose(state);
+        getLogger().debug(
+            "Observer teleported to the recorded player at tick {} ({:.2f}, {:.2f}, {:.2f})",
+            mCurrentTick,
+            position.x,
+            position.y,
+            position.z
+        );
+        return false;
+    }
+
+    Vec3 const     feetPosition{state.x, state.y, state.z};
+    Vec2 const     rotation{state.pitch, state.yaw};
+    ChunkPos const chunk{feetPosition.x, feetPosition.z};
+    bool const serverSyncNeeded = oneShot || !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != chunk.x
+                               || mLastObserverServerSyncChunk->z != chunk.z;
+    forceFirstPersonCamera();
+    teleportReplayPlayer(feetPosition, rotation);
+    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
+    if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
+    return true;
+}
+
+std::optional<keyframe::CameraRenderState> ReplaySession::sampleSubjectFollowState() {
+    // The entity pose trails the camera by one tick; the camera time covers tick 0.
+    auto time = getEntityRenderSampleTime();
+    if (!time) time = getCameraRenderSampleTime();
+    if (!time) return std::nullopt;
+    auto const pose = visuals::sampleReplaySubjectPose(*time);
+    if (!pose) return std::nullopt;
+    auto const& position = pose->position;
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)
+        || !std::isfinite(pose->yaw) || !std::isfinite(pose->pitch)
+        || (position.x == 0.0f && position.y == 0.0f && position.z == 0.0f)) {
+        return std::nullopt;
+    }
+    // The recorded player's position is already its eye position; the recorded FOV carries the spyglass zoom.
+    auto const fov = visuals::sampleReplaySubjectFov(*time);
+    // The hand and vignette hooks read the sleep state sampled here.
+    (void)visuals::sampleReplaySubjectViewWeight(*time);
+    return keyframe::CameraRenderState{
+        position.x,
+        position.y,
+        position.z,
+        pose->yaw,
+        pose->pitch,
+        0.0f,
+        fov && *fov > 1.0f && *fov < 179.0f ? *fov : 70.0f,
+    };
+}
+
+// Server corrections land during the client update, after the previous frame's pin; pin again right before drawing.
+std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRender() {
+    if (!isFollowViewActive() || !mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler
+        || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || mPendingReplayDimension) {
+        mFollowHeldPose.reset();
+        return std::nullopt;
+    }
+    // The tick stops while chunks or a snapshot stream in, but frames keep coming: keep the last pose.
+    if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return mFollowHeldPose;
+
+    auto state = sampleSubjectFollowState();
+    if (!state) return mFollowHeldPose;
+    cancelNativeMovementInterpolation(
+        *mReplayPlayer,
+        Vec3{state->x, state->y, state->z},
+        Vec2{state->pitch, state->yaw},
+        state->yaw
+    );
+    // The observer stays on the eyes so chunks and the server copy follow; only the drawn camera moves back.
+    // The sample above refreshed the sleep weight, so a subject in bed already reads as first person here.
+    if (isFollowViewThirdPerson() && visuals::isReplaySubjectThirdPerson()) {
+        state = thirdPersonFollowPose(*mReplayPlayer, *state);
+    }
+    mFollowHeldPose = state;
+    return state;
 }
 
 void ReplaySession::enforceReplayWorldTime() {
@@ -697,35 +1993,41 @@ void ReplaySession::syncObserverServerPosition(Vec3 const& feetPosition, Vec2 co
 
 void ReplaySession::updateObserverPreview() {
     if (!mReplayPlayer || !mReplayWorldJoined) return;
-    if (mIsPaused) return;
+    updatePreviewShot();
+    if (updateSubjectFollow()) {
+        mPendingObserverPark.reset();
+        return;
+    }
+    parkObserverAfterFollow();
+    if (mPendingObserverPark && mNetworkHandler && isReplayWorldReady() && !mPendingSnapshotApply && !isSeekPending()
+        && !mPendingReplayDimension && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+        auto const pose = *std::exchange(mPendingObserverPark, std::nullopt);
+        parkObserverAtPose(pose);
+        return;
+    }
+    if (mIsPaused) {
+        if (!mPendingReplayDimension) updatePausedObserverPreview();
+        return;
+    }
     if (mPendingReplayDimension) return;
     if (!mNetworkHandler) return;
-    if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) return;
+    if (!keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
+        releasePreviewObserver();
+        return;
+    }
     auto const time = getCameraRenderSampleTime();
     if (!time) return;
     // Republishing (a track was toggled or edited) invalidates the cached pose, unlike merely leaving the range.
     auto const timelineGeneration = keyframe::previewTimelineGeneration();
     if (mObserverPreviewGeneration != timelineGeneration) {
         mObserverPreviewGeneration = timelineGeneration;
-        mObserverPreviewInRange    = false;
-        mLastObserverServerSyncChunk.reset();
+        releasePreviewObserver();
     }
 
     auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *time);
     if (!sample) {
         // Leaving the range: pin the observer and server to the last in-range pose.
-        if (mObserverPreviewInRange) {
-            mObserverPreviewInRange = false;
-            teleportReplayPlayer(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
-            cancelNativeMovementInterpolation(
-                *mReplayPlayer,
-                mLastObserverPreviewFeet,
-                mLastObserverPreviewRotation,
-                mLastObserverPreviewRotation.y
-            );
-            syncObserverServerPosition(mLastObserverPreviewFeet, mLastObserverPreviewRotation);
-        }
-        mLastObserverServerSyncChunk.reset();
+        releasePreviewObserver();
         return;
     }
     mObserverPreviewInRange = true;
@@ -792,9 +2094,15 @@ std::optional<visuals::ReplaySampleTime> ReplaySession::getEntityRenderSampleTim
 bool ReplaySession::beginExportTimeline(int startTick) {
     if (!mActive || mReplayFailed || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return false;
 
-    startTick                = std::clamp(startTick, 0, getTotalTicks());
-    mIsPaused                = true;
-    mPlaybackTickAccumulator = 0.0f;
+    // The export warm-up waits for a menu-free scene, so a preview from before the export must not stay open.
+    closeContainerPreview("exportBegin");
+    popReplayContainerScreen();
+    clearPreviewShot();
+    setFollowRecordedPlayer(false);
+    mTeleportToSubjectPending = false;
+    startTick                 = std::clamp(startTick, 0, getTotalTicks());
+    mIsPaused                 = true;
+    mPlaybackTickAccumulator  = 0.0f;
 
     mRequestedSeekTick.store(startTick, std::memory_order_release);
     mSeekTargetTick         = -1;
@@ -924,6 +2232,7 @@ bool ReplaySession::finishExportTimelineInitialization() {
     mExportSeekRequested    = false;
     mSnapMovementDuringSeek = false;
     mExportTimelinePhase    = ReplayExportTimelinePhase::Continuous;
+    syncContainerPreviewAfterSeek();
     return true;
 }
 
@@ -988,18 +2297,24 @@ void ReplaySession::setPlaybackSpeed(float speed) {
 std::span<float const> ReplaySession::playbackSpeeds() noexcept { return PlaybackSpeeds; }
 
 void ReplaySession::finishSeek() {
+    // Export seeks never tick the level during catch-up, so they always drop the particles it piled up.
+    if (mExportSeekRequested) mSeekParticlesStale = true;
     mSeekTargetTick         = -1;
     mExportSeekRequested    = false;
     mSnapMovementDuringSeek = false;
+    mSeekFinishCount.fetch_add(1, std::memory_order_acq_rel);
     settleAfterSeek();
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();
     if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
+    syncContainerPreviewAfterSeek();
 }
 
 // Per-action snapping misses entities that never moved during catch-up, so settle every recorded one here.
 void ReplaySession::settleAfterSeek() {
-    clearReplayParticles();
+    if (mSeekParticlesStale) clearReplayParticles();
+    mSeekParticlesStale   = false;
+    mSeekParticlesCleared = false;
     if (!mReplayPlayer || !mReplayWorldJoined) return;
 
     auto& level = mReplayPlayer->getLevel();
@@ -1016,9 +2331,9 @@ void ReplaySession::beginSeek(int targetTick) {
     if (mReaders.empty()) return;
     if (!refreshReplayPlayer()) throw std::runtime_error("Replay player is unavailable while seeking");
 
-
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
+    visuals::setReplaySubject(std::nullopt);
 
     size_t selectedReader = mReaders.size() - 1;
     int    selectedStart  = 0;
@@ -1040,6 +2355,8 @@ void ReplaySession::beginSeek(int targetTick) {
     mPlaybackTickAccumulator = 0.0f;
     mSeekTargetTick          = targetTick;
     mSnapMovementDuringSeek  = !exportSeek || mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
+    mSeekParticlesCleared    = false;
+    mSeekParticlesStale      = false;
     if (selectedReader >= mSnapshotContexts.size()) {
         throw std::runtime_error("Replay seek snapshot context index is out of range");
     }
@@ -1069,6 +2386,7 @@ void ReplaySession::beginSeek(int targetTick) {
             mCurrentTick,
             targetTick
         );
+        rebindReplaySubject();
         return;
     }
 
@@ -1080,8 +2398,15 @@ void ReplaySession::beginSeek(int targetTick) {
         );
     }
 
-    mReaderIndex = selectedReader;
-    mCurrentTick = selectedStart;
+    // A reloaded world keeps the particles of the place it left, so they are dropped even when the landing ticks
+    // nothing. The same interval does not close: the screen stays until the landing tick leaves it.
+    auto const* landing      = recordedContainerOpenAt(targetTick);
+    bool const  sameContainer = mContainerPreview && landing && mContainerPreview->id == landing->id
+                            && mContainerPreview->openTick == landing->openTick;
+    if (changesDimension || forceExportSnapshot || !sameContainer) closeContainerPreview("seek");
+    mSeekParticlesStale = true;
+    mReaderIndex        = selectedReader;
+    mCurrentTick        = selectedStart;
     integration::pushReplayClock(mCurrentTick, true);
     applySnapshot(*mReaders[mReaderIndex], followRecordedPlayer);
     getLogger()
@@ -1092,9 +2417,17 @@ void ReplaySession::tick() {
     if (!mActive) return;
     try {
         if (!mReplayWorldJoined || !mNetworkHandler || !refreshReplayPlayer()) return;
+        // The level stays live on every early return; only a settled pause or slow-motion gap freezes it.
+        struct LevelFreezeScope {
+            ReplaySession& session;
+            bool           freeze{};
+            ~LevelFreezeScope() { session.syncLevelSimPause(freeze); }
+        } levelFreeze{*this};
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
+        updateContainerPreview();
+        syncFollowedPlayerHud();
 
         if (mPendingSnapshotApply) {
             if (mPendingReplayDimension) return;
@@ -1140,6 +2473,10 @@ void ReplaySession::tick() {
         // Yielding the tick that finishes a snapshot lets the client rebuild its players before catch-up resumes.
         if (mChunkInjectionPending) return;
 
+        refreshReplayPlayerRoster();
+        refreshReplaySubjectBinding();
+        refreshReplayEntityList();
+
         if (mSeekTargetTick >= 0) {
             auto const deadline = std::chrono::steady_clock::now() + SeekCatchUpBudget;
             while (mCurrentTick < mSeekTargetTick) {
@@ -1152,6 +2489,28 @@ void ReplaySession::tick() {
                     if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                 }
                 if (mPendingSnapshotApply || mPendingReplayDimension) break;
+                refreshReplayPlayerRoster();
+                refreshReplaySubjectBinding();
+                // Export seeks keep the clear at the landing frame so their first frames stay unchanged.
+                bool const inParticleWindow =
+                    !mExportSeekRequested && mCurrentTick >= mSeekTargetTick - SeekParticleWindowTicks;
+                if (inParticleWindow) {
+                    if (!mSeekParticlesCleared) {
+                        mSeekParticlesCleared = true;
+                        // Ticks skipped before the window left their particle events piled up at age zero.
+                        if (mSeekParticlesStale) {
+                            clearReplayParticles();
+                            mSeekParticlesStale = false;
+                        }
+                        // A paused level would tick its particles as frozen.
+                        syncLevelSimPause(false);
+                    }
+                    // Like normal playback the level ticks before each replay tick, so the landing is not aged past it.
+                    if (runtime::runNativeLevelTick()) ageReplayParticles();
+                    else mSeekParticlesStale = true;
+                } else {
+                    mSeekParticlesStale = true;
+                }
                 if (!advanceReplayTick(false)) {
                     getLogger().warn("Replay ended at tick {} while seeking to tick {}", mCurrentTick, mSeekTargetTick);
                     finishSeek();
@@ -1163,6 +2522,8 @@ void ReplaySession::tick() {
             if (mCurrentTick >= mSeekTargetTick) {
                 getLogger().debug("Replay seek completed at tick {}", mCurrentTick);
                 finishSeek();
+                // The next level tick runs before the next replay tick, so a paused landing is frozen from here.
+                levelFreeze.freeze = mIsPaused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive;
             }
             return;
         }
@@ -1177,10 +2538,16 @@ void ReplaySession::tick() {
             return;
         }
 
-        if (mIsPaused) return;
+        bool const exportActive = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
+        if (mIsPaused) {
+            levelFreeze.freeze = !exportActive;
+            holdItemUseBetweenTicks();
+            return;
+        }
         mPlaybackTickAccumulator += mPlaybackSpeed;
         int const ticksToAdvance  = static_cast<int>(mPlaybackTickAccumulator);
         mPlaybackTickAccumulator -= static_cast<float>(ticksToAdvance);
+        if (ticksToAdvance == 0) holdItemUseBetweenTicks();
         for (int tick = 0;
              tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
              ++tick) {
@@ -1188,6 +2555,9 @@ void ReplaySession::tick() {
             if (!advanceReplayTick(true)) break;
             if (mCurrentTick != before) markReplayTickAdvanced();
         }
+        // The next client tick runs before its replay tick, so freeze it only when that replay tick will not advance.
+        bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
+        levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + mPlaybackSpeed < 1.0f;
     } catch (std::exception const& e) {
         getLogger().error("Replay session failed: {}", e.what());
         stop();
@@ -1343,6 +2713,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mChunkInjectionIdleTicks = 0;
     mPendingLevelChunkCursor = 0;
     mPendingSubChunkCursor   = 0;
+    restoreObserverSkin();
     mReplayPlayer            = nullptr;
     {
         std::scoped_lock lock(mPendingLevelChunksMutex);
@@ -1366,6 +2737,11 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mPendingSnapshotGamePackets.clear();
     mAppliedConfigurationPackets.clear();
     mRecordedEntityIds.clear();
+    mRecordedLocalPlayerId.reset();
+    gReplayHandBobTick.clear();
+    gReplayHotbars.clear();
+    clearReplayPlayers(true);
+    visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     mReplayObjectiveNames.clear();
@@ -1418,6 +2794,12 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
         auto keys = info->mData->collectKeys();
         mReplayCachedResourcePacksLoaded = true;
         repository.addCachedResourcePacks(&keys);
+        // Packs embedded in the replay take over from the local download cache; old replays keep using the cache.
+        try {
+            mMountedReplayPacks = io::packs::mountReplayPacks(repository, *info->mData, mReplayFilePath);
+        } catch (std::exception const& exception) {
+            getLogger().warn("Unable to mount embedded resource packs, using the local cache: {}", exception.what());
+        }
     }
 
     if (!serializedStack) return true;
@@ -1462,6 +2844,93 @@ void ReplaySession::prepareRecordedBlockRegistry(std::vector<PlaybackSerializedG
     } catch (...) {
         getLogger().error("Unable to prepare the recorded block registry");
     }
+}
+
+void ReplaySession::prepareRecordedItemRegistry(std::vector<PlaybackSerializedGamePacket> const& packets) {
+    std::lock_guard lock(mReplayItemRegistryMutex);
+    mReplayItemRegistryPayload.clear();
+    mRecordedItemRegistryApplied.store(false, std::memory_order_release);
+
+    for (auto it = packets.rbegin(); it != packets.rend(); ++it) {
+        if (it->mPacketId != static_cast<int32_t>(MinecraftPacketIds::ItemRegistryPacket)) continue;
+        mReplayItemRegistryPayload = it->mPayload;
+        return;
+    }
+    getLogger().warn("Replay has no item registry; custom items in this recording stay unresolved");
+}
+
+std::shared_ptr<ItemRegistryPacket const> ReplaySession::takeRecordedItemRegistry() {
+    std::string payload;
+    {
+        std::lock_guard lock(mReplayItemRegistryMutex);
+        payload.swap(mReplayItemRegistryPayload);
+    }
+    if (payload.empty()) return nullptr;
+
+    auto restore = [&] {
+        std::lock_guard lock(mReplayItemRegistryMutex);
+        if (mReplayItemRegistryPayload.empty()) mReplayItemRegistryPayload = std::move(payload);
+    };
+    auto decode = [&]() -> std::shared_ptr<ItemRegistryPacket const> {
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ItemRegistryPacket);
+        if (!packet) throw std::runtime_error("Unable to create a recorded item registry packet");
+
+        ReadOnlyBinaryStream stream(payload, false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            throw std::runtime_error("Unable to decode the recorded item registry");
+        }
+        mRecordedItemRegistryApplied.store(true, std::memory_order_release);
+        return std::static_pointer_cast<ItemRegistryPacket const>(std::move(packet));
+    };
+
+    // ItemRegistryPacket::read locks the thread-local item registry and asserts when that lock fails. Replay start
+    // is still the main menu, so the bytes stay stored until this hook. The join dispatcher has already installed
+    // that registry; if it has not, keep the bytes for a later packet instead of crashing.
+    try {
+        if (ItemRegistryManager::getItemRegistry().mWeakRegistry.expired()) {
+            auto client = ll::service::getClientInstance();
+            if (!client) {
+                restore();
+                getLogger().error("Unable to decode the recorded item registry because the client is unavailable");
+                return nullptr;
+            }
+            auto registry = client->getItemRegistry();
+            if (registry.mWeakRegistry.expired()) {
+                restore();
+                getLogger().error(
+                    "Unable to decode the recorded item registry because the client item registry is not ready"
+                );
+                return nullptr;
+            }
+            ItemRegistryManager::ScopedItemRegistry scope(registry.mWeakRegistry);
+            return decode();
+        }
+        return decode();
+    } catch (std::exception const& exception) {
+        getLogger().error("Unable to prepare the recorded item registry: {}", exception.what());
+    } catch (...) {
+        getLogger().error("Unable to prepare the recorded item registry");
+    }
+    return nullptr;
+}
+
+void ReplaySession::logRecordedItemRegistryApplied(ItemRegistryPacket const& packet) const {
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    auto const registry = client->getItemRegistry();
+    // lookupByName locks the ref and asserts when it is empty.
+    if (registry.mWeakRegistry.expired()) return;
+
+    int custom   = 0;
+    int resolved = 0;
+    for (auto const& item : *packet.mItems) {
+        auto const& name = item.mName->getString();
+        if (name.starts_with("minecraft:")) continue;
+        ++custom;
+        if (registry.lookupByName(HashedString{name})) ++resolved;
+    }
+    getLogger()
+        .info("Registered recorded item ids items={} custom={} resolved={}", packet.mItems->size(), custom, resolved);
 }
 
 void ReplaySession::applyRecordedBlockRegistry() {
@@ -1702,14 +3171,19 @@ void ReplaySession::releaseReplayResourcePacks() {
     if (!mReplayCachedResourcePacksLoaded) return;
     mReplayCachedResourcePacksLoaded = false;
 
-    auto client = ll::service::getClientInstance();
-    if (!client) return;
-    try {
-        client->getResourcePackRepository().removePacksLoadedFromCache();
-    } catch (std::exception const& exception) {
-        getLogger().error("Unable to release replay resource packs loaded from cache: {}", exception.what());
-    } catch (...) {
-        getLogger().error("Unable to release replay resource packs loaded from cache");
+    if (auto client = ll::service::getClientInstance()) {
+        try {
+            client->getResourcePackRepository().removePacksLoadedFromCache();
+        } catch (std::exception const& exception) {
+            getLogger().error("Unable to release replay resource packs loaded from cache: {}", exception.what());
+        } catch (...) {
+            getLogger().error("Unable to release replay resource packs loaded from cache");
+        }
+    }
+    // The cache sources pointing at the mount are gone now, so its files can be deleted.
+    if (mMountedReplayPacks) {
+        io::packs::removeMountedPacks(*mMountedReplayPacks);
+        mMountedReplayPacks.reset();
     }
 }
 
@@ -1760,6 +3234,8 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         auto const& rotation = replayPlayer->getRotation();
         transitionView       = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
     }
+    // Actor::teleport lands one eye height above the request. Snapshot and observer positions are already eye height.
+    transitionView.y -= kServerEyeHeight;
     bool const relocateWithinDimension = followRecordedPlayer && !serverPlayerRelocated;
     if (!ensureReplayDimension(DimensionType{snapshotContext.dimensionId}, transitionView, relocateWithinDimension)) {
         if (!mReplayFailed) {
@@ -1832,6 +3308,21 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         mApplyingChunkSnapshot = false;
         return;
     }
+    std::optional<visuals::EntityRenderPose> snapshotCameraView;
+    if (snapshotContext.hasView) {
+        snapshotCameraView = visuals::EntityRenderPose{
+            {snapshotContext.viewX, snapshotContext.viewY, snapshotContext.viewZ},
+            snapshotContext.viewPitch,
+            snapshotContext.viewYaw,
+            snapshotContext.viewYaw,
+            snapshotContext.viewYaw
+        };
+    }
+    visuals::queueReplaySubjectCameraOffset(
+        {snapshotContext.cameraOffsetX, snapshotContext.cameraOffsetY, snapshotContext.cameraOffsetZ},
+        snapshotContext.fov,
+        snapshotCameraView
+    );
 
     PlaybackView view;
     if (followRecordedPlayer) {
@@ -2162,6 +3653,8 @@ void ReplaySession::completeReplayDimensionTransition() {
     mDimensionTransitionStartedAt      = {};
     mCompletedDimensionGeneration      = completedGeneration;
     resetDimensionScopedReplayState();
+    // The observer keeps its old coordinates in the new dimension; bring it to the recorded player once that is known.
+    if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) mTeleportToSubjectPending = true;
 }
 
 void ReplaySession::resetDimensionScopedReplayState() {
@@ -2186,6 +3679,11 @@ void ReplaySession::resetDimensionScopedReplayState() {
     mDirectLevelChunkIndices.clear();
     mCenterChunkPositions.clear();
     mRecordedEntityIds.clear();
+    gReplayHandBobTick.clear();
+    gReplayHotbars.clear();
+    clearReplayPlayers(false);
+    mRecordedLocalPlayerId.reset();
+    visuals::setReplaySubject(std::nullopt);
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     {
@@ -2214,6 +3712,59 @@ bool ReplaySession::refreshReplayPlayer() {
     return true;
 }
 
+static void noteSkippedReplayChunk(bool levelChunk, int packetDimension, int currentDimension, int tick) {
+    struct Signature {
+        bool levelChunk;
+        int  packetDimension;
+        int  currentDimension;
+        int  tick;
+    };
+    static Signature last{};
+    static int       suppressed = 0;
+    static bool      haveLast   = false;
+    Signature const  now{levelChunk, packetDimension, currentDimension, tick};
+    if (haveLast && now.levelChunk == last.levelChunk && now.packetDimension == last.packetDimension
+        && now.currentDimension == last.currentDimension && now.tick == last.tick) {
+        ++suppressed;
+        return;
+    }
+    int const repeatedBefore = haveLast ? suppressed : 0;
+    getLogger().debug(
+        "replay chunk skipped kind={} dimension={} current={} tick={} repeatedBefore={}",
+        levelChunk ? "level" : "sub",
+        packetDimension,
+        currentDimension,
+        tick,
+        repeatedBefore
+    );
+    last       = now;
+    suppressed = 0;
+    haveLast   = true;
+}
+
+std::optional<ReplaySession::FollowedChunkCenter>
+ReplaySession::followedPlayerChunkCenter(DimensionType const& snapshotDimension) {
+    if (!visuals::isReplaySubjectViewDriven() || visuals::isReplaySubjectRecorder()) return std::nullopt;
+    std::string const choice = replaySubjectChoice();
+    if (choice.empty() || !mReplayPlayer) return std::nullopt;
+
+    ActorUniqueID id;
+    if (auto const raw = parseEntityChoice(choice)) {
+        id = ActorUniqueID{*raw};
+    } else {
+        std::lock_guard lock(mReplayPlayersMutex);
+        auto const      it = mReplayPlayers.find(choice);
+        if (it == mReplayPlayers.end() || it->second.recorder || !it->second.present) return std::nullopt;
+        id = it->second.id;
+    }
+
+    Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
+    if (!actor || actor == mReplayPlayer || actor->getDimensionId() != snapshotDimension) return std::nullopt;
+    auto const position = actor->getPosition();
+    if (!std::isfinite(position.x) || !std::isfinite(position.z)) return std::nullopt;
+    return FollowedChunkCenter{choice, position.x, position.z};
+}
+
 bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     struct PrioritizedLevelChunk {
         ChunkPos pos;
@@ -2225,8 +3776,24 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         int64_t               distanceSquared;
     };
 
-    int const  centerX         = static_cast<int>(std::floor(view.x / 16.0f));
-    int const  centerZ         = static_cast<int>(std::floor(view.z / 16.0f));
+    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+    if (!replayDimension) {
+        getLogger().error("Replay dimension disappeared while preparing chunk streaming");
+        return false;
+    }
+
+    int const snapshotChunkX = static_cast<int>(std::floor(view.x / 16.0f));
+    int const snapshotChunkZ = static_cast<int>(std::floor(view.z / 16.0f));
+    int       centerX        = snapshotChunkX;
+    int       centerZ        = snapshotChunkZ;
+    bool      followCenter   = false;
+    std::string followSubject;
+    if (auto const followed = followedPlayerChunkCenter(replayDimension->getDimensionId())) {
+        centerX       = static_cast<int>(std::floor(followed->x / 16.0f));
+        centerZ       = static_cast<int>(std::floor(followed->z / 16.0f));
+        followCenter  = true;
+        followSubject = followed->subject;
+    }
     auto const distanceSquared = [centerX, centerZ](ChunkPos const& pos) {
         int64_t const dx = static_cast<int64_t>(pos.x) - centerX;
         int64_t const dz = static_cast<int64_t>(pos.z) - centerZ;
@@ -2239,6 +3806,7 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     std::unordered_map<ChunkPos, SnapshotColumnIdentity>  targetColumns;
     std::unordered_map<ChunkPos, std::unordered_set<int>> subChunkIndicesByColumn;
     size_t                                                skippedBlobCachePackets = 0;
+    size_t                                                skippedDimensionPackets = 0;
     levelChunks.reserve(mPendingLevelChunkIndices.size());
     levelChunkPositions.reserve(mPendingLevelChunkIndices.size());
     requestModeLevelChunks.reserve(mPendingLevelChunkIndices.size());
@@ -2259,6 +3827,17 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
         if (static_cast<bool>(levelChunk.mCacheEnabled)) {
             ++skippedBlobCachePackets;
+            continue;
+        }
+        auto const packetDimension = static_cast<DimensionType const&>(levelChunk.mDimensionId);
+        if (packetDimension != replayDimension->getDimensionId()) {
+            ++skippedDimensionPackets;
+            noteSkippedReplayChunk(
+                true,
+                packetDimension.mValue,
+                replayDimension->getDimensionId().mValue,
+                mCurrentTick
+            );
             continue;
         }
 
@@ -2321,6 +3900,17 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         auto const& subChunk = static_cast<SubChunkPacket const&>(*packet);
         if (static_cast<bool>(subChunk.mCacheEnabled)) {
             ++skippedBlobCachePackets;
+            continue;
+        }
+        auto const packetDimension = static_cast<DimensionType const&>(subChunk.mDimensionType);
+        if (packetDimension != replayDimension->getDimensionId()) {
+            ++skippedDimensionPackets;
+            noteSkippedReplayChunk(
+                false,
+                packetDimension.mValue,
+                replayDimension->getDimensionId().mValue,
+                mCurrentTick
+            );
             continue;
         }
 
@@ -2402,11 +3992,6 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     }
     mReusedSnapshotColumns = mReusableSnapshotColumns.size();
 
-    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
-    if (!replayDimension) {
-        getLogger().error("Replay dimension disappeared while preparing direct chunk updates");
-        return false;
-    }
     mChunkIsolationDimension = replayDimension->getDimensionId();
 
     int const    minimumSubChunk = static_cast<int>(replayDimension->mHeightRange->mMin) / 16;
@@ -2503,6 +4088,33 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 
     mPendingLevelChunkCursor    = 0;
     mPendingSubChunkCursor      = 0;
+    std::string const centerKey = std::format(
+        "{}|{}|{}|{}|{}|{}|{}",
+        followCenter ? "follow" : "snapshot",
+        followSubject,
+        replayDimension->getDimensionId().mValue,
+        centerX,
+        centerZ,
+        snapshotChunkX,
+        snapshotChunkZ
+    );
+    if (centerKey != mChunkCenterLogKey) {
+        mChunkCenterLogKey = centerKey;
+        getLogger().debug(
+            "replay chunk center center={} subject={} dimension={} centerChunk={},{} snapshotChunk={},{} planned={} "
+            "injected={} skipped={}",
+            followCenter ? "follow" : "snapshot",
+            followSubject.empty() ? "-" : followSubject,
+            replayDimension->getDimensionId().mValue,
+            centerX,
+            centerZ,
+            snapshotChunkX,
+            snapshotChunkZ,
+            levelChunks.size(),
+            mPendingLevelChunkIndices.size(),
+            skippedBlobCachePackets + skippedDimensionPackets
+        );
+    }
     mChunkInjectionPlanPrepared = true;
     return true;
 }
@@ -2876,6 +4488,19 @@ void ReplaySession::handleNextTick() {
     if (mIsProcessingSnapshot) {
         throw std::runtime_error("Can't go to next tick while processing snapshot");
     }
+    // A tick a player did not move still has to settle that player's map bob; the last step would otherwise stick.
+    if (mReplayPlayer) {
+        auto& level = mReplayPlayer->getLevel();
+        for (auto& [rawId, bobTick] : gReplayHandBobTick) {
+            if (bobTick == mCurrentTick) continue;
+            ActorUniqueID const id{rawId};
+            if (!mRecordedEntityIds.contains(id)) continue;
+            auto* actor = level.fetchEntity(id, false);
+            if (!actor || actor == mReplayPlayer || !actor->isPlayer()) continue;
+            updateReplayHandBob(*actor, 0.0f);
+            bobTick = mCurrentTick;
+        }
+    }
     visuals::commitReplayEntityPoses(static_cast<int64_t>(mCurrentTick) + 1);
     mCurrentTick += 1;
     integration::pushReplayClock(mCurrentTick, false);
@@ -2883,6 +4508,7 @@ void ReplaySession::handleNextTick() {
         ++*mReplayTime;
         if (mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
     }
+    updateReplaySubjectPosture(false);
 }
 
 void ReplaySession::handleSnapshotContext(PlaybackSnapshotContext const& context) {
@@ -2967,7 +4593,51 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
 
         if (mReplayFailed) throw std::runtime_error("Unable to apply a replay action");
     }
+    if (mActive && mReplayPlayer) {
+        auto& level = mReplayPlayer->getLevel();
+        mHeldItemUse.clear();
+        for (auto const& id : mRecordedEntityIds) {
+            auto* actor = level.fetchEntity(id, false);
+            if (!actor || !actor->isPlayer()) continue;
+            tickReplayItemUse(*actor);
+            if (auto inUse = actor->getEntityContext().tryGetComponent<ItemInUseComponent>()) {
+                int const duration = inUse->mDuration;
+                mHeldItemUse[id]   = {static_cast<void const*>(inUse->mItem.get().get()), duration};
+            }
+        }
+    }
     return true;
+}
+
+// The native pause flag stops animation and particle updates; the replay drives entity state itself.
+void ReplaySession::syncLevelSimPause(bool freeze) {
+    if (mLevelSimFrozen == freeze || !mReplayPlayer) return;
+    mReplayPlayer->getLevel().setSimPaused(freeze);
+    mLevelSimFrozen = freeze;
+}
+
+// The native pause flag leaves item-use ticking alone, which runs the use animation on between replay ticks.
+void ReplaySession::holdItemUseBetweenTicks() {
+    if (!mReplayPlayer) return;
+    auto& level = mReplayPlayer->getLevel();
+    for (auto const& id : mRecordedEntityIds) {
+        auto* actor = level.fetchEntity(id, false);
+        if (!actor || !actor->isPlayer()) continue;
+        auto inUse = actor->getEntityContext().tryGetComponent<ItemInUseComponent>();
+        if (!inUse) {
+            mHeldItemUse.erase(id);
+            continue;
+        }
+        int&        duration = inUse->mDuration;
+        void const* item     = static_cast<void const*>(inUse->mItem.get().get());
+        auto const  held     = mHeldItemUse.find(id);
+        // A new item or a snapshot-reloaded use has no tick to hold yet; take its current state as the baseline.
+        if (held == mHeldItemUse.end() || held->second.item != item || duration > held->second.duration) {
+            mHeldItemUse[id] = {item, duration};
+            continue;
+        }
+        if (duration < held->second.duration) duration = held->second.duration;
+    }
 }
 
 void ReplaySession::handleLevelChunkCached(int index) {
@@ -3088,6 +4758,52 @@ void ReplaySession::handleGamePacket(PlaybackBuffer& data) {
     if (!applyGamePacket(packetId, payload)) mReplayFailed = true;
 }
 
+void ReplaySession::handleLocalCameraOffset(PlaybackBuffer& data) {
+    float const x   = data.getFloat().value();
+    float const y   = data.getFloat().value();
+    float const z   = data.getFloat().value();
+    float const fov = data.getFloat().value();
+    bool const  hasView   = data.getBool().value();
+    float const viewX     = data.getFloat().value();
+    float const viewY     = data.getFloat().value();
+    float const viewZ     = data.getFloat().value();
+    float const viewYaw   = data.getFloat().value();
+    float const viewPitch = data.getFloat().value();
+    std::optional<visuals::EntityRenderPose> view;
+    if (hasView)
+        view = visuals::EntityRenderPose{
+            {viewX, viewY, viewZ},
+            viewPitch,
+            viewYaw,
+            viewYaw,
+            viewYaw
+        };
+    visuals::queueReplaySubjectCameraOffset({x, y, z}, fov, view);
+}
+void ReplaySession::handleLocalViewSamples(PlaybackBuffer& data) {
+    // The recorder writes at most 32; anything far larger is a corrupt stream.
+    constexpr int MaxSamples = 1024;
+    auto const    count      = data.getVarInt().value();
+    if (count < 0 || count > MaxSamples) throw std::runtime_error("Local view sample count is out of range");
+    std::vector<visuals::LocalViewSample> samples;
+    samples.reserve(static_cast<size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        float const fraction = data.getFloat().value();
+        float const pitch    = data.getFloat().value();
+        float const yaw      = data.getFloat().value();
+        samples.push_back({fraction, pitch, yaw});
+    }
+
+    if (!mRecordedLocalPlayerId || !mReplayPlayer) return;
+    auto* actor = mReplayPlayer->getLevel().fetchEntity(*mRecordedLocalPlayerId, false);
+    // The observer is the free camera; its view is not the recording's.
+    if (!actor || (!mIsPaused && actor == mReplayPlayer)) return;
+    auto const renderKey = replayEntityRenderKey(actor->getLevel(), *mRecordedLocalPlayerId);
+    if (!renderKey) return;
+    visuals::queueReplayLocalViewSamples(*renderKey, std::move(samples));
+}
+
+
 void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
 
     auto dispatchMovementPacket = [this](std::shared_ptr<Packet>& packet) {
@@ -3154,7 +4870,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                     entityContext.removeComponent<OnGroundFlagComponent>();
                 }
                 if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
-                else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw);
+                else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw, mCurrentTick);
                 continue;
             }
 
@@ -3192,7 +4908,7 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
 
             pinReplayEntityHeadRotation(*actor, headYaw, bodyYaw);
             if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
-            else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw);
+            else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw, mCurrentTick);
         }
         return;
     }
@@ -3297,7 +5013,15 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             Vec2 const rotation{currentPose.pitch, currentPose.yaw};
             pinReplayEntityHeadRotation(*actor, currentPose.headYaw, currentPose.bodyYaw);
             if (snapMovement) cancelNativeMovementInterpolation(*actor, targetPosition, rotation, currentPose.headYaw);
-            else applyReplayEntityMovement(*actor, targetPosition, previousPose, rotation, currentPose.headYaw);
+            else
+                applyReplayEntityMovement(
+                    *actor,
+                    targetPosition,
+                    previousPose,
+                    rotation,
+                    currentPose.headYaw,
+                    mCurrentTick
+                );
         }
     }
 }
@@ -3317,9 +5041,175 @@ bool ReplaySession::applyPendingSnapshotLocalPlayer() {
     return true;
 }
 
+bool ReplaySession::dispatchUiPacket(std::shared_ptr<Packet> packet) {
+    if (!packet || !mNetworkHandler || !packet->mHandler) return false;
+    mInjectingPacket.store(packet.get(), std::memory_order_release);
+    InjectionReset reset{mInjectingPacket};
+    packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
+    return true;
+}
+
+// Container screens are only previewed for a followed, settled, non-exporting replay; every other case skips.
+bool ReplaySession::trackContainerUiPacket(MinecraftPacketIds packetId, std::string_view payload) {
+    if (packetId != MinecraftPacketIds::ContainerOpen) {
+        for (auto it = mRecordedContainers.rbegin(); it != mRecordedContainers.rend(); ++it) {
+            if (it->openTick > mCurrentTick) continue;
+            if (it->closeTick < 0) it->closeTick = mCurrentTick;
+            break;
+        }
+        // A seek records every packet it crosses and decides the screen once, at the landing tick.
+        if (mSeekTargetTick < 0 && mContainerPreview) {
+            closeContainerPreview(packetId == MinecraftPacketIds::ContainerClose ? "recordedClose" : "closeScreen");
+            popReplayContainerScreen();
+        }
+        return true;
+    }
+
+    auto packet = MinecraftPackets::createPacket(packetId);
+    if (!packet) return true;
+    ReadOnlyBinaryStream stream(payload, false);
+    if (!packet->read(stream) || !stream.ensureReadCompleted()) return true;
+    int const id = static_cast<int>(static_cast<ContainerOpenPacket&>(*packet).mContainerId);
+
+    // Reads repeat after a backward seek, so an interval is only recorded once.
+    bool known = false;
+    for (auto& record : mRecordedContainers) {
+        if (record.closeTick < 0 && record.openTick < mCurrentTick) record.closeTick = mCurrentTick;
+        if (record.openTick == mCurrentTick && record.id == id) known = true;
+    }
+    if (!known) mRecordedContainers.push_back({id, mCurrentTick, -1, std::string(payload)});
+
+    if (mSeekTargetTick >= 0) return true;
+    if (mContainerPreview && (mContainerPreview->id != id || mContainerPreview->openTick != mCurrentTick)) {
+        closeContainerPreview("replaced");
+    }
+    openContainerPreview(payload, mCurrentTick);
+    return true;
+}
+
+void ReplaySession::openContainerPreview(std::string_view payload, int openTick) {
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerOpen);
+    if (!packet) return;
+    ReadOnlyBinaryStream stream(payload, false);
+    if (!packet->read(stream) || !stream.ensureReadCompleted()) return;
+
+    auto&      open      = static_cast<ContainerOpenPacket&>(*packet);
+    int const  id        = static_cast<int>(open.mContainerId);
+    int const  type      = static_cast<int>(open.mType);
+    auto const pos       = open.mPos.get();
+    auto const entityRaw = open.mEntityUniqueID.get().rawID;
+    bool const following = visuals::isReplaySubjectViewDriven() && visuals::isReplaySubjectRecorder();
+
+    char const* action      = "inject";
+    int         blockEntity = -1;
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler) action = "skip:noWorld";
+    else if (!following) action = "skip:notFollowing";
+    else if (mSeekTargetTick >= 0 || mIsProcessingSnapshot || mPendingSnapshotApply || mPendingReplayDimension)
+        action = "skip:seeking";
+    // The export waits for a menu-free scene while it initializes; finishExportTimelineInitialization reopens it.
+    else if (mExportTimelinePhase == ReplayExportTimelinePhase::Initializing) action = "skip:exportInit";
+    else if (mContainerPreview) action = "skip:alreadyOpen";
+    // The player inventory screen does not follow the recorded player yet, so it is not previewed.
+    else if (open.mType == SharedTypes::Legacy::ContainerType::Inventory) action = "skip:inventory";
+    else if (entityRaw != -1 && entityRaw != 0) {
+        if (!mReplayPlayer->getLevel().fetchEntity(open.mEntityUniqueID.get(), false)) action = "skip:entityMissing";
+    } else {
+        using Type = SharedTypes::Legacy::ContainerType;
+        auto const kind = open.mType;
+        bool const needsBlockEntity = kind == Type::Container || kind == Type::Furnace || kind == Type::BrewingStand
+                                   || kind == Type::Dispenser || kind == Type::Dropper || kind == Type::Hopper
+                                   || kind == Type::BlastFurnace || kind == Type::Smoker;
+        if (needsBlockEntity) {
+            blockEntity = mReplayPlayer->getDimensionBlockSource().getBlockEntity(pos) ? 1 : 0;
+            if (blockEntity == 0) action = "skip:noBlockEntity";
+        }
+    }
+
+    getLogger().info(
+        "containerPreview open action={} id={} type={} entity={} blockEntity={} following={} tick={} openTick={}",
+        action,
+        id,
+        type,
+        entityRaw,
+        blockEntity,
+        following,
+        mCurrentTick,
+        openTick
+    );
+    if (std::string_view(action) != "inject") return;
+
+    mContainerPreview = ContainerPreview{id, type, openTick};
+    visuals::setReplayContainerKeepOpen(true);
+    (void)dispatchUiPacket(std::move(packet));
+}
+
+void ReplaySession::closeContainerPreview(char const* reason) {
+    if (!mContainerPreview) return;
+    auto const preview = *mContainerPreview;
+    visuals::setReplayContainerKeepOpen(false);
+    getLogger().info(
+        "containerPreview close reason={} id={} type={} openTick={} tick={} keepOpenOverrides={}",
+        reason,
+        preview.id,
+        preview.type,
+        preview.openTick,
+        mCurrentTick,
+        visuals::replayContainerKeepOpenOverrides()
+    );
+    if (mReplayPlayer && mReplayWorldJoined && mNetworkHandler) {
+        if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerClose)) {
+            auto& close                 = static_cast<ContainerClosePacket&>(*packet);
+            close.mContainerId          = static_cast<ContainerID>(preview.id);
+            close.mContainerType        = static_cast<SharedTypes::Legacy::ContainerType>(preview.type);
+            close.mServerInitiatedClose = true;
+            (void)dispatchUiPacket(std::move(packet));
+        }
+    }
+    mContainerPreview.reset();
+}
+
+void ReplaySession::updateContainerPreview() {
+    if (!mContainerPreview) return;
+    // A native screen would keep the dimension loading screen from clearing, so it closes before the transition.
+    if (!visuals::isReplaySubjectViewDriven() || !visuals::isReplaySubjectRecorder())
+        closeContainerPreview("followEnded");
+    else if (mPendingReplayDimension) closeContainerPreview("dimension");
+    if (!mContainerPreview) popReplayContainerScreen();
+}
+
+// The landing tick has applied every action before it, so a container opened earlier and not yet closed is the one to
+// show.
+ReplaySession::RecordedContainer const* ReplaySession::recordedContainerOpenAt(int tick) const {
+    RecordedContainer const* wanted = nullptr;
+    for (auto const& record : mRecordedContainers) {
+        if (record.openTick < tick && (record.closeTick < 0 || record.closeTick >= tick)) wanted = &record;
+    }
+    return wanted;
+}
+
+void ReplaySession::syncContainerPreviewAfterSeek() {
+    auto const* wanted = recordedContainerOpenAt(mCurrentTick);
+    if (mContainerPreview && wanted && mContainerPreview->id == wanted->id
+        && mContainerPreview->openTick == wanted->openTick) {
+        return;
+    }
+    closeContainerPreview("seek");
+    if (wanted) openContainerPreview(wanted->payload, wanted->openTick);
+    else popReplayContainerScreen();
+}
+
 bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
-    // Keep UI packets for a future first-person handler and let the replay world own client chunk publishing.
+    if (packetId == MinecraftPacketIds::ContainerOpen || packetId == MinecraftPacketIds::ContainerClose
+        || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
+        return trackContainerUiPacket(packetId, payload);
+    }
+    // The replay world owns client chunk publishing.
     if (shouldIgnoreReplayPacket(packetId)) return true;
+    // The client registry is built once; the recorded table already went in at login in place of the local one.
+    if (packetId == MinecraftPacketIds::ItemRegistryPacket
+        && mRecordedItemRegistryApplied.load(std::memory_order_acquire)) {
+        return true;
+    }
 
     auto packet = MinecraftPackets::createPacket(packetId);
     if (!packet || !mNetworkHandler || !packet->mHandler) return false;
@@ -3333,8 +5223,14 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     if (packetId == MinecraftPacketIds::PlayerList) {
         auto& playerList = static_cast<PlayerListPacket&>(*packet);
+        auto& entries    = *playerList.mEntries;
         if (playerList.mAction == PlayerListPacketType::Add) {
-            auto& entries = *playerList.mEntries;
+            for (auto const& entry : entries) {
+                std::string uuid = entry.mUUID->asString();
+                if (uuid.empty()) continue;
+                bool const recorder = mRecordedLocalPlayerId && entry.mId->rawID == mRecordedLocalPlayerId->rawID;
+                noteReplayIdentity(std::move(uuid), *entry.mName, ActorUniqueID{entry.mId->rawID}, recorder);
+            }
             // Servers may withhold a player's skin; drop only that entry so the rest of the list still spawns.
             auto removed = std::erase_if(entries, [](PlayerListEntry const& entry) {
                 if (entry.mSkin->mSkinImpl) return false;
@@ -3347,6 +5243,24 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             }
             for (auto& entry : entries) {
                 entry.mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
+            }
+        } else if (playerList.mAction == PlayerListPacketType::Remove) {
+            // Leaving the tab list means the player left the server; the view goes back to the recorder. A player
+            // who is only out of range or in another dimension keeps the choice and binds again on the next AddPlayer.
+            // A camera track's subject leaving only unbinds it; the track itself still names that player.
+            std::string const choice      = userReplaySubjectChoice();
+            bool              subjectLeft = false;
+            for (auto const& entry : entries) {
+                auto const uuid = entry.mUUID->asString();
+                if (uuid.empty()) continue;
+                if (!choice.empty() && uuid == choice) subjectLeft = true;
+                forgetReplayIdentity(uuid);
+            }
+            if (subjectLeft) {
+                getLogger().debug("replay subject left uuid={} tick={} fallback=recorder", choice, mCurrentTick);
+                setReplaySubjectChoice({});
+            } else {
+                rebindReplaySubject();
             }
         }
     }
@@ -3437,20 +5351,128 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     // Must also run while chunks are streaming: a seek keeps applying block updates between batches.
     if (!mIsProcessingSnapshot) invalidateSnapshotColumns(*packet);
 
+    // Texture updates do not create the map. A recording that started after the map was created never carries the
+    // creation packet, so the level has to own the map before the native handler will keep its pixels.
+    if (packetId == MinecraftPacketIds::MapData && mReplayPlayer) {
+        auto& mapPacket = static_cast<ClientboundMapItemDataPacket&>(*packet);
+        if (!mapPacket.mMapPixels->empty()) {
+            auto& level = mReplayPlayer->getLevel();
+            for (auto const& id : *mapPacket.mMapIds) {
+                if (level.getMapSavedData(id)) continue;
+                (void)level.createMapSavedData(
+                    id,
+                    mapPacket.mMapOrigin,
+                    DimensionType{static_cast<int>(mapPacket.mDimension)},
+                    static_cast<int>(mapPacket.mScale)
+                );
+            }
+        }
+    }
+
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
+
+    // The recorded local player's inventory packets land on the observer, which is what the HUD draws. While another
+    // player's HUD is shown they would overwrite it, so they update the saved slots the restore puts back instead.
+    if (mFollowedHudMirror && mFollowedHudMirror->active && divertRecordedHudPacket(*packet, *mFollowedHudMirror)) {
+        return true;
+    }
+
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 
+    if (mReplayPlayer) {
+        std::string const subject = [&]() -> std::string {
+            std::string const choice = replaySubjectChoice();
+            if (!choice.empty()) return choice;
+            if (!mRecordedLocalPlayerId) return {};
+            std::lock_guard lock(mReplayPlayersMutex);
+            for (auto const& [uuid, record] : mReplayPlayers) {
+                if (record.id == *mRecordedLocalPlayerId) return uuid;
+            }
+            return {};
+        }();
+        if (!subject.empty() && packetId == MinecraftPacketIds::PlayerSkin) {
+            auto const& skinPacket = static_cast<PlayerSkinPacket const&>(*packet);
+            if (skinPacket.mUUID->asString() == subject && skinPacket.mSkin->mSkinImpl) {
+                applyObserverSkin(*skinPacket.mSkin);
+                getLogger().debug("replay observer skin refreshed uuid={}", subject);
+            }
+        } else if (!subject.empty() && packetId == MinecraftPacketIds::PlayerList) {
+            auto const& playerList = static_cast<PlayerListPacket const&>(*packet);
+            if (playerList.mAction == PlayerListPacketType::Add) {
+                for (auto const& entry : *playerList.mEntries) {
+                    if (entry.mUUID->asString() != subject || !entry.mSkin->mSkinImpl) continue;
+                    applyObserverSkin(*entry.mSkin);
+                    getLogger().debug("replay observer skin refreshed uuid={}", subject);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (packetId == MinecraftPacketIds::MapData && mReplayPlayer) {
+        auto& map   = static_cast<ClientboundMapItemDataPacket&>(*packet);
+        auto& level = mReplayPlayer->getLevel();
+        if (!map.mMapPixels->empty()) {
+            for (auto const& id : *map.mMapIds) {
+                auto* saved = level.getMapSavedData(id);
+                if (!saved) {
+                    saved = &level.createMapSavedData(
+                        id,
+                        map.mMapOrigin,
+                        DimensionType{static_cast<int>(map.mDimension)},
+                        static_cast<int>(map.mScale)
+                    );
+                }
+                if (saved->getPixels().size() == 0) map.applyToMap(*saved, false);
+            }
+        }
+    }
+
     if (addsEntity) mRecordedEntityIds.emplace(entityId);
+
+    if (packetId == MinecraftPacketIds::AddPlayer && mReplayPlayer) {
+        auto const& addPlayer = static_cast<AddPlayerPacket const&>(*packet);
+        if (recordedLocalPlayer) mRecordedLocalPlayerId = entityId;
+        std::string uuid = addPlayer.mUuid->asString();
+        std::string name = *addPlayer.mName;
+        if (!uuid.empty()) rememberReplayPlayer(std::move(uuid), std::move(name), entityId, recordedLocalPlayer);
+        // A player who never moves again has no movement action to seed the pose history a first-person view reads.
+        auto& level = mReplayPlayer->getLevel();
+        if (auto* actor = level.fetchEntity(entityId, false)) {
+            if (actor->isPlayer()) {
+                auto const& entries = level.getPlayerList();
+                auto const  entry   = entries.find(*addPlayer.mUuid);
+                if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
+                    auto& player = static_cast<Player&>(*actor);
+                    player.updateSkin(*entry->second.mSkin, static_cast<int>(player.getClientSubId()));
+                    getLogger()
+                        .debug("replay skin applied name={} uuid={}", *addPlayer.mName, addPlayer.mUuid->asString());
+                }
+            }
+            if (auto const renderKey = replayEntityRenderKey(level, entityId)) {
+                auto const pose = replayRenderPose(*actor);
+                mEntityRenderKeys.insert_or_assign(entityId, *renderKey);
+                visuals::queueReplayEntityPose(*renderKey, pose, pose);
+            }
+        }
+        rebindReplaySubject();
+    }
 
     switch (packetId) {
     case MinecraftPacketIds::RemoveActor: {
         auto const id = *static_cast<RemoveActorPacket const&>(*packet).mEntityId;
         mRecordedEntityIds.erase(id);
+        std::optional<visuals::EntityRenderKey> removedKey;
         if (auto const renderKey = mEntityRenderKeys.find(id); renderKey != mEntityRenderKeys.end()) {
+            removedKey = renderKey->second;
             visuals::removeReplayEntityPose(renderKey->second);
             mEntityRenderKeys.erase(renderKey);
         }
+        gReplayHandBobTick.erase(id.rawID);
+        markReplayPlayerAbsent(id);
+        if (removedKey && visuals::isReplaySubject(*removedKey)) visuals::setReplaySubject(std::nullopt);
+        rebindReplaySubject();
         break;
     }
     case MinecraftPacketIds::SetDisplayObjective: {
@@ -3461,6 +5483,38 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     case MinecraftPacketIds::RemoveObjective:
         mReplayObjectiveNames.erase(*static_cast<RemoveObjectivePacket const&>(*packet).mObjectiveName);
         break;
+    case MinecraftPacketIds::PlayerEquipment: {
+        auto const& equipment = static_cast<MobEquipmentPacket const&>(*packet);
+        if (equipment.mContainerId != ContainerID::Inventory) break;
+        if (equipment.mRuntimeId->rawID == record::RecordedPlayerRuntimeIdValue) break;
+        auto const level = ll::service::getMultiPlayerLevel();
+        if (!level) break;
+        int const slot = equipment.mSlot;
+        if (slot < 0 || slot >= 9) break;
+        auto& hotbar                            = gReplayHotbars[equipment.mRuntimeId->rawID];
+        hotbar.items[static_cast<size_t>(slot)] =
+            ItemStack::fromDescriptor(*equipment.mItem, level->getBlockPalette(), true);
+        hotbar.selected = std::clamp(static_cast<int>(equipment.mSelectedSlot), 0, 8);
+        break;
+    }
+    case MinecraftPacketIds::UpdateAttributes: {
+        auto& attributes = static_cast<UpdateAttributesPacket&>(*packet);
+        if (mReplayPlayer && attributes.mRuntimeId->rawID == record::RecordedPlayerRuntimeIdValue) {
+            if (mFollowedHudMirror && mFollowedHudMirror->active) {
+                keepRecordedAttributes(*mFollowedHudMirror, attributes);
+            } else {
+                mirrorRecordedAttributes(*mReplayPlayer, attributes);
+            }
+        }
+        break;
+    }
+    case MinecraftPacketIds::UpdatePlayerGameType: {
+        auto const& gameType = static_cast<UpdatePlayerGameTypePacket const&>(*packet);
+        if (gameType.mTargetPlayer->rawID == record::RecordedPlayerUniqueIdValue) {
+            visuals::setReplayHudGameType(static_cast<int>(gameType.mPlayerGameType));
+        }
+        break;
+    }
     default:
         break;
     }
@@ -3531,6 +5585,10 @@ bool ReplaySession::flushPendingSnapshotGamePackets(
 }
 
 bool ReplaySession::clearRecordedEntities() {
+    visuals::setReplaySubject(std::nullopt);
+    clearReplayPlayers(false);
+    gReplayHandBobTick.clear();
+    gReplayHotbars.clear();
     mEntityRenderKeys.clear();
     visuals::clearReplayEntityPoses();
     if (mRecordedEntityIds.empty()) return true;
@@ -3538,6 +5596,7 @@ bool ReplaySession::clearRecordedEntities() {
 
     auto ids = std::move(mRecordedEntityIds);
     mRecordedEntityIds.clear();
+    mHeldItemUse.clear();
     for (auto const& id : ids) {
         auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::RemoveActor);
         if (!packet || !packet->mHandler) return false;
@@ -3658,9 +5717,18 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
     size_t subChunkEntries = 0;
     if (packetId == MinecraftPacketIds::FullChunkData) {
         auto& levelChunk = static_cast<LevelChunkPacket&>(*packet);
-        if (static_cast<bool>(levelChunk.mCacheEnabled)
-            || static_cast<DimensionType const&>(levelChunk.mDimensionId) != replayDimension->getDimensionId()) {
+        if (static_cast<bool>(levelChunk.mCacheEnabled)) {
             return false;
+        }
+        auto const packetDimension = static_cast<DimensionType const&>(levelChunk.mDimensionId);
+        if (packetDimension != replayDimension->getDimensionId()) {
+            noteSkippedReplayChunk(
+                true,
+                packetDimension.mValue,
+                replayDimension->getDimensionId().mValue,
+                mCurrentTick
+            );
+            return true;
         }
 
         auto const& pos = *levelChunk.mPos;
@@ -3684,9 +5752,18 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
         mChunkInjectionPending = true;
     } else if (packetId == MinecraftPacketIds::SubChunkPacket) {
         auto& subChunk = static_cast<SubChunkPacket&>(*packet);
-        if (static_cast<bool>(subChunk.mCacheEnabled)
-            || static_cast<DimensionType const&>(subChunk.mDimensionType) != replayDimension->getDimensionId()) {
+        if (static_cast<bool>(subChunk.mCacheEnabled)) {
             return false;
+        }
+        auto const packetDimension = static_cast<DimensionType const&>(subChunk.mDimensionType);
+        if (packetDimension != replayDimension->getDimensionId()) {
+            noteSkippedReplayChunk(
+                false,
+                packetDimension.mValue,
+                replayDimension->getDimensionId().mValue,
+                mCurrentTick
+            );
+            return true;
         }
         std::vector<SubChunkPacket::SubChunkPacketData> successfulEntries;
         successfulEntries.reserve(subChunk.mSubChunkData->size());

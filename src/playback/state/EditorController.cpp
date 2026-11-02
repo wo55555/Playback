@@ -1,4 +1,4 @@
-#include "EditorController.h"
+﻿#include "EditorController.h"
 
 #include "playback/Playback.h"
 #include "playback/io/ReplayLibrary.h"
@@ -67,12 +67,12 @@ void EditorController::publishCameraTimeline() {
         return;
     }
     auto dimensionTransitionTicks = replay::ReplaySession::getInstance().getDimensionTransitionTicks();
+    // No subject sampler: the replay session follows a person track's subject natively, like the user's follow.
     keyframe::publishCameraTimeline(
         keyframe::CameraTimelineSource::Preview,
         std::make_shared<keyframe::CameraTimelineEvaluator>(
             mProject,
             mPreviewCameraId,
-            std::nullopt,
             false,
             std::move(dimensionTransitionTicks)
         )
@@ -148,7 +148,7 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     mProject             = {};
     mProject.projectPath = std::string(replayPath);
     mProject.totalTicks  = totalTicks;
-    state::editing::CameraBindingOps::addFreeCamera(mProject, {});
+    state::editing::CameraBindingOps::addFreeCamera(mProject, {}, state::editing::model::CameraTrackKind::Keyframe);
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
     mPreviewCameraId.reset();
@@ -179,7 +179,9 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
     loaded.projectPath           = mProject.projectPath;
     loaded.totalTicks            = mProject.totalTicks;
     loaded.worldActor.totalTicks = mProject.totalTicks;
-    if (loaded.cameras.empty()) state::editing::CameraBindingOps::addFreeCamera(loaded, {});
+    if (loaded.cameras.empty()) {
+        state::editing::CameraBindingOps::addFreeCamera(loaded, {}, state::editing::model::CameraTrackKind::Keyframe);
+    }
     if (loaded.worldActor.segments.empty()) {
         loaded.worldActor.segments.push_back({"worldActor", 0, mProject.totalTicks, 0});
     }
@@ -229,27 +231,13 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::RedoEditorEdit:
         (void)mCommandStack.redo(mProject);
         break;
-    case EditorActionType::AddFreeCamera:
-        mCommandStack.push(CommandFactory::createAddFreeCamera(action.name), mProject);
+    case EditorActionType::AddFreeCamera: {
+        auto const kind = action.kind == 1 ? state::editing::model::CameraTrackKind::FirstPerson
+                        : action.kind == 2 ? state::editing::model::CameraTrackKind::ThirdPerson
+                                           : state::editing::model::CameraTrackKind::Keyframe;
+        mCommandStack.push(CommandFactory::createAddFreeCamera(action.name, kind), mProject);
         break;
-    case EditorActionType::AddCameraSequence:
-        mCommandStack.push(CommandFactory::createAddCameraSequence(), mProject);
-        break;
-    case EditorActionType::DeleteCameraSequence:
-        mCommandStack.push(CommandFactory::createDeleteCameraSequence(), mProject);
-        break;
-    case EditorActionType::SplitSequence:
-        mCommandStack.push(CommandFactory::createSplitSequence(action.tick), mProject);
-        break;
-    case EditorActionType::TrimSequence:
-        mCommandStack.push(CommandFactory::createTrimSequence(action.id, action.tick, action.kind), mProject);
-        break;
-    case EditorActionType::DeleteSequenceSegment:
-        mCommandStack.push(CommandFactory::createDeleteSequenceSegment(action.id), mProject);
-        break;
-    case EditorActionType::BindSequenceCamera:
-        mCommandStack.push(CommandFactory::createBindSequenceToCamera(action.id, action.secondaryId), mProject);
-        break;
+    }
     case EditorActionType::SplitWorldActor:
         mCommandStack.push(CommandFactory::createSplitWorldActor(action.tick), mProject);
         break;
@@ -260,8 +248,17 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(CommandFactory::createRippleDeleteWorldActorSegment(action.id), mProject);
         break;
     case EditorActionType::AddCameraKeyframe:
+        if (action.keyframe) {
+            mCommandStack.push(
+                CommandFactory::createAddCameraKeyframe(action.id, action.tick, action.keyframe),
+                mProject
+            );
+            break;
+        }
         if (auto captured = captureCameraKeyframe()) {
             logger().debug("Captured camera keyframe (camera={}, tick={})", action.id, action.tick);
+            // A person track's first key views whoever the user follows; later keys keep the previous subject.
+            captured->subject = replay::ReplaySession::getInstance().userReplaySubjectChoice();
             mCommandStack.push(
                 CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)),
                 mProject
@@ -309,8 +306,23 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SetKeyframeFov:
         mCommandStack.push(CommandFactory::createSetCameraKeyframeFov(action.id, action.tick, action.speed), mProject);
         break;
+    case EditorActionType::SetKeyframeSubject:
+        mCommandStack.push(
+            CommandFactory::createSetCameraKeyframeSubject(action.id, action.tick, action.secondaryId),
+            mProject
+        );
+        break;
     case EditorActionType::SetCameraEnabled:
         mCommandStack.push(CommandFactory::createSetCameraEnabled(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetCameraLocked:
+        mCommandStack.push(CommandFactory::createSetCameraLocked(action.id, action.value), mProject);
+        break;
+    case EditorActionType::RenameCamera:
+        mCommandStack.push(CommandFactory::createRenameCamera(action.id, action.name), mProject);
+        break;
+    case EditorActionType::ClearCameraKeyframes:
+        mCommandStack.push(CommandFactory::createClearCameraKeyframes(action.id), mProject);
         break;
     case EditorActionType::DeleteCamera:
         mCommandStack.push(CommandFactory::createDeleteCamera(action.id), mProject);
@@ -324,23 +336,79 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SetSubActorDetails:
         mCommandStack.push(CommandFactory::createSetSubActorDetails(action.id, action.details), mProject);
         break;
+    case EditorActionType::MoveCameraKeyframes:
+        mCommandStack.push(CommandFactory::createMoveCameraKeyframes(action.keyframeRefs, action.tick), mProject);
+        break;
+    case EditorActionType::DeleteCameraKeyframes:
+        mCommandStack.push(CommandFactory::createDeleteCameraKeyframes(action.keyframeRefs), mProject);
+        break;
+    case EditorActionType::SetKeyframesInterpolation:
+        mCommandStack.push(
+            CommandFactory::createSetKeyframesInterpolation(
+                action.keyframeRefs,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::AddCameraKeyframes:
+        mCommandStack.push(CommandFactory::createAddCameraKeyframes(action.keyframeRefs), mProject);
+        break;
+    case EditorActionType::AddMarker:
+        mCommandStack.push(CommandFactory::createAddMarker(action.id, action.tick, action.name), mProject);
+        break;
+    case EditorActionType::DeleteMarker:
+        mCommandStack.push(CommandFactory::createDeleteMarker(action.id), mProject);
+        break;
+    case EditorActionType::MoveMarker:
+        mCommandStack.push(CommandFactory::createMoveMarker(action.id, action.tick), mProject);
+        break;
+    case EditorActionType::RenameMarker:
+        mCommandStack.push(CommandFactory::createRenameMarker(action.id, action.name), mProject);
+        break;
     case EditorActionType::SetPreviewCamera:
+        replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
         if (std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
-                return camera.id == action.id && state::editing::model::isCameraRenderable(camera);
+                return camera.id == action.id && state::editing::model::isCameraRenderable(camera)
+                    && camera.kind == state::editing::model::CameraTrackKind::Keyframe;
             })) {
             mPreviewCameraId = action.id;
         }
         break;
     case EditorActionType::ClearPreviewCamera:
+        replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
         break;
+    case EditorActionType::MoveViewToKeyframe: {
+        auto const camera = std::ranges::find(mProject.cameras, action.id, &state::editing::model::CameraEntity::id);
+        if (camera == mProject.cameras.end()) break;
+        auto const key = camera->keysByTick.find(action.tick);
+        if (key == camera->keysByTick.end()) break;
+        auto& session = replay::ReplaySession::getInstance();
+        session.setFollowRecordedPlayer(false);
+        mPreviewCameraId.reset();
+        auto const& pose = key->second;
+        session.requestParkObserver(
+            keyframe::CameraRenderState{
+                pose.position.x,
+                pose.position.y,
+                pose.position.z,
+                pose.yaw,
+                pose.pitch,
+                pose.roll,
+                pose.fov,
+            }
+        );
+        break;
+    }
     default:
         break;
     }
 
     if (mPreviewCameraId && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
-            return camera.id == *mPreviewCameraId && state::editing::model::isCameraRenderable(camera);
+            return camera.id == *mPreviewCameraId && state::editing::model::isCameraRenderable(camera)
+                && camera.kind == state::editing::model::CameraTrackKind::Keyframe;
         })) {
         mPreviewCameraId.reset();
     }
@@ -357,12 +425,20 @@ void EditorController::publishState(bool hudVisible) {
     // Gate only on the loading/progress screen clearing and let chunks stream in natively.
     if (!sessionActive) mEditorReadyLatched = false;
     else if (hudVisible) mEditorReadyLatched = true;
-    state.editorVisible = mEditorReadyLatched;
-    state.hudVisible    = hudVisible;
-    state.paused        = session.isPaused();
+    state.editorVisible           = mEditorReadyLatched;
+    state.hudVisible              = hudVisible;
+    state.paused                  = session.isPaused();
+    state.followingRecordedPlayer = session.isFollowingRecordedPlayer();
+    state.followThirdPerson       = session.isFollowThirdPerson();
+    state.replaySubjectChoice     = session.userReplaySubjectChoice();
+    auto const replayPlayers      = session.replayPlayers();
+    state.replayPlayers.reserve(replayPlayers.size());
+    for (auto const& player : replayPlayers) {
+        state.replayPlayers.push_back({player.uuid, player.name, player.recorder, player.present});
+    }
     state.playbackSpeed = session.getPlaybackSpeed();
-    state.currentTick   = std::max(0, session.getCurrentTick());
-    state.totalTicks    = std::max(0, session.getTotalTicks());
+    state.currentTick             = std::max(0, session.getCurrentTick());
+    state.totalTicks              = std::max(0, session.getTotalTicks());
     if (state.editorVisible != mEditorVisibleLogged) {
         mEditorVisibleLogged = state.editorVisible;
         logger().debug(
@@ -384,6 +460,9 @@ void EditorController::publishState(bool hudVisible) {
     mProject.playbackSpeed           = state.playbackSpeed;
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
     state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
+    if (state.cameraTimeline) {
+        if (auto const shot = state.cameraTimeline->shotAt(state.currentTick)) state.activeCameraId = shot.camera->id;
+    }
     state.canUndo                    = mCommandStack.canUndo();
     state.canRedo                    = mCommandStack.canRedo();
     state.persistence.dirty          = state.editorVisible && isProjectDirty();
@@ -558,6 +637,33 @@ void EditorController::tick(bool hudVisible) {
             auto target = action.path.empty() ? mProjectFile : action.path;
             if (target.empty()) target = state::editing::ProjectStore::defaultProjectPath(mProject.projectPath);
             if (!target.empty()) (void)saveProject(target);
+            break;
+        }
+        case EditorActionType::TeleportToRecordedPlayer:
+            session.requestTeleportToRecordedPlayer();
+            break;
+        case EditorActionType::SetFollowRecordedPlayer:
+            if (action.value) session.setReplaySubjectChoice(action.id);
+            session.setFollowRecordedPlayer(action.value);
+            break;
+        case EditorActionType::SetFollowThirdPerson:
+            session.setFollowThirdPerson(action.value);
+            break;
+        case EditorActionType::SetReplaySubjectChoice: {
+            bool legal = action.id.empty();
+            if (!legal) {
+                for (auto const& player : session.replayPlayers()) {
+                    if (player.uuid == action.id && player.present) {
+                        legal = true;
+                        break;
+                    }
+                }
+            }
+            if (!legal) {
+                logger().debug("replay subject ignored uuid={}", action.id);
+                break;
+            }
+            session.setReplaySubjectChoice(action.id);
             break;
         }
         case EditorActionType::LoadProject: {

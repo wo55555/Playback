@@ -1,1 +1,4 @@
 playback.ui.replays=回放
+playback.recordControls.tooltip.toggle=开始、暂停或继续录制
+playback.recordControls.tooltip.finish=结束录制
+playback.recordControls.tooltip.cancel=取消录制

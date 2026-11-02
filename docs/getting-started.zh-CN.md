@@ -8,10 +8,10 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 | Minecraft / LeviLamina | Playback 版本                                                                       |
 | ---------------------- | ----------------------------------------------------------------------------------- |
-| `26.10.*`              | [`v0.3.3-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.10) |
-| `26.20.*`              | [`v0.3.3-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.20) |
-| `26.40.*`              | [`v0.3.3-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.40) |
-| `26.51.*`              | [`v0.3.3-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.50) |
+| `26.10.*`              | [`v0.4.0-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.10) |
+| `26.20.*`              | [`v0.4.0-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.20) |
+| `26.40.*`              | [`v0.4.0-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.40) |
+| `26.51.*`              | [`v0.4.0-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.50) |
 
 上表四个 Playback 版本均为预发布版本；请仅安装与当前实例匹配的版本。
 
@@ -22,7 +22,7 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 > 暂不支持灵动视效（Vibrant Visuals）。录制、回放和导出前请在视频设置中关闭该选项；保持开启的情况未经测试，可能导致渲染和采集异常。
 
 > [!CAUTION]
-> `v0.3.3` 在各发行线上仍是预发布版本。早于 `v0.2.0` 的版本创建的回放不兼容，必须重新录制。受影响服务器在 2026 年 8 月 20 日热更新前录制的回放可能已经缺少可移植区块或自定义实体注册数据，这类归档无法修复，也必须重新录制；同一发行线上 `v0.2.0` 及之后版本录制的完整回放与 `v0.3.3` 兼容，无需转换。配置版本、录制文件的快照上下文版本和编辑器工程格式版本均为 `1`，不提供迁移。
+> `v0.4.0` 在各发行线上仍是预发布版本。早于 `v0.4.0` 的版本录制的回放不再支持，必须重新录制：录制文件布局已变化，但快照上下文版本仍为 `1`，因此旧归档不会被识别，也无法正确读取。相机切换轨道已移除，旧编辑器工程中的切换轨道数据会被丢弃。配置版本、快照上下文版本和编辑器工程格式版本均保持 `1`，不提供迁移。
 
 ## 使用 LeviLauncher 和 Lip 安装
 
@@ -66,16 +66,16 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 ```powershell
 # Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.3.3-mc26.10#client
+lip install github.com/wo55555/Playback@0.4.0-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
-lip install github.com/wo55555/Playback@0.3.3-mc26.20#client
+lip install github.com/wo55555/Playback@0.4.0-mc26.20#client
 
 # Minecraft / LeviLamina 26.40
-lip install github.com/wo55555/Playback@0.3.3-mc26.40#client
+lip install github.com/wo55555/Playback@0.4.0-mc26.40#client
 
 # Minecraft / LeviLamina 26.51
-lip install github.com/wo55555/Playback@0.3.3-mc26.50#client
+lip install github.com/wo55555/Playback@0.4.0-mc26.50#client
 ```
 
 > [!NOTE]
@@ -95,7 +95,9 @@ record pause
 record stop
 ```
 
-`record start` 开始或继续录制，`record pause` 暂停录制，`record stop` 结束录制并导出回放。导出的回放归档位于 Playback 的 `data/replays` 目录。
+`record start` 开始或继续录制，`record pause` 暂停录制，`record stop` 结束录制并导出回放。暂停菜单的小图标行也提供开始、暂停、结束和取消按钮；从暂停菜单结束录制时会要求输入回放名称。导出的回放归档位于 Playback 的 `data/replays` 目录。
+
+`record indicator` 切换右上角录制指示器的显示状态，`record indicator on|off` 直接设置。`record rate [20-120]` 设置本地玩家视角每秒采样次数，重启游戏前有效；初始值来自配置中的 `record.localPlayerUpdatesPerSecond`。
 
 ## 回放
 
@@ -162,6 +164,6 @@ record stop
 | D3D11    | H.264 MP4、PNG 序列 | 1x         |
 
 > [!IMPORTANT]
-> 视频导出仍为实验性功能，当前不包含音频，且暂不支持灵动视效。相机区域必须真实存在于已录制的回放数据中，Playback 无法重建从未录制的区块。跨维度加载、回放状态准备、UI 稳定和导出预热均有超时保护。Playback 不再要求固定相机邻域内的每个区块都存在，但回放数据缺失时仍可能无法渲染预期场景。
+> 视频导出仍为实验性功能，且暂不支持灵动视效。MP4 带 AAC 游戏音轨，PNG 序列附带 `.audio.wav`。相机区域必须真实存在于已录制的回放数据中，Playback 无法重建从未录制的区块。跨维度加载、回放状态准备、UI 稳定和导出预热均有超时保护。Playback 不再要求固定相机邻域内的每个区块都存在，但回放数据缺失时仍可能无法渲染预期场景。
 
 开发说明见[源码构建](building.zh-CN.md)，发行历史见[更新日志](../CHANGELOG.md)。

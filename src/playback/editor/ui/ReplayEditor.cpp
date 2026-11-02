@@ -209,6 +209,14 @@ bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(fra
 
 bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(frameContext()); }
 
+bool ReplayEditor::selectAllKeyframes() { return mTimelinePanel.selectAllKeyframes(frameContext()); }
+
+bool ReplayEditor::copySelection() { return mTimelinePanel.copySelection(frameContext()); }
+
+bool ReplayEditor::pasteAtPlayhead() { return mTimelinePanel.pasteAtPlayhead(frameContext()); }
+
+bool ReplayEditor::addMarkerAtPlayhead() { return mTimelinePanel.addMarkerAtPlayhead(frameContext()); }
+
 bool ReplayEditor::selectCameraByIndex(std::size_t index) {
     auto const project = state().project;
     if (!project || index >= project->cameras.size()) return false;
@@ -262,7 +270,10 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
 
     ErrorDialog::getInstance().draw();
     updateExitHold();
-    if (!exportActive) handleKeyboardShortcuts();
+    if (!exportActive) {
+        handleKeyboardShortcuts();
+        updateFollowExitTap();
+    }
 
     mFrameState = nullptr;
     mSubmit     = nullptr;
@@ -282,6 +293,40 @@ void ReplayEditor::updateExitHold() {
     }
 }
 
+// A lone Shift tap exits following, keeping Shift+click and Ctrl+Shift chords free.
+void ReplayEditor::updateFollowExitTap() {
+    ImGuiIO const& io        = ImGui::GetIO();
+    bool const     shiftDown = ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift);
+    if (!shiftDown) {
+        bool const tapped   = mFollowExitTapArmed;
+        mFollowExitTapArmed = false;
+        if (!tapped || !state().followingRecordedPlayer || input::isGameInputCaptured() || io.WantTextInput
+            || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+            return;
+        }
+        playback::state::EditorAction action{playback::state::EditorActionType::SetFollowRecordedPlayer};
+        action.value = false;
+        submitAction(std::move(action));
+        return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftShift, false) || ImGui::IsKeyPressed(ImGuiKey_RightShift, false)) {
+        mFollowExitTapArmed = !io.KeyCtrl && !io.KeyAlt && !ImGui::IsAnyMouseDown();
+        return;
+    }
+    if (!mFollowExitTapArmed) return;
+    if (io.KeyCtrl || io.KeyAlt || ImGui::IsAnyMouseDown() || io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f) {
+        mFollowExitTapArmed = false;
+        return;
+    }
+    for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_ReservedForModCtrl; ++key) {
+        if (key == ImGuiKey_LeftShift || key == ImGuiKey_RightShift) continue;
+        if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(key), false)) {
+            mFollowExitTapArmed = false;
+            return;
+        }
+    }
+}
+
 void ReplayEditor::handleKeyboardShortcuts() {
     using input::EditorKeybind;
 
@@ -295,6 +340,34 @@ void ReplayEditor::handleKeyboardShortcuts() {
 
     if (mViewportMaximized && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         mViewportMaximized = false;
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ClearSelection)) {
+        mSelection.clear();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SelectAll)) {
+        (void)selectAllKeyframes();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::Copy)) {
+        (void)copySelection();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::Paste)) {
+        (void)pasteAtPlayhead();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::InsertMarker)) {
+        (void)addMarkerAtPlayhead();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::PreviousMarker, true)) {
+        mTimelinePanel.seekAdjacentMarker(frameContext(), false);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::NextMarker, true)) {
+        mTimelinePanel.seekAdjacentMarker(frameContext(), true);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SaveProject)) {
@@ -327,6 +400,14 @@ void ReplayEditor::handleKeyboardShortcuts() {
     }
     if (input::KeyMap::pressed(EditorKeybind::AddCameraTrack)) {
         submitAction({playback::state::EditorActionType::AddFreeCamera});
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ToggleFollowPerspective)) {
+        if (state().followingRecordedPlayer) {
+            playback::state::EditorAction action{playback::state::EditorActionType::SetFollowThirdPerson};
+            action.value = !state().followThirdPerson;
+            submitAction(std::move(action));
+        }
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SelectCamera1)) {
