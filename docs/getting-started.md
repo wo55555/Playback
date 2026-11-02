@@ -8,10 +8,10 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 
 | Minecraft / LeviLamina | Playback release                                                                    |
 | ---------------------- | ----------------------------------------------------------------------------------- |
-| `26.10.*`              | [`v0.3.3-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.10) |
-| `26.20.*`              | [`v0.3.3-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.20) |
-| `26.40.*`              | [`v0.3.3-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.40) |
-| `26.51.*`              | [`v0.3.3-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.3.3-mc26.50) |
+| `26.10.*`              | [`v0.4.0-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.10) |
+| `26.20.*`              | [`v0.4.0-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.20) |
+| `26.40.*`              | [`v0.4.0-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.40) |
+| `26.51.*`              | [`v0.4.0-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.50) |
 
 All four Playback releases listed above are prereleases; install only the version that matches your instance.
 
@@ -22,7 +22,7 @@ All four Playback releases listed above are prereleases; install only the versio
 > Vibrant Visuals is not supported yet. Turn it off in the video settings before recording, replaying, or exporting; leaving it on is untested and can break rendering and capture.
 
 > [!CAUTION]
-> `v0.3.3` is a prerelease on every release line. Replay archives created before `v0.2.0` are incompatible and must be recorded again. Replays recorded before the August 20, 2026 hotfix on affected servers may already be missing portable chunk or custom-entity registry data; those archives cannot be repaired and must also be recorded again. Complete archives recorded with `v0.2.0` or later on the same release line are compatible with `v0.3.3` and require no conversion. The configuration version, recording-file snapshot context version, and editor project format version are all `1`; no migration is provided.
+> `v0.4.0` is a prerelease on every release line. Replays recorded with releases before `v0.4.0` are not supported and must be recorded again: the recording layout changed while its snapshot context version stayed at `1`, so older archives are not detected and cannot be read correctly. The camera switch track was removed, and its data in earlier editor projects is dropped. The configuration version, snapshot context version, and editor project format version all stay at `1`; no migration is provided.
 
 ## Install with LeviLauncher and Lip
 
@@ -66,16 +66,16 @@ Run the matching command from the root directory of the target LeviLamina instan
 
 ```powershell
 # Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.3.3-mc26.10#client
+lip install github.com/wo55555/Playback@0.4.0-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
-lip install github.com/wo55555/Playback@0.3.3-mc26.20#client
+lip install github.com/wo55555/Playback@0.4.0-mc26.20#client
 
 # Minecraft / LeviLamina 26.40
-lip install github.com/wo55555/Playback@0.3.3-mc26.40#client
+lip install github.com/wo55555/Playback@0.4.0-mc26.40#client
 
 # Minecraft / LeviLamina 26.51
-lip install github.com/wo55555/Playback@0.3.3-mc26.50#client
+lip install github.com/wo55555/Playback@0.4.0-mc26.50#client
 ```
 
 > [!NOTE]
@@ -95,7 +95,9 @@ record pause
 record stop
 ```
 
-`record start` begins or resumes recording, `record pause` pauses capture, and `record stop` finishes and exports the replay. Exported replay archives are stored under Playback's `data/replays` directory.
+`record start` begins or resumes recording, `record pause` pauses capture, and `record stop` finishes and exports the replay. The pause menu's icon row offers the same start, pause, finish and cancel controls; finishing from the pause menu asks for a replay name. Exported replay archives are stored under Playback's `data/replays` directory.
+
+`record indicator` toggles the top-right recording indicator, and `record indicator on|off` sets it. `record rate [20-120]` sets how many times per second the local player's view is sampled until the game restarts; the starting value comes from `record.localPlayerUpdatesPerSecond` in the config.
 
 ## Replay
 
@@ -162,6 +164,6 @@ The experimental exporter renders frames from replay time rather than recording 
 | D3D11    | H.264 MP4, PNG sequence | 1x          |
 
 > [!IMPORTANT]
-> Video export is experimental and currently has no audio, and Vibrant Visuals is not supported. Camera regions must exist in the recorded replay data; Playback cannot reconstruct chunks that were never recorded. Cross-dimension loading, replay-state preparation, UI stabilization, and export warm-up use timeouts. Playback no longer requires every chunk in a fixed camera neighborhood to be present, but missing replay data can still prevent the intended scene from rendering.
+> Video export is experimental, and Vibrant Visuals is not supported. MP4 files include game audio as an AAC track; PNG sequences get a sidecar `.audio.wav`. Camera regions must exist in the recorded replay data; Playback cannot reconstruct chunks that were never recorded. Cross-dimension loading, replay-state preparation, UI stabilization, and export warm-up use timeouts. Playback no longer requires every chunk in a fixed camera neighborhood to be present, but missing replay data can still prevent the intended scene from rendering.
 
 For development instructions, see [Building Playback](building.md). Release history is available in the [changelog](../CHANGELOG.md).
