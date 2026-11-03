@@ -112,11 +112,12 @@ LL_TYPE_INSTANCE_HOOK(
     ClientInstance,
     &ClientInstance::$update,
     bool,
-    bool isInitFinished
+    bool isInitFinished,
+    bool allowGameUpdate
 ) {
     editor::tickReplayExportBeforeClientUpdate();
 
-    auto result = origin(isInitFinished);
+    auto result = origin(isInitFinished, allowGameUpdate);
 
     if (isInitFinished) exporting::recoverEcoModeAfterInterruptedExport();
     editor::graphics::updateReplayMouseOwnership(*this);

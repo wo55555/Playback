@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3-mc26.60] - 2026-11-03
+
+### Changed
+
+- Adapted to LeviLamina 26.60.*
+
 ## [0.3.3-mc26.50] - 2026-10-11
 
 ### Added
@@ -270,8 +276,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.50...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.60...HEAD
+[0.3.3-mc26.60]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.50...v0.3.3-mc26.60
 [0.3.3-mc26.50]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.50...v0.3.3-mc26.50
+[0.3.2-mc26.50]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.50...v0.3.2-mc26.50
 [0.3.1-mc26.50]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.20...v0.3.1-mc26.50
 [0.3.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.0-mc26.20...v0.3.1-mc26.20
 [0.3.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.2.1-mc26.20...v0.3.0-mc26.20

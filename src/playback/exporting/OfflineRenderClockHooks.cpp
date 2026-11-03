@@ -353,9 +353,10 @@ LL_TYPE_INSTANCE_HOOK(
     Timer,
     &Timer::advanceTime,
     void,
-    float preferredFrameStep
+    float preferredFrameStep,
+    bool  forceOnlySingleTick
 ) {
-    origin(preferredFrameStep);
+    origin(preferredFrameStep, forceOnlySingleTick);
 
     if (this != gSimTimer.load(std::memory_order_acquire)) {
         gOtherTimerAdvances.fetch_add(1, std::memory_order_relaxed);
@@ -576,7 +577,7 @@ bool retryMissedOfflineRenderScene(OfflineRenderClockToken token) {
         early                  = wasOfflineRenderSceneMissed(active.captureGeneration);
         overlays               = offlineRenderOverlaySubmitsAfterPermit(active.captureGeneration);
         bool const due         = overlays >= LostSceneOverlaySubmits
-                      || sinceReturn >= (early ? MissedSceneRetryDelay : lostSceneRetryDelay());
+                              || sinceReturn >= (early ? MissedSceneRetryDelay : lostSceneRetryDelay());
         if (!due) return false;
 
         if (active.sceneRetries == 0) active.sceneRetryStartedAt = now;

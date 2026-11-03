@@ -36,6 +36,7 @@
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
+#include "mc/entity/components/MobWalkAnimationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
 #include "mc/network/MinecraftPackets.h"
@@ -112,10 +113,12 @@
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
 
+
 #include "snappy.h"
 #include "uuid.h"
 #include "zip.h"
 
+#include <mc/world/actor/ActorType.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -247,12 +250,15 @@ void applyReplayEntityMovement(
         position.y - previousPosition.y,
         position.z - previousPosition.z,
     };
-    if (auto walk = actor.mBuiltInComponents->mWalkAnimationComponent.get()) {
-        // 26.51 dropped the HardcodedAnimationSystem.h helper, which only ever existed as a header inline; the engine
-        // still folds this same horizontal-distance formula into its own tick, so compute it here.
-        float const dx          = state.mPos->x - state.mPosPrev->x;
-        float const dz          = state.mPos->z - state.mPosPrev->z;
-        walk->mMovementThisTick = std::sqrt(dx * dx + dz * dz);
+    if (actor.isType(ActorType::Mob)) {
+        auto& mob = static_cast<Mob&>(actor);
+        if (auto walk = mob.mBuiltInMobComponents->mWalkAnimationComponent.get()) {
+            // 26.51 dropped the HardcodedAnimationSystem.h helper, which only ever existed as a header inline; the
+            // engine still folds this same horizontal-distance formula into its own tick, so compute it here.
+            float const dx          = state.mPos->x - state.mPosPrev->x;
+            float const dz          = state.mPos->z - state.mPosPrev->z;
+            walk->mMovementThisTick = std::sqrt(dx * dx + dz * dz);
+        }
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
@@ -745,9 +751,9 @@ void ReplaySession::updateObserverPreview() {
     Vec2 const     rotation{sample->state.pitch, sample->state.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    mLastObserverPreviewFeet     = feetPosition;
-    mLastObserverPreviewRotation = rotation;
+                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
+    mLastObserverPreviewFeet        = feetPosition;
+    mLastObserverPreviewRotation    = rotation;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -857,7 +863,7 @@ void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint)
     Vec2 const     rotation{viewpoint.pitch, viewpoint.yaw};
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
+                                   || mLastObserverServerSyncChunk->z != cameraChunk.z;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
@@ -1509,17 +1515,16 @@ void ReplaySession::applyRecordedBlockRegistry() {
 
         // The registry exposes no updater version accessor, so read it back from a vanilla permutation.
         std::optional<uint> updaterVersion;
-        registry.forEachBlockType([&updaterVersion](BlockType const& blockType) {
-            if (updaterVersion) return false;
-            for (auto const& permutation : *blockType.mBlockPermutations) {
+        for (auto& [name, blockType] : *BlockTypeRegistry::get().mBlockLookupMap) {
+            if (updaterVersion) break;
+            for (auto const& permutation : *blockType->mBlockPermutations) {
                 if (!permutation) continue;
                 auto const& serializationId = permutation->mSerializationId;
                 if (!serializationId->contains("version", Tag::Type::Int)) continue;
                 updaterVersion = static_cast<uint>(serializationId->at("version").get<IntTag>().data);
-                return false;
+                break;
             }
-            return true;
-        });
+        }
         if (!updaterVersion) throw std::runtime_error("Unable to resolve the block updater version");
 
         auto const preloadedGeometry = preloadRecordedBlockGeometry(properties);
@@ -2101,7 +2106,7 @@ void ReplaySession::processPendingDimensionTransition() {
     bool const loadingScreenVisible = client
                                    && (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
                                        || client->isShowingWorldProgressScreen());
-    bool const readyToRender = client && client->isReadyToRender();
+    bool const readyToRender        = client && client->isReadyToRender();
 
     if (elapsed >= DIMENSION_TRANSITION_TIMEOUT) {
         getLogger().error(
@@ -2453,7 +2458,7 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 
     mDirectSnapshotColumns.clear();
     mDirectLevelChunkIndices.clear();
-    auto& chunkSource = replayDimension->getChunkSource();
+    auto& chunkSource = *replayDimension->mChunkSource;
     for (auto const& [pos, identity] : targetColumns) {
         if (mReusableSnapshotColumns.contains(pos) || identity.levelChunkIndex < 0) continue;
         if (!requestModeLevelChunks.contains(pos)) {
@@ -3659,7 +3664,7 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
     }
 
     auto const& pos   = *levelChunk.mPos;
-    auto        chunk = replayDimension->getChunkSource().getExistingChunk(pos);
+    auto        chunk = replayDimension->mChunkSource->getExistingChunk(pos);
     if (!chunk || chunk->mIsEmptyClientChunk
         || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
         return false;
@@ -3754,7 +3759,7 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
         auto const& pos = *levelChunk.mPos;
         if (mApplyingChunkSnapshot) mApplyingSnapshotChunks.emplace(pos);
         else mSnapshotChunks.emplace(pos);
-        auto& chunkSource = replayDimension->getChunkSource();
+        auto& chunkSource = *replayDimension->mChunkSource;
         auto  replayChunk = chunkSource.getExistingChunk(pos);
         if (!replayChunk) {
             replayChunk = chunkSource.getOrLoadChunk(pos, ChunkSource::LoadMode::None, false);
@@ -4038,7 +4043,7 @@ void ReplaySession::clearNetworkContext() { mNetworkHandler = nullptr; }
 void ReplaySession::onLevelChunkHandled(ChunkPos const& pos, Dimension const& dimension) {
     if (mReplayDimension.load(std::memory_order_acquire) != &dimension) return;
 
-    auto       chunk      = dimension.getChunkSource().getExistingChunk(pos);
+    auto       chunk      = dimension.mChunkSource->getExistingChunk(pos);
     auto const loadState  = chunk ? chunk->mLoadState->load(std::memory_order_acquire) : ChunkState::Unloaded;
     bool const retainable = chunk && !chunk->mIsEmptyClientChunk && loadState == ChunkState::Loaded;
     {
