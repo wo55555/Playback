@@ -241,7 +241,7 @@ bool remapRecordedPlayerReferences(
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
         bool  changed   = addPlayer.mRuntimeId->rawID == sourceRuntimeId.rawID || *addPlayer.mUuid == sourceUuid
-                    || addPlayer.mAbilitiesData->mTargetPlayer->rawID == sourceUniqueId.rawID;
+                       || addPlayer.mAbilitiesData->mTargetPlayer->rawID == sourceUniqueId.rawID;
         for (auto& link : *addPlayer.mLinks) {
             changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
             changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
@@ -791,7 +791,7 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
 
         capturedDimension = &guardedPlayer->getDimension();
 
-        auto const& storage = capturedDimension->getChunkSource().getStorage();
+        auto const& storage = capturedDimension->mChunkSource->getStorage();
         columns.reserve(storage.size());
         for (auto const& [pos, weakChunk] : storage) {
             auto chunk = weakChunk.lock();
@@ -1593,7 +1593,7 @@ bool Recorder::writeLocalPlayerState() {
         recordGamePacket(*packet);
     }
 
-    bool const swinging  = localPlayer->mSwinging;
+    bool const swinging  = localPlayer->mSwingingHand->has_value();
     int const  swingTime = localPlayer->mSwingTime;
     if (!swinging) {
         mLastLocalPlayerSwingTime.reset();
@@ -1722,7 +1722,7 @@ void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimens
         if (byDimension == mPendingPortableChunks.end() || !byDimension->second.contains(pos)) return;
     }
 
-    auto chunk = dimension.getChunkSource().getExistingChunk(pos);
+    auto chunk = dimension.mChunkSource->getExistingChunk(pos);
     if (!chunk || chunk->mIsEmptyClientChunk
         || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
         return;

@@ -21,7 +21,7 @@
 class Packet;
 
 namespace playback::action {
-class Action;
+struct Action;
 }
 namespace playback::replay {
 class ReplaySession;
