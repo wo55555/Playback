@@ -10,6 +10,7 @@
 #include "mc/client/options/IOptions.h"
 #include "mc/client/game/ClientInputCallbacks.h"
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/gui/controls/UIControl.h"
 #include "mc/client/gui/controls/renderers/HudVignetteRenderer.h"
 #include "mc/client/gui/screens/InGamePlayScreen.h"
 #include "mc/client/player/LocalPlayer.h"
@@ -686,27 +687,30 @@ LL_TYPE_INSTANCE_HOOK(
     SleepVignetteHook,
     ll::memory::HookPriority::High,
     HudVignetteRenderer,
-    &HudVignetteRenderer::_renderVignette,
-    bool,
+    &HudVignetteRenderer::$render,
+    void,
     MinecraftUIRenderContext& renderContext,
     IClientInstance&          client,
-    float                     undergroundness,
-    int                       w,
-    int                       h
+    UIControl&                owner,
+    int                       pass
 ) {
-    bool const thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
+    // The fill uses the vignette control size.
+    auto const  size              = owner.mSize.get();
+    float const w                 = size.x;
+    float const h                 = size.y;
+    bool const  thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
     if (isReplaySubjectViewDriven() && !thirdPersonFollow && replaySubjectViewWeight() > 0.0f) {
         float const progress = std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
         float const alpha    = SleepFadeTargetA * progress;
         if (alpha > 0.0f) {
             renderContext.fillRectangle(
-                RectangleArea(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), false),
+                RectangleArea(0.0f, 0.0f, w, h, false),
                 mce::Color(SleepFadeRed, SleepFadeGreen, SleepFadeBlue, 1.0f),
                 alpha
             );
         }
     }
-    return origin(renderContext, client, undergroundness, w, h);
+    origin(renderContext, client, owner, pass);
 }
 
 // The recorded perspective is first person; a toggle while following would be undone by the follow loop anyway.
