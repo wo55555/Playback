@@ -311,7 +311,9 @@ private:
     std::optional<std::filesystem::path>                        mMountedReplayPacks;
 
     std::shared_ptr<StartGamePacket const> mReplayStartGame;
-    bool                                   mRecordedBlockRegistryApplied{};
+    // applyRecordedBlockRegistry runs from two hooks that can fire concurrently while the replay world loads.
+    std::recursive_mutex mRecordedBlockRegistryMutex;
+    bool                 mRecordedBlockRegistryApplied{};
 
     // Decoded when the local world's item packet arrives. Reading it at replay start asserts: the packet locks
     // the thread item registry, which is empty on the main menu.
