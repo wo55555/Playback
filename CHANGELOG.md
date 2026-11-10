@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Recording the world snapshot no longer stalls the game: unchanged chunk columns are reused and changed ones are serialized on background threads.
+- Seeking in a replay now catches up faster by loading the world in merged chunk batches.
 
 ### Fixed
 
