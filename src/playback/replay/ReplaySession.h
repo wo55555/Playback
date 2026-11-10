@@ -76,7 +76,9 @@ struct ReplayCameraViewpoint {
 
 class ReplaySession {
 private:
-    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT          = 64;
+    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT = 64;
+    // A seek waits on its batch, so it keeps more columns loading at once than normal playback.
+    static constexpr size_t SEEK_LEVEL_CHUNKS_IN_FLIGHT         = 128;
     static constexpr size_t MAX_SUB_CHUNK_ENTRIES_PER_PACKET    = 1536;
     static constexpr size_t SNAPSHOT_GAME_PACKETS_PER_TICK      = 16;
     static constexpr int    CHUNK_INJECTION_STALL_TIMEOUT_TICKS = 20 * 30;
@@ -158,6 +160,56 @@ private:
     bool                          mChunkInjectionPlanPrepared = false;
     bool                          mCenterChunksReady          = false;
     SnapshotGamePacketPhase       mSnapshotGamePacketPhase    = SnapshotGamePacketPhase::StreamingChunks;
+
+    // A seek holds timeline chunk packets back until its landing is near, so catch-up streams one merged batch.
+    // Block updates for those columns wait too, or the older chunk data would overwrite them when it lands.
+    // A packet the plan would skip anyway (blob cache, other dimension) passes through untouched.
+    struct SeekDeferredLevelChunk {
+        int      index{};
+        uint64_t sequence{};
+        ChunkPos pos;
+        bool     passthrough{};
+    };
+    struct SeekDeferredSubChunkEntry {
+        ChunkPos column;
+        int      subChunk{};
+        bool     successful{};
+    };
+    struct SeekDeferredSubChunk {
+        int                                    index{};
+        uint64_t                               sequence{};
+        bool                                   passthrough{};
+        std::vector<SeekDeferredSubChunkEntry> entries;
+    };
+    struct SeekHeldBlockPacket {
+        MinecraftPacketIds id{};
+        std::string        payload;
+        ChunkPos           column;
+        int                subChunk{};
+        uint64_t           sequence{};
+    };
+    bool                                   mSeekChunksDeferred{};
+    uint64_t                               mSeekDeferredSequence{};
+    std::vector<SeekDeferredLevelChunk>    mSeekDeferredLevelChunkPackets;
+    std::vector<SeekDeferredSubChunk>      mSeekDeferredSubChunkPackets;
+    std::unordered_map<ChunkPos, uint64_t> mSeekLatestLevelChunks;
+    // A request-mode LevelChunk for a loaded column keeps its sub chunks, so only one with block data replaces them.
+    std::unordered_map<ChunkPos, uint64_t>                          mSeekLatestBlockLevelChunks;
+    std::unordered_map<ChunkPos, std::unordered_map<int, uint64_t>> mSeekLatestSubChunks;
+    // Set until the pending injection batch that includes a seek flush completes.
+    bool                             mSeekFlushedBatch{};
+    std::vector<SeekHeldBlockPacket> mSeekHeldBlockPackets;
+    struct SeekReleasedPacket {
+        MinecraftPacketIds id{};
+        std::string        payload;
+        bool               recordedLocalPlayer{};
+    };
+    // Packets held for a flushed batch, applied in order once it lands.
+    std::vector<SeekReleasedPacket> mSeekReleasedPackets;
+    // An entity spawning into a held column that the client has not loaded stops the tick until the batch lands.
+    bool mSeekTickInterrupted{};
+    bool mSeekWindowEntered{};
+    bool mSeekTickResuming{};
 
     std::atomic<bool>                    mStopRequested{false};
     std::atomic<int>                     mRequestedSeekTick{-1};
@@ -407,6 +459,18 @@ private:
     [[nodiscard]] bool applyPendingSnapshotLocalPlayer();
 
     void invalidateSnapshotColumns(Packet const& packet);
+
+    [[nodiscard]] bool seekChunkDeferralOpen() const;
+
+    [[nodiscard]] bool deferSeekChunk(int index, bool levelChunk);
+
+    [[nodiscard]] bool holdSeekBlockPacket(Packet const& packet, std::string_view payload);
+
+    void flushSeekChunks();
+
+    [[nodiscard]] bool releaseSeekPackets();
+
+    void clearSeekChunkDeferral();
 
     [[nodiscard]] bool flushPendingSnapshotGamePackets(
         bool                                         playerListOnly,
