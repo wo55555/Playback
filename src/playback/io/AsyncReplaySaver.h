@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -176,7 +177,7 @@ private:
 
     std::filesystem::path mRecordPath;
 
-    std::vector<WriteTask>     mQueue;
+    std::deque<WriteTask>      mQueue;
     mutable std::mutex         mQueueMutex;
     std::condition_variable    mCondition;
     std::thread                mWorkerThread;
