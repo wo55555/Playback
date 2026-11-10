@@ -7,6 +7,7 @@
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
+#include "playback/editor/graphics/SeekFreezeHooks.h"
 #include "playback/exporting/ExportEcoMode.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
@@ -112,6 +113,9 @@ bool Playback::hook() {
     impl->mCameraRenderInstalled = editor::graphics::hookCameraRender(true);
     if (!impl->mCameraRenderInstalled) {
         getSelf().getLogger().warn("Unable to install camera render hooks; camera timelines are disabled");
+    }
+    if (!editor::graphics::hookSeekFreeze(true)) {
+        getSelf().getLogger().warn("Unable to install the seek freeze hook; seeks will show catch-up frames");
     }
     if (audio::probe::install()) {
         // Export-audio capture registers its policy callbacks on the probe; no additional hooks are installed.
@@ -220,6 +224,9 @@ bool Playback::unhook() {
 
     audio::exportcap::uninstall();
     audio::probe::uninstall();
+    if (!editor::graphics::hookSeekFreeze(false)) {
+        getSelf().getLogger().warn("Unable to remove the seek freeze hook during shutdown");
+    }
     screen::hookRecordControls(false);
     screen::hookMainMenu(false);
     getEventListeners().clear();
