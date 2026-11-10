@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- First-person follow now shows the followed player's arm swing and item-use animation, such as eating.
+
 ## [0.4.0-mc26.10] - 2026-11-01
 
 ### Added
