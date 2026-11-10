@@ -10,6 +10,7 @@
 #include "mc-external/IOptionRegistry.h"
 #include "mc/client/game/ClientInputCallbacks.h"
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/gui/controls/UIControl.h"
 #include "mc/client/gui/controls/renderers/HudVignetteRenderer.h"
 #include "mc/client/gui/screens/InGamePlayScreen.h"
 #include "mc/client/player/LocalPlayer.h"
@@ -31,6 +32,7 @@
 #include "mc/world/actor/BuiltInActorComponents.h"
 #include "mc/world/actor/Mob.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/item/ItemStack.h"
 
 
@@ -257,8 +259,8 @@ public:
       mInvisible(subject.getStatusFlag(ActorFlags::Invisible)),
       mHiddenWhenInvisible(subject.getStatusFlag(ActorFlags::HiddenWhenInvisible)) {
         if (mOuter) {
-            mSubject.setStatusFlag(ActorFlags::Invisible, false);
-            mSubject.setStatusFlag(ActorFlags::HiddenWhenInvisible, false);
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::Invisible, false);
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::HiddenWhenInvisible, false);
 
             // The scope leaves the subject's movement in place; with bobbing off it must read as standing still.
             mStateVector = mSubject.mBuiltInComponents->mStateVectorComponent.get();
@@ -274,8 +276,12 @@ public:
         --gPassDepth;
         if (mOuter) {
             if (mStateVector) mStateVector->mPosDelta = mPosDelta;
-            mSubject.setStatusFlag(ActorFlags::HiddenWhenInvisible, mHiddenWhenInvisible);
-            mSubject.setStatusFlag(ActorFlags::Invisible, mInvisible);
+            SynchedActorDataAccess::setActorFlag(
+                mSubject.getEntityContext(),
+                ActorFlags::HiddenWhenInvisible,
+                mHiddenWhenInvisible
+            );
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::Invisible, mInvisible);
         }
     }
 
@@ -616,7 +622,8 @@ LL_TYPE_INSTANCE_HOOK(
     if (!subject || !isOverlayCaller(_ReturnAddress())) return actor;
     // The scope overlay reads LocalPlayer-only members, which a remote subject lacks; it follows the observer via
     // isScoping.
-    return !subject->isScoping() && !subject->isUsingItem() ? subject : actor;
+    bool const usingItem = !subject->mItemInUse->mItem->isNull();
+    return !subject->isScoping() && !usingItem ? subject : actor;
 }
 
 // Vanilla darkens a sleeping player's screen with PlayerSleepFadeEffectSystem::Fade, which runs the registry-context
@@ -635,28 +642,32 @@ LL_TYPE_INSTANCE_HOOK(
     SleepVignetteHook,
     ll::memory::HookPriority::High,
     HudVignetteRenderer,
-    &HudVignetteRenderer::_renderVignette,
-    bool,
+    &HudVignetteRenderer::$render,
+    void,
     MinecraftUIRenderContext& renderContext,
     IClientInstance&          client,
-    float                     undergroundness,
-    int                       w,
-    int                       h
+    UIControl&                owner,
+    int                       pass
 ) {
-    bool const thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
+    // The fill uses the vignette control size.
+    auto const  size              = owner.mSize.get();
+    float const w                 = size.x;
+    float const h                 = size.y;
+    bool const  thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
     if (isReplaySubjectViewDriven() && !thirdPersonFollow && replaySubjectViewWeight() > 0.0f) {
         float const progress =
             std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
         float const alpha = SleepFadeTargetA * progress;
         if (alpha > 0.0f) {
-            renderContext.fillRectangle(
-                RectangleArea(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), false),
-                mce::Color(SleepFadeRed, SleepFadeGreen, SleepFadeBlue, 1.0f),
-                alpha
-            );
+            RectangleArea area{};
+            area._x0 = 0.0f;
+            area._x1 = w;
+            area._y0 = 0.0f;
+            area._y1 = h;
+            renderContext.fillRectangle(area, mce::Color(SleepFadeRed, SleepFadeGreen, SleepFadeBlue, 1.0f), alpha);
         }
     }
-    return origin(renderContext, client, undergroundness, w, h);
+    origin(renderContext, client, owner, pass);
 }
 
 // The recorded perspective is first person; a toggle while following would be undone by the follow loop anyway.
