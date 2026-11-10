@@ -13,6 +13,7 @@
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
+#include "mc/network/MinecraftPackets.h"
 #include "mc/network/NetworkIdentifier.h"
 #include "mc/network/NetworkStatistics.h"
 #include "mc/network/Packet.h"
@@ -27,6 +28,7 @@
 #include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelEventPacket.h"
+#include "mc/network/packet/LevelSoundEventPacket.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
 #include "mc/network/packet/PlayerHotbarPacket.h"
 #include "mc/network/packet/PlayerListPacket.h"
@@ -43,7 +45,10 @@
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/platform/brstd/function_ref.h"
+#include "mc/world/actor/ActorDefinitionIdentifier.h"
+#include "mc/world/actor/ActorSoundIdentifier.h"
 #include "mc/world/level/Level.h"
+#include "mc/world/level/LevelSoundManager.h"
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/BlockType.h"
 #include "mc/world/level/block/registry/BlockTypeRegistry.h"
@@ -96,6 +101,7 @@ struct NetworkHookState {
     bool inventoryContent{};
     bool playerHotbar{};
     bool mobEquipment{};
+    bool predictedSound{};
 
     [[nodiscard]] bool hudHandlersInstalled() const {
         return inventorySlot && inventoryContent && playerHotbar && mobEquipment;
@@ -107,12 +113,13 @@ struct NetworkHookState {
 
     [[nodiscard]] bool fastPathHandlersInstalled() const {
         return removeActor && setActorData && takeItemActor && actorEvent && levelEvent && updateBlock
-            && updateBlockSynced && updateSubChunkBlocks && addPlayer && playerList && playerSkin;
+            && updateBlockSynced && updateSubChunkBlocks && addPlayer && playerList && playerSkin && predictedSound;
     }
 
     [[nodiscard]] bool fastPathHandlersRemoved() const {
         return !removeActor && !setActorData && !takeItemActor && !actorEvent && !levelEvent && !updateBlock
-            && !updateBlockSynced && !updateSubChunkBlocks && !addPlayer && !playerList && !playerSkin;
+            && !updateBlockSynced && !updateSubChunkBlocks && !addPlayer && !playerList && !playerSkin
+            && !predictedSound;
     }
 
     [[nodiscard]] bool resourceHandlersInstalled() const {
@@ -609,6 +616,39 @@ LL_TYPE_INSTANCE_HOOK(
     Recorder::getInstance().recordLocalViewFrame(partialTick);
 }
 
+// The client plays the local player's predicted sounds (hits, landing, strong attacks) itself, and the server sends
+// them to every other player only, so they never arrive as packets.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackPredictedSoundHook,
+    ll::memory::HookPriority::Normal,
+    LevelSoundManager,
+    &LevelSoundManager::playPredictiveSynchronizedSound,
+    void,
+    IDimension&                          dimension,
+    SharedTypes::Legacy::LevelSoundEvent type,
+    Vec3 const&                          pos,
+    Player*                              targetPlayer,
+    int                                  data,
+    ActorSoundIdentifier const&          actor,
+    bool                                 isGlobal
+) {
+    origin(dimension, type, pos, targetPlayer, data, actor, isGlobal);
+    auto& recorder = Recorder::getInstance();
+    if (!mIsClientSide || !recorder.isActive() || recorder.isPaused()) return;
+    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::LevelSoundEvent);
+    if (!packet) return;
+    auto&                            sound      = static_cast<LevelSoundEventPacket&>(*packet);
+    ActorDefinitionIdentifier const& definition = actor.mIdentifier;
+    sound.mActorIdentifier                      = definition.mCanonicalName->getString();
+    sound.mActor                                = actor.mActorId;
+    sound.mEventId                              = type;
+    sound.mPos                                  = pos;
+    sound.mData                                 = data;
+    sound.mIsGlobal                             = isGlobal;
+    sound.mIsBaby                               = actor.mIsBaby;
+    recorder.recordGamePacket(sound);
+}
+
 template <class Hook>
 bool installNetworkHook(bool& installed) {
     if (!installed) installed = Hook::hook() == 0;
@@ -667,9 +707,11 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackInventorySlotHook>(state.inventorySlot)
             && installNetworkHook<PlaybackInventoryContentHook>(state.inventoryContent)
             && installNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar)
-            && installNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment);
+            && installNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment)
+            && installNetworkHook<PlaybackPredictedSoundHook>(state.predictedSound);
     };
     auto removeAll = [&] {
+        removeNetworkHook<PlaybackPredictedSoundHook>(state.predictedSound);
         removeNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment);
         removeNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar);
         removeNetworkHook<PlaybackInventoryContentHook>(state.inventoryContent);
