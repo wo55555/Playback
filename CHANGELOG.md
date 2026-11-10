@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The camera switch track was removed; switch track data in earlier editor projects is dropped. The project format version stays at `1`.
 - Dropdowns, popups and context menus in the editor now open under the control that opened them, with menu padding.
 - Recording the world snapshot no longer stalls the game: unchanged chunk columns are reused and changed ones are serialized on background threads.
+- Seeking in a replay now catches up faster by loading the world in merged chunk batches.
 
 ### Fixed
 
