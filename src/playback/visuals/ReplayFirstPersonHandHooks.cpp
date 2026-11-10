@@ -29,6 +29,7 @@
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
+#include "mc/entity/systems/VanillaOffsetSystem.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
@@ -763,72 +764,24 @@ struct ScopedObserverOverlay {
     }
 };
 
-// MC 1.26.51.01. The block overlay samples this actor's render position. Prologue-checked so a game update misses
-// instead of hooking the wrong function.
-constexpr uintptr_t OverlayEyeSampleRva    = 0x28A5230;
-constexpr uint8_t   OverlayEyeSampleHead[] = {
-    0x41,
-    0x56,
-    0x56,
-    0x57,
-    0x53,
-    0x48,
-    0x83,
-    0xEC,
-    0x58,
-    0x0F,
-    0x29,
-    0x7C,
-    0x24,
-    0x40,
-    0x0F,
-    0x29,
-};
-
-using OverlayEyeSampleFn = float* (*)(float* out, Actor* actor, float partial);
-
-OverlayEyeSampleFn  gOverlayEyeSampleOriginal{};
-void*               gOverlayEyeSampleTarget{};
 thread_local bool   gOverlaySample = false;
 thread_local Actor* gOverlayLocal  = nullptr;
 
-// The observer's own render offset sits on a block face and the overlay strobes. 26.20 sampled the subject.
-float* overlayEyeSampleDetour(float* out, Actor* actor, float partial) {
-    if (gOverlaySample && actor && actor == gOverlayLocal) {
-        if (auto* subject = subjectPlayer()) return gOverlayEyeSampleOriginal(out, subject, partial);
+// The observer's own render offset sits on a block face and the overlay strobes, so the pass samples the subject.
+LL_TYPE_STATIC_HOOK(
+    OverlayEyeSampleHook,
+    ll::memory::HookPriority::High,
+    VanillaOffsetSystem,
+    &VanillaOffsetSystem::getCameraPosition,
+    Vec3,
+    Actor const& actor,
+    float        alpha
+) {
+    if (gOverlaySample && &actor == gOverlayLocal) {
+        if (auto* subject = subjectPlayer()) return origin(*subject, alpha);
     }
-    return gOverlayEyeSampleOriginal(out, actor, partial);
+    return origin(actor, alpha);
 }
-
-bool installOverlayEyeSampleHook() {
-    if (gOverlayEyeSampleTarget) return true;
-    auto const base   = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    auto*      target = reinterpret_cast<void*>(base + OverlayEyeSampleRva);
-    if (std::memcmp(target, OverlayEyeSampleHead, sizeof(OverlayEyeSampleHead)) != 0) {
-        Playback::getInstance().getSelf().getLogger().warn("replay overlay eye sample hook skipped: prologue mismatch");
-        return false;
-    }
-    int const code = ll::memory::hook(
-        target,
-        reinterpret_cast<ll::memory::FuncPtr>(&overlayEyeSampleDetour),
-        reinterpret_cast<ll::memory::FuncPtr*>(&gOverlayEyeSampleOriginal),
-        ll::memory::HookPriority::High
-    );
-    if (code != 0) {
-        Playback::getInstance().getSelf().getLogger().warn("replay overlay eye sample hook failed code={}", code);
-        return false;
-    }
-    gOverlayEyeSampleTarget = target;
-    return true;
-}
-
-void removeOverlayEyeSampleHook() {
-    if (!gOverlayEyeSampleTarget) return;
-    ll::memory::unhook(gOverlayEyeSampleTarget, reinterpret_cast<ll::memory::FuncPtr>(&overlayEyeSampleDetour));
-    gOverlayEyeSampleTarget   = nullptr;
-    gOverlayEyeSampleOriginal = nullptr;
-}
-
 struct ScopedOverlaySample {
     explicit ScopedOverlaySample(Actor* local) {
         gOverlayLocal  = local;
@@ -925,6 +878,7 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             makeSlot<BobViewHook>("bobView"),
             makeSlot<PortalDataHook>("portalData"),
             makeSlot<TransparentOverlayHook>("transparentOverlay"),
+            makeSlot<OverlayEyeSampleHook>("eyeSample"),
             makeSlot<OverlayOnFireHook>("onFire"),
             makeSlot<PlayerIsScopingHook>("isScoping"),
             makeSlot<SleepVignetteHook>("sleepVignette"),
@@ -936,8 +890,7 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             slot.ok   = slot.hook();
             complete &= slot.ok;
         }
-        complete  &= installOverlayEyeSampleHook();
-        installed  = true;
+        installed = true;
         Playback::getInstance().getSelf().getLogger().debug(
             "Replay first-person hand hooks installed in {} ms",
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count()
@@ -947,7 +900,6 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             for (auto const& slot : slots) {
                 if (!slot.ok) missing += std::string(" ") + slot.name;
             }
-            if (!gOverlayEyeSampleTarget) missing += " eyeSample";
             Playback::getInstance().getSelf().getLogger().warn("Replay first-person hand hooks incomplete:{}", missing);
         }
         return;
@@ -957,7 +909,6 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
     for (auto& slot : slots) {
         if (slot.ok) slot.unhook();
     }
-    removeOverlayEyeSampleHook();
     slots.clear();
     gHeights.reset();
     installed = false;
