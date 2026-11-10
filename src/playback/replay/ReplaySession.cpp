@@ -5310,6 +5310,16 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         }
     }
 
+    if (packetId == MinecraftPacketIds::PlayerSkin) {
+        // Same rule as the player list: a recorded skin must never be treated as the viewer's own.
+        auto& skinImpl = static_cast<PlayerSkinPacket&>(*packet).mSkin->mSkinImpl;
+        if (!skinImpl) {
+            getLogger().debug("Skipping a replay player skin packet without skin data");
+            return true;
+        }
+        skinImpl->mObject.mIsPrimaryUser = false;
+    }
+
     if (packetId == MinecraftPacketIds::ChangeDimension) {
         if (!mReplayPlayer) return false;
         auto const&        change   = static_cast<ChangeDimensionPacket const&>(*packet);
