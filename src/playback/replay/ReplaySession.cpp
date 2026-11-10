@@ -4150,6 +4150,7 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
     if (!mChunkInjectionPlanPrepared) {
         auto* player = mReplayPlayer;
         if (!player) {
+            getLogger().error("Unable to finish replay chunk injection: replay player is unavailable");
             mReplayFailed = true;
             return false;
         }
@@ -4161,6 +4162,7 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
         PlaybackView view{position.x, position.y, position.z, rotation.y, rotation.x};
         mChunkInjectionStartedAt = std::chrono::steady_clock::now();
         if (!prepareChunkInjectionPlan(view)) {
+            getLogger().error("Unable to prepare the replay chunk injection plan");
             mReplayFailed = true;
             return false;
         }
@@ -5216,10 +5218,16 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
 
     auto packet = MinecraftPackets::createPacket(packetId);
-    if (!packet || !mNetworkHandler || !packet->mHandler) return false;
+    if (!packet || !mNetworkHandler || !packet->mHandler) {
+        getLogger().error("Unable to create or bind replay game packet {}", static_cast<int>(packetId));
+        return false;
+    }
 
     ReadOnlyBinaryStream stream(payload, false);
-    if (!packet->read(stream) || !stream.ensureReadCompleted()) return false;
+    if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+        getLogger().error("Unable to read or deserialize replay game packet {}", static_cast<int>(packetId));
+        return false;
+    }
 
     if (packetId == MinecraftPacketIds::SetTime) {
         mReplayTime = static_cast<SetTimePacket const&>(*packet).mTime;
@@ -5581,7 +5589,14 @@ bool ReplaySession::flushPendingSnapshotGamePackets(
             continue;
         }
 
-        if (!applyGamePacket(packetId, payload)) return false;
+        if (!applyGamePacket(packetId, payload)) {
+            getLogger().error(
+                "Unable to apply replay snapshot game packet {} (playerListOnly={})",
+                static_cast<int>(packetId),
+                playerListOnly
+            );
+            return false;
+        }
         ++applied;
     }
     if (applied != 0) {
@@ -5865,14 +5880,20 @@ void ReplaySession::setMinecraftScreenModel(std::shared_ptr<MinecraftScreenModel
 void ReplaySession::onLevelJoined(Player& player) {
     if (!mActive) return;
     if (!isReplayLevel(player.getLevel())) {
-        getLogger().error("The replay world did not open; replay cancelled");
+        getLogger().error(
+            "The replay world did not open; replay cancelled (joinedLevelId={}, expectedLevelId={})",
+            player.getLevel().getLevelId(),
+            mReplayLevelId
+        );
         stop();
         return;
     }
 
     mReplayWorldJoined = true;
     mReplayPlayer      = &player;
-    (void)refreshReplayPlayer();
+    if (!refreshReplayPlayer()) {
+        getLogger().error("Replay player is unavailable immediately after joining the replay world");
+    }
 }
 
 void ReplaySession::onLevelStartJoin() {
