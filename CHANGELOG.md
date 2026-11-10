@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Players whose skin the server withheld are no longer dropped from the replay: snapshots fall back to the skin the player is rendered with, and player-list entries that still have none get the default skin.
 - Fixed custom block registration running twice when both replay-world hooks fired at once; blocks the client already has are no longer registered again.
 - Fixed video export reading the frame's draw count from the wrong place, which classified every frame as overlay-only.
+- Recordings now keep the recording player's own predicted sounds, such as hitting blocks, landing and strong attacks, so replays and exported audio no longer miss them.
 
 ## [0.4.0-mc26.40] - 2026-11-01
 
