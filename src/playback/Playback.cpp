@@ -337,6 +337,7 @@ bool Playback::disable() {
     exporting::applyExportEcoMode(false);
     record::Recorder::getInstance().stop();
     record::Recorder::getInstance().waitForExport();
+    record::Recorder::getInstance().releaseWorkerPool();
     if (!unhook()) {
         logger.error("Playback cannot disable because its runtime hooks could not be removed safely");
         return false;
