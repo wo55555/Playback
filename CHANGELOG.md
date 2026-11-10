@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - First-person follow now shows the followed player's arm swing and item-use animation, such as eating.
+- Fixed recordings being cancelled when the player changed dimensions.
+- Fixed block updates storing runtime-only network IDs instead of portable block network IDs.
+- Fixed entity name tags not updating during replay by recording actor-data packets.
 
 ## [0.4.0-mc26.10] - 2026-11-01
 
