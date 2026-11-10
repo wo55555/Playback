@@ -101,6 +101,7 @@ struct NetworkHookState {
     bool playerHotbar{};
     bool mobEquipment{};
     bool predictedSound{};
+    bool localSound{};
 
     [[nodiscard]] bool hudHandlersInstalled() const {
         return inventorySlot && inventoryContent && playerHotbar && mobEquipment;
@@ -112,13 +113,14 @@ struct NetworkHookState {
 
     [[nodiscard]] bool fastPathHandlersInstalled() const {
         return removeActor && setActorData && takeItemActor && actorEvent && levelEvent && updateBlock
-            && updateBlockSynced && updateSubChunkBlocks && addPlayer && playerList && playerSkin && predictedSound;
+            && updateBlockSynced && updateSubChunkBlocks && addPlayer && playerList && playerSkin && predictedSound
+            && localSound;
     }
 
     [[nodiscard]] bool fastPathHandlersRemoved() const {
         return !removeActor && !setActorData && !takeItemActor && !actorEvent && !levelEvent && !updateBlock
             && !updateBlockSynced && !updateSubChunkBlocks && !addPlayer && !playerList && !playerSkin
-            && !predictedSound;
+            && !predictedSound && !localSound;
     }
 
     [[nodiscard]] bool resourceHandlersInstalled() const {
@@ -640,6 +642,52 @@ LL_TYPE_INSTANCE_HOOK(
     );
 }
 
+using DimensionSoundFn = void (Level::*)(
+    DimensionType,
+    SharedTypes::Legacy::LevelSoundEvent,
+    Vec3 const&,
+    int,
+    ActorSoundIdentifier const&,
+    bool
+);
+
+// The client plays each actor's own sounds (steps, jumps) itself, so the local player's never arrive as packets.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackLocalSoundHook,
+    ll::memory::HookPriority::Normal,
+    Level,
+    static_cast<DimensionSoundFn>(&Level::$playSound),
+    void,
+    DimensionType                        dimension,
+    SharedTypes::Legacy::LevelSoundEvent type,
+    Vec3 const&                          pos,
+    int                                  data,
+    ActorSoundIdentifier const&          actor,
+    bool                                 isGlobal
+) {
+    if (!mIsClientSide) {
+        origin(dimension, type, pos, data, actor, isGlobal);
+        return;
+    }
+    auto const actorId       = actor.mActorId->rawID;
+    auto&      replaySession = ReplaySession::getInstance();
+    if (replaySession.isIsolatingReplayWorld()) {
+        // The recording already carries the recorded player's own sounds, so the client's copies would repeat them.
+        if (actorId == RecordedPlayerUniqueIdValue) return;
+        origin(dimension, type, pos, data, actor, isGlobal);
+        return;
+    }
+    origin(dimension, type, pos, data, actor, isGlobal);
+    auto& recorder = Recorder::getInstance();
+    if (!recorder.isActive() || recorder.isPaused()) return;
+    auto  client      = ll::service::getClientInstance();
+    auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
+    if (!localPlayer || actorId != localPlayer->getOrCreateUniqueID().rawID) return;
+    recorder.recordGamePacket(
+        LevelSoundEventPacket(LevelSoundEventPacketPayload(type, pos, data, actor, isGlobal, std::nullopt))
+    );
+}
+
 template <class Hook>
 bool installNetworkHook(bool& installed) {
     if (!installed) installed = Hook::hook() == 0;
@@ -699,9 +747,11 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackInventoryContentHook>(state.inventoryContent)
             && installNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar)
             && installNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment)
-            && installNetworkHook<PlaybackPredictedSoundHook>(state.predictedSound);
+            && installNetworkHook<PlaybackPredictedSoundHook>(state.predictedSound)
+            && installNetworkHook<PlaybackLocalSoundHook>(state.localSound);
     };
     auto removeAll = [&] {
+        removeNetworkHook<PlaybackLocalSoundHook>(state.localSound);
         removeNetworkHook<PlaybackPredictedSoundHook>(state.predictedSound);
         removeNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment);
         removeNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar);
