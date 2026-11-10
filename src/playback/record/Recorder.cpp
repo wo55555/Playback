@@ -1422,7 +1422,22 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         std::vector<PlayerListEntry>            identity;
         std::unordered_map<std::string, size_t> identityIndex;
         auto const hasSkin = [](PlayerListEntry const& entry) { return static_cast<bool>(entry.mSkin->mSkinImpl); };
+        std::unordered_map<std::string, Player const*> playersByUuid;
+        playersByUuid.emplace(playerUuid, finalPlayer);
+        level.forEachPlayer([&](Player& player) {
+            playersByUuid.emplace(player.getUuid().asString(), &player);
+            return true;
+        });
         auto const upsertIdentity = [&](PlayerListEntry entry) {
+            // A listed entry can lack its skin; fall back to the skin the player actor already renders with.
+            if (!hasSkin(entry)) {
+                auto const source = playersByUuid.find(entry.mUUID->asString());
+                if (source != playersByUuid.end()) {
+                    if (auto const& ownSkin = source->second->mSkin; ownSkin && static_cast<bool>(ownSkin->mSkinImpl)) {
+                        entry.mSkin->mSkinImpl = ownSkin->mSkinImpl;
+                    }
+                }
+            }
             auto const entryId = entry.mId->rawID;
             if (entry.mUUID->asString() == playerUuid || (entryId != 0 && entryId == playerUniqueId.rawID)) {
                 entry.mId   = *mRecordedLocalPlayerId;
