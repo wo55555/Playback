@@ -27,6 +27,7 @@
 #include "mc/entity/components/AbilitiesComponent.h"
 #include "mc/entity/components/ActorGameTypeComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
+#include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
@@ -339,6 +340,55 @@ private:
     GameType                mSaved{};
 };
 
+// The hand pass draws the observer, so the subject's swing and item-use state stands in for it during the pass.
+class ScopedHandAction {
+public:
+    ScopedHandAction(Player& observer, Player& subject) : mObserver(observer) {
+        mAttackAnim  = observer.mAttackAnim;
+        mOAttackAnim = observer.mOAttackAnim;
+        mSwingTime   = observer.mSwingTime;
+        mSwinging    = observer.mSwinging;
+        mItemInUse   = observer.mItemInUse.get();
+
+        observer.mAttackAnim  = static_cast<float>(subject.mAttackAnim);
+        observer.mOAttackAnim = static_cast<float>(subject.mOAttackAnim);
+        observer.mSwingTime   = static_cast<int>(subject.mSwingTime);
+        observer.mSwinging    = static_cast<bool>(subject.mSwinging);
+        observer.mItemInUse   = subject.mItemInUse.get();
+
+        auto& context = observer.getEntityContext();
+        if (auto current = context.tryGetComponent<ItemInUseComponent>()) mSavedUse = *current;
+        if (auto use = subject.getEntityContext().tryGetComponent<ItemInUseComponent>()) {
+            context.getOrAddComponent<ItemInUseComponent>() = *use;
+        } else if (mSavedUse) {
+            context.removeComponent<ItemInUseComponent>();
+        }
+    }
+
+    ~ScopedHandAction() {
+        mObserver.mAttackAnim  = mAttackAnim;
+        mObserver.mOAttackAnim = mOAttackAnim;
+        mObserver.mSwingTime   = mSwingTime;
+        mObserver.mSwinging    = mSwinging;
+        mObserver.mItemInUse   = mItemInUse;
+
+        auto& context = mObserver.getEntityContext();
+        if (mSavedUse) context.getOrAddComponent<ItemInUseComponent>() = *mSavedUse;
+        else context.removeComponent<ItemInUseComponent>();
+    }
+
+    ScopedHandAction(ScopedHandAction const&)            = delete;
+    ScopedHandAction& operator=(ScopedHandAction const&) = delete;
+
+private:
+    Player&                           mObserver;
+    float                             mAttackAnim{};
+    float                             mOAttackAnim{};
+    int                               mSwingTime{};
+    bool                              mSwinging{};
+    PlayerItemInUse                   mItemInUse;
+    std::optional<ItemInUseComponent> mSavedUse;
+};
 LL_TYPE_INSTANCE_HOOK(
     HandItemInHandHook,
     ll::memory::HookPriority::High,
@@ -360,6 +410,7 @@ LL_TYPE_INSTANCE_HOOK(
     player.setOffhandSlot(subject->getOffhandSlot());
     ScopedHandPass         pass(*subject);
     ScopedObserverGameType gameType(player, *subject);
+    ScopedHandAction       action(player, *subject);
     ScopedHandSway         sway(*this, player, *subject);
     origin(screenContext, player);
     player.setCarriedItem(savedCarried);

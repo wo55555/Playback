@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The camera switch track was removed; switch track data in earlier editor projects is dropped. The project format version stays at `1`.
 - Dropdowns, popups and context menus in the editor now open under the control that opened them, with menu padding.
 
+### Fixed
+
+- First-person follow now shows the followed player's arm swing and item-use animation, such as eating.
+
 ## [0.3.3-mc26.60] - 2026-11-03
 
 ### Changed
