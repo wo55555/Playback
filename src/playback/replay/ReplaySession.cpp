@@ -111,6 +111,7 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/actor/player/TrustedSkinFlag.h"
 #include "mc/world/attribute/Attribute.h"
 #include "mc/world/attribute/AttributeData.h"
 #include "mc/world/attribute/AttributeInstance.h"
@@ -5288,17 +5289,18 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 bool const recorder = mRecordedLocalPlayerId && entry.mId->rawID == mRecordedLocalPlayerId->rawID;
                 noteReplayIdentity(std::move(uuid), *entry.mName, ActorUniqueID{entry.mId->rawID}, recorder);
             }
-            // Servers may withhold a player's skin; drop only that entry so the rest of the list still spawns.
-            auto removed = std::erase_if(entries, [](PlayerListEntry const& entry) {
-                if (entry.mSkin->mSkinImpl) return false;
-                getLogger().debug("Skipping replay player-list entry '{}' without skin data", *entry.mName);
-                return true;
-            });
-            if (entries.empty()) {
-                if (removed != 0) getLogger().warn("Skipping a replay player-list packet with no usable entries");
-                return true;
-            }
+            // Servers may withhold a player's skin; give that entry the default skin instead of dropping the player.
             for (auto& entry : entries) {
+                if (!entry.mSkin->mSkinImpl) {
+                    getLogger().debug(
+                        "Replay player-list entry '{}' has no skin data; using the default skin",
+                        *entry.mName
+                    );
+                    *entry.mSkin = SerializedSkinRef{};
+                    if (!entry.mSkin->mSkinImpl) continue;
+                    // 26.10 does not export createTrustedDefaultSerializedSkin: the default skin marked as trusted.
+                    entry.mSkin->mSkinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
+                }
                 entry.mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
             }
         } else if (playerList.mAction == PlayerListPacketType::Remove) {

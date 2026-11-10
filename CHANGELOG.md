@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - First-person follow now shows the followed player's arm swing and item-use animation, such as eating.
-- Snapshots now fall back to the skin a player is rendered with when the server withheld it from the player list.
+- Players whose skin the server withheld are no longer dropped from the replay: snapshots fall back to the skin the player is rendered with, and player-list entries that still have none get the default skin.
 - Fixed custom block registration running twice when both replay-world hooks fired at once; blocks the client already has are no longer registered again.
 - Recorded entities no longer raise the game's runtime-id allocator, which could make the game discard the real local player.
 - Fixed recordings being cancelled when the player changed dimensions.
