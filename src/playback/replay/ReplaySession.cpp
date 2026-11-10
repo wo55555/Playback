@@ -2953,6 +2953,8 @@ void ReplaySession::logRecordedItemRegistryApplied(ItemRegistryPacket const& pac
 }
 
 void ReplaySession::applyRecordedBlockRegistry() {
+    // The check and the registration share a lock so the two hooks cannot both register.
+    std::lock_guard lock(mRecordedBlockRegistryMutex);
     if (mRecordedBlockRegistryApplied) return;
     auto startGame = mReplayStartGame;
     if (!startGame) return;
@@ -2999,6 +3001,9 @@ void ReplaySession::applyRecordedBlockRegistry() {
 
         size_t registered = 0;
         for (auto const& [name, tag] : properties) {
+            // Blocks the client already has are kept; only the recording's custom blocks are registered here.
+            if (registry.lookupByName(HashedString{name}, false)) continue;
+
             auto const* definition = findDefinition(name);
             if (!definition) continue;
 
