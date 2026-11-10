@@ -123,7 +123,6 @@
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/item/registry/ItemRegistryManager.h"
 #include "mc/world/item/registry/ItemRegistryRef.h"
-#include "mc/world/level/ActorRuntimeIDManager.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/BlockSource.h"
 #include "mc/world/level/DimensionManager.h"
@@ -5356,10 +5355,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             return true;
         }
 
-        auto runtimeIdManager = level.getActorRuntimeIDManager();
-        if (runtimeIdManager->mLastRuntimeID->rawID < runtimeId.rawID) {
-            runtimeIdManager->mLastRuntimeID = runtimeId;
-        }
+        // Recorded IDs never raise the runtime-id allocator: that made native code drop the real local player.
     }
 
     // Must also run while chunks are streaming: a seek keeps applying block updates between batches.
