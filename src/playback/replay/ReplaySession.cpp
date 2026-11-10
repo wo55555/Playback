@@ -94,6 +94,7 @@
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdatePlayerGameTypePacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/network/packet/UpdateSubChunkNetworkBlockInfo.h"
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/resources/MinEngineVersion.h"
 #include "mc/resources/ResourcePack.h"
@@ -235,7 +236,11 @@ constexpr auto             CenterChunkInjectionBudget = std::chrono::millisecond
 constexpr auto             OuterChunkInjectionBudget  = std::chrono::milliseconds(4);
 constexpr auto             SnapshotGamePacketBudget   = std::chrono::milliseconds(2);
 // Every client tick a seek spills into is one more frame of visible catch-up, so land it in as few as possible.
-constexpr auto       SeekCatchUpBudget = std::chrono::milliseconds(2000);
+constexpr auto SeekCatchUpBudget = std::chrono::milliseconds(2000);
+// An interactive seek leaves the rest of each client tick to the editor, so it lands over a few frames instead of one.
+constexpr auto SeekFrameBudget = std::chrono::milliseconds(100);
+// Snapshot entities a seek waits on drain in one pass of up to this long instead of a few per client tick.
+constexpr auto       SeekEntityPacketBudget = std::chrono::milliseconds(50);
 constexpr std::array PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f};
 // A seek keeps only the particle events from this many ticks before its landing, and ticks the level once per replay
 // tick across them. Emitters such as lingering clouds are spawned by actor ticks and live about 27 ticks.
@@ -885,8 +890,9 @@ void ReplaySession::clearReplayData() {
     mSeekParticlesStale   = false;
     mChunkCompletionObserved.store(false, std::memory_order_release);
     mReplayDimension.store(nullptr, std::memory_order_release);
-    mInitialSnapshotApplied  = false;
-    mChunkInjectionPending   = false;
+    mInitialSnapshotApplied = false;
+    mChunkInjectionPending  = false;
+    clearSeekChunkDeferral();
     mChunkCenterLogKey.clear();
     mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mIsProcessingSnapshot    = false;
@@ -2373,6 +2379,8 @@ void ReplaySession::beginSeek(int targetTick) {
     mIsPaused                = true;
     mPlaybackTickAccumulator = 0.0f;
     mSeekTargetTick          = targetTick;
+    mSeekWindowEntered       = false;
+    mSeekTickResuming        = false;
     mSnapMovementDuringSeek  = !exportSeek || mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
     mSeekParticlesCleared    = false;
     mSeekParticlesStale      = false;
@@ -2489,6 +2497,11 @@ void ReplaySession::tick() {
             if (mPendingSnapshotApply || mPendingReplayDimension) return;
         }
         if (mPendingSnapshotApply || mPendingReplayDimension) return;
+        // A seek cleared from outside, such as by an export, leaves nothing to land the held chunks.
+        if (mSeekChunksDeferred && mSeekTargetTick < 0) {
+            flushSeekChunks();
+            if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
+        }
         // Yielding the tick that finishes a snapshot lets the client rebuild its players before catch-up resumes.
         if (mChunkInjectionPending) return;
 
@@ -2497,19 +2510,45 @@ void ReplaySession::tick() {
         refreshReplayEntityList();
 
         if (mSeekTargetTick >= 0) {
-            auto const deadline = std::chrono::steady_clock::now() + SeekCatchUpBudget;
+            auto const catchUpStart     = std::chrono::steady_clock::now();
+            auto const budget           = mExportSeekRequested ? SeekCatchUpBudget : SeekFrameBudget;
+            auto const deadline         = catchUpStart + budget;
+            bool       advancedThisCall = false;
             while (mCurrentTick < mSeekTargetTick) {
                 // Draining here instead of returning keeps the rest of this client tick usable for replay.
                 if (mChunkInjectionPending) {
-                    if (!tryFinishChunkInjection(deadline)) {
+                    auto const injectDeadline =
+                        mExportSeekRequested
+                            ? deadline
+                            : std::min(deadline, std::chrono::steady_clock::now() + OuterChunkInjectionBudget * 4);
+                    if (!tryFinishChunkInjection(injectDeadline)) {
                         if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                         break;
                     }
                     if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                 }
                 if (mPendingSnapshotApply || mPendingReplayDimension) break;
+                // The terrain loaded so far is the landing's base, so it lands once as the window opens. Chunks sent
+                // inside the window stay held for the final flush instead of each stopping catch-up for a frame.
+                if (!mSeekWindowEntered && mCurrentTick >= mSeekTargetTick - SeekParticleWindowTicks) {
+                    // The flush and the plan after it each take about a frame's budget, so a frame already half spent
+                    // leaves them to the next one.
+                    auto const halfSpent = [&] {
+                        return std::chrono::steady_clock::now() - catchUpStart >= budget / 2;
+                    };
+                    if (mSeekChunksDeferred && advancedThisCall && !mExportSeekRequested && halfSpent()) break;
+                    mSeekWindowEntered = true;
+                    if (mSeekChunksDeferred) {
+                        flushSeekChunks();
+                        if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
+                        if (!mExportSeekRequested && halfSpent()) break;
+                        continue;
+                    }
+                }
                 refreshReplayPlayerRoster();
                 refreshReplaySubjectBinding();
+                // A tick resumed after its entity's chunks landed already ticked the level the first time through.
+                bool const resumingTick = std::exchange(mSeekTickResuming, false);
                 // Export seeks keep the clear at the landing frame so their first frames stay unchanged.
                 bool const inParticleWindow =
                     !mExportSeekRequested && mCurrentTick >= mSeekTargetTick - SeekParticleWindowTicks;
@@ -2525,21 +2564,28 @@ void ReplaySession::tick() {
                         syncLevelSimPause(false);
                     }
                     // Like normal playback the level ticks before each replay tick, so the landing is not aged past it.
-                    if (runtime::runNativeLevelTick()) ageReplayParticles();
-                    else mSeekParticlesStale = true;
+                    if (!resumingTick) {
+                        if (runtime::runNativeLevelTick()) ageReplayParticles();
+                        else mSeekParticlesStale = true;
+                    }
                 } else {
                     mSeekParticlesStale = true;
                 }
                 if (!advanceReplayTick(false)) {
                     getLogger().warn("Replay ended at tick {} while seeking to tick {}", mCurrentTick, mSeekTargetTick);
+                    flushSeekChunks();
+                    if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                     finishSeek();
                     return;
                 }
+                advancedThisCall = true;
                 if (std::chrono::steady_clock::now() >= deadline) break;
             }
 
             if (mCurrentTick >= mSeekTargetTick) {
                 getLogger().debug("Replay seek completed at tick {}", mCurrentTick);
+                flushSeekChunks();
+                if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                 finishSeek();
                 // The next level tick runs before the next replay tick, so a paused landing is frozen from here.
                 levelFreeze.freeze = mIsPaused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive;
@@ -2725,8 +2771,9 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mInjectingPacket.store(nullptr, std::memory_order_release);
     mChunkCompletionObserved.store(false, std::memory_order_release);
     mReplayDimension.store(nullptr, std::memory_order_release);
-    mInitialSnapshotApplied  = false;
-    mChunkInjectionPending   = false;
+    mInitialSnapshotApplied = false;
+    mChunkInjectionPending  = false;
+    clearSeekChunkDeferral();
     mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mChunkInjectionTicks     = 0;
     mChunkInjectionIdleTicks = 0;
@@ -3303,6 +3350,8 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         return;
     }
 
+    // The snapshot resends every column it covers, which supersedes chunks a seek still holds.
+    clearSeekChunkDeferral();
     mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
     if (!clearRecordedEntities()) {
@@ -3708,6 +3757,7 @@ void ReplaySession::completeReplayDimensionTransition() {
 }
 
 void ReplaySession::resetDimensionScopedReplayState() {
+    clearSeekChunkDeferral();
     mChunkInjectionPending      = false;
     mChunkInjectionPlanPrepared = false;
     mApplyingChunkSnapshot      = false;
@@ -4053,9 +4103,12 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 
     mDirectSnapshotColumns.clear();
     mDirectLevelChunkIndices.clear();
-    auto& chunkSource = replayDimension->getChunkSource();
+    bool const seekFlushedBatch = mSeekFlushedBatch;
+    auto&      chunkSource      = replayDimension->getChunkSource();
     for (auto const& [pos, identity] : targetColumns) {
         if (mReusableSnapshotColumns.contains(pos) || identity.levelChunkIndex < 0) continue;
+        // Applied directly, a merged seek batch left the loaded columns of a dimension it just entered empty.
+        if (seekFlushedBatch) continue;
         if (!requestModeLevelChunks.contains(pos)) {
             continue;
         }
@@ -4172,8 +4225,15 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_clock::time_point> catchUpDeadline) {
     if (!mChunkInjectionPending) return true;
     if (mSnapshotGamePacketPhase == SnapshotGamePacketPhase::WaitingAfterPlayerList) {
-        auto const deadline = std::chrono::steady_clock::now() + SnapshotGamePacketBudget;
-        if (!flushPendingSnapshotGamePackets(false, SNAPSHOT_GAME_PACKETS_PER_TICK, deadline)) {
+        // A seek is waiting on these, so it drains them in one pass instead of spreading them over client ticks.
+        bool const seeking = mSeekTargetTick >= 0 && !mExportSeekRequested;
+        auto const deadline =
+            std::chrono::steady_clock::now() + (seeking ? SeekEntityPacketBudget : SnapshotGamePacketBudget);
+        if (!flushPendingSnapshotGamePackets(
+                false,
+                seeking ? std::numeric_limits<size_t>::max() : SNAPSHOT_GAME_PACKETS_PER_TICK,
+                deadline
+            )) {
             mReplayFailed = true;
             return false;
         }
@@ -4283,7 +4343,9 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
 }
 
 bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_point deadline) {
-    size_t processed = 0;
+    size_t       processed = 0;
+    size_t const inFlightLimit =
+        mSeekTargetTick >= 0 && !mExportSeekRequested ? SEEK_LEVEL_CHUNKS_IN_FLIGHT : MAX_LEVEL_CHUNKS_IN_FLIGHT;
     while (mPendingLevelChunkCursor < mPendingLevelChunkIndices.size()) {
         if (processed != 0 && std::chrono::steady_clock::now() >= deadline) {
             break;
@@ -4293,7 +4355,7 @@ bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_poi
         bool const direct = mDirectLevelChunkIndices.contains(index);
         if (!direct) {
             std::scoped_lock lock(mPendingLevelChunksMutex);
-            if (mPendingLevelChunks.size() >= MAX_LEVEL_CHUNKS_IN_FLIGHT) {
+            if (mPendingLevelChunks.size() >= inFlightLimit) {
                 break;
             }
         }
@@ -4495,6 +4557,7 @@ bool ReplaySession::finishChunkInjection() {
     mPendingLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
     mPendingSubChunkPackets.clear();
+    mSeekFlushedBatch = false;
     mCenterChunkPositions.clear();
     mRemainingSubChunkPacketsByColumn.clear();
     {
@@ -4530,6 +4593,11 @@ bool ReplaySession::finishChunkInjection() {
         mDirectSubChunkPackets   = 0;
         mDirectSubChunkEntries   = 0;
         mChunkInjectionPending   = false;
+        // Block updates held behind a merged seek batch go on top of the data that just landed.
+        if (!mSeekReleasedPackets.empty() && !releaseSeekPackets()) {
+            mReplayFailed = true;
+            return false;
+        }
         return true;
     }
 
@@ -4642,6 +4710,8 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
         }
 
         if (mPendingReplayDimension) return true;
+        // The rest of the tick resumes from the same action once the batch an entity needs has landed.
+        if (mSeekTickInterrupted) return true;
 
         if (mReplayFailed) throw std::runtime_error("Unable to apply a replay action");
     }
@@ -4697,6 +4767,7 @@ void ReplaySession::handleLevelChunkCached(int index) {
         mReplayFailed = true;
         return;
     }
+    if (deferSeekChunk(index, true)) return;
     if (!mChunkInjectionPending) {
         mChunkInjectionTicks     = 0;
         mChunkInjectionIdleTicks = 0;
@@ -4713,6 +4784,7 @@ void ReplaySession::handleSubChunkCached(int index) {
         mReplayFailed = true;
         return;
     }
+    if (deferSeekChunk(index, false)) return;
     if (!mChunkInjectionPending) {
         mChunkInjectionTicks     = 0;
         mChunkInjectionIdleTicks = 0;
@@ -4722,6 +4794,263 @@ void ReplaySession::handleSubChunkCached(int index) {
     mPendingSubChunkIndices.emplace_back(index);
     mChunkInjectionPending      = true;
     mChunkInjectionPlanPrepared = false;
+}
+
+// Each timeline batch stops catch-up until the client finishes loading it, and a seek crosses many batches that
+// re-send the same columns. Held back, they load as one batch with only the latest data per column.
+bool ReplaySession::seekChunkDeferralOpen() const {
+    if (mSeekTargetTick < 0 || mExportSeekRequested || mIsProcessingSnapshot || mApplyingChunkSnapshot
+        || mPendingReplayDimension) {
+        return false;
+    }
+    // A batch already loading is left to finish; holding starts again once it lands.
+    return mSeekChunksDeferred || !mChunkInjectionPending;
+}
+
+bool ReplaySession::deferSeekChunk(int index, bool levelChunk) {
+    // A deferral cannot outlive the conditions that close it, or the held data would land over newer packets.
+    if (mSeekChunksDeferred
+        && (mExportSeekRequested || mIsProcessingSnapshot || mApplyingChunkSnapshot || mPendingReplayDimension)) {
+        flushSeekChunks();
+        if (mReplayFailed) return false;
+    }
+    if (!seekChunkDeferralOpen()) return false;
+    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+    if (!replayDimension) return false;
+
+    auto packet = MinecraftPackets::createPacket(
+        levelChunk ? MinecraftPacketIds::FullChunkData : MinecraftPacketIds::SubChunkPacket
+    );
+    if (!packet) return false;
+    ReadOnlyBinaryStream stream(mChunkPackets[static_cast<size_t>(index)], false);
+    // The normal path reports packets that do not decode.
+    if (!packet->read(stream) || !stream.ensureReadCompleted() || !packet->mHandler) return false;
+
+    auto const sequence = ++mSeekDeferredSequence;
+    if (levelChunk) {
+        auto const& chunk   = static_cast<LevelChunkPacket const&>(*packet);
+        bool const  skipped = static_cast<bool>(chunk.mCacheEnabled)
+                          || static_cast<DimensionType const&>(chunk.mDimensionId) != replayDimension->getDimensionId();
+        ChunkPos const pos = *chunk.mPos;
+        mSeekDeferredLevelChunkPackets.push_back(SeekDeferredLevelChunk{index, sequence, pos, skipped});
+        if (!skipped) {
+            mSeekLatestLevelChunks.insert_or_assign(pos, sequence);
+            if (!static_cast<bool>(chunk.mClientNeedsToRequestSubchunks)) {
+                mSeekLatestBlockLevelChunks.insert_or_assign(pos, sequence);
+            }
+        }
+    } else {
+        auto const& subChunk = static_cast<SubChunkPacket const&>(*packet);
+        bool const  skipped =
+            static_cast<bool>(subChunk.mCacheEnabled)
+            || static_cast<DimensionType const&>(subChunk.mDimensionType) != replayDimension->getDimensionId();
+        SeekDeferredSubChunk deferred{index, sequence, skipped, {}};
+        if (!skipped) {
+            auto const& center = *subChunk.mCenterPos;
+            for (auto const& entry : *subChunk.mSubChunkData) {
+                auto const&    offset = *entry.mSubChunkPosOffset;
+                ChunkPos const column{center.x + static_cast<int>(offset.mX), center.z + static_cast<int>(offset.mZ)};
+                int const      y          = center.y + static_cast<int>(offset.mY);
+                auto const     result     = static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult);
+                bool const     successful = isSuccessfulSubChunkResult(result);
+                deferred.entries.push_back(SeekDeferredSubChunkEntry{column, y, successful});
+                if (successful) mSeekLatestSubChunks[column].insert_or_assign(y, sequence);
+            }
+        }
+        mSeekDeferredSubChunkPackets.push_back(std::move(deferred));
+    }
+    mSeekChunksDeferred = true;
+    return true;
+}
+
+// A block update for a held column would land under the older chunk data, so it waits for that data.
+bool ReplaySession::holdSeekBlockPacket(Packet const& packet, std::string_view payload) {
+    std::optional<BlockPos> target;
+    switch (packet.getId()) {
+    case MinecraftPacketIds::UpdateBlock:
+        target = *static_cast<UpdateBlockPacket const&>(packet).mPos;
+        break;
+    case MinecraftPacketIds::UpdateBlockSynced:
+        target = *static_cast<UpdateBlockSyncedPacket const&>(packet).mPos;
+        break;
+    case MinecraftPacketIds::UpdateSubChunkBlocks: {
+        // The entries carry block positions of one sub chunk; the header position is not guaranteed to be one.
+        auto const& subChunk = static_cast<UpdateSubChunkBlocksPacket const&>(packet);
+        auto const& changed  = *subChunk.mBlocksChanged;
+        if (!changed.mStandards->empty()) target = *changed.mStandards->front().mPos;
+        else if (!changed.mExtras->empty()) target = *changed.mExtras->front().mPos;
+        else target = *subChunk.mSubChunkBlockPosition;
+        break;
+    }
+    case MinecraftPacketIds::BlockActorData:
+        target = *static_cast<BlockActorDataPacket const&>(packet).mPos;
+        break;
+    case MinecraftPacketIds::TileEvent:
+        target = *static_cast<BlockEventPacket const&>(packet).mPos;
+        break;
+    default:
+        break;
+    }
+    if (!target) return false;
+
+    ChunkPos const column{target->x >> 4, target->z >> 4};
+    int const      y    = target->y >> 4;
+    bool           held = mSeekLatestLevelChunks.contains(column);
+    if (!held) {
+        auto const subChunks = mSeekLatestSubChunks.find(column);
+        held                 = subChunks != mSeekLatestSubChunks.end() && subChunks->second.contains(y);
+    }
+    if (!held) return false;
+
+    // A dropped update still leaves the column changed since the snapshot that a later seek may reuse.
+    invalidateSnapshotColumns(packet);
+    mSeekHeldBlockPackets.push_back(
+        SeekHeldBlockPacket{packet.getId(), std::string(payload), column, y, ++mSeekDeferredSequence}
+    );
+    return true;
+}
+
+void ReplaySession::flushSeekChunks() {
+    if (!mSeekChunksDeferred) return;
+
+    // Data older than a later packet for the same place is what the client would have overwritten anyway.
+    auto const levelChunkAfter = [this](ChunkPos const& column, uint64_t sequence) {
+        auto const latest = mSeekLatestLevelChunks.find(column);
+        return latest != mSeekLatestLevelChunks.end() && latest->second > sequence;
+    };
+    auto const blockLevelChunkAfter = [this](ChunkPos const& column, uint64_t sequence) {
+        auto const latest = mSeekLatestBlockLevelChunks.find(column);
+        return latest != mSeekLatestBlockLevelChunks.end() && latest->second > sequence;
+    };
+    auto const subChunkAfter = [this](ChunkPos const& column, int y, uint64_t sequence) {
+        auto const subChunks = mSeekLatestSubChunks.find(column);
+        if (subChunks == mSeekLatestSubChunks.end()) return false;
+        auto const latest = subChunks->second.find(y);
+        return latest != subChunks->second.end() && latest->second > sequence;
+    };
+
+    std::vector<int> levelIndices;
+    levelIndices.reserve(mSeekDeferredLevelChunkPackets.size());
+    for (auto const& deferred : mSeekDeferredLevelChunkPackets) {
+        if (!deferred.passthrough && levelChunkAfter(deferred.pos, deferred.sequence)) continue;
+        levelIndices.push_back(deferred.index);
+    }
+
+    std::vector<int> subIndices;
+    subIndices.reserve(mSeekDeferredSubChunkPackets.size());
+    for (auto const& deferred : mSeekDeferredSubChunkPackets) {
+        if (deferred.passthrough) {
+            subIndices.push_back(deferred.index);
+            continue;
+        }
+        // Most packets are either fully current or fully replaced, so only a partial overlap is decoded again.
+        size_t successful = 0;
+        size_t superseded = 0;
+        for (auto const& place : deferred.entries) {
+            if (!place.successful) continue;
+            ++successful;
+            if (blockLevelChunkAfter(place.column, deferred.sequence)
+                || subChunkAfter(place.column, place.subChunk, deferred.sequence)) {
+                ++superseded;
+            }
+        }
+        if (superseded == 0 && successful > 0) {
+            subIndices.push_back(deferred.index);
+            continue;
+        }
+        if (superseded == successful) continue;
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
+        if (!packet) {
+            mReplayFailed = true;
+            return;
+        }
+        ReadOnlyBinaryStream stream(mChunkPackets[static_cast<size_t>(deferred.index)], false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            mReplayFailed = true;
+            return;
+        }
+        auto& subChunk = static_cast<SubChunkPacket&>(*packet);
+        auto& entries  = *subChunk.mSubChunkData;
+        if (entries.size() != deferred.entries.size()) {
+            mReplayFailed = true;
+            return;
+        }
+        std::vector<SubChunkPacket::SubChunkPacketData> kept;
+        kept.reserve(entries.size() - superseded);
+        for (size_t i = 0; i < entries.size(); ++i) {
+            auto const& place = deferred.entries[i];
+            if (place.successful
+                && (blockLevelChunkAfter(place.column, deferred.sequence)
+                    || subChunkAfter(place.column, place.subChunk, deferred.sequence))) {
+                continue;
+            }
+            kept.push_back(entries[i]);
+        }
+        entries = std::move(kept);
+        PlaybackBuffer filtered;
+        subChunk.write(filtered);
+        subIndices.push_back(cacheInlineChunkPacket(MinecraftPacketIds::SubChunkPacket, std::move(filtered.mBuffer)));
+    }
+
+    for (auto& held : mSeekHeldBlockPackets) {
+        if (blockLevelChunkAfter(held.column, held.sequence)
+            || subChunkAfter(held.column, held.subChunk, held.sequence)) {
+            continue;
+        }
+        mSeekReleasedPackets.push_back(SeekReleasedPacket{held.id, std::move(held.payload), false});
+    }
+
+    mSeekChunksDeferred = false;
+    mSeekDeferredLevelChunkPackets.clear();
+    mSeekDeferredSubChunkPackets.clear();
+    mSeekLatestLevelChunks.clear();
+    mSeekLatestBlockLevelChunks.clear();
+    mSeekLatestSubChunks.clear();
+    mSeekHeldBlockPackets.clear();
+
+    if (levelIndices.empty() && subIndices.empty()) {
+        if (!releaseSeekPackets()) mReplayFailed = true;
+        return;
+    }
+    if (!mChunkInjectionPending) {
+        mChunkInjectionTicks     = 0;
+        mChunkInjectionIdleTicks = 0;
+        mCenterChunksReady       = false;
+        mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    }
+    // The plan lets a later index win per column, and anything already queued arrived after these were held.
+    mPendingLevelChunkIndices.insert(mPendingLevelChunkIndices.begin(), levelIndices.begin(), levelIndices.end());
+    mPendingSubChunkIndices.insert(mPendingSubChunkIndices.begin(), subIndices.begin(), subIndices.end());
+    mSeekFlushedBatch           = true;
+    mChunkInjectionPending      = true;
+    mChunkInjectionPlanPrepared = false;
+}
+
+bool ReplaySession::releaseSeekPackets() {
+    mSeekTickResuming    = mSeekTickInterrupted;
+    mSeekTickInterrupted = false;
+    auto packets         = std::move(mSeekReleasedPackets);
+    mSeekReleasedPackets.clear();
+    for (auto const& packet : packets) {
+        if (!applyGamePacket(packet.id, packet.payload, packet.recordedLocalPlayer)) return false;
+    }
+    return true;
+}
+
+void ReplaySession::clearSeekChunkDeferral() {
+    mSeekChunksDeferred   = false;
+    mSeekDeferredSequence = 0;
+    mSeekDeferredLevelChunkPackets.clear();
+    mSeekDeferredSubChunkPackets.clear();
+    mSeekLatestLevelChunks.clear();
+    mSeekLatestBlockLevelChunks.clear();
+    mSeekLatestSubChunks.clear();
+    mSeekHeldBlockPackets.clear();
+    mSeekReleasedPackets.clear();
+    mSeekTickInterrupted = false;
+    mSeekTickResuming    = false;
+    mSeekWindowEntered   = false;
+    mSeekFlushedBatch    = false;
 }
 
 int ReplaySession::cacheInlineChunkPacket(MinecraftPacketIds packetId, std::string payload) {
@@ -5346,28 +5675,33 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     ActorUniqueID  entityId{};
     ActorRuntimeID runtimeId{};
+    Vec3           entityPosition{};
     bool           addsEntity = true;
     switch (packetId) {
     case MinecraftPacketIds::AddActor: {
         auto const& addActor = static_cast<AddActorPacket const&>(*packet);
         entityId             = *addActor.mEntityId;
         runtimeId            = *addActor.mRuntimeId;
+        entityPosition       = *addActor.mPos;
         break;
     }
     case MinecraftPacketIds::AddItemActor: {
         auto const& addItem = static_cast<AddItemActorPacket const&>(*packet);
         entityId            = *addItem.mId;
         runtimeId           = *addItem.mRuntimeId;
+        entityPosition      = *addItem.mPos;
         break;
     }
     case MinecraftPacketIds::AddPainting: {
         auto const& addPainting = static_cast<AddPaintingPacket const&>(*packet);
         entityId                = *addPainting.mEntityId;
         runtimeId               = *addPainting.mRuntimeId;
+        entityPosition          = *addPainting.mPos;
         break;
     }
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
+        entityPosition  = *addPlayer.mPos;
         if (recordedLocalPlayer && mReplayPlayer && *addPlayer.mName == "__playback_" + addPlayer.mUuid->asString()) {
             // Older snapshots kept the original name in the player list under the synthetic UUID.
             auto const& entries = mReplayPlayer->getLevel().getPlayerList();
@@ -5412,6 +5746,32 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         }
 
         // Recorded IDs never raise the runtime-id allocator: that made native code drop the real local player.
+    }
+
+    if (mSeekChunksDeferred && !mIsProcessingSnapshot) {
+        if (holdSeekBlockPacket(*packet, payload)) return true;
+        if (addsEntity) {
+            // An entity added to a column the client has not loaded may never be placed, so its chunk lands first.
+            ChunkPos const column{
+                static_cast<int>(std::floor(entityPosition.x)) >> 4,
+                static_cast<int>(std::floor(entityPosition.z)) >> 4
+            };
+            auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+            if (replayDimension && mSeekLatestLevelChunks.contains(column)) {
+                auto chunk = replayDimension->getChunkSource().getExistingChunk(column);
+                if (!chunk || chunk->mIsEmptyClientChunk
+                    || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+                    flushSeekChunks();
+                    if (mReplayFailed) return false;
+                    mSeekReleasedPackets.push_back(
+                        SeekReleasedPacket{packetId, std::string(payload), recordedLocalPlayer}
+                    );
+                    mSeekTickInterrupted = mChunkInjectionPending;
+                    if (!mChunkInjectionPending) return releaseSeekPackets();
+                    return true;
+                }
+            }
+        }
     }
 
     // Must also run while chunks are streaming: a seek keeps applying block updates between batches.
@@ -5597,9 +5957,15 @@ void ReplaySession::invalidateSnapshotColumns(Packet const& packet) {
     case MinecraftPacketIds::UpdateBlockSynced:
         invalidate(*static_cast<UpdateBlockSyncedPacket const&>(packet).mPos);
         break;
-    case MinecraftPacketIds::UpdateSubChunkBlocks:
-        invalidate(*static_cast<UpdateSubChunkBlocksPacket const&>(packet).mSubChunkBlockPosition);
+    case MinecraftPacketIds::UpdateSubChunkBlocks: {
+        auto const& subChunk = static_cast<UpdateSubChunkBlocksPacket const&>(packet);
+        auto const& changed  = *subChunk.mBlocksChanged;
+        invalidate(*subChunk.mSubChunkBlockPosition);
+        for (auto const* blocks : {&*changed.mStandards, &*changed.mExtras}) {
+            for (auto const& info : *blocks) invalidate(*info.mPos);
+        }
         break;
+    }
     case MinecraftPacketIds::BlockActorData:
         invalidate(*static_cast<BlockActorDataPacket const&>(packet).mPos);
         break;
