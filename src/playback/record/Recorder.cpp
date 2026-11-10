@@ -31,6 +31,8 @@
 #include "mc/network/packet/AddItemActorPacket.h"
 #include "mc/network/packet/AddPlayerPacket.h"
 #include "mc/network/packet/AnimatePacket.h"
+#include "mc/network/packet/BlockActorDataPacket.h"
+#include "mc/network/packet/BlockEventPacket.h"
 #include "mc/network/packet/ChangeDimensionPacket.h"
 #include "mc/network/packet/ChangeEntityScore.h"
 #include "mc/network/packet/ChangeFakePlayerScore.h"
@@ -115,9 +117,9 @@
 #include <filesystem>
 #include <format>
 #include <functional>
-#include <future>
 #include <iomanip>
 #include <iterator>
+#include <latch>
 #include <limits>
 #include <memory>
 #include <random>
@@ -148,6 +150,49 @@ constexpr auto DimensionChangeBarrierTimeout = std::chrono::milliseconds{15000};
 constexpr auto ChunkRotationBarrierTimeout   = std::chrono::milliseconds{8000};
 constexpr auto InitialSnapshotBarrierTimeout = std::chrono::milliseconds{2000};
 
+// Client thread time one rotation slice may block a tick for.
+constexpr uint64_t RotationSliceBudgetNs = 8'000'000;
+
+uint64_t steadyNowNs() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count()
+    );
+}
+
+uint64_t mixFingerprint(uint64_t hash, uint64_t value) {
+    return hash ^ (value + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2));
+}
+
+uint64_t packDirtyTicks(DirtyTicksCounter const& counter) {
+    return static_cast<uint32_t>(counter.totalTime) | (uint64_t{static_cast<uint32_t>(counter.lastChange)} << 32);
+}
+
+// Engine state that moves when a subchunk's blocks change or its block storage is replaced.
+uint64_t fingerprintSubChunks(LevelChunk const& chunk) {
+    auto const& subChunks = *chunk.mSubChunks;
+    uint64_t    hash      = subChunks.size();
+    for (auto const& subChunk : subChunks) {
+        auto const& blocks = subChunk.mBlocksReadPtr;
+        hash               = mixFingerprint(hash, packDirtyTicks(*subChunk.mDirtyTicksCounter));
+        hash               = mixFingerprint(hash, static_cast<uint64_t>(subChunk.mSubChunkState));
+        hash               = mixFingerprint(hash, reinterpret_cast<uintptr_t>(blocks[0]));
+        hash               = mixFingerprint(hash, reinterpret_cast<uintptr_t>(blocks[1]));
+        hash               = mixFingerprint(hash, subChunk.mHash);
+        hash               = mixFingerprint(hash, static_cast<uint64_t>(subChunk.mHashDirty));
+        hash               = mixFingerprint(hash, static_cast<uint64_t>(static_cast<uint8_t>(subChunk.mAbsoluteIndex)));
+    }
+    return hash;
+}
+
+uint64_t fingerprintChunk(LevelChunk const& chunk) {
+    uint64_t hash = 0;
+    for (auto const& counter : chunk.mFullChunkDirtyTicksCounters) {
+        hash = mixFingerprint(hash, packDirtyTicks(counter.get()));
+    }
+    return hash;
+}
+
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
 
 // The replay observer's HUD and inventory screen read its own slots. The whole player inventory is recorded, not
@@ -160,6 +205,7 @@ constexpr size_t HudAttributeKey = HudOffhandKey + 1;
 constexpr size_t HudSelectedKey  = HudAttributeKey + 1;
 constexpr size_t HudCacheSize    = HudSelectedKey + 1;
 static_assert(HudCacheSize <= 48);
+static_assert(HudOffhandKey < 41);
 
 std::shared_ptr<Packet> makeHudSlotPacket(ContainerID container, int slot, ItemStack const& item) {
     return std::make_shared<InventorySlotPacket>(InventorySlotPacketPayload(container, slot, item));
@@ -209,6 +255,12 @@ std::shared_ptr<Packet> makeHudGameTypePacket(Player& player, ActorUniqueID targ
 }
 
 std::optional<int64_t> heldMapId(ItemStack const& item) { return utils::readMapUuid(item); }
+
+// What a slot packet serializes. Same content means the packet bytes cannot have changed.
+bool sameHudItem(ItemStack const& item, ItemStack const& previous) {
+    return item.mCount == previous.mCount && item.mBlock == previous.mBlock && item.getId() == previous.getId()
+        && item.getAuxValue() == previous.getAuxValue() && item.hasSameUserData(previous);
+}
 
 // The replay level only has the map data its recorded map packets carried, so a held map is written out in full.
 std::unique_ptr<Packet> makeHeldMapPacket(Player& player, int64_t mapId) {
@@ -300,6 +352,70 @@ bool packetMayReferenceRecordedPlayer(MinecraftPacketIds packetId) {
         return true;
     default:
         return false;
+    }
+}
+
+// Mirrors remapRecordedPlayerReferences on the live packet, so packets about other actors skip the decode round trip.
+bool referencesRecordedPlayer(
+    Packet const&    packet,
+    ActorUniqueID    sourceUniqueId,
+    ActorRuntimeID   sourceRuntimeId,
+    mce::UUID const& sourceUuid
+) {
+    auto const runtime = [&sourceRuntimeId](ActorRuntimeID const& id) { return id.rawID == sourceRuntimeId.rawID; };
+    auto const unique  = [&sourceUniqueId](ActorUniqueID const& id) { return id.rawID == sourceUniqueId.rawID; };
+    switch (packet.getId()) {
+    case MinecraftPacketIds::AddPlayer: {
+        auto const& addPlayer = static_cast<AddPlayerPacket const&>(packet);
+        if (unique(*addPlayer.mAbilitiesData->mTargetPlayer) || runtime(addPlayer.mRuntimeId)
+            || *addPlayer.mUuid == sourceUuid) {
+            return true;
+        }
+        return std::any_of(addPlayer.mLinks->begin(), addPlayer.mLinks->end(), [&unique](ActorLink const& link) {
+            return unique(link.A) || unique(link.B);
+        });
+    }
+    case MinecraftPacketIds::PlayerList: {
+        auto const& entries = *static_cast<PlayerListPacket const&>(packet).mEntries;
+        return std::any_of(entries.begin(), entries.end(), [&](auto const& entry) {
+            auto const* added = std::get_if<PlayerListPacketPayload::AddEntry>(&entry);
+            return added && (unique(added->mId) || *added->mUUID == sourceUuid);
+        });
+    }
+    case MinecraftPacketIds::RemoveActor:
+        return unique(static_cast<RemoveActorPacket const&>(packet).mEntityId);
+    case MinecraftPacketIds::TakeItemActor: {
+        auto const& takeItem = static_cast<TakeItemActorPacket const&>(packet);
+        return runtime(takeItem.mItemId) || runtime(takeItem.mActorId);
+    }
+    case MinecraftPacketIds::ActorEvent:
+        return runtime(static_cast<ActorEventPacket const&>(packet).mRuntimeId);
+    case MinecraftPacketIds::MobEffect:
+        return runtime(static_cast<MobEffectPacket const&>(packet).mRuntimeId);
+    case MinecraftPacketIds::UpdateAttributes:
+        return runtime(static_cast<UpdateAttributesPacket const&>(packet).mRuntimeId);
+    case MinecraftPacketIds::PlayerEquipment:
+        return runtime(static_cast<MobEquipmentPacket const&>(packet).mRuntimeId);
+    case MinecraftPacketIds::MobArmorEquipment:
+        return runtime(static_cast<MobArmorEquipmentPacket const&>(packet).mRuntimeId);
+    case MinecraftPacketIds::SetActorData:
+        return runtime(static_cast<SetActorDataPacket const&>(packet).mId);
+    case MinecraftPacketIds::SetActorMotion:
+        return runtime(static_cast<SetActorMotionPacket const&>(packet).mRuntimeId);
+    case MinecraftPacketIds::SetActorLink: {
+        auto const& link = *static_cast<SetActorLinkPacket const&>(packet).mLink;
+        return unique(link.A) || unique(link.B);
+    }
+    case MinecraftPacketIds::Animate:
+        return runtime(static_cast<AnimatePacket const&>(packet).mRuntimeId);
+    case MinecraftPacketIds::PlayerAction:
+        return runtime(static_cast<PlayerActionPacket const&>(packet).mRuntimeId);
+    case MinecraftPacketIds::LevelSoundEvent:
+        return unique(static_cast<LevelSoundEventPacket const&>(packet).mActor);
+    case MinecraftPacketIds::UpdatePlayerGameType:
+        return unique(static_cast<UpdatePlayerGameTypePacket const&>(packet).mTargetPlayer);
+    default:
+        return true;
     }
 }
 
@@ -710,6 +826,8 @@ bool Recorder::closeRecording() {
     }
 
     endTick(true);
+    // endTick returns early without a local player, before it drops a rotation snapshot still in progress.
+    discardRotationSnapshot();
     if (mState.load() != State::Closing) return false;
     if (mNeedsInitialSnapshot.load(std::memory_order_acquire)) {
         auto reason = mSnapshotFailure.empty()
@@ -813,6 +931,43 @@ void Recorder::waitForExport() {
     if (mExportThread.joinable()) mExportThread.join();
 }
 
+void Recorder::releaseWorkerPool() { mWorkerPool.reset(); }
+
+namespace {
+// One worker per core; the calling thread takes the last share.
+size_t workerPoolThreads() { return std::max(1u, std::thread::hardware_concurrency()) - 1; }
+} // namespace
+
+void Recorder::runParallel(size_t helpers, std::function<void()> const& work) {
+    helpers = std::min(helpers, workerPoolThreads());
+    if (helpers > 0 && !mWorkerPool) {
+        mWorkerPool = std::make_unique<ll::thread::ThreadPoolExecutor>("playback_worker", workerPoolThreads());
+    }
+    // Shared so a task can still touch the latch after the waiter has returned.
+    auto const done = std::make_shared<std::latch>(static_cast<std::ptrdiff_t>(helpers));
+    for (size_t submitted = 0; submitted < helpers; ++submitted) {
+        try {
+            mWorkerPool->execute([&work, done] {
+                struct CountDown {
+                    std::latch& latch;
+                    ~CountDown() { latch.count_down(); }
+                } countDown{*done};
+                work();
+            });
+        } catch (...) {
+            done->count_down(static_cast<std::ptrdiff_t>(helpers - submitted));
+            break;
+        }
+    }
+    try {
+        work();
+    } catch (...) {
+        done->wait();
+        throw;
+    }
+    done->wait();
+}
+
 void Recorder::logRecordedGamePacketSummary() const {
     std::scoped_lock lock(mPendingGamePacketsMutex);
     auto             count = [this](MinecraftPacketIds packetId) {
@@ -853,7 +1008,9 @@ void Recorder::resetStateForNewRecording() {
     mMetadata.totalTicks  = 0;
     mMetadata.gameVersion = PlaybackMeta::currentGameVersion();
     mRecordingDimension.reset();
+    discardRotationSnapshot();
     resetChunkSnapshot();
+    resetSnapshotColumnCache();
     if (auto level = ll::service::getMultiPlayerLevel()) {
         mMetadata.worldName = level->getLevelData().mLevelName;
     }
@@ -884,11 +1041,16 @@ void Recorder::resetStateForNewRecording() {
     mLastLocalPlayerEquipmentPacket.reset();
     mLastLocalPlayerSwingTime.reset();
     mLastLocalHudPackets.fill(std::nullopt);
+    mLastLocalHudItems.fill(ItemStack());
+    mLastLocalSelectedSlot         = -1;
+    mLastLocalAttributeValuesValid = false;
+    mLastLocalGameTypeValue        = -1;
     mLastLocalGameTypePacket.reset();
     mLastLocalHeldMapIds.fill(std::nullopt);
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mPendingGamePackets.clear();
+        mDeferredCompletedChunks.clear();
         mRecordedGamePacketCounts.clear();
         // A registry built from the previous session's level must not be reused after a server change.
         if (mItemRegistrySource == ItemRegistrySource::Synthetic) {
@@ -943,6 +1105,10 @@ void Recorder::endTick(bool close) {
         dimensionChanged = localPlayer->getDimensionId() != *mRecordingDimension;
     }
 
+    // A rotation snapshot belongs to the chunk being finished. An initial snapshot still in slices has to survive a
+    // close, or stopping during that first second would throw the recording away.
+    if (dimensionChanged || (close && !(mRotationJob && mRotationJob->initial))) discardRotationSnapshot();
+
     if (dimensionChanged) {
         auto const currentDimensionId = localPlayer->getDimensionId();
 
@@ -968,14 +1134,41 @@ void Recorder::endTick(bool close) {
         return;
     }
 
-    bool const rotateChunk =
+    bool const rotationDue =
         !close && !mNeedsInitialSnapshot.load() && mHasOpenChunk && mTicksInCurrentChunk + 1 >= RECORD_CHUNK_TICKS;
+
+    // The terrain is serialized in bounded slices over the next ticks, which keep going into the current chunk.
+    bool rotateChunk = false;
+    if (rotationDue && !mRotationJob) {
+        auto launched = launchRotationSnapshot(ChunkRotationBarrierTimeout);
+        if (launched != SnapshotCaptureResult::Success) {
+            getLogger().error("Replay snapshot launch failed: {}", mSnapshotFailure);
+            failRecording(mSnapshotFailure.empty() ? "Unable to prepare the replay chunk snapshot" : mSnapshotFailure);
+            return;
+        }
+    } else if (rotationDue) {
+        bool const drained = runRotationSlice();
+        bool const capped  = mRotationJob->slices >= ROTATION_JOB_MAX_SLICES;
+        // The slice that finishes the background pass already used this tick's budget. The final pass starts next tick.
+        if (!mRotationJob->finalPass && drained && !capped) {
+            auto const begun = beginSnapshotFinalPass();
+            if (begun == SnapshotCaptureResult::Failed) {
+                getLogger().error("Replay snapshot final pass failed: {}", mSnapshotFailure);
+                failRecording(
+                    mSnapshotFailure.empty() ? "Unable to prepare the replay chunk snapshot" : mSnapshotFailure
+                );
+                return;
+            }
+        } else {
+            rotateChunk = mRotationJob->finalPass ? (drained || capped) : capped;
+        }
+    }
 
     if (rotateChunk) {
         auto                                captureStart = std::chrono::steady_clock::now();
         std::chrono::steady_clock::duration barrierWait{};
-        auto captureResult = captureChunkSnapshot(barrierWait, ChunkRotationBarrierTimeout);
-        auto elapsed       = std::chrono::steady_clock::now() - captureStart;
+        auto                                captureResult = finishRotationSnapshot(barrierWait);
+        auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
 
         if (captureResult != SnapshotCaptureResult::Success) {
             getLogger().error(
@@ -1020,6 +1213,40 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
 ) {
     resetChunkSnapshot();
 
+    SnapshotColumnsJob job;
+    auto const         prepared = prepareSnapshotColumns(
+        job,
+        barrierWait,
+        barrierTimeout,
+        &mSnapshotColumnCache,
+        mSnapshotColumnCacheDimension,
+        &mSnapshotCarriedDirtyColumns
+    );
+    if (prepared != SnapshotCaptureResult::Success) {
+        restoreSnapshotDirtyColumns(job);
+        return prepared;
+    }
+    runSnapshotColumns(job);
+    auto const finished = finishSnapshotColumns(job);
+    if (finished != SnapshotCaptureResult::Success) restoreSnapshotDirtyColumns(job);
+    return finished;
+}
+
+void Recorder::restoreSnapshotDirtyColumns(SnapshotColumnsJob& job) {
+    if (job.dirtyTaken.empty()) return;
+    std::scoped_lock lock(mSnapshotDirtyColumnsMutex);
+    mSnapshotDirtyColumns.merge(job.dirtyTaken);
+    job.dirtyTaken.clear();
+}
+
+Recorder::SnapshotCaptureResult Recorder::prepareSnapshotColumns(
+    SnapshotColumnsJob&                                           job,
+    std::chrono::steady_clock::duration&                          barrierWait,
+    std::chrono::milliseconds                                     barrierTimeout,
+    std::unordered_map<ChunkPos, SnapshotColumnCacheEntry> const* cache,
+    std::optional<DimensionType>                                  cacheDimension,
+    std::unordered_set<ChunkPos> const*                           carriedDirty
+) {
     auto  clientInstance = ll::service::getClientInstance();
     auto* localPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
     if (!localPlayer) {
@@ -1028,14 +1255,8 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
     }
 
     auto const dimension = localPlayer->getDimensionId();
-
-    struct SnapshotColumn {
-        ChunkPos                    pos;
-        std::shared_ptr<LevelChunk> chunk;
-    };
-
-    std::vector<SnapshotColumn> columns;
-    Dimension*                  capturedDimension{};
+    auto&      columns   = job.columns;
+    Dimension* capturedDimension{};
 
     // The barrier only has to cover the storage walk; holding shared_ptrs keeps the columns alive for serialization.
     {
@@ -1053,6 +1274,10 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         }
 
         capturedDimension = &guardedPlayer->getDimension();
+        {
+            std::scoped_lock lock(mSnapshotDirtyColumnsMutex);
+            job.dirtyTaken.swap(mSnapshotDirtyColumns);
+        }
 
         auto const& storage = capturedDimension->getChunkSource().getStorage();
         columns.reserve(storage.size());
@@ -1111,206 +1336,399 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         return SnapshotCaptureResult::Failed;
     }
 
-    size_t const       numColumns = columns.size();
-    unsigned int const numThreads = std::max(1u, std::thread::hardware_concurrency());
-    size_t const       batchSize  = std::max(size_t{1}, (numColumns + numThreads - 1) / numThreads);
+    job.player        = localPlayer;
+    job.view          = view;
+    job.camera        = camera;
+    job.dimension     = dimension;
+    job.minHeight     = dimensionMinHeight;
+    job.maxHeight     = dimensionMaxHeight;
+    job.dimensionName = *dimensionObject.mName;
+    job.air           = &*air;
+    if (cache && cacheDimension == dimension) {
+        for (auto& column : columns) {
+            auto const cached = cache->find(column.pos);
+            if (cached == cache->end() || cached->second.chunk.lock() != column.chunk) continue;
+            column.cached = cached->second;
+            column.packetDirty =
+                job.dirtyTaken.contains(column.pos) || (carriedDirty && carriedDirty->contains(column.pos));
+        }
+    }
+    job.results.resize(columns.size());
+    return SnapshotCaptureResult::Success;
+}
 
-    struct ColumnResult {
-        std::shared_ptr<LevelChunkPacket> levelChunk;
-        std::shared_ptr<SubChunkPacket>   subChunk;
-        std::string                       error;
-    };
+void Recorder::serializeSnapshotColumns(SnapshotColumnsJob& job) {
+    auto const&  columns            = job.columns;
+    size_t const numColumns         = columns.size();
+    auto const   dimension          = job.dimension;
+    auto const   dimensionMinHeight = job.minHeight;
+    auto const*  air                = job.air;
+    bool const   finalPass          = job.finalPass;
 
-    std::vector<std::future<std::vector<ColumnResult>>> futures;
+    auto saveContext = SaveContextFactory::createNetworkSaveContext();
+    if (!saveContext) {
+        auto const ci = job.next.fetch_add(1, std::memory_order_relaxed);
+        if (ci < numColumns) job.results[ci].error = "Unable to create a network SaveContext for block actors";
+        return;
+    }
 
-    for (unsigned int t = 0; t < numThreads; ++t) {
-        size_t start = t * batchSize;
-        if (start >= numColumns) break;
-        size_t end = std::min(start + batchSize, numColumns);
+    // Column cost varies a lot with terrain, so workers claim columns one at a time instead of fixed ranges.
+    while (true) {
+        auto const deadline = job.sliceDeadlineNs.load(std::memory_order_relaxed);
+        if (deadline != 0 && steadyNowNs() >= deadline) return;
+        size_t const ci = job.next.fetch_add(1, std::memory_order_relaxed);
+        if (ci >= numColumns) return;
 
-        futures.push_back(
-            std::async(
-                std::launch::async,
-                [&columns, start, end, dimension, air, dimensionMinHeight]() -> std::vector<ColumnResult> {
-                    std::vector<ColumnResult> results;
-                    results.reserve(end - start);
+        auto&       result = job.results[ci];
+        auto const& column = columns[ci];
+        auto const& pos    = column.pos;
+        auto&       chunk  = *column.chunk;
+        // True when the worker should stop; a sliced job records the error and moves on.
+        auto const fail = [&result, &job](std::string error) {
+            result.error = std::move(error);
+            return job.stopOnError;
+        };
 
-                    auto saveContext = SaveContextFactory::createNetworkSaveContext();
-                    if (!saveContext) {
-                        results.push_back({{}, {}, "Unable to create a network SaveContext for block actors"});
-                        return results;
+        if (chunk.mIsEmptyClientChunk || chunk.mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+            if (fail(snapshotFailure(pos, std::nullopt, "starting column serialization", "chunk unloaded"))) return;
+            continue;
+        }
+
+        auto const& subChunks = *chunk.mSubChunks;
+        if (subChunks.empty()) {
+            if (fail(snapshotFailure(pos, std::nullopt, "validating slots", "no subchunk slots"))) return;
+            continue;
+        }
+
+        {
+            // Read before serializing, so a change that lands during serialization shows up next time.
+            result.subChunkFingerprint = fingerprintSubChunks(chunk);
+            result.chunkFingerprint    = fingerprintChunk(chunk);
+            auto const* cached         = column.cached ? &*column.cached : nullptr;
+            enum class Reason { Missing, Packet, SubChunks, Chunk, Reuse } reason = Reason::Reuse;
+            if (!cached) {
+                reason = Reason::Missing;
+            } else if (column.packetDirty) {
+                reason = Reason::Packet;
+            } else if (cached->subChunkFingerprint != result.subChunkFingerprint) {
+                reason = Reason::SubChunks;
+            } else if (cached->chunkFingerprint != result.chunkFingerprint) {
+                reason = Reason::Chunk;
+            }
+            if (reason == Reason::Reuse) {
+
+                result.levelChunk = cached->levelChunk;
+                result.subChunk   = cached->subChunk;
+                result.done       = true;
+                continue;
+            }
+
+            std::string stage = "creating LevelChunkPacket";
+            try {
+                auto levelBase = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
+                if (!levelBase || levelBase->getId() != MinecraftPacketIds::FullChunkData) {
+                    if (fail(snapshotFailure(pos, std::nullopt, stage, "native packet factory returned wrong type"))) {
+                        return;
                     }
-
-                    for (size_t ci = start; ci < end; ++ci) {
-                        ColumnResult result;
-                        auto const&  pos   = columns[ci].pos;
-                        auto&        chunk = *columns[ci].chunk;
-
-                        if (chunk.mIsEmptyClientChunk
-                            || chunk.mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
-                            result.error =
-                                snapshotFailure(pos, std::nullopt, "starting column serialization", "chunk unloaded");
-                            results.push_back(std::move(result));
-                            return results;
-                        }
-
-                        auto const& subChunks = *chunk.mSubChunks;
-                        if (subChunks.empty()) {
-                            result.error = snapshotFailure(pos, std::nullopt, "validating slots", "no subchunk slots");
-                            results.push_back(std::move(result));
-                            return results;
-                        }
-                        std::string stage = "creating LevelChunkPacket";
-                        try {
-                            auto levelBase = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
-                            if (!levelBase || levelBase->getId() != MinecraftPacketIds::FullChunkData) {
-                                result.error = snapshotFailure(
-                                    pos,
-                                    std::nullopt,
-                                    stage,
-                                    "native packet factory returned wrong type"
-                                );
-                                results.push_back(std::move(result));
-                                return results;
-                            }
-                            auto level = std::static_pointer_cast<LevelChunkPacket>(std::move(levelBase));
-
-                            level->mPos                        = pos;
-                            level->mDimensionId                = dimension;
-                            level->mCacheEnabled               = false;
-                            level->mSubChunksCount             = 0;
-                            level->mClientRequestSubChunkLimit = -1;
-                            level->mCacheMetadata->clear();
-
-                            stage = "serializing biome and border data";
-                            BinaryStream     levelPayload;
-                            VarIntDataOutput levelOutput(levelPayload);
-                            chunk.serializeBiomes(levelOutput);
-                            chunk.serializeBorderBlocks(levelOutput);
-                            level->mSerializedChunk = std::move(levelPayload.mBuffer);
-
-                            stage             = "creating SubChunkPacket";
-                            auto subChunkBase = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
-                            if (!subChunkBase || subChunkBase->getId() != MinecraftPacketIds::SubChunkPacket) {
-                                result.error = snapshotFailure(
-                                    pos,
-                                    std::nullopt,
-                                    stage,
-                                    "native packet factory returned wrong type"
-                                );
-                                results.push_back(std::move(result));
-                                return results;
-                            }
-                            auto subChunkPacket = std::static_pointer_cast<SubChunkPacket>(std::move(subChunkBase));
-                            int const minimumSubChunkY = dimensionMinHeight / 16;
-
-                            subChunkPacket->mCacheEnabled  = false;
-                            subChunkPacket->mDimensionType = dimension;
-                            subChunkPacket->mCenterPos     = SubChunkPos{pos.x, minimumSubChunkY, pos.z};
-                            subChunkPacket->mSubChunkData->clear();
-                            subChunkPacket->mSubChunkData->reserve(subChunks.size());
-
-                            for (size_t index = 0; index < subChunks.size(); ++index) {
-                                auto const& subChunk = subChunks[index];
-                                int const   actualAbsoluteY =
-                                    static_cast<int>(static_cast<schar>(subChunk.mAbsoluteIndex));
-                                stage = "validating subchunk slot";
-
-                                if (subChunk.isPlaceHolderSubChunk()) continue;
-                                if (subChunk.mSubChunkState != SubChunk::SubChunkState::Normal
-                                    && subChunk.mSubChunkState != SubChunk::SubChunkState::RequestFinished
-                                    && subChunk.mSubChunkState != SubChunk::SubChunkState::ProcessedSubChunk) {
-                                    continue;
-                                }
-
-                                int const relativeY = actualAbsoluteY - minimumSubChunkY;
-                                if (relativeY < std::numeric_limits<schar>::min()
-                                    || relativeY > std::numeric_limits<schar>::max()) {
-                                    result.error = snapshotFailure(
-                                        pos,
-                                        actualAbsoluteY,
-                                        stage,
-                                        "subchunk offset is outside the packet range"
-                                    );
-                                    results.push_back(std::move(result));
-                                    return results;
-                                }
-
-                                // 26.40's SubChunkPacket::isValid rejects entries without payload bytes, and genuine
-                                // servers only ever send Success, so air subchunks are serialized like any other.
-                                BinaryStream serializedSubChunk;
-                                {
-                                    stage = "serializing subchunk";
-                                    VarIntDataOutput subChunkOutput(serializedSubChunk);
-                                    subChunk.serialize(subChunkOutput, false);
-                                }
-
-                                stage = "serializing block actors";
-                                {
-                                    VarIntDataOutput blockActorOutput(serializedSubChunk);
-                                    chunk.serializeBlockEntitiesForSubChunk(
-                                        blockActorOutput,
-                                        SubChunkPos{pos.x, actualAbsoluteY, pos.z},
-                                        *saveContext
-                                    );
-                                }
-
-                                SubChunkPacket::SubChunkPosOffset offset{};
-                                offset.mX = 0;
-                                offset.mY = static_cast<schar>(relativeY);
-                                offset.mZ = 0;
-                                subChunkPacket->mSubChunkData->emplace_back(
-                                    offset,
-                                    SubChunkPacket::SubChunkRequestResult::Success
-                                );
-                                auto& data               = subChunkPacket->mSubChunkData->back();
-                                data.mSerializedSubChunk = std::move(serializedSubChunk.mBuffer);
-                                // 26.40 routes any engaged mBlobId through the blob cache, which these packets skip.
-                                data.mBlobId = std::nullopt;
-
-                                stage = "populating heightmaps";
-                                chunk.populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
-                            }
-                            result.levelChunk = std::move(level);
-                            if (!subChunkPacket->mSubChunkData->empty()) {
-                                result.subChunk = std::move(subChunkPacket);
-                            }
-                        } catch (std::exception const& exception) {
-                            result.error = snapshotFailure(pos, std::nullopt, stage, exception.what());
-                            results.push_back(std::move(result));
-                            return results;
-                        } catch (...) {
-                            result.error =
-                                snapshotFailure(pos, std::nullopt, stage, "unknown engine serialization error");
-                            results.push_back(std::move(result));
-                            return results;
-                        }
-
-                        results.push_back(std::move(result));
-                    }
-                    return results;
+                    continue;
                 }
-            )
+                auto level = std::static_pointer_cast<LevelChunkPacket>(std::move(levelBase));
+
+                level->mPos                        = pos;
+                level->mDimensionId                = dimension;
+                level->mCacheEnabled               = false;
+                level->mSubChunksCount             = 0;
+                level->mClientRequestSubChunkLimit = -1;
+                level->mCacheMetadata->clear();
+
+                stage = "serializing biome and border data";
+                BinaryStream     levelPayload;
+                VarIntDataOutput levelOutput(levelPayload);
+                chunk.serializeBiomes(levelOutput);
+                chunk.serializeBorderBlocks(levelOutput);
+                level->mSerializedChunk = std::move(levelPayload.mBuffer);
+
+                stage             = "creating SubChunkPacket";
+                auto subChunkBase = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
+                if (!subChunkBase || subChunkBase->getId() != MinecraftPacketIds::SubChunkPacket) {
+                    if (fail(snapshotFailure(pos, std::nullopt, stage, "native packet factory returned wrong type"))) {
+                        return;
+                    }
+                    continue;
+                }
+                auto      subChunkPacket   = std::static_pointer_cast<SubChunkPacket>(std::move(subChunkBase));
+                int const minimumSubChunkY = dimensionMinHeight / 16;
+
+                subChunkPacket->mCacheEnabled  = false;
+                subChunkPacket->mDimensionType = dimension;
+                subChunkPacket->mCenterPos     = SubChunkPos{pos.x, minimumSubChunkY, pos.z};
+                subChunkPacket->mSubChunkData->clear();
+                subChunkPacket->mSubChunkData->reserve(subChunks.size());
+
+                for (size_t index = 0; index < subChunks.size(); ++index) {
+                    auto const& subChunk        = subChunks[index];
+                    int const   actualAbsoluteY = static_cast<int>(static_cast<schar>(subChunk.mAbsoluteIndex));
+                    stage                       = "validating subchunk slot";
+
+                    if (subChunk.isPlaceHolderSubChunk()) continue;
+                    if (subChunk.mSubChunkState != SubChunk::SubChunkState::Normal
+                        && subChunk.mSubChunkState != SubChunk::SubChunkState::RequestFinished
+                        && subChunk.mSubChunkState != SubChunk::SubChunkState::ProcessedSubChunk) {
+                        continue;
+                    }
+
+                    int const relativeY = actualAbsoluteY - minimumSubChunkY;
+                    if (relativeY < std::numeric_limits<schar>::min()
+                        || relativeY > std::numeric_limits<schar>::max()) {
+                        result.error =
+                            snapshotFailure(pos, actualAbsoluteY, stage, "subchunk offset is outside the packet range");
+                        break;
+                    }
+
+                    BinaryStream serializedSubChunk;
+                    // 26.40's SubChunkPacket::isValid rejects entries without payload bytes, and genuine servers only ever send
+                    // Success, so air subchunks are serialized like any other.
+                    {
+                        stage = "serializing subchunk";
+                        VarIntDataOutput subChunkOutput(serializedSubChunk);
+                        subChunk.serialize(subChunkOutput, false);
+                    }
+
+                    stage = "serializing block actors";
+                    {
+                        VarIntDataOutput blockActorOutput(serializedSubChunk);
+                        chunk.serializeBlockEntitiesForSubChunk(
+                            blockActorOutput,
+                            SubChunkPos{pos.x, actualAbsoluteY, pos.z},
+                            *saveContext
+                        );
+                    }
+
+                    SubChunkPacket::SubChunkPosOffset offset{};
+                    offset.mX = 0;
+                    offset.mY = static_cast<schar>(relativeY);
+                    offset.mZ = 0;
+                    subChunkPacket->mSubChunkData->emplace_back(offset, SubChunkPacket::SubChunkRequestResult::Success);
+                    auto& data               = subChunkPacket->mSubChunkData->back();
+                    data.mSerializedSubChunk = std::move(serializedSubChunk.mBuffer);
+                    // 26.40 made mBlobId optional and routes any engaged value through the blob cache, which these packets skip.
+                    data.mBlobId = std::nullopt;
+
+                    stage = "populating heightmaps";
+                    chunk.populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
+                }
+
+                if (!result.error.empty()) {
+                    if (job.stopOnError) return;
+                    continue;
+                }
+                result.levelChunk = std::move(level);
+                if (!subChunkPacket->mSubChunkData->empty()) {
+                    result.subChunk = std::move(subChunkPacket);
+                }
+            } catch (std::exception const& exception) {
+                if (fail(snapshotFailure(pos, std::nullopt, stage, exception.what()))) return;
+                continue;
+            } catch (...) {
+                if (fail(snapshotFailure(pos, std::nullopt, stage, "unknown engine serialization error"))) return;
+                continue;
+            }
+        }
+        result.done = true;
+    }
+}
+
+void Recorder::runSnapshotColumns(SnapshotColumnsJob& job) {
+    // Pool threads stay alive: creating and exiting threads per snapshot stalled the client thread for seconds.
+    runParallel(job.columns.empty() ? 0 : job.columns.size() - 1, [&job] { serializeSnapshotColumns(job); });
+}
+
+Recorder::SnapshotCaptureResult Recorder::launchRotationSnapshot(std::chrono::milliseconds barrierTimeout) {
+    auto const                          start = std::chrono::steady_clock::now();
+    auto                                job   = std::make_unique<SnapshotColumnsJob>();
+    std::chrono::steady_clock::duration barrierWait{};
+    job->stopOnError    = false;
+    auto const prepared = prepareSnapshotColumns(
+        *job,
+        barrierWait,
+        barrierTimeout,
+        &mSnapshotColumnCache,
+        mSnapshotColumnCacheDimension,
+        &mSnapshotCarriedDirtyColumns
+    );
+    if (prepared != SnapshotCaptureResult::Success) {
+        restoreSnapshotDirtyColumns(*job);
+        return prepared;
+    }
+
+    // Half the cores, so the slices leave room for the engine's own workers.
+    size_t const threads =
+        std::min(job->columns.size(), static_cast<size_t>(std::max(1u, std::thread::hardware_concurrency() / 2)));
+    job->sliceHelpers = threads == 0 ? 0 : threads - 1;
+    job->launchCostNs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()
+    );
+    job->barrierWait = barrierWait;
+    mRotationJob     = std::move(job);
+    return SnapshotCaptureResult::Success;
+}
+
+bool Recorder::runRotationSlice() {
+    auto&      job   = *mRotationJob;
+    auto const start = steadyNowNs();
+    job.sliceDeadlineNs.store(start + RotationSliceBudgetNs, std::memory_order_relaxed);
+    // The client thread is blocked for the whole slice, so chunk applies and block actor lists stay put. Subchunk
+    // insert workers can still swap block storage; the old storage is freed late enough for a read in progress, and
+    // the fingerprints send that column through the final pass again.
+    runParallel(job.sliceHelpers, [&job] { serializeSnapshotColumns(job); });
+    auto const elapsed = steadyNowNs() - start;
+    ++job.slices;
+    job.sliceTotalNs += elapsed;
+    job.sliceMaxNs    = std::max(job.sliceMaxNs, elapsed);
+    return job.next.load(std::memory_order_relaxed) >= job.columns.size();
+}
+
+Recorder::SnapshotCaptureResult Recorder::beginSnapshotFinalPass() {
+    auto launched = std::move(mRotationJob);
+
+    // Background results are the cache. A column is redone only when its fingerprint moved or a newer dirty mark
+    // arrived during the slices. The launch dirty set is not forced through again: those bytes were just written,
+    // and a mark that still has not landed stays carried for the next snapshot.
+    std::unordered_map<ChunkPos, SnapshotColumnCacheEntry> interim;
+    interim.reserve(launched->columns.size());
+    for (size_t index = 0; index < launched->columns.size(); ++index) {
+        auto const& result = launched->results[index];
+        if (!result.done || !result.error.empty()) continue;
+        auto const& column = launched->columns[index];
+        interim.insert_or_assign(
+            column.pos,
+            SnapshotColumnCacheEntry{
+                column.chunk,
+                result.subChunkFingerprint,
+                result.chunkFingerprint,
+                result.levelChunk,
+                result.subChunk
+            }
         );
     }
 
-    std::vector<std::shared_ptr<LevelChunkPacket>> levelChunks;
-    std::vector<std::shared_ptr<SubChunkPacket>>   subChunkPackets;
-    levelChunks.reserve(columns.size());
-    subChunkPackets.reserve(columns.size());
-    for (auto& future : futures) {
-        auto batchResults = future.get();
-        for (auto& result : batchResults) {
-            if (!result.error.empty()) {
-                mSnapshotFailure = std::move(result.error);
-                return SnapshotCaptureResult::Failed;
-            }
-            levelChunks.emplace_back(std::move(result.levelChunk));
-            if (result.subChunk) subChunkPackets.emplace_back(std::move(result.subChunk));
+    auto job                    = std::make_unique<SnapshotColumnsJob>();
+    job->finalPass              = true;
+    job->initial                = launched->initial;
+    job->stopOnError            = false;
+    job->backgroundSlices       = launched->slices;
+    job->backgroundSliceTotalNs = launched->sliceTotalNs;
+    job->backgroundSliceMaxNs   = launched->sliceMaxNs;
+    job->backgroundLaunchCostNs = launched->launchCostNs;
+    job->backgroundColumns      = launched->columns.size();
+    job->backgroundDirty        = std::move(launched->dirtyTaken);
+
+    auto const timeout = job->initial ? InitialSnapshotBarrierTimeout : ChunkRotationBarrierTimeout;
+    auto const result = prepareSnapshotColumns(*job, job->barrierWait, timeout, &interim, launched->dimension, nullptr);
+    if (result != SnapshotCaptureResult::Success) {
+        restoreSnapshotDirtyColumns(*job);
+        launched->dirtyTaken = std::move(job->backgroundDirty);
+        mRotationJob         = std::move(launched);
+        return result;
+    }
+
+    size_t const threads =
+        std::min(job->columns.size(), static_cast<size_t>(std::max(1u, std::thread::hardware_concurrency() / 2)));
+    job->sliceHelpers = threads == 0 ? 0 : threads - 1;
+    mRotationJob      = std::move(job);
+    return SnapshotCaptureResult::Success;
+}
+
+Recorder::SnapshotCaptureResult Recorder::finishRotationSnapshot(std::chrono::steady_clock::duration& barrierWait) {
+    // The slice cap can expire before the background pass drains. One unbounded join then closes the chunk.
+    if (!mRotationJob->finalPass) {
+        auto const begun = beginSnapshotFinalPass();
+        if (begun != SnapshotCaptureResult::Success) return begun;
+    }
+
+    auto& job = *mRotationJob;
+    if (job.next.load(std::memory_order_relaxed) < job.columns.size()) {
+        job.sliceDeadlineNs.store(0, std::memory_order_relaxed);
+        runSnapshotColumns(job);
+    }
+
+    barrierWait = job.barrierWait;
+    auto result = finishSnapshotColumns(job);
+    if (result != SnapshotCaptureResult::Success) {
+        restoreSnapshotDirtyColumns(job);
+        discardRotationSnapshot();
+        return result;
+    }
+
+    auto const stallNs = std::max(job.backgroundSliceMaxNs, job.sliceMaxNs);
+    if (stallNs > 0) {
+        mLongestSnapshotStall = std::max(
+            mLongestSnapshotStall,
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::nanoseconds(stallNs))
+        );
+    }
+    mSnapshotCarriedDirtyColumns.merge(job.backgroundDirty);
+
+    job.backgroundDirty.clear();
+    job.dirtyTaken.clear();
+    mRotationJob.reset();
+    return SnapshotCaptureResult::Success;
+}
+void Recorder::discardRotationSnapshot() {
+    if (!mRotationJob) return;
+    restoreSnapshotDirtyColumns(*mRotationJob);
+    if (!mRotationJob->backgroundDirty.empty()) {
+        std::scoped_lock lock(mSnapshotDirtyColumnsMutex);
+        mSnapshotDirtyColumns.merge(mRotationJob->backgroundDirty);
+        mRotationJob->backgroundDirty.clear();
+    }
+    mRotationJob.reset();
+}
+
+Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJob& job) {
+    auto const&  columns    = job.columns;
+    size_t const numColumns = columns.size();
+    // Claims are in index order, so the first error is the lowest failing column, like a serial capture.
+    for (size_t index = 0; index < numColumns; ++index) {
+        auto& result = job.results[index];
+        if (!result.error.empty()) {
+            mSnapshotFailure = std::move(result.error);
+            return SnapshotCaptureResult::Failed;
+        }
+        if (!result.done) {
+            mSnapshotFailure =
+                snapshotFailure(columns[index].pos, std::nullopt, "serializing the column", "no worker finished it");
+            return SnapshotCaptureResult::Failed;
         }
     }
 
-    auto* finalPlayer = clientInstance->getLocalPlayer();
+    // Distance order, so the snapshot layout does not depend on worker scheduling.
+    std::vector<std::shared_ptr<LevelChunkPacket>>         levelChunks;
+    std::vector<std::shared_ptr<SubChunkPacket>>           subChunkPackets;
+    std::unordered_map<ChunkPos, SnapshotColumnCacheEntry> nextColumnCache;
+    levelChunks.reserve(numColumns);
+    subChunkPackets.reserve(numColumns);
+    nextColumnCache.reserve(numColumns);
+    for (size_t index = 0; index < numColumns; ++index) {
+        auto& result = job.results[index];
+        nextColumnCache.insert_or_assign(
+            columns[index].pos,
+            SnapshotColumnCacheEntry{
+                columns[index].chunk,
+                result.subChunkFingerprint,
+                result.chunkFingerprint,
+                result.levelChunk,
+                result.subChunk
+            }
+        );
+        levelChunks.emplace_back(std::move(result.levelChunk));
+        if (result.subChunk) subChunkPackets.emplace_back(std::move(result.subChunk));
+    }
+
+    auto        clientInstance = ll::service::getClientInstance();
+    auto* const localPlayer    = job.player;
+    auto const  dimension      = job.dimension;
+    auto*       finalPlayer    = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
     if (finalPlayer != localPlayer || !finalPlayer || finalPlayer->getDimensionId() != dimension) {
         mSnapshotFailure = "The player or dimension changed while capturing the chunk snapshot";
         return SnapshotCaptureResult::NotReady;
@@ -1627,10 +2045,15 @@ Recorder::SnapshotCaptureResult Recorder::captureChunkSnapshot(
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mSnapshotConfigurationPackets = mConfigurationPackets;
     }
-    mSnapshotView       = view;
-    mSnapshotCamera     = camera;
-    mSnapshotDimension  = SnapshotDimension{dimension, dimensionMinHeight, dimensionMaxHeight, *dimensionObject.mName};
-    mRecordingDimension = dimension;
+    mSnapshotView          = job.view;
+    mSnapshotCamera        = job.camera;
+    mSnapshotDimension     = SnapshotDimension{dimension, job.minHeight, job.maxHeight, job.dimensionName};
+    mRecordingDimension    = dimension;
+
+    mSnapshotColumnCache          = std::move(nextColumnCache);
+    mSnapshotColumnCacheDimension = dimension;
+    mSnapshotCarriedDirtyColumns  = std::move(job.dirtyTaken);
+    job.dirtyTaken.clear();
 
     return SnapshotCaptureResult::Success;
 }
@@ -1663,11 +2086,51 @@ bool Recorder::commitChunkSnapshot(
 bool Recorder::writeInitialSnapshotIfNeeded() {
     if (!mNeedsInitialSnapshot.load()) return true;
 
+    // Same 8 ms slices as chunk rotation. Ticks are not written until the snapshot commits, so the baseline matches
+    // the world the following tick records. Closing drains whatever is left in this tick.
+    bool const finishNow = mState.load() == State::Closing;
+    if (!mRotationJob) {
+        auto const launched = launchRotationSnapshot(InitialSnapshotBarrierTimeout);
+        if (launched == SnapshotCaptureResult::NotReady) return false;
+        if (launched == SnapshotCaptureResult::Failed) {
+            getLogger().error("Initial snapshot launch failed: {}", mSnapshotFailure);
+            failRecording(
+                mSnapshotFailure.empty() ? "Unable to prepare the initial replay chunk snapshot" : mSnapshotFailure
+            );
+            return false;
+        }
+        mRotationJob->initial = true;
+        if (!finishNow) return false;
+    }
+
+    auto drainNow = [this](SnapshotColumnsJob& job) {
+        if (job.next.load(std::memory_order_relaxed) >= job.columns.size()) return;
+        job.sliceDeadlineNs.store(0, std::memory_order_relaxed);
+        runSnapshotColumns(job);
+    };
+    if (finishNow && !mRotationJob->finalPass) drainNow(*mRotationJob);
+
+    bool const drained = mRotationJob->finalPass && finishNow ? true : runRotationSlice();
+    bool const capped  = mRotationJob->slices >= ROTATION_JOB_MAX_SLICES;
+    if (!mRotationJob->finalPass && (drained || finishNow) && !capped) {
+        auto const begun = beginSnapshotFinalPass();
+        if (begun == SnapshotCaptureResult::NotReady) return false;
+        if (begun == SnapshotCaptureResult::Failed) {
+            getLogger().error("Initial snapshot final pass failed: {}", mSnapshotFailure);
+            failRecording(
+                mSnapshotFailure.empty() ? "Unable to prepare the initial replay chunk snapshot" : mSnapshotFailure
+            );
+            return false;
+        }
+        if (!finishNow) return false;
+    }
+    if (finishNow && mRotationJob->finalPass) drainNow(*mRotationJob);
+    if (!finishNow && !drained && !capped) return false;
+
     auto                                captureStart = std::chrono::steady_clock::now();
     std::chrono::steady_clock::duration barrierWait{};
-    // Retried every tick, so a short budget is fine here.
-    auto captureResult = captureChunkSnapshot(barrierWait, InitialSnapshotBarrierTimeout);
-    auto elapsed       = std::chrono::steady_clock::now() - captureStart;
+    auto const                          captureResult = finishRotationSnapshot(barrierWait);
+    auto const                          elapsed       = std::chrono::steady_clock::now() - captureStart;
 
     if (captureResult == SnapshotCaptureResult::NotReady) return false;
     if (captureResult == SnapshotCaptureResult::Failed) {
@@ -1830,11 +2293,14 @@ bool Recorder::flushGamePackets() {
     }
 
     std::vector<PlaybackSerializedGamePacket> pending;
+    std::vector<DeferredCompletedChunk>       deferred;
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
         pending.swap(mPendingGamePackets);
+        deferred.swap(mDeferredCompletedChunks);
     }
 
+    if (!deferred.empty()) resolveDeferredCompletedChunks(pending, deferred);
     if (pending.empty()) return true;
     std::vector<AsyncReplaySaver::GamePacket> gamePackets;
     gamePackets.reserve(pending.size());
@@ -1860,13 +2326,15 @@ bool Recorder::writeEntityMovements() {
     }
 
     struct MovementRecord {
-        ActorUniqueID id;
-        std::string   state;
+        ActorUniqueID       id;
+        EntityMovementState state;
     };
 
-    std::vector<MovementRecord>                    changed;
-    std::unordered_map<ActorUniqueID, std::string> current;
-    auto                                           actors = localPlayer->getLevel().getRuntimeActorList();
+    std::vector<MovementRecord> changed;
+    // Reuse last tick's buckets instead of rebuilding the map every tick.
+    auto& current = mCurrentEntityMovements;
+    current.clear();
+    auto actors = localPlayer->getLevel().getRuntimeActorList();
     changed.reserve(actors.size());
     current.reserve(actors.size());
 
@@ -1896,28 +2364,22 @@ bool Recorder::writeEntityMovements() {
             bodyYaw = bodyRotation->mYBodyRot;
         }
 
-        PlaybackBuffer state;
-        state.writeFloat(position.x, nullptr, nullptr);
-        state.writeFloat(position.y, nullptr, nullptr);
-        state.writeFloat(position.z, nullptr, nullptr);
-        state.writeFloat(rotation.x, nullptr, nullptr);
-        state.writeFloat(rotation.y, nullptr, nullptr);
-        state.writeFloat(headYaw, nullptr, nullptr);
-        state.writeFloat(bodyYaw, nullptr, nullptr);
-        state.writeBool(actor->isOnGround(), nullptr, nullptr);
+        EntityMovementState state;
+        state.values   = {position.x, position.y, position.z, rotation.x, rotation.y, headYaw, bodyYaw};
+        state.onGround = actor->isOnGround();
 
         if (actor == localPlayer && !mRecordedLocalPlayerId) {
             failRecording("The recorded local player identity is unavailable while writing entity movements");
             return false;
         }
         auto const id       = actor == localPlayer ? *mRecordedLocalPlayerId : actor->getOrCreateUniqueID();
-        auto       it       = current.emplace(id, std::move(state.mBuffer)).first;
+        auto       it       = current.emplace(id, state).first;
         auto       previous = mLastEntityMovements.find(id);
-        if (previous == mLastEntityMovements.end() || previous->second != it->second) {
-            changed.emplace_back(id, it->second);
+        if (previous == mLastEntityMovements.end() || !previous->second.sameAs(it->second)) {
+            changed.push_back({id, it->second});
         }
     }
-    mLastEntityMovements = std::move(current);
+    mLastEntityMovements.swap(current);
 
     if (changed.empty()) return true;
     if (!mAsyncReplaySaver->submit([changed = std::move(changed)](ReplayWriter& writer) {
@@ -1927,7 +2389,8 @@ bool Recorder::writeEntityMovements() {
             writer.mStream.writeVarInt(static_cast<int>(changed.size()), nullptr, nullptr);
             for (auto const& movement : changed) {
                 writer.mStream.writeVarInt64(movement.id.rawID, nullptr, nullptr);
-                writer.mStream.write(movement.state.data(), movement.state.size());
+                for (float const value : movement.state.values) writer.mStream.writeFloat(value, nullptr, nullptr);
+                writer.mStream.writeBool(movement.state.onGround, nullptr, nullptr);
             }
             writer.finishAction(action);
         })) {
@@ -2104,7 +2567,9 @@ bool Recorder::writeLocalPlayerState() {
     }
 
     auto recordChanged = [this](Packet const& packet, std::optional<std::string>& previous) {
-        PlaybackBuffer serialized;
+        // Reused every tick so the unchanged case does not allocate.
+        auto& serialized = mLocalPlayerDataBuffer;
+        serialized.clear();
         packet.write(serialized);
         if (previous && *previous == serialized.mBuffer) return false;
         previous = serialized.mBuffer;
@@ -2126,33 +2591,71 @@ bool Recorder::writeLocalPlayerState() {
     }
 
     // The replay observer's HUD reads its own hotbar, armor, attributes and game mode, so they are recorded as well.
+    // Unchanged slots used to be serialized twice per tick just to find out they had not changed.
+    auto recordSlot = [&](size_t index, ContainerID container, int slot, ItemStack const& item) {
+        if (sameHudItem(item, mLastLocalHudItems[index])) return;
+        recordChanged(*makeHudSlotPacket(container, slot, item), mLastLocalHudPackets[index]);
+        mLastLocalHudItems[index] = item;
+    };
     for (int slot = 0; slot < HudHotbarSlots; ++slot) {
-        auto const packet = makeHudSlotPacket(
+        recordSlot(
+            static_cast<size_t>(slot),
             ContainerID::Inventory,
             slot,
             localPlayer->getInventory().getItem(slot)
         );
-        recordChanged(*packet, mLastLocalHudPackets[static_cast<size_t>(slot)]);
     }
     for (int slot = 0; slot < HudArmorSlots; ++slot) {
-        auto const packet = makeHudSlotPacket(
+        recordSlot(
+            HudArmorKey + static_cast<size_t>(slot),
             ContainerID::Armor,
             slot,
             localPlayer->getArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(slot))
         );
-        recordChanged(*packet, mLastLocalHudPackets[HudArmorKey + static_cast<size_t>(slot)]);
     }
-    recordChanged(
-        *makeHudSlotPacket(ContainerID::Offhand, 0, localPlayer->getOffhandSlot()),
-        mLastLocalHudPackets[HudOffhandKey]
-    );
-    recordChanged(*makeHudSelectedSlotPacket(*localPlayer), mLastLocalHudPackets[HudSelectedKey]);
-    recordChanged(
-        *makeHudAttributePacket(*localPlayer, *mRecordedLocalPlayerRuntimeId),
-        mLastLocalHudPackets[HudAttributeKey]
-    );
+    recordSlot(HudOffhandKey, ContainerID::Offhand, 0, localPlayer->getOffhandSlot());
+
+    int const selectedSlot = localPlayer->getSelectedItemSlot();
+    if (selectedSlot != mLastLocalSelectedSlot) {
+        recordChanged(*makeHudSelectedSlotPacket(*localPlayer), mLastLocalHudPackets[HudSelectedKey]);
+        mLastLocalSelectedSlot = selectedSlot;
+    }
+
+    std::array<float, 18> attributeValues{};
+    auto const            attributes = {
+        &SharedAttributes::HEALTH(),
+        &SharedAttributes::ABSORPTION(),
+        &Player::HUNGER(),
+        &Player::SATURATION(),
+        &Player::LEVEL(),
+        &Player::EXPERIENCE(),
+    };
+    size_t valueIndex = 0;
+    for (auto const* attribute : attributes) {
+        auto const instance = localPlayer->getAttribute(*attribute);
+        if (instance.mPtr) {
+            attributeValues[valueIndex]     = instance.mPtr->mCurrentMinValue;
+            attributeValues[valueIndex + 1] = instance.mPtr->mCurrentMaxValue;
+            attributeValues[valueIndex + 2] = instance.mPtr->mCurrentValue;
+        }
+        valueIndex += 3;
+    }
+    if (!mLastLocalAttributeValuesValid
+        || std::memcmp(attributeValues.data(), mLastLocalAttributeValues.data(), sizeof(attributeValues)) != 0) {
+        recordChanged(
+            *makeHudAttributePacket(*localPlayer, *mRecordedLocalPlayerRuntimeId),
+            mLastLocalHudPackets[HudAttributeKey]
+        );
+        mLastLocalAttributeValues      = attributeValues;
+        mLastLocalAttributeValuesValid = true;
+    }
+
     if (mRecordedLocalPlayerId) {
-        recordChanged(*makeHudGameTypePacket(*localPlayer, *mRecordedLocalPlayerId), mLastLocalGameTypePacket);
+        int const gameType = static_cast<int>(localPlayer->getPlayerGameType());
+        if (gameType != mLastLocalGameTypeValue) {
+            recordChanged(*makeHudGameTypePacket(*localPlayer, *mRecordedLocalPlayerId), mLastLocalGameTypePacket);
+            mLastLocalGameTypeValue = gameType;
+        }
     }
 
     for (size_t hand = 0; hand < mLastLocalHeldMapIds.size(); ++hand) {
@@ -2384,49 +2887,72 @@ void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimens
         return;
     }
 
-    auto air = Block::tryGetFromRegistry(BedrockBlockNames::Air());
-    if (!air) return;
-
-    auto saveContext = SaveContextFactory::createNetworkSaveContext();
-    if (!saveContext) return;
-
-    auto const& subChunks          = *chunk->mSubChunks;
-    auto const  dimensionMinHeight = static_cast<int>(dimension.mHeightRange->mMin);
-    auto const  dimensionMaxHeight = static_cast<int>(dimension.mHeightRange->mMax);
-    auto const  subChunkCount      = static_cast<size_t>(dimension.getHeightInSubchunks());
+    auto const dimensionMinHeight = static_cast<int>(dimension.mHeightRange->mMin);
+    auto const dimensionMaxHeight = static_cast<int>(dimension.mHeightRange->mMax);
+    auto const subChunkCount      = static_cast<size_t>(dimension.getHeightInSubchunks());
     if (dimensionMinHeight % 16 != 0 || dimensionMaxHeight <= dimensionMinHeight
-        || static_cast<size_t>((dimensionMaxHeight - dimensionMinHeight) / 16) != subChunkCount || subChunks.empty()) {
+        || static_cast<size_t>((dimensionMaxHeight - dimensionMinHeight) / 16) != subChunkCount
+        || chunk->mSubChunks->empty()) {
         return;
+    }
+
+    // This runs inside the engine's chunk-completion continuation on the main thread, once per column. Only the
+    // timeline slot is reserved here; flushGamePackets serializes every column completed this tick in parallel.
+    {
+        std::scoped_lock lock(mPendingGamePacketsMutex);
+        mPendingGamePackets.push_back({DeferredChunkPacketId, {}});
+        mDeferredCompletedChunks.push_back({pos, dimensionId, dimensionMinHeight / 16, std::move(chunk)});
+    }
+
+    std::scoped_lock lock(mPendingPortableChunksMutex);
+    auto const       byDimension = mPendingPortableChunks.find(dimensionId);
+    if (byDimension == mPendingPortableChunks.end()) return;
+    byDimension->second.erase(pos);
+    if (byDimension->second.empty()) mPendingPortableChunks.erase(byDimension);
+}
+
+bool Recorder::serializeDeferredCompletedChunk(
+    DeferredCompletedChunk const& job,
+    Block const&                  air,
+    SaveContext const&            saveContext,
+    std::string&                  levelChunkPayload,
+    std::string&                  subChunkPayload
+) {
+    auto const& pos   = job.pos;
+    auto const& chunk = *job.chunk;
+    // The column may have been discarded later in the tick; the shared_ptr keeps it alive but its storage is stale.
+    if (chunk.mIsEmptyClientChunk || chunk.mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+        return false;
     }
 
     auto levelBase = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
     auto subBase   = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
     if (!levelBase || !subBase || levelBase->getId() != MinecraftPacketIds::FullChunkData
         || subBase->getId() != MinecraftPacketIds::SubChunkPacket) {
-        return;
+        return false;
     }
 
-    auto level                         = std::static_pointer_cast<LevelChunkPacket>(std::move(levelBase));
-    level->mPos                        = pos;
-    level->mDimensionId                = dimension.getDimensionId();
-    level->mCacheEnabled               = false;
-    level->mSubChunksCount             = 0;
-    level->mClientRequestSubChunkLimit = -1;
-    level->mCacheMetadata->clear();
+    auto& level                          = static_cast<LevelChunkPacket&>(*levelBase);
+    level.mPos                           = pos;
+    level.mDimensionId                   = job.dimensionId;
+    level.mCacheEnabled                  = false;
+    level.mSubChunksCount                = 0;
+    level.mClientRequestSubChunkLimit    = -1;
+    level.mCacheMetadata->clear();
 
     BinaryStream     levelPayload;
     VarIntDataOutput levelOutput(levelPayload);
-    chunk->serializeBiomes(levelOutput);
-    chunk->serializeBorderBlocks(levelOutput);
-    level->mSerializedChunk = std::move(levelPayload.mBuffer);
+    chunk.serializeBiomes(levelOutput);
+    chunk.serializeBorderBlocks(levelOutput);
+    level.mSerializedChunk = std::move(levelPayload.mBuffer);
 
-    auto      subChunkPacket       = std::static_pointer_cast<SubChunkPacket>(std::move(subBase));
-    int const minimumSubChunkY     = dimensionMinHeight / 16;
-    subChunkPacket->mCacheEnabled  = false;
-    subChunkPacket->mDimensionType = dimension.getDimensionId();
-    subChunkPacket->mCenterPos     = SubChunkPos{pos.x, minimumSubChunkY, pos.z};
-    subChunkPacket->mSubChunkData->clear();
-    subChunkPacket->mSubChunkData->reserve(subChunks.size());
+    auto const& subChunks         = *chunk.mSubChunks;
+    auto&       subChunkPacket    = static_cast<SubChunkPacket&>(*subBase);
+    subChunkPacket.mCacheEnabled  = false;
+    subChunkPacket.mDimensionType = job.dimensionId;
+    subChunkPacket.mCenterPos     = SubChunkPos{pos.x, job.minimumSubChunkY, pos.z};
+    subChunkPacket.mSubChunkData->clear();
+    subChunkPacket.mSubChunkData->reserve(subChunks.size());
 
     for (auto const& subChunk : subChunks) {
         if (subChunk.isPlaceHolderSubChunk()) continue;
@@ -2437,7 +2963,7 @@ void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimens
         }
 
         int const actualAbsoluteY = static_cast<int>(static_cast<schar>(subChunk.mAbsoluteIndex));
-        int const relativeY       = actualAbsoluteY - minimumSubChunkY;
+        int const relativeY       = actualAbsoluteY - job.minimumSubChunkY;
         if (relativeY < std::numeric_limits<schar>::min() || relativeY > std::numeric_limits<schar>::max()) continue;
 
         // 26.40's SubChunkPacket::isValid rejects entries without payload bytes, and genuine servers only ever send
@@ -2448,30 +2974,116 @@ void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimens
             subChunk.serialize(subChunkOutput, false);
         }
         VarIntDataOutput blockActorOutput(serializedSubChunk);
-        chunk->serializeBlockEntitiesForSubChunk(
+        chunk.serializeBlockEntitiesForSubChunk(
             blockActorOutput,
             SubChunkPos{pos.x, actualAbsoluteY, pos.z},
-            *saveContext
+            saveContext
         );
 
         SubChunkPacket::SubChunkPosOffset offset{};
         offset.mY = static_cast<schar>(relativeY);
-        subChunkPacket->mSubChunkData->emplace_back(offset, SubChunkPacket::SubChunkRequestResult::Success);
-        auto& data               = subChunkPacket->mSubChunkData->back();
+        subChunkPacket.mSubChunkData->emplace_back(offset, SubChunkPacket::SubChunkRequestResult::Success);
+        auto& data               = subChunkPacket.mSubChunkData->back();
         data.mSerializedSubChunk = std::move(serializedSubChunk.mBuffer);
         // 26.40 made mBlobId optional and routes any engaged value through the blob cache, which these packets skip.
         data.mBlobId = std::nullopt;
-        chunk->populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
+        chunk.populateHeightMapDataForSubChunkPacket(static_cast<short>(actualAbsoluteY), data);
     }
 
-    recordGamePacket(*level);
-    if (!subChunkPacket->mSubChunkData->empty()) recordGamePacket(*subChunkPacket);
+    PlaybackBuffer levelStream;
+    level.write(levelStream);
+    levelChunkPayload = std::move(levelStream.mBuffer);
 
-    std::scoped_lock lock(mPendingPortableChunksMutex);
-    auto const       byDimension = mPendingPortableChunks.find(dimensionId);
-    if (byDimension == mPendingPortableChunks.end()) return;
-    byDimension->second.erase(pos);
-    if (byDimension->second.empty()) mPendingPortableChunks.erase(byDimension);
+    subChunkPayload.clear();
+    if (!subChunkPacket.mSubChunkData->empty()) {
+        PlaybackBuffer subChunkStream;
+        subChunkPacket.write(subChunkStream);
+        subChunkPayload = std::move(subChunkStream.mBuffer);
+    }
+    return true;
+}
+
+void Recorder::resolveDeferredCompletedChunks(
+    std::vector<PlaybackSerializedGamePacket>& pending,
+    std::vector<DeferredCompletedChunk>&       deferred
+) {
+
+    struct Result {
+        std::string levelChunk;
+        std::string subChunk;
+        bool        ok{};
+    };
+    std::vector<Result> results(deferred.size());
+
+    // Block reads tolerate concurrent workers because SubChunk::_setBlock retires replaced storage through a delayed
+    // free queue; the block actor list only changes on the main thread, which waits here like in a chunk snapshot.
+    auto air = Block::tryGetFromRegistry(BedrockBlockNames::Air());
+    if (air) {
+        std::atomic<size_t> nextJob{0};
+        auto                serializeJobs = [&deferred, &results, &nextJob, air]() {
+            auto saveContext = SaveContextFactory::createNetworkSaveContext();
+            if (!saveContext) return;
+            for (size_t index = nextJob.fetch_add(1, std::memory_order_relaxed); index < deferred.size();
+                 index        = nextJob.fetch_add(1, std::memory_order_relaxed)) {
+                auto const& job    = deferred[index];
+                auto&       result = results[index];
+                try {
+                    result.ok =
+                        serializeDeferredCompletedChunk(job, *air, *saveContext, result.levelChunk, result.subChunk);
+                } catch (std::exception const& exception) {
+                    getLogger()
+                        .warn("Unable to capture completed chunk ({}, {}): {}", job.pos.x, job.pos.z, exception.what());
+                } catch (...) {
+                    getLogger().warn("Unable to capture completed chunk ({}, {})", job.pos.x, job.pos.z);
+                }
+            }
+        };
+
+        runParallel(deferred.size() - 1, serializeJobs);
+    }
+
+    // Expand each reserved slot in place, deduplicating the way recordGamePacket would have when the column completed.
+    std::vector<PlaybackSerializedGamePacket> expanded;
+    expanded.reserve(pending.size() + deferred.size());
+    uint64_t levelChunkCount = 0;
+    uint64_t subChunkCount   = 0;
+    auto     append          = [&expanded](int32_t packetId, std::string&& payload) {
+        for (auto const& [existingId, existingPayload] : expanded) {
+            if (existingId == packetId && existingPayload == payload) return false;
+        }
+        expanded.push_back({packetId, std::move(payload)});
+        return true;
+    };
+
+    size_t nextDeferred = 0;
+    for (auto& packet : pending) {
+        if (packet.mPacketId != DeferredChunkPacketId) {
+            // A native chunk packet recorded after a reserved slot was only deduplicated against the empty placeholder.
+            bool const chunkPacket = packet.mPacketId == static_cast<int32_t>(MinecraftPacketIds::FullChunkData)
+                                  || packet.mPacketId == static_cast<int32_t>(MinecraftPacketIds::SubChunkPacket);
+            if (chunkPacket && nextDeferred > 0) {
+                append(packet.mPacketId, std::move(packet.mPayload));
+            } else {
+                expanded.push_back(std::move(packet));
+            }
+            continue;
+        }
+        if (nextDeferred >= results.size()) continue;
+        auto& result = results[nextDeferred++];
+        if (!result.ok) continue;
+        if (append(static_cast<int32_t>(MinecraftPacketIds::FullChunkData), std::move(result.levelChunk))) {
+            ++levelChunkCount;
+        }
+        if (!result.subChunk.empty()
+            && append(static_cast<int32_t>(MinecraftPacketIds::SubChunkPacket), std::move(result.subChunk))) {
+            ++subChunkCount;
+        }
+    }
+    pending = std::move(expanded);
+
+    std::scoped_lock lock(mPendingGamePacketsMutex);
+    mRecordedGamePacketCounts[static_cast<int32_t>(MinecraftPacketIds::FullChunkData)]  += levelChunkCount;
+    mRecordedGamePacketCounts[static_cast<int32_t>(MinecraftPacketIds::SubChunkPacket)] += subChunkCount;
 }
 
 void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet, std::string_view payload) {
@@ -2481,6 +3093,7 @@ void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet, std::strin
     auto const& pos         = *packet.mPos;
     auto const  dimensionId = *packet.mDimensionId;
     // 26.40 folded the request-mode flag into the limit: a value means the client must request subchunks.
+    markSnapshotColumnDirty(pos);
     bool const requestMode  = packet.mClientRequestSubChunkLimit->has_value();
     bool const cacheEnabled = static_cast<bool>(packet.mCacheEnabled);
     if (requestMode && !cacheEnabled) {
@@ -2500,8 +3113,65 @@ void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet, std::strin
     mPendingPortableChunks[dimensionId].emplace(pos);
 }
 
+void Recorder::markSnapshotColumnDirty(ChunkPos const& pos) {
+    std::scoped_lock lock(mSnapshotDirtyColumnsMutex);
+    mSnapshotDirtyColumns.insert(pos);
+}
+
+void Recorder::markSnapshotColumnsDirty(Packet const& packet) {
+    auto mark = [this](BlockPos const& pos) { markSnapshotColumnDirty(ChunkPos{pos}); };
+
+    switch (packet.getId()) {
+    case MinecraftPacketIds::UpdateBlock:
+        mark(*static_cast<UpdateBlockPacket const&>(packet).mPos);
+        break;
+    case MinecraftPacketIds::UpdateBlockSynced:
+        mark(*static_cast<UpdateBlockSyncedPacket const&>(packet).mPos);
+        break;
+    case MinecraftPacketIds::UpdateSubChunkBlocks: {
+        auto const& changed = *static_cast<UpdateSubChunkBlocksPacket const&>(packet).mBlocksChanged;
+        mark(*static_cast<UpdateSubChunkBlocksPacket const&>(packet).mSubChunkBlockPosition);
+        for (auto const* blocks : {&*changed.mStandards, &*changed.mExtras}) {
+            for (auto const& info : *blocks) mark(*info.mPos);
+        }
+        break;
+    }
+    case MinecraftPacketIds::BlockActorData:
+        mark(*static_cast<BlockActorDataPacket const&>(packet).mPos);
+        break;
+    case MinecraftPacketIds::TileEvent:
+        mark(*static_cast<BlockEventPacket const&>(packet).mPos);
+        break;
+    case MinecraftPacketIds::FullChunkData:
+        markSnapshotColumnDirty(*static_cast<LevelChunkPacket const&>(packet).mPos);
+        break;
+    case MinecraftPacketIds::SubChunkPacket: {
+        auto const& subChunkPacket = static_cast<SubChunkPacket const&>(packet);
+        auto const& center         = *subChunkPacket.mCenterPos;
+        for (auto const& entry : *subChunkPacket.mSubChunkData) {
+            auto const& offset = *entry.mSubChunkPosOffset;
+            markSnapshotColumnDirty(
+                ChunkPos{center.x + static_cast<int>(offset.mX), center.z + static_cast<int>(offset.mZ)}
+            );
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+void Recorder::resetSnapshotColumnCache() {
+    mSnapshotColumnCache.clear();
+    mSnapshotColumnCacheDimension.reset();
+    mSnapshotCarriedDirtyColumns.clear();
+    std::scoped_lock lock(mSnapshotDirtyColumnsMutex);
+    mSnapshotDirtyColumns.clear();
+}
+
 void Recorder::recordGamePacket(Packet const& packet, std::string_view payload) {
-    auto const packetId  = packet.getId();
+    auto const packetId = packet.getId();
+    if (mState.load(std::memory_order_acquire) != State::Idle) markSnapshotColumnsDirty(packet);
     auto const semantics = describePacketLifecycle(packetId);
     switch (semantics.lifecycle) {
     case PacketLifecycle::Ignore:
@@ -2526,21 +3196,35 @@ void Recorder::recordGamePacket(Packet const& packet, std::string_view payload) 
         }
         PlaybackBuffer stream;
         if (packetId == MinecraftPacketIds::SubChunkPacket) {
-            auto filteredPacket = static_cast<SubChunkPacket const&>(packet);
-            if (static_cast<bool>(filteredPacket.mCacheEnabled)) return;
+            auto const& subChunkPacket = static_cast<SubChunkPacket const&>(packet);
+            if (static_cast<bool>(subChunkPacket.mCacheEnabled)) return;
+            auto const& entries = *subChunkPacket.mSubChunkData;
+            if (entries.empty()) return;
 
-            std::vector<SubChunkPacket::SubChunkPacketData> successfulEntries;
-            successfulEntries.reserve(filteredPacket.mSubChunkData->size());
-            for (auto const& entry : *filteredPacket.mSubChunkData) {
-                if (isSuccessfulSubChunkResult(
-                        static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
-                    )) {
-                    successfulEntries.emplace_back(entry);
+            // Copying the packet duplicates every serialized subchunk, so only filter when something must go.
+            bool const allSuccessful = std::all_of(entries.begin(), entries.end(), [](auto const& entry) {
+                return isSuccessfulSubChunkResult(
+                    static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
+                );
+            });
+            if (allSuccessful) {
+                packet.write(stream);
+            } else {
+                auto filteredPacket = subChunkPacket;
+
+                std::vector<SubChunkPacket::SubChunkPacketData> successfulEntries;
+                successfulEntries.reserve(entries.size());
+                for (auto const& entry : entries) {
+                    if (isSuccessfulSubChunkResult(
+                            static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult)
+                        )) {
+                        successfulEntries.emplace_back(entry);
+                    }
                 }
+                if (successfulEntries.empty()) return;
+                *filteredPacket.mSubChunkData = std::move(successfulEntries);
+                filteredPacket.write(stream);
             }
-            *filteredPacket.mSubChunkData = std::move(successfulEntries);
-            if (filteredPacket.mSubChunkData->empty()) return;
-            filteredPacket.write(stream);
         } else if (payload.empty()) {
             packet.write(stream);
         } else {
@@ -2572,7 +3256,13 @@ void Recorder::recordGamePacket(Packet const& packet, std::string_view payload) 
         }
 
         if (localPlayer && mRecordedLocalPlayerId && mRecordedLocalPlayerRuntimeId && mRecordedLocalPlayerUuid
-            && packetMayReferenceRecordedPlayer(packetId)) {
+            && packetMayReferenceRecordedPlayer(packetId)
+            && referencesRecordedPlayer(
+                packet,
+                localPlayer->getOrCreateUniqueID(),
+                localPlayer->getRuntimeID(),
+                localPlayer->getUuid()
+            )) {
             auto                 remappedPacket = MinecraftPackets::createPacket(packetId);
             ReadOnlyBinaryStream input(stream.mBuffer, false);
             bool                 readOk = false;
@@ -2664,7 +3354,9 @@ void Recorder::abortRecording() {
     mPendingDimensionSnapshot    = false;
     mDimensionTransitionPending  = false;
     mDimensionTransitionTargetId = 0;
+    discardRotationSnapshot();
     resetChunkSnapshot();
+    resetSnapshotColumnCache();
     mLastEntityMovements.clear();
     mRecordedLocalPlayerId.reset();
     mRecordedLocalPlayerRuntimeId.reset();
@@ -2673,11 +3365,16 @@ void Recorder::abortRecording() {
     mLastLocalPlayerEquipmentPacket.reset();
     mLastLocalPlayerSwingTime.reset();
     mLastLocalHudPackets.fill(std::nullopt);
+    mLastLocalHudItems.fill(ItemStack());
+    mLastLocalSelectedSlot         = -1;
+    mLastLocalAttributeValuesValid = false;
+    mLastLocalGameTypeValue        = -1;
     mLastLocalGameTypePacket.reset();
     mLastLocalHeldMapIds.fill(std::nullopt);
     {
         std::scoped_lock lock(mPendingGamePacketsMutex);
         mPendingGamePackets.clear();
+        mDeferredCompletedChunks.clear();
     }
     {
         std::scoped_lock lock(mPendingPortableChunksMutex);
