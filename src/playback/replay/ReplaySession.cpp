@@ -5231,17 +5231,16 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 bool const recorder = mRecordedLocalPlayerId && entry.mId->rawID == mRecordedLocalPlayerId->rawID;
                 noteReplayIdentity(std::move(uuid), *entry.mName, ActorUniqueID{entry.mId->rawID}, recorder);
             }
-            // Servers may withhold a player's skin; drop only that entry so the rest of the list still spawns.
-            auto removed = std::erase_if(entries, [](PlayerListEntry const& entry) {
-                if (entry.mSkin->mSkinImpl) return false;
-                getLogger().debug("Skipping replay player-list entry '{}' without skin data", *entry.mName);
-                return true;
-            });
-            if (entries.empty()) {
-                if (removed != 0) getLogger().warn("Skipping a replay player-list packet with no usable entries");
-                return true;
-            }
+            // Servers may withhold a player's skin; give that entry the default skin instead of dropping the player.
             for (auto& entry : entries) {
+                if (!entry.mSkin->mSkinImpl) {
+                    getLogger().debug(
+                        "Replay player-list entry '{}' has no skin data; using the default skin",
+                        *entry.mName
+                    );
+                    *entry.mSkin = SerializedSkinRef::createTrustedDefaultSerializedSkin();
+                    if (!entry.mSkin->mSkinImpl) continue;
+                }
                 entry.mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
             }
         } else if (playerList.mAction == PlayerListPacketType::Remove) {
@@ -5263,6 +5262,16 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 rebindReplaySubject();
             }
         }
+    }
+
+    if (packetId == MinecraftPacketIds::PlayerSkin) {
+        // Same rule as the player list: a recorded skin must never be treated as the viewer's own.
+        auto& skinImpl = static_cast<PlayerSkinPacket&>(*packet).mSkin->mSkinImpl;
+        if (!skinImpl) {
+            getLogger().debug("Skipping a replay player skin packet without skin data");
+            return true;
+        }
+        skinImpl->mObject.mIsPrimaryUser = false;
     }
 
     if (packetId == MinecraftPacketIds::ChangeDimension) {

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - First-person follow now shows the followed player's arm swing and item-use animation, such as eating.
+- Players whose skin the server withheld are no longer dropped from the replay: snapshots fall back to the skin the player is rendered with, and player-list entries that still have none get the default skin.
 
 ## [0.4.0-mc26.20] - 2026-11-01
 
