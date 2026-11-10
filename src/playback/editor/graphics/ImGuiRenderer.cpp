@@ -8,6 +8,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/graphics/ReplayUILayout.h"
+#include "playback/editor/graphics/SeekFreezeHooks.h"
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/exporting/ExportActivity.h"
@@ -754,7 +755,7 @@ struct ImGuiRenderer::Impl {
             (void)d3d11FrameTap.capture(d3d11Device.Get(), d3d11Context.Get(), source.Get());
         }
         // The export preview reuses this copy: at Present the back buffer already holds the clean world frame.
-        if (!exporting::isExportActive(state.exportStatus.state) || captureFrame) {
+        if ((!exporting::isExportActive(state.exportStatus.state) && !isSeekDisplayFrozen()) || captureFrame) {
             d3d11Context->CopyResource(d3d11GameTexture.Get(), source.Get());
         }
 
@@ -1566,7 +1567,9 @@ bool ImGuiRenderer::renderInternal(
     auto const bd = f.backBuffer->GetDesc();
     if (bd.Width == 0 || bd.Height == 0) return false;
     // The export preview reuses the editor viewport copy, since Present already holds the clean world frame.
-    bool const copyGameTexture = !exportOverlay || captureActive;
+    // A seek freeze leaves no world in the back buffer, so the viewport keeps the last copied frame.
+    bool const seekFrozen      = !exportOverlay && isSeekDisplayFrozen() && p.lastGameTextureIndex.has_value();
+    bool const copyGameTexture = (!exportOverlay && !seekFrozen) || captureActive;
 
     // Export UI goes to its own window-sized layer, so the export resolution cannot blur it.
     bool const exportUi         = uiActive && forceExportOverlay && exportOverlay;
@@ -1605,7 +1608,8 @@ bool ImGuiRenderer::renderInternal(
             replayBrowser.draw(state.browser, submit);
         } else if (state.editorVisible || exportOverlay) {
             // During export only captured frames refresh the copy, so show the latest one instead of this slot.
-            auto const textureIndex = exportOverlay ? p.lastGameTextureIndex : std::optional<UINT>{fi};
+            auto const textureIndex =
+                exportOverlay || seekFrozen ? p.lastGameTextureIndex : std::optional<UINT>{fi};
             replayEditor.setGameTexture(
                 textureIndex ? static_cast<ImTextureID>(p.frames[*textureIndex].gameSrvGpu.ptr) : ImTextureID{}
             );

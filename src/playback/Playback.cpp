@@ -7,6 +7,7 @@
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
+#include "playback/editor/graphics/SeekFreezeHooks.h"
 #include "playback/exporting/ExportEcoMode.h"
 #include "playback/exporting/GuiScaleHooks.h"
 #include "playback/exporting/IdleDetectionHooks.h"
@@ -121,6 +122,9 @@ bool Playback::hook() {
             "Unable to install the GUI scale override; exports will leave the UI scale to the game"
         );
     }
+    if (!editor::graphics::hookSeekFreeze(true)) {
+        getSelf().getLogger().warn("Unable to install the seek freeze hook; seeks will show catch-up frames");
+    }
     if (audio::probe::install()) {
         // Export-audio capture registers its policy callbacks on the probe; no additional hooks are installed.
         (void)audio::exportcap::install();
@@ -229,6 +233,9 @@ bool Playback::unhook() {
 
     audio::exportcap::uninstall();
     audio::probe::uninstall();
+    if (!editor::graphics::hookSeekFreeze(false)) {
+        getSelf().getLogger().warn("Unable to remove the seek freeze hook during shutdown");
+    }
     screen::hookRecordControls(false);
     screen::hookMainMenu(false);
     getEventListeners().clear();
