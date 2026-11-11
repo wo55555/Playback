@@ -24,6 +24,7 @@
 #include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
+#include "mc/entity/components/AbilitiesComponent.h"
 #include "mc/entity/components/ActorGameTypeComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
@@ -32,6 +33,8 @@
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
 #include "mc/world/actor/Mob.h"
+#include "mc/world/actor/player/AbilitiesIndex.h"
+#include "mc/world/actor/player/Ability.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/item/ItemStack.h"
@@ -39,6 +42,7 @@
 
 #include <Windows.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -641,20 +645,20 @@ std::vector<uintptr_t> directCallees(uintptr_t function) {
     return callees;
 }
 
-// The screen-overlay renderers (fire, in-block, portal, scope); every other caller keeps the observer. 1.26.20.04 draws
-// fire and in-block from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
+// The screen-overlay renderers (fire, in-block, scope); every other caller keeps the observer. 1.26.20.04 draws fire
+// and in-block from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
+// _renderTransparentFirstPerson3DObjects stays on the observer: its portal overlay reads LocalPlayer-only fields that
+// a remote subject lacks, and it hands its actor to _renderItemInHand, which copies the subject's items onto the
+// observer itself.
 bool isOverlayCaller(void* returnAddress) {
     static uintptr_t const levelPrep =
         reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderLevelPrep));
     static uintptr_t const firstPersonObjects =
         reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_shouldRenderFirstPersonObjects));
-    static uintptr_t const transparentObjects = reinterpret_cast<uintptr_t>(
-        ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderTransparentFirstPerson3DObjects)
-    );
     static std::vector<uintptr_t> const levelPrepCallees = directCallees(levelPrep);
     auto const                          start            = functionStart(reinterpret_cast<uintptr_t>(returnAddress));
     if (start == 0) return false;
-    if (start == levelPrep || start == firstPersonObjects || start == transparentObjects) return true;
+    if (start == levelPrep || start == firstPersonObjects) return true;
     return std::binary_search(levelPrepCallees.begin(), levelPrepCallees.end(), start);
 }
 
@@ -741,36 +745,6 @@ LL_TYPE_INSTANCE_HOOK(PlayerIsScopingHook, ll::memory::HookPriority::High, Playe
     return scoping || !subject || subject == this ? scoping : subject->isScoping();
 }
 
-// The followed subject's portal warp, computed once per frame by PortalDataHook and read by the overlay getters.
-std::atomic<float> gPortalLevel{0.0f};
-
-// The screen overlay reads these LocalPlayer-only fields from the remote subject, whose smaller object yields heap
-// garbage. Feed it the subject's replayed portal ramp instead.
-float neutralPortalTime(LocalPlayer const& self, float raw) {
-    if (static_cast<Player const&>(self).isLocalPlayer()) return raw;
-    return gPortalLevel.load(std::memory_order_relaxed);
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    PortalEffectTimeHook,
-    ll::memory::HookPriority::High,
-    LocalPlayer,
-    &LocalPlayer::getPortalEffectTime,
-    float
-) {
-    return neutralPortalTime(*this, origin());
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    OPortalEffectTimeHook,
-    ll::memory::HookPriority::High,
-    LocalPlayer,
-    &LocalPlayer::getOPortalEffectTime,
-    float
-) {
-    return neutralPortalTime(*this, origin());
-}
-
 // Vanilla grows the distortion 0.0066667 per tick while nausea lasts over 60 ticks and fades it 0.05 per tick.
 struct NauseaRamp {
     bool        valid{};
@@ -818,7 +792,6 @@ float advancePortal(SubjectNauseaSample const& sample) {
 void resetWarp() {
     gNausea = NauseaRamp{};
     gPortal = PortalRamp{};
-    gPortalLevel.store(0.0f, std::memory_order_relaxed);
     gNauseaDistorting.store(false, std::memory_order_release);
 }
 
@@ -839,8 +812,7 @@ LL_TYPE_INSTANCE_HOOK(
     }
     float const nausea = advanceNausea(*sample);
     float const portal = sample->present ? 0.0f : advancePortal(*sample);
-    gPortalLevel.store(portal, std::memory_order_relaxed);
-    float const level = std::max(nausea, portal);
+    float const level  = std::max(nausea, portal);
     gNauseaDistorting.store(level > 0.0f && data.has_value(), std::memory_order_release);
     if (level <= 0.0f || !data) return data;
     data->mTime = std::max(data->mTime, level);
@@ -849,6 +821,79 @@ LL_TYPE_INSTANCE_HOOK(
     float const speed = sample->present ? 7.0f : 20.0f;
     data->mRotation   = static_cast<float>(static_cast<long double>(speed) * sample->tick);
     return data;
+}
+
+// Writes the subject's portal time onto the observer and clears NoClip for one vanilla overlay call, then restores
+// both.
+struct ScopedObserverOverlay {
+    LocalPlayer*        player{};
+    float               portal{};
+    float               oldPortal{};
+    bool                abilities{};
+    std::array<bool, 6> noclip{};
+
+    ScopedObserverOverlay(LocalPlayer& local, float level) : player(&local) {
+        portal                   = local.mPortalEffectTime;
+        oldPortal                = local.mOPortalEffectTime;
+        local.mPortalEffectTime  = level;
+        local.mOPortalEffectTime = level;
+        if (auto* component = local.getEntityContext().tryGetComponent<AbilitiesComponent>().as_ptr()) {
+            abilities    = true;
+            auto& layers = component->mAbilities->mLayers.get();
+            for (size_t i = 0; i < layers.size() && i < noclip.size(); ++i) {
+                auto& ability            = layers[i].mAbilities.get()[static_cast<size_t>(AbilitiesIndex::NoClip)];
+                noclip[i]                = ability.mValue->mBoolVal;
+                ability.mValue->mBoolVal = false;
+            }
+        }
+    }
+
+    ~ScopedObserverOverlay() {
+        if (!player) return;
+        player->mPortalEffectTime  = portal;
+        player->mOPortalEffectTime = oldPortal;
+        if (!abilities) return;
+        if (auto* component = player->getEntityContext().tryGetComponent<AbilitiesComponent>().as_ptr()) {
+            auto& layers = component->mAbilities->mLayers.get();
+            for (size_t i = 0; i < layers.size() && i < noclip.size(); ++i) {
+                layers[i].mAbilities.get()[static_cast<size_t>(AbilitiesIndex::NoClip)].mValue->mBoolVal = noclip[i];
+            }
+        }
+    }
+};
+
+// The purple warp draws here. Redirecting its actor would read past a remote player.
+LL_TYPE_INSTANCE_HOOK(
+    TransparentOverlayHook,
+    ll::memory::HookPriority::High,
+    InGamePlayScreen,
+    &InGamePlayScreen::$_renderTransparentFirstPerson3DObjects,
+    void,
+    ScreenContext& screenContext,
+    LevelRenderer& levelRenderer
+) {
+    bool const firstPerson = (isReplaySubjectFollowed() || isReplaySubjectHiddenFor(SubjectHideReason::Export))
+                          && !isReplaySubjectThirdPerson();
+    auto* subject = firstPerson ? replayHiddenActorInScope() : nullptr;
+    if (!subject) {
+        origin(screenContext, levelRenderer);
+        return;
+    }
+    auto const sample = sampleReplaySubjectNausea();
+    if (!sample) {
+        resetWarp();
+        origin(screenContext, levelRenderer);
+        return;
+    }
+    float const portal = sample->present ? 0.0f : advancePortal(*sample);
+    auto        client = ll::service::getClientInstance();
+    auto*       local  = client ? client->getLocalPlayer() : nullptr;
+    if (!local) {
+        origin(screenContext, levelRenderer);
+        return;
+    }
+    ScopedObserverOverlay overlay(*local, portal);
+    origin(screenContext, levelRenderer);
 }
 
 struct HookSlot {
@@ -895,9 +940,8 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             makeSlot<HandMiniMapHook>("miniMap"),
             makeSlot<CameraTargetHook>("cameraTarget"),
             makeSlot<BobViewHook>("bobView"),
-            makeSlot<PortalEffectTimeHook>("portalEffectTime"),
-            makeSlot<OPortalEffectTimeHook>("oPortalEffectTime"),
             makeSlot<PortalDataHook>("portalData"),
+            makeSlot<TransparentOverlayHook>("transparentOverlay"),
             makeSlot<PlayerIsScopingHook>("isScoping"),
             makeSlot<SleepVignetteHook>("sleepVignette"),
             makeSlot<TogglePerspectiveHook>("togglePerspective"),
