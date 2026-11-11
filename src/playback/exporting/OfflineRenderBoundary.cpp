@@ -99,7 +99,8 @@ bool OfflineRenderBoundary::open(
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
     mCaptureArmed                  = false;
-    mWarmupFramesRemaining         = settings.warmupFrames;
+    mWarmupFrames                  = settings.warmupFrames;
+    mWarmupFramesRemaining         = mWarmupFrames;
     mWarmupStableFrames            = 0;
     mConvergenceRendersDone        = 0;
     mConvergenceComplete           = false;
@@ -277,6 +278,8 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         mTickGateOpen                  = false;
         mTickGateSuspendedForDimension = true;
         mDimensionLoadingForced        = false;
+        // The new dimension starts from a cold renderer, so it is owed the whole warm-up again.
+        mWarmupFramesRemaining         = mWarmupFrames;
         mWarmupStableFrames            = 0;
         mWarmupStartedAt               = {};
         mWarmupLastLoggedAt            = {};
