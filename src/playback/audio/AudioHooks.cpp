@@ -19,21 +19,21 @@ namespace playback::audio::hooks {
 
 namespace {
 
-// FMOD 2.02.30 (fmod.dll in 1.26.51.01); the C handle and the C++ object are the same pointer.
+// FMOD 2.02.35 (fmod.dll in 1.26.60.05); the C handle and the C++ object are the same pointer.
 using InitFn = int (*)(void* system, int maxChannels, unsigned flags, void* extra);
 
-// SoundSystemFMOD on 1.26.51.01.
-constexpr uintptr_t SoundSystemFmodVtableRva = 0xEAD0DC0;
-constexpr size_t    UpdateFloatVtableSlot    = 56;
-constexpr uintptr_t UpdateFloatRva           = 0xB3B7630;
+// SoundSystemFMOD on 1.26.60.05.
+constexpr uintptr_t SoundSystemFmodVtableRva = 0xF333930;
+constexpr size_t    UpdateFloatVtableSlot    = 63;
+constexpr uintptr_t UpdateFloatRva           = 0x7A743B0;
 // Calls that would fight the export for the FMOD output while it runs NOSOUND_NRT.
 constexpr size_t    SetOutputDeviceVtableSlot = 4; // setDriver(guid match) + setOutput(AUTODETECT)
-constexpr uintptr_t SetOutputDeviceRva        = 0xB3B1520;
+constexpr uintptr_t SetOutputDeviceRva        = 0x7A6AF10;
 constexpr size_t    EnableVtableSlot          = 6; // mixerSuspend / mixerResume
-constexpr uintptr_t EnableRva                 = 0xB3B2650;
+constexpr uintptr_t EnableRva                 = 0x7A6C060;
 // Ore UI stream pause: System::update once, then spins on Channel::getPosition.
-constexpr size_t    StreamPauseVtableSlot = 67;
-constexpr uintptr_t StreamPauseRva        = 0xB3B9EC0;
+constexpr size_t    StreamPauseVtableSlot = 74;
+constexpr uintptr_t StreamPauseRva        = 0x7A77960;
 using StreamPauseFn                       = uint64_t (*)(void* soundSystem, uint64_t key);
 
 struct Hook {
