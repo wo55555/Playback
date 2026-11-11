@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -232,11 +233,90 @@ void shortcutRow(std::string const& keys, std::string const& description) {
     ImGui::TableSetColumnIndex(0);
     ImGui::TextDisabled("%s", keys.c_str());
     ImGui::TableSetColumnIndex(1);
+    // Only wraps once the dialog is narrower than its text, i.e. on a viewport too narrow for the sheet.
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextUnformatted(description.c_str());
+    ImGui::PopTextWrapPos();
 }
 
 std::string shortcutPair(input::EditorKeybind first, input::EditorKeybind second) {
     return input::KeyMap::displayString(first) + " / " + input::KeyMap::displayString(second);
+}
+
+struct ShortcutGroup {
+    std::string                                      title;
+    std::vector<std::pair<std::string, std::string>> rows; // keys, description
+};
+
+[[nodiscard]] std::vector<ShortcutGroup> shortcutGroups() {
+    using input::EditorKeybind;
+    auto const key = [](EditorKeybind bind) { return input::KeyMap::displayString(bind); };
+    return {
+        {"playback.refactorEditor.shortcuts.playback"_tr(),
+         {
+             {key(EditorKeybind::TogglePlayback), "playback.refactorEditor.shortcuts.playPause"_tr()},
+             {shortcutPair(EditorKeybind::JumpStart, EditorKeybind::JumpEnd),
+              "playback.refactorEditor.shortcuts.jumpEdges"_tr()},
+             {shortcutPair(EditorKeybind::SeekSecondLeft, EditorKeybind::SeekSecondRight),
+              "playback.refactorEditor.shortcuts.seekSeconds"_tr()},
+             {shortcutPair(EditorKeybind::SeekTickLeft, EditorKeybind::SeekTickRight),
+              "playback.refactorEditor.shortcuts.seekTicks"_tr()},
+             {shortcutPair(EditorKeybind::PreviousEditPoint, EditorKeybind::NextEditPoint),
+              "playback.refactorEditor.shortcuts.editPoints"_tr()},
+             {shortcutPair(EditorKeybind::DecreaseSpeed, EditorKeybind::IncreaseSpeed),
+              "playback.refactorEditor.shortcuts.speed"_tr()},
+             {"Shift", "playback.refactorEditor.shortcuts.stopFollow"_tr()},
+             {"F5", "playback.refactorEditor.shortcuts.togglePerspective"_tr()},
+         }},
+        {"playback.refactorEditor.shortcuts.editing"_tr(),
+         {
+             {shortcutPair(EditorKeybind::Undo, EditorKeybind::Redo),
+              "playback.refactorEditor.shortcuts.undoRedo"_tr()},
+             {key(EditorKeybind::SaveProject), "playback.refactorEditor.shortcuts.saveProject"_tr()},
+             {key(EditorKeybind::AddKeyframe), "playback.refactorEditor.shortcuts.keyframe"_tr()},
+             {key(EditorKeybind::AddCameraTrack), "playback.refactorEditor.shortcuts.addCamera"_tr()},
+             {"1 / 2 / 3", "playback.refactorEditor.shortcuts.selectCamera"_tr()},
+             {key(EditorKeybind::DeleteSelection), "playback.refactorEditor.shortcuts.delete"_tr()},
+             {key(EditorKeybind::SelectAll), "playback.refactorEditor.shortcuts.selectAll"_tr()},
+             {"Ctrl+Click / Drag", "playback.refactorEditor.shortcuts.boxSelect"_tr()},
+             {key(EditorKeybind::ClearSelection), "playback.refactorEditor.shortcuts.clearSelection"_tr()},
+             {shortcutPair(EditorKeybind::Copy, EditorKeybind::Paste),
+              "playback.refactorEditor.shortcuts.copyPaste"_tr()},
+             {"Shift+Drag", "playback.refactorEditor.shortcuts.shiftSnap"_tr()},
+             {key(EditorKeybind::InsertMarker), "playback.refactorEditor.shortcuts.insertMarker"_tr()},
+             {shortcutPair(EditorKeybind::PreviousMarker, EditorKeybind::NextMarker),
+              "playback.refactorEditor.shortcuts.markers"_tr()},
+             {shortcutPair(EditorKeybind::ZoomOutTimeline, EditorKeybind::ZoomInTimeline),
+              "playback.refactorEditor.shortcuts.zoom"_tr()},
+             {"Alt+Wheel", "playback.refactorEditor.shortcuts.zoomWheel"_tr()},
+             {key(EditorKeybind::ResetTimelineZoom), "playback.refactorEditor.shortcuts.zoomReset"_tr()},
+             {shortcutPair(EditorKeybind::MarkExportIn, EditorKeybind::MarkExportOut),
+              "playback.refactorEditor.shortcuts.exportRange"_tr()},
+         }},
+        {"playback.refactorEditor.shortcuts.application"_tr(),
+         {
+             {key(EditorKeybind::OpenExport), "playback.refactorEditor.shortcuts.export"_tr()},
+             {key(EditorKeybind::ToggleViewportMaximized), "playback.refactorEditor.shortcuts.viewport"_tr()},
+             {shortcutPair(EditorKeybind::DecreaseUiScale, EditorKeybind::IncreaseUiScale),
+              "playback.refactorEditor.shortcuts.uiScale"_tr()},
+             {key(EditorKeybind::ResetUiScale), "playback.refactorEditor.shortcuts.uiScaleReset"_tr()},
+         }},
+    };
+}
+
+// One column of the shortcut sheet. Its groups share a key column, so every description starts on the same edge.
+struct ShortcutColumn {
+    std::vector<size_t> groups; // indices into shortcutGroups()
+    float               keyWidth{};
+    float               width{};
+    float               height{};
+};
+
+// Font size of a popup opened from the menu bar: the bar's own window runs a size up, and popups do not inherit that.
+[[nodiscard]] float popupFontSize() {
+    ImGuiStyle const& style = ImGui::GetStyle();
+    // ImGui rounds the final size to whole pixels; measuring at the unrounded size comes out a few pixels short.
+    return std::max(1.0f, std::floor(style.FontSizeBase * style.FontScaleMain * style.FontScaleDpi + 0.5f));
 }
 
 } // namespace
@@ -456,149 +536,134 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
 }
 
 void EditorMenuBar::drawShortcutDialog() {
-    if (mShortcutDialogOpen) ImGui::OpenPopup("##KeyboardShortcuts");
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    float const shortcutWidth = std::min(620.0f, std::max(420.0f, ImGui::GetMainViewport()->WorkSize.x - 32.0f));
-    ImGui::SetNextWindowSize(ImVec2(shortcutWidth, 0.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal(
-            "##KeyboardShortcuts",
-            &mShortcutDialogOpen,
-            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize
-        )) {
-        ImGui::TextUnformatted("playback.refactorEditor.shortcuts.title"_tr().c_str());
-        ImGui::Separator();
-        ImGui::TextUnformatted("playback.refactorEditor.shortcuts.playback"_tr().c_str());
-        if (ImGui::BeginTable("##playback-shortcuts", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("##playback-key", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-            ImGui::TableSetupColumn("##playback-command", ImGuiTableColumnFlags_WidthStretch);
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::TogglePlayback),
-                "playback.refactorEditor.shortcuts.playPause"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::JumpStart, input::EditorKeybind::JumpEnd),
-                "playback.refactorEditor.shortcuts.jumpEdges"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::SeekSecondLeft, input::EditorKeybind::SeekSecondRight),
-                "playback.refactorEditor.shortcuts.seekSeconds"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::SeekTickLeft, input::EditorKeybind::SeekTickRight),
-                "playback.refactorEditor.shortcuts.seekTicks"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::PreviousEditPoint, input::EditorKeybind::NextEditPoint),
-                "playback.refactorEditor.shortcuts.editPoints"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::DecreaseSpeed, input::EditorKeybind::IncreaseSpeed),
-                "playback.refactorEditor.shortcuts.speed"_tr()
-            );
-            shortcutRow("Shift", "playback.refactorEditor.shortcuts.stopFollow"_tr());
-            shortcutRow("F5", "playback.refactorEditor.shortcuts.togglePerspective"_tr());
+    char const* const popupId = "##KeyboardShortcuts";
+    if (mShortcutDialogOpen) ImGui::OpenPopup(popupId);
+    if (!ImGui::IsPopupOpen(popupId)) return;
+
+    // Measured at the popup's own font size, so the sheet is sized and laid out before it opens.
+    ImGuiStyle const& style     = ImGui::GetStyle();
+    float const       font      = popupFontSize();
+    float const       scale     = std::max(1.0f, font / 14.0f);
+    ImFont* const     fontFace  = ImGui::GetFont();
+    auto const        textWidth = [&](std::string const& text) {
+        return std::ceil(fontFace->CalcTextSizeA(font, FLT_MAX, 0.0f, text.c_str()).x);
+    };
+    ImVec2 const padding{20.0f * scale, 14.0f * scale};
+    ImVec2 const cellPadding{8.0f * scale, 2.0f * scale};
+    float const  rowHeight    = font + cellPadding.y * 2.0f;
+    float const  buttonHeight = font + style.FramePadding.y * 2.0f + 6.0f * scale;
+    float const  columnGap    = 32.0f * scale;
+    float const  headerTop    = 8.0f;
+
+    std::vector<ShortcutGroup> const groups      = shortcutGroups();
+    auto const                       buildColumn = [&](std::initializer_list<size_t> indices) {
+        ShortcutColumn column;
+        float          descriptionWidth = 0.0f;
+        for (size_t const index : indices) {
+            auto const& group = groups[index];
+            column.groups.push_back(index);
+            // Mirrors sectionHeader plus one table row per shortcut.
+            column.height += (headerTop + 1.0f) * scale + font + style.ItemSpacing.y * 4.0f
+                           + rowHeight * static_cast<float>(group.rows.size());
+            column.width = std::max(column.width, textWidth(group.title));
+            for (auto const& [keys, description] : group.rows) {
+                column.keyWidth  = std::max(column.keyWidth, textWidth(keys));
+                descriptionWidth = std::max(descriptionWidth, textWidth(description));
+            }
+        }
+        // The slack keeps the longest description from wrapping over a rounding difference.
+        column.width = std::max(column.width, column.keyWidth + cellPadding.x * 2.0f + descriptionWidth + 2.0f * scale);
+        return column;
+    };
+    // Playback and application shortcuts together are about as tall as the editing list.
+    ShortcutColumn const stacked = buildColumn({0, 1, 2});
+    ShortcutColumn const left    = buildColumn({0, 2});
+    ShortcutColumn const right   = buildColumn({1});
+
+    auto const* const viewport  = ImGui::GetMainViewport();
+    float const       margin    = 12.0f * scale;
+    float const       maxWidth  = std::max(1.0f, viewport->WorkSize.x - margin * 2.0f);
+    float const       maxHeight = std::max(1.0f, viewport->WorkSize.y - margin * 2.0f);
+    // Title bar, title line, both separators and the close button around the scrolling list.
+    float const chromeHeight =
+        font + style.FramePadding.y * 2.0f + padding.y * 2.0f + font + buttonHeight + style.ItemSpacing.y * 4.0f + 2.0f;
+    // The list keeps a scrollbar's width spare, so one appearing never squeezes the text.
+    float const frameWidth     = padding.x * 2.0f + style.ScrollbarSize;
+    float const twoColumnWidth = frameWidth + left.width + columnGap + right.width;
+    // Two columns once one would not fit the viewport's height, as long as the viewport is wide enough for them.
+    bool const  twoColumns  = chromeHeight + stacked.height > maxHeight && twoColumnWidth <= maxWidth;
+    float const dialogWidth = std::min(maxWidth, twoColumns ? twoColumnWidth : frameWidth + stacked.width);
+
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize({dialogWidth, 0.0f}, ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints({dialogWidth, 0.0f}, {dialogWidth, maxHeight});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
+    bool const visible = ImGui::BeginPopupModal(
+        popupId,
+        &mShortcutDialogOpen,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+            | ImGuiWindowFlags_NoScrollWithMouse
+    );
+    ImGui::PopStyleVar(2);
+    if (!visible) return;
+
+    ImGui::TextUnformatted("playback.refactorEditor.shortcuts.title"_tr().c_str());
+    ImGui::Separator();
+
+    // Only the list scrolls on a short viewport; the close button below it always stays on screen.
+    float const footerHeight  = style.ItemSpacing.y * 2.0f + 1.0f + buttonHeight + padding.y;
+    float const maxBodyHeight = std::max(rowHeight * 4.0f, maxHeight - ImGui::GetCursorPosY() - footerHeight);
+    ImGui::SetNextWindowSizeConstraints({0.0f, 0.0f}, {FLT_MAX, maxBodyHeight});
+    ImGui::BeginChild("##shortcut-body", {0.0f, 0.0f}, ImGuiChildFlags_AutoResizeY);
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, cellPadding);
+    auto const drawColumn = [&](ShortcutColumn const& column) {
+        for (size_t const index : column.groups) {
+            auto const& group = groups[index];
+            ImGui::PushID(static_cast<int>(index));
+            sectionHeader(group.title.c_str(), headerTop);
+            if (ImGui::BeginTable("##shortcuts", 2, ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn("##key", ImGuiTableColumnFlags_WidthFixed, column.keyWidth);
+                ImGui::TableSetupColumn("##command", ImGuiTableColumnFlags_WidthStretch);
+                for (auto const& [keys, description] : group.rows) shortcutRow(keys, description);
+                ImGui::EndTable();
+            }
+            ImGui::PopID();
+        }
+    };
+    if (twoColumns) {
+        // Spacing between the two columns is twice the horizontal cell padding.
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {columnGap * 0.5f, 0.0f});
+        bool const columns = ImGui::BeginTable("##shortcut-columns", 2, ImGuiTableFlags_SizingStretchProp);
+        if (columns) {
+            ImGui::TableSetupColumn("##left", ImGuiTableColumnFlags_WidthFixed, left.width);
+            ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableNextRow();
+        }
+        ImGui::PopStyleVar();
+        if (columns) {
+            ImGui::TableSetColumnIndex(0);
+            drawColumn(left);
+            ImGui::TableSetColumnIndex(1);
+            drawColumn(right);
             ImGui::EndTable();
         }
-        ImGui::Spacing();
-        ImGui::TextUnformatted("playback.refactorEditor.shortcuts.editing"_tr().c_str());
-        if (ImGui::BeginTable("##editing-shortcuts", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("##editing-key", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-            ImGui::TableSetupColumn("##editing-command", ImGuiTableColumnFlags_WidthStretch);
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::Undo, input::EditorKeybind::Redo),
-                "playback.refactorEditor.shortcuts.undoRedo"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::SaveProject),
-                "playback.refactorEditor.shortcuts.saveProject"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::AddKeyframe),
-                "playback.refactorEditor.shortcuts.keyframe"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::AddCameraTrack),
-                "playback.refactorEditor.shortcuts.addCamera"_tr()
-            );
-            shortcutRow("1 / 2 / 3", "playback.refactorEditor.shortcuts.selectCamera"_tr());
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::DeleteSelection),
-                "playback.refactorEditor.shortcuts.delete"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::SelectAll),
-                "playback.refactorEditor.shortcuts.selectAll"_tr()
-            );
-            shortcutRow("Ctrl+Click / Drag", "playback.refactorEditor.shortcuts.boxSelect"_tr());
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::ClearSelection),
-                "playback.refactorEditor.shortcuts.clearSelection"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::Copy, input::EditorKeybind::Paste),
-                "playback.refactorEditor.shortcuts.copyPaste"_tr()
-            );
-            shortcutRow("Shift+Drag", "playback.refactorEditor.shortcuts.shiftSnap"_tr());
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::InsertMarker),
-                "playback.refactorEditor.shortcuts.insertMarker"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::PreviousMarker, input::EditorKeybind::NextMarker),
-                "playback.refactorEditor.shortcuts.markers"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::ZoomOutTimeline, input::EditorKeybind::ZoomInTimeline),
-                "playback.refactorEditor.shortcuts.zoom"_tr()
-            );
-            shortcutRow("Alt+Wheel", "playback.refactorEditor.shortcuts.zoomWheel"_tr());
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::ResetTimelineZoom),
-                "playback.refactorEditor.shortcuts.zoomReset"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::MarkExportIn, input::EditorKeybind::MarkExportOut),
-                "playback.refactorEditor.shortcuts.exportRange"_tr()
-            );
-            ImGui::EndTable();
-        }
-        ImGui::Spacing();
-        ImGui::TextUnformatted("playback.refactorEditor.shortcuts.application"_tr().c_str());
-        if (ImGui::BeginTable("##application-shortcuts", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("##application-key", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-            ImGui::TableSetupColumn("##application-command", ImGuiTableColumnFlags_WidthStretch);
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::OpenExport),
-                "playback.refactorEditor.shortcuts.export"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::ToggleViewportMaximized),
-                "playback.refactorEditor.shortcuts.viewport"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::DecreaseUiScale, input::EditorKeybind::IncreaseUiScale),
-                "playback.refactorEditor.shortcuts.uiScale"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::ResetUiScale),
-                "playback.refactorEditor.shortcuts.uiScaleReset"_tr()
-            );
-            ImGui::EndTable();
-        }
-        ImGui::Spacing();
-        float const closeWidth = 110.0f;
-        ImGui::SetCursorPosX(
-            std::max(
-                ImGui::GetStyle().WindowPadding.x,
-                ImGui::GetWindowWidth() - closeWidth - ImGui::GetStyle().WindowPadding.x
-            )
-        );
-        if (ImGui::Button("playback.refactorEditor.shortcuts.close"_tr().c_str(), {closeWidth, 32.0f})) {
-            mShortcutDialogOpen = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
+    } else {
+        drawColumn(stacked);
     }
+    ImGui::PopStyleVar();
+    ImGui::EndChild();
+
+    ImGui::Separator();
+    std::string const closeLabel = "playback.refactorEditor.shortcuts.close"_tr();
+    float const       closeWidth =
+        std::max(96.0f * scale, ImGui::CalcTextSize(closeLabel.c_str()).x + style.FramePadding.x * 4.0f);
+    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - closeWidth - padding.x));
+    if (ImGui::Button(closeLabel.c_str(), {closeWidth, buttonHeight})) {
+        mShortcutDialogOpen = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {

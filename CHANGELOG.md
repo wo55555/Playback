@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed custom block registration running twice when both replay-world hooks fired at once; blocks the client already has are no longer registered again.
 - Recorded entities no longer raise the game's runtime-id allocator, which could make the game discard the real local player.
 - The replay list's selection summary separates the file count and the total size with a middle dot instead of a garbled character.
+- Editor dialogs and menus stay inside the game window at any size. The keyboard shortcut sheet and message dialogs stay centred when the window is resized, the shortcut sheet switches to two columns or scrolls on a short window, menus too long for the window scroll, and long tooltips wrap. On a narrow window the replay list toolbar shrinks the search box first, then drops the import and sort labels and finally the title.
 
 ## [0.4.0-mc26.20] - 2026-11-01
 
