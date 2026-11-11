@@ -518,8 +518,8 @@ void** dispatcherVtable(IPacketHandlerDispatcher const* dispatcher) {
 }
 
 // Pausing every thread can catch one holding the heap lock, so the slot is swapped in place.
-void setDispatchSlot(void** vtable, void* function) {
-    auto* const slot = &vtable[PacketDispatchSlot];
+void setVtableSlot(void** vtable, size_t index, void* function) {
+    auto* const slot = &vtable[index];
     DWORD       protection{};
     if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &protection)) return;
     std::atomic_ref(*slot).store(function, std::memory_order_release);
@@ -582,8 +582,8 @@ void dispatchPacket(
     recorder.recordHandledPacket(*received);
 }
 
-// Mods load before the game can create packets, so each dispatcher is wrapped when its first packet is read, which
-// precedes that packet's dispatch on the same thread.
+// Mods load before the game can create packets, so each dispatcher is wrapped when its first packet is created, which
+// precedes that packet's dispatch.
 void wrapDispatcher(IPacketHandlerDispatcher const* dispatcher) {
     if (!dispatcher) return;
     auto** const vtable = dispatcherVtable(dispatcher);
@@ -593,7 +593,7 @@ void wrapDispatcher(IPacketHandlerDispatcher const* dispatcher) {
     std::unique_lock lock(dispatchers.mutex);
     if (vtable[PacketDispatchSlot] == detour) return;
     dispatchers.originals[vtable] = reinterpret_cast<PacketDispatchFn>(vtable[PacketDispatchSlot]);
-    setDispatchSlot(vtable, detour);
+    setVtableSlot(vtable, PacketDispatchSlot, detour);
 }
 
 void unwrapDispatchers() {
@@ -602,29 +602,86 @@ void unwrapDispatchers() {
     // A slot another mod has since taken keeps its chain.
     for (auto const& [vtable, original] : dispatchers.originals) {
         if (vtable[PacketDispatchSlot] == reinterpret_cast<void*>(&dispatchPacket)) {
-            setDispatchSlot(vtable, reinterpret_cast<void*>(original));
+            setVtableSlot(vtable, PacketDispatchSlot, reinterpret_cast<void*>(original));
         }
     }
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    PlaybackPacketReadHook,
-    ll::memory::HookPriority::Normal,
-    Packet,
-    &Packet::readNoHeader,
-    Bedrock::Result<void>,
+// The client reads each received packet through Packet::read(ReadOnlyBinaryStream&, cereal::ReflectionCtx const&),
+// then dispatches it on the same thread. Member functions return their result through a pointer passed after this.
+using PacketReadFn = Bedrock::Result<void>* (*)(Packet*,
+                                                Bedrock::Result<void>*,
+                                                ReadOnlyBinaryStream&,
+                                                cereal::ReflectionCtx const&);
+
+constexpr size_t PacketReadSlot = 9;
+
+// Entries are never erased, so a read already past its lookup can still call its original.
+struct PacketReaders {
+    std::shared_mutex                        mutex;
+    std::unordered_map<void**, PacketReadFn> originals;
+};
+
+PacketReaders& packetReaders() {
+    static PacketReaders readers;
+    return readers;
+}
+
+Bedrock::Result<void>* readPacket(
+    Packet*                      packet,
+    Bedrock::Result<void>*       result,
     ReadOnlyBinaryStream&        stream,
-    cereal::ReflectionCtx const& reflectionCtx,
-    SubClientId const&           subId
+    cereal::ReflectionCtx const& reflectionCtx
 ) {
-    wrapDispatcher(mHandler);
-    auto const begin  = stream.mReadPointer;
-    auto       result = origin(stream, reflectionCtx, subId);
-    if (result) {
-        gReadPacket.packet = this;
+    PacketReadFn original;
+    {
+        auto&            readers = packetReaders();
+        std::shared_lock lock(readers.mutex);
+        original = readers.originals.at(*reinterpret_cast<void** const*>(packet));
+    }
+    auto const begin = stream.mReadPointer;
+    original(packet, result, stream, reflectionCtx);
+    if (*result) {
+        gReadPacket.packet = packet;
         gReadPacket.bytes.assign(stream.mView.data() + begin, stream.mReadPointer - begin);
     }
     return result;
+}
+
+void wrapReader(Packet const& packet) {
+    auto** const vtable = *reinterpret_cast<void** const*>(&packet);
+    auto* const  detour = reinterpret_cast<void*>(&readPacket);
+    if (std::atomic_ref(vtable[PacketReadSlot]).load(std::memory_order_acquire) == detour) return;
+    auto&            readers = packetReaders();
+    std::unique_lock lock(readers.mutex);
+    if (vtable[PacketReadSlot] == detour) return;
+    readers.originals[vtable] = reinterpret_cast<PacketReadFn>(vtable[PacketReadSlot]);
+    setVtableSlot(vtable, PacketReadSlot, detour);
+}
+
+void unwrapReaders() {
+    auto&            readers = packetReaders();
+    std::unique_lock lock(readers.mutex);
+    for (auto const& [vtable, original] : readers.originals) {
+        if (vtable[PacketReadSlot] == reinterpret_cast<void*>(&readPacket)) {
+            setVtableSlot(vtable, PacketReadSlot, reinterpret_cast<void*>(original));
+        }
+    }
+}
+
+LL_STATIC_HOOK(
+    PlaybackCreatePacketHook,
+    ll::memory::HookPriority::Normal,
+    &MinecraftPackets::createPacket,
+    std::shared_ptr<Packet>,
+    MinecraftPacketIds id
+) {
+    auto packet = origin(id);
+    if (packet) {
+        wrapDispatcher(packet->mHandler);
+        wrapReader(*packet);
+    }
+    return packet;
 }
 
 } // namespace
@@ -664,7 +721,7 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack)
             && installNetworkHook<PlaybackStartGameHook>(state.startGame)
             && installNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion)
-            && installNetworkHook<PlaybackPacketReadHook>(state.packetRead)
+            && installNetworkHook<PlaybackCreatePacketHook>(state.packetRead)
             && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer)
             && installNetworkHook<PlaybackRenderedFovHook>(state.renderedFov)
             && installNetworkHook<PlaybackLocalViewFrameHook>(state.localViewFrame)
@@ -685,8 +742,11 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackLocalViewFrameHook>(state.localViewFrame);
         removeNetworkHook<PlaybackRenderedFovHook>(state.renderedFov);
         removeNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
-        removeNetworkHook<PlaybackPacketReadHook>(state.packetRead);
-        if (!state.packetRead) unwrapDispatchers();
+        removeNetworkHook<PlaybackCreatePacketHook>(state.packetRead);
+        if (!state.packetRead) {
+            unwrapReaders();
+            unwrapDispatchers();
+        }
         removeNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion);
         removeNetworkHook<PlaybackStartGameHook>(state.startGame);
         removeNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack);
