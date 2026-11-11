@@ -478,7 +478,7 @@
                 "pistonDuration": "Animation duration",
                 "optiPistonHint": "Saved to OptiPiston's config; also applies outside replays.",
                 "preview": "Preview",
-                "previewSubtitle": "What the replay shows",
+                "previewSubtitle": "What the replay shows and plays",
                 "hud": "HUD",
                 "hudChat": "Chat",
                 "hudBossBar": "Boss bar",
@@ -487,7 +487,13 @@
                 "hudActionBar": "Action bar",
                 "hudHotbar": "Hotbar",
                 "hudHotbarHint": "Shown only while the camera follows a recorded player.",
-                "hudHint": "Applies to the preview and to exported video."
+                "hudHint": "Applies to the preview and to exported video.",
+                "previewAudio": "Audio",
+                "previewMute": "Mute",
+                "previewVolume": "Volume",
+                "previewSilentPaused": "Silent while paused",
+                "previewSilentPausedHint": "Sounds triggered while the replay is paused or seeking are not played.",
+                "previewAudioHint": "Preview only. Exported audio is set in the export dialog."
             },
             "defaults": {
                 "camera": "Camera {}",

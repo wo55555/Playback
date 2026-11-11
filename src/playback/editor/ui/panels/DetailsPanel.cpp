@@ -935,6 +935,31 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
         property::endSection();
     }
 
+    if (property::beginSection("playback.refactorEditor.inspector.previewAudio"_tr().c_str())) {
+        bool muted = ctx.commands.isPreviewAudioMuted();
+        if (ImGui::Checkbox(("playback.refactorEditor.inspector.previewMute"_tr() + "##set-mute").c_str(), &muted))
+            ctx.commands.setPreviewAudioMuted(muted);
+
+        ImGui::BeginDisabled(muted);
+        ImGui::TextUnformatted("playback.refactorEditor.inspector.previewVolume"_tr().c_str());
+        float percent = ctx.commands.previewAudioVolume() * 100.0f;
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::SliderFloat("##set-preview-volume", &percent, 0.0f, 100.0f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp))
+            ctx.commands.setPreviewAudioVolume(percent / 100.0f, false);
+        if (ImGui::IsItemDeactivatedAfterEdit()) ctx.commands.setPreviewAudioVolume(percent / 100.0f, true);
+        ImGui::EndDisabled();
+
+        bool silent = ctx.commands.isPreviewSilentWhilePaused();
+        if (ImGui::Checkbox(
+                ("playback.refactorEditor.inspector.previewSilentPaused"_tr() + "##set-silent-paused").c_str(),
+                &silent
+            ))
+            ctx.commands.setPreviewSilentWhilePaused(silent);
+        widgets::itemTooltip("playback.refactorEditor.inspector.previewSilentPausedHint"_tr().c_str());
+        hint("playback.refactorEditor.inspector.previewAudioHint"_tr());
+        property::endSection();
+    }
+
     ImGui::EndDisabled();
 }
 

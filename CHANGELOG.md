@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The inspector has a Preview page for choosing which HUD elements a replay shows: chat, boss bar, title text, scoreboard, action bar and hotbar. Only the hotbar is on by default; the choices are saved and also apply to exported video. The export dialog's Hide HUD option leaves the whole HUD out of an export.
 - The export dialog's Audio page can turn export audio off and record it in mono or stereo. MP4 audio can be encoded as AAC, Opus or FLAC, with a bitrate of 128 to 320 kbps for AAC and Opus; PNG sequences keep an uncompressed `.audio.wav`.
+- The inspector's Preview page has audio controls for the editor preview: mute, volume, and Silent while paused, which keeps sounds triggered while the replay is paused or seeking from playing (on by default). They are saved and do not affect exported audio.
 
 ### Changed
 

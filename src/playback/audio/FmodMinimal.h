@@ -65,6 +65,8 @@ struct CApi {
     int (*groupRemoveDSP)(void*, void*){};
     int (*dspRelease)(void*){};
     int (*systemClose)(void*){};
+    // Preview audio (FMOD_Channel_Stop).
+    int (*channelStop)(void*){};
 };
 
 using FMOD_DSP_CREATE_CALLBACK  = FMOD_RESULT(PB_F_CALLBACK*)(FMOD_DSP_STATE*);
