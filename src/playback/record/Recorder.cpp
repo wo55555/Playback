@@ -141,18 +141,6 @@ constexpr auto DimensionChangeBarrierTimeout = std::chrono::milliseconds{15000};
 constexpr auto ChunkRotationBarrierTimeout   = std::chrono::milliseconds{8000};
 constexpr auto InitialSnapshotBarrierTimeout = std::chrono::milliseconds{2000};
 
-struct NetworkPacketFilter {
-    [[nodiscard]] static constexpr bool shouldFilter(MinecraftPacketIds packetId) {
-        switch (packetId) {
-        case MinecraftPacketIds::AddActor:
-        case MinecraftPacketIds::AddItemActor:
-            return true;
-        default:
-            return false;
-        }
-    }
-};
-
 auto& getLogger() { return playback::Playback::getInstance().getSelf().getLogger(); }
 
 // The replay observer's HUD and inventory screen read its own slots. The whole player inventory is recorded, not
@@ -2167,9 +2155,31 @@ bool Recorder::writeLocalPlayerState() {
     return true;
 }
 
-void Recorder::recordNetworkGamePacket(Packet const& packet) {
-    if (NetworkPacketFilter::shouldFilter(packet.getId())) return;
-    recordGamePacket(packet);
+void Recorder::recordReceivedPacket(Packet const& packet, std::string_view payload) {
+    switch (packet.getId()) {
+    // Spawns are rebuilt from the entity the handler creates.
+    case MinecraftPacketIds::AddActor:
+    case MinecraftPacketIds::AddItemActor:
+        return;
+    case MinecraftPacketIds::FullChunkData:
+        recordLevelChunkPacket(static_cast<LevelChunkPacket const&>(packet), payload);
+        return;
+    default:
+        recordGamePacket(packet, payload);
+    }
+}
+
+void Recorder::recordHandledPacket(Packet const& packet) {
+    switch (packet.getId()) {
+    case MinecraftPacketIds::AddActor:
+        recordSpawnedActor(*static_cast<AddActorPacket const&>(packet).mRuntimeId, packet);
+        return;
+    case MinecraftPacketIds::AddItemActor:
+        recordSpawnedActor(*static_cast<AddItemActorPacket const&>(packet).mRuntimeId, packet);
+        return;
+    default:
+        return;
+    }
 }
 
 void Recorder::recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallbackPacket) {
@@ -2245,7 +2255,11 @@ void Recorder::ensureRecordedItemRegistry(Level& level) {
     );
 }
 
-void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSemantics const& semantics) {
+void Recorder::recordConfigurationPacket(
+    Packet const&                   packet,
+    PacketLifecycleSemantics const& semantics,
+    std::string_view                payload
+) {
     try {
         if (!semantics.isConfiguration()) return;
 
@@ -2268,7 +2282,8 @@ void Recorder::recordConfigurationPacket(Packet const& packet, PacketLifecycleSe
         }
 
         PlaybackBuffer stream;
-        packet.write(stream);
+        if (payload.empty()) packet.write(stream);
+        else stream.mBuffer.assign(payload);
 
         auto const       packetId = static_cast<int32_t>(packetType);
         std::scoped_lock lock(mPendingGamePacketsMutex);
@@ -2428,7 +2443,7 @@ void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimens
     if (byDimension->second.empty()) mPendingPortableChunks.erase(byDimension);
 }
 
-void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet) {
+void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet, std::string_view payload) {
     auto const state = mState.load(std::memory_order_acquire);
     if (state != State::Recording && state != State::Closing) return;
 
@@ -2445,7 +2460,7 @@ void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet) {
                 if (byDimension->second.empty()) mPendingPortableChunks.erase(byDimension);
             }
         }
-        recordGamePacket(packet);
+        recordGamePacket(packet, payload);
         return;
     }
 
@@ -2453,7 +2468,7 @@ void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet) {
     mPendingPortableChunks[dimensionId].emplace(pos);
 }
 
-void Recorder::recordGamePacket(Packet const& packet) {
+void Recorder::recordGamePacket(Packet const& packet, std::string_view payload) {
     auto const packetId  = packet.getId();
     auto const semantics = describePacketLifecycle(packetId);
     switch (semantics.lifecycle) {
@@ -2462,7 +2477,7 @@ void Recorder::recordGamePacket(Packet const& packet) {
     case PacketLifecycle::PreWorldHandshake:
     case PacketLifecycle::SnapshotLatest:
     case PacketLifecycle::SnapshotSequence:
-        recordConfigurationPacket(packet, semantics);
+        recordConfigurationPacket(packet, semantics, payload);
         return;
     case PacketLifecycle::Timeline:
         break;
@@ -2502,8 +2517,10 @@ void Recorder::recordGamePacket(Packet const& packet) {
             *filteredPacket.mSubChunkData = std::move(successfulEntries);
             if (filteredPacket.mSubChunkData->empty()) return;
             filteredPacket.write(stream);
-        } else {
+        } else if (payload.empty()) {
             packet.write(stream);
+        } else {
+            stream.mBuffer.assign(payload);
         }
 
         if (packetId == MinecraftPacketIds::ChangeDimension) {
@@ -2554,9 +2571,6 @@ void Recorder::recordGamePacket(Packet const& packet) {
         }
 
         std::scoped_lock lock(mPendingGamePacketsMutex);
-        for (auto const& [pendingId, pendingPayload] : mPendingGamePackets) {
-            if (pendingId == static_cast<int32_t>(packetId) && pendingPayload == stream.mBuffer) return;
-        }
         mPendingGamePackets.push_back({static_cast<int32_t>(packetId), std::move(stream.mBuffer)});
         auto& recordedCount = mRecordedGamePacketCounts[static_cast<int32_t>(packetId)];
         ++recordedCount;
