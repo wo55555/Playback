@@ -248,9 +248,17 @@ private:
 
     void resetChunkSnapshot();
 
-    void recordConfigurationPacket(Packet const& packet, PacketLifecycleSemantics const& semantics);
+    void recordConfigurationPacket(
+        Packet const&                   packet,
+        PacketLifecycleSemantics const& semantics,
+        std::string_view                payload = {}
+    );
 
     void ensureRecordedItemRegistry(::Level& level);
+
+    void recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallbackPacket);
+
+    void recordLevelChunkPacket(LevelChunkPacket const& packet, std::string_view payload);
 
 public:
     Recorder();
@@ -295,13 +303,13 @@ public:
         mThumbnailCaptureProvider.store(provider, std::memory_order_release);
     }
 
-    void recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallbackPacket);
+    // Every packet the client handles, around its handler.
+    void recordReceivedPacket(Packet const& packet, std::string_view payload);
 
-    void recordNetworkGamePacket(Packet const& packet);
+    void recordHandledPacket(Packet const& packet);
 
-    void recordLevelChunkPacket(LevelChunkPacket const& packet);
-
-    void recordGamePacket(Packet const& packet);
+    // A payload is the packet as received; it is kept instead of writing the decoded packet back out.
+    void recordGamePacket(Packet const& packet, std::string_view payload = {});
 
     void recordCompletedChunk(ChunkPos const& pos, Dimension const& dimension);
 
