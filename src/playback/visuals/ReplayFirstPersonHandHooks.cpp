@@ -4,6 +4,7 @@
 #include "ReplayHandArm.h"
 #include "playback/Playback.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
+#include "playback/runtime/GameAddress.h"
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
@@ -411,7 +412,7 @@ LL_TYPE_INSTANCE_HOOK(
     HandItemInHandHook,
     ll::memory::HookPriority::High,
     InGamePlayScreen,
-    &InGamePlayScreen::$_renderItemInHand,
+    runtime::gameAddress(runtime::GameFunction::RenderItemInHand),
     void,
     ScreenContext& screenContext,
     Player&        player
@@ -559,9 +560,14 @@ bool isOverlayCaller(void* returnAddress) {
     static uintptr_t const levelPrep =
         reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderLevelPrep));
     static uintptr_t const firstPersonObjects =
-        reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_shouldRenderFirstPersonObjects));
+        runtime::gameAddress(runtime::GameFunction::ShouldRenderFirstPersonObjects);
     auto const start = functionStart(returnAddress);
     return start != 0 && (start == levelPrep || start == firstPersonObjects);
+}
+
+bool isPlayerScoping(Player const& player) {
+    static auto const fn = runtime::gameMember<bool (Player::*)() const>(runtime::GameFunction::PlayerIsScoping);
+    return (player.*fn)();
 }
 
 // Follow mode parks the observer on the subject, so only the overlays are redirected; the render list and name tags
@@ -570,7 +576,7 @@ LL_TYPE_INSTANCE_HOOK(
     CameraTargetHook,
     ll::memory::HookPriority::High,
     ClientInstance,
-    &ClientInstance::$getCameraTargetActor,
+    runtime::gameAddress(runtime::GameFunction::GetCameraTargetActor),
     Actor*
 ) {
     auto* actor = origin();
@@ -581,7 +587,7 @@ LL_TYPE_INSTANCE_HOOK(
     // isScoping.
     // 26.51 no longer exports Player::isUsingItem; it reported a non-empty mItemInUse item.
     bool const usingItem = !subject->mItemInUse->mItem->isNull();
-    return !subject->isScoping() && !usingItem ? subject : actor;
+    return !isPlayerScoping(*subject) && !usingItem ? subject : actor;
 }
 
 // Vanilla darkens a sleeping player's screen with PlayerSleepFadeEffectSystem::Fade, which runs the registry-context
@@ -600,7 +606,7 @@ LL_TYPE_INSTANCE_HOOK(
     SleepVignetteHook,
     ll::memory::HookPriority::High,
     HudVignetteRenderer,
-    &HudVignetteRenderer::$render,
+    runtime::gameAddress(runtime::GameFunction::HudVignetteRender),
     void,
     MinecraftUIRenderContext& renderContext,
     IClientInstance&          client,
@@ -641,11 +647,17 @@ LL_TYPE_STATIC_HOOK(
     origin(client);
 }
 
-LL_TYPE_INSTANCE_HOOK(PlayerIsScopingHook, ll::memory::HookPriority::High, Player, &Player::isScoping, bool) {
+LL_TYPE_INSTANCE_HOOK(
+    PlayerIsScopingHook,
+    ll::memory::HookPriority::High,
+    Player,
+    runtime::gameAddress(runtime::GameFunction::PlayerIsScoping),
+    bool
+) {
     bool const scoping = origin();
     if (!isLocalPlayer()) return scoping;
     auto* subject = subjectPlayer();
-    return scoping || !subject || subject == this ? scoping : subject->isScoping();
+    return scoping || !subject || subject == this ? scoping : isPlayerScoping(*subject);
 }
 
 // 26.51 inlines the portal and in-block overlays into $_renderTransparentFirstPerson3DObjects and reads the observer.
@@ -708,7 +720,7 @@ LL_TYPE_INSTANCE_HOOK(
     PortalDataHook,
     ll::memory::HookPriority::High,
     VanillaCameraAPI,
-    &VanillaCameraAPI::$tryGetPortalData,
+    runtime::gameAddress(runtime::GameFunction::TryGetPortalData),
     std::optional<IVanillaCameraAPI::PortalData>
 ) {
     auto       data   = origin();
@@ -777,7 +789,7 @@ LL_TYPE_STATIC_HOOK(
     OverlayEyeSampleHook,
     ll::memory::HookPriority::High,
     VanillaOffsetSystem,
-    &VanillaOffsetSystem::getCameraPosition,
+    runtime::gameAddress(runtime::GameFunction::GetCameraPosition),
     Vec3,
     Actor const& actor,
     float        alpha
@@ -800,7 +812,13 @@ struct ScopedOverlaySample {
 };
 
 // The flame quads call Actor::isOnFire on the camera actor. The observer is never burning; the subject is.
-LL_TYPE_INSTANCE_HOOK(OverlayOnFireHook, ll::memory::HookPriority::High, Actor, &Actor::$isOnFire, bool) {
+LL_TYPE_INSTANCE_HOOK(
+    OverlayOnFireHook,
+    ll::memory::HookPriority::High,
+    Actor,
+    runtime::gameAddress(runtime::GameFunction::ActorIsOnFire),
+    bool
+) {
     if (gOverlaySample && this == gOverlayLocal) {
         if (auto* subject = subjectPlayer(); subject && static_cast<Actor*>(subject) != this)
             return subject->isOnFire();
@@ -813,7 +831,7 @@ LL_TYPE_INSTANCE_HOOK(
     TransparentOverlayHook,
     ll::memory::HookPriority::High,
     InGamePlayScreen,
-    &InGamePlayScreen::$_renderTransparentFirstPerson3DObjects,
+    runtime::gameAddress(runtime::GameFunction::RenderTransparentFirstPerson3DObjects),
     void,
     ScreenContext& screenContext,
     LevelRenderer& levelRenderer

@@ -5,6 +5,7 @@
 #include "playback/exporting/ExportActivity.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/runtime/GameAddress.h"
 #include "playback/screen/RecordDialogs.h"
 
 #include "ll/api/i18n/I18n.h"
@@ -214,7 +215,7 @@ LL_TYPE_INSTANCE_HOOK(
     HudRecordIndicatorTickHook,
     ll::memory::HookPriority::Normal,
     HudScreenController,
-    &HudScreenController::$tick,
+    runtime::gameAddress(runtime::GameFunction::HudScreenTick),
     ::ui::DirtyFlag
 ) {
     auto result = origin();

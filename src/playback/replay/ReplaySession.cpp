@@ -9,6 +9,7 @@
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/record/Recorder.h"
 #include "playback/runtime/ClientTickHooks.h"
+#include "playback/runtime/GameAddress.h"
 #include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
@@ -353,6 +354,14 @@ void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
     }
 }
 
+void updateAttribute(AttributeData const& data, AttributeInstanceRef instance, AttributeModificationContext& context) {
+    static auto const update =
+        runtime::gameFunction<void (*)(AttributeData const&, AttributeInstanceRef, AttributeModificationContext&)>(
+            runtime::GameFunction::UpdateAttribute
+        );
+    update(data, instance, context);
+}
+
 // The HUD draws health, hunger, armor and experience from the observer's own attributes, so the recorded player's
 // are copied onto it. Health never drops below 1: a dead local player would open the death screen.
 void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
@@ -365,8 +374,8 @@ void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) 
         auto const& attribute = Attribute::getByName(*data.mName);
         if (attribute.mName->getString() != data.mName->getString()) continue;
         auto instance = attributes.getMutableInstance(attribute);
-        if (!instance.mPtr || instance.mPtr == &BaseAttributeMap::mInvalidInstance()) continue;
-        BaseAttributeMap::updateAttribute(data, instance, context);
+        if (!instance.mPtr) continue;
+        updateAttribute(data, instance, context);
     }
 }
 
@@ -383,9 +392,9 @@ std::array<Attribute const*, 6> hudAttributes() {
 }
 
 std::optional<FollowedHudMirror::SavedAttribute> readHudAttribute(Actor& actor, Attribute const& attribute) {
-    auto const  instance = actor.getAttributes()->getInstance(attribute);
+    auto const  instance = actor.getAttributes()->getMutableInstance(attribute);
     auto const* value    = instance.mPtr;
-    if (!value || value == &BaseAttributeMap::mInvalidInstance()) return std::nullopt;
+    if (!value) return std::nullopt;
     return FollowedHudMirror::SavedAttribute{
         *attribute.mName,
         value->mCurrentValue,
@@ -402,9 +411,14 @@ void writeHudAttribute(Player& observer, FollowedHudMirror::SavedAttribute const
     if (*attribute.mName != value.name) return;
     auto& attributes = *observer.getAttributes();
     auto  instance   = attributes.getMutableInstance(attribute);
-    if (!instance.mPtr || instance.mPtr == &BaseAttributeMap::mInvalidInstance()) return;
+    if (!instance.mPtr) return;
+    static auto const construct = runtime::gameFunction<void* (*)(void*, AttributeInstance const&)>(
+        runtime::GameFunction::AttributeDataConstructor
+    );
+    static auto const destroy = runtime::gameFunction<void (*)(void*)>(runtime::GameFunction::AttributeDataDestructor);
+    alignas(AttributeData) std::byte storage[sizeof(AttributeData)];
     // Built from the live instance so the modifiers stay; only the values are replaced.
-    AttributeData data{*instance.mPtr};
+    auto& data            = *static_cast<AttributeData*>(construct(storage, *instance.mPtr));
     data.mCurrentValue    = value.current;
     data.mMinValue        = value.min;
     data.mMaxValue        = value.max;
@@ -414,7 +428,8 @@ void writeHudAttribute(Player& observer, FollowedHudMirror::SavedAttribute const
     if (value.name == *SharedAttributes::HEALTH().mName && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
     AttributeModificationContext context{};
     context.mAttributeMap = &attributes;
-    BaseAttributeMap::updateAttribute(data, instance, context);
+    updateAttribute(data, instance, context);
+    destroy(&data);
 }
 
 // While another player's HUD is shown, the recorder's attribute updates are kept for the restore instead of applied.
@@ -684,6 +699,14 @@ bool sameHudStack(ItemStack const& left, ItemStack const& right) {
         && left.hasSameUserData(right);
 }
 
+ItemStack itemFromDescriptor(NetworkItemStackDescriptor const& descriptor, BlockPalette const& palette) {
+    static auto const getItemStack =
+        runtime::gameMember<ItemStack (NetworkItemStackDescriptor::*)(BlockPalette const&) const>(
+            runtime::GameFunction::NetworkItemStackDescriptorGetItemStack
+        );
+    return (descriptor.*getItemStack)(palette);
+}
+
 constexpr std::array<SharedTypes::Legacy::ArmorSlot, 4> HudArmorSlots{
     SharedTypes::Legacy::ArmorSlot::Head,
     SharedTypes::Legacy::ArmorSlot::Torso,
@@ -696,7 +719,7 @@ constexpr std::array<SharedTypes::Legacy::ArmorSlot, 4> HudArmorSlots{
 bool divertRecordedHudPacket(Packet& packet, FollowedHudMirror& mirror) {
     auto const level  = ll::service::getMultiPlayerLevel();
     auto const toItem = [&](NetworkItemStackDescriptor const& descriptor) {
-        return ItemStack::fromDescriptor(descriptor, level->getBlockPalette(), true);
+        return itemFromDescriptor(descriptor, level->getBlockPalette());
     };
 
     switch (packet.getId()) {
@@ -5862,6 +5885,10 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
 
     if (packetId == MinecraftPacketIds::MapData && mReplayPlayer) {
+        static auto const applyToMap =
+            runtime::gameMember<void (ClientboundMapItemDataPacketPayload::*)(MapItemSavedData&, bool) const>(
+                runtime::GameFunction::MapDataApplyToMap
+            );
         auto& map   = static_cast<ClientboundMapItemDataPacket&>(*packet);
         auto& level = mReplayPlayer->getLevel();
         if (!map.mMapPixels->empty()) {
@@ -5877,7 +5904,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                         static_cast<int>(map.mScale)
                     );
                 }
-                if (saved->mPixels->empty()) map.applyToMap(*saved, false);
+                if (saved->mPixels->empty()) (map.*applyToMap)(*saved, false);
             }
         }
     }
@@ -5945,8 +5972,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         int const slot = equipment.mSlot;
         if (slot < 0 || slot >= 9) break;
         auto& hotbar = gReplayHotbars[equipment.mRuntimeId->rawID];
-        hotbar.items[static_cast<size_t>(slot)] =
-            ItemStack::fromDescriptor(*equipment.mItem, level->getBlockPalette(), true);
+        hotbar.items[static_cast<size_t>(slot)] = itemFromDescriptor(*equipment.mItem, level->getBlockPalette());
         hotbar.selected = std::clamp(static_cast<int>(equipment.mSelectedSlot), 0, 8);
         break;
     }

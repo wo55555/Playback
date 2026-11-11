@@ -1,6 +1,7 @@
 #include "ReplayContainerKeepOpenHook.h"
 
 #include "playback/Playback.h"
+#include "playback/runtime/GameAddress.h"
 
 #include "ll/api/memory/Hook.h"
 #include "mc/client/gui/screens/controllers/ContainerScreenController.h"
@@ -24,7 +25,7 @@ LL_TYPE_INSTANCE_HOOK(
     ContainerStillValidHook,
     ll::memory::HookPriority::High,
     ContainerScreenController,
-    &ContainerScreenController::$_isStillValid,
+    runtime::gameAddress(runtime::GameFunction::ContainerScreenIsStillValid),
     bool
 ) {
     bool const valid = origin();
@@ -44,7 +45,7 @@ void install() {
         return;
     }
     gHooked = true;
-    auto const target = reinterpret_cast<uintptr_t>(ll::memory::toFuncPtr(&ContainerScreenController::$_isStillValid));
+    auto const target = runtime::gameAddress(runtime::GameFunction::ContainerScreenIsStillValid);
     logger.info(
         "containerKeepOpen hook installed rva=0x{:X}",
         target - reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))

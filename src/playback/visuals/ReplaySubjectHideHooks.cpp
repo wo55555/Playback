@@ -3,6 +3,7 @@
 #include "ReplayEntityInterpolator.h"
 #include "ReplayFirstPersonHandHooks.h"
 #include "playback/Playback.h"
+#include "playback/runtime/GameAddress.h"
 
 #include "ll/api/memory/Hook.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
@@ -17,7 +18,6 @@ namespace playback::visuals {
 
 namespace {
 
-using RenderBasic  = void (ActorRenderDispatcher::*)(BaseActorRenderContext&, Actor&, bool);
 using RenderCamera =
     void (ActorRenderDispatcher::*)(BaseActorRenderContext&, Actor&, Vec3 const&, Vec3 const&, Vec2 const&, bool);
 
@@ -25,7 +25,7 @@ LL_TYPE_INSTANCE_HOOK(
     SubjectHideRenderBasicHook,
     ll::memory::HookPriority::Lowest,
     ActorRenderDispatcher,
-    static_cast<RenderBasic>(&ActorRenderDispatcher::render),
+    runtime::gameAddress(runtime::GameFunction::ActorRenderDispatcherRender),
     void,
     BaseActorRenderContext& context,
     Actor&                  entity,

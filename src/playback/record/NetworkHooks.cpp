@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/runtime/GameAddress.h"
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
@@ -418,16 +419,16 @@ LL_TYPE_INSTANCE_HOOK(
     PlaybackPredictedSoundHook,
     ll::memory::HookPriority::Normal,
     LevelSoundManager,
-    &LevelSoundManager::playPredictiveSynchronizedSound,
+    runtime::gameAddress(runtime::GameFunction::PlayPredictiveSynchronizedSound),
     void,
-    IDimension&                          dimension,
-    SoundEventIdentifier const&          soundEvent,
-    Vec3 const&                          pos,
-    Player*                              targetPlayer,
-    int                                  data,
-    ActorSoundIdentifier const&          actor,
-    bool                                 isGlobal,
-    std::optional<Vec3> const&           fireAtPosition
+    IDimension&                 dimension,
+    SoundEventIdentifier const& soundEvent,
+    Vec3 const&                 pos,
+    Player*                     targetPlayer,
+    int                         data,
+    ActorSoundIdentifier const& actor,
+    bool                        isGlobal,
+    std::optional<Vec3> const&  fireAtPosition
 ) {
     origin(dimension, soundEvent, pos, targetPlayer, data, actor, isGlobal, fireAtPosition);
     auto& recorder = Recorder::getInstance();
