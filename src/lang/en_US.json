@@ -310,6 +310,8 @@
                 "outputSummary": "Output",
                 "summaryValue": "{} FPS | {:.2f} s | {} frames",
                 "captureValue": "{} x {} | {}x SSAA | {} warm-up frames",
+                "hideHud": "Hide HUD",
+                "hideHudHint": "Leaves the whole HUD out of the export, so only the world is rendered. When off, the export shows the HUD elements chosen on the inspector's Preview page.",
                 "fullRange": "Full replay",
                 "usePlayhead": "Use current playhead tick",
                 "export": "Start Export",
@@ -463,7 +465,18 @@
                 "optiPiston": "OptiPiston",
                 "pistonEnabled": "Smooth piston animation",
                 "pistonDuration": "Animation duration",
-                "optiPistonHint": "Saved to OptiPiston's config; also applies outside replays."
+                "optiPistonHint": "Saved to OptiPiston's config; also applies outside replays.",
+                "preview": "Preview",
+                "previewSubtitle": "What the replay shows",
+                "hud": "HUD",
+                "hudChat": "Chat",
+                "hudBossBar": "Boss bar",
+                "hudTitle": "Title text",
+                "hudScoreboard": "Scoreboard",
+                "hudActionBar": "Action bar",
+                "hudHotbar": "Hotbar",
+                "hudHotbarHint": "Shown only while the camera follows a recorded player.",
+                "hudHint": "Applies to the preview and to exported video."
             },
             "defaults": {
                 "camera": "Camera {}",

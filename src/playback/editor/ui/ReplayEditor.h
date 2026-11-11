@@ -71,6 +71,9 @@ public:
     [[nodiscard]] UiScaleTier uiScaleTier() const override { return mUiScaleTier; }
     void                      setUiScaleTier(UiScaleTier tier) override;
 
+    [[nodiscard]] bool isHudElementShown(visuals::HudElement element) const override;
+    void               setHudElementShown(visuals::HudElement element, bool shown) override;
+
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }

@@ -5,6 +5,7 @@
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorState.h"
 #include "playback/state/editing/models/SelectionModel.h"
+#include "playback/visuals/ReplayHudVisibility.h"
 
 #include <functional>
 #include <utility>
@@ -51,6 +52,10 @@ public:
 
     [[nodiscard]] virtual UiScaleTier uiScaleTier() const              = 0;
     virtual void                      setUiScaleTier(UiScaleTier tier) = 0;
+
+    // What the replay shows; the choices carry over to an export.
+    [[nodiscard]] virtual bool isHudElementShown(visuals::HudElement element) const        = 0;
+    virtual void               setHudElementShown(visuals::HudElement element, bool shown) = 0;
 };
 
 // Everything a panel needs for one frame, so panels stay callable without the editor singleton.

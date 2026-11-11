@@ -10,6 +10,7 @@
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/state/editing/models/EditorStateExt.h"
+#include "playback/visuals/ReplayHudVisibility.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -122,6 +123,7 @@ bool ReplayExportDriver::start(
         return false;
     }
     if (mPlan->settings.audio) playback::audio::exportcap::exportBegin(mPlan->settings);
+    visuals::setHudHiddenForExport(mPlan->settings.hideHud);
 
     bool const previousPaused = mReplay.isPaused();
     if (!mReplay.setPaused(true)) {
@@ -157,7 +159,7 @@ bool ReplayExportDriver::start(
     mPhase = Phase::Rendering;
     getLogger().info(
         "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
-        "warmup={}, convergence={}, accelerateClient={}, x264={}/crf{}",
+        "warmup={}, convergence={}, accelerateClient={}, x264={}/crf{}, hideHud={}",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -171,7 +173,8 @@ bool ReplayExportDriver::start(
         mPlan->settings.convergenceFrames,
         mPlan->settings.accelerateClient,
         x264Preset(mPlan->settings.encodeSpeed),
-        mPlan->settings.videoCrf
+        mPlan->settings.videoCrf,
+        mPlan->settings.hideHud
     );
     return true;
 }
@@ -472,6 +475,7 @@ void ReplayExportDriver::fail(ExportError error, std::string message) {
 void ReplayExportDriver::restoreReplayState() {
     // exportEnd is idempotent and must run on every exit path (success, cancel, fault); this is the common funnel.
     playback::audio::exportcap::exportEnd();
+    visuals::setHudHiddenForExport(false);
     if (!mPreviousPaused) return;
     bool const previousPaused = *mPreviousPaused;
     mPreviousPaused.reset();

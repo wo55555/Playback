@@ -72,6 +72,8 @@ struct ExportSettings {
     uint32_t         videoCrf{18};
     // Capture game audio during export: muxed into MP4, written as a sidecar .wav for PNG sequences.
     bool audio{true};
+    // Leave the whole HUD out of the captured frames, whatever the preview shows.
+    bool hideHud{false};
 };
 
 enum class ExportError : uint8_t {
