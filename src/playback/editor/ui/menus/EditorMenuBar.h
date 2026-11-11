@@ -40,6 +40,7 @@ private:
     bool mExportAccelerateClient{false};
     int  mExportEncodeSpeed{0};
     int  mExportCrf{18};
+    bool mExportHideHud{false};
     // Page of the export dialog being shown.
     int mExportTab{0};
     // Height shared by every page: the tallest one measured so far.

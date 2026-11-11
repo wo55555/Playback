@@ -683,6 +683,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     for (std::string const& label :
          {"playback.refactorEditor.export.ssaa"_tr(),
           "playback.refactorEditor.export.warmupFrames"_tr(),
+          "playback.refactorEditor.export.hideHud"_tr(),
           "playback.refactorEditor.export.encodeSpeed"_tr(),
           "playback.refactorEditor.export.crf"_tr(),
           "playback.refactorEditor.export.convergenceFrames"_tr(),
@@ -952,6 +953,12 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     "playback.refactorEditor.export.warmupHint"_tr().c_str()
                 );
                 inputClampedInt("##export-warmup", mExportWarmupFrames, 0, 3600, fieldWidth);
+
+                propertyLabel(
+                    "playback.refactorEditor.export.hideHud"_tr().c_str(),
+                    "playback.refactorEditor.export.hideHudHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-hide-hud", &mExportHideHud);
                 ImGui::EndTable();
             }
 
@@ -1052,6 +1059,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         previewSettings.videoCrf    = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         previewSettings.accelerateClient = mExportAccelerateClient;
+        previewSettings.hideHud          = mExportHideHud;
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
 

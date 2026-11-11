@@ -120,6 +120,9 @@ void DetailsPanel::draw(PanelContext const& ctx) {
         case InspectorPage::Export:
             drawExportPage(ctx);
             break;
+        case InspectorPage::Preview:
+            drawPreviewPage(ctx);
+            break;
         case InspectorPage::Settings:
             drawSettingsPage(ctx);
             break;
@@ -145,6 +148,7 @@ void DetailsPanel::drawRail(PanelContext const& ctx, float width, float height) 
     std::array const entries{
         Entry{InspectorPage::Selection, ICON_PANEL_LEFT, "playback.refactorEditor.inspector.selection"_tr(), true},
         Entry{InspectorPage::Export,    ICON_EXPORT,     "playback.refactorEditor.inspector.export"_tr(),    true},
+        Entry{InspectorPage::Preview,   ICON_EYE,        "playback.refactorEditor.inspector.preview"_tr(),   true},
         Entry{InspectorPage::Settings,  ICON_SETTINGS,   "playback.refactorEditor.inspector.settings"_tr(),  true},
     };
 
@@ -889,6 +893,49 @@ void DetailsPanel::drawExportPage(PanelContext const& ctx) {
         }
         property::endSection();
     }
+}
+
+void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
+    property::beginInspector(
+        "playback.refactorEditor.inspector.preview"_tr(),
+        "playback.refactorEditor.inspector.previewSubtitle"_tr()
+    );
+    auto const hint = [](std::string const& text) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", text.c_str());
+        ImGui::PopTextWrapPos();
+    };
+
+    // An export renders what these say, so they stay put while one is running.
+    ImGui::BeginDisabled(exporting::isExportActive(ctx.state.exportStatus.state));
+
+    if (property::beginSection("playback.refactorEditor.inspector.hud"_tr().c_str())) {
+        struct Toggle {
+            visuals::HudElement element;
+            std::string         label;
+        };
+        std::array const toggles{
+            Toggle{visuals::HudElement::Chat,       "playback.refactorEditor.inspector.hudChat"_tr()      },
+            Toggle{visuals::HudElement::BossBar,    "playback.refactorEditor.inspector.hudBossBar"_tr()   },
+            Toggle{visuals::HudElement::Title,      "playback.refactorEditor.inspector.hudTitle"_tr()     },
+            Toggle{visuals::HudElement::Scoreboard, "playback.refactorEditor.inspector.hudScoreboard"_tr()},
+            Toggle{visuals::HudElement::ActionBar,  "playback.refactorEditor.inspector.hudActionBar"_tr() },
+            Toggle{visuals::HudElement::Hotbar,     "playback.refactorEditor.inspector.hudHotbar"_tr()    },
+        };
+        for (auto const& toggle : toggles) {
+            bool shown = ctx.commands.isHudElementShown(toggle.element);
+            ImGui::PushID(static_cast<int>(toggle.element));
+            if (ImGui::Checkbox((toggle.label + "##set-hud").c_str(), &shown))
+                ctx.commands.setHudElementShown(toggle.element, shown);
+            ImGui::PopID();
+            if (toggle.element == visuals::HudElement::Hotbar)
+                widgets::itemTooltip("playback.refactorEditor.inspector.hudHotbarHint"_tr().c_str());
+        }
+        hint("playback.refactorEditor.inspector.hudHint"_tr());
+        property::endSection();
+    }
+
+    ImGui::EndDisabled();
 }
 
 void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {

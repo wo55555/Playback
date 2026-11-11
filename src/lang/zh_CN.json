@@ -310,6 +310,8 @@
                 "outputSummary": "输出文件",
                 "summaryValue": "{} FPS | {:.2f} 秒 | {} 帧",
                 "captureValue": "{} x {} | {}x SSAA | {} 个预热帧",
+                "hideHud": "隐藏 HUD",
+                "hideHudHint": "导出时不渲染任何 HUD，画面中只有世界。关闭时，导出会显示检查器“预览”页中选择的 HUD 元素。",
                 "fullRange": "完整回放",
                 "usePlayhead": "使用当前播放头游戏刻",
                 "export": "开始导出",
@@ -463,7 +465,18 @@
                 "optiPiston": "OptiPiston",
                 "pistonEnabled": "活塞动画优化",
                 "pistonDuration": "动画时长",
-                "optiPistonHint": "保存到 OptiPiston 配置，回放外同样生效。"
+                "optiPistonHint": "保存到 OptiPiston 配置，回放外同样生效。",
+                "preview": "预览",
+                "previewSubtitle": "回放中显示的内容",
+                "hud": "HUD",
+                "hudChat": "聊天栏",
+                "hudBossBar": "Boss 栏",
+                "hudTitle": "标题文字",
+                "hudScoreboard": "计分板",
+                "hudActionBar": "动作栏",
+                "hudHotbar": "快捷栏",
+                "hudHotbarHint": "仅在镜头跟随录制玩家时显示。",
+                "hudHint": "对预览和导出的视频都生效。"
             },
             "defaults": {
                 "camera": "相机 {}",
