@@ -1696,7 +1696,7 @@ void SelectReplayScreen::drawActionBar() {
         if (mSelectedIds.contains(item.replayId)) selectedBytes += item.fileSize;
     }
     std::string const summary =
-        "playback.replayBrowser.selectedCount"_tr(mSelectedIds.size()) + "  路  " + formatSize(selectedBytes);
+        "playback.replayBrowser.selectedCount"_tr(mSelectedIds.size()) + "  ·  " + formatSize(selectedBytes);
 
     float const buttonWidth    = 140.0f;
     float const buttonGap      = 10.0f;
