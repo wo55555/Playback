@@ -7,17 +7,17 @@ namespace playback::exporting {
 struct ExportSettings;
 }
 
-// Phase 2 export-audio capture (R1): takes over the game's FMOD system during export, drives the mixer from the frame
-// ledger, and captures the master-group mix to a sidecar WAV. Registers policy callbacks on the probe; no re-hooking.
+// Export-audio capture: takes over the game's FMOD system during export, drives the mixer from the frame ledger, and
+// captures the master-group mix to a sidecar WAV. Registers policy callbacks on playback::audio::hooks.
 namespace playback::audio::exportcap {
 
-// Wire the policy callbacks into the probe. Must be called after probe::install(). Safe to call when audio symbols
-// are missing (returns false and the whole audio path stays inert).
+// Wire the policy callbacks into the audio hooks. Call only after hooks::install() succeeded. Safe to call when FMOD
+// symbols are missing (returns false and the whole audio path stays inert).
 bool install();
 void uninstall();
 
-// Arm the session at export start (before the timeline seek). Gates the game mixer and rewrites the audio restart to
-// NOSOUND_NRT. endTick/frameRate come from the export plan.
+// Arm the session at export start (before the timeline seek). Gates the game mixer and switches the FMOD output
+// to NOSOUND_NRT. endTick/frameRate come from the export plan.
 void exportBegin(exporting::ExportSettings const& settings);
 
 // Disarm and clean up. Idempotent; called on success, cancel, and failure alike.

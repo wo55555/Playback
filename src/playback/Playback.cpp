@@ -2,7 +2,7 @@
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
-#include "playback/audio/AudioProbe.h"
+#include "playback/audio/AudioHooks.h"
 #include "playback/audio/ExportAudioCapture.h"
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
@@ -125,8 +125,7 @@ bool Playback::hook() {
     if (!editor::graphics::hookSeekFreeze(true)) {
         getSelf().getLogger().warn("Unable to install the seek freeze hook; seeks will show catch-up frames");
     }
-    if (audio::probe::install()) {
-        // Export-audio capture registers its policy callbacks on the probe; no additional hooks are installed.
+    if (audio::hooks::install()) {
         (void)audio::exportcap::install();
     }
     screen::hookRecordControls(true);
@@ -232,7 +231,7 @@ bool Playback::unhook() {
     }
 
     audio::exportcap::uninstall();
-    audio::probe::uninstall();
+    audio::hooks::uninstall();
     if (!editor::graphics::hookSeekFreeze(false)) {
         getSelf().getLogger().warn("Unable to remove the seek freeze hook during shutdown");
     }
