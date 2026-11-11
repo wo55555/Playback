@@ -55,7 +55,7 @@ EditorController::EditorController(EditorContext& context)
       std::make_unique<exporting::ReplayExportDriver>(mExportCoordinator, replay::ReplaySession::getInstance())
   ) {}
 
-EditorController::~EditorController() { keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview); }
+EditorController::~EditorController() = default;
 
 void EditorController::setRendererAvailable(bool available) {
     if (mExportDriver) mExportDriver->setRendererAvailable(available);
