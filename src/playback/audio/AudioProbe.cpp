@@ -1,6 +1,7 @@
 #include "AudioProbe.h"
 
 #include "FmodMinimal.h"
+#include "PreviewAudio.h"
 
 #include "playback/Playback.h"
 #include "playback/exporting/ExportActivity.h"
@@ -393,7 +394,12 @@ int setOutputDetour(void* system, int output) {
 int playSoundDetour(void* system, void* sound, void* group, bool paused, void** channel) {
     int const result = reinterpret_cast<PlaySoundFn>(gOriginalPlaySound)(system, sound, group, paused, channel);
     if (gInProbe) return result;
-    gInProbe          = true;
+    gInProbe = true;
+    // A paused or seeking preview starts no world sounds. The game still gets its channel handle back; it just finds
+    // the channel already finished, the same as one that was stolen. Music and TTS groups are left alone.
+    if (result == 0 && channel && *channel && gApi.channelStop && preview::shouldDropNewSounds() && group
+        && groupName(group).starts_with("Sound"))
+        gApi.channelStop(*channel);
     auto const bucket = gBucket.load(std::memory_order_relaxed);
     gPlayCalls[bucket].fetch_add(1);
     if (result != 0) gPlayFailures[bucket].fetch_add(1);
@@ -675,6 +681,7 @@ bool install() {
     resolve(fmod, "FMOD_ChannelGroup_RemoveDSP", gApi.groupRemoveDSP);
     resolve(fmod, "FMOD_DSP_Release", gApi.dspRelease);
     resolve(fmod, "FMOD_System_Close", gApi.systemClose);
+    resolve(fmod, "FMOD_Channel_Stop", gApi.channelStop);
 
     gHooks.update = reinterpret_cast<void*>(GetProcAddress(fmod, "?update@System@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"));
     gHooks.init   = reinterpret_cast<void*>(GetProcAddress(fmod, "?init@System@FMOD@@QEAA?AW4FMOD_RESULT@@HIPEAX@Z"));
@@ -742,6 +749,7 @@ bool install() {
 }
 
 void uninstall() {
+    preview::reset();
     gPolicy = {};
     gGateUpdateFloat.store(false, std::memory_order_relaxed);
     removeHook(gStreamPauseHook.target, &streamPauseDetour, gStreamPauseHook.installed);
@@ -805,6 +813,12 @@ void onClientUpdate(ClientInstance& client) {
             gUpdateCalls.load()
         );
     }
+    preview::update(
+        bucket != Normal,
+        bucket == ReplayPaused,
+        bucket == ReplaySeeking,
+        bucket == ExportRunning || bucket == ExportSeeking
+    );
     logPlaySummary(bucket);
     logListener(client, bucket);
 }

@@ -478,7 +478,7 @@
                 "pistonDuration": "动画时长",
                 "optiPistonHint": "保存到 OptiPiston 配置，回放外同样生效。",
                 "preview": "预览",
-                "previewSubtitle": "回放中显示的内容",
+                "previewSubtitle": "回放中显示和播放的内容",
                 "hud": "HUD",
                 "hudChat": "聊天栏",
                 "hudBossBar": "Boss 栏",
@@ -487,7 +487,13 @@
                 "hudActionBar": "动作栏",
                 "hudHotbar": "快捷栏",
                 "hudHotbarHint": "仅在镜头跟随录制玩家时显示。",
-                "hudHint": "对预览和导出的视频都生效。"
+                "hudHint": "对预览和导出的视频都生效。",
+                "previewAudio": "音频",
+                "previewMute": "静音",
+                "previewVolume": "音量",
+                "previewSilentPaused": "暂停时静音",
+                "previewSilentPausedHint": "回放暂停或跳转期间触发的声音不会播放。",
+                "previewAudioHint": "仅影响预览。导出的音频在导出对话框中设置。"
             },
             "defaults": {
                 "camera": "相机 {}",
