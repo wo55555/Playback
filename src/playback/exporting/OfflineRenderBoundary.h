@@ -118,6 +118,8 @@ private:
     // Set once a step of the pending frame carried the time since the last submitted frame.
     bool                                           mFrameTimeSpent{};
     int64_t                                        mMaximumReplayTick{};
+    // The configured warm-up budget; it is owed again after every dimension change.
+    uint32_t                                       mWarmupFrames{};
     uint32_t                                       mWarmupFramesRemaining{};
     uint32_t                                       mWarmupStableFrames{};
     uint32_t                                       mConvergenceRendersDone{};
