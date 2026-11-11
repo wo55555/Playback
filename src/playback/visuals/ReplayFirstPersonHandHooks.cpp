@@ -645,8 +645,8 @@ std::vector<uintptr_t> directCallees(uintptr_t function) {
     return callees;
 }
 
-// The screen-overlay renderers (fire, in-block, scope); every other caller keeps the observer. 1.26.20.04 draws fire
-// and in-block from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
+// The screen-overlay renderers (in-block, scope); every other caller keeps the observer. 1.26.20.04 draws in-block
+// from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
 // _renderTransparentFirstPerson3DObjects stays on the observer: its portal overlay reads LocalPlayer-only fields that
 // a remote subject lacks, and it hands its actor to _renderItemInHand, which copies the subject's items onto the
 // observer itself.
@@ -862,7 +862,31 @@ struct ScopedObserverOverlay {
     }
 };
 
-// The purple warp draws here. Redirecting its actor would read past a remote player.
+thread_local bool   gOverlaySample = false;
+thread_local Actor* gOverlayLocal  = nullptr;
+
+struct ScopedOverlaySample {
+    explicit ScopedOverlaySample(Actor* local) {
+        gOverlayLocal  = local;
+        gOverlaySample = true;
+    }
+
+    ~ScopedOverlaySample() {
+        gOverlaySample = false;
+        gOverlayLocal  = nullptr;
+    }
+};
+
+// The flame quads call Actor::isOnFire on the camera actor. The observer is never burning; the subject is.
+LL_TYPE_INSTANCE_HOOK(OverlayOnFireHook, ll::memory::HookPriority::High, Actor, &Actor::$isOnFire, bool) {
+    if (gOverlaySample && this == gOverlayLocal) {
+        if (auto* subject = subjectPlayer(); subject && static_cast<Actor*>(subject) != this)
+            return subject->isOnFire();
+    }
+    return origin();
+}
+
+// The purple warp and the flames draw here. Redirecting its actor would read past a remote player.
 LL_TYPE_INSTANCE_HOOK(
     TransparentOverlayHook,
     ll::memory::HookPriority::High,
@@ -893,6 +917,7 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
     ScopedObserverOverlay overlay(*local, portal);
+    ScopedOverlaySample   sampleScope(local);
     origin(screenContext, levelRenderer);
 }
 
@@ -942,6 +967,7 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             makeSlot<BobViewHook>("bobView"),
             makeSlot<PortalDataHook>("portalData"),
             makeSlot<TransparentOverlayHook>("transparentOverlay"),
+            makeSlot<OverlayOnFireHook>("onFire"),
             makeSlot<PlayerIsScopingHook>("isScoping"),
             makeSlot<SleepVignetteHook>("sleepVignette"),
             makeSlot<TogglePerspectiveHook>("togglePerspective"),
