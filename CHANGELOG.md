@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The export dialog is split into General, Video and Advanced pages, picked from tabs at the top; the summary, which now also names the encoder settings, and the export buttons stay visible on every page. On a short window the summary makes room first, and only then does the page scroll.
+
 ### Fixed
 
 - First-person follow now shows the followed player's arm swing and item-use animation, such as eating.
