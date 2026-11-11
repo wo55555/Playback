@@ -45,18 +45,14 @@ namespace {
     return std::filesystem::path(std::u8string{begin, begin + value.size()});
 }
 
+// Typed digits apply as they are entered, so leaving the field any way (the export button included) keeps them.
+// The value is clamped on every edit; the field shows the clamped number once it loses focus.
 bool inputClampedInt(char const* id, int& value, int minimum, int maximum, float width) {
     ImGui::SetNextItemWidth(width);
-    bool const changed = ImGui::InputInt(
-        id,
-        &value,
-        1,
-        10,
-        ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll
-    );
-    if (ImGui::IsItemDeactivatedAfterEdit() || (changed && ImGui::IsKeyPressed(ImGuiKey_Enter))) {
-        value = std::clamp(value, minimum, maximum);
-    }
+    int        edited = value;
+    bool const changed =
+        ImGui::InputInt(id, &edited, 1, 10, ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_AutoSelectAll);
+    if (changed) value = std::clamp(edited, minimum, maximum);
     return changed;
 }
 
