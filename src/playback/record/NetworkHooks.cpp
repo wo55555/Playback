@@ -5,6 +5,8 @@
 #include "playback/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
+#include "ll/api/memory/Memory.h"
+#include "ll/api/service/Bedrock.h"
 #include "ll/api/service/TargetedBedrock.h"
 
 #include "mc/client/game/ClientInstance.h"
@@ -13,37 +15,26 @@
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
+#include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
+#include "mc/network/IPacketHandlerDispatcher.h"
+#include "mc/network/NetEventCallback.h"
 #include "mc/network/NetworkIdentifier.h"
-#include "mc/network/NetworkStatistics.h"
 #include "mc/network/Packet.h"
-#include "mc/network/packet/ActorEventPacket.h"
-#include "mc/network/packet/AddActorPacket.h"
-#include "mc/network/packet/AddItemActorPacket.h"
-#include "mc/network/packet/AddPlayerPacket.h"
-#include "mc/network/packet/AvailableActorIdentifiersPacket.h"
+#include "mc/network/ServerNetworkHandler.h"
 #include "mc/network/packet/InventoryContentPacket.h"
 #include "mc/network/packet/InventorySlotPacket.h"
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
-#include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/LevelSoundEventPacket.h"
 #include "mc/network/packet/LevelSoundEventPacketPayload.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
 #include "mc/network/packet/PlayerHotbarPacket.h"
-#include "mc/network/packet/PlayerListPacket.h"
-#include "mc/network/packet/PlayerSkinPacket.h"
-#include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
-#include "mc/network/packet/SetActorDataPacket.h"
 #include "mc/network/packet/SetTimePacket.h"
 #include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
-#include "mc/network/packet/TakeItemActorPacket.h"
-#include "mc/network/packet/UpdateBlockPacket.h"
-#include "mc/network/packet/UpdateBlockSyncedPacket.h"
-#include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/platform/brstd/function_ref.h"
 #include "mc/world/actor/ActorSoundIdentifier.h"
 #include "mc/world/level/Level.h"
@@ -57,8 +48,11 @@
 
 
 #include <atomic>
+#include <mutex>
+#include <shared_mutex>
+#include <string>
+#include <unordered_map>
 #include <utility>
-#include <variant>
 
 namespace playback::record {
 using namespace playback::replay;
@@ -76,23 +70,8 @@ struct NetworkHookState {
     bool resourcePackStack{};
     bool startGame{};
     bool itemRegistry{};
-    bool actorIdentifiers{};
     bool completion{};
-    bool packetObserver{};
-    bool packetSender{};
-    bool addActor{};
-    bool addItemActor{};
-    bool addPlayer{};
-    bool playerList{};
-    bool playerSkin{};
-    bool removeActor{};
-    bool setActorData{};
-    bool takeItemActor{};
-    bool actorEvent{};
-    bool levelEvent{};
-    bool updateBlock{};
-    bool updateBlockSynced{};
-    bool updateSubChunkBlocks{};
+    bool packetRead{};
     bool renderFinalizer{};
     bool renderedFov{};
     bool localViewFrame{};
@@ -111,17 +90,9 @@ struct NetworkHookState {
         return !inventorySlot && !inventoryContent && !playerHotbar && !mobEquipment;
     }
 
-    [[nodiscard]] bool fastPathHandlersInstalled() const {
-        return removeActor && setActorData && takeItemActor && actorEvent && levelEvent && updateBlock
-            && updateBlockSynced && updateSubChunkBlocks && addPlayer && playerList && playerSkin && predictedSound
-            && localSound;
-    }
+    [[nodiscard]] bool soundHandlersInstalled() const { return predictedSound && localSound; }
 
-    [[nodiscard]] bool fastPathHandlersRemoved() const {
-        return !removeActor && !setActorData && !takeItemActor && !actorEvent && !levelEvent && !updateBlock
-            && !updateBlockSynced && !updateSubChunkBlocks && !addPlayer && !playerList && !playerSkin
-            && !predictedSound && !localSound;
-    }
+    [[nodiscard]] bool soundHandlersRemoved() const { return !predictedSound && !localSound; }
 
     [[nodiscard]] bool resourceHandlersInstalled() const {
         return resourcePacksInfo && resourcePackStack && startGame && itemRegistry;
@@ -144,44 +115,6 @@ std::atomic<float> gRenderedFov{0.0f};
 float latestRenderedFov() noexcept { return gRenderedFov.load(std::memory_order_relaxed); }
 
 LL_TYPE_INSTANCE_HOOK(
-    PlaybackPacketReceivedHook,
-    ll::memory::HookPriority::Normal,
-    NetworkStatistics,
-    &NetworkStatistics::$packetReceivedFrom,
-    void,
-    NetworkIdentifier const& source,
-    Packet const&            packet,
-    uint                     size
-) {
-    auto const& network = this->mNetwork.get();
-    if (std::holds_alternative<ClientOrServerNetworkSystemRef::ClientRefT>(network)) {
-        Recorder::getInstance().recordNetworkGamePacket(packet);
-    }
-    origin(source, packet, size);
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    PlaybackPacketSentHook,
-    ll::memory::HookPriority::Normal,
-    NetworkStatistics,
-    &NetworkStatistics::$packetSentTo,
-    void,
-    NetworkIdentifier const& target,
-    Packet const&            packet,
-    uint                     size
-) {
-    auto const& network = this->mNetwork.get();
-    if (std::holds_alternative<ClientOrServerNetworkSystemRef::ServerRefT>(network)) {
-        auto  client      = ll::service::getClientInstance();
-        auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
-        if (localPlayer && target == localPlayer->getNetworkIdentifier()) {
-            Recorder::getInstance().recordNetworkGamePacket(packet);
-        }
-    }
-    origin(target, packet, size);
-}
-
-LL_TYPE_INSTANCE_HOOK(
     PlaybackResourcePacksInfoHook,
     ll::memory::HookPriority::Normal,
     ClientNetworkHandler,
@@ -197,22 +130,7 @@ LL_TYPE_INSTANCE_HOOK(
             origin(source, *recordedInfo);
             return;
         }
-    } else {
-        Recorder::getInstance().recordGamePacket(packet);
     }
-    origin(source, packet);
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    PlaybackAvailableActorIdentifiersHook,
-    ll::memory::HookPriority::Normal,
-    ClientNetworkHandler,
-    &ClientNetworkHandler::$handle,
-    void,
-    NetworkIdentifier const&               source,
-    AvailableActorIdentifiersPacket const& packet
-) {
-    Recorder::getInstance().recordGamePacket(packet);
     origin(source, packet);
 }
 
@@ -226,99 +144,6 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     replay::ReplaySession::getInstance().configureReplayDimension(arguments);
     return origin(std::move(arguments));
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    PlaybackAddActorHook,
-    ll::memory::HookPriority::Normal,
-    LegacyClientNetworkHandler,
-    &LegacyClientNetworkHandler::$handle,
-    void,
-    NetworkIdentifier const& source,
-    AddActorPacket const&    packet
-) {
-    auto const runtimeId = *packet.mRuntimeId;
-    origin(source, packet);
-    Recorder::getInstance().recordSpawnedActor(runtimeId, packet);
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    PlaybackAddItemActorHook,
-    ll::memory::HookPriority::Normal,
-    LegacyClientNetworkHandler,
-    &LegacyClientNetworkHandler::$handle,
-    void,
-    NetworkIdentifier const&  source,
-    AddItemActorPacket const& packet
-) {
-    auto const runtimeId = *packet.mRuntimeId;
-    origin(source, packet);
-    Recorder::getInstance().recordSpawnedActor(runtimeId, packet);
-}
-
-#define PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(HookName, HandlerType, PacketType)                                   \
-    LL_TYPE_INSTANCE_HOOK(                                                                                             \
-        HookName,                                                                                                      \
-        ll::memory::HookPriority::Normal,                                                                              \
-        HandlerType,                                                                                                   \
-        &HandlerType::$handle,                                                                                         \
-        void,                                                                                                          \
-        NetworkIdentifier const& source,                                                                               \
-        PacketType const&        packet                                                                                \
-    ) {                                                                                                                \
-        Recorder::getInstance().recordGamePacket(packet);                                                              \
-        origin(source, packet);                                                                                        \
-    }
-
-#define PLAYBACK_DEFINE_SHARED_CLIENT_HANDLER_HOOK(HookName, HandlerType, PacketType)                                  \
-    LL_TYPE_INSTANCE_HOOK(                                                                                             \
-        HookName,                                                                                                      \
-        ll::memory::HookPriority::Normal,                                                                              \
-        HandlerType,                                                                                                   \
-        &HandlerType::$handle,                                                                                         \
-        void,                                                                                                          \
-        NetworkIdentifier const&    source,                                                                            \
-        std::shared_ptr<PacketType> packet /* NOLINT */                                                                \
-    ) {                                                                                                                \
-        if (packet) Recorder::getInstance().recordGamePacket(*packet);                                                 \
-        origin(source, packet);                                                                                        \
-    }
-
-PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackRemoveActorHook, LegacyClientNetworkHandler, RemoveActorPacket)
-// The statistics observer did not keep these during a match whose tab list still grew. Record the handler copy.
-PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackAddPlayerHook, LegacyClientNetworkHandler, AddPlayerPacket)
-PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackPlayerListHook, LegacyClientNetworkHandler, PlayerListPacket)
-PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackPlayerSkinHook, LegacyClientNetworkHandler, PlayerSkinPacket)
-PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackTakeItemActorHook, ClientNetworkHandler, TakeItemActorPacket)
-PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackActorEventHook, ClientNetworkHandler, ActorEventPacket)
-PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(PlaybackLevelEventHook, ClientNetworkHandler, LevelEventPacket)
-PLAYBACK_DEFINE_SHARED_CLIENT_HANDLER_HOOK(PlaybackUpdateBlockHook, LegacyClientNetworkHandler, UpdateBlockPacket)
-PLAYBACK_DEFINE_SHARED_CLIENT_HANDLER_HOOK(
-    PlaybackUpdateBlockSyncedHook,
-    LegacyClientNetworkHandler,
-    UpdateBlockSyncedPacket
-)
-PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK(
-    PlaybackUpdateSubChunkBlocksHook,
-    ClientNetworkHandler,
-    UpdateSubChunkBlocksPacket
-)
-
-#undef PLAYBACK_DEFINE_SHARED_CLIENT_HANDLER_HOOK
-#undef PLAYBACK_DEFINE_CONST_CLIENT_HANDLER_HOOK
-
-// Entity metadata (name tags, flags, scale) only reaches the replay through this handler.
-LL_TYPE_INSTANCE_HOOK(
-    PlaybackSetActorDataHook,
-    ll::memory::HookPriority::Normal,
-    LegacyClientNetworkHandler,
-    &LegacyClientNetworkHandler::$handle,
-    void,
-    NetworkIdentifier const&  source,
-    SetActorDataPacket const& packet
-) {
-    Recorder::getInstance().recordGamePacket(packet);
-    origin(source, packet);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -349,7 +174,6 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
 
-    if (packet) Recorder::getInstance().recordLevelChunkPacket(*packet);
     origin(source, packet);
 }
 
@@ -401,7 +225,6 @@ LL_TYPE_INSTANCE_HOOK(
         return;
     }
 
-    Recorder::getInstance().recordGamePacket(packet);
     origin(source, packet);
 }
 
@@ -494,8 +317,6 @@ LL_TYPE_INSTANCE_HOOK(
             origin(source, *recordedStack);
             return;
         }
-    } else {
-        Recorder::getInstance().recordGamePacket(packet);
     }
     origin(source, packet);
 }
@@ -511,7 +332,6 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto& replaySession = ReplaySession::getInstance();
     if (!replaySession.isIsolatingReplayWorld()) {
-        Recorder::getInstance().recordGamePacket(packet);
         origin(source, packet);
         return;
     }
@@ -534,12 +354,7 @@ LL_TYPE_INSTANCE_HOOK(
     ItemRegistryPacket const& packet
 ) {
     auto& replaySession = ReplaySession::getInstance();
-    if (!replaySession.isIsolatingReplayWorld()) {
-        Recorder::getInstance().recordGamePacket(packet);
-        origin(source, packet);
-        return;
-    }
-    if (replaySession.isInjectingPacket(&packet)) {
+    if (!replaySession.isIsolatingReplayWorld() || replaySession.isInjectingPacket(&packet)) {
         origin(source, packet);
         return;
     }
@@ -688,6 +503,121 @@ LL_TYPE_INSTANCE_HOOK(
     );
 }
 
+namespace {
+
+// Every packet the client handles passes through its type's dispatcher, so recording there keeps each one once, on the
+// tick the client applies it, whichever connection delivered it.
+using PacketDispatchFn =
+    void (*)(IPacketHandlerDispatcher const*, NetworkIdentifier const&, NetEventCallback&, std::shared_ptr<Packet>&);
+
+constexpr size_t PacketDispatchSlot = 1;
+
+// Entries are never erased, so a dispatch already past its lookup can still call its original.
+struct PacketDispatchers {
+    std::shared_mutex                            mutex;
+    std::unordered_map<void**, PacketDispatchFn> originals;
+};
+
+PacketDispatchers& packetDispatchers() {
+    static PacketDispatchers dispatchers;
+    return dispatchers;
+}
+
+void** dispatcherVtable(IPacketHandlerDispatcher const* dispatcher) {
+    return *reinterpret_cast<void** const*>(dispatcher);
+}
+
+void setDispatchSlot(void** vtable, void* function) {
+    ll::memory::modify(&vtable[PacketDispatchSlot], sizeof(void*), [&] { vtable[PacketDispatchSlot] = function; });
+}
+
+struct ReadPacket {
+    Packet const* packet{};
+    std::string   bytes;
+};
+
+// A decoded packet cannot always be written back out, so the bytes it was read from are kept until its dispatch,
+// which follows on the same thread.
+thread_local ReadPacket gReadPacket;
+
+bool isIntegratedServer(NetEventCallback const& callback) {
+    auto server = ll::service::getServerNetworkHandler();
+    return server && &callback == static_cast<NetEventCallback const*>(server.as_ptr());
+}
+
+void dispatchPacket(
+    IPacketHandlerDispatcher const* dispatcher,
+    NetworkIdentifier const&        source,
+    NetEventCallback&               callback,
+    std::shared_ptr<Packet>&        packet
+) {
+    PacketDispatchFn original;
+    {
+        auto&            dispatchers = packetDispatchers();
+        std::shared_lock lock(dispatchers.mutex);
+        original = dispatchers.originals.at(dispatcherVtable(dispatcher));
+    }
+    std::string payload;
+    if (packet && gReadPacket.packet == packet.get()) payload = std::move(gReadPacket.bytes);
+    gReadPacket.packet = nullptr;
+    if (!packet || isIntegratedServer(callback) || ReplaySession::getInstance().isIsolatingReplayWorld()) {
+        original(dispatcher, source, callback, packet);
+        return;
+    }
+    auto const received = packet;
+    auto&      recorder = Recorder::getInstance();
+    recorder.recordReceivedPacket(*received, payload);
+    original(dispatcher, source, callback, packet);
+    recorder.recordHandledPacket(*received);
+}
+
+// Mods load before the game can create packets, so each dispatcher is wrapped when its first packet is read, which
+// precedes that packet's dispatch on the same thread.
+void wrapDispatcher(IPacketHandlerDispatcher const* dispatcher) {
+    if (!dispatcher) return;
+    auto** const vtable = dispatcherVtable(dispatcher);
+    auto* const  detour = reinterpret_cast<void*>(&dispatchPacket);
+    if (std::atomic_ref(vtable[PacketDispatchSlot]).load(std::memory_order_acquire) == detour) return;
+    auto&            dispatchers = packetDispatchers();
+    std::unique_lock lock(dispatchers.mutex);
+    if (vtable[PacketDispatchSlot] == detour) return;
+    dispatchers.originals[vtable] = reinterpret_cast<PacketDispatchFn>(vtable[PacketDispatchSlot]);
+    setDispatchSlot(vtable, detour);
+}
+
+void unwrapDispatchers() {
+    auto&            dispatchers = packetDispatchers();
+    std::unique_lock lock(dispatchers.mutex);
+    // A slot another mod has since taken keeps its chain.
+    for (auto const& [vtable, original] : dispatchers.originals) {
+        if (vtable[PacketDispatchSlot] == reinterpret_cast<void*>(&dispatchPacket)) {
+            setDispatchSlot(vtable, reinterpret_cast<void*>(original));
+        }
+    }
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackPacketReadHook,
+    ll::memory::HookPriority::Normal,
+    Packet,
+    &Packet::readNoHeader,
+    Bedrock::Result<void>,
+    ReadOnlyBinaryStream&        stream,
+    cereal::ReflectionCtx const& reflectionCtx,
+    SubClientId const&           subId
+) {
+    wrapDispatcher(mHandler);
+    auto const begin  = stream.mReadPointer;
+    auto       result = origin(stream, reflectionCtx, subId);
+    if (result) {
+        gReadPacket.packet = this;
+        gReadPacket.bytes.assign(stream.mView.data() + begin, stream.mReadPointer - begin);
+    }
+    return result;
+}
+
+} // namespace
+
 template <class Hook>
 bool installNetworkHook(bool& installed) {
     if (!installed) installed = Hook::hook() == 0;
@@ -704,15 +634,15 @@ bool hookNetwork(bool enable) {
 
     auto allInstalled = [&] {
         return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
-            && state.resourceHandlersInstalled() && state.actorIdentifiers && state.completion && state.packetObserver
-            && state.packetSender && state.addActor && state.addItemActor && state.fastPathHandlersInstalled()
-            && state.renderFinalizer && state.renderedFov && state.localViewFrame && state.hudHandlersInstalled();
+            && state.resourceHandlersInstalled() && state.completion && state.packetRead && state.renderFinalizer
+            && state.renderedFov && state.localViewFrame && state.hudHandlersInstalled()
+            && state.soundHandlersInstalled();
     };
     auto noneInstalled = [&] {
         return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime
-            && state.resourceHandlersRemoved() && !state.actorIdentifiers && !state.completion && !state.packetObserver
-            && !state.packetSender && !state.addActor && !state.addItemActor && state.fastPathHandlersRemoved()
-            && !state.renderFinalizer && !state.renderedFov && !state.localViewFrame && state.hudHandlersRemoved();
+            && state.resourceHandlersRemoved() && !state.completion && !state.packetRead && !state.renderFinalizer
+            && !state.renderedFov && !state.localViewFrame && state.hudHandlersRemoved()
+            && state.soundHandlersRemoved();
     };
     auto installAll = [&] {
         return installNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor)
@@ -723,23 +653,8 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack)
             && installNetworkHook<PlaybackStartGameHook>(state.startGame)
             && installNetworkHook<PlaybackItemRegistryHook>(state.itemRegistry)
-            && installNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers)
             && installNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion)
-            && installNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver)
-            && installNetworkHook<PlaybackPacketSentHook>(state.packetSender)
-            && installNetworkHook<PlaybackAddActorHook>(state.addActor)
-            && installNetworkHook<PlaybackAddItemActorHook>(state.addItemActor)
-            && installNetworkHook<PlaybackAddPlayerHook>(state.addPlayer)
-            && installNetworkHook<PlaybackPlayerListHook>(state.playerList)
-            && installNetworkHook<PlaybackPlayerSkinHook>(state.playerSkin)
-            && installNetworkHook<PlaybackRemoveActorHook>(state.removeActor)
-            && installNetworkHook<PlaybackSetActorDataHook>(state.setActorData)
-            && installNetworkHook<PlaybackTakeItemActorHook>(state.takeItemActor)
-            && installNetworkHook<PlaybackActorEventHook>(state.actorEvent)
-            && installNetworkHook<PlaybackLevelEventHook>(state.levelEvent)
-            && installNetworkHook<PlaybackUpdateBlockHook>(state.updateBlock)
-            && installNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced)
-            && installNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks)
+            && installNetworkHook<PlaybackPacketReadHook>(state.packetRead)
             && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer)
             && installNetworkHook<PlaybackRenderedFovHook>(state.renderedFov)
             && installNetworkHook<PlaybackLocalViewFrameHook>(state.localViewFrame)
@@ -760,23 +675,9 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackLocalViewFrameHook>(state.localViewFrame);
         removeNetworkHook<PlaybackRenderedFovHook>(state.renderedFov);
         removeNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer);
-        removeNetworkHook<PlaybackUpdateSubChunkBlocksHook>(state.updateSubChunkBlocks);
-        removeNetworkHook<PlaybackUpdateBlockSyncedHook>(state.updateBlockSynced);
-        removeNetworkHook<PlaybackUpdateBlockHook>(state.updateBlock);
-        removeNetworkHook<PlaybackLevelEventHook>(state.levelEvent);
-        removeNetworkHook<PlaybackActorEventHook>(state.actorEvent);
-        removeNetworkHook<PlaybackTakeItemActorHook>(state.takeItemActor);
-        removeNetworkHook<PlaybackSetActorDataHook>(state.setActorData);
-        removeNetworkHook<PlaybackRemoveActorHook>(state.removeActor);
-        removeNetworkHook<PlaybackPlayerSkinHook>(state.playerSkin);
-        removeNetworkHook<PlaybackPlayerListHook>(state.playerList);
-        removeNetworkHook<PlaybackAddPlayerHook>(state.addPlayer);
-        removeNetworkHook<PlaybackAddItemActorHook>(state.addItemActor);
-        removeNetworkHook<PlaybackAddActorHook>(state.addActor);
-        removeNetworkHook<PlaybackPacketSentHook>(state.packetSender);
-        removeNetworkHook<PlaybackPacketReceivedHook>(state.packetObserver);
+        removeNetworkHook<PlaybackPacketReadHook>(state.packetRead);
+        if (!state.packetRead) unwrapDispatchers();
         removeNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion);
-        removeNetworkHook<PlaybackAvailableActorIdentifiersHook>(state.actorIdentifiers);
         removeNetworkHook<PlaybackItemRegistryHook>(state.itemRegistry);
         removeNetworkHook<PlaybackStartGameHook>(state.startGame);
         removeNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack);
@@ -800,18 +701,16 @@ bool hookNetwork(bool enable) {
             if (removed) (void)hookChunkMutationBarrier(false);
             getLogger().error(
                 "Unable to install replay network hooks (dimensionConstructor={}, LevelChunk={}, SubChunk={}, "
-                "SetTime={}, resourceHandlers={}, completion={}, packetObserver={}, packetSender={}, "
-                "spawnHandlers={}, fastPathHandlers={}, rollback={})",
+                "SetTime={}, resourceHandlers={}, completion={}, packetRead={}, soundHandlers={}, "
+                "rollback={})",
                 state.dimensionConstructor,
                 state.levelChunk,
                 state.subChunk,
                 state.setTime,
                 state.resourceHandlersInstalled(),
                 state.completion,
-                state.packetObserver,
-                state.packetSender,
-                state.addActor && state.addItemActor,
-                state.fastPathHandlersInstalled(),
+                state.packetRead,
+                state.soundHandlersInstalled(),
                 removed
             );
             return false;
@@ -823,8 +722,8 @@ bool hookNetwork(bool enable) {
         bool restored = installAll();
         getLogger().error(
             "Unable to remove all replay network hooks; runtime restoration={} (dimensionConstructor={}, "
-            "LevelChunk={}, SubChunk={}, SetTime={}, resourceHandlers={}, completion={}, packetObserver={}, "
-            "packetSender={}, spawnHandlers={}, fastPathHandlers={})",
+            "LevelChunk={}, SubChunk={}, SetTime={}, resourceHandlers={}, completion={}, packetRead={}, "
+            "soundHandlers={})",
             restored,
             state.dimensionConstructor,
             state.levelChunk,
@@ -832,10 +731,8 @@ bool hookNetwork(bool enable) {
             state.setTime,
             state.resourceHandlersInstalled(),
             state.completion,
-            state.packetObserver,
-            state.packetSender,
-            state.addActor && state.addItemActor,
-            state.fastPathHandlersInstalled()
+            state.packetRead,
+            state.soundHandlersInstalled()
         );
         return false;
     }
