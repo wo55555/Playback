@@ -1,6 +1,7 @@
 ﻿#include "ReplayResourcePacks.h"
 
 #include "playback/Playback.h"
+#include "playback/runtime/GameAddress.h"
 #include "playback/utils/PathUtils.h"
 
 #include "ll/api/service/TargetedBedrock.h"
@@ -72,6 +73,13 @@ constexpr std::string_view ServerPacksFile = "server_packs.json";
 
 std::filesystem::path fromUtf8(std::string_view text) {
     return std::filesystem::path(std::u8string(reinterpret_cast<char8_t const*>(text.data()), text.size()));
+}
+
+std::filesystem::path fullPathOf(ResourceLocation const& location) {
+    static auto const getFullPath = runtime::gameMember<Core::PathBuffer<std::string> (ResourceLocation::*)() const>(
+        runtime::GameFunction::ResourceLocationGetFullPath
+    );
+    return fromUtf8((location.*getFullPath)().value);
 }
 
 std::string toUtf8(std::filesystem::path const& path) {
@@ -635,7 +643,7 @@ ServerPackSnapshot collectServerPacks(std::vector<PlaybackSerializedGamePacket> 
             manifest.mIdentity->mId->asString(),
             manifest.mIdentity->mVersion->asString(),
             folderFor(key),
-            fromUtf8(manifest.mLocation->getFullPath().value),
+            fullPathOf(*manifest.mLocation),
             static_cast<int>(manifest.mPackOrigin)
         };
     });
@@ -888,7 +896,7 @@ std::optional<std::filesystem::path> mountReplayPacks(
         if (!isCacheOrigin(manifest.mPackOrigin) || manifest.mPackType != PackType::Resources) return;
         auto key = packKey(*manifest.mIdentity);
         if (!index.keys.contains(key) && announced.contains(key)) {
-            notEmbedded.emplace_back(folderFor(key), fromUtf8(manifest.mLocation->getFullPath().value));
+            notEmbedded.emplace_back(folderFor(key), fullPathOf(*manifest.mLocation));
         }
         ++removed;
     });

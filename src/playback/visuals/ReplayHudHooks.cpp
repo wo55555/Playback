@@ -2,6 +2,7 @@
 
 #include "ReplayEntityInterpolator.h"
 #include "playback/Playback.h"
+#include "playback/runtime/GameAddress.h"
 
 #include "ll/api/memory/Hook.h"
 #include "mc/client/gui/DirtyFlag.h"
@@ -47,7 +48,7 @@ LL_TYPE_INSTANCE_HOOK(
     HudTickHook,
     ll::memory::HookPriority::High,
     HudScreenController,
-    &HudScreenController::$tick,
+    runtime::gameAddress(runtime::GameFunction::HudScreenTick),
     ui::DirtyFlag
 ) {
     auto       flags = origin();
@@ -68,7 +69,7 @@ LL_TYPE_INSTANCE_HOOK(
     HudShowSurvivalUiHook,
     ll::memory::HookPriority::High,
     HudScreenController,
-    &HudScreenController::_showSurvivalUI,
+    runtime::gameAddress(runtime::GameFunction::HudShowSurvivalUi),
     bool
 ) {
     bool const value = origin();

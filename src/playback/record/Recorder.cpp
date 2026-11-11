@@ -7,6 +7,7 @@
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/record/ChunkMutationBarrier.h"
+#include "playback/runtime/GameAddress.h"
 #include "playback/utils/MapItemId.h"
 #include "playback/utils/PathUtils.h"
 
@@ -222,7 +223,18 @@ std::shared_ptr<Packet> makeHudSelectedSlotPacket(Player& player) {
 
 // Only what the HUD draws; exhaustion and the like change every tick and would bloat the recording.
 std::shared_ptr<Packet> makeHudAttributePacket(Player& player, ActorRuntimeID runtimeId) {
-    // AttributeData cannot be copied or moved from here, so the SDK constructor builds the entries from handles.
+    using PayloadConstructor = void* (*)(void*,
+                                         ActorRuntimeID const&,
+                                         BaseAttributeMap const&,
+                                         std::vector<AttributeInstanceHandle> const&,
+                                         PlayerInputTick);
+    // The packet takes the payload by value, so it destroys it.
+    using PacketConstructor = void* (*)(void*, void*);
+    static auto const constructPayload =
+        runtime::gameFunction<PayloadConstructor>(runtime::GameFunction::UpdateAttributesPacketPayloadConstructor);
+    static auto const constructPacket =
+        runtime::gameFunction<PacketConstructor>(runtime::GameFunction::UpdateAttributesPacketConstructor);
+    // AttributeData cannot be copied or moved from here, so the payload constructor builds the entries from handles.
     auto const attributes = {
         &SharedAttributes::HEALTH(),
         &SharedAttributes::ABSORPTION(),
@@ -240,11 +252,11 @@ std::shared_ptr<Packet> makeHudAttributePacket(Player& player, ActorRuntimeID ru
         handle.mAttributeID = attribute->mIDValue;
         handles.push_back(handle);
     }
-    // The payload is a prvalue so it initializes the by-value parameter in place; AttributeModifier has no exported
-    // copy constructor, so make_shared's forwarding copy would not link.
-    return std::shared_ptr<UpdateAttributesPacket>(new UpdateAttributesPacket(
-        UpdateAttributesPacketPayload(runtimeId, *player.getAttributes(), handles, PlayerInputTick{})
-    ));
+    alignas(UpdateAttributesPacketPayload) std::byte payload[sizeof(UpdateAttributesPacketPayload)];
+    constructPayload(payload, runtimeId, *player.getAttributes(), handles, PlayerInputTick{});
+    return std::shared_ptr<UpdateAttributesPacket>(
+        static_cast<UpdateAttributesPacket*>(constructPacket(::operator new(sizeof(UpdateAttributesPacket)), payload))
+    );
 }
 
 std::shared_ptr<Packet> makeHudGameTypePacket(Player& player, ActorUniqueID target) {
@@ -265,8 +277,11 @@ bool sameHudItem(ItemStack const& item, ItemStack const& previous) {
 
 // The replay level only has the map data its recorded map packets carried, so a held map is written out in full.
 std::unique_ptr<Packet> makeHeldMapPacket(Player& player, int64_t mapId) {
+    static auto const getFullDataPacket = runtime::gameMember<std::unique_ptr<Packet> (MapItemSavedData::*)() const>(
+        runtime::GameFunction::MapGetFullDataPacket
+    );
     auto* data = player.getLevel().getMapSavedData(ActorUniqueID{mapId});
-    return data ? data->getFullDataPacket() : nullptr;
+    return data ? (data->*getFullDataPacket)() : nullptr;
 }
 
 bool isSuccessfulSubChunkResult(SubChunkPacket::SubChunkRequestResult result) {
@@ -648,7 +663,9 @@ PlaybackMeta metaFromJson(nlohmann::ordered_json const& json) {
 PlaybackCameraSample captureLocalCameraSample(LocalPlayer& player) {
     Vec3 offset{0.0f, 0.0f, 0.0f};
     if (player.getEntityContext().hasComponent<VanillaOffsetComponent>()) {
-        auto const camera   = VanillaOffsetSystem::getCameraPosition(player, 1.0f);
+        static auto const getCameraPosition =
+            runtime::gameFunction<Vec3 (*)(Actor const&, float)>(runtime::GameFunction::GetCameraPosition);
+        auto const camera   = getCameraPosition(player, 1.0f);
         auto const position = player.getPosition();
         offset              = {camera.x - position.x, camera.y - position.y, camera.z - position.z};
     }
@@ -1866,7 +1883,11 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
                 return;
             }
             auto& existing = identity[found->second];
-            if (!hasSkin(existing) && hasSkin(entry)) existing = std::move(entry);
+            // PlayerListEntry's move assignment is not exported.
+            if (!hasSkin(existing) && hasSkin(entry)) {
+                std::destroy_at(&existing);
+                std::construct_at(&existing, std::move(entry));
+            }
         };
         for (auto const& listed : level.getPlayerList()) upsertIdentity(PlayerListEntry(listed.second));
         upsertIdentity(PlayerListEntry(*finalPlayer));

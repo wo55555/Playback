@@ -4,6 +4,7 @@
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/exporting/GuiScaleHooks.h"
 #include "playback/replay/ReplaySession.h"
+#include "playback/runtime/GameAddress.h"
 
 #include "ll/api/service/TargetedBedrock.h"
 
@@ -344,7 +345,9 @@ bool OfflineRenderFrameExecutor::forceFinishDimensionLoading() const {
     auto* loadingState = context.tryGetComponent<LoadingStateComponent>().as_ptr();
     bool  dimensionOk  = !dimension || dimension->mDimensionState == DimensionStateComponent::DimensionState::Ready;
     auto  loading      = loadingState ? loadingState->mLoadingState : LoadingState::Done;
-    if (dimensionOk && ClientLoadingProgressTickingSystem::hasFinishedLoading(context)) return false;
+    static auto const hasFinishedLoading =
+        runtime::gameFunction<bool (*)(EntityContext const&)>(runtime::GameFunction::HasFinishedLoading);
+    if (dimensionOk && hasFinishedLoading(context)) return false;
     getLogger().warn(
         "Forcing the native dimension loading to finish: dimensionReady={}, loadingState={}",
         dimensionOk,
