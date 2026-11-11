@@ -795,19 +795,21 @@ LL_TYPE_INSTANCE_HOOK(
     }
 }
 
+// ViewRenderObject has no available move constructor, so the hook passes the caller's return slot straight through.
 LL_TYPE_INSTANCE_HOOK(
     ReplayCameraViewRenderObjectHook,
     ll::memory::HookPriority::Lowest,
     LevelRendererPlayer,
-    &LevelRendererPlayer::createViewRenderObject,
-    ::ViewRenderObject,
-    ::ScreenContext& screenContext,
-    ::SubClientId    clientSubId
+    ll::memory::unchecked(&LevelRendererPlayer::createViewRenderObject),
+    ::ViewRenderObject*,
+    ::ViewRenderObject* renderObject,
+    ::ScreenContext&    screenContext,
+    ::SubClientId       clientSubId
 ) {
     auto const context = keyframe::currentCameraTimelineRenderContext();
     if (!context || context->source != keyframe::CameraTimelineSource::Export) {
         if (gFollowCamera) applyFollowCameraEcs(*gFollowCamera);
-        auto result = origin(screenContext, clientSubId);
+        auto* result = origin(renderObject, screenContext, clientSubId);
         if (gFollowCamera) (void)applyFollowCameraEcs(*gFollowCamera);
         // Without a timeline camera the vanilla observer owns the view, so publish it here.
         if (!context && keyframe::hasCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
@@ -822,16 +824,16 @@ LL_TYPE_INSTANCE_HOOK(
     }
     if (!context->sample) {
         logMissingSample(*context);
-        return origin(screenContext, clientSubId);
+        return origin(renderObject, screenContext, clientSubId);
     }
 
     auto const& sample = *context->sample;
-    if (!finite(sample.state)) return origin(screenContext, clientSubId);
+    if (!finite(sample.state)) return origin(renderObject, screenContext, clientSubId);
 
     auto const position = ::glm::vec3{sample.state.x, sample.state.y, sample.state.z};
     auto const basis    = basisFromState(sample.state);
     if (!finite(position) || !finite(basis.right) || !finite(basis.up) || !finite(basis.forward)) {
-        return origin(screenContext, clientSubId);
+        return origin(renderObject, screenContext, clientSubId);
     }
 
     auto& level        = *static_cast<LevelRendererPlayer*>(this);
@@ -846,8 +848,8 @@ LL_TYPE_INSTANCE_HOOK(
         writeLevelCameraPose(level, position, basis);
     }
 
-    auto  renderObject = origin(screenContext, clientSubId);
-    auto& view         = renderObject.mViewData.get();
+    auto* result = origin(renderObject, screenContext, clientSubId);
+    auto& view   = result->mViewData.get();
 
     (void)applyCameraEcs(*context);
     if (rolled) {
@@ -894,7 +896,7 @@ LL_TYPE_INSTANCE_HOOK(
             context->frameIndex
         );
     }
-    return renderObject;
+    return result;
 }
 
 } // namespace
