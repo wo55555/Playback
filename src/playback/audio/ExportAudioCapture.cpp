@@ -1,6 +1,6 @@
 #include "ExportAudioCapture.h"
 
-#include "AudioProbe.h"
+#include "AudioHooks.h"
 #include "ExportAudioWav.h"
 #include "FmodMinimal.h"
 
@@ -35,7 +35,7 @@ constexpr int64_t R = 48000;
 
 constexpr int     FirstFrameFlushUpdates = 2;   // blocks mixed and dropped after Stop(master) so the ramp is not captured
 constexpr int     ExtraUpdatesPerFrame   = 8;   // slack over need/512 before a frame is declared stalled
-constexpr int64_t SummaryEvery           = 120; // accepted frames per probe summary line
+constexpr int64_t SummaryEvery           = 120; // accepted frames per summary line
 
 auto& logger() { return Playback::getInstance().getSelf().getLogger(); }
 
@@ -50,8 +50,8 @@ std::atomic<int>  gPhase{int(Phase::Discarding)};
 thread_local bool tDriving = false; // this thread is mixing for the export; let System::update through
 
 CApi const*              gApi             = nullptr;
-probe::OrigUpdateFloatFn gOrigUpdateFloat = nullptr;
-probe::OrigUpdateFn      gOrigUpdate      = nullptr;
+hooks::OrigUpdateFloatFn gOrigUpdateFloat = nullptr;
+hooks::OrigUpdateFn      gOrigUpdate      = nullptr;
 
 std::mutex gMutex;
 void*      gSystem      = nullptr;
@@ -83,7 +83,7 @@ std::filesystem::path gSidecar;
 std::mutex         gPcmMutex;
 std::vector<float> gPcm; // stereo interleaved, captured but not yet written
 
-// Probe counters. Window counters reset after each summary line.
+// Counters for the summary lines. Window counters reset after each summary line.
 std::atomic<int64_t> gInch1{0}, gInch2{0}, gInch6{0}, gInch8{0}, gInchOther{0};
 std::atomic<int64_t> gLenMin{INT64_MAX}, gLenMax{0};
 std::atomic<int64_t> gBlocks{0};
@@ -183,7 +183,7 @@ captureShouldProcess(FMOD_DSP_STATE*, FMOD_BOOL, unsigned int, FMOD_CHANNELMASK,
     return FMOD_OK;
 }
 
-void resetProbeCounters() {
+void resetCounters() {
     gInch1 = gInch2 = gInch6 = gInch8 = gInchOther = 0;
     gLenMin                                       = INT64_MAX;
     gLenMax                                       = 0;
@@ -286,11 +286,11 @@ void restoreOutputLocked() {
         device = std::exchange(gPendingDevice, std::nullopt);
     }
     if (device && gSoundSystem) {
-        if (auto const fn = probe::origSetOutputDeviceFn()) fn(gSoundSystem, device->data());
+        if (auto const fn = hooks::origSetOutputDeviceFn()) fn(gSoundSystem, device->data());
         logger().info("Export audio capture: replayed deferred setOutputDevice");
     }
     if (enable && gSoundSystem) {
-        if (auto const fn = probe::origEnableFn()) fn(gSoundSystem, *enable);
+        if (auto const fn = hooks::origEnableFn()) fn(gSoundSystem, *enable);
         logger().info("Export audio capture: replayed deferred enable({})", *enable);
     }
 }
@@ -300,7 +300,7 @@ void disarmLocked(char const* why) {
     releaseDspLocked();
     restoreOutputLocked();
     gArmed = false;
-    probe::setGateUpdateFloat(false);
+    hooks::setGateUpdateFloat(false);
 }
 
 bool attachDspLocked() {
@@ -382,22 +382,16 @@ void padTailLocked() {
 } // namespace
 
 bool install() {
-    gApi             = &probe::exportcap_internal::api();
-    gOrigUpdateFloat = probe::origUpdateFloatFn();
-    gOrigUpdate      = probe::origUpdateFn();
+    gApi             = &hooks::fmodApi();
+    gOrigUpdateFloat = hooks::origUpdateFloatFn();
+    gOrigUpdate      = hooks::origUpdateFn();
     if (!gApi->getOutput || !gApi->setOutput || !gApi->getDriver || !gApi->setDriver || !gApi->getMasterChannelGroup
-        || !gApi->createDSP || !gApi->groupAddDSP || !gApi->groupStop || !gApi->groupRemoveDSP || !gApi->dspRelease
-        || !gOrigUpdateFloat || !gOrigUpdate) {
+        || !gApi->createDSP || !gApi->groupAddDSP || !gApi->groupStop || !gApi->groupRemoveDSP || !gApi->dspRelease) {
         logger().warn("Export audio capture: required FMOD symbols are unavailable; audio export disabled");
         gApi = nullptr;
         return false;
     }
-    if (!probe::outputGuardsInstalled()) {
-        logger().warn("Export audio capture: output guard hooks are missing; audio export disabled");
-        gApi = nullptr;
-        return false;
-    }
-    probe::Policy policy;
+    hooks::Policy policy;
     // The game's own System::update calls (Ore UI stream helpers) would mix blocks outside the ledger.
     policy.shouldGateUpdate = [] { return gOwnsOutput.load() && !tDriving; };
     policy.onSystemReady    = [](void* system) {
@@ -409,7 +403,7 @@ bool install() {
         gDsp        = nullptr;
         gCapturing  = false;
         gArmed      = false;
-        probe::setGateUpdateFloat(false);
+        hooks::setGateUpdateFloat(false);
         logger().warn("Export audio capture: FMOD system re-initialised during export; audio export disabled");
     };
     policy.deferEnable = [](bool enable) {
@@ -427,13 +421,13 @@ bool install() {
         return true;
     };
     policy.skipStreamPauseWait = [] { return gOwnsOutput.load(); };
-    probe::setPolicy(std::move(policy));
+    hooks::setPolicy(std::move(policy));
     return true;
 }
 
 void uninstall() {
     exportEnd();
-    probe::setPolicy({});
+    hooks::setPolicy({});
 }
 
 void exportBegin(exporting::ExportSettings const& settings) {
@@ -455,14 +449,14 @@ void exportBegin(exporting::ExportSettings const& settings) {
         gPendingEnable.reset();
         gPendingDevice.reset();
     }
-    resetProbeCounters();
+    resetCounters();
     openWavLocked();
     gArmed = true;
     // Swallow the game's own SoundSystemFMOD::update(float) so replayed sounds stay paused during the seek; the export
     // calls it once per accepted frame instead.
-    probe::setGateUpdateFloat(true);
-    gSoundSystem = probe::currentSoundSystem();
-    gSystem      = probe::currentSystem();
+    hooks::setGateUpdateFloat(true);
+    gSoundSystem = hooks::currentSoundSystem();
+    gSystem      = hooks::currentSystem();
     if (!gSoundSystem || !gSystem) {
         disarmLocked("no live FMOD system");
         gWav.finalize();
@@ -520,7 +514,7 @@ void exportEnd() {
     if (gCapturing && gMaster && gApi) gApi->groupStop(gMaster);
     releaseDspLocked();
     if (gApi) restoreOutputLocked();
-    probe::setGateUpdateFloat(false);
+    hooks::setGateUpdateFloat(false);
     gWav.finalize();
     gSystem      = nullptr;
     gSoundSystem = nullptr;
@@ -559,7 +553,7 @@ void onFrameAccepted(uint64_t frameIndex) {
     // System::update mixes the frame's first block.
     auto const t0 = std::chrono::steady_clock::now();
     {
-        probe::UpdateFloatDriveScope drive;
+        hooks::UpdateFloatDriveScope drive;
         tDriving = true;
         gOrigUpdateFloat(gSoundSystem, float(gFrameDen) / float(gFrameNum));
         tDriving = false;
