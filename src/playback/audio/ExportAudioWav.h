@@ -6,11 +6,11 @@
 
 namespace playback::audio::exportcap {
 
-// Streaming 32-bit float stereo WAV writer. No FMOD dependency; pure file IO.
+// Streaming 32-bit float WAV writer, mono or stereo. No FMOD dependency; pure file IO.
 class WavWriter {
 public:
     static constexpr uint32_t SampleRate    = 48000;
-    static constexpr uint16_t Channels      = 2;
+    static constexpr uint16_t MaxChannels   = 2;
     static constexpr uint16_t BitsPerSample = 32;
 
     WavWriter() = default;
@@ -19,8 +19,9 @@ public:
     WavWriter(WavWriter const&)            = delete;
     WavWriter& operator=(WavWriter const&) = delete;
 
-    [[nodiscard]] bool open(std::filesystem::path const& path);
-    // Append interleaved stereo float samples. count is the number of floats (samples*2).
+    // channels is clamped to 1 or 2.
+    [[nodiscard]] bool open(std::filesystem::path const& path, uint16_t channels = MaxChannels);
+    // Append interleaved float samples. count is the number of floats (samples * channels).
     void append(float const* data, size_t count);
     // Pad with silence up to totalSamplesPerChannel samples per channel, to match the video length exactly.
     void padTo(uint64_t totalSamplesPerChannel);
@@ -28,12 +29,14 @@ public:
     void finalize();
 
     [[nodiscard]] bool     isOpen() const { return mFile.is_open(); }
+    [[nodiscard]] uint16_t channels() const { return mChannels; }
     [[nodiscard]] uint64_t samplesPerChannel() const { return mSamplesPerChannel; }
 
 private:
     std::ofstream mFile;
     uint64_t      mSamplesPerChannel{};
     uint32_t      mDataBytes{};
+    uint16_t      mChannels{MaxChannels};
     bool          mFinalized{};
 };
 

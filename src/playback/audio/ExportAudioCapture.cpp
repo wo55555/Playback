@@ -61,6 +61,7 @@ void*      gDsp         = nullptr;
 bool       gCapturing   = false;
 bool       gFirstFrame  = true;
 bool       gWavOk       = false;
+bool       gStereo      = true; // false: the sidecar is a mono fold of the stereo capture
 int        gSavedOutput = -1;
 int        gSavedDriver = -1;
 
@@ -354,7 +355,16 @@ void writeSamplesLocked(int64_t need) {
         gWin.sumSq += double(v) * double(v);
     }
     gWin.sqCount += int64_t(buffer.size());
-    if (gWavOk && got > 0) gWav.append(buffer.data(), buffer.size());
+    if (gWavOk && got > 0) {
+        if (gStereo) {
+            gWav.append(buffer.data(), buffer.size());
+        } else {
+            // Equal-weight fold, so a sound panned hard to one side keeps half its level instead of clipping the sum.
+            auto const frames = size_t(got);
+            for (size_t i = 0; i < frames; ++i) buffer[i] = 0.5f * (buffer[i * 2] + buffer[i * 2 + 1]);
+            gWav.append(buffer.data(), frames);
+        }
+    }
     if (got < need) {
         int64_t const missing = need - got;
         if (gWavOk) gWav.padTo(uint64_t(gWritten + need));
@@ -367,7 +377,7 @@ void writeSamplesLocked(int64_t need) {
 
 bool openWavLocked() {
     if (gSidecar.empty()) return false;
-    gWavOk = gWav.open(gSidecar);
+    gWavOk = gWav.open(gSidecar, gStereo ? uint16_t{2} : uint16_t{1});
     if (!gWavOk) logger().warn("Export audio capture: unable to open sidecar WAV {}", gSidecar.string());
     return gWavOk;
 }
@@ -442,6 +452,7 @@ void exportBegin(exporting::ExportSettings const& settings) {
     gFrameNum       = settings.frameRate.numerator > 0 ? settings.frameRate.numerator : 60;
     gFrameDen       = settings.frameRate.denominator > 0 ? settings.frameRate.denominator : 1;
     gSidecar        = settings.outputDirectory / (settings.outputName + ".audio.wav");
+    gStereo         = settings.audioStereo;
     gFirstFrame     = true;
     gAcceptedFrames = 0;
     gWritten        = 0;
@@ -487,10 +498,11 @@ void exportBegin(exporting::ExportSettings const& settings) {
         return;
     }
     logger().info(
-        "Export audio capture: armed (NRT), savedOutput={} savedDriver={} sidecar={} fps={}/{}",
+        "Export audio capture: armed (NRT), savedOutput={} savedDriver={} sidecar={} channels={} fps={}/{}",
         gSavedOutput,
         gSavedDriver,
         gSidecar.string(),
+        gStereo ? 2 : 1,
         gFrameNum,
         gFrameDen
     );
