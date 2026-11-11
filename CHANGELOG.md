@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed video export reading the frame's draw count from the wrong place, which classified every frame as overlay-only.
 - Recordings now keep the recording player's own predicted sounds, such as hitting blocks, landing and strong attacks, so replays and exported audio no longer miss them.
 - Recordings now keep the sounds the client plays for the recording player itself, such as jumping and footsteps, and replays mute the copies the game regenerates so nothing plays twice.
+- Fixed item pickups, mob hurt and death sounds, and other entity and block events playing twice in replays. Each packet the client handles is now recorded once, as it was received.
 
 ## [0.4.0-mc26.40] - 2026-11-01
 
