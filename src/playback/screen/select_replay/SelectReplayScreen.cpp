@@ -271,11 +271,24 @@ float toolbarButtonWidth(char const* icon, std::string_view text, char const* tr
 bool beginAnchoredPopup(char const* popupId, ImVec2 buttonMinimum, ImVec2 buttonMaximum) {
     constexpr float popupGap      = 4.0f;
     constexpr float popupMinWidth = 200.0f;
-    float const     popupWidth    = std::max(buttonMaximum.x - buttonMinimum.x, popupMinWidth);
+    ImVec2 const    display       = ImGui::GetIO().DisplaySize;
+    float const     popupWidth =
+        std::min(std::max(buttonMaximum.x - buttonMinimum.x, popupMinWidth), std::max(1.0f, display.x));
+    // Kept on screen: a popup wider than the space right of its button shifts left, and one taller than the space
+    // below it scrolls.
+    float const x         = std::max(0.0f, std::min(buttonMinimum.x, display.x - popupWidth));
+    float const y         = buttonMaximum.y + popupGap;
+    float const maxHeight = std::max(kNavigationLayout.popupItemHeight * 2.0f, display.y - y - popupGap);
 
-    ImGui::SetNextWindowPos({buttonMinimum.x, buttonMaximum.y + popupGap}, ImGuiCond_Always);
-    ImGui::SetNextWindowSizeConstraints({popupWidth, 0.0f}, {popupWidth, FLT_MAX});
-    return ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoMove);
+    ImGui::SetNextWindowPos({x, y}, ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints({popupWidth, 0.0f}, {popupWidth, maxHeight});
+    // A constrained size is truncated to whole pixels, so fractional padding (it follows the UI scale) would leave
+    // the popup a fraction shorter than its content and bring up a scrollbar.
+    ImVec2 const padding = ImGui::GetStyle().WindowPadding;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {std::round(padding.x), std::round(padding.y)});
+    bool const open = ImGui::BeginPopup(popupId, ImGuiWindowFlags_NoMove);
+    ImGui::PopStyleVar();
+    return open;
 }
 
 void drawClippedText(std::string_view text, ImVec2 position, float clipRight, ImU32 color) {
@@ -785,11 +798,10 @@ void SelectReplayScreen::draw(playback::state::ReplayBrowserState const& state, 
 void SelectReplayScreen::drawNavigation() {
     ImGui::BeginChild("##header", {0.0f, kNavHeight}, false, ImGuiWindowFlags_NoScrollbar);
 
-    float const width   = ImGui::GetWindowWidth();
-    float const margin  = kNavigationLayout.horizontalMargin;
-    float const gap     = kNavigationLayout.controlGap;
-    float const iconW   = kControlHeight;
-    float const searchW = kNavigationLayout.searchWidth;
+    float const width  = ImGui::GetWindowWidth();
+    float const margin = kNavigationLayout.horizontalMargin;
+    float const gap    = kNavigationLayout.controlGap;
+    float const iconW  = kControlHeight;
 
     std::string const importLabelText   = "playback.replayBrowser.navigation.import"_tr();
     std::string const filterLabelText   = "playback.replayBrowser.navigation.filter"_tr();
@@ -804,17 +816,35 @@ void SelectReplayScreen::drawNavigation() {
     float const  titleRight = titleX + titleSize.x;
 
     ImGui::SetWindowFontScale(kFontScaleNavControl);
-    float const importW      = toolbarButtonWidth(ICON_EXPORT, importLabelText);
-    float const sortW        = toolbarButtonWidth(ICON_SORT, sortLabelText, ICON_CHEVRON_DOWN);
     float const viewSegmentW = std::max(
         kNavigationLayout.viewSegmentMinWidth,
         std::ceil(
             std::max(textWidth(overviewLabelText), textWidth(detailsLabelText)) + kNavigationLayout.buttonPadding * 2.0f
         )
     );
-    float const viewW  = viewSegmentW * 2.0f;
-    float const ctrlW  = searchW + importW + sortW + iconW + viewW + gap * 3.0f + kNavigationLayout.viewGroupGap;
-    float const startX = std::max(titleRight + margin, width - margin - ctrlW);
+    float const viewW = viewSegmentW * 2.0f;
+    // On a narrow panel the search box gives up width first; then import and sort drop their labels, which their
+    // tooltips still spell out; narrower still, the title goes and the back arrow alone leads the bar.
+    constexpr float searchMinWidth   = 180.0f;
+    constexpr float searchFloorWidth = 120.0f;
+    float const     fixedW           = iconW + viewW + gap * 3.0f + kNavigationLayout.viewGroupGap;
+    float           controlsLeft     = titleRight + margin;
+    float           importW          = toolbarButtonWidth(ICON_EXPORT, importLabelText);
+    float           sortW            = toolbarButtonWidth(ICON_SORT, sortLabelText, ICON_CHEVRON_DOWN);
+    bool const      compact          = fixedW + importW + sortW + searchMinWidth > width - margin - controlsLeft;
+    if (compact) {
+        importW = iconW;
+        sortW   = toolbarButtonWidth(ICON_SORT, {}, ICON_CHEVRON_DOWN);
+    }
+    bool const showTitle = fixedW + importW + sortW + searchFloorWidth <= width - margin - controlsLeft;
+    if (!showTitle) controlsLeft = margin + iconW + gap;
+    float const searchW = std::clamp(
+        width - margin - controlsLeft - fixedW - importW - sortW,
+        searchFloorWidth,
+        kNavigationLayout.searchWidth
+    );
+    float const ctrlW  = searchW + importW + sortW + fixedW;
+    float const startX = std::max(controlsLeft, width - margin - ctrlW);
     float const y      = (kNavHeight - kControlHeight) * 0.5f;
 
     ImGui::SetWindowFontScale(kFontScaleNavBackIcon);
@@ -823,12 +853,14 @@ void SelectReplayScreen::drawNavigation() {
     ImGui::SetWindowFontScale(kFontScaleNavControl);
     tooltip("playback.replayBrowser.navigation.back"_tr().c_str());
 
-    ImGui::SetWindowFontScale(kFontScaleNavTitle);
-    ImGui::SetCursorPos({titleX, (kNavHeight - titleSize.y) * 0.5f + kTextOpticalOffsetY});
-    ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
-    ImGui::TextUnformatted(title.c_str());
-    ImGui::PopStyleColor();
-    ImGui::SetWindowFontScale(kFontScaleNavControl);
+    if (showTitle) {
+        ImGui::SetWindowFontScale(kFontScaleNavTitle);
+        ImGui::SetCursorPos({titleX, (kNavHeight - titleSize.y) * 0.5f + kTextOpticalOffsetY});
+        ImGui::PushStyleColor(ImGuiCol_Text, kColorText);
+        ImGui::TextUnformatted(title.c_str());
+        ImGui::PopStyleColor();
+        ImGui::SetWindowFontScale(kFontScaleNavControl);
+    }
 
     float x = startX;
 
@@ -843,14 +875,20 @@ void SelectReplayScreen::drawNavigation() {
     x += searchW + gap;
 
     ImGui::SetCursorPos({x, y});
-    if (toolbarButton("##import", ICON_EXPORT, importLabelText, importW)) importReplay();
+    if (toolbarButton("##import", ICON_EXPORT, compact ? std::string_view{} : importLabelText, importW)) importReplay();
     tooltip("playback.replayBrowser.navigation.importTooltip"_tr().c_str());
     x += importW + gap;
 
     // Keep filtering and sorting in one fixed-label menu so the toolbar stays compact and stable.
     ImGui::SetCursorPos({x, y});
-    bool const sortClicked =
-        toolbarButton("##sort", ICON_SORT, sortLabelText, sortW, mFilter != ReplayFilter::All, ICON_CHEVRON_DOWN);
+    bool const sortClicked = toolbarButton(
+        "##sort",
+        ICON_SORT,
+        compact ? std::string_view{} : sortLabelText,
+        sortW,
+        mFilter != ReplayFilter::All,
+        ICON_CHEVRON_DOWN
+    );
     ImVec2 const sortButtonMinimum = ImGui::GetItemRectMin();
     ImVec2 const sortButtonMaximum = ImGui::GetItemRectMax();
     if (sortClicked) ImGui::OpenPopup("##sort-menu");
