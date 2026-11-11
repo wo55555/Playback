@@ -92,12 +92,19 @@ private:
     void                                                  updateExportCamera(ExportFramePlan const& frame);
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
     [[nodiscard]] bool                                    warmupComplete() const;
-    [[nodiscard]] bool publishClockSample(ExportFramePlan const& frame, bool captureSample);
+    [[nodiscard]] bool                                    hasStep(OfflineRenderClockKind kind) const;
+    // Replaces a keep-alive; any other step still published is a fault.
+    [[nodiscard]] bool publishStep(ExportFramePlan const& frame, OfflineRenderClockKind kind);
     // Renders the frame's scene without a capture a fixed number of times; nothing measures whether it has settled.
     [[nodiscard]] bool advanceConvergence(ExportFramePlan const& frame);
-    void               releaseHeldRender();
-    void               clearClockSample();
+    void               clearStep();
     void               fault(OfflineRenderBoundaryError error, std::string message);
+
+    // The clock hooks hold one render step at a time.
+    struct PublishedStep {
+        OfflineRenderClockToken token;
+        OfflineRenderClockKind  kind{OfflineRenderClockKind::KeepAlive};
+    };
 
     replay::ReplaySession&                         mReplay;
     uint32_t                                       mCaptureCapacity{};
@@ -107,14 +114,12 @@ private:
     std::optional<ExportFramePlan>                 mLastSubmittedFrame;
     std::optional<visuals::FrameTicket>            mCompletedFrameTicket;
     std::optional<runtime::OfflineReplayTickToken> mReplayTickToken;
-    std::optional<OfflineRenderClockToken>         mClockToken;
-    std::optional<OfflineRenderClockToken>         mHoldToken;
+    std::optional<PublishedStep>                   mStep;
     int64_t                                        mMaximumReplayTick{};
     uint32_t                                       mWarmupFramesRemaining{};
     uint32_t                                       mWarmupStableFrames{};
     uint32_t                                       mConvergenceRendersDone{};
     bool                                           mConvergenceComplete{};
-    std::optional<OfflineRenderClockToken>         mConvergenceToken{};
     // Per-frame wall clock split three ways, because tick gating before the first convergence poll is neither.
     std::chrono::steady_clock::time_point mFrameStartedAt{};
     std::chrono::steady_clock::time_point mConvergenceStartedAt{};
