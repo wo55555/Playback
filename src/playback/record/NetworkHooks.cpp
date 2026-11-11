@@ -5,7 +5,6 @@
 #include "playback/replay/ReplaySession.h"
 
 #include "ll/api/memory/Hook.h"
-#include "ll/api/memory/Memory.h"
 #include "ll/api/service/Bedrock.h"
 #include "ll/api/service/TargetedBedrock.h"
 
@@ -52,6 +51,7 @@
 
 
 
+#include <Windows.h>
 #include <atomic>
 #include <mutex>
 #include <shared_mutex>
@@ -545,8 +545,13 @@ void** dispatcherVtable(IPacketHandlerDispatcher const* dispatcher) {
     return *reinterpret_cast<void** const*>(dispatcher);
 }
 
+// Pausing every thread can catch one holding the heap lock, so the slot is swapped in place.
 void setDispatchSlot(void** vtable, void* function) {
-    ll::memory::modify(&vtable[PacketDispatchSlot], sizeof(void*), [&] { vtable[PacketDispatchSlot] = function; });
+    auto* const slot = &vtable[PacketDispatchSlot];
+    DWORD       protection{};
+    if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &protection)) return;
+    std::atomic_ref(*slot).store(function, std::memory_order_release);
+    VirtualProtect(slot, sizeof(void*), protection, &protection);
 }
 
 struct ReadPacket {
