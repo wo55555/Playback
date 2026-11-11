@@ -37,6 +37,7 @@
 #include "mc/world/actor/player/Ability.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/provider/SynchedActorDataAccess.h"
+#include "mc/world/item/HandSlot.h"
 #include "mc/world/item/ItemStack.h"
 
 
@@ -89,6 +90,20 @@ struct HeightTracker {
 
 std::unique_ptr<HeightTracker> gHeights;
 
+// The SDK leaves HandAnimationState opaque: the hand's item, its hotbar slot (only tracked for the main hand), then
+// the current and previous arm heights.
+struct HandAnimation {
+    ItemStack item;
+    int       slot;
+    float     height;
+    float     oldHeight;
+};
+static_assert(sizeof(HandAnimation) == sizeof(ItemInHandRenderer::HandAnimationState));
+
+HandAnimation& handAnimation(ItemInHandRenderer& renderer, HandSlot hand) {
+    return reinterpret_cast<HandAnimation&>((*renderer.mHandAnimationState)[hand]);
+}
+
 // The native renderer follows the local player's items and arm height; the subject's are applied before each pass.
 void syncRenderer(ItemInHandRenderer& renderer, Player& subject) {
     auto const& carried = subject.getCarriedItem();
@@ -127,13 +142,15 @@ void syncRenderer(ItemInHandRenderer& renderer, Player& subject) {
     }
 
     // Old and current heights match so the native alpha cannot change the interpolated value.
-    renderer.mItem             = state.main.item;
-    renderer.mOffHandItem      = state.off.item;
-    renderer.mSlot             = state.main.slot;
-    renderer.mHeight           = mainHeight;
-    renderer.mOldHeight        = mainHeight;
-    renderer.mHeightOffHand    = offHeight;
-    renderer.mOldHeightOffHand = offHeight;
+    auto& main     = handAnimation(renderer, HandSlot::Mainhand);
+    auto& off      = handAnimation(renderer, HandSlot::Offhand);
+    main.item      = state.main.item;
+    main.slot      = state.main.slot;
+    main.height    = mainHeight;
+    main.oldHeight = mainHeight;
+    off.item       = state.off.item;
+    off.height     = offHeight;
+    off.oldHeight  = offHeight;
 }
 
 // The game's view-bobbing setting; the hand bob follows it like the native first-person view does.
@@ -345,17 +362,17 @@ private:
 class ScopedHandAction {
 public:
     ScopedHandAction(Player& observer, Player& subject) : mObserver(observer) {
-        mAttackAnim  = observer.mAttackAnim;
-        mOAttackAnim = observer.mOAttackAnim;
-        mSwingTime   = observer.mSwingTime;
-        mSwinging    = observer.mSwinging;
-        mItemInUse   = observer.mItemInUse.get();
+        mAttackAnim   = observer.mAttackAnim;
+        mOAttackAnim  = observer.mOAttackAnim;
+        mSwingTime    = observer.mSwingTime;
+        mSwingingHand = observer.mSwingingHand;
+        mItemInUse    = observer.mItemInUse.get();
 
-        observer.mAttackAnim  = static_cast<float>(subject.mAttackAnim);
-        observer.mOAttackAnim = static_cast<float>(subject.mOAttackAnim);
-        observer.mSwingTime   = static_cast<int>(subject.mSwingTime);
-        observer.mSwinging    = static_cast<bool>(subject.mSwinging);
-        observer.mItemInUse   = subject.mItemInUse.get();
+        observer.mAttackAnim   = static_cast<float>(subject.mAttackAnim);
+        observer.mOAttackAnim  = static_cast<float>(subject.mOAttackAnim);
+        observer.mSwingTime    = static_cast<int>(subject.mSwingTime);
+        observer.mSwingingHand = static_cast<std::optional<HandSlot>>(subject.mSwingingHand);
+        observer.mItemInUse    = subject.mItemInUse.get();
 
         auto& context = observer.getEntityContext();
         if (auto current = context.tryGetComponent<ItemInUseComponent>()) mSavedUse = *current;
@@ -367,11 +384,11 @@ public:
     }
 
     ~ScopedHandAction() {
-        mObserver.mAttackAnim  = mAttackAnim;
-        mObserver.mOAttackAnim = mOAttackAnim;
-        mObserver.mSwingTime   = mSwingTime;
-        mObserver.mSwinging    = mSwinging;
-        mObserver.mItemInUse   = mItemInUse;
+        mObserver.mAttackAnim   = mAttackAnim;
+        mObserver.mOAttackAnim  = mOAttackAnim;
+        mObserver.mSwingTime    = mSwingTime;
+        mObserver.mSwingingHand = mSwingingHand;
+        mObserver.mItemInUse    = mItemInUse;
 
         auto& context = mObserver.getEntityContext();
         if (mSavedUse) context.getOrAddComponent<ItemInUseComponent>() = *mSavedUse;
@@ -386,7 +403,7 @@ private:
     float                             mAttackAnim{};
     float                             mOAttackAnim{};
     int                               mSwingTime{};
-    bool                              mSwinging{};
+    std::optional<HandSlot>           mSwingingHand;
     PlayerItemInUse                   mItemInUse;
     std::optional<ItemInUseComponent> mSavedUse;
 };
@@ -440,20 +457,8 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 // 26.51 no longer exports _renderFirstPersonHandsAndAttachables, _renderItemInMainHand/_renderItemInOffhand,
-// _shouldRenderOffhandItem and renderMainhandItem; their hooks only passed the player through unchanged.
-
-LL_TYPE_INSTANCE_HOOK(
-    HandOffhandItemHook,
-    ll::memory::HookPriority::High,
-    ItemInHandRenderer,
-    &ItemInHandRenderer::renderOffhandItem,
-    void,
-    BaseActorRenderContext& context,
-    Player&                 player,
-    ItemContextFlags        itemFlags
-) {
-    origin(context, handPlayer(player), itemFlags);
-}
+// _shouldRenderOffhandItem and renderMainhandItem, nor 26.60 renderOffhandItem; their hooks only passed the player
+// through unchanged.
 
 LL_TYPE_INSTANCE_HOOK(
     HandMiniMapHook,
@@ -872,7 +877,6 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             makeSlot<HandGameTypeHook>("gameType"),
             makeSlot<HandItemInHandHook>("itemInHand"),
             makeSlot<HandRenderFirstPersonHook>("renderFirstPerson"),
-            makeSlot<HandOffhandItemHook>("offhandItem"),
             makeSlot<HandMiniMapHook>("miniMap"),
             makeSlot<CameraTargetHook>("cameraTarget"),
             makeSlot<BobViewHook>("bobView"),
