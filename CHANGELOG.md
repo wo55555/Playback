@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recorded entities no longer raise the game's runtime-id allocator, which could make the game discard the real local player.
 - The replay list's selection summary separates the file count and the total size with a middle dot instead of a garbled character.
 - Editor dialogs and menus stay inside the game window at any size. The keyboard shortcut sheet and message dialogs stay centred when the window is resized, the shortcut sheet switches to two columns or scrolls on a short window, menus too long for the window scroll, and long tooltips wrap. On a narrow window the replay list toolbar shrinks the search box first, then drops the import and sort labels and finally the title.
+- Numbers typed into the export dialog take effect at once, without pressing Enter, so starting the export straight after typing uses them. Out-of-range values are clamped as they are typed.
 
 ## [0.4.0-mc26.20] - 2026-11-01
 
