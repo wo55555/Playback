@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0-mc26.60] - 2026-11-12
+
 ### Added
 
+- Added first-person follow for the recorded player, with teleport and follow actions in the camera menu. The view uses the recorded camera offset and rendered FOV (including the spyglass), the recorded HUD (inventory, armor, offhand, selected slot, health, hunger, experience and game mode), held maps, view bobbing, hand sway, the nether portal warp and the bed view with its fade to black while sleeping. Recorded container screens are previewed while following.
+- Other recorded players and any entity can be followed in first person, from the subject picker or the viewport's right-click and nearby entities menus. When the subject leaves the server, or an entity stays gone, the view returns to the recorder.
+- Video export can render first-person video from the chosen subject, with the subject's arm and held item and without its model.
+- Video export now captures game audio. MP4 files get an AAC track and PNG sequences get a sidecar `.audio.wav`. The game's sound output is restored when the export ends.
+- Recordings now embed the server's downloaded resource packs and mount them on playback, so server textures and models show anywhere. Extracted packs are cached for the three most recent replays. `record.embedServerPacks` in the config turns this off.
+- The local player's view can be recorded between ticks with `/record rate` (20 to 120 samples per second; 20 records once per tick, the default). Replay uses those samples instead of a straight line between ticks. The starting rate comes from `record.localPlayerUpdatesPerSecond` in the config; `/record rate` changes it until the game restarts.
+- Camera keyframes are now applied to the preview while the replay is paused.
 - Added first-person and third-person camera tracks next to keyframe tracks. A person track views a replay player from its first key to its last, and each key picks the player from the inspector's searchable list. Where tracks overlap, the highest track in the list plays, in preview and in export. The viewport camera chip names the track that is playing.
 - Added a searchable player list for choosing which player to follow in the viewport.
 - Added right-click menus for keyframes, empty lanes, track headers and the ruler on the timeline.
@@ -26,16 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The camera path overlay and the paused camera glyph only show for keyframe tracks.
 - The camera switch track was removed; switch track data in earlier editor projects is dropped. The project format version stays at `1`.
+- Replays recorded with earlier releases are no longer supported and must be recorded again. The recording layout gained camera, FOV and view data while its snapshot context version stayed at `1`, so older archives are not detected and cannot be read correctly.
 - Dropdowns, popups and context menus in the editor now open under the control that opened them, with menu padding.
 - Recording the world snapshot no longer stalls the game: unchanged chunk columns are reused and changed ones are serialized on background threads.
 - Seeking in a replay now catches up faster by loading the world in merged chunk batches.
+- Requires Minecraft 1.26.60.5. Several game functions Playback uses are no longer exported in 26.60, so this build calls them at their addresses in that version; on any other build Playback does not load and logs the version it needs.
 
 ### Fixed
 
+- Replays from servers with custom items now record the server's item registry and apply it on playback, so recorded item ids resolve to the server's items.
+- Fixed a freeze when chunk draining re-entered the level join while recording.
+- Particles are rebuilt after a seek.
+- Recorded container screens stay open across seeks and exports, and the inventory screen is no longer previewed.
+- Fixed a dimension loading screen that could stay up forever during export.
 - First-person follow now shows the followed player's arm swing and item-use animation, such as eating.
 - Recordings now keep the recording player's own predicted sounds, such as hitting blocks, landing and strong attacks, so replays and exported audio no longer miss them.
-- Fixed item pickups, mob hurt and death sounds, and other entity and block events playing twice in replays. Each packet the client handles is now recorded once, as it was received.
 - Recordings now keep the sounds the client plays for every entity itself, such as footsteps, jumping, mob calls and wing flaps, and replays mute the copies the game regenerates, so replays and exported audio match what was heard and nothing plays twice.
+- Fixed item pickups, mob hurt and death sounds, and other entity and block events playing twice in replays. Each packet the client handles is now recorded once, as it was received.
 - Fixed a crash when quitting the game after the replay editor had been opened or while a video export was running.
 - Fixed the free camera's FOV widening while a followed first-person player sprinted. Following a player now only copies the attributes the HUD shows.
 - Fixed server forms, such as Hive's game list, staying open in replays and keeping the free camera from moving. Forms are now previewed like container screens while following the recorder in first person, and close where the recorder closed them, on seeks and when switching cameras. Other screens a server shows the recording player to answer are no longer opened.
@@ -309,7 +325,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.60...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.0-mc26.60...HEAD
+[0.4.0-mc26.60]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.60...v0.4.0-mc26.60
 [0.3.3-mc26.60]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.50...v0.3.3-mc26.60
 [0.3.3-mc26.50]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.50...v0.3.3-mc26.50
 [0.3.2-mc26.50]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.50...v0.3.2-mc26.50
