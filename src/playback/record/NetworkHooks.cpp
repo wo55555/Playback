@@ -9,10 +9,8 @@
 #include "ll/api/service/Bedrock.h"
 #include "ll/api/service/TargetedBedrock.h"
 
-#include "mc/client/game/ClientInstance.h"
 #include "mc/client/network/ClientNetworkHandler.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
-#include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/GameRenderer.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
@@ -80,7 +78,7 @@ struct NetworkHookState {
     bool playerHotbar{};
     bool mobEquipment{};
     bool predictedSound{};
-    bool localSound{};
+    bool actorSound{};
 
     [[nodiscard]] bool hudHandlersInstalled() const {
         return inventorySlot && inventoryContent && playerHotbar && mobEquipment;
@@ -90,9 +88,9 @@ struct NetworkHookState {
         return !inventorySlot && !inventoryContent && !playerHotbar && !mobEquipment;
     }
 
-    [[nodiscard]] bool soundHandlersInstalled() const { return predictedSound && localSound; }
+    [[nodiscard]] bool soundHandlersInstalled() const { return predictedSound && actorSound; }
 
-    [[nodiscard]] bool soundHandlersRemoved() const { return !predictedSound && !localSound; }
+    [[nodiscard]] bool soundHandlersRemoved() const { return !predictedSound && !actorSound; }
 
     [[nodiscard]] bool resourceHandlersInstalled() const {
         return resourcePacksInfo && resourcePackStack && startGame && itemRegistry;
@@ -466,9 +464,10 @@ using DimensionSoundFn = void (Level::*)(
     bool
 );
 
-// The client plays each actor's own sounds (steps, jumps) itself, so the local player's never arrive as packets.
+// The client plays every actor's own sounds (steps, calls, hurt cries) itself instead of receiving sound packets.
+// The replay simulates those actors differently, so its own copies stay silent and the recorded sounds play.
 LL_TYPE_INSTANCE_HOOK(
-    PlaybackLocalSoundHook,
+    PlaybackActorSoundHook,
     ll::memory::HookPriority::Normal,
     Level,
     static_cast<DimensionSoundFn>(&Level::$playSound),
@@ -480,24 +479,14 @@ LL_TYPE_INSTANCE_HOOK(
     ActorSoundIdentifier const&          actor,
     bool                                 isGlobal
 ) {
-    if (!mIsClientSide) {
+    if (!mIsClientSide || *actor.mActorId == ActorUniqueID::INVALID_ID()) {
         origin(dimension, type, pos, data, actor, isGlobal);
         return;
     }
-    auto const actorId       = actor.mActorId->rawID;
-    auto&      replaySession = ReplaySession::getInstance();
-    if (replaySession.isIsolatingReplayWorld()) {
-        // The recording already carries the recorded player's own sounds, so the client's copies would repeat them.
-        if (actorId == RecordedPlayerUniqueIdValue) return;
-        origin(dimension, type, pos, data, actor, isGlobal);
-        return;
-    }
+    if (ReplaySession::getInstance().isIsolatingReplayWorld()) return;
     origin(dimension, type, pos, data, actor, isGlobal);
     auto& recorder = Recorder::getInstance();
     if (!recorder.isActive() || recorder.isPaused()) return;
-    auto  client      = ll::service::getClientInstance();
-    auto* localPlayer = client ? client->getLocalPlayer() : nullptr;
-    if (!localPlayer || actorId != localPlayer->getOrCreateUniqueID().rawID) return;
     recorder.recordGamePacket(
         LevelSoundEventPacket(LevelSoundEventPacketPayload(type, pos, data, actor, isGlobal, std::nullopt))
     );
@@ -663,10 +652,10 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar)
             && installNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment)
             && installNetworkHook<PlaybackPredictedSoundHook>(state.predictedSound)
-            && installNetworkHook<PlaybackLocalSoundHook>(state.localSound);
+            && installNetworkHook<PlaybackActorSoundHook>(state.actorSound);
     };
     auto removeAll = [&] {
-        removeNetworkHook<PlaybackLocalSoundHook>(state.localSound);
+        removeNetworkHook<PlaybackActorSoundHook>(state.actorSound);
         removeNetworkHook<PlaybackPredictedSoundHook>(state.predictedSound);
         removeNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment);
         removeNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar);
