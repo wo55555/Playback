@@ -784,11 +784,12 @@ bool OfflineRenderBoundary::warmupComplete() const {
 
 bool OfflineRenderBoundary::publishClockSample(ExportFramePlan const& frame, bool captureSample) {
     releaseHeldRender();
-    auto const sample = clockSample(frame);
+    auto sample = clockSample(frame);
     if (!sample) {
         fault(OfflineRenderBoundaryError::InvalidFrame, "The offline render clock sample is invalid");
         return false;
     }
+    sample->kind = captureSample ? OfflineRenderClockKind::Capture : OfflineRenderClockKind::Warmup;
 
     OfflineRenderClockToken token;
     switch (publishOfflineRenderClockSample(*sample, token, captureSample)) {
@@ -824,11 +825,12 @@ bool OfflineRenderBoundary::advanceConvergence(ExportFramePlan const& frame) {
     }
     releaseHeldRender();
     if (!mConvergenceToken) {
-        auto const sample = clockSample(frame);
+        auto sample = clockSample(frame);
         if (!sample) {
             fault(OfflineRenderBoundaryError::InvalidFrame, "The offline render clock sample is invalid");
             return false;
         }
+        sample->kind = OfflineRenderClockKind::Convergence;
         OfflineRenderClockToken token;
         if (publishOfflineRenderClockSample(*sample, token, false) != OfflineRenderClockPublishResult::Published) {
             fault(OfflineRenderBoundaryError::ClockUnavailable, "The convergence render clock is unavailable");
