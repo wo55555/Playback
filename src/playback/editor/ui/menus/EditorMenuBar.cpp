@@ -182,6 +182,13 @@ constexpr ResolutionPreset kResolutionPresets[] = {
     {3840, 2160}
 };
 
+constexpr exporting::AudioCodec kAudioCodecs[] = {
+    exporting::AudioCodec::Aac,
+    exporting::AudioCodec::Opus,
+    exporting::AudioCodec::Flac,
+};
+constexpr uint32_t kAudioBitratesKbps[] = {128, 192, 256, 320};
+
 // Dim note on the same row, right-aligned to `rightEdge` (screen x) so it lines up with the full-width fields.
 void trailingText(char const* text, float rightEdge) {
     ImGui::SameLine();
@@ -686,6 +693,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
           "playback.refactorEditor.export.hideHud"_tr(),
           "playback.refactorEditor.export.encodeSpeed"_tr(),
           "playback.refactorEditor.export.crf"_tr(),
+          "playback.refactorEditor.export.recordAudio"_tr(),
+          "playback.refactorEditor.export.audioCodec"_tr(),
+          "playback.refactorEditor.export.audioBitrate"_tr(),
           "playback.refactorEditor.export.convergenceFrames"_tr(),
           "playback.refactorEditor.export.accelerateClient"_tr()}) {
         hintedLabelWidth = std::max(hintedLabelWidth, textWidth(label) + hintExtra);
@@ -742,13 +752,25 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         std::string const encodeFast            = "playback.refactorEditor.export.encodeFast"_tr();
         std::string const encodeFastest         = "playback.refactorEditor.export.encodeFastest"_tr();
         char const*       encodeSpeedOptions[]  = {encodeQuality.c_str(), encodeFast.c_str(), encodeFastest.c_str()};
+        std::string const audioMono             = "playback.refactorEditor.export.audioMono"_tr();
+        std::string const audioStereo           = "playback.refactorEditor.export.audioStereo"_tr();
+        char const*       audioChannelOptions[] = {audioMono.c_str(), audioStereo.c_str()};
+        char const*       audioCodecOptions[]   = {"AAC", "Opus", "FLAC"};
+        static_assert(IM_ARRAYSIZE(audioCodecOptions) == IM_ARRAYSIZE(kAudioCodecs));
+        char const* audioBitrateOptions[] = {"128k", "192k", "256k", "320k"};
+        static_assert(IM_ARRAYSIZE(audioBitrateOptions) == IM_ARRAYSIZE(kAudioBitratesKbps));
         std::string const tabGeneral  = "playback.refactorEditor.export.tabGeneral"_tr();
         std::string const tabVideo    = "playback.refactorEditor.export.tabVideo"_tr();
+        std::string const tabAudio    = "playback.refactorEditor.export.tabAudio"_tr();
         std::string const tabAdvanced = "playback.refactorEditor.export.tabAdvanced"_tr();
-        char const*       tabLabels[] = {tabGeneral.c_str(), tabVideo.c_str(), tabAdvanced.c_str()};
-        enum ExportTab { TabGeneral, TabVideo, TabAdvanced };
+        char const*       tabLabels[] = {tabGeneral.c_str(), tabVideo.c_str(), tabAudio.c_str(), tabAdvanced.c_str()};
+        enum ExportTab { TabGeneral, TabVideo, TabAudio, TabAdvanced };
         mExportTab                  = std::clamp(mExportTab, 0, IM_ARRAYSIZE(tabLabels) - 1);
+        mExportAudioChannels        = std::clamp(mExportAudioChannels, 0, 1);
+        mExportAudioCodec           = std::clamp(mExportAudioCodec, 0, IM_ARRAYSIZE(kAudioCodecs) - 1);
+        mExportAudioBitrate         = std::clamp(mExportAudioBitrate, 0, IM_ARRAYSIZE(kAudioBitratesKbps) - 1);
         mExportEncodeSpeed          = std::clamp(mExportEncodeSpeed, 0, 2);
+        auto const audioCodec       = kAudioCodecs[mExportAudioCodec];
         mExportSsaa                 = std::clamp(mExportSsaa, 0, 2);
         int const maximumReplayTick = std::max(state.totalTicks, 0);
 
@@ -988,6 +1010,63 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndDisabled();
                 ImGui::EndTable();
             }
+        } else if (mExportTab == TabAudio) {
+            sectionHeader("playback.refactorEditor.export.capture"_tr().c_str(), 6.0f);
+            if (beginPropertyTable("##export-audio", labelWidth)) {
+                propertyLabel(
+                    "playback.refactorEditor.export.recordAudio"_tr().c_str(),
+                    "playback.refactorEditor.export.recordAudioHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-record-audio", &mExportAudio);
+
+                // Rows stay in place while audio is off, so the page keeps its layout.
+                propertyLabel("playback.refactorEditor.export.audioChannels"_tr().c_str());
+                ImGui::BeginDisabled(!mExportAudio);
+                segmented(
+                    "##export-audio-channels",
+                    audioChannelOptions,
+                    IM_ARRAYSIZE(audioChannelOptions),
+                    mExportAudioChannels,
+                    resolutionRowWidth
+                );
+                ImGui::EndDisabled();
+                ImGui::EndTable();
+            }
+
+            sectionHeader("playback.refactorEditor.export.advancedEncode"_tr().c_str());
+            if (beginPropertyTable("##export-audio-encoding", labelWidth)) {
+                // A PNG sequence keeps the captured sound as a WAV next to the frames, so there is nothing to encode.
+                propertyLabel(
+                    "playback.refactorEditor.export.audioCodec"_tr().c_str(),
+                    "playback.refactorEditor.export.audioCodecHint"_tr().c_str()
+                );
+                ImGui::BeginDisabled(mExportFormat != 0 || !mExportAudio);
+                segmented(
+                    "##export-audio-codec",
+                    audioCodecOptions,
+                    IM_ARRAYSIZE(audioCodecOptions),
+                    mExportAudioCodec,
+                    resolutionRowWidth
+                );
+                ImGui::EndDisabled();
+
+                propertyLabel(
+                    "playback.refactorEditor.export.audioBitrate"_tr().c_str(),
+                    "playback.refactorEditor.export.audioBitrateHint"_tr().c_str()
+                );
+                ImGui::BeginDisabled(
+                    mExportFormat != 0 || !mExportAudio || !exporting::audioCodecUsesBitrate(audioCodec)
+                );
+                segmented(
+                    "##export-audio-bitrate",
+                    audioBitrateOptions,
+                    IM_ARRAYSIZE(audioBitrateOptions),
+                    mExportAudioBitrate,
+                    valueWidth
+                );
+                ImGui::EndDisabled();
+                ImGui::EndTable();
+            }
         } else {
             sectionHeader("playback.refactorEditor.export.advancedRender"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-rendering", labelWidth)) {
@@ -1060,6 +1139,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.videoCrf    = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         previewSettings.accelerateClient = mExportAccelerateClient;
         previewSettings.hideHud          = mExportHideHud;
+        previewSettings.audio            = mExportAudio;
+        previewSettings.audioStereo      = mExportAudioChannels == 1;
+        previewSettings.audioCodec       = audioCodec;
+        previewSettings.audioBitrateKbps = kAudioBitratesKbps[mExportAudioBitrate];
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
 
@@ -1086,10 +1169,19 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 auto const u8 = compiled.plan->outputPath.filename().u8string();
                 outputValue.assign(reinterpret_cast<char const*>(u8.data()), u8.size());
             }
-            // Encoder choices live on another page than the one open, so the recap names them.
-            std::string const encodeValue = mExportFormat == 0 ? std::string(encodeSpeedOptions[mExportEncodeSpeed])
-                                                                     + " | CRF " + std::to_string(mExportCrf)
-                                                               : std::string("PNG");
+            // Encoder choices live on other pages than the one open, so the recap names them: video first, then audio.
+            std::string encodeValue = mExportFormat == 0 ? std::string(encodeSpeedOptions[mExportEncodeSpeed])
+                                                               + " | CRF " + std::to_string(mExportCrf)
+                                                         : std::string("PNG");
+            if (mExportAudio) {
+                // A PNG sequence keeps its sound as a WAV file beside the frames.
+                std::string audioValue = mExportFormat == 0 ? audioCodecOptions[mExportAudioCodec] : "WAV";
+                if (mExportFormat == 0 && exporting::audioCodecUsesBitrate(audioCodec))
+                    audioValue += std::string(" ") + audioBitrateOptions[mExportAudioBitrate];
+                encodeValue += " | " + audioValue + " " + audioChannelOptions[mExportAudioChannels];
+            } else {
+                encodeValue += " | " + "playback.refactorEditor.export.audioSummaryOff"_tr();
+            }
             // The block bleeds past the window padding while its rows stay on the shared label/value columns.
             float const  padY     = 6.0f * uiScale;
             float const  rowH     = ImGui::GetTextLineHeight() + style.CellPadding.y * 2.0f;

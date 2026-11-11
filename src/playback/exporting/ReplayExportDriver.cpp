@@ -159,7 +159,7 @@ bool ReplayExportDriver::start(
     mPhase = Phase::Rendering;
     getLogger().info(
         "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
-        "warmup={}, convergence={}, accelerateClient={}, x264={}/crf{}, hideHud={}",
+        "warmup={}, convergence={}, accelerateClient={}, x264={}/crf{}, hideHud={}, audio={} ({} ch, {} {}k)",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -174,7 +174,11 @@ bool ReplayExportDriver::start(
         mPlan->settings.accelerateClient,
         x264Preset(mPlan->settings.encodeSpeed),
         mPlan->settings.videoCrf,
-        mPlan->settings.hideHud
+        mPlan->settings.hideHud,
+        mPlan->settings.audio,
+        mPlan->settings.audioStereo ? 2 : 1,
+        ffmpegAudioEncoder(mPlan->settings.audioCodec),
+        mPlan->settings.audioBitrateKbps
     );
     return true;
 }
@@ -196,7 +200,12 @@ void ReplayExportDriver::tick() try {
                 && std::filesystem::file_size(sidecar, sidecarEc) > 44 && !sidecarEc;
             if (hasAudio) {
                 if (mPlan->settings.format == ExportFormat::Mp4Video) {
-                    playback::audio::exportmux::muxIntoMp4(mPlan->outputPath, sidecar);
+                    playback::audio::exportmux::muxIntoMp4(
+                        mPlan->outputPath,
+                        sidecar,
+                        mPlan->settings.audioCodec,
+                        mPlan->settings.audioBitrateKbps
+                    );
                 } else {
                     getLogger().info("Export audio written to {}", sidecar);
                 }
