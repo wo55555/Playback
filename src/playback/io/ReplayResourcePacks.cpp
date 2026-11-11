@@ -19,15 +19,16 @@
 #include "mc/network/packet/PacksInfoData.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
 #include "mc/platform/UUID.h"
-#include "mc/world/level/PackInstanceId.h"
 #include "mc/resources/CompositePackSource.h"
 #include "mc/resources/DirectoryPackSource.h"
+#include "mc/resources/IContentAccessibilityProvider.h"
 #include "mc/resources/Pack.h"
 #include "mc/resources/PackSourceFactory.h"
 #include "mc/resources/RepositorySources.h"
 #include "mc/resources/ResourcePack.h"
 #include "mc/resources/ResourcePackRepository.h"
 #include "mc/scripting/modules/PackManifest.h"
+#include "mc/world/level/PackInstanceId.h"
 
 #include "xxhash.h"
 #include "zip.h"
@@ -882,21 +883,15 @@ std::optional<std::filesystem::path> mountReplayPacks(
     // Packs the replay does not carry still come from the local cache, copied so the two sources never overlap.
     std::vector<std::pair<std::string, std::filesystem::path>> notEmbedded;
     size_t                                                     removed = 0;
-    repo._removePacksIf([&](ResourcePack const& pack) {
+    repo.forEachPack([&](ResourcePack const& pack) {
         auto const& manifest = manifestOf(pack);
-        if (!isCacheOrigin(manifest.mPackOrigin) || manifest.mPackType != PackType::Resources) return false;
+        if (!isCacheOrigin(manifest.mPackOrigin) || manifest.mPackType != PackType::Resources) return;
         auto key = packKey(*manifest.mIdentity);
         if (!index.keys.contains(key) && announced.contains(key)) {
             notEmbedded.emplace_back(folderFor(key), fromUtf8(manifest.mLocation->getFullPath().value));
         }
         ++removed;
-        return true;
     });
-
-    size_t fromLocalCache = 0;
-    for (auto const& [folder, directory] : notEmbedded) {
-        if (copyPackDirectory(directory, localCache / folder)) ++fromLocalCache;
-    }
 
     std::vector<PackSource*> kept;
     for (auto* source : sources) {
@@ -904,6 +899,18 @@ std::optional<std::filesystem::path> mountReplayPacks(
             kept.push_back(source);
         }
     }
+    // This also drops the cache behavior packs, reloaded from the kept sources on refresh, and the content keys
+    // addCachedResourcePacks installed, which the replay's encrypted packs still need.
+    auto contentKeys = *repo.mTempCacheContentKeys;
+    repo.removePacksLoadedFromCache();
+    *repo.mTempCacheContentKeys = std::move(contentKeys);
+    repo.mContentAccessibility->setTempContentKeys(*repo.mTempCacheContentKeys);
+
+    size_t fromLocalCache = 0;
+    for (auto const& [folder, directory] : notEmbedded) {
+        if (copyPackDirectory(directory, localCache / folder)) ++fromLocalCache;
+    }
+
     auto& factory = repository.getPackSourceFactory();
     kept.push_back(
         &factory.createDirectoryPackSource(Core::Path{embedded}, PackType::Resources, PackOrigin::TempCache, false)
