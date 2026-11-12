@@ -93,7 +93,7 @@ private:
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
     [[nodiscard]] bool                                    warmupComplete() const;
     [[nodiscard]] bool publishClockSample(ExportFramePlan const& frame, bool captureSample);
-    // Renders the frame's own time without a capture until the ray-traced denoiser has settled on it.
+    // Renders the frame's scene without a capture a fixed number of times; nothing measures whether it has settled.
     [[nodiscard]] bool advanceConvergence(ExportFramePlan const& frame);
     void               releaseHeldRender();
     void               clearClockSample();
