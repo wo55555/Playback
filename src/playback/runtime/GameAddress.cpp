@@ -49,6 +49,7 @@ constexpr Entry Entries[] = {
     {GameFunction::HudVignetteRender,                        0x5750F30},
     {GameFunction::TryGetPortalData,                         0x6F2D140},
     {GameFunction::ActorIsOnFire,                            0xBC4EC0 },
+    {GameFunction::ClientOnTick,                             0x65A0090},
 };
 
 constexpr bool entriesInOrder() {

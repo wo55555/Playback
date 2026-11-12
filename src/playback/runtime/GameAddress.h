@@ -32,6 +32,7 @@ enum class GameFunction : uint8_t {
     HudVignetteRender,
     TryGetPortalData,
     ActorIsOnFire,
+    ClientOnTick,
     Count,
 };
 
