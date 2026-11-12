@@ -22,6 +22,8 @@ constexpr auto     RenderWaitLogInterval = std::chrono::seconds{2};
 constexpr auto     WarmupSceneTimeout    = std::chrono::seconds{30};
 constexpr auto     ForcedLoadingDelay    = std::chrono::seconds{5};
 constexpr uint32_t StableWarmupFrames    = 3;
+// Renderer time per warm-up render: one tick, 50 ms.
+constexpr float WarmupStepTicks = 1.0f;
 
 bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
     return left.frameIndex == right.frameIndex && left.ptsNumerator == right.ptsNumerator
@@ -256,6 +258,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
             return waiting(OfflineRenderWaitReason::CaptureCapacity, OfflineRenderStepResult::Backpressured);
         }
         mPendingFrame           = frame;
+        mFrameTimeSpent         = false;
         mConvergenceRendersDone = 0;
         mConvergenceComplete    = false;
         mFrameStartedAt         = std::chrono::steady_clock::now();
@@ -798,11 +801,20 @@ bool OfflineRenderBoundary::publishStep(ExportFramePlan const& frame, OfflineRen
         return false;
     }
     sample->kind = kind;
+    if (kind == OfflineRenderClockKind::Warmup) {
+        // The scene holds still while the renderers' time runs.
+        sample->deltaTicks = WarmupStepTicks;
+        sample->wholeTicks = 0;
+    } else if (mFrameTimeSpent) {
+        sample->deltaTicks = 0.0f;
+        sample->wholeTicks = 0;
+    }
 
     OfflineRenderClockToken token;
     switch (publishOfflineRenderClockSample(*sample, token)) {
     case OfflineRenderClockPublishResult::Published:
         mStep = PublishedStep{token, kind};
+        if (kind != OfflineRenderClockKind::Warmup) mFrameTimeSpent = true;
         return true;
     case OfflineRenderClockPublishResult::Unavailable:
         fault(OfflineRenderBoundaryError::ClockUnavailable, "The fractional render clock is unavailable");
@@ -818,7 +830,7 @@ bool OfflineRenderBoundary::publishStep(ExportFramePlan const& frame, OfflineRen
 }
 
 // Steps without a capture are re-rendered every frame, which lets the denoiser accumulate on this frame's scene.
-// The renderers' clock only moves with the capture that follows.
+// The frame's time passes with the first of them, so the rest and the capture that follows add none.
 bool OfflineRenderBoundary::advanceConvergence(ExportFramePlan const& frame) {
     if (mConvergenceStartedAt == std::chrono::steady_clock::time_point{})
         mConvergenceStartedAt = std::chrono::steady_clock::now();
