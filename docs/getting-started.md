@@ -158,7 +158,7 @@ Open **File > Export...** in the replay editor and configure:
 - Start and end tick.
 - Frame rate and output resolution.
 - SSAA and warm-up frames.
-- Under **Advanced**, convergence frames (0 by default). They render each frame again without capturing it so ray-traced temporal effects can settle, at the cost of a full render per extra frame.
+- Under **Advanced**, extra renders (0 by default). Each frame is rendered that many more times before it is saved, and those renders are discarded, so ray-traced temporal effects can settle, at the cost of a full render each.
 
 The experimental exporter renders frames from replay time rather than recording the screen in real time. MP4 uses the bundled FFmpeg/libx264 tool; PNG export remains available if FFmpeg cannot be started. Outputs are written under `mods/playback/exports` by default.
 
