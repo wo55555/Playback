@@ -484,8 +484,9 @@ OfflineRenderClientBoostStats takeOfflineRenderClientBoostStats() {
 }
 
 OfflineRenderClockPublishResult
-publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token, bool captureSample) {
-    token = {};
+publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token) {
+    token                    = {};
+    bool const captureSample = sample.kind == OfflineRenderClockKind::Capture;
     if (!sample.replayTime.isValid() || !std::isfinite(sample.deltaTicks) || sample.deltaTicks < 0.0f
         || sample.wholeTicks < 0) {
         return OfflineRenderClockPublishResult::InvalidSample;
