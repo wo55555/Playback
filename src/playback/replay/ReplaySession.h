@@ -614,7 +614,7 @@ public:
     // Keeps the observer on the recorded player's first-person view until the user takes over or picks a camera.
     void setFollowRecordedPlayer(bool follow);
 
-    // Pulls the follow camera behind the recorded player while following. Only honoured while
+    // Pulls the follow camera behind the recorded player. Only honoured while
     // following; leaving the follow view (free camera, preview camera, export) always returns to first person.
     void setFollowThirdPerson(bool thirdPerson);
 
