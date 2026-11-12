@@ -1361,13 +1361,14 @@ bool ImGuiRenderer::armExportCapture(visuals::FrameTicket const& ticket) {
     return true;
 }
 
-std::optional<visuals::CapturedFrame> ImGuiRenderer::collectExportFrame() {
+std::optional<visuals::CapturedFrame> ImGuiRenderer::collectExportFrame(std::chrono::milliseconds wait) {
     std::optional<visuals::FrameTapSession> session;
     {
         std::scoped_lock lock(mImpl->captureMutex);
         session = mImpl->captureSession;
     }
     if (!session) return std::nullopt;
+    if (wait > std::chrono::milliseconds::zero()) return mImpl->frameTap.waitPop(*session, wait);
     return mImpl->frameTap.tryPop(*session);
 }
 
@@ -1445,6 +1446,11 @@ bool ImGuiRenderer::captureSubmittedScene() {
     }
     if (!swapChain || !mImpl->frameTap.hasArmedCapture()) return false;
     return renderInternal(swapChain, false, true, false);
+}
+
+bool ImGuiRenderer::canCaptureSubmittedScene() const {
+    std::scoped_lock lock(mImpl->mutex);
+    return mImpl->initialized && mImpl->swapChain;
 }
 
 void ImGuiRenderer::pollFrameCapture() {
