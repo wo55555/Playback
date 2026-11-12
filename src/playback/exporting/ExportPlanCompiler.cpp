@@ -197,8 +197,8 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     if (settings.warmupFrames > MaxWarmupFrames) {
         return failure(ExportError::InvalidSettings, "The export warm-up frame count is too large");
     }
-    if (settings.convergenceFrames > MaxExportConvergenceFrames) {
-        return failure(ExportError::InvalidSettings, "The export convergence frame count is too large");
+    if (settings.extraRenders > MaxExportExtraRenders) {
+        return failure(ExportError::InvalidSettings, "The export extra render count is too large");
     }
     if (settings.videoCrf > MaxExportCrf || settings.encodeSpeed > VideoEncodeSpeed::Fastest) {
         return failure(ExportError::InvalidSettings, "The video encoder quality or speed setting is invalid");
