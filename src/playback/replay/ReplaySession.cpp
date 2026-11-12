@@ -6229,6 +6229,11 @@ bool ReplaySession::isReplayLevel(Level const& level) {
         && level.getLevelId() == session.mReplayLevelId;
 }
 
+bool ReplaySession::isReplayWorldLevelId(std::string_view levelId) const {
+    auto const profile = mReplayDimensionProfile.load(std::memory_order_acquire);
+    return profile && levelId == profile->levelId;
+}
+
 void ReplaySession::configureReplayDimension(DimensionArguments& arguments) const {
     auto profile = mReplayDimensionProfile.load(std::memory_order_acquire);
     if (!profile || arguments.mDerived->mLevel.getLevelId() != profile->levelId) return;
