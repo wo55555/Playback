@@ -104,8 +104,8 @@ bool OfflineRenderBoundary::open(
     mWarmupFrames                  = settings.warmupFrames;
     mWarmupFramesRemaining         = mWarmupFrames;
     mWarmupStableFrames            = 0;
-    mConvergenceRendersDone        = 0;
-    mConvergenceComplete           = false;
+    mExtraRendersDone              = 0;
+    mExtraRendersComplete          = false;
     mWarmupStartedAt               = {};
     mWarmupLastLoggedAt            = {};
     mReplayTickRequestedAt         = {};
@@ -120,19 +120,19 @@ void OfflineRenderBoundary::close() {
     if (mProfiledFrames != 0) {
         auto const   frames     = mProfiledFrames;
         double const prepareMs  = static_cast<double>(mPrepareMicros) / 1000.0;
-        double const convergeMs = static_cast<double>(mConvergenceMicros) / 1000.0;
+        double const extraRenderMs = static_cast<double>(mExtraRenderMicros) / 1000.0;
         double const captureMs  = static_cast<double>(mCaptureMicros) / 1000.0;
         Playback::getInstance().getSelf().getLogger().debug(
-            "Offline render frame profile: frames={}, convergencePasses={} ({:.2f}/frame), "
-            "prepareMs={:.0f} ({:.2f}/frame), convergenceMs={:.0f} ({:.2f}/frame), captureMs={:.0f} ({:.2f}/frame), "
+            "Offline render frame profile: frames={}, extraRenders={} ({:.2f}/frame), "
+            "prepareMs={:.0f} ({:.2f}/frame), extraRenderMs={:.0f} ({:.2f}/frame), captureMs={:.0f} ({:.2f}/frame), "
             "captureWaits={} (missed={})",
             frames,
-            mConvergencePasses,
-            static_cast<double>(mConvergencePasses) / static_cast<double>(frames),
+            mExtraRenderPasses,
+            static_cast<double>(mExtraRenderPasses) / static_cast<double>(frames),
             prepareMs,
             prepareMs / static_cast<double>(frames),
-            convergeMs,
-            convergeMs / static_cast<double>(frames),
+            extraRenderMs,
+            extraRenderMs / static_cast<double>(frames),
             captureMs,
             captureMs / static_cast<double>(frames),
             mCaptureWaits,
@@ -140,15 +140,15 @@ void OfflineRenderBoundary::close() {
         );
     }
     mPrepareMicros        = 0;
-    mConvergenceMicros    = 0;
+    mExtraRenderMicros     = 0;
     mCaptureMicros        = 0;
-    mConvergencePasses    = 0;
+    mExtraRenderPasses     = 0;
     mCaptureWaits         = 0;
     mCaptureWaitsMissed   = 0;
     mProfiledFrames       = 0;
     mFrameStartedAt       = {};
-    mConvergenceStartedAt = {};
-    mConvergenceEndedAt   = {};
+    mExtraRendersStartedAt = {};
+    mExtraRendersEndedAt   = {};
     setOfflineRenderActivityActive(false);
     clearStep();
     mReplayTickToken.reset();
@@ -236,13 +236,13 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         if (mFrameStartedAt != std::chrono::steady_clock::time_point{}) {
             auto const now = std::chrono::steady_clock::now();
             auto const begin =
-                mConvergenceStartedAt == std::chrono::steady_clock::time_point{} ? now : mConvergenceStartedAt;
+                mExtraRendersStartedAt == std::chrono::steady_clock::time_point{} ? now : mExtraRendersStartedAt;
             auto const end =
-                mConvergenceEndedAt == std::chrono::steady_clock::time_point{} ? begin : mConvergenceEndedAt;
+                mExtraRendersEndedAt == std::chrono::steady_clock::time_point{} ? begin : mExtraRendersEndedAt;
             mPrepareMicros += static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(begin - mFrameStartedAt).count()
             );
-            mConvergenceMicros +=
+            mExtraRenderMicros +=
                 static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count());
             mCaptureMicros +=
                 static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - end).count());
@@ -267,11 +267,11 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         }
         mPendingFrame           = frame;
         mFrameTimeSpent         = false;
-        mConvergenceRendersDone = 0;
-        mConvergenceComplete    = false;
+        mExtraRendersDone       = 0;
+        mExtraRendersComplete   = false;
         mFrameStartedAt         = std::chrono::steady_clock::now();
-        mConvergenceStartedAt   = {};
-        mConvergenceEndedAt     = {};
+        mExtraRendersStartedAt  = {};
+        mExtraRendersEndedAt    = {};
         // Only the first frame and the first one of a new dimension have a warm-up to run.
         mState = !mTimelineInitialized ? OfflineRenderBoundaryState::InitializingReplay
                : warmupComplete()      ? OfflineRenderBoundaryState::PreparingReplay
@@ -466,9 +466,9 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
             return advanceWarmup(*mPendingFrame);
         }
 
-        if (!mConvergenceComplete) {
-            if (!advanceConvergence(*mPendingFrame)) return OfflineRenderStepResult::Failed;
-            if (!mConvergenceComplete) return waiting(OfflineRenderWaitReason::Convergence);
+        if (!mExtraRendersComplete) {
+            if (!advanceExtraRenders(*mPendingFrame)) return OfflineRenderStepResult::Failed;
+            if (!mExtraRendersComplete) return waiting(OfflineRenderWaitReason::ExtraRender);
         }
 
         if (!hasStep(OfflineRenderClockKind::Capture)
@@ -860,30 +860,30 @@ bool OfflineRenderBoundary::publishStep(ExportFramePlan const& frame, OfflineRen
     return false;
 }
 
-// Steps without a capture are re-rendered every frame, which lets the denoiser accumulate on this frame's scene.
-// The frame's time passes with the first of them, so the rest and the capture that follows add none.
-bool OfflineRenderBoundary::advanceConvergence(ExportFramePlan const& frame) {
-    if (mConvergenceStartedAt == std::chrono::steady_clock::time_point{})
-        mConvergenceStartedAt = std::chrono::steady_clock::now();
-    if (mConvergenceRendersDone >= mExecutor.convergenceFrames()) {
-        if (hasStep(OfflineRenderClockKind::Convergence)) clearStep();
-        mConvergenceComplete = true;
-        if (mConvergenceEndedAt == std::chrono::steady_clock::time_point{})
-            mConvergenceEndedAt = std::chrono::steady_clock::now();
+// Extra renders draw this frame's scene without a capture, which lets the denoiser accumulate on it before the frame
+// is saved. The frame's time passes with the first of them, so the rest and the capture that follows add none.
+bool OfflineRenderBoundary::advanceExtraRenders(ExportFramePlan const& frame) {
+    if (mExtraRendersStartedAt == std::chrono::steady_clock::time_point{})
+        mExtraRendersStartedAt = std::chrono::steady_clock::now();
+    if (mExtraRendersDone >= mExecutor.extraRenders()) {
+        if (hasStep(OfflineRenderClockKind::ExtraRender)) clearStep();
+        mExtraRendersComplete = true;
+        if (mExtraRendersEndedAt == std::chrono::steady_clock::time_point{})
+            mExtraRendersEndedAt = std::chrono::steady_clock::now();
         return true;
     }
-    if (!hasStep(OfflineRenderClockKind::Convergence) && !publishStep(frame, OfflineRenderClockKind::Convergence)) {
+    if (!hasStep(OfflineRenderClockKind::ExtraRender) && !publishStep(frame, OfflineRenderClockKind::ExtraRender)) {
         return false;
     }
     mExecutor.pollCapture();
     // One step per render, so a step that stays published cannot be counted twice.
     if (wasOfflineRenderClockSampleApplied(mStep->token)) {
         clearStep();
-        ++mConvergenceRendersDone;
-        ++mConvergencePasses;
-        if (mConvergenceRendersDone >= mExecutor.convergenceFrames()) {
-            mConvergenceComplete = true;
-            mConvergenceEndedAt  = std::chrono::steady_clock::now();
+        ++mExtraRendersDone;
+        ++mExtraRenderPasses;
+        if (mExtraRendersDone >= mExecutor.extraRenders()) {
+            mExtraRendersComplete = true;
+            mExtraRendersEndedAt  = std::chrono::steady_clock::now();
         }
     }
     return true;
