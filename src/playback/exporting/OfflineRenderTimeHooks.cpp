@@ -32,13 +32,13 @@ constexpr size_t ClockCount   = 2;
 constexpr size_t VibrantClock = 0;
 constexpr size_t RayClock     = 1;
 // The renderers read the performance counter through MSVCP140's _Query_perf_counter import, and none of the functions
-// that do has a symbol, so the reads are told apart by where they return to. Client RVAs (1.26.20.04): Vibrant
+// that do has a symbol, so the reads are told apart by where they return to. Client RVAs (1.26.40.05): Vibrant
 // Visuals exposure dt, ray tracing frame time, ray tracing start time and ray tracing shader seconds.
 constexpr std::array<uintptr_t, SiteCount> SiteReturnRvas{
-    0x9300A86,
-    0xA303CE3,
-    0xA30850D,
-    0xA30AE79,
+    0x529F027,
+    0xDF0D6C9,
+    0xDF0B690,
+    0xDF0F98D,
 };
 constexpr std::array<size_t, SiteCount> SiteClocks{
     VibrantClock,
