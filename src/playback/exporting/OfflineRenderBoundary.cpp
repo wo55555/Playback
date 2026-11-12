@@ -19,6 +19,8 @@ namespace {
 constexpr auto     ReplayTickWaitTimeout = std::chrono::seconds{2};
 constexpr auto     RenderWaitTimeout     = std::chrono::seconds{30};
 constexpr auto     RenderWaitLogInterval = std::chrono::seconds{2};
+// Far longer than a frame takes to render; it only bounds the stall when the capture does not come.
+constexpr auto     SubmittedCaptureWait  = std::chrono::milliseconds{1000};
 constexpr auto     WarmupSceneTimeout    = std::chrono::seconds{30};
 constexpr auto     ForcedLoadingDelay    = std::chrono::seconds{5};
 constexpr uint32_t StableWarmupFrames    = 3;
@@ -122,7 +124,8 @@ void OfflineRenderBoundary::close() {
         double const captureMs  = static_cast<double>(mCaptureMicros) / 1000.0;
         Playback::getInstance().getSelf().getLogger().debug(
             "Offline render frame profile: frames={}, convergencePasses={} ({:.2f}/frame), "
-            "prepareMs={:.0f} ({:.2f}/frame), convergenceMs={:.0f} ({:.2f}/frame), captureMs={:.0f} ({:.2f}/frame)",
+            "prepareMs={:.0f} ({:.2f}/frame), convergenceMs={:.0f} ({:.2f}/frame), captureMs={:.0f} ({:.2f}/frame), "
+            "captureWaits={} (missed={})",
             frames,
             mConvergencePasses,
             static_cast<double>(mConvergencePasses) / static_cast<double>(frames),
@@ -131,13 +134,17 @@ void OfflineRenderBoundary::close() {
             convergeMs,
             convergeMs / static_cast<double>(frames),
             captureMs,
-            captureMs / static_cast<double>(frames)
+            captureMs / static_cast<double>(frames),
+            mCaptureWaits,
+            mCaptureWaitsMissed
         );
     }
     mPrepareMicros        = 0;
     mConvergenceMicros    = 0;
     mCaptureMicros        = 0;
     mConvergencePasses    = 0;
+    mCaptureWaits         = 0;
+    mCaptureWaitsMissed   = 0;
     mProfiledFrames       = 0;
     mFrameStartedAt       = {};
     mConvergenceStartedAt = {};
@@ -468,9 +475,10 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
             && !publishStep(*mPendingFrame, OfflineRenderClockKind::Capture)) {
             return OfflineRenderStepResult::Failed;
         }
-        mState                  = OfflineRenderBoundaryState::AwaitingDownload;
-        mRenderWaitStartedAt    = std::chrono::steady_clock::now();
-        mRenderWaitLastLoggedAt = {};
+        mState                   = OfflineRenderBoundaryState::AwaitingDownload;
+        mSubmittedCaptureAwaited = false;
+        mRenderWaitStartedAt     = std::chrono::steady_clock::now();
+        mRenderWaitLastLoggedAt  = {};
     }
 
     if (mState == OfflineRenderBoundaryState::WarmingUp) return advanceWarmup(*mPendingFrame);
@@ -525,7 +533,8 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
     // The capture is still armed, so a scene submit that raced the permit was discarded and must be rendered again.
     // Each re-render gets its own timeout; the retry cap bounds the total wait.
     if (captureStatus.armed && captureStatus.inFlightFrames == 0 && retryMissedOfflineRenderScene(mStep->token)) {
-        mRenderWaitStartedAt = {};
+        mRenderWaitStartedAt     = {};
+        mSubmittedCaptureAwaited = false;
     }
 
     auto const now = std::chrono::steady_clock::now();
@@ -569,9 +578,28 @@ bool OfflineRenderBoundary::isDrained() {
     return capture.bufferedFrames == 0 && capture.inFlightFrames == 0 && !capture.armed;
 }
 
+// The render thread captures a frame as soon as it has submitted it, so once the render has returned its capture is on
+// the way. Blocking for it costs less than another pass of the game loop, and that pass would send the renderer the
+// same frame a second time.
+std::chrono::milliseconds OfflineRenderBoundary::submittedCaptureWait() {
+    if (mState != OfflineRenderBoundaryState::AwaitingDownload || !mCaptureArmed || mSubmittedCaptureAwaited
+        || !hasStep(OfflineRenderClockKind::Capture)) {
+        return {};
+    }
+    if (!editor::graphics::gImGuiRenderer.canCaptureSubmittedScene()) return {};
+    if (!wasOfflineRenderClockSampleApplied(mStep->token)) return {};
+    mSubmittedCaptureAwaited = true;
+    return SubmittedCaptureWait;
+}
+
 std::optional<visuals::CapturedFrame> OfflineRenderBoundary::finishDownload() {
     mExecutor.pollCapture();
-    auto frame = editor::graphics::gImGuiRenderer.collectExportFrame();
+    auto const wait  = submittedCaptureWait();
+    auto       frame = editor::graphics::gImGuiRenderer.collectExportFrame(wait);
+    if (wait > std::chrono::milliseconds::zero()) {
+        ++mCaptureWaits;
+        if (!frame) ++mCaptureWaitsMissed;
+    }
     if (!frame) return std::nullopt;
 
     if (!mPendingFrame) {
