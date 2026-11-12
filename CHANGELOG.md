@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ray tracing exports of the same replay no longer differ in brightness for a few seconds after the lighting changes, such as after a time change. The game now draws on every frame it sends to the renderer during an export.
 - Exports now time interface animations, such as a chat message leaving the HUD, on the replay instead of on how long the export took, so a message stays on screen for the same length of video in every export.
 - Exports now run particles, the held item's equip animation, the sky, cloud and rain transitions and HUD timers such as the item name on the replay instead of on how long the export took, so they move at the same speed in the video as in the replay.
+- Recordings now take the snapshot of a new dimension once the game's loading screen is gone, so replays and exports show the terrain the player first saw right after a dimension change instead of an empty world that fills in over the next second or two. Replays recorded earlier are unchanged.
 
 ## [0.4.0-mc26.20] - 2026-11-01
 
