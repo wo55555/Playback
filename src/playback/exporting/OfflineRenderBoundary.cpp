@@ -505,7 +505,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         return OfflineRenderStepResult::Failed;
     }
 
-    // executeSample only reports the clock being applied, not that the Present capture landed.
+    // executeSample only reports the clock being applied, not that the capture landed.
     auto const executed = mExecutor.executeSample(*mPendingFrame, mStep->token);
     if (executed == OfflineRenderFrameExecutionResult::Failed) {
         auto const executorStatus = mExecutor.status();
@@ -534,7 +534,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         || now - mRenderWaitLastLoggedAt >= RenderWaitLogInterval) {
         auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - mRenderWaitStartedAt);
         Playback::getInstance().getSelf().getLogger().debug(
-            "Offline render waiting for the Present capture (frame={}, elapsedMs={}, armed={}, inFlight={}, "
+            "Offline render waiting for the frame capture (frame={}, elapsedMs={}, armed={}, inFlight={}, "
             "buffered={}, state={})",
             mPendingFrame->ticket.frameIndex,
             elapsed.count(),
