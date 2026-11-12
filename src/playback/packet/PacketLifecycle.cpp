@@ -21,8 +21,7 @@ constexpr auto PacketLifecycleTable = std::to_array<PacketLifecycleEntry>({
     {MinecraftPacketIds::NetworkChunkPublisherUpdate,             {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::ChunkRadiusUpdated,                      {PacketLifecycle::Ignore}                        },
     // Screens the server opens for the recording player to answer. A replay can neither answer nor close them, and an
-    // open one keeps the input from the free camera.
-    {MinecraftPacketIds::ShowModalForm,                           {PacketLifecycle::Ignore}                        },
+    // open one keeps the input from the free camera. Forms are previewed instead, with the close the recorder adds.
     {MinecraftPacketIds::ServerSettingsResponse,                  {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::ClientboundDataDrivenUIShowScreen,       {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::ClientboundDataDrivenUICloseScreen,      {PacketLifecycle::Ignore}                        },
