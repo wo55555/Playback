@@ -9,7 +9,7 @@ namespace playback::exporting {
 void beginOfflineRenderTime();
 // Logs the session summary and keeps the clock continuous for the renderers after the export.
 void endOfflineRenderTime();
-// Main thread, before the render that consumes the sample; only the first render of a sample moves the clock.
+// Main thread, before a render: moves the clock by the time that render adds. firstRender only feeds the summary.
 void advanceOfflineRenderTime(OfflineRenderClockKind kind, float deltaTicks, bool firstRender);
 // Restores the patched import; mod shutdown only.
 void releaseOfflineRenderTimeHooks();
