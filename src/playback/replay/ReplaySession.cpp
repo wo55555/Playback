@@ -237,16 +237,6 @@ constexpr std::array PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 1
 // tick across them. Emitters such as lingering clouds are spawned by actor ticks and live about 27 ticks.
 constexpr int SeekParticleWindowTicks = 40;
 
-bool shouldIgnoreReplayPacket(MinecraftPacketIds packetId) {
-    switch (packetId) {
-    case MinecraftPacketIds::NetworkChunkPublisherUpdate:
-    case MinecraftPacketIds::ChunkRadiusUpdated:
-        return true;
-    default:
-        return false;
-    }
-}
-
 bool isSuccessfulSubChunkResult(SubChunkPacket::SubChunkRequestResult result) {
     return result == SubChunkPacket::SubChunkRequestResult::Success
         || result == SubChunkPacket::SubChunkRequestResult::SuccessAllAir;
@@ -346,17 +336,6 @@ void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
     }
 }
 
-// The HUD draws health, hunger, armor and experience from the observer's own attributes, so the recorded player's
-// are copied onto it. Health never drops below 1: a dead local player would open the death screen.
-void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
-    auto&             attributes = *observer.getAttributes();
-    std::string const health     = SharedAttributes::HEALTH().getName().getString();
-    for (auto& data : *packet.mAttributeData) {
-        if (data.mName->getString() == health && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
-        attributes.updateOrCreateAttribute(data);
-    }
-}
-
 // The attributes the HUD draws: hearts, absorption, hunger, saturation and the experience bar.
 std::array<Attribute const*, 6> hudAttributes() {
     return {
@@ -367,6 +346,25 @@ std::array<Attribute const*, 6> hudAttributes() {
         &Player::LEVEL(),
         &Player::EXPERIENCE(),
     };
+}
+
+bool isHudAttribute(HashedString const& name) {
+    auto const attributes = hudAttributes();
+    return std::any_of(attributes.begin(), attributes.end(), [&](Attribute const* attribute) {
+        return *attribute->mName == name;
+    });
+}
+
+// The HUD draws health, hunger, armor and experience from the observer's own attributes, so the recorded player's
+// are copied onto it. Only those: movement speed would carry the recorder's sprint into the free camera's FOV.
+// Health never drops below 1: a dead local player would open the death screen.
+void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
+    auto& attributes = *observer.getAttributes();
+    for (auto& data : *packet.mAttributeData) {
+        if (!isHudAttribute(*data.mName)) continue;
+        if (*data.mName == SharedAttributes::HEALTH().getName() && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
+        attributes.updateOrCreateAttribute(data);
+    }
 }
 
 std::optional<FollowedHudMirror::SavedAttribute> readHudAttribute(Actor& actor, Attribute const& attribute) {
@@ -407,6 +405,7 @@ void writeHudAttribute(Player& observer, FollowedHudMirror::SavedAttribute const
 // While another player's HUD is shown, the recorder's attribute updates are kept for the restore instead of applied.
 void keepRecordedAttributes(FollowedHudMirror& mirror, UpdateAttributesPacket const& packet) {
     for (auto const& data : *packet.mAttributeData) {
+        if (!isHudAttribute(*data.mName)) continue;
         auto const found = std::find_if(mirror.savedAttributes.begin(), mirror.savedAttributes.end(), [&](auto& kept) {
             return kept.name == *data.mName;
         });
@@ -5538,8 +5537,8 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
         return trackContainerUiPacket(packetId, payload);
     }
-    // The replay world owns client chunk publishing.
-    if (shouldIgnoreReplayPacket(packetId)) return true;
+    // An older recording may still carry packets the recorder now ignores.
+    if (describePacketLifecycle(packetId).lifecycle == PacketLifecycle::Ignore) return true;
     // The client registry is built once; the recorded table already went in at login in place of the local one.
     if (packetId == MinecraftPacketIds::ItemRegistryPacket
         && mRecordedItemRegistryApplied.load(std::memory_order_acquire)) {
