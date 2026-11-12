@@ -8,11 +8,13 @@
 namespace playback::exporting {
 
 // What a render step is for. A capture step renders once, into the armed frame capture; the others render every frame
-// until they are cleared. Only the first render of a capture or warm-up step moves the renderers' wall clock.
+// until they are cleared.
 enum class OfflineRenderClockKind : uint8_t { KeepAlive, Capture, Warmup, Convergence };
 
 struct OfflineRenderClockSample {
     visuals::ReplaySampleTime replayTime;
+    // Time the step adds for the game timer and the renderers' clock. It passes with the step's first render; any
+    // further render of the step draws the same instant again and adds none.
     float                     deltaTicks{};
     int                       wholeTicks{};
     uint64_t                  frameIndex{};
