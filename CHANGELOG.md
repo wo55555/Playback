@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Recording the world snapshot no longer stalls the game: unchanged chunk columns are reused and changed ones are serialized on background threads.
 - Seeking in a replay now catches up faster by loading the world in merged chunk batches.
+- Exports now always run a client tick as soon as they ask for one instead of waiting for the game's 20 Hz timer, which the experimental Accelerate client option used to turn on. The option is removed.
 
 ### Fixed
 

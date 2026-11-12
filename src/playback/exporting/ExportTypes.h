@@ -65,8 +65,6 @@ struct ExportSettings {
     uint32_t warmupFrames{60};
     // Extra renders per frame so ray-traced temporal accumulation can settle; each one costs a full render.
     uint32_t convergenceFrames{0};
-    // Experimental: hand out client ticks as soon as the export asks instead of waiting for the 20 Hz game timer.
-    bool accelerateClient{false};
     // MP4 only; the defaults are what the writer used before these were configurable.
     VideoEncodeSpeed encodeSpeed{VideoEncodeSpeed::Quality};
     uint32_t         videoCrf{18};
