@@ -96,7 +96,7 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 - **Cinematic camera keyframes** — Captures position, yaw, pitch, roll, and FOV with Smooth, Linear, Ease, Hold, Hermite, and Cubic Bezier interpolation.
 - **Dimension-aware camera paths** — Splits camera tracks at every dimension change so preview and export never interpolate through unrelated worlds.
 - **First-person follow** — Views the replay through the recorder, another player, or any entity, with the recorded HUD, held maps, view bobbing, and portal and sleep effects.
-- **Experimental video export** — Renders a selected tick range to H.264 MP4 with AAC game audio, or to PNG sequences with a sidecar WAV, with configurable frame rate, resolution, SSAA, warm-up frames, and ray-traced convergence frames.
+- **Experimental video export** — Renders a selected tick range to H.264 MP4 with AAC game audio, or to PNG sequences with a sidecar WAV, with configurable frame rate, resolution, SSAA, warm-up frames, and extra renders per frame.
 - **D3D11 and D3D12 capture** — Supports the native renderer on both backends; D3D12 supports 1x/2x/4x SSAA and D3D11 uses 1x.
 - **Bilingual UI** — Localizes commands, the native replay UI, and the resource-pack main-menu button in English and Simplified Chinese.
 
