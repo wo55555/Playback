@@ -4,6 +4,7 @@
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
 #include "playback/exporting/ExportEcoMode.h"
+#include "playback/exporting/OfflineRenderClockHooks.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
@@ -128,6 +129,7 @@ LL_TYPE_INSTANCE_HOOK(
     bool isInitFinished
 ) {
     editor::tickReplayExportBeforeClientUpdate();
+    exporting::grantPendingOfflineReplayTick();
 
     auto result = origin(isInitFinished);
 
