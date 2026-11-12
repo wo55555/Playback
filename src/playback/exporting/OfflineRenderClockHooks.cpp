@@ -93,11 +93,7 @@ uint64_t                                       gNextRenderSerial{1};
 thread_local std::optional<ActiveRenderSample> gRenderSample;
 
 // The timer handed to updateGraphics is the one whose ticks the client loop runs.
-std::atomic<Timer const*>     gSimTimer{nullptr};
-std::atomic<uint64_t>         gOtherTimerAdvances{0};
-std::mutex                    gClientBoostMutex;
-OfflineRenderClientBoostStats gClientBoostStats;
-bool                          gClientBoostInstalled{false};
+std::atomic<Timer const*> gSimTimer{nullptr};
 
 // Guarded by gClockMutex; reset per export.
 struct SceneLatencyStats {
@@ -401,45 +397,6 @@ LL_TYPE_INSTANCE_HOOK(
     origin(partialTick);
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    OfflineRenderClientBoostHook,
-    ll::memory::HookPriority::Normal,
-    Timer,
-    &Timer::advanceTime,
-    void,
-    float preferredFrameStep
-) {
-    origin(preferredFrameStep);
-
-    if (this != gSimTimer.load(std::memory_order_acquire)) {
-        gOtherTimerAdvances.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    bool const pending = runtime::hasPendingOfflineReplayTick();
-    int const  natural = this->mTicks;
-
-    std::scoped_lock lock(gClientBoostMutex);
-    auto&            stats = gClientBoostStats;
-    ++stats.advances;
-    if (!pending) return;
-    ++stats.pendingAdvances;
-    if (natural >= 1) {
-        ++stats.naturalTicks;
-        return;
-    }
-
-    // The level tick hook swallows every tick except the requested one, so one is all the gate needs.
-    this->mTicks       = 1;
-    float const passed = this->mPassedTime;
-    if (++stats.forcedTicks == 1) {
-        stats.minPassedAfterForce = stats.maxPassedAfterForce = passed;
-    } else {
-        stats.minPassedAfterForce = std::min(stats.minPassedAfterForce, passed);
-        stats.maxPassedAfterForce = std::max(stats.maxPassedAfterForce, passed);
-    }
-}
-
 } // namespace
 
 bool hookOfflineRenderClock(bool enable) {
@@ -456,7 +413,6 @@ bool hookOfflineRenderClock(bool enable) {
         visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Export);
         resetOfflineRenderClock();
         reportSceneRetries();
-        (void)setOfflineRenderClientBoost(false);
         if (state.gameFrame && OfflineRenderGameFrameHook::unhook()) state.gameFrame = false;
         if (state.clock && OfflineRenderClockUpdateGraphicsHook::unhook()) state.clock = false;
         gSimTimer.store(nullptr, std::memory_order_release);
@@ -494,26 +450,11 @@ bool hookOfflineRenderClock(bool enable) {
 
 bool isOfflineRenderClockInstalled() { return gHookInstalled.load(std::memory_order_acquire); }
 
-bool setOfflineRenderClientBoost(bool enable) {
-    if (enable == gClientBoostInstalled) return true;
-    if (enable) {
-        {
-            std::scoped_lock lock(gClientBoostMutex);
-            gClientBoostStats = {};
-        }
-        gOtherTimerAdvances.store(0, std::memory_order_relaxed);
-        gClientBoostInstalled = OfflineRenderClientBoostHook::hook() == 0;
-        return gClientBoostInstalled;
-    }
-    if (OfflineRenderClientBoostHook::unhook()) gClientBoostInstalled = false;
-    return !gClientBoostInstalled;
-}
-
-OfflineRenderClientBoostStats takeOfflineRenderClientBoostStats() {
-    std::scoped_lock lock(gClientBoostMutex);
-    auto             stats   = std::exchange(gClientBoostStats, OfflineRenderClientBoostStats{});
-    stats.otherTimerAdvances = gOtherTimerAdvances.exchange(0, std::memory_order_relaxed);
-    return stats;
+void grantPendingOfflineReplayTick() {
+    auto* const timer = const_cast<Timer*>(gSimTimer.load(std::memory_order_acquire));
+    if (!timer || !runtime::hasPendingOfflineReplayTick()) return;
+    // The level tick hook swallows every tick except the requested one, so one is all the gate needs.
+    if (timer->mTicks < 1) timer->mTicks = 1;
 }
 
 OfflineRenderClockPublishResult
