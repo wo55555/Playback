@@ -293,7 +293,7 @@ void ReplayEditor::updateExitHold() {
     }
 }
 
-// Flashback leaves spectating on sneak; here a lone Shift tap does it, so Shift+click and Ctrl+Shift chords stay free.
+// A lone Shift tap leaves spectating, so Shift+click and Ctrl+Shift chords stay free.
 void ReplayEditor::updateFollowExitTap() {
     ImGuiIO const& io        = ImGui::GetIO();
     bool const     shiftDown = ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift);

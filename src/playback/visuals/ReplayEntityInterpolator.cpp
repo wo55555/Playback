@@ -739,7 +739,7 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
     }
     if (!found) return std::nullopt;
     auto pose = *found;
-    // Any other entity records its feet and turns its head independently of its body, like Flashback's spectate.
+    // Any other entity records its feet and turns its head independently of its body.
     if (!isReplaySubjectPlayer()) {
         pose.position.y += gSubjectEyeHeight.load(std::memory_order_relaxed);
         pose.yaw = pose.headYaw;

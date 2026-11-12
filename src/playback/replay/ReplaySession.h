@@ -315,7 +315,7 @@ private:
     std::optional<std::string>                          mShotSubject;
     // Choice that already logged "not in this snapshot", so a missing player does not spam every tick.
     std::string                                         mReplaySubjectGapChoice;
-    // Played ticks an entity choice has had no actor. Like Flashback, a removed entity hands the view back to the
+    // Played ticks an entity choice has had no actor. A removed entity hands the view back to the
     // recorder after a short grace; a re-add with the same id inside it binds again.
     int                                                 mReplaySubjectEntityMissingTicks{0};
     int                                                 mReplaySubjectEntityMissingLastTick{-1};
@@ -614,7 +614,7 @@ public:
     // Keeps the observer on the recorded player's first-person view until the user takes over or picks a camera.
     void setFollowRecordedPlayer(bool follow);
 
-    // Pulls the follow camera behind the recorded player, like Flashback's F5 while spectating. Only honoured while
+    // Pulls the follow camera behind the recorded player. Only honoured while
     // following; leaving the follow view (free camera, preview camera, export) always returns to first person.
     void setFollowThirdPerson(bool thirdPerson);
 
