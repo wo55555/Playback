@@ -29,24 +29,12 @@ struct OfflineRenderClockToken {
 
 enum class OfflineRenderClockPublishResult : uint8_t { Published, Unavailable, Busy, InvalidSample };
 
-// What the client acceleration did to the game's sim timer; all zero when it was never installed.
-struct OfflineRenderClientBoostStats {
-    uint64_t advances{};
-    uint64_t pendingAdvances{};
-    uint64_t naturalTicks{};
-    uint64_t forcedTicks{};
-    uint64_t otherTimerAdvances{};
-    float    minPassedAfterForce{};
-    float    maxPassedAfterForce{};
-};
-
 [[nodiscard]] bool hookOfflineRenderClock(bool enable);
 [[nodiscard]] bool isOfflineRenderClockInstalled();
 
-// Hands out a native client tick as soon as one is requested instead of waiting for the 20 Hz timer.
-// Removed together with the other export hooks by hookOfflineRenderClock(false).
-[[nodiscard]] bool                          setOfflineRenderClientBoost(bool enable);
-[[nodiscard]] OfflineRenderClientBoostStats takeOfflineRenderClientBoostStats();
+// Call right before the client update. A client tick the export is waiting for then runs in that update instead of
+// whenever the game's 20 Hz timer next comes due, so the frame that needs it can render in the same pass of the loop.
+void grantPendingOfflineReplayTick();
 
 [[nodiscard]] OfflineRenderClockPublishResult
      publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);

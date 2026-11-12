@@ -657,7 +657,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         // Advanced labels sit one indent deeper, yet their values must stay on the shared value column.
         for (std::string const& label :
              {"playback.refactorEditor.export.convergenceFrames"_tr(),
-              "playback.refactorEditor.export.accelerateClient"_tr(),
               "playback.refactorEditor.export.encodeSpeed"_tr(),
               "playback.refactorEditor.export.crf"_tr()}) {
             hintedLabelWidth =
@@ -865,9 +864,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 "playback.refactorEditor.export.advancedSummaryConvergence"_tr(mExportConvergenceFrames)
             );
         }
-        if (mExportAccelerateClient) {
-            advancedSummary.push_back("playback.refactorEditor.export.advancedSummaryAccelerate"_tr());
-        }
         mExportAdvancedOpen = collapseHeader(
             "##export-advanced",
             "playback.refactorEditor.export.advanced"_tr().c_str(),
@@ -929,16 +925,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 );
                 ImGui::EndTable();
             }
-
-            subHeader("playback.refactorEditor.export.advancedExperimental"_tr().c_str(), 8.0f);
-            if (beginPropertyTable("##export-experimental", subLabelWidth)) {
-                propertyLabel(
-                    "playback.refactorEditor.export.accelerateClient"_tr().c_str(),
-                    "playback.refactorEditor.export.accelerateClientHint"_tr().c_str()
-                );
-                ImGui::Checkbox("##export-accelerate-client", &mExportAccelerateClient);
-                ImGui::EndTable();
-            }
             ImGui::Unindent(advancedIndent);
             float const advancedBottom = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y;
             ImGui::GetWindowDrawList()->AddLine(
@@ -988,8 +974,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.warmupFrames      = static_cast<uint32_t>(std::max(0, mExportWarmupFrames));
         previewSettings.convergenceFrames = static_cast<uint32_t>(std::max(0, mExportConvergenceFrames));
         previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
-        previewSettings.videoCrf    = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
-        previewSettings.accelerateClient = mExportAccelerateClient;
+        previewSettings.videoCrf          = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
 
