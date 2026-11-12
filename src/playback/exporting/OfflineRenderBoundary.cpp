@@ -720,6 +720,11 @@ void OfflineRenderBoundary::updateExportCamera(ExportFramePlan const& frame) {
             cameraSample->state.roll,
             cameraSample->state.fov,
         };
+    } else if (!viewpoint && !mTickGateSuspendedForDimension) {
+        // A dimension change drops the viewpoint, whose coordinates belong to the old dimension. Without a camera of
+        // its own the export goes on from where the replay put the observer in the new one. Not behind the game's
+        // loading screen, though: moving the observer there keeps the screen up.
+        viewpoint = mReplay.currentCameraViewpoint();
     }
     mReplay.setExportCameraViewpoint(viewpoint);
     if (viewpoint) mReplay.updateExportObserver(*viewpoint);
