@@ -244,7 +244,8 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     std::scoped_lock lock(gClockMutex);
     if (!gActiveSample) return std::nullopt;
     if (gActiveSample->captureGeneration != 0 && !gActiveSample->captureArmed) return std::nullopt;
-    // A capture-carrying sample renders once because Present captures it; one without a capture repeats until released.
+    // A capture-carrying sample renders once because that render is captured; one without a capture repeats until
+    // released.
     if (gActiveSample->captureGeneration != 0 && gActiveSample->claimed && gActiveSample->renderReturned)
         return std::nullopt;
 
