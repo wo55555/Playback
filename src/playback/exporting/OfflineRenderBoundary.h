@@ -76,9 +76,6 @@ public:
     [[nodiscard]] bool                    beginDrain();
     [[nodiscard]] bool                    isDrained();
 
-    // Republishes the last submitted frame without a capture so the game keeps drawing through a driver stall.
-    void holdRenderAlive();
-
     [[nodiscard]] std::optional<visuals::CapturedFrame> finishDownload();
 
     [[nodiscard]] OfflineRenderBoundaryStatus status();
@@ -93,7 +90,7 @@ private:
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
     [[nodiscard]] bool                                    warmupComplete() const;
     [[nodiscard]] bool                                    hasStep(OfflineRenderClockKind kind) const;
-    // Replaces a keep-alive; any other step still published is a fault.
+    // A step that is still published is a fault.
     [[nodiscard]] bool publishStep(ExportFramePlan const& frame, OfflineRenderClockKind kind);
     // Renders the frame's scene without a capture a fixed number of times; nothing measures whether it has settled.
     [[nodiscard]] bool advanceConvergence(ExportFramePlan const& frame);

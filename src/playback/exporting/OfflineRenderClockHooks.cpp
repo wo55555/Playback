@@ -86,6 +86,8 @@ std::atomic_bool                               gInitialCameraSampleLogged{false}
 std::atomic_bool                               gMissingCameraSampleLogged{false};
 std::mutex                                     gClockMutex;
 std::optional<ActiveClockSample>               gActiveSample;
+// Guarded by gClockMutex: what the last render drew, for the frames that have no step of their own.
+std::optional<AcquiredClockSample>             gLastRenderedSample;
 uint64_t                                       gNextTokenId{1};
 uint64_t                                       gNextRenderSerial{1};
 thread_local std::optional<ActiveRenderSample> gRenderSample;
@@ -270,7 +272,27 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
         acquired.sample.deltaTicks = 0.0f;
         acquired.sample.wholeTicks = 0;
     }
+    gLastRenderedSample = acquired;
     return acquired;
+}
+
+// The last render again, at the same instant. It carries no serial, so nothing takes it for a render of the step that
+// is published now.
+std::optional<AcquiredClockSample> acquireRedrawOfLastRender() {
+    std::scoped_lock lock(gClockMutex);
+    if (!gLastRenderedSample) return std::nullopt;
+    auto redraw              = *gLastRenderedSample;
+    redraw.sample.kind       = OfflineRenderClockKind::KeepAlive;
+    redraw.sample.deltaTicks = 0.0f;
+    redraw.sample.wholeTicks = 0;
+    redraw.renderSerial      = 0;
+    redraw.firstRender       = false;
+    return redraw;
+}
+
+void forgetLastRender() {
+    std::scoped_lock lock(gClockMutex);
+    gLastRenderedSample.reset();
 }
 
 void completeClockSample(OfflineRenderClockToken token, uint64_t renderSerial, bool entityApplied) {
@@ -311,7 +333,11 @@ LL_TYPE_INSTANCE_HOOK(
     // Export steps resolve on this path, so advance before rendering instead of waiting for the 20Hz client tick.
     if (isOfflineRenderActivityActive()) editor::tickReplayExportDuringGraphics();
 
-    auto const sample = acquireClockSampleForRender();
+    auto sample = acquireClockSampleForRender();
+    // The game sends the renderer a frame on every pass of its loop, drawn or not. Ray tracing updates on each of them
+    // and finds no scene in one that was not drawn, which upsets what it accumulates across frames. So a pass with no
+    // step to render draws the last one again, as the game itself draws every frame while it is played.
+    if (!sample && isOfflineRenderActivityActive() && isExportActivityActive()) sample = acquireRedrawOfLastRender();
     if (sample) {
         bool poseApplied = false;
         {
@@ -341,6 +367,7 @@ LL_TYPE_INSTANCE_HOOK(
     }
 
     if (isOfflineRenderActivityActive()) {
+        // Nothing has been rendered yet that could be drawn again.
         if (isExportActivityActive()) return;
         setOfflineRenderActivityActive(false);
         if (!gOfflineFlagMismatchLogged.exchange(true, std::memory_order_acq_rel)) {
@@ -350,6 +377,8 @@ LL_TYPE_INSTANCE_HOOK(
         }
     }
 
+    // The game draws for itself here, as it does through a dimension change; the last render is no longer its scene.
+    forgetLastRender();
     origin(client, timer);
 }
 
@@ -700,6 +729,7 @@ void resetOfflineRenderClock() {
             }
         }
         gActiveSample.reset();
+        gLastRenderedSample.reset();
     }
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Export, cameraContext);
     gRenderSample.reset();
