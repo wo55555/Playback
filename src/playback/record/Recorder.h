@@ -253,6 +253,7 @@ private:
     PlaybackBuffer                                         mLocalPlayerDataBuffer;
     std::optional<PlaybackSetEquipmentPacket>              mLastLocalPlayerEquipmentPacket;
     std::optional<int>                                     mLastLocalPlayerSwingTime;
+    bool                                                   mLocalFormOpen{};
     // Inventory slots 0-35, armor, offhand, attributes and the selected slot. Must stay >= Recorder.cpp HudCacheSize.
     std::array<std::optional<std::string>, 48> mLastLocalHudPackets;
     // Last item written for inventory slots 0-35, armor and the offhand. Unchanged slots skip serialization.

@@ -657,13 +657,31 @@ void ageReplayParticles() {
 constexpr float kServerEyeHeight = 1.62f;
 
 // ContainerClose does not dismiss the player inventory. Pop it by name so a screen opened later is left alone.
-void popReplayContainerScreen() {
+void popReplayScreen() {
     auto client = ll::service::getClientInstance();
     if (!client) return;
     auto const name = client->getTopScreenName();
     if (name != "inventory_screen" && name != "crafting_screen") return;
     client->getCurrentSceneStack()->schedulePopScreenWithExpectedNames(std::vector<std::string>{name});
-    getLogger().info("containerPreview pop screen={}", name);
+    getLogger().info("screenPreview pop screen={}", name);
+}
+
+// The replay observer cannot use every container the recorder opened, so some are not previewed.
+char const* containerPreviewSkip(Player& observer, ContainerOpenPacket& open, int& blockEntity) {
+    using Type     = SharedTypes::Legacy::ContainerType;
+    auto const raw = open.mEntityUniqueID.get().rawID;
+    // The player inventory screen does not follow the recorded player yet, so it is not previewed.
+    if (open.mType == Type::Inventory) return "skip:inventory";
+    if (raw != -1 && raw != 0) {
+        return observer.getLevel().fetchEntity(open.mEntityUniqueID.get(), false) ? nullptr : "skip:entityMissing";
+    }
+    auto const kind             = open.mType;
+    bool const needsBlockEntity = kind == Type::Container || kind == Type::Furnace || kind == Type::BrewingStand
+                               || kind == Type::Dispenser || kind == Type::Dropper || kind == Type::Hopper
+                               || kind == Type::BlastFurnace || kind == Type::Smoker;
+    if (!needsBlockEntity) return nullptr;
+    blockEntity = observer.getDimensionBlockSource().getBlockEntity(open.mPos.get()) ? 1 : 0;
+    return blockEntity ? nullptr : "skip:noBlockEntity";
 }
 
 bool sameHudStack(ItemStack const& left, ItemStack const& right) {
@@ -872,8 +890,9 @@ void ReplaySession::clearReplayData() {
     mWorldReady   = false;
     mReplayFailed = false;
     mInjectingPacket.store(nullptr, std::memory_order_release);
-    mContainerPreview.reset();
-    mRecordedContainers.clear();
+    mScreenPreview.reset();
+    mRecordedScreens.clear();
+    mTriedScreenOpenTick = -1;
     visuals::setReplayContainerKeepOpen(false);
     visuals::setReplayHudGameType(-1);
     mLevelSimFrozen       = false;
@@ -2112,8 +2131,8 @@ bool ReplaySession::beginExportTimeline(int startTick) {
     if (!mActive || mReplayFailed || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return false;
 
     // The export warm-up waits for a menu-free scene, so a preview from before the export must not stay open.
-    closeContainerPreview("exportBegin");
-    popReplayContainerScreen();
+    closeScreenPreview("exportBegin");
+    popReplayScreen();
     clearPreviewShot();
     setFollowRecordedPlayer(false);
     mTeleportToSubjectPending = false;
@@ -2249,7 +2268,7 @@ bool ReplaySession::finishExportTimelineInitialization() {
     mExportSeekRequested    = false;
     mSnapMovementDuringSeek = false;
     mExportTimelinePhase    = ReplayExportTimelinePhase::Continuous;
-    syncContainerPreviewAfterSeek();
+    syncScreenPreviewAfterSeek();
     return true;
 }
 
@@ -2324,7 +2343,7 @@ void ReplaySession::finishSeek() {
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();
     if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
-    syncContainerPreviewAfterSeek();
+    syncScreenPreviewAfterSeek();
 }
 
 // Per-action snapping misses entities that never moved during catch-up, so settle every recorded one here.
@@ -2419,10 +2438,9 @@ void ReplaySession::beginSeek(int targetTick) {
 
     // A reloaded world keeps the particles of the place it left, so they are dropped even when the landing ticks
     // nothing. The same interval does not close: the screen stays until the landing tick leaves it.
-    auto const* landing      = recordedContainerOpenAt(targetTick);
-    bool const  sameContainer = mContainerPreview && landing && mContainerPreview->id == landing->id
-                            && mContainerPreview->openTick == landing->openTick;
-    if (changesDimension || forceExportSnapshot || !sameContainer) closeContainerPreview("seek");
+    auto const* landing    = recordedScreenOpenAt(targetTick);
+    bool const  sameScreen = mScreenPreview && landing && mScreenPreview->shows(*landing);
+    if (changesDimension || forceExportSnapshot || !sameScreen) closeScreenPreview("seek");
     mSeekParticlesStale = true;
     mReaderIndex        = selectedReader;
     mCurrentTick        = selectedStart;
@@ -2446,7 +2464,7 @@ void ReplaySession::tick() {
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
-        updateContainerPreview();
+        updateScreenPreview();
         syncFollowedPlayerHud();
 
         if (mPendingSnapshotApply) {
@@ -5395,55 +5413,60 @@ bool ReplaySession::dispatchUiPacket(std::shared_ptr<Packet> packet) {
     return true;
 }
 
-// Container screens are only previewed for a followed, settled, non-exporting replay; every other case skips.
-bool ReplaySession::trackContainerUiPacket(MinecraftPacketIds packetId, std::string_view payload) {
-    if (packetId != MinecraftPacketIds::ContainerOpen) {
-        for (auto it = mRecordedContainers.rbegin(); it != mRecordedContainers.rend(); ++it) {
-            if (it->openTick > mCurrentTick) continue;
+// Container screens and server forms are only previewed for a followed, settled replay; every other case skips.
+bool ReplaySession::trackScreenPacket(MinecraftPacketIds packetId, std::string_view payload) {
+    if (packetId != MinecraftPacketIds::ContainerOpen && packetId != MinecraftPacketIds::ShowModalForm) {
+        // ContainerClose leaves a form alone; ClientboundCloseScreen closes whichever screen is open.
+        auto const closes = [&](MinecraftPacketIds opener) {
+            return packetId != MinecraftPacketIds::ContainerClose || opener == MinecraftPacketIds::ContainerOpen;
+        };
+        for (auto it = mRecordedScreens.rbegin(); it != mRecordedScreens.rend(); ++it) {
+            if (it->openTick > mCurrentTick || !closes(it->packetId)) continue;
             if (it->closeTick < 0) it->closeTick = mCurrentTick;
             break;
         }
         // A seek records every packet it crosses and decides the screen once, at the landing tick.
-        if (mSeekTargetTick < 0 && mContainerPreview) {
-            closeContainerPreview(packetId == MinecraftPacketIds::ContainerClose ? "recordedClose" : "closeScreen");
-            popReplayContainerScreen();
+        if (mSeekTargetTick < 0 && mScreenPreview && closes(mScreenPreview->packetId)) {
+            closeScreenPreview(packetId == MinecraftPacketIds::ContainerClose ? "recordedClose" : "closeScreen");
+            popReplayScreen();
         }
         return true;
     }
 
-    auto packet = MinecraftPackets::createPacket(packetId);
-    if (!packet) return true;
-    ReadOnlyBinaryStream stream(payload, false);
-    if (!packet->read(stream) || !stream.ensureReadCompleted()) return true;
-    int const id = static_cast<int>(static_cast<ContainerOpenPacket&>(*packet).mContainerId);
+    int id = 0;
+    if (packetId == MinecraftPacketIds::ContainerOpen) {
+        auto packet = MinecraftPackets::createPacket(packetId);
+        if (!packet) return true;
+        ReadOnlyBinaryStream stream(payload, false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) return true;
+        id = static_cast<int>(static_cast<ContainerOpenPacket&>(*packet).mContainerId);
+    }
 
     // Reads repeat after a backward seek, so an interval is only recorded once.
-    bool known = false;
-    for (auto& record : mRecordedContainers) {
+    RecordedScreen const* screen = nullptr;
+    for (auto& record : mRecordedScreens) {
         if (record.closeTick < 0 && record.openTick < mCurrentTick) record.closeTick = mCurrentTick;
-        if (record.openTick == mCurrentTick && record.id == id) known = true;
+        if (record.packetId == packetId && record.id == id && record.openTick == mCurrentTick) screen = &record;
     }
-    if (!known) mRecordedContainers.push_back({id, mCurrentTick, -1, std::string(payload)});
+    if (!screen) screen = &mRecordedScreens.emplace_back(packetId, id, mCurrentTick, -1, std::string(payload));
 
     if (mSeekTargetTick >= 0) return true;
-    if (mContainerPreview && (mContainerPreview->id != id || mContainerPreview->openTick != mCurrentTick)) {
-        closeContainerPreview("replaced");
-    }
-    openContainerPreview(payload, mCurrentTick);
+    if (mScreenPreview && !mScreenPreview->shows(*screen)) closeScreenPreview("replaced");
+    openScreenPreview(*screen);
     return true;
 }
 
-void ReplaySession::openContainerPreview(std::string_view payload, int openTick) {
-    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerOpen);
+void ReplaySession::openScreenPreview(RecordedScreen const& screen) {
+    mTriedScreenOpenTick = screen.openTick;
+    auto packet          = MinecraftPackets::createPacket(screen.packetId);
     if (!packet) return;
-    ReadOnlyBinaryStream stream(payload, false);
+    ReadOnlyBinaryStream stream(screen.payload, false);
     if (!packet->read(stream) || !stream.ensureReadCompleted()) return;
 
-    auto&      open      = static_cast<ContainerOpenPacket&>(*packet);
-    int const  id        = static_cast<int>(open.mContainerId);
-    int const  type      = static_cast<int>(open.mType);
-    auto const pos       = open.mPos.get();
-    auto const entityRaw = open.mEntityUniqueID.get().rawID;
+    auto* const open =
+        screen.packetId == MinecraftPacketIds::ContainerOpen ? &static_cast<ContainerOpenPacket&>(*packet) : nullptr;
+    int const  type      = open ? static_cast<int>(open->mType) : -1;
+    auto const entityRaw = open ? open->mEntityUniqueID.get().rawID : int64{-1};
     bool const following = visuals::isReplaySubjectViewDriven() && visuals::isReplaySubjectRecorder();
 
     char const* action      = "inject";
@@ -5454,48 +5477,40 @@ void ReplaySession::openContainerPreview(std::string_view payload, int openTick)
         action = "skip:seeking";
     // The export waits for a menu-free scene while it initializes; finishExportTimelineInitialization reopens it.
     else if (mExportTimelinePhase == ReplayExportTimelinePhase::Initializing) action = "skip:exportInit";
-    else if (mContainerPreview) action = "skip:alreadyOpen";
-    // The player inventory screen does not follow the recorded player yet, so it is not previewed.
-    else if (open.mType == SharedTypes::Legacy::ContainerType::Inventory) action = "skip:inventory";
-    else if (entityRaw != -1 && entityRaw != 0) {
-        if (!mReplayPlayer->getLevel().fetchEntity(open.mEntityUniqueID.get(), false)) action = "skip:entityMissing";
-    } else {
-        using Type = SharedTypes::Legacy::ContainerType;
-        auto const kind = open.mType;
-        bool const needsBlockEntity = kind == Type::Container || kind == Type::Furnace || kind == Type::BrewingStand
-                                   || kind == Type::Dispenser || kind == Type::Dropper || kind == Type::Hopper
-                                   || kind == Type::BlastFurnace || kind == Type::Smoker;
-        if (needsBlockEntity) {
-            blockEntity = mReplayPlayer->getDimensionBlockSource().getBlockEntity(pos) ? 1 : 0;
-            if (blockEntity == 0) action = "skip:noBlockEntity";
-        }
+    else if (mScreenPreview) action = "skip:alreadyOpen";
+    else if (open) {
+        if (auto const skip = containerPreviewSkip(*mReplayPlayer, *open, blockEntity)) action = skip;
     }
 
     getLogger().info(
-        "containerPreview open action={} id={} type={} entity={} blockEntity={} following={} tick={} openTick={}",
+        "screenPreview open action={} screen={} id={} type={} entity={} blockEntity={} following={} tick={} "
+        "openTick={}",
         action,
-        id,
+        open ? "container" : "form",
+        screen.id,
         type,
         entityRaw,
         blockEntity,
         following,
         mCurrentTick,
-        openTick
+        screen.openTick
     );
     if (std::string_view(action) != "inject") return;
 
-    mContainerPreview = ContainerPreview{id, type, openTick};
-    visuals::setReplayContainerKeepOpen(true);
+    mScreenPreview = ScreenPreview{screen.packetId, screen.id, type, screen.openTick};
+    if (open) visuals::setReplayContainerKeepOpen(true);
     (void)dispatchUiPacket(std::move(packet));
 }
 
-void ReplaySession::closeContainerPreview(char const* reason) {
-    if (!mContainerPreview) return;
-    auto const preview = *mContainerPreview;
-    visuals::setReplayContainerKeepOpen(false);
+void ReplaySession::closeScreenPreview(char const* reason) {
+    if (!mScreenPreview) return;
+    auto const preview   = *mScreenPreview;
+    bool const container = preview.packetId == MinecraftPacketIds::ContainerOpen;
+    if (container) visuals::setReplayContainerKeepOpen(false);
     getLogger().info(
-        "containerPreview close reason={} id={} type={} openTick={} tick={} keepOpenOverrides={}",
+        "screenPreview close reason={} screen={} id={} type={} openTick={} tick={} keepOpenOverrides={}",
         reason,
+        container ? "container" : "form",
         preview.id,
         preview.type,
         preview.openTick,
@@ -5503,7 +5518,11 @@ void ReplaySession::closeContainerPreview(char const* reason) {
         visuals::replayContainerKeepOpenOverrides()
     );
     if (mReplayPlayer && mReplayWorldJoined && mNetworkHandler) {
-        if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerClose)) {
+        if (!container) {
+            if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ClientboundCloseScreen)) {
+                (void)dispatchUiPacket(std::move(packet));
+            }
+        } else if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerClose)) {
             auto& close                 = static_cast<ContainerClosePacket&>(*packet);
             close.mContainerId          = static_cast<ContainerID>(preview.id);
             close.mContainerType        = static_cast<SharedTypes::Legacy::ContainerType>(preview.type);
@@ -5511,43 +5530,48 @@ void ReplaySession::closeContainerPreview(char const* reason) {
             (void)dispatchUiPacket(std::move(packet));
         }
     }
-    mContainerPreview.reset();
+    mScreenPreview.reset();
 }
 
-void ReplaySession::updateContainerPreview() {
-    if (!mContainerPreview) return;
+void ReplaySession::updateScreenPreview() {
+    bool const following = visuals::isReplaySubjectViewDriven() && visuals::isReplaySubjectRecorder();
+    if (!mScreenPreview) {
+        // Following the recorder again shows the screen it still has open, tried once per interval.
+        if (!following) mTriedScreenOpenTick = -1;
+        else if (auto const* wanted = recordedScreenOpenAt(mCurrentTick);
+                 wanted && wanted->openTick != mTriedScreenOpenTick && mSeekTargetTick < 0) {
+            openScreenPreview(*wanted);
+        }
+        return;
+    }
     // A native screen would keep the dimension loading screen from clearing, so it closes before the transition.
-    if (!visuals::isReplaySubjectViewDriven() || !visuals::isReplaySubjectRecorder())
-        closeContainerPreview("followEnded");
-    else if (mPendingReplayDimension) closeContainerPreview("dimension");
-    if (!mContainerPreview) popReplayContainerScreen();
+    if (!following) closeScreenPreview("followEnded");
+    else if (mPendingReplayDimension) closeScreenPreview("dimension");
+    if (!mScreenPreview) popReplayScreen();
 }
 
-// The landing tick has applied every action before it, so a container opened earlier and not yet closed is the one to
+// The landing tick has applied every action before it, so a screen opened earlier and not yet closed is the one to
 // show.
-ReplaySession::RecordedContainer const* ReplaySession::recordedContainerOpenAt(int tick) const {
-    RecordedContainer const* wanted = nullptr;
-    for (auto const& record : mRecordedContainers) {
+ReplaySession::RecordedScreen const* ReplaySession::recordedScreenOpenAt(int tick) const {
+    RecordedScreen const* wanted = nullptr;
+    for (auto const& record : mRecordedScreens) {
         if (record.openTick < tick && (record.closeTick < 0 || record.closeTick >= tick)) wanted = &record;
     }
     return wanted;
 }
 
-void ReplaySession::syncContainerPreviewAfterSeek() {
-    auto const* wanted = recordedContainerOpenAt(mCurrentTick);
-    if (mContainerPreview && wanted && mContainerPreview->id == wanted->id
-        && mContainerPreview->openTick == wanted->openTick) {
-        return;
-    }
-    closeContainerPreview("seek");
-    if (wanted) openContainerPreview(wanted->payload, wanted->openTick);
-    else popReplayContainerScreen();
+void ReplaySession::syncScreenPreviewAfterSeek() {
+    auto const* wanted = recordedScreenOpenAt(mCurrentTick);
+    if (mScreenPreview && wanted && mScreenPreview->shows(*wanted)) return;
+    closeScreenPreview("seek");
+    if (wanted) openScreenPreview(*wanted);
+    else popReplayScreen();
 }
 
 bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
     if (packetId == MinecraftPacketIds::ContainerOpen || packetId == MinecraftPacketIds::ContainerClose
-        || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
-        return trackContainerUiPacket(packetId, payload);
+        || packetId == MinecraftPacketIds::ShowModalForm || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
+        return trackScreenPacket(packetId, payload);
     }
     // An older recording may still carry packets the recorder now ignores.
     if (describePacketLifecycle(packetId).lifecycle == PacketLifecycle::Ignore) return true;

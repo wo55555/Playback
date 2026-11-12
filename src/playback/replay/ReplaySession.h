@@ -340,22 +340,31 @@ private:
     Player*                             mReplayPlayer   = nullptr;
     LegacyClientNetworkHandler*         mNetworkHandler = nullptr;
 
-    // The container screen the replay world opened for the followed player.
-    struct ContainerPreview {
-        int id{};
-        int type{};
-        int openTick{};
+    // Open/close intervals of the recorder's container screens and server forms, seen while reading actions, so a seek
+    // can show the screen that is open at its landing. packetId is the packet that opened it.
+    struct RecordedScreen {
+        MinecraftPacketIds packetId{};
+        int                id{};
+        int                openTick{};
+        int                closeTick{-1};
+        std::string        payload;
     };
-    std::optional<ContainerPreview> mContainerPreview;
+    std::vector<RecordedScreen> mRecordedScreens;
 
-    // Open/close intervals seen while reading actions, so a seek can show the container that is open at its landing.
-    struct RecordedContainer {
-        int         id{};
-        int         openTick{};
-        int         closeTick{-1};
-        std::string payload;
+    // The screen the replay world opened for the followed player.
+    struct ScreenPreview {
+        MinecraftPacketIds packetId{};
+        int                id{};
+        int                type{};
+        int                openTick{};
+
+        [[nodiscard]] bool shows(RecordedScreen const& screen) const {
+            return packetId == screen.packetId && id == screen.id && openTick == screen.openTick;
+        }
     };
-    std::vector<RecordedContainer> mRecordedContainers;
+    std::optional<ScreenPreview> mScreenPreview;
+    // Open tick of the last interval a preview was tried for, so a skipped one is not retried every tick.
+    int mTriedScreenOpenTick{-1};
 
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
@@ -428,22 +437,22 @@ private:
     [[nodiscard]] bool
     applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer = false);
 
-    // Tracks the recorded container state; true when the packet was consumed (open/close), false to apply it normally.
-    [[nodiscard]] bool trackContainerUiPacket(MinecraftPacketIds packetId, std::string_view payload);
+    // Tracks the recorded screen state; true when the packet was consumed (open/close), false to apply it normally.
+    [[nodiscard]] bool trackScreenPacket(MinecraftPacketIds packetId, std::string_view payload);
 
     bool dispatchUiPacket(std::shared_ptr<Packet> packet);
 
-    void openContainerPreview(std::string_view payload, int openTick);
+    void openScreenPreview(RecordedScreen const& screen);
 
-    void closeContainerPreview(char const* reason);
+    void closeScreenPreview(char const* reason);
 
-    void updateContainerPreview();
+    void updateScreenPreview();
 
     // Last record whose half-open interval [openTick, closeTick) contains tick. Unread closes stay open.
-    [[nodiscard]] RecordedContainer const* recordedContainerOpenAt(int tick) const;
+    [[nodiscard]] RecordedScreen const* recordedScreenOpenAt(int tick) const;
 
-    // Brings the preview in line with the recorded container after a seek landed.
-    void syncContainerPreviewAfterSeek();
+    // Brings the preview in line with the recorded screen after a seek landed.
+    void syncScreenPreviewAfterSeek();
 
     [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
 
