@@ -92,8 +92,9 @@ uint64_t                                       gNextTokenId{1};
 uint64_t                                       gNextRenderSerial{1};
 thread_local std::optional<ActiveRenderSample> gRenderSample;
 
-// The timer handed to updateGraphics is the one whose ticks the client loop runs.
-std::atomic<Timer const*> gSimTimer{nullptr};
+// Set across a client update that has a requested tick to run. The client advances its own simulation timer first
+// thing in the update and runs the ticks that timer then reports, so the grant can only land after that.
+thread_local bool tTickGrantPending{false};
 
 // Guarded by gClockMutex; reset per export.
 struct SceneLatencyStats {
@@ -326,7 +327,6 @@ LL_TYPE_INSTANCE_HOOK(
     Bedrock::NotNullNonOwnerPtr<IClientInstance> const& client,
     Timer const&                                        timer
 ) {
-    gSimTimer.store(&timer, std::memory_order_release);
     // Export steps resolve on this path, so advance before rendering instead of waiting for the 20Hz client tick.
     if (isOfflineRenderActivityActive()) editor::tickReplayExportDuringGraphics();
 
@@ -382,6 +382,22 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 LL_TYPE_INSTANCE_HOOK(
+    OfflineReplayTickGrantHook,
+    ll::memory::HookPriority::Normal,
+    Timer,
+    &Timer::advanceTime,
+    void,
+    float preferredFrameStep,
+    bool  forceOnlySingleTick
+) {
+    origin(preferredFrameStep, forceOnlySingleTick);
+    // The simulation timer is the first one the client update advances.
+    if (!std::exchange(tTickGrantPending, false)) return;
+    // The level tick hook swallows every tick except the requested one, so one is all the gate needs.
+    if (mTicks < 1) mTicks = 1;
+}
+
+LL_TYPE_INSTANCE_HOOK(
     OfflineRenderGameFrameHook,
     ll::memory::HookPriority::Highest,
     GameRenderer,
@@ -406,6 +422,7 @@ bool hookOfflineRenderClock(bool enable) {
     struct HookState {
         bool clock{};
         bool gameFrame{};
+        bool tickGrant{};
     };
     static HookState state;
 
@@ -417,15 +434,16 @@ bool hookOfflineRenderClock(bool enable) {
         resetOfflineRenderClock();
         reportSceneRetries();
         if (state.gameFrame && OfflineRenderGameFrameHook::unhook()) state.gameFrame = false;
+        if (state.tickGrant && OfflineReplayTickGrantHook::unhook()) state.tickGrant = false;
         if (state.clock && OfflineRenderClockUpdateGraphicsHook::unhook()) state.clock = false;
-        gSimTimer.store(nullptr, std::memory_order_release);
-        return !state.clock && !state.gameFrame;
+        return !state.clock && !state.gameFrame && !state.tickGrant;
     };
 
     if (enable) {
         if (!state.clock) state.clock = OfflineRenderClockUpdateGraphicsHook::hook() == 0;
         if (!state.gameFrame) state.gameFrame = OfflineRenderGameFrameHook::hook() == 0;
-        bool const ready = state.clock && state.gameFrame;
+        if (!state.tickGrant) state.tickGrant = OfflineReplayTickGrantHook::hook() == 0;
+        bool const ready = state.clock && state.gameFrame && state.tickGrant;
         gHookInstalled.store(ready, std::memory_order_release);
         if (ready) {
             visuals::hookReplaySubjectHide(true, visuals::SubjectHideReason::Export);
@@ -438,11 +456,14 @@ bool hookOfflineRenderClock(bool enable) {
 
         bool const clockInstalled     = state.clock;
         bool const gameFrameInstalled = state.gameFrame;
+        bool const tickGrantInstalled = state.tickGrant;
         bool const rolledBack         = removeAll();
         Playback::getInstance().getSelf().getLogger().error(
-            "Unable to install export-scoped render hooks (updateGraphics={}, gameFrame={}, rollback={})",
+            "Unable to install export-scoped render hooks (updateGraphics={}, gameFrame={}, advanceTime={}, "
+            "rollback={})",
             clockInstalled,
             gameFrameInstalled,
+            tickGrantInstalled,
             rolledBack
         );
         return false;
@@ -454,10 +475,12 @@ bool hookOfflineRenderClock(bool enable) {
 bool isOfflineRenderClockInstalled() { return gHookInstalled.load(std::memory_order_acquire); }
 
 void grantPendingOfflineReplayTick() {
-    auto* const timer = const_cast<Timer*>(gSimTimer.load(std::memory_order_acquire));
-    if (!timer || !runtime::hasPendingOfflineReplayTick()) return;
-    // The level tick hook swallows every tick except the requested one, so one is all the gate needs.
-    if (timer->mTicks < 1) timer->mTicks = 1;
+    tTickGrantPending = gHookInstalled.load(std::memory_order_acquire) && runtime::hasPendingOfflineReplayTick();
+}
+
+// An update that advanced no timer leaves the grant unused; it must not reach a timer advanced elsewhere.
+void endOfflineReplayTickGrant() {
+    tTickGrantPending = false;
 }
 
 OfflineRenderClockPublishResult

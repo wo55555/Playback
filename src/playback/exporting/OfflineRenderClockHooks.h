@@ -32,9 +32,11 @@ enum class OfflineRenderClockPublishResult : uint8_t { Published, Unavailable, B
 [[nodiscard]] bool hookOfflineRenderClock(bool enable);
 [[nodiscard]] bool isOfflineRenderClockInstalled();
 
-// Call right before the client update. A client tick the export is waiting for then runs in that update instead of
-// whenever the game's 20 Hz timer next comes due, so the frame that needs it can render in the same pass of the loop.
+// Call right before the client update, and end the grant right after it. A client tick the export is waiting for then
+// runs in that update instead of whenever the game's 20 Hz timer next comes due, so the frame that needs it can render
+// in the same pass of the loop.
 void grantPendingOfflineReplayTick();
+void endOfflineReplayTickGrant();
 
 [[nodiscard]] OfflineRenderClockPublishResult
      publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
