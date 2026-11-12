@@ -28,7 +28,6 @@ constexpr std::array<uintptr_t, 4> SiteReturnRvas{0x9300A86, 0xA303CE3, 0xA30850
 constexpr size_t                   VibrantClock = 0;
 constexpr size_t                   RayClock     = 1;
 
-constexpr double WarmupStepSeconds = 0.05;
 // Exposure adaptation snaps on a large dt; timelapse frames would otherwise jump it every frame.
 constexpr double VibrantMaxStepSeconds = 0.1;
 
@@ -292,12 +291,9 @@ void advanceOfflineRenderTime(OfflineRenderClockKind kind, float deltaTicks, boo
     } else if (gStats.captureSeen) {
         ++gStats.sinceCapture;
     }
-    if (!firstRender) return;
-    ++gStats.tokens[index];
+    if (firstRender) ++gStats.tokens[index];
 
-    double seconds = 0.0;
-    if (kind == OfflineRenderClockKind::Capture) seconds = static_cast<double>(deltaTicks) / 20.0;
-    else if (kind == OfflineRenderClockKind::Warmup) seconds = WarmupStepSeconds;
+    double const seconds = static_cast<double>(deltaTicks) / 20.0;
     if (!(seconds > 0.0)) return;
 
     ++gStats.advances;

@@ -115,6 +115,8 @@ private:
     std::optional<visuals::FrameTicket>            mCompletedFrameTicket;
     std::optional<runtime::OfflineReplayTickToken> mReplayTickToken;
     std::optional<PublishedStep>                   mStep;
+    // Set once a step of the pending frame carried the time since the last submitted frame.
+    bool                                           mFrameTimeSpent{};
     int64_t                                        mMaximumReplayTick{};
     uint32_t                                       mWarmupFramesRemaining{};
     uint32_t                                       mWarmupStableFrames{};
