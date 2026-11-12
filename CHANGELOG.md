@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the free camera's FOV widening while a followed first-person player sprinted. Following a player now only copies the attributes the HUD shows.
 - Fixed server forms, such as Hive's game list, staying open in replays and keeping the free camera from moving. Forms are now previewed like container screens while following the recorder in first person, and close where the recorder closed them, on seeks and when switching cameras. Other screens a server shows the recording player to answer are no longer opened.
 - First-person follow now shows the flames on screen while the followed player is burning.
+- Ray tracing and Vibrant Visuals exports now time auto exposure and other time-driven effects on the replay instead of on how long each frame took to render, so exported brightness adapts at the same pace as in the replay.
 
 ## [0.4.0-mc26.40] - 2026-11-01
 
