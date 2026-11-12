@@ -218,13 +218,13 @@ void reportSession() {
     auto const& stats   = gStats;
     auto const  capture = static_cast<size_t>(OfflineRenderClockKind::Capture);
     auto const  warmup  = static_cast<size_t>(OfflineRenderClockKind::Warmup);
-    auto const  conv    = static_cast<size_t>(OfflineRenderClockKind::Convergence);
+    auto const  extra   = static_cast<size_t>(OfflineRenderClockKind::ExtraRender);
     auto const  keep    = static_cast<size_t>(OfflineRenderClockKind::KeepAlive);
     Playback::getInstance().getSelf().getLogger().debug(
         "Offline renderer clock: installed={}, verify={}, hits(vv={}, rtFrame={}, rtInit={}, rtConst={}, uiNew={}, "
         "uiFocus={}, uiFrame={}), other={}, adv(n={}, vvMs={:.1f}, rtMs={:.1f}, uiMs={:.1f}, expectMs={:.1f}, "
-        "nativeFrames={}), tok(cap={}, warm={}, conv={}), "
-        "renders(cap={}, warm={}, conv={}, keep={}), retry={}, extraPerCap(gaps={}, min={}, max={}), "
+        "nativeFrames={}), tok(cap={}, warm={}, extra={}), "
+        "renders(cap={}, warm={}, extra={}, keep={}), retry={}, extraPerCap(gaps={}, min={}, max={}), "
         "skipped(vv={}, rt={}), off(vvMs={:.1f}, rtMs={:.1f}, uiMs={:.1f})",
         installName(gInstall),
         gVerify,
@@ -244,10 +244,10 @@ void reportSession() {
         stats.nativeFrames,
         stats.tokens[capture],
         stats.tokens[warmup],
-        stats.tokens[conv],
+        stats.tokens[extra],
         stats.renders[capture],
         stats.renders[warmup],
-        stats.renders[conv],
+        stats.renders[extra],
         stats.renders[keep],
         stats.renders[capture] - stats.tokens[capture],
         stats.captureGaps,
