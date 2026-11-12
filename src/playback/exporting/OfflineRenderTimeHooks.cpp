@@ -32,14 +32,22 @@ constexpr size_t ClockCount   = 2;
 constexpr size_t VibrantClock = 0;
 constexpr size_t RayClock     = 1;
 // The renderers read the performance counter through MSVCP140's _Query_perf_counter import, and none of the functions
-// that do has a symbol, so the reads are told apart by where they return to. Client RVAs (1.26.20.04): Vibrant
+// that do has a symbol, so the reads are told apart by where they return to. Client RVAs (1.26.10.04): Vibrant
 // Visuals exposure dt, ray tracing frame time, ray tracing start time and ray tracing shader seconds.
 constexpr std::array<uintptr_t, SiteCount> SiteReturnRvas{
-    0x9300A86,
-    0xA303CE3,
-    0xA30850D,
-    0xA30AE79,
+    0x16F6EC,
+    0x7317584,
+    0x7318A78,
+    0x731686C,
 };
+// Vibrant Visuals makes its read through a clock function the whole game shares, so that read only counts when the
+// function itself returns into the frame: the function's entry and prologue, how far above the read's return address
+// that leaves its own, and the return address in the frame.
+constexpr size_t                        VibrantSite    = 0;
+constexpr uintptr_t                     SharedClockRva = 0x16F6D0;
+constexpr std::array<uint8_t, 10>       SharedClockPrologue{0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20};
+constexpr size_t                        SharedClockCallerOffset = 0x30;
+constexpr uintptr_t                     VibrantCallerReturnRva  = 0x70DE5D6;
 constexpr std::array<size_t, SiteCount> SiteClocks{
     VibrantClock,
     RayClock,
@@ -114,6 +122,12 @@ long long __cdecl queryCounterDetour() {
             site = index;
             break;
         }
+    }
+    if (site == VibrantSite) {
+        auto const caller = *reinterpret_cast<uintptr_t const*>(
+            reinterpret_cast<uintptr_t>(_AddressOfReturnAddress()) + SharedClockCallerOffset
+        );
+        if (caller - gBase != VibrantCallerReturnRva) site = SiteReturnRvas.size();
     }
     bool const active = gActive.load(std::memory_order_acquire);
     if (site == SiteReturnRvas.size()) {
@@ -205,6 +219,20 @@ std::string installDetour() {
         if (!callsImportSlot(base, imageSize, base + SiteReturnRvas[index], reinterpret_cast<uintptr_t>(slot))) {
             return "site" + std::to_string(index);
         }
+    }
+    if (VibrantCallerReturnRva > imageSize || SharedClockRva + SharedClockPrologue.size() > imageSize)
+        return "image-size";
+    if (std::memcmp(
+            reinterpret_cast<void const*>(base + SharedClockRva),
+            SharedClockPrologue.data(),
+            SharedClockPrologue.size()
+        )
+        != 0) {
+        return "shared-clock";
+    }
+    auto const frameCall = reinterpret_cast<uint8_t const*>(base + VibrantCallerReturnRva - 5);
+    if (frameCall[0] != 0xE8 || relativeTarget(base + VibrantCallerReturnRva, frameCall + 1) != base + SharedClockRva) {
+        return "shared-clock-caller";
     }
 
     gBase = base;
