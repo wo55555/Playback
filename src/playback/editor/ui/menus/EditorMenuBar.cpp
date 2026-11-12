@@ -656,7 +656,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         }
         // Advanced labels sit one indent deeper, yet their values must stay on the shared value column.
         for (std::string const& label :
-             {"playback.refactorEditor.export.convergenceFrames"_tr(),
+             {"playback.refactorEditor.export.extraRenders"_tr(),
               "playback.refactorEditor.export.encodeSpeed"_tr(),
               "playback.refactorEditor.export.crf"_tr()}) {
             hintedLabelWidth =
@@ -859,9 +859,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 + std::to_string(mExportCrf)
             );
         }
-        if (mExportConvergenceFrames > 0) {
+        if (mExportExtraRenders > 0) {
             advancedSummary.push_back(
-                "playback.refactorEditor.export.advancedSummaryConvergence"_tr(mExportConvergenceFrames)
+                "playback.refactorEditor.export.advancedSummaryExtraRenders"_tr(mExportExtraRenders)
             );
         }
         mExportAdvancedOpen = collapseHeader(
@@ -913,14 +913,14 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             subHeader("playback.refactorEditor.export.advancedRender"_tr().c_str(), 8.0f);
             if (beginPropertyTable("##export-rendering", subLabelWidth)) {
                 propertyLabel(
-                    "playback.refactorEditor.export.convergenceFrames"_tr().c_str(),
-                    "playback.refactorEditor.export.convergenceHint"_tr().c_str()
+                    "playback.refactorEditor.export.extraRenders"_tr().c_str(),
+                    "playback.refactorEditor.export.extraRendersHint"_tr().c_str()
                 );
                 inputClampedInt(
-                    "##export-convergence",
-                    mExportConvergenceFrames,
+                    "##export-extra-renders",
+                    mExportExtraRenders,
                     0,
-                    static_cast<int>(exporting::MaxExportConvergenceFrames),
+                    static_cast<int>(exporting::MaxExportExtraRenders),
                     fieldWidth
                 );
                 ImGui::EndTable();
@@ -953,11 +953,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                                          static_cast<uint32_t>(mExportHeight),
                                          ssaaValue
                                   );
-        bool const validCapture =
-            mExportSsaa >= 0 && mExportSsaa <= 2 && mExportWarmupFrames >= 0 && mExportWarmupFrames <= 3600
-            && mExportConvergenceFrames >= 0
-            && static_cast<uint32_t>(mExportConvergenceFrames) <= exporting::MaxExportConvergenceFrames
-            && mExportCrf >= 0 && static_cast<uint32_t>(mExportCrf) <= exporting::MaxExportCrf;
+        bool const validCapture = mExportSsaa >= 0 && mExportSsaa <= 2 && mExportWarmupFrames >= 0
+                               && mExportWarmupFrames <= 3600 && mExportExtraRenders >= 0
+                               && static_cast<uint32_t>(mExportExtraRenders) <= exporting::MaxExportExtraRenders
+                               && mExportCrf >= 0 && static_cast<uint32_t>(mExportCrf) <= exporting::MaxExportCrf;
         bool const formatAvailable  = mExportFormat != 0 || capabilities.ffmpegVideoExport;
         bool const rawSettingsValid = validOutput && validTimeline && validFps && validResolution && validCapture
                                    && formatAvailable && state.project != nullptr;
@@ -972,7 +971,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.resolutionY       = static_cast<uint32_t>(std::max(0, mExportHeight));
         previewSettings.ssaa              = ssaaValue;
         previewSettings.warmupFrames      = static_cast<uint32_t>(std::max(0, mExportWarmupFrames));
-        previewSettings.convergenceFrames = static_cast<uint32_t>(std::max(0, mExportConvergenceFrames));
+        previewSettings.extraRenders      = static_cast<uint32_t>(std::max(0, mExportExtraRenders));
         previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         previewSettings.videoCrf          = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         previewSettings.format =
