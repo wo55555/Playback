@@ -1014,7 +1014,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             }
 
             if (ImGui::MenuItem("playback.refactorEditor.timeline.seekHere"_tr().c_str())) seekTo(ctx, mKeyframeMenuTick);
-            // Flashback's "Apply": the free camera jumps to this keyframe's pose without touching the track.
+            // Apply: the free camera jumps to this keyframe's pose without touching the track.
             if (ImGui::MenuItem(
                     "playback.refactorEditor.timeline.applyKeyframe"_tr().c_str(),
                     nullptr,

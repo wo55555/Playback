@@ -1089,7 +1089,7 @@ void ReplaySession::parkObserverAtPose(keyframe::CameraRenderState const& pose) 
     syncObserverServerPosition(feetPosition, rotation);
 }
 
-// Like Flashback applying keyframes on a paused seek: park the observer at the pose the preview timeline samples here.
+// On a paused seek, park the observer at the pose the preview timeline samples here.
 void ReplaySession::updatePausedObserverPreview() {
     if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || !mNetworkHandler) return;
     if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return;
@@ -1749,7 +1749,7 @@ void ReplaySession::rebindReplaySubject() {
             break;
         }
     }
-    // A followed entity that stays gone hands the view back to the recorder, as Flashback does when its target dies.
+    // A followed entity that stays gone hands the view back to the recorder.
     auto const loseEntity = [&]() {
         loseSubject(choice);
         // A seek catch-up replays the entity's add later; only played ticks count toward the grace.
@@ -1857,7 +1857,7 @@ void ReplaySession::refreshReplaySubjectBinding() {
     rebindReplaySubject();
 }
 
-// Like Flashback teleporting the viewer to the local player: a pending request lands once, following repeats per frame.
+// Teleports the viewer to the local player: a pending request lands once, following repeats per frame.
 bool ReplaySession::updateSubjectFollow() {
     // Player input owns the camera, and a started export drives it from the export timeline.
     bool const exporting = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;

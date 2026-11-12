@@ -275,7 +275,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             ImGui::CloseCurrentPopup();
             openPlayerPicker = true;
         }
-        // Any living mob, nearest first, like Flashback's spectate-entity list. Players stay in the picker above.
+        // Any living mob, nearest first. Players stay in the picker above.
         auto const entities  = replay::ReplaySession::getInstance().replayEntities();
         bool const hasEntity = std::ranges::any_of(entities, [](auto const& entity) { return !entity.player; });
         if (ImGui::BeginMenu(
