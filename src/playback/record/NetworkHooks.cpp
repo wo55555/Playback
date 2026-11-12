@@ -48,11 +48,12 @@
 #include "mc/world/level/chunk/LevelChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
-
+#include "mc/world/level/dimension/end/TheEndDimension.h"
 
 
 #include <Windows.h>
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
@@ -85,6 +86,7 @@ struct NetworkHookState {
     bool mobEquipment{};
     bool predictedSound{};
     bool actorSound{};
+    bool endTick{};
 
     [[nodiscard]] bool hudHandlersInstalled() const {
         return inventorySlot && inventoryContent && playerHotbar && mobEquipment;
@@ -146,6 +148,26 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     replay::ReplaySession::getInstance().configureReplayDimension(arguments);
     return origin(std::move(arguments));
+}
+
+// The End of the replay world would run a dragon fight like any other and spawn a dragon. That one is not part of the
+// recording: it shows up in the replay with a boss bar of its own, and the replay refuses the spawn of a recorded
+// actor that has the same runtime id. The fight is taken out for the tick, so it never runs there.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackEndTickHook,
+    ll::memory::HookPriority::Normal,
+    TheEndDimension,
+    &TheEndDimension::$tick,
+    void
+) {
+    if (!replay::ReplaySession::getInstance().isReplayWorldLevelId(mLevel.getLevelId())) {
+        origin();
+        return;
+    }
+    // The fight's type is opaque here, so its pointer goes back without ever running a deleter.
+    auto* const held = mDragonFight.release();
+    origin();
+    std::construct_at(&mDragonFight, held);
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -645,13 +667,13 @@ bool hookNetwork(bool enable) {
         return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
             && state.resourceHandlersInstalled() && state.completion && state.packetRead && state.renderFinalizer
             && state.renderedFov && state.localViewFrame && state.hudHandlersInstalled()
-            && state.soundHandlersInstalled();
+            && state.soundHandlersInstalled() && state.endTick;
     };
     auto noneInstalled = [&] {
         return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime
             && state.resourceHandlersRemoved() && !state.completion && !state.packetRead && !state.renderFinalizer
-            && !state.renderedFov && !state.localViewFrame && state.hudHandlersRemoved()
-            && state.soundHandlersRemoved();
+            && !state.renderedFov && !state.localViewFrame && state.hudHandlersRemoved() && state.soundHandlersRemoved()
+            && !state.endTick;
     };
     auto installAll = [&] {
         return installNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor)
@@ -671,9 +693,11 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackPlayerHotbarHook>(state.playerHotbar)
             && installNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment)
             && installNetworkHook<PlaybackPredictedSoundHook>(state.predictedSound)
-            && installNetworkHook<PlaybackActorSoundHook>(state.actorSound);
+            && installNetworkHook<PlaybackActorSoundHook>(state.actorSound)
+            && installNetworkHook<PlaybackEndTickHook>(state.endTick);
     };
     auto removeAll = [&] {
+        removeNetworkHook<PlaybackEndTickHook>(state.endTick);
         removeNetworkHook<PlaybackActorSoundHook>(state.actorSound);
         removeNetworkHook<PlaybackPredictedSoundHook>(state.predictedSound);
         removeNetworkHook<PlaybackMobEquipmentHook>(state.mobEquipment);
