@@ -11,6 +11,7 @@
 #include "playback/exporting/ExportEcoMode.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
+#include "playback/exporting/OfflineRenderTimeHooks.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
@@ -200,6 +201,7 @@ bool Playback::unhook() {
         getSelf().getLogger().error("Unable to remove export-scoped offline render hooks during shutdown");
         return false;
     }
+    exporting::releaseOfflineRenderTimeHooks();
     // The replay session installs these for its whole lifetime; release them with the mod.
     visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Session);
     visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Session);

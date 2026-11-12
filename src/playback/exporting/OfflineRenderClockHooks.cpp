@@ -1,6 +1,7 @@
 ﻿#include "OfflineRenderClockHooks.h"
 
 #include "ExportActivity.h"
+#include "OfflineRenderTimeHooks.h"
 #include "playback/Playback.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
@@ -54,6 +55,7 @@ struct ActiveClockSample {
     std::chrono::steady_clock::time_point       sceneRetryStartedAt;
     uint64_t                                    captureGeneration{};
     uint64_t                                    renderSerial{};
+    uint64_t                                    rendersStarted{};
     uint32_t                                    gameRenderOrdinal{};
     uint32_t                                    sceneRetries{};
     bool                                        captureArmed{};
@@ -70,6 +72,7 @@ struct AcquiredClockSample {
     OfflineRenderClockSample                    sample;
     keyframe::CameraTimelineRenderContextHandle cameraContext;
     uint64_t                                    renderSerial{};
+    bool                                        firstRender{};
 };
 
 struct ActiveRenderSample {
@@ -248,6 +251,7 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     if (gActiveSample->captureGeneration != 0 && gActiveSample->claimed && gActiveSample->renderReturned)
         return std::nullopt;
 
+    bool const firstRender                        = gActiveSample->rendersStarted++ == 0;
     gActiveSample->claimed                        = true;
     gActiveSample->renderSerial                   = gNextRenderSerial++;
     gActiveSample->gameRenderOrdinal              = 0;
@@ -261,6 +265,7 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
         gActiveSample->sample,
         gActiveSample->cameraContext,
         gActiveSample->renderSerial,
+        firstRender,
     };
 }
 
@@ -322,6 +327,9 @@ LL_TYPE_INSTANCE_HOOK(
             auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
             poseApplied = pose != nullptr;
 
+            // Only the first render of a capture or warm-up sample moves the renderers' clock. Convergence renders
+            // come before their frame's capture, so they still run on the previous frame's renderer time.
+            advanceOfflineRenderTime(sample->sample.kind, sample->sample.deltaTicks, sample->firstRender);
             markClockSampleRenderReady(sample->token, sample->renderSerial, true);
             origin(client, timer);
         }
@@ -411,6 +419,7 @@ bool hookOfflineRenderClock(bool enable) {
 
     auto removeAll = [&] {
         gHookInstalled.store(false, std::memory_order_release);
+        endOfflineRenderTime();
         visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Export);
         visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Export);
         resetOfflineRenderClock();
@@ -432,6 +441,7 @@ bool hookOfflineRenderClock(bool enable) {
             visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Export);
             gInitialCameraSampleLogged.store(false, std::memory_order_release);
             gMissingCameraSampleLogged.store(false, std::memory_order_release);
+            beginOfflineRenderTime();
             return true;
         }
 
