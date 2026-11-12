@@ -18,9 +18,10 @@ namespace playback::editor {
 using namespace playback::state;
 
 namespace {
-EditorContext    gContext;
-EditorController gController{gContext};
-std::atomic_bool gUiHooked{false};
+// Never destroyed: at process exit, an export's teardown would reach statics of other files that are already gone.
+EditorContext&    gContext    = *new EditorContext;
+EditorController& gController = *new EditorController{gContext};
+std::atomic_bool  gUiHooked{false};
 } // namespace
 
 bool hookReplayUIRendererInit(bool enable) { return editor::graphics::hookRendererInit(enable); }
