@@ -1089,7 +1089,7 @@ void ReplaySession::parkObserverAtPose(keyframe::CameraRenderState const& pose) 
     syncObserverServerPosition(feetPosition, rotation);
 }
 
-// On a paused seek, park the observer at the pose sampled from the preview timeline.
+// On a paused seek, park the observer at the pose the preview timeline samples here.
 void ReplaySession::updatePausedObserverPreview() {
     if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || !mNetworkHandler) return;
     if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return;
@@ -1857,7 +1857,7 @@ void ReplaySession::refreshReplaySubjectBinding() {
     rebindReplaySubject();
 }
 
-// Teleport the viewer to the target: a pending request lands once, following repeats per frame.
+// Teleports the viewer to the local player: a pending request lands once, following repeats per frame.
 bool ReplaySession::updateSubjectFollow() {
     // Player input owns the camera, and a started export drives it from the export timeline.
     bool const exporting = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;

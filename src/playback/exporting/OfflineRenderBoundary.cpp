@@ -20,7 +20,7 @@ constexpr auto     ReplayTickWaitTimeout = std::chrono::seconds{2};
 constexpr auto     RenderWaitTimeout     = std::chrono::seconds{30};
 constexpr auto     RenderWaitLogInterval = std::chrono::seconds{2};
 constexpr auto     WarmupSceneTimeout    = std::chrono::seconds{30};
-constexpr auto     ForcedLoadingDelay    = std::chrono::seconds{5}; // Force-close lingering loading screens after 5 s.
+constexpr auto     ForcedLoadingDelay    = std::chrono::seconds{5};
 constexpr uint32_t StableWarmupFrames    = 3;
 
 bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
