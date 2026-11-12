@@ -94,6 +94,8 @@ private:
     [[nodiscard]] bool publishStep(ExportFramePlan const& frame, OfflineRenderClockKind kind);
     // Renders the frame's scene without a capture a fixed number of times; nothing measures whether it has settled.
     [[nodiscard]] bool advanceConvergence(ExportFramePlan const& frame);
+    // How long finishDownload may block for the capture of the render that has just returned; zero is a plain poll.
+    [[nodiscard]] std::chrono::milliseconds submittedCaptureWait();
     void               clearStep();
     void               fault(OfflineRenderBoundaryError error, std::string message);
 
@@ -106,6 +108,8 @@ private:
     replay::ReplaySession&                         mReplay;
     uint32_t                                       mCaptureCapacity{};
     bool                                           mCaptureArmed{};
+    // Each render of the capture step is blocked on once; a capture that misses that wait is polled for.
+    bool                                           mSubmittedCaptureAwaited{};
     OfflineRenderFrameExecutor                     mExecutor;
     std::optional<ExportFramePlan>                 mPendingFrame;
     std::optional<ExportFramePlan>                 mLastSubmittedFrame;
@@ -129,6 +133,8 @@ private:
     uint64_t                              mConvergenceMicros{};
     uint64_t                              mCaptureMicros{};
     uint64_t                              mConvergencePasses{};
+    uint64_t                              mCaptureWaits{};
+    uint64_t                              mCaptureWaitsMissed{};
     uint64_t                              mProfiledFrames{};
     std::chrono::steady_clock::time_point mRenderWaitStartedAt{};
     std::chrono::steady_clock::time_point mRenderWaitLastLoggedAt{};
