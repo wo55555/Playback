@@ -358,6 +358,7 @@ LL_TYPE_INSTANCE_HOOK(
             advanceOfflineRenderTime(sample->sample.kind, sample->sample.deltaTicks, sample->firstRender);
             markClockSampleRenderReady(sample->token, sample->renderSerial, true);
             origin(client, timer);
+            finishOfflineRenderTime();
         }
         completeClockSample(sample->token, sample->renderSerial, poseApplied);
         return;
