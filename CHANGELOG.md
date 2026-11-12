@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed server forms, such as Hive's game list, staying open in replays and keeping the free camera from moving. Forms are now previewed like container screens while following the recorder in first person, and close where the recorder closed them, on seeks and when switching cameras. Other screens a server shows the recording player to answer are no longer opened.
 - Ray tracing and Vibrant Visuals exports now time auto exposure and other time-driven effects on the replay instead of on how long each frame took to render, so exported brightness adapts at the same pace as in the replay.
 - Exports now repeat the renderer warm-up after the replay changes dimension, so the first frames in the new dimension are no longer captured while auto exposure is still adapting.
+- Ray tracing exports of the same replay no longer differ in brightness for a few seconds after the lighting changes, such as after a time change. The game now draws on every frame it sends to the renderer during an export.
 
 ## [0.4.0-mc26.50] - 2026-11-01
 
