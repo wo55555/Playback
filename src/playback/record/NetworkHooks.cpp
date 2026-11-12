@@ -76,7 +76,6 @@ struct NetworkHookState {
     bool resourcePacksInfo{};
     bool resourcePackStack{};
     bool startGame{};
-    bool itemRegistry{};
     bool completion{};
     bool packetRead{};
     bool renderFinalizer{};
@@ -101,12 +100,10 @@ struct NetworkHookState {
 
     [[nodiscard]] bool soundHandlersRemoved() const { return !predictedSound && !actorSound; }
 
-    [[nodiscard]] bool resourceHandlersInstalled() const {
-        return resourcePacksInfo && resourcePackStack && startGame && itemRegistry;
-    }
+    [[nodiscard]] bool resourceHandlersInstalled() const { return resourcePacksInfo && resourcePackStack && startGame; }
 
     [[nodiscard]] bool resourceHandlersRemoved() const {
-        return !resourcePacksInfo && !resourcePackStack && !startGame && !itemRegistry;
+        return !resourcePacksInfo && !resourcePackStack && !startGame;
     }
 };
 
@@ -348,33 +345,6 @@ LL_TYPE_INSTANCE_HOOK(
     replaySession.applyRecordedBlockRegistry();
 }
 
-// The server's own table carries the data-driven item versions and components (icons) that a table rebuilt from the
-// client registry loses. The client builds its registry from the first table only, so during replay the local
-// world's table is swapped for the recorded one.
-LL_TYPE_INSTANCE_HOOK(
-    PlaybackItemRegistryHook,
-    ll::memory::HookPriority::Normal,
-    LegacyClientNetworkHandler,
-    &LegacyClientNetworkHandler::$handle,
-    void,
-    NetworkIdentifier const&  source,
-    ItemRegistryPacket const& packet
-) {
-    auto& replaySession = ReplaySession::getInstance();
-    if (!replaySession.isIsolatingReplayWorld() || replaySession.isInjectingPacket(&packet)) {
-        origin(source, packet);
-        return;
-    }
-
-    auto recorded = replaySession.takeRecordedItemRegistry();
-    if (!recorded) {
-        origin(source, packet);
-        return;
-    }
-    origin(source, *recorded);
-    replaySession.logRecordedItemRegistryApplied(*recorded);
-}
-
 // Materials are only baked inside this pass, so the recorded blocks must be registered before it runs.
 LL_TYPE_INSTANCE_HOOK(
     PlaybackRenderFinalizerHook,
@@ -585,7 +555,23 @@ void dispatchPacket(
     std::string payload;
     if (packet && gReadPacket.packet == packet.get()) payload = std::move(gReadPacket.bytes);
     gReadPacket.packet = nullptr;
-    if (!packet || isIntegratedServer(callback) || ReplaySession::getInstance().isIsolatingReplayWorld()) {
+    if (!packet || isIntegratedServer(callback)) {
+        original(dispatcher, source, callback, packet);
+        return;
+    }
+    if (auto& replaySession = ReplaySession::getInstance(); replaySession.isIsolatingReplayWorld()) {
+        // The server's own table carries the data-driven item versions and components (icons) that a table rebuilt
+        // from the client registry loses. The client builds its registry from the first table only, so during replay
+        // the local world's table is swapped for the recorded one.
+        if (packet->getId() == MinecraftPacketIds::ItemRegistryPacket
+            && !replaySession.isInjectingPacket(packet.get())) {
+            if (auto recorded = replaySession.takeRecordedItemRegistry()) {
+                std::shared_ptr<Packet> swapped = std::const_pointer_cast<ItemRegistryPacket>(recorded);
+                original(dispatcher, source, callback, swapped);
+                replaySession.logRecordedItemRegistryApplied(*recorded);
+                return;
+            }
+        }
         original(dispatcher, source, callback, packet);
         return;
     }
@@ -677,7 +663,6 @@ bool hookNetwork(bool enable) {
             && installNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo)
             && installNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack)
             && installNetworkHook<PlaybackStartGameHook>(state.startGame)
-            && installNetworkHook<PlaybackItemRegistryHook>(state.itemRegistry)
             && installNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion)
             && installNetworkHook<PlaybackPacketReadHook>(state.packetRead)
             && installNetworkHook<PlaybackRenderFinalizerHook>(state.renderFinalizer)
@@ -703,7 +688,6 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackPacketReadHook>(state.packetRead);
         if (!state.packetRead) unwrapDispatchers();
         removeNetworkHook<PlaybackChunkHandleCompletedHook>(state.completion);
-        removeNetworkHook<PlaybackItemRegistryHook>(state.itemRegistry);
         removeNetworkHook<PlaybackStartGameHook>(state.startGame);
         removeNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack);
         removeNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo);
