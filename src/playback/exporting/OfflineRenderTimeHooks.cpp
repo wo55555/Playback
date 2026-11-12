@@ -2,56 +2,50 @@
 
 #include "playback/Playback.h"
 
+#include "ll/api/memory/Hook.h"
+
+#include "mc/client/gui/screens/ScreenView.h"
+
 #include <Windows.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <intrin.h>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace playback::exporting {
 
 namespace {
 
-// Client RVAs (1.26.20.04). Render code reads QPC through MSVCP140's _Query_perf_counter: the import thunk is
-// jmp [slot], and each reader calls the thunk with a 5-byte E8 call.
-constexpr uintptr_t QpcImportSlotRva = 0xB6D28E0;
-constexpr uintptr_t QpcThunkRva      = 0xAC5BD40;
-constexpr size_t    SiteCount        = 8;
-constexpr size_t    ClockCount       = 3;
-constexpr size_t    VibrantClock     = 0;
-constexpr size_t    RayClock         = 1;
-constexpr size_t    InterfaceClock   = 2;
-// Return addresses of those calls: Vibrant Visuals exposure dt, ray tracing frame time, ray tracing start time and ray
-// tracing shader seconds, then the reads a screen times its interface animations with: two in ScreenView's
-// constructor, ScreenView::onFocusGained and ScreenView::render.
+constexpr size_t SiteCount    = 4;
+constexpr size_t ClockCount   = 2;
+constexpr size_t VibrantClock = 0;
+constexpr size_t RayClock     = 1;
+// The renderers read the performance counter through MSVCP140's _Query_perf_counter import, and none of the functions
+// that do has a symbol, so the reads are told apart by where they return to. Client RVAs (1.26.20.04): Vibrant
+// Visuals exposure dt, ray tracing frame time, ray tracing start time and ray tracing shader seconds.
 constexpr std::array<uintptr_t, SiteCount> SiteReturnRvas{
     0x9300A86,
     0xA303CE3,
     0xA30850D,
     0xA30AE79,
-    0x4A6B59,
-    0x4A6C32,
-    0x4AD46E,
-    0x4B0E75,
 };
 constexpr std::array<size_t, SiteCount> SiteClocks{
     VibrantClock,
     RayClock,
     RayClock,
     RayClock,
-    InterfaceClock,
-    InterfaceClock,
-    InterfaceClock,
-    InterfaceClock,
 };
 // The site that reads each clock on every frame.
-constexpr std::array<size_t, ClockCount> FrameSites{0, 1, 7};
+constexpr std::array<size_t, ClockCount> FrameSites{0, 1};
 
 // Exposure adaptation snaps on a large dt; timelapse frames would otherwise jump it every frame.
 constexpr double VibrantMaxStepSeconds = 0.1;
@@ -76,6 +70,7 @@ struct TimeStats {
     std::array<int64_t, ClockCount>  advancedTicks{};
     std::array<uint64_t, ClockCount> skipped{};
     uint64_t                         nativeFrames{};
+    uint64_t                         screenRenders{};
     bool                             captureSeen{};
     uint64_t                         sinceCapture{};
     uint64_t                         captureGaps{};
@@ -86,6 +81,7 @@ struct TimeStats {
 std::atomic_bool                             gActive{false};
 std::atomic<QueryCounterFn>                  gOriginal{nullptr};
 uintptr_t                                    gBase{};
+QueryCounterFn*                              gSlot{};
 std::array<RendererClock, ClockCount>        gClocks;
 std::array<std::atomic<uint64_t>, SiteCount> gSiteHits{};
 std::atomic<uint64_t>                        gOtherHits{};
@@ -96,9 +92,13 @@ InstallState gInstall{InstallState::NotTried};
 std::string  gVerify{"untried"};
 bool         gSessionOpen{};
 int64_t      gFrequency{};
-// The real counter at the last frame, which is where a frame the game draws for itself measures its time from.
-int64_t   gLastFrameCounter{};
-TimeStats gStats;
+bool         gScreenHookInstalled{};
+// The replay time the screens have been given in this export, and where on it each screen last rendered.
+std::chrono::nanoseconds                                        gInterfaceTime{};
+std::unordered_map<ScreenView const*, std::chrono::nanoseconds> gScreenTimes;
+// When the last frame was drawn, which is where a frame the game draws for itself measures its time from.
+std::chrono::steady_clock::time_point gLastFrameAt{};
+TimeStats                             gStats;
 
 long long __cdecl queryCounterDetour() {
     auto const original = gOriginal.load(std::memory_order_acquire);
@@ -130,7 +130,38 @@ uintptr_t relativeTarget(uintptr_t next, uint8_t const* displacement) {
     return next + static_cast<uintptr_t>(static_cast<intptr_t>(relative));
 }
 
-QueryCounterFn* importSlot() { return reinterpret_cast<QueryCounterFn*>(gBase + QpcImportSlotRva); }
+// The game's import slot for MSVCP140's _Query_perf_counter.
+QueryCounterFn* findImportSlot(uintptr_t base, IMAGE_NT_HEADERS64 const& nt) {
+    auto const& directory = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (directory.VirtualAddress == 0) return nullptr;
+    auto const* library = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR const*>(base + directory.VirtualAddress);
+    for (; library->Name != 0; ++library) {
+        if (_stricmp(reinterpret_cast<char const*>(base + library->Name), "MSVCP140.dll") != 0) continue;
+        if (library->OriginalFirstThunk == 0) return nullptr;
+        auto const* name = reinterpret_cast<IMAGE_THUNK_DATA64 const*>(base + library->OriginalFirstThunk);
+        auto*       slot = reinterpret_cast<IMAGE_THUNK_DATA64*>(base + library->FirstThunk);
+        for (; name->u1.AddressOfData != 0; ++name, ++slot) {
+            if (IMAGE_SNAP_BY_ORDINAL64(name->u1.Ordinal)) continue;
+            auto const* import = reinterpret_cast<IMAGE_IMPORT_BY_NAME const*>(base + name->u1.AddressOfData);
+            if (std::strcmp(import->Name, "_Query_perf_counter") == 0) {
+                return reinterpret_cast<QueryCounterFn*>(&slot->u1.Function);
+            }
+        }
+    }
+    return nullptr;
+}
+
+// Whether the call that returns here reads the slot: call [slot], or a call to a jmp [slot] thunk.
+bool callsImportSlot(uintptr_t base, uintptr_t imageSize, uintptr_t returnAddress, uintptr_t slot) {
+    auto const direct = reinterpret_cast<uint8_t const*>(returnAddress - 6);
+    if (direct[0] == 0xFF && direct[1] == 0x15 && relativeTarget(returnAddress, direct + 2) == slot) return true;
+    auto const call = reinterpret_cast<uint8_t const*>(returnAddress - 5);
+    if (call[0] != 0xE8) return false;
+    auto const thunk = relativeTarget(returnAddress, call + 1);
+    if (thunk < base || thunk - base + 6 > imageSize) return false;
+    auto const jump = reinterpret_cast<uint8_t const*>(thunk);
+    return jump[0] == 0xFF && jump[1] == 0x25 && relativeTarget(thunk + 6, jump + 2) == slot;
+}
 
 bool writeSlot(QueryCounterFn* slot, QueryCounterFn expected, QueryCounterFn replacement) {
     DWORD previous{};
@@ -153,36 +184,33 @@ std::string installDetour() {
     auto const nt = reinterpret_cast<IMAGE_NT_HEADERS64 const*>(base + static_cast<uintptr_t>(dos->e_lfanew));
     if (nt->Signature != IMAGE_NT_SIGNATURE) return "image";
     uintptr_t const imageSize = nt->OptionalHeader.SizeOfImage;
-    if (QpcImportSlotRva + sizeof(void*) > imageSize || QpcThunkRva + 6 > imageSize) return "image-size";
     for (auto const rva : SiteReturnRvas) {
-        if (rva < 5 || rva > imageSize) return "image-size";
+        if (rva < 6 || rva > imageSize) return "image-size";
     }
 
     auto const runtime = GetModuleHandleW(L"msvcp140.dll");
     if (!runtime) return "msvcp140";
     auto const expected = reinterpret_cast<QueryCounterFn>(GetProcAddress(runtime, "_Query_perf_counter"));
     if (!expected) return "export";
-    auto* const slot = reinterpret_cast<QueryCounterFn*>(base + QpcImportSlotRva);
+    auto* const slot = findImportSlot(base, *nt);
+    if (!slot) return "import";
     if (*slot != expected) return "slot";
 
-    auto const thunk = reinterpret_cast<uint8_t const*>(base + QpcThunkRva);
-    if (thunk[0] != 0xFF || thunk[1] != 0x25
-        || relativeTarget(base + QpcThunkRva + 6, thunk + 2) != base + QpcImportSlotRva)
-        return "thunk";
     for (size_t index = 0; index < SiteReturnRvas.size(); ++index) {
-        auto const returnAddress = base + SiteReturnRvas[index];
-        auto const call          = reinterpret_cast<uint8_t const*>(returnAddress - 5);
-        if (call[0] != 0xE8 || relativeTarget(returnAddress, call + 1) != base + QpcThunkRva)
+        if (!callsImportSlot(base, imageSize, base + SiteReturnRvas[index], reinterpret_cast<uintptr_t>(slot))) {
             return "site" + std::to_string(index);
+        }
     }
 
     gBase = base;
+    gSlot = slot;
     gOriginal.store(expected, std::memory_order_release);
     if (!writeSlot(slot, expected, &queryCounterDetour)) return "protect";
     return "ok";
 }
 
-void stepClockTicks(size_t index, int64_t ticks) {
+void stepClock(size_t index, double seconds) {
+    auto const ticks = static_cast<int64_t>(std::llround(seconds * static_cast<double>(gFrequency)));
     if (ticks <= 0) return;
     auto& clock = gClocks[index];
     // A step nobody read means the render thread fell a whole sample behind the main thread.
@@ -192,12 +220,32 @@ void stepClockTicks(size_t index, int64_t ticks) {
     gStats.advancedTicks[index] += ticks;
 }
 
-void stepClock(size_t index, double seconds) {
-    stepClockTicks(index, static_cast<int64_t>(std::llround(seconds * static_cast<double>(gFrequency))));
-}
-
 double ticksToMilliseconds(int64_t ticks) {
     return gFrequency == 0 ? 0.0 : static_cast<double>(ticks) * 1000.0 / static_cast<double>(gFrequency);
+}
+
+// The time a screen's animations move by on this render: what its frames have added since it last rendered.
+std::optional<std::chrono::nanoseconds> takeScreenStep(ScreenView const* screen) {
+    std::scoped_lock lock(gStateMutex);
+    if (!gSessionOpen) return std::nullopt;
+    ++gStats.screenRenders;
+    auto const entry = gScreenTimes.try_emplace(screen, gInterfaceTime).first;
+    auto const step  = gInterfaceTime - entry->second;
+    entry->second    = gInterfaceTime;
+    return step;
+}
+
+// A screen steps its animations by the wall-clock time since its previous render, which it keeps in mCurrentTime.
+LL_TYPE_INSTANCE_HOOK(
+    OfflineRenderScreenAnimationHook,
+    ll::memory::HookPriority::Normal,
+    ScreenView,
+    &ScreenView::render,
+    void,
+    UIRenderContext& uiRenderContext
+) {
+    if (auto const step = takeScreenStep(this)) this->mCurrentTime = std::chrono::steady_clock::now() - *step;
+    origin(uiRenderContext);
 }
 
 char const* installName(InstallState state) {
@@ -221,25 +269,24 @@ void reportSession() {
     auto const  extra   = static_cast<size_t>(OfflineRenderClockKind::ExtraRender);
     auto const  keep    = static_cast<size_t>(OfflineRenderClockKind::KeepAlive);
     Playback::getInstance().getSelf().getLogger().debug(
-        "Offline renderer clock: installed={}, verify={}, hits(vv={}, rtFrame={}, rtInit={}, rtConst={}, uiNew={}, "
-        "uiFocus={}, uiFrame={}), other={}, adv(n={}, vvMs={:.1f}, rtMs={:.1f}, uiMs={:.1f}, expectMs={:.1f}, "
+        "Offline renderer clock: installed={}, verify={}, screens={}, hits(vv={}, rtFrame={}, rtInit={}, rtConst={}, "
+        "uiFrame={}), other={}, adv(n={}, vvMs={:.1f}, rtMs={:.1f}, uiMs={:.1f}, expectMs={:.1f}, "
         "nativeFrames={}), tok(cap={}, warm={}, extra={}), "
         "renders(cap={}, warm={}, extra={}, keep={}), retry={}, extraPerCap(gaps={}, min={}, max={}), "
-        "skipped(vv={}, rt={}), off(vvMs={:.1f}, rtMs={:.1f}, uiMs={:.1f})",
+        "skipped(vv={}, rt={}), off(vvMs={:.1f}, rtMs={:.1f})",
         installName(gInstall),
         gVerify,
+        gScreenHookInstalled,
         gSiteHits[0].load(std::memory_order_relaxed),
         gSiteHits[1].load(std::memory_order_relaxed),
         gSiteHits[2].load(std::memory_order_relaxed),
         gSiteHits[3].load(std::memory_order_relaxed),
-        gSiteHits[4].load(std::memory_order_relaxed) + gSiteHits[5].load(std::memory_order_relaxed),
-        gSiteHits[6].load(std::memory_order_relaxed),
-        gSiteHits[7].load(std::memory_order_relaxed),
+        stats.screenRenders,
         gOtherHits.load(std::memory_order_relaxed),
         stats.advances,
         ticksToMilliseconds(stats.advancedTicks[VibrantClock]),
         ticksToMilliseconds(stats.advancedTicks[RayClock]),
-        ticksToMilliseconds(stats.advancedTicks[InterfaceClock]),
+        std::chrono::duration<double, std::milli>(gInterfaceTime).count(),
         stats.expectedSeconds * 1000.0,
         stats.nativeFrames,
         stats.tokens[capture],
@@ -256,8 +303,7 @@ void reportSession() {
         stats.skipped[VibrantClock],
         stats.skipped[RayClock],
         ticksToMilliseconds(gClocks[VibrantClock].offset.load(std::memory_order_relaxed)),
-        ticksToMilliseconds(gClocks[RayClock].offset.load(std::memory_order_relaxed)),
-        ticksToMilliseconds(gClocks[InterfaceClock].offset.load(std::memory_order_relaxed))
+        ticksToMilliseconds(gClocks[RayClock].offset.load(std::memory_order_relaxed))
     );
 }
 
@@ -271,13 +317,25 @@ void beginOfflineRenderTime() {
     for (auto& hits : gSiteHits) hits.store(0, std::memory_order_relaxed);
     gOtherHits.store(0, std::memory_order_relaxed);
 
+    gInterfaceTime = {};
+    gScreenTimes.clear();
+    gLastFrameAt = std::chrono::steady_clock::now();
+    if (!gScreenHookInstalled) {
+        gScreenHookInstalled = OfflineRenderScreenAnimationHook::hook() == 0;
+        if (!gScreenHookInstalled) {
+            Playback::getInstance().getSelf().getLogger().warn(
+                "Export timing of interface animations is unavailable; they follow the wall clock"
+            );
+        }
+    }
+
     if (gInstall == InstallState::NotTried) {
         gVerify  = installDetour();
         gInstall = gVerify == "ok" ? InstallState::Installed : InstallState::Rejected;
         if (gInstall == InstallState::Rejected) {
             Playback::getInstance().getSelf().getLogger().warn(
-                "Export timing of ray tracing, Vibrant Visuals and interface animations is unavailable on this game "
-                "build (check={}); they follow the wall clock",
+                "Export timing of ray tracing and Vibrant Visuals is unavailable on this game build (check={}); they "
+                "follow the wall clock",
                 gVerify
             );
         }
@@ -294,7 +352,6 @@ void beginOfflineRenderTime() {
         clock.value.store(original() + clock.offset.load(std::memory_order_relaxed) + lead, std::memory_order_relaxed);
         clock.readsSinceStep.store(0, std::memory_order_relaxed);
     }
-    gLastFrameCounter = original();
     gActive.store(true, std::memory_order_release);
 }
 
@@ -311,11 +368,14 @@ void endOfflineRenderTime() {
         gActive.store(false, std::memory_order_release);
     }
     reportSession();
+    // The screens kept the real time of their last render, so their next step is measured from there again.
+    if (gScreenHookInstalled && OfflineRenderScreenAnimationHook::unhook()) gScreenHookInstalled = false;
+    gScreenTimes.clear();
 }
 
 void advanceOfflineRenderTime(OfflineRenderClockKind kind, float deltaTicks, bool firstRender) {
     std::scoped_lock lock(gStateMutex);
-    if (!gActive.load(std::memory_order_relaxed)) return;
+    if (!gSessionOpen) return;
     auto const index = static_cast<size_t>(kind);
     ++gStats.renders[index];
     if (kind == OfflineRenderClockKind::Capture && firstRender) {
@@ -330,25 +390,26 @@ void advanceOfflineRenderTime(OfflineRenderClockKind kind, float deltaTicks, boo
         ++gStats.sinceCapture;
     }
     if (firstRender) ++gStats.tokens[index];
-    gLastFrameCounter = gOriginal.load(std::memory_order_acquire)();
+    gLastFrameAt = std::chrono::steady_clock::now();
 
     double const seconds = static_cast<double>(deltaTicks) / 20.0;
     if (!(seconds > 0.0)) return;
 
     ++gStats.advances;
     gStats.expectedSeconds += seconds;
+    gInterfaceTime += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(seconds));
+    if (!gActive.load(std::memory_order_relaxed)) return;
     stepClock(VibrantClock, std::min(seconds, VibrantMaxStepSeconds));
     stepClock(RayClock, seconds);
-    stepClock(InterfaceClock, seconds);
 }
 
 void advanceOfflineRenderTimeForNativeFrame() {
     std::scoped_lock lock(gStateMutex);
-    if (!gActive.load(std::memory_order_relaxed)) return;
-    auto const now = gOriginal.load(std::memory_order_acquire)();
+    if (!gSessionOpen) return;
+    auto const now = std::chrono::steady_clock::now();
     ++gStats.nativeFrames;
-    stepClockTicks(InterfaceClock, now - gLastFrameCounter);
-    gLastFrameCounter = now;
+    gInterfaceTime += now - gLastFrameAt;
+    gLastFrameAt    = now;
 }
 
 void releaseOfflineRenderTimeHooks() {
@@ -356,7 +417,7 @@ void releaseOfflineRenderTimeHooks() {
     if (gInstall != InstallState::Installed) return;
     gActive.store(false, std::memory_order_release);
     gInstall = InstallState::Released;
-    if (writeSlot(importSlot(), &queryCounterDetour, gOriginal.load(std::memory_order_acquire))) {
+    if (writeSlot(gSlot, &queryCounterDetour, gOriginal.load(std::memory_order_acquire))) {
         // A later enable may patch again.
         gInstall = InstallState::NotTried;
     } else {

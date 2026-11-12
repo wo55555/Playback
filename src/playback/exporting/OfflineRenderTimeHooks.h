@@ -6,7 +6,8 @@ namespace playback::exporting {
 
 // Ray tracing and Vibrant Visuals time their temporal effects (auto exposure, scrolling phases, shader time) on the
 // wall clock, and so do the screens with their interface animations, such as a chat message fading from the HUD. While
-// an export is open those reads follow a virtual clock that only moves with the exported replay.
+// an export is open the renderers read a virtual clock that only moves with the exported replay, and each screen is
+// handed the replay time its frames added as the step of its animations.
 void beginOfflineRenderTime();
 // Logs the session summary and keeps the clock continuous for its readers after the export.
 void endOfflineRenderTime();
