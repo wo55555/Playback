@@ -5,6 +5,7 @@
 #include "ll/api/memory/Hook.h"
 
 #include "mc/client/gui/screens/ScreenView.h"
+#include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 
 #include <Windows.h>
 #include <algorithm>
@@ -20,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace playback::exporting {
 
@@ -93,9 +95,12 @@ std::string  gVerify{"untried"};
 bool         gSessionOpen{};
 int64_t      gFrequency{};
 bool         gScreenHookInstalled{};
+bool         gParticleHookInstalled{};
 // The replay time the screens have been given in this export, and where on it each screen last rendered.
 std::chrono::nanoseconds                                        gInterfaceTime{};
 std::unordered_map<ScreenView const*, std::chrono::nanoseconds> gScreenTimes;
+// The replay time the render in progress adds to the scene; empty outside the renders of an export.
+std::optional<std::chrono::nanoseconds> gRenderSceneStep;
 // When the last frame was drawn, which is where a frame the game draws for itself measures its time from.
 std::chrono::steady_clock::time_point gLastFrameAt{};
 TimeStats                             gStats;
@@ -248,6 +253,30 @@ LL_TYPE_INSTANCE_HOOK(
     origin(uiRenderContext);
 }
 
+std::optional<std::chrono::nanoseconds> takeRenderSceneStep() {
+    std::scoped_lock lock(gStateMutex);
+    if (!gSessionOpen) return std::nullopt;
+    // Only the first tick of a render gets the step; a second one in the same render adds nothing.
+    return std::exchange(gRenderSceneStep, gRenderSceneStep ? std::optional{std::chrono::nanoseconds{}} : std::nullopt);
+}
+
+// The particle systems tick once per render and age by the wall-clock time since their previous tick, which they keep
+// in mLastTickTime. Ticks made outside a render, as a seek makes them, keep their own time.
+LL_TYPE_INSTANCE_HOOK(
+    OfflineRenderParticleSystemHook,
+    ll::memory::HookPriority::Normal,
+    ParticleSystemEngine,
+    &ParticleSystemEngine::tick,
+    void,
+    float a,
+    bool  paused
+) {
+    if (auto const step = takeRenderSceneStep(); step && this->mLastTickTimeValid) {
+        this->mLastTickTime = std::chrono::steady_clock::now() - *step;
+    }
+    origin(a, paused);
+}
+
 char const* installName(InstallState state) {
     switch (state) {
     case InstallState::NotTried:
@@ -320,6 +349,15 @@ void beginOfflineRenderTime() {
     gInterfaceTime = {};
     gScreenTimes.clear();
     gLastFrameAt = std::chrono::steady_clock::now();
+    gRenderSceneStep.reset();
+    if (!gParticleHookInstalled) {
+        gParticleHookInstalled = OfflineRenderParticleSystemHook::hook() == 0;
+        if (!gParticleHookInstalled) {
+            Playback::getInstance().getSelf().getLogger().warn(
+                "Export timing of particle systems is unavailable; they follow the wall clock"
+            );
+        }
+    }
     if (!gScreenHookInstalled) {
         gScreenHookInstalled = OfflineRenderScreenAnimationHook::hook() == 0;
         if (!gScreenHookInstalled) {
@@ -370,6 +408,8 @@ void endOfflineRenderTime() {
     reportSession();
     // The screens kept the real time of their last render, so their next step is measured from there again.
     if (gScreenHookInstalled && OfflineRenderScreenAnimationHook::unhook()) gScreenHookInstalled = false;
+    if (gParticleHookInstalled && OfflineRenderParticleSystemHook::unhook()) gParticleHookInstalled = false;
+    gRenderSceneStep.reset();
     gScreenTimes.clear();
 }
 
@@ -393,6 +433,10 @@ void advanceOfflineRenderTime(OfflineRenderClockKind kind, float deltaTicks, boo
     gLastFrameAt = std::chrono::steady_clock::now();
 
     double const seconds = static_cast<double>(deltaTicks) / 20.0;
+    // The scene holds still through warm-up, so only the renderers' time runs there.
+    gRenderSceneStep = kind != OfflineRenderClockKind::Warmup && seconds > 0.0
+                         ? std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(seconds))
+                         : std::chrono::nanoseconds{};
     if (!(seconds > 0.0)) return;
 
     ++gStats.advances;
@@ -401,6 +445,11 @@ void advanceOfflineRenderTime(OfflineRenderClockKind kind, float deltaTicks, boo
     if (!gActive.load(std::memory_order_relaxed)) return;
     stepClock(VibrantClock, std::min(seconds, VibrantMaxStepSeconds));
     stepClock(RayClock, seconds);
+}
+
+void finishOfflineRenderTime() {
+    std::scoped_lock lock(gStateMutex);
+    gRenderSceneStep.reset();
 }
 
 void advanceOfflineRenderTimeForNativeFrame() {
