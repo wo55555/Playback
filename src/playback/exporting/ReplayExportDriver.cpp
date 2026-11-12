@@ -142,7 +142,7 @@ bool ReplayExportDriver::start(
     mPhase = Phase::Rendering;
     getLogger().info(
         "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
-        "warmup={}, convergence={}, x264={}/crf{}",
+        "warmup={}, extraRenders={}, x264={}/crf{}",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -153,7 +153,7 @@ bool ReplayExportDriver::start(
         mPlan->settings.resolutionY,
         mPlan->settings.ssaa,
         mPlan->settings.warmupFrames,
-        mPlan->settings.convergenceFrames,
+        mPlan->settings.extraRenders,
         x264Preset(mPlan->settings.encodeSpeed),
         mPlan->settings.videoCrf
     );
@@ -369,7 +369,7 @@ void ReplayExportDriver::reportWaitProfile() const {
         "CollectPending",
         "Draining",
         "Failed",
-        "Convergence",
+        "ExtraRender",
         "Unknown",
     };
     uint64_t total = 0;

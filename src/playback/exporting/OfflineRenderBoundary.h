@@ -93,7 +93,7 @@ private:
     // A step that is still published is a fault.
     [[nodiscard]] bool publishStep(ExportFramePlan const& frame, OfflineRenderClockKind kind);
     // Renders the frame's scene without a capture a fixed number of times; nothing measures whether it has settled.
-    [[nodiscard]] bool advanceConvergence(ExportFramePlan const& frame);
+    [[nodiscard]] bool advanceExtraRenders(ExportFramePlan const& frame);
     // How long finishDownload may block for the capture of the render that has just returned; zero is a plain poll.
     [[nodiscard]] std::chrono::milliseconds submittedCaptureWait();
     void               clearStep();
@@ -123,16 +123,16 @@ private:
     uint32_t                                       mWarmupFrames{};
     uint32_t                                       mWarmupFramesRemaining{};
     uint32_t                                       mWarmupStableFrames{};
-    uint32_t                                       mConvergenceRendersDone{};
-    bool                                           mConvergenceComplete{};
-    // Per-frame wall clock split three ways, because tick gating before the first convergence poll is neither.
+    uint32_t                                       mExtraRendersDone{};
+    bool                                           mExtraRendersComplete{};
+    // Per-frame wall clock split three ways, because tick gating before the first extra render poll is neither.
     std::chrono::steady_clock::time_point mFrameStartedAt{};
-    std::chrono::steady_clock::time_point mConvergenceStartedAt{};
-    std::chrono::steady_clock::time_point mConvergenceEndedAt{};
+    std::chrono::steady_clock::time_point mExtraRendersStartedAt{};
+    std::chrono::steady_clock::time_point mExtraRendersEndedAt{};
     uint64_t                              mPrepareMicros{};
-    uint64_t                              mConvergenceMicros{};
+    uint64_t                              mExtraRenderMicros{};
     uint64_t                              mCaptureMicros{};
-    uint64_t                              mConvergencePasses{};
+    uint64_t                              mExtraRenderPasses{};
     uint64_t                              mCaptureWaits{};
     uint64_t                              mCaptureWaitsMissed{};
     uint64_t                              mProfiledFrames{};
