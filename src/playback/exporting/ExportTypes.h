@@ -40,7 +40,7 @@ constexpr uint32_t MaxExportResolution = 16'384;
 constexpr uint32_t MaxExportSsaa       = 4;
 constexpr uint64_t MaxExportPixels     = (512ull * 1024 * 1024) / 4;
 // Noise falls roughly with the square root of the pass count, so each doubling costs twice the render time.
-constexpr uint32_t MaxExportConvergenceFrames = 1'000;
+constexpr uint32_t MaxExportExtraRenders = 1'000;
 
 // The supersampled surface, not the output, is what the renderer and the capture path have to hold.
 [[nodiscard]] constexpr bool supersampleFits(uint32_t width, uint32_t height, uint32_t ssaa) {
@@ -64,7 +64,7 @@ struct ExportSettings {
     uint32_t ssaa{1};
     uint32_t warmupFrames{60};
     // Extra renders per frame so ray-traced temporal accumulation can settle; each one costs a full render.
-    uint32_t convergenceFrames{0};
+    uint32_t extraRenders{0};
     // MP4 only; the defaults are what the writer used before these were configurable.
     VideoEncodeSpeed encodeSpeed{VideoEncodeSpeed::Quality};
     uint32_t         videoCrf{18};
