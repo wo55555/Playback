@@ -36,7 +36,7 @@ private:
     int                   mExportHeight{1080};
     int                   mExportSsaa{0};
     int                   mExportWarmupFrames{60};
-    int                   mExportConvergenceFrames{0};
+    int                   mExportExtraRenders{0};
     int                   mExportEncodeSpeed{0};
     int                   mExportCrf{18};
     bool                  mExportAdvancedOpen{false};

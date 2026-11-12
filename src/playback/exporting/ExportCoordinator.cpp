@@ -184,7 +184,7 @@ FrameWriterSubmitResult ExportCoordinator::trySubmit(visuals::CapturedFrame& fra
     }
 
     auto const result = writer->trySubmit(frame);
-    // Advance the export audio ledger exactly once per accepted frame (warmup/convergence never reach here).
+    // Advance the export audio ledger exactly once per accepted frame (warm-up and extra renders never reach here).
     if (result == FrameWriterSubmitResult::Accepted)
         playback::audio::exportcap::onFrameAccepted(frame.ticket.frameIndex);
     auto const writerStatus = writer->status();
