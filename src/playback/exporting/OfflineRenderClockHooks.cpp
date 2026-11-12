@@ -377,6 +377,7 @@ LL_TYPE_INSTANCE_HOOK(
 
     // The game draws for itself here, as it does through a dimension change; the last render is no longer its scene.
     forgetLastRender();
+    advanceOfflineRenderTimeForNativeFrame();
     origin(client, timer);
 }
 
