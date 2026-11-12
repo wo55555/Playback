@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed item pickups, mob hurt and death sounds, and other entity and block events playing twice in replays. Each packet the client handles is now recorded once, as it was received.
 - Fixed a crash when quitting the game after the replay editor had been opened or while a video export was running.
 - Fixed the free camera's FOV widening while a followed first-person player sprinted. Following a player now only copies the attributes the HUD shows.
-- Fixed server forms, such as Hive's game list, staying open in replays and keeping the free camera from moving. Replays no longer open the screens a server shows the recording player to answer.
+- Fixed server forms, such as Hive's game list, staying open in replays and keeping the free camera from moving. Forms are now previewed like container screens while following the recorder in first person, and close where the recorder closed them, on seeks and when switching cameras. Other screens a server shows the recording player to answer are no longer opened.
 
 ## [0.4.0-mc26.50] - 2026-11-01
 

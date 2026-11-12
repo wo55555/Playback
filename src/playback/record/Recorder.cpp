@@ -1042,6 +1042,7 @@ void Recorder::resetStateForNewRecording() {
     mLastLocalPlayerDataPacket.reset();
     mLastLocalPlayerEquipmentPacket.reset();
     mLastLocalPlayerSwingTime.reset();
+    mLocalFormOpen = false;
     mLastLocalHudPackets.fill(std::nullopt);
     mLastLocalHudItems.fill(ItemStack());
     mLastLocalSelectedSlot         = -1;
@@ -2691,6 +2692,16 @@ bool Recorder::writeLocalPlayerState() {
         }
         mLastLocalPlayerSwingTime = swingTime;
     }
+
+    // Answering or closing a form is never echoed by the server, so the close is recorded as the packet a server sends
+    // to close forms.
+    bool const formOpen = clientInstance->getTopScreenName() == "third_party_server_screen";
+    if (mLocalFormOpen && !formOpen) {
+        if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ClientboundCloseScreen)) {
+            recordGamePacket(*packet);
+        }
+    }
+    mLocalFormOpen = formOpen;
     return true;
 }
 
@@ -3368,6 +3379,7 @@ void Recorder::abortRecording() {
     mLastLocalPlayerDataPacket.reset();
     mLastLocalPlayerEquipmentPacket.reset();
     mLastLocalPlayerSwingTime.reset();
+    mLocalFormOpen = false;
     mLastLocalHudPackets.fill(std::nullopt);
     mLastLocalHudItems.fill(ItemStack());
     mLastLocalSelectedSlot         = -1;
