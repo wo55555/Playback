@@ -7,8 +7,9 @@
 
 namespace playback::exporting {
 
-// What a render step is for. A capture step renders once, into the armed frame capture; the others render every frame
-// until they are cleared.
+// What a render step is for. A capture step renders once, into the armed frame capture; warm-up and convergence steps
+// render every frame until they are cleared. KeepAlive is never published: it marks the redraws of the last render
+// that fill the frames with no step to render.
 enum class OfflineRenderClockKind : uint8_t { KeepAlive, Capture, Warmup, Convergence };
 
 struct OfflineRenderClockSample {

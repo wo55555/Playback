@@ -364,7 +364,6 @@ void ReplayExportDriver::waitFor(OfflineRenderWaitReason reason) {
     accumulateWait(std::chrono::steady_clock::now());
     mWaitCharged = reason;
     ++mWaitHits[static_cast<size_t>(reason)];
-    if (mRenderBoundary) mRenderBoundary->holdRenderAlive();
 }
 
 void ReplayExportDriver::reportWaitProfile() const {
