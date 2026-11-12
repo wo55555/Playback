@@ -168,6 +168,7 @@ LL_TYPE_INSTANCE_HOOK(
     exporting::grantPendingOfflineReplayTick();
 
     auto result = origin(isInitFinished, allowGameUpdate);
+    exporting::endOfflineReplayTickGrant();
     // The ticks stay owed until the game has made the call once.
     if (auto* const target = gOfflineRealTickTarget.load(std::memory_order_acquire)) {
         if (int const owed = gOfflineRealTicksOwed.exchange(0, std::memory_order_acq_rel); owed > 0) {
