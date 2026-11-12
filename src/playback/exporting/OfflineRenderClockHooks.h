@@ -7,11 +7,15 @@
 
 namespace playback::exporting {
 
+// Why a sample is rendered. Only the first render of a capture or warm-up sample moves the renderers' wall clock.
+enum class OfflineRenderClockKind : uint8_t { KeepAlive, Capture, Warmup, Convergence };
+
 struct OfflineRenderClockSample {
     visuals::ReplaySampleTime replayTime;
     float                     deltaTicks{};
     int                       wholeTicks{};
     uint64_t                  frameIndex{};
+    OfflineRenderClockKind    kind{OfflineRenderClockKind::KeepAlive};
 };
 
 struct OfflineRenderClockToken {
