@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recordings now keep the sounds the client plays for every entity itself, such as footsteps, jumping, mob calls and wing flaps, and replays mute the copies the game regenerates, so replays and exported audio match what was heard and nothing plays twice.
 - Fixed a crash when quitting the game after the replay editor had been opened or while a video export was running.
 - Fixed the free camera's FOV widening while a followed first-person player sprinted. Following a player now only copies the attributes the HUD shows.
-- Fixed server forms, such as Hive's game list, staying open in replays and keeping the free camera from moving. Replays no longer open the screens a server shows the recording player to answer.
+- Fixed server forms, such as Hive's game list, staying open in replays and keeping the free camera from moving. Forms are now previewed like container screens while following the recorder in first person, and close where the recorder closed them, on seeks and when switching cameras. Other screens a server shows the recording player to answer are no longer opened.
 
 ## [0.3.3-mc26.60] - 2026-11-03
 
