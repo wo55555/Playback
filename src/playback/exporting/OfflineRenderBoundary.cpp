@@ -796,8 +796,6 @@ bool OfflineRenderBoundary::warmupComplete() const {
 bool OfflineRenderBoundary::hasStep(OfflineRenderClockKind kind) const { return mStep && mStep->kind == kind; }
 
 bool OfflineRenderBoundary::publishStep(ExportFramePlan const& frame, OfflineRenderClockKind kind) {
-    // A keep-alive only fills the gap until the next step.
-    if (hasStep(OfflineRenderClockKind::KeepAlive)) clearStep();
     auto sample = clockSample(frame);
     if (!sample) {
         fault(OfflineRenderBoundaryError::InvalidFrame, "The offline render clock sample is invalid");
@@ -865,22 +863,6 @@ void OfflineRenderBoundary::clearStep() {
     if (!mStep) return;
     clearOfflineRenderClockSample(mStep->token);
     mStep.reset();
-}
-
-// Only rendering advances the renderer's clock, so a stall with no published sample freezes the temporal state.
-void OfflineRenderBoundary::holdRenderAlive() {
-    if (mStep || !mLastSubmittedFrame) return;
-    // Ready is the state a driver stall leaves behind, so that is when the hold has to engage.
-    if (mState != OfflineRenderBoundaryState::Ready && mState != OfflineRenderBoundaryState::AwaitingDownload
-        && mState != OfflineRenderBoundaryState::PreparingReplay
-        && mState != OfflineRenderBoundaryState::InitializingReplay) {
-        return;
-    }
-    auto const sample = clockSample(*mLastSubmittedFrame);
-    if (!sample) return;
-    OfflineRenderClockToken token;
-    if (publishOfflineRenderClockSample(*sample, token) != OfflineRenderClockPublishResult::Published) return;
-    mStep = PublishedStep{token, OfflineRenderClockKind::KeepAlive};
 }
 
 void OfflineRenderBoundary::fault(OfflineRenderBoundaryError error, std::string message) {
