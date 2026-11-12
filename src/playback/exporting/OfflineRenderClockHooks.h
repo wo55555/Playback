@@ -6,7 +6,8 @@
 
 namespace playback::exporting {
 
-// Why a sample is rendered. Only the first render of a capture or warm-up sample moves the renderers' wall clock.
+// What a render step is for. A capture step renders once, into the armed frame capture; the others render every frame
+// until they are cleared. Only the first render of a capture or warm-up step moves the renderers' wall clock.
 enum class OfflineRenderClockKind : uint8_t { KeepAlive, Capture, Warmup, Convergence };
 
 struct OfflineRenderClockSample {
@@ -44,13 +45,8 @@ struct OfflineRenderClientBoostStats {
 [[nodiscard]] bool                          setOfflineRenderClientBoost(bool enable);
 [[nodiscard]] OfflineRenderClientBoostStats takeOfflineRenderClientBoostStats();
 
-// clang-format off
-[[nodiscard]] OfflineRenderClockPublishResult publishOfflineRenderClockSample(
-    OfflineRenderClockSample sample,
-    OfflineRenderClockToken& token,
-    bool captureSample
-);
-// clang-format on
+[[nodiscard]] OfflineRenderClockPublishResult
+     publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
 void markOfflineRenderClockCaptureArmed(OfflineRenderClockToken token);
 // Re-renders a capture sample whose scene submit was early or never arrived; false when nothing changed.
 [[nodiscard]] bool retryMissedOfflineRenderScene(OfflineRenderClockToken token);
