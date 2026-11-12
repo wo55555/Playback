@@ -300,6 +300,8 @@ private:
     bool mCurrentChunkForcePlaySnapshot = false;
     bool mThumbnailCaptureRequested     = false;
     bool mPendingDimensionSnapshot      = false;
+    // When the recording player arrived in the dimension that snapshot is for.
+    std::chrono::steady_clock::time_point mDimensionEnteredAt{};
 
     std::filesystem::path mPendingRecordPath;
     std::string           mPendingRecordingName;
@@ -363,6 +365,12 @@ private:
     );
 
     [[nodiscard]] bool writeInitialSnapshotIfNeeded();
+    // Whether the game still shows its loading screen for the dimension the player has just entered.
+    [[nodiscard]] bool isDimensionLoading() const;
+    // Drops the queued column packets of the columns the job holds. Their subchunk packets stay queued.
+    void dropPendingSnapshotColumnPackets(SnapshotColumnsJob const& job);
+    // Drops the queued packets that spawn an actor. The snapshot being written has every actor alive right now.
+    void dropPendingSpawnPackets();
 
     [[nodiscard]] bool writeCreateLocalPlayer();
 
