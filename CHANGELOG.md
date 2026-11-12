@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Exports now always run a client tick as soon as they ask for one instead of waiting for the game's 20 Hz timer, which the experimental Accelerate client option used to turn on. The option is removed.
+
 ### Fixed
 
 - Ray tracing and Vibrant Visuals exports now time auto exposure and other time-driven effects on the replay instead of on how long each frame took to render, so exported brightness adapts at the same pace as in the replay.
