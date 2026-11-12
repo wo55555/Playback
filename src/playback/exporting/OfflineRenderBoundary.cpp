@@ -265,8 +265,10 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         mFrameStartedAt         = std::chrono::steady_clock::now();
         mConvergenceStartedAt   = {};
         mConvergenceEndedAt     = {};
-        mState                  = !mTimelineInitialized ? OfflineRenderBoundaryState::InitializingReplay
-                                                        : OfflineRenderBoundaryState::WarmingUp;
+        // Only the first frame and the first one of a new dimension have a warm-up to run.
+        mState = !mTimelineInitialized ? OfflineRenderBoundaryState::InitializingReplay
+               : warmupComplete()      ? OfflineRenderBoundaryState::PreparingReplay
+                                       : OfflineRenderBoundaryState::WarmingUp;
     }
 
     if (mTickGateOpen && mReplay.isDimensionTransitionPending()
