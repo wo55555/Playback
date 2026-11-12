@@ -191,7 +191,7 @@ void reportSession() {
     auto const  keep    = static_cast<size_t>(OfflineRenderClockKind::KeepAlive);
     Playback::getInstance().getSelf().getLogger().debug(
         "Offline renderer clock: installed={}, verify={}, hits(vv={}, rtFrame={}, rtInit={}, rtConst={}), other={}, "
-        "adv(n={}, vvMs={:.1f}, rtMs={:.1f}, expectMs={:.1f}), tok(cap={}, warm={}, conv={}, keep={}), "
+        "adv(n={}, vvMs={:.1f}, rtMs={:.1f}, expectMs={:.1f}), tok(cap={}, warm={}, conv={}), "
         "renders(cap={}, warm={}, conv={}, keep={}), retry={}, extraPerCap(gaps={}, min={}, max={}), "
         "skipped(vv={}, rt={}), off(vvMs={:.1f}, rtMs={:.1f})",
         installName(gInstall),
@@ -208,7 +208,6 @@ void reportSession() {
         stats.tokens[capture],
         stats.tokens[warmup],
         stats.tokens[conv],
-        stats.tokens[keep],
         stats.renders[capture],
         stats.renders[warmup],
         stats.renders[conv],
