@@ -259,13 +259,18 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     gActiveSample->renderReturned                 = false;
     gActiveSample->cameraApplicationFailureLogged = false;
     if (gNextRenderSerial == 0) ++gNextRenderSerial;
-    return AcquiredClockSample{
+    AcquiredClockSample acquired{
         gActiveSample->token,
         gActiveSample->sample,
         gActiveSample->cameraContext,
         gActiveSample->renderSerial,
         firstRender,
     };
+    if (!firstRender) {
+        acquired.sample.deltaTicks = 0.0f;
+        acquired.sample.wholeTicks = 0;
+    }
+    return acquired;
 }
 
 void completeClockSample(OfflineRenderClockToken token, uint64_t renderSerial, bool entityApplied) {
@@ -326,8 +331,7 @@ LL_TYPE_INSTANCE_HOOK(
             auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
             poseApplied = pose != nullptr;
 
-            // Only the first render of a capture or warm-up sample moves the renderers' clock. Convergence renders
-            // come before their frame's capture, so they still run on the previous frame's renderer time.
+            // The renderers' clock moves by the same step the timer override just applied.
             advanceOfflineRenderTime(sample->sample.kind, sample->sample.deltaTicks, sample->firstRender);
             markClockSampleRenderReady(sample->token, sample->renderSerial, true);
             origin(client, timer);
