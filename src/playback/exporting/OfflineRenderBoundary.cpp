@@ -809,7 +809,8 @@ bool OfflineRenderBoundary::publishClockSample(ExportFramePlan const& frame, boo
     return false;
 }
 
-// Samples without a capture are re-rendered every frame, which is what lets the denoiser accumulate on this instant.
+// Samples without a capture are re-rendered every frame, which lets the denoiser accumulate on this frame's scene.
+// The renderers' clock only moves with the capture that follows.
 bool OfflineRenderBoundary::advanceConvergence(ExportFramePlan const& frame) {
     if (mConvergenceStartedAt == std::chrono::steady_clock::time_point{})
         mConvergenceStartedAt = std::chrono::steady_clock::now();
