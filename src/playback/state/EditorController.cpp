@@ -422,7 +422,7 @@ void EditorController::publishState(bool hudVisible) {
 
     EditorState state;
     state.replayVisible = sessionActive && session.hasJoinedReplayWorld();
-    // Like Flashback, gate only on the loading/progress screen clearing and let chunks stream in natively.
+    // Gate only on the loading/progress screen clearing and let chunks stream in natively.
     if (!sessionActive) mEditorReadyLatched = false;
     else if (hudVisible) mEditorReadyLatched = true;
     state.editorVisible           = mEditorReadyLatched;
