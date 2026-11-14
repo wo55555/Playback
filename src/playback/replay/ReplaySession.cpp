@@ -852,6 +852,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         settings.mLANBroadcastIntent        = false;
         settings.mDisablePlayerInteractions = true;
         settings.mDefaultSpawn              = BlockPos(Vec3{context.x, context.y, context.z});
+        if (mReplayStartGame) settings.mSeed = mReplayStartGame->mSettings->mSeed;
 
         mReplayLevelId            = createReplayLevelId();
         auto dimensionProfile     = std::make_shared<ReplayDimensionProfile>();
