@@ -28,6 +28,7 @@
 class Level;
 class Dimension;
 class LevelChunk;
+class LevelChunkPacket;
 class Actor;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
@@ -431,6 +432,7 @@ private:
     [[nodiscard]] bool injectChunkPacket(std::string_view payload, MinecraftPacketIds packetId);
 
     [[nodiscard]] bool applyRequestModeLevelChunkDirect(std::string_view payload);
+    [[nodiscard]] bool applyRequestModeLevelChunkData(LevelChunkPacket const& packet);
 
     [[nodiscard]] bool applySubChunkDirect(std::string_view payload);
 
