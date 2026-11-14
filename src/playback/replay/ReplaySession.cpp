@@ -4454,6 +4454,28 @@ void ReplaySession::updateCenterChunkReadiness() {
 }
 
 bool ReplaySession::finishChunkInjection() {
+    // Native request-mode loading can reuse a column without replacing its biomes.
+    // Apply only the last packet per column, after all native work has finished.
+    for (int index : mPendingLevelChunkIndices) {
+        if (mDirectLevelChunkIndices.contains(index)) continue;
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
+        if (!packet) {
+            mReplayFailed = true;
+            return false;
+        }
+        ReadOnlyBinaryStream stream(mChunkPackets[static_cast<size_t>(index)], false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            mReplayFailed = true;
+            return false;
+        }
+        auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
+        if (levelChunk.mClientRequestSubChunkLimit->has_value() && !applyRequestModeLevelChunkData(levelChunk)) {
+            auto const& pos = *levelChunk.mPos;
+            getLogger().error("Unable to restore replay chunk metadata at ({}, {})", pos.x, pos.z);
+            mReplayFailed = true;
+            return false;
+        }
+    }
     updateCenterChunkReadiness();
     bool const applyingSnapshot = mApplyingChunkSnapshot;
 
@@ -6072,11 +6094,6 @@ bool ReplaySession::clearRecordedEntities() {
 }
 
 bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
-    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
-    if (!replayDimension) {
-        return false;
-    }
-
     auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
     if (!packet) return false;
 
@@ -6086,6 +6103,21 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
     }
 
     auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
+    if (!applyRequestModeLevelChunkData(levelChunk)) return false;
+
+    {
+        std::scoped_lock lock(mPendingLevelChunksMutex);
+        mCompletedLevelChunkPositions.emplace(*levelChunk.mPos);
+    }
+    mChunkCompletionObserved.store(true, std::memory_order_release);
+    ++mDirectLevelChunks;
+    return true;
+}
+
+bool ReplaySession::applyRequestModeLevelChunkData(LevelChunkPacket const& levelChunk) {
+    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+    if (!replayDimension) return false;
+
     // 26.40 folded the request-mode flag into the limit: a value means the client must request subchunks.
     if (static_cast<bool>(levelChunk.mCacheEnabled) || !levelChunk.mClientRequestSubChunkLimit->has_value()
         || static_cast<DimensionType const&>(levelChunk.mDimensionId) != replayDimension->getDimensionId()) {
@@ -6114,12 +6146,6 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
         return false;
     }
 
-    {
-        std::scoped_lock lock(mPendingLevelChunksMutex);
-        mCompletedLevelChunkPositions.emplace(pos);
-    }
-    mChunkCompletionObserved.store(true, std::memory_order_release);
-    ++mDirectLevelChunks;
     return true;
 }
 
