@@ -771,6 +771,9 @@ public:
 
     void configureReplayDimension(DimensionArguments& arguments) const;
 
+    // Whether a level id is the replay world's. Unlike isReplayLevel it may be asked from the server thread.
+    [[nodiscard]] bool isReplayWorldLevelId(std::string_view levelId) const;
+
     void setMinecraftScreenModel(std::shared_ptr<MinecraftScreenModel> const& screenModel);
 
     void onLevelJoined(Player& player);
