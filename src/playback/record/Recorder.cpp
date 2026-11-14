@@ -19,6 +19,8 @@
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/deps/shared_types/legacy/LevelEvent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
+#include "mc/entity/components/DimensionStateComponent.h"
+#include "mc/entity/components/LoadingStateComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
 #include "mc/entity/components/VanillaOffsetComponent.h"
@@ -2138,9 +2140,20 @@ bool Recorder::writeInitialSnapshotIfNeeded() {
 bool Recorder::isDimensionLoading() const {
     if (std::chrono::steady_clock::now() - mDimensionEnteredAt > DimensionLoadingTimeout) return false;
     auto client = ll::service::getClientInstance();
-    return client
-        && (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
-            || client->isShowingWorldProgressScreen());
+    if (!client) return false;
+    if (client->isShowingLoadingScreen() || client->isShowingProgressScreen()
+        || client->isShowingWorldProgressScreen()) {
+        return true;
+    }
+    // The screen can come up a moment after the player is in the new dimension. Until then only the player's own
+    // state tells that the dimension is still loading.
+    auto* const player = client->getLocalPlayer();
+    if (!player) return false;
+    auto&      context   = player->getEntityContext();
+    auto const dimension = context.tryGetComponent<DimensionStateComponent>();
+    if (dimension && dimension->mDimensionState != DimensionStateComponent::DimensionState::Ready) return true;
+    auto const loading = context.tryGetComponent<LoadingStateComponent>();
+    return loading && loading->mLoadingState != LoadingState::Done;
 }
 
 void Recorder::dropPendingSnapshotColumnPackets(SnapshotColumnsJob const& job) {
