@@ -1,4 +1,5 @@
 ﻿#include "ClientTickHooks.h"
+#include "WindowCloseGuard.h"
 
 #include "playback/Playback.h"
 #include "playback/editor/ReplayUI.h"
@@ -201,6 +202,7 @@ LL_TYPE_INSTANCE_HOOK(
     editor::tickReplayUI(hudVisible);
     screen::tickRecordDialogs();
     replay.tryFinalizeWorldCleanup();
+    advanceWindowClose();
     return result;
 }
 
