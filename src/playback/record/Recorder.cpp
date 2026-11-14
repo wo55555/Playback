@@ -1470,7 +1470,7 @@ void Recorder::serializeSnapshotColumns(SnapshotColumnsJob& job) {
                 BinaryStream     levelPayload;
                 VarIntDataOutput levelOutput(levelPayload);
                 chunk.serializeBiomes(levelOutput);
-                chunk.serializeBorderBlocks(levelOutput);
+                if (!chunk.serializeBorderBlocks(levelOutput)) levelOutput.writeByte(0);
                 level->mSerializedChunk = std::move(levelPayload.mBuffer);
 
                 stage             = "creating SubChunkPacket";
@@ -3061,7 +3061,7 @@ bool Recorder::serializeDeferredCompletedChunk(
     BinaryStream     levelPayload;
     VarIntDataOutput levelOutput(levelPayload);
     chunk.serializeBiomes(levelOutput);
-    chunk.serializeBorderBlocks(levelOutput);
+    if (!chunk.serializeBorderBlocks(levelOutput)) levelOutput.writeByte(0);
     level.mSerializedChunk = std::move(levelPayload.mBuffer);
 
     auto const& subChunks         = *chunk.mSubChunks;
