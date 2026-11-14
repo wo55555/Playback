@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recordings now take the snapshot of a new dimension once the player has finished loading it, including the short gap before the loading screen appears, so replays and exports show the terrain the player first saw right after a dimension change instead of an empty world that fills in over the next second or two. Replays recorded earlier are unchanged.
 - Exports without a camera track keep their fixed 70 degree field of view after a dimension change instead of switching to the player's field of view setting for the rest of the video.
 - Replays and exports of the End no longer show a second ender dragon and boss bar that the replay world spawned on its own, and no longer drop a recorded entity that shared its id.
+- Replay worlds now use the recorded world's seed instead of choosing a new one.
 
 ## [0.4.0-mc26.60] - 2026-11-12
 
