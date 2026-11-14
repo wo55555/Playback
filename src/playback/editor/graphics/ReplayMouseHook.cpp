@@ -4,6 +4,7 @@
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/exporting/ExportActivity.h"
+#include "playback/runtime/WindowCloseGuard.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/input/KeyInputEvent.h"
@@ -349,6 +350,8 @@ bool isCursorInClient(HWND window) {
 }
 
 LRESULT CALLBACK cursorWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_CLOSE && gInstalled.load(std::memory_order_acquire) && runtime::deferWindowClose(window))
+        return 0;
     if (message == WM_SETCURSOR && LOWORD(lParam) == HTCLIENT && applyUiCursor(window)) return TRUE;
     // WM_SETCURSOR only follows mouse movement, and not at all while the mouse is captured.
     if (message == applyCursorMessage()) {

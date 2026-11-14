@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replays and exports of the End no longer show a second ender dragon and boss bar that the replay world spawned on its own, and no longer drop a recorded entity that shared its id.
 - Replay worlds now use the recorded world's seed instead of choosing a new one.
 - Replays and exports now preserve the recorded biomes when returning to a dimension, keeping the sky and water colors consistent with the recording.
+- Closing the game from a replay now waits for its temporary world to close and be removed, including when an export is in progress.
 
 ## [0.4.0-mc26.40] - 2026-11-01
 
