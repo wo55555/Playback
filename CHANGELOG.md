@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exports without a camera track keep their fixed 70 degree field of view after a dimension change instead of switching to the player's field of view setting for the rest of the video.
 - Replays and exports of the End no longer show a second ender dragon and boss bar that the replay world spawned on its own, and no longer drop a recorded entity that shared its id.
 - Replay worlds now use the recorded world's seed instead of choosing a new one.
+- Replays and exports now preserve the recorded biomes when returning to a dimension, keeping the sky and water colors consistent with the recording.
 
 ## [0.4.0-mc26.20] - 2026-11-01
 
