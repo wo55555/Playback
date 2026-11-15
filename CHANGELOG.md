@@ -7,57 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- The inspector has a Preview page for choosing which HUD elements a replay shows: chat, boss bar, title text, scoreboard, action bar and hotbar. Only the hotbar is on by default; the choices are saved and also apply to exported video. The export dialog's Hide HUD option leaves the whole HUD out of an export.
-- The export dialog's Audio page can turn export audio off and record it in mono or stereo. MP4 audio can be encoded as AAC, Opus or FLAC, with a bitrate of 128 to 320 kbps for AAC and Opus; PNG sequences keep an uncompressed `.audio.wav`.
-- The inspector's Preview page has audio controls for the editor preview: mute, volume, and Silent while paused, which keeps sounds triggered while the replay is paused or seeking from playing. They are saved and do not affect exported audio.
-
-### Changed
-
-- Recording the world snapshot no longer stalls the game: unchanged chunk columns are reused and changed ones are serialized on background threads.
-- Seeking in a replay now catches up faster by loading the world in merged chunk batches.
-- Exports now always run a client tick as soon as they ask for one instead of waiting for the game's 20 Hz timer, which the experimental Accelerate client option used to turn on. The option is removed.
-- Exports on DirectX 12 now draw a frame once instead of two or more times, which shortens them; a frame is only drawn again while the replay is still preparing the next one. Ray-traced lighting therefore adapts about once per exported frame, so how quickly it follows a change such as the time of day no longer depends on how fast the export happens to run.
-- The export setting Convergence frames is now called Extra renders, which is what it does: each frame is rendered that many more times before it is saved. What it does and its default of 0 are unchanged.
-- The export dialog is split into General, Video, Audio and Advanced pages, picked from tabs at the top; the summary, which now also names the encoder settings, and the export buttons stay visible on every page. On a short window the summary makes room first, and only then does the page scroll.
-
-### Fixed
-
-- First-person follow now shows the followed player's arm swing and item-use animation, such as eating.
-- Players whose skin the server withheld are no longer dropped from the replay: snapshots fall back to the skin the player is rendered with, and player-list entries that still have none get the default skin.
-- Fixed custom block registration running twice when both replay-world hooks fired at once; blocks the client already has are no longer registered again.
-- Recorded entities no longer raise the game's runtime-id allocator, which could make the game discard the real local player.
-- Recordings now keep the recording player's own predicted sounds, such as hitting blocks, landing and strong attacks, so replays and exported audio no longer miss them.
-- Recordings now keep the sounds the client plays for every entity itself, such as footsteps, jumping, mob calls and wing flaps, and replays mute the copies the game regenerates, so replays and exported audio match what was heard and nothing plays twice.
-- Fixed item pickups, mob hurt and death sounds, and other entity and block events playing twice in replays. Each packet the client handles is now recorded once, as it was received.
-- Fixed a crash when quitting the game after the replay editor had been opened or while a video export was running.
-- Fixed the free camera's FOV widening while a followed first-person player sprinted. Following a player now only copies the attributes the HUD shows.
-- Fixed server forms, such as Hive's game list, staying open in replays and keeping the free camera from moving. Forms are now previewed like container screens while following the recorder in first person, and close where the recorder closed them, on seeks and when switching cameras. Other screens a server shows the recording player to answer are no longer opened.
-- First-person follow now shows the flames on screen while the followed player is burning.
-- Ray tracing and Vibrant Visuals exports now time auto exposure and other time-driven effects on the replay instead of on how long each frame took to render, so exported brightness adapts at the same pace as in the replay.
-- Exports now repeat the renderer warm-up after the replay changes dimension, so the first frames in the new dimension are no longer captured while auto exposure is still adapting.
-- Ray tracing exports of the same replay no longer differ in brightness for a few seconds after the lighting changes, such as after a time change. The game now draws on every frame it sends to the renderer during an export.
-- Exports now time interface animations, such as a chat message leaving the HUD, on the replay instead of on how long the export took, so a message stays on screen for the same length of video in every export.
-- Exports now run particles, the held item's equip animation, the sky, cloud and rain transitions and HUD timers such as the item name on the replay instead of on how long the export took, so they move at the same speed in the video as in the replay.
-- Recordings now take the snapshot of a new dimension once the player has finished loading it, including the short gap before the loading screen appears, so replays and exports show the terrain the player first saw right after a dimension change instead of an empty world that fills in over the next second or two. Replays recorded earlier are unchanged.
-- Exports without a camera track keep their fixed 70 degree field of view after a dimension change instead of switching to the player's field of view setting for the rest of the video.
-- Replays and exports of the End no longer show a second ender dragon and boss bar that the replay world spawned on its own, and no longer drop a recorded entity that shared its id.
-- Replay worlds now use the recorded world's seed instead of choosing a new one.
-- Replays and exports now preserve the recorded biomes when returning to a dimension, keeping the sky and water colors consistent with the recording.
-- Closing the game from a replay now waits for its temporary world to close and be removed, including when an export is in progress.
-- The replay list's selection summary separates the file count and the total size with a middle dot instead of a garbled character.
-- Editor dialogs and menus stay inside the game window at any size. The keyboard shortcut sheet and message dialogs stay centred when the window is resized, the shortcut sheet switches to two columns or scrolls on a short window, menus too long for the window scroll, and long tooltips wrap. On a narrow window the replay list toolbar shrinks the search box first, then drops the import and sort labels and finally the title.
-- Numbers typed into the export dialog take effect at once, without pressing Enter, so starting the export straight after typing uses them. Out-of-range values are clamped as they are typed.
-
-## [0.4.0-mc26.20] - 2026-11-01
+## [0.4.0-mc26.20] - 2026-11-15
 
 ### Added
 
 - Added first-person follow for the recorded player, with teleport and follow actions in the camera menu. The view uses the recorded camera offset and rendered FOV (including the spyglass), the recorded HUD (inventory, armor, offhand, selected slot, health, hunger, experience and game mode), held maps, view bobbing, hand sway, the nether portal warp and the bed view with its fade to black while sleeping. Recorded container screens are previewed while following.
 - Other recorded players and any entity can be followed in first person, from the subject picker or the viewport's right-click and nearby entities menus. When the subject leaves the server, or an entity stays gone, the view returns to the recorder.
 - Video export can render first-person video from the chosen subject, with the subject's arm and held item and without its model.
-- Video export now captures game audio. MP4 files get an AAC track and PNG sequences get a sidecar `.audio.wav`. The game's sound output is restored when the export ends.
+- Video export now captures optional mono or stereo game audio: AAC, Opus or FLAC in MP4, or an uncompressed sidecar `.audio.wav` for PNG sequences. AAC and Opus offer 128, 192, 256 or 320 kbps; AAC is the default. The game's sound output is restored when the export ends.
 - Recordings now embed the server's downloaded resource packs and mount them on playback, so server textures and models show anywhere. Extracted packs are cached for the three most recent replays. `record.embedServerPacks` in the config turns this off.
 - The local player's view can be recorded between ticks with `/record rate` (20 to 120 samples per second; 20 records once per tick, the default). Replay uses those samples instead of a straight line between ticks. The starting rate comes from `record.localPlayerUpdatesPerSecond` in the config; `/record rate` changes it until the game restarts.
 - Camera keyframes are now applied to the preview while the replay is paused.
@@ -73,13 +30,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added recording controls to the small icon row of the pause menu: start or resume, pause, finish and cancel.
 - Finishing a recording shows a save dialog with a name input that defaults to the timestamp, plus save and delete actions. Deleting and cancelling ask for confirmation first. Escape cannot dismiss the save dialog, so a finished recording cannot be dropped by accident. Starting a new recording while one is still waiting for a name saves it under its timestamp name first.
 - Added a top-right recording indicator that shows the recording state and elapsed time. `/record indicator [on|off]` shows or hides it. It never appears in replays, the editor, exported videos or recording thumbnails.
+- The inspector has a Preview page for choosing which HUD elements a replay shows: chat, boss bar, title text, scoreboard, action bar and hotbar. Only the hotbar is on by default; the choices are saved and also apply to exported video. The export dialog's Hide HUD option leaves the whole HUD out of an export.
+- The inspector's Preview page has audio controls for the editor preview: mute, volume, and Silent while paused, which keeps sounds triggered while the replay is paused or seeking from playing. They are saved and do not affect exported audio.
 
 ### Changed
 
 - The camera path overlay and the paused camera glyph only show for keyframe tracks.
-- The camera switch track was removed; switch track data in earlier editor projects is dropped. The project format version stays at `1`.
-- Replays recorded with earlier releases are no longer supported and must be recorded again. The recording layout gained camera, FOV and view data while its snapshot context version stayed at `1`, so older archives are not detected and cannot be read correctly.
+- The camera switch track was removed, and its data in earlier editor projects is dropped.
+- Replays recorded before `v0.4.0` are no longer supported and must be recorded again. Older archives may not be detected as incompatible; back up recordings and projects before upgrading. No migration is provided.
 - Dropdowns, popups and context menus in the editor now open under the control that opened them, with menu padding.
+- Recording snapshots reuse unchanged chunk columns and serialize changed columns on background threads to reduce game stalls.
+- Seeking in a replay now catches up faster by loading the world in merged chunk batches.
+- Exports now always run a client tick as soon as they ask for one instead of waiting for the game's 20 Hz timer, which the experimental Accelerate client option used to turn on. The option is removed.
+- Exports on DirectX 12 now draw a frame once instead of two or more times, which shortens them; a frame is only drawn again while the replay is still preparing the next one. Ray-traced lighting therefore adapts about once per exported frame, so how quickly it follows a change such as the time of day no longer depends on how fast the export happens to run.
+- The export setting Convergence frames is now called Extra renders, which is what it does: each frame is rendered that many more times before it is saved. What it does and its default of 0 are unchanged.
+- The export dialog now has General, Video, Audio and Advanced pages. Export buttons stay visible on every page; the summary includes encoder settings and hides first on short windows before the settings page scrolls.
 
 ### Fixed
 
@@ -88,6 +53,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Particles are rebuilt after a seek.
 - Recorded container screens stay open across seeks and exports, and the inventory screen is no longer previewed.
 - Fixed a dimension loading screen that could stay up forever during export.
+- First-person follow now shows the followed player's arm swing and item-use animation, such as eating.
+- Players whose skin the server withheld are no longer dropped from the replay: snapshots fall back to the skin the player is rendered with, and player-list entries that still have none get the default skin.
+- Fixed custom block registration running twice when both replay-world hooks fired at once; blocks the client already has are no longer registered again.
+- Recorded entities no longer raise the game's runtime-id allocator, which could make the game discard the real local player.
+- Recordings now keep the recording player's own predicted sounds, such as hitting blocks, landing and strong attacks, so replays and exported audio no longer miss them.
+- Recordings now keep the sounds the client plays for every entity itself, such as footsteps, jumping, mob calls and wing flaps, and replays mute the copies the game regenerates, so replays and exported audio match what was heard and nothing plays twice.
+- Fixed item pickups, mob hurt and death sounds, and other entity and block events playing twice in replays. Each packet the client handles is now recorded once, as it was received.
+- Fixed a crash when quitting the game after the replay editor had been opened or while a video export was running.
+- Fixed the free camera's FOV widening while a followed first-person player sprinted. Following a player now only copies the attributes the HUD shows.
+- Recorded server forms no longer trap the free camera. Containers and forms are previewed only while following the recorder in first person; seeks restore their recorded state and switching away closes the preview. Other server response screens are not opened.
+- First-person follow now shows the flames on screen while the followed player is burning.
+- Ray tracing and Vibrant Visuals exports now time auto exposure and other time-driven effects on the replay instead of on how long each frame took to render, so exported brightness adapts at the same pace as in the replay.
+- Exports now repeat the renderer warm-up after the replay changes dimension, so the first frames in the new dimension are no longer captured while auto exposure is still adapting.
+- Ray tracing exports of the same replay no longer differ in brightness for a few seconds after the lighting changes, such as after a time change. The game now draws on every frame it sends to the renderer during an export.
+- Exports now time interface animations, such as a chat message leaving the HUD, on the replay instead of on how long the export took, so a message stays on screen for the same length of video in every export.
+- Exports now run particles, the held item's equip animation, the sky, cloud and rain transitions and HUD timers such as the item name on the replay instead of on how long the export took, so they move at the same speed in the video as in the replay.
+- Recordings now take the snapshot of a new dimension once the player has finished loading it, including the short gap before the loading screen appears, so replays and exports show the terrain the player first saw right after a dimension change instead of an empty world that fills in over the next second or two. Replays recorded earlier are unchanged.
+- Exports without a camera track keep their fixed 70 degree field of view after a dimension change instead of switching to the player's field of view setting for the rest of the video.
+- Replays and exports of the End no longer show a second ender dragon and boss bar that the replay world spawned on its own, and no longer drop a recorded entity that shared its id.
+- Replay worlds now use the recorded world's seed instead of choosing a new one.
+- Replays and exports now preserve the recorded biomes when returning to a dimension, keeping the sky and water colors consistent with the recording.
+- Closing the game from a replay now waits for its temporary world to close and be removed, including when an export is in progress.
+- The replay list's selection summary separates the file count and the total size with a middle dot instead of a garbled character.
+- Editor dialogs and menus stay inside the game window at any size. The keyboard shortcut sheet and message dialogs stay centred when the window is resized, the shortcut sheet switches to two columns or scrolls on a short window, menus too long for the window scroll, and long tooltips wrap. On a narrow window the replay list toolbar shrinks the search box first, then drops the import and sort labels and finally the title.
+- Numbers typed into the export dialog take effect at once, without pressing Enter, so starting the export straight after typing uses them. Out-of-range values are clamped as they are typed.
 
 ## [0.3.3-mc26.20] - 2026-10-11
 
