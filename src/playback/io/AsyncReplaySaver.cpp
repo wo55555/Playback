@@ -73,7 +73,7 @@ void AsyncReplaySaver::workerLoop() {
 
                 if (!mQueue.empty()) {
                     task = std::move(mQueue.front());
-                    mQueue.erase(mQueue.begin());
+                    mQueue.pop_front();
                 }
             }
 

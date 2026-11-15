@@ -152,6 +152,7 @@ struct SubjectNauseaSample {
     int         duration{}; // remaining ticks, -1 when infinite
     bool        active{};   // long enough to keep the distortion growing
     long double tick{};     // replay time of the sample
+    bool        insidePortal{}; // standing in a nether portal; the purple warp is not the nausea effect
 };
 
 // Empty unless a follow render scope refreshed it within the last half second.

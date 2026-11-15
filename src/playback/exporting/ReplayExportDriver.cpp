@@ -10,6 +10,7 @@
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/state/editing/models/EditorStateExt.h"
+#include "playback/visuals/ReplayHudVisibility.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -26,28 +27,17 @@ constexpr uint32_t ExportCaptureCapacity = 6;
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
 
 // Draining the counters means a second close of the same export prints nothing.
-void reportTickPacing(bool accelerated) {
+void reportTickPacing() {
     auto const pacing = runtime::takeOfflineReplayTickPacing();
-    auto const boost  = takeOfflineRenderClientBoostStats();
     if (pacing.requests == 0) return;
 
     double const claims = static_cast<double>(std::max<uint64_t>(pacing.claims, 1));
     getLogger().debug(
-        "Export native tick pacing: accelerated={}, requests={}, claims={}, claimWait avg={:.2f}ms max={:.2f}ms; "
-        "sim timer advances={}, withRequest={}, naturalTick={}, forced={}, otherTimers={}, "
-        "passedTimeAfterForce=[{:.3f}, {:.3f}]",
-        accelerated,
+        "Export native tick pacing: requests={}, claims={}, claimWait avg={:.2f}ms max={:.2f}ms",
         pacing.requests,
         pacing.claims,
         static_cast<double>(pacing.claimLatencyMicros) / 1000.0 / claims,
-        static_cast<double>(pacing.maxClaimLatencyMicros) / 1000.0,
-        boost.advances,
-        boost.pendingAdvances,
-        boost.naturalTicks,
-        boost.forcedTicks,
-        boost.otherTimerAdvances,
-        boost.minPassedAfterForce,
-        boost.maxPassedAfterForce
+        static_cast<double>(pacing.maxClaimLatencyMicros) / 1000.0
     );
 }
 
@@ -122,6 +112,7 @@ bool ReplayExportDriver::start(
         return false;
     }
     if (mPlan->settings.audio) playback::audio::exportcap::exportBegin(mPlan->settings);
+    visuals::setHudHiddenForExport(mPlan->settings.hideHud);
 
     bool const previousPaused = mReplay.isPaused();
     if (!mReplay.setPaused(true)) {
@@ -149,15 +140,11 @@ bool ReplayExportDriver::start(
     mWaitCharged.reset();
     mDriverTicks = 0;
     (void)runtime::takeOfflineReplayTickPacing();
-    (void)takeOfflineRenderClientBoostStats();
-    if (mPlan->settings.accelerateClient && !setOfflineRenderClientBoost(true)) {
-        getLogger().warn("Client acceleration could not be installed; the export keeps the game's 20 Hz tick pacing");
-    }
     setExportActivityActive(true);
     mPhase = Phase::Rendering;
     getLogger().info(
         "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
-        "warmup={}, convergence={}, accelerateClient={}, x264={}/crf{}",
+        "warmup={}, extraRenders={}, x264={}/crf{}, hideHud={}, audio={} ({} ch, {} {}k)",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -168,10 +155,14 @@ bool ReplayExportDriver::start(
         mPlan->settings.resolutionY,
         mPlan->settings.ssaa,
         mPlan->settings.warmupFrames,
-        mPlan->settings.convergenceFrames,
-        mPlan->settings.accelerateClient,
+        mPlan->settings.extraRenders,
         x264Preset(mPlan->settings.encodeSpeed),
-        mPlan->settings.videoCrf
+        mPlan->settings.videoCrf,
+        mPlan->settings.hideHud,
+        mPlan->settings.audio,
+        mPlan->settings.audioStereo ? 2 : 1,
+        ffmpegAudioEncoder(mPlan->settings.audioCodec),
+        mPlan->settings.audioBitrateKbps
     );
     return true;
 }
@@ -193,7 +184,12 @@ void ReplayExportDriver::tick() try {
                 && std::filesystem::file_size(sidecar, sidecarEc) > 44 && !sidecarEc;
             if (hasAudio) {
                 if (mPlan->settings.format == ExportFormat::Mp4Video) {
-                    playback::audio::exportmux::muxIntoMp4(mPlan->outputPath, sidecar);
+                    playback::audio::exportmux::muxIntoMp4(
+                        mPlan->outputPath,
+                        sidecar,
+                        mPlan->settings.audioCodec,
+                        mPlan->settings.audioBitrateKbps
+                    );
                 } else {
                     getLogger().info("Export audio written to {}", sidecar);
                 }
@@ -364,7 +360,6 @@ void ReplayExportDriver::waitFor(OfflineRenderWaitReason reason) {
     accumulateWait(std::chrono::steady_clock::now());
     mWaitCharged = reason;
     ++mWaitHits[static_cast<size_t>(reason)];
-    if (mRenderBoundary) mRenderBoundary->holdRenderAlive();
 }
 
 void ReplayExportDriver::reportWaitProfile() const {
@@ -386,7 +381,7 @@ void ReplayExportDriver::reportWaitProfile() const {
         "CollectPending",
         "Draining",
         "Failed",
-        "Convergence",
+        "ExtraRender",
         "Unknown",
     };
     uint64_t total = 0;
@@ -472,6 +467,7 @@ void ReplayExportDriver::fail(ExportError error, std::string message) {
 void ReplayExportDriver::restoreReplayState() {
     // exportEnd is idempotent and must run on every exit path (success, cancel, fault); this is the common funnel.
     playback::audio::exportcap::exportEnd();
+    visuals::setHudHiddenForExport(false);
     if (!mPreviousPaused) return;
     bool const previousPaused = *mPreviousPaused;
     mPreviousPaused.reset();
@@ -480,7 +476,7 @@ void ReplayExportDriver::restoreReplayState() {
 
 void ReplayExportDriver::closeCapture(bool cancelled) {
     reportWaitProfile();
-    reportTickPacing(mPlan && mPlan->settings.accelerateClient);
+    reportTickPacing();
     setOfflineRenderActivityActive(false);
     if (mRenderBoundary) {
         if (cancelled) mRenderBoundary->cancel();

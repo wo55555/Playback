@@ -1,6 +1,7 @@
 ﻿#include "OfflineRenderClockHooks.h"
 
 #include "ExportActivity.h"
+#include "OfflineRenderTimeHooks.h"
 #include "playback/Playback.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
@@ -54,6 +55,7 @@ struct ActiveClockSample {
     std::chrono::steady_clock::time_point       sceneRetryStartedAt;
     uint64_t                                    captureGeneration{};
     uint64_t                                    renderSerial{};
+    uint64_t                                    rendersStarted{};
     uint32_t                                    gameRenderOrdinal{};
     uint32_t                                    sceneRetries{};
     bool                                        captureArmed{};
@@ -70,6 +72,7 @@ struct AcquiredClockSample {
     OfflineRenderClockSample                    sample;
     keyframe::CameraTimelineRenderContextHandle cameraContext;
     uint64_t                                    renderSerial{};
+    bool                                        firstRender{};
 };
 
 struct ActiveRenderSample {
@@ -84,16 +87,14 @@ std::atomic_bool                               gInitialCameraSampleLogged{false}
 std::atomic_bool                               gMissingCameraSampleLogged{false};
 std::mutex                                     gClockMutex;
 std::optional<ActiveClockSample>               gActiveSample;
+// Guarded by gClockMutex: what the last render drew, for the frames that have no step of their own.
+std::optional<AcquiredClockSample>             gLastRenderedSample;
 uint64_t                                       gNextTokenId{1};
 uint64_t                                       gNextRenderSerial{1};
 thread_local std::optional<ActiveRenderSample> gRenderSample;
 
 // The timer handed to updateGraphics is the one whose ticks the client loop runs.
-std::atomic<Timer const*>     gSimTimer{nullptr};
-std::atomic<uint64_t>         gOtherTimerAdvances{0};
-std::mutex                    gClientBoostMutex;
-OfflineRenderClientBoostStats gClientBoostStats;
-bool                          gClientBoostInstalled{false};
+std::atomic<Timer const*> gSimTimer{nullptr};
 
 // Guarded by gClockMutex; reset per export.
 struct SceneLatencyStats {
@@ -244,10 +245,12 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     std::scoped_lock lock(gClockMutex);
     if (!gActiveSample) return std::nullopt;
     if (gActiveSample->captureGeneration != 0 && !gActiveSample->captureArmed) return std::nullopt;
-    // A capture-carrying sample renders once because Present captures it; one without a capture repeats until released.
+    // A capture-carrying sample renders once because that render is captured; one without a capture repeats until
+    // released.
     if (gActiveSample->captureGeneration != 0 && gActiveSample->claimed && gActiveSample->renderReturned)
         return std::nullopt;
 
+    bool const firstRender                        = gActiveSample->rendersStarted++ == 0;
     gActiveSample->claimed                        = true;
     gActiveSample->renderSerial                   = gNextRenderSerial++;
     gActiveSample->gameRenderOrdinal              = 0;
@@ -256,12 +259,38 @@ std::optional<AcquiredClockSample> acquireClockSampleForRender() {
     gActiveSample->renderReturned                 = false;
     gActiveSample->cameraApplicationFailureLogged = false;
     if (gNextRenderSerial == 0) ++gNextRenderSerial;
-    return AcquiredClockSample{
+    AcquiredClockSample acquired{
         gActiveSample->token,
         gActiveSample->sample,
         gActiveSample->cameraContext,
         gActiveSample->renderSerial,
+        firstRender,
     };
+    if (!firstRender) {
+        acquired.sample.deltaTicks = 0.0f;
+        acquired.sample.wholeTicks = 0;
+    }
+    gLastRenderedSample = acquired;
+    return acquired;
+}
+
+// The last render again, at the same instant. It carries no serial, so nothing takes it for a render of the step that
+// is published now.
+std::optional<AcquiredClockSample> acquireRedrawOfLastRender() {
+    std::scoped_lock lock(gClockMutex);
+    if (!gLastRenderedSample) return std::nullopt;
+    auto redraw              = *gLastRenderedSample;
+    redraw.sample.kind       = OfflineRenderClockKind::KeepAlive;
+    redraw.sample.deltaTicks = 0.0f;
+    redraw.sample.wholeTicks = 0;
+    redraw.renderSerial      = 0;
+    redraw.firstRender       = false;
+    return redraw;
+}
+
+void forgetLastRender() {
+    std::scoped_lock lock(gClockMutex);
+    gLastRenderedSample.reset();
 }
 
 void completeClockSample(OfflineRenderClockToken token, uint64_t renderSerial, bool entityApplied) {
@@ -302,7 +331,11 @@ LL_TYPE_INSTANCE_HOOK(
     // Export steps resolve on this path, so advance before rendering instead of waiting for the 20Hz client tick.
     if (isOfflineRenderActivityActive()) editor::tickReplayExportDuringGraphics();
 
-    auto const sample = acquireClockSampleForRender();
+    auto sample = acquireClockSampleForRender();
+    // The game sends the renderer a frame on every pass of its loop, drawn or not. Ray tracing updates on each of them
+    // and finds no scene in one that was not drawn, which upsets what it accumulates across frames. So a pass with no
+    // step to render draws the last one again, as the game itself draws every frame while it is played.
+    if (!sample && isOfflineRenderActivityActive() && isExportActivityActive()) sample = acquireRedrawOfLastRender();
     if (sample) {
         bool poseApplied = false;
         {
@@ -322,14 +355,18 @@ LL_TYPE_INSTANCE_HOOK(
             auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
             poseApplied = pose != nullptr;
 
+            // The renderers' clock moves by the same step the timer override just applied.
+            advanceOfflineRenderTime(sample->sample.kind, sample->sample.deltaTicks, sample->firstRender);
             markClockSampleRenderReady(sample->token, sample->renderSerial, true);
             origin(client, timer);
+            finishOfflineRenderTime();
         }
         completeClockSample(sample->token, sample->renderSerial, poseApplied);
         return;
     }
 
     if (isOfflineRenderActivityActive()) {
+        // Nothing has been rendered yet that could be drawn again.
         if (isExportActivityActive()) return;
         setOfflineRenderActivityActive(false);
         if (!gOfflineFlagMismatchLogged.exchange(true, std::memory_order_acq_rel)) {
@@ -339,6 +376,9 @@ LL_TYPE_INSTANCE_HOOK(
         }
     }
 
+    // The game draws for itself here, as it does through a dimension change; the last render is no longer its scene.
+    forgetLastRender();
+    advanceOfflineRenderTimeForNativeFrame();
     origin(client, timer);
 }
 
@@ -361,45 +401,6 @@ LL_TYPE_INSTANCE_HOOK(
     origin(partialTick);
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    OfflineRenderClientBoostHook,
-    ll::memory::HookPriority::Normal,
-    Timer,
-    &Timer::advanceTime,
-    void,
-    float preferredFrameStep
-) {
-    origin(preferredFrameStep);
-
-    if (this != gSimTimer.load(std::memory_order_acquire)) {
-        gOtherTimerAdvances.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    bool const pending = runtime::hasPendingOfflineReplayTick();
-    int const  natural = this->mTicks;
-
-    std::scoped_lock lock(gClientBoostMutex);
-    auto&            stats = gClientBoostStats;
-    ++stats.advances;
-    if (!pending) return;
-    ++stats.pendingAdvances;
-    if (natural >= 1) {
-        ++stats.naturalTicks;
-        return;
-    }
-
-    // The level tick hook swallows every tick except the requested one, so one is all the gate needs.
-    this->mTicks       = 1;
-    float const passed = this->mPassedTime;
-    if (++stats.forcedTicks == 1) {
-        stats.minPassedAfterForce = stats.maxPassedAfterForce = passed;
-    } else {
-        stats.minPassedAfterForce = std::min(stats.minPassedAfterForce, passed);
-        stats.maxPassedAfterForce = std::max(stats.maxPassedAfterForce, passed);
-    }
-}
-
 } // namespace
 
 bool hookOfflineRenderClock(bool enable) {
@@ -411,11 +412,11 @@ bool hookOfflineRenderClock(bool enable) {
 
     auto removeAll = [&] {
         gHookInstalled.store(false, std::memory_order_release);
+        endOfflineRenderTime();
         visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Export);
         visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Export);
         resetOfflineRenderClock();
         reportSceneRetries();
-        (void)setOfflineRenderClientBoost(false);
         if (state.gameFrame && OfflineRenderGameFrameHook::unhook()) state.gameFrame = false;
         if (state.clock && OfflineRenderClockUpdateGraphicsHook::unhook()) state.clock = false;
         gSimTimer.store(nullptr, std::memory_order_release);
@@ -432,6 +433,7 @@ bool hookOfflineRenderClock(bool enable) {
             visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Export);
             gInitialCameraSampleLogged.store(false, std::memory_order_release);
             gMissingCameraSampleLogged.store(false, std::memory_order_release);
+            beginOfflineRenderTime();
             return true;
         }
 
@@ -452,31 +454,17 @@ bool hookOfflineRenderClock(bool enable) {
 
 bool isOfflineRenderClockInstalled() { return gHookInstalled.load(std::memory_order_acquire); }
 
-bool setOfflineRenderClientBoost(bool enable) {
-    if (enable == gClientBoostInstalled) return true;
-    if (enable) {
-        {
-            std::scoped_lock lock(gClientBoostMutex);
-            gClientBoostStats = {};
-        }
-        gOtherTimerAdvances.store(0, std::memory_order_relaxed);
-        gClientBoostInstalled = OfflineRenderClientBoostHook::hook() == 0;
-        return gClientBoostInstalled;
-    }
-    if (OfflineRenderClientBoostHook::unhook()) gClientBoostInstalled = false;
-    return !gClientBoostInstalled;
-}
-
-OfflineRenderClientBoostStats takeOfflineRenderClientBoostStats() {
-    std::scoped_lock lock(gClientBoostMutex);
-    auto             stats   = std::exchange(gClientBoostStats, OfflineRenderClientBoostStats{});
-    stats.otherTimerAdvances = gOtherTimerAdvances.exchange(0, std::memory_order_relaxed);
-    return stats;
+void grantPendingOfflineReplayTick() {
+    auto* const timer = const_cast<Timer*>(gSimTimer.load(std::memory_order_acquire));
+    if (!timer || !runtime::hasPendingOfflineReplayTick()) return;
+    // The level tick hook swallows every tick except the requested one, so one is all the gate needs.
+    if (timer->mTicks < 1) timer->mTicks = 1;
 }
 
 OfflineRenderClockPublishResult
-publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token, bool captureSample) {
-    token = {};
+publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token) {
+    token                    = {};
+    bool const captureSample = sample.kind == OfflineRenderClockKind::Capture;
     if (!sample.replayTime.isValid() || !std::isfinite(sample.deltaTicks) || sample.deltaTicks < 0.0f
         || sample.wholeTicks < 0) {
         return OfflineRenderClockPublishResult::InvalidSample;
@@ -685,6 +673,7 @@ void resetOfflineRenderClock() {
             }
         }
         gActiveSample.reset();
+        gLastRenderedSample.reset();
     }
     keyframe::clearCameraTimelineRenderContext(keyframe::CameraTimelineSource::Export, cameraContext);
     gRenderSample.reset();

@@ -3,6 +3,7 @@
 #include "playback/visuals/FrameTap.h"
 #include "playback/visuals/ReplayThumbnail.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -30,16 +31,22 @@ public:
     void               requestReplayThumbnailCapture() override;
     [[nodiscard]] bool saveReplayThumbnail(std::filesystem::path const& output) override;
 
-    // Present-time export capture; the back buffer holds the overlay-free world, so no MSAA or resize is needed.
+    // Export capture of the back buffer, which holds the overlay-free world, so no MSAA or resize is needed.
     [[nodiscard]] bool                                  openExportCapture(uint32_t capacity, uint32_t downsample);
     void                                                closeExportCapture();
     [[nodiscard]] bool                                  armExportCapture(visuals::FrameTicket const& ticket);
-    [[nodiscard]] std::optional<visuals::CapturedFrame> collectExportFrame();
+    // Blocks for up to `wait` when no frame is ready yet.
+    [[nodiscard]] std::optional<visuals::CapturedFrame> collectExportFrame(std::chrono::milliseconds wait = {});
     [[nodiscard]] visuals::FrameTapStatus               exportCaptureStatus() const;
     [[nodiscard]] void* acquireReplayThumbnailTexture(std::filesystem::path const& path);
 
     bool               render(IDXGISwapChain* swapChain, bool allowFrameCapture = true);
     bool               renderExportOverlay(IDXGISwapChain* swapChain);
+    // Render thread, once the renderer has submitted a scene: takes an armed export capture from the back buffer
+    // without waiting for the Present that follows. False leaves the capture to that Present.
+    bool               captureSubmittedScene();
+    // True while captureSubmittedScene has a backend to capture with.
+    [[nodiscard]] bool canCaptureSubmittedScene() const;
     void               pollFrameCapture();
     [[nodiscard]] bool isD3D12RendererActive() const;
     [[nodiscard]] bool ownsSwapChain(IDXGISwapChain* swapChain) const;

@@ -26,23 +26,31 @@ private:
     void drawShortcutDialog();
     void drawExportDialog(PanelContext const& ctx);
 
-    bool                  mExportDialogOpen{false};
-    bool                  mExportSettingsInitialized{false};
-    bool                  mShortcutDialogOpen{false};
-    int                   mExportFormat{0};
-    int                   mFpsPreset{1};
-    int                   mFps{60};
-    int                   mExportWidth{1920};
-    int                   mExportHeight{1080};
-    int                   mExportSsaa{0};
-    int                   mExportWarmupFrames{60};
-    int                   mExportConvergenceFrames{0};
-    bool                  mExportAccelerateClient{false};
-    int                   mExportEncodeSpeed{0};
-    int                   mExportCrf{18};
-    bool                  mExportAdvancedOpen{false};
-    bool                  mExportScrollToAdvanced{false};
-    float                 mExportBodyHeight{0.0f};
+    bool mExportDialogOpen{false};
+    bool mExportSettingsInitialized{false};
+    bool mShortcutDialogOpen{false};
+    int  mExportFormat{0};
+    int  mFpsPreset{1};
+    int  mFps{60};
+    int  mExportWidth{1920};
+    int  mExportHeight{1080};
+    int  mExportSsaa{0};
+    int  mExportWarmupFrames{60};
+    int  mExportExtraRenders{0};
+    int  mExportEncodeSpeed{0};
+    int  mExportCrf{18};
+    bool mExportHideHud{false};
+    bool mExportAudio{true};
+    int  mExportAudioChannels{1};
+    int  mExportAudioCodec{0};
+    int  mExportAudioBitrate{1};
+    // Page of the export dialog being shown.
+    int mExportTab{0};
+    // Height shared by every page: the tallest one measured so far.
+    float mExportBodyHeight{0.0f};
+    bool  mExportBodyScrollable{false};
+    // Font size the page height was measured at.
+    float                 mExportLayoutKey{0.0f};
     int                   mExportStartTick{-1};
     int                   mExportEndTick{-1};
     std::array<char, 128> mExportName{"replay-export"};

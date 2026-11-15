@@ -25,7 +25,7 @@ public:
     ReplayExportDriver(ReplayExportDriver const&)            = delete;
     ReplayExportDriver& operator=(ReplayExportDriver const&) = delete;
 
-    // Export needs the ImGui renderer alive to capture at Present, so the boundary only exists while it is up.
+    // Export needs the ImGui renderer alive to capture frames, so the boundary only exists while it is up.
     void setRendererAvailable(bool available);
 
     [[nodiscard]] bool start(
