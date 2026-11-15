@@ -1,10 +1,13 @@
 ﻿#include "ClientTickHooks.h"
+#include "WindowCloseGuard.h"
 
 #include "playback/Playback.h"
-#include "playback/audio/AudioProbe.h"
+#include "playback/audio/PreviewAudio.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
+#include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/ExportEcoMode.h"
+#include "playback/exporting/OfflineRenderClockHooks.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
@@ -15,6 +18,7 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/SceneType.h"
 #include "mc/client/multiplayer/MultiPlayerLevel.h"
+#include "mc/client/renderer/game/ItemInHandRenderer.h"
 #include "mc/world/level/storage/LevelData.h"
 
 #include <algorithm>
@@ -50,6 +54,13 @@ struct OfflineTickClaim {
 std::atomic_bool     gClientTickHooksInstalled{false};
 std::mutex           gOfflineTickGateMutex;
 OfflineTickGateState gOfflineTickGate;
+// Replay ticks an export has run that still owe the tick the game pairs with each tick of its real-time timer.
+std::atomic<int>  gOfflineRealTicksOwed{0};
+bool              gOfflineRealTickHooked{false};
+thread_local bool tOfflineRealTick{false};
+// The game makes that call on the client's GameCallbacks base, not on the client itself, so the export makes its own
+// calls on the pointer the game last used.
+std::atomic<ClientInstance*> gOfflineRealTickTarget{nullptr};
 
 // Set while the replay tick runs after the native level tick, so a seek can tick the level in step with its ticks.
 thread_local std::function<void()> gNativeLevelTick;
@@ -114,9 +125,35 @@ void completeOfflineTick(uint64_t token, int replayTickBefore, int replayTickAft
         replayTickAfter,
         true,
     };
+    if (gOfflineRealTickHooked) gOfflineRealTicksOwed.fetch_add(1, std::memory_order_acq_rel);
+}
+
+bool offlineTickGateActive() {
+    std::scoped_lock lock(gOfflineTickGateMutex);
+    return gOfflineTickGate.active;
 }
 
 } // namespace
+
+// The game ticks its renderers, its particles and the HUD timers from here: the held item's equip animation, the FOV
+// and sky colour transitions, clouds, rain, block particles, item name and title timers. It does so once per tick of
+// its real-time timer, which runs at 20 Hz however fast an export goes, so an export drops those calls and makes one
+// for every replay tick it runs instead.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackClientRealTickHook,
+    ll::memory::HookPriority::Normal,
+    ClientInstance,
+    &ClientInstance::$onTick,
+    void,
+    int nTick,
+    int maxTick
+) {
+    if (!tOfflineRealTick) {
+        gOfflineRealTickTarget.store(this, std::memory_order_release);
+        if (offlineTickGateActive()) return;
+    }
+    origin(nTick, maxTick);
+}
 
 LL_TYPE_INSTANCE_HOOK(
     PlaybackClientUpdateHook,
@@ -127,11 +164,32 @@ LL_TYPE_INSTANCE_HOOK(
     bool isInitFinished
 ) {
     editor::tickReplayExportBeforeClientUpdate();
+    exporting::grantPendingOfflineReplayTick();
     auto result = origin(isInitFinished);
+    // The ticks stay owed until the game has made the call once.
+    if (auto* const target = gOfflineRealTickTarget.load(std::memory_order_acquire)) {
+        if (int const owed = gOfflineRealTicksOwed.exchange(0, std::memory_order_acq_rel); owed > 0) {
+            tOfflineRealTick = true;
+            for (int index = 0; index < owed; ++index) {
+                // The held item's sway runs on a timer each of those ticks moves by the real time since the last.
+                if (auto* const hand = getItemInHandRenderer()) {
+                    hand->mLastTime = std::chrono::steady_clock::now() - std::chrono::milliseconds{50};
+                }
+                target->$onTick(index, owed);
+            }
+            tOfflineRealTick = false;
+        }
+    }
     if (isInitFinished) exporting::recoverEcoModeAfterInterruptedExport();
     editor::graphics::updateReplayMouseOwnership(*this);
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
+    audio::preview::update(
+        replay.isActive(),
+        replay.isPaused(),
+        replay.isSeekPending(),
+        exporting::isExportActivityActive()
+    );
     // Gates the editor overlay, so loading, progress and sign-in screens must clear first.
     bool hudVisible = false;
     if (isInitFinished && replay.isActive() && replay.hasJoinedReplayWorld()) {
@@ -143,7 +201,7 @@ LL_TYPE_INSTANCE_HOOK(
     editor::tickReplayUI(hudVisible);
     screen::tickRecordDialogs();
     replay.tryFinalizeWorldCleanup();
-    audio::probe::onClientUpdate(*this);
+    advanceWindowClose();
     return result;
 }
 
@@ -253,9 +311,21 @@ bool hookClientTick(bool enable) {
 bool beginOfflineReplayTickGate() {
     if (!gClientTickHooksInstalled.load(std::memory_order_acquire)) return false;
 
+    if (!gOfflineRealTickHooked) {
+        gOfflineRealTickHooked = PlaybackClientRealTickHook::hook() == 0;
+        if (!gOfflineRealTickHooked) {
+            Playback::getInstance().getSelf().getLogger().warn(
+                "Unable to drive the client's real-time tick from the export; particles, held item and HUD timers "
+                "follow the wall clock"
+            );
+        }
+    }
+
     std::scoped_lock lock(gOfflineTickGateMutex);
     if (!gClientTickHooksInstalled.load(std::memory_order_relaxed) || gOfflineTickGate.active) return false;
 
+    gOfflineRealTicksOwed.store(0, std::memory_order_release);
+    gOfflineRealTickTarget.store(nullptr, std::memory_order_release);
     gOfflineTickGate.active = true;
     gOfflineTickGate.pendingToken.reset();
     gOfflineTickGate.inFlightToken.reset();
@@ -265,12 +335,17 @@ bool beginOfflineReplayTickGate() {
 }
 
 void endOfflineReplayTickGate() {
-    std::scoped_lock lock(gOfflineTickGateMutex);
-    gOfflineTickGate.active = false;
-    gOfflineTickGate.pendingToken.reset();
-    gOfflineTickGate.inFlightToken.reset();
-    gOfflineTickGate.completedToken.reset();
-    gOfflineTickGate.completion.reset();
+    {
+        std::scoped_lock lock(gOfflineTickGateMutex);
+        gOfflineTickGate.active = false;
+        gOfflineTickGate.pendingToken.reset();
+        gOfflineTickGate.inFlightToken.reset();
+        gOfflineTickGate.completedToken.reset();
+        gOfflineTickGate.completion.reset();
+    }
+    gOfflineRealTicksOwed.store(0, std::memory_order_release);
+    if (gOfflineRealTickHooked && PlaybackClientRealTickHook::unhook()) gOfflineRealTickHooked = false;
+    gOfflineRealTickTarget.store(nullptr, std::memory_order_release);
 }
 
 OfflineReplayTickRequestResult requestOfflineReplayTick(OfflineReplayTickToken& token) {

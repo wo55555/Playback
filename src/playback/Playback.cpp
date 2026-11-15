@@ -2,14 +2,16 @@
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
-#include "playback/audio/AudioProbe.h"
+#include "playback/audio/AudioHooks.h"
 #include "playback/audio/ExportAudioCapture.h"
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
+#include "playback/editor/graphics/SeekFreezeHooks.h"
 #include "playback/exporting/ExportEcoMode.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
+#include "playback/exporting/OfflineRenderTimeHooks.h"
 #include "playback/record/ChunkMutationBarrier.h"
 #include "playback/record/Recorder.h"
 #include "playback/replay/ReplaySession.h"
@@ -21,6 +23,7 @@
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
 #include "playback/visuals/ReplayHudHooks.h"
+#include "playback/visuals/ReplayHudVisibility.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/event/EventBus.h"
@@ -113,11 +116,14 @@ bool Playback::hook() {
     if (!impl->mCameraRenderInstalled) {
         getSelf().getLogger().warn("Unable to install camera render hooks; camera timelines are disabled");
     }
-    if (audio::probe::install()) {
-        // Export-audio capture registers its policy callbacks on the probe; no additional hooks are installed.
+    if (!editor::graphics::hookSeekFreeze(true)) {
+        getSelf().getLogger().warn("Unable to install the seek freeze hook; seeks will show catch-up frames");
+    }
+    if (audio::hooks::install()) {
         (void)audio::exportcap::install();
     }
     screen::hookRecordControls(true);
+    visuals::hookReplayHudVisibility(true);
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -197,6 +203,7 @@ bool Playback::unhook() {
         getSelf().getLogger().error("Unable to remove export-scoped offline render hooks during shutdown");
         return false;
     }
+    exporting::releaseOfflineRenderTimeHooks();
     // The replay session installs these for its whole lifetime; release them with the mod.
     visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Session);
     visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Session);
@@ -219,7 +226,11 @@ bool Playback::unhook() {
     }
 
     audio::exportcap::uninstall();
-    audio::probe::uninstall();
+    audio::hooks::uninstall();
+    if (!editor::graphics::hookSeekFreeze(false)) {
+        getSelf().getLogger().warn("Unable to remove the seek freeze hook during shutdown");
+    }
+    visuals::hookReplayHudVisibility(false);
     screen::hookRecordControls(false);
     screen::hookMainMenu(false);
     getEventListeners().clear();
@@ -320,6 +331,7 @@ bool Playback::disable() {
     exporting::applyExportEcoMode(false);
     record::Recorder::getInstance().stop();
     record::Recorder::getInstance().waitForExport();
+    record::Recorder::getInstance().releaseWorkerPool();
     if (!unhook()) {
         logger.error("Playback cannot disable because its runtime hooks could not be removed safely");
         return false;

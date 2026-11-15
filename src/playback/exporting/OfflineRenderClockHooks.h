@@ -7,11 +7,19 @@
 
 namespace playback::exporting {
 
+// What a render step is for. A capture step renders once, into the armed frame capture; warm-up and extra render steps
+// render every frame until they are cleared. KeepAlive is never published: it marks the redraws of the last render
+// that fill the frames with no step to render.
+enum class OfflineRenderClockKind : uint8_t { KeepAlive, Capture, Warmup, ExtraRender };
+
 struct OfflineRenderClockSample {
     visuals::ReplaySampleTime replayTime;
+    // Time the step adds for the game timer and the renderers' clock. It passes with the step's first render; any
+    // further render of the step draws the same instant again and adds none.
     float                     deltaTicks{};
     int                       wholeTicks{};
     uint64_t                  frameIndex{};
+    OfflineRenderClockKind    kind{OfflineRenderClockKind::KeepAlive};
 };
 
 struct OfflineRenderClockToken {
@@ -22,32 +30,15 @@ struct OfflineRenderClockToken {
 
 enum class OfflineRenderClockPublishResult : uint8_t { Published, Unavailable, Busy, InvalidSample };
 
-// What the client acceleration did to the game's sim timer; all zero when it was never installed.
-struct OfflineRenderClientBoostStats {
-    uint64_t advances{};
-    uint64_t pendingAdvances{};
-    uint64_t naturalTicks{};
-    uint64_t forcedTicks{};
-    uint64_t otherTimerAdvances{};
-    float    minPassedAfterForce{};
-    float    maxPassedAfterForce{};
-};
-
 [[nodiscard]] bool hookOfflineRenderClock(bool enable);
 [[nodiscard]] bool isOfflineRenderClockInstalled();
 
-// Hands out a native client tick as soon as one is requested instead of waiting for the 20 Hz timer.
-// Removed together with the other export hooks by hookOfflineRenderClock(false).
-[[nodiscard]] bool                          setOfflineRenderClientBoost(bool enable);
-[[nodiscard]] OfflineRenderClientBoostStats takeOfflineRenderClientBoostStats();
+// Call right before the client update. A client tick the export is waiting for then runs in that update instead of
+// whenever the game's 20 Hz timer next comes due, so the frame that needs it can render in the same pass of the loop.
+void grantPendingOfflineReplayTick();
 
-// clang-format off
-[[nodiscard]] OfflineRenderClockPublishResult publishOfflineRenderClockSample(
-    OfflineRenderClockSample sample,
-    OfflineRenderClockToken& token,
-    bool captureSample
-);
-// clang-format on
+[[nodiscard]] OfflineRenderClockPublishResult
+     publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token);
 void markOfflineRenderClockCaptureArmed(OfflineRenderClockToken token);
 // Re-renders a capture sample whose scene submit was early or never arrived; false when nothing changed.
 [[nodiscard]] bool retryMissedOfflineRenderScene(OfflineRenderClockToken token);

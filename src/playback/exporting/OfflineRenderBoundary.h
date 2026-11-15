@@ -76,9 +76,6 @@ public:
     [[nodiscard]] bool                    beginDrain();
     [[nodiscard]] bool                    isDrained();
 
-    // Republishes the last submitted frame without a capture so the game keeps drawing through a driver stall.
-    void holdRenderAlive();
-
     [[nodiscard]] std::optional<visuals::CapturedFrame> finishDownload();
 
     [[nodiscard]] OfflineRenderBoundaryStatus status();
@@ -92,37 +89,52 @@ private:
     void                                                  updateExportCamera(ExportFramePlan const& frame);
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
     [[nodiscard]] bool                                    warmupComplete() const;
-    [[nodiscard]] bool publishClockSample(ExportFramePlan const& frame, bool captureSample);
-    // Renders the frame's own time without a capture until the ray-traced denoiser has settled on it.
-    [[nodiscard]] bool advanceConvergence(ExportFramePlan const& frame);
-    void               releaseHeldRender();
-    void               clearClockSample();
+    [[nodiscard]] bool                                    hasStep(OfflineRenderClockKind kind) const;
+    // A step that is still published is a fault.
+    [[nodiscard]] bool publishStep(ExportFramePlan const& frame, OfflineRenderClockKind kind);
+    // Renders the frame's scene without a capture a fixed number of times; nothing measures whether it has settled.
+    [[nodiscard]] bool advanceExtraRenders(ExportFramePlan const& frame);
+    // How long finishDownload may block for the capture of the render that has just returned; zero is a plain poll.
+    [[nodiscard]] std::chrono::milliseconds submittedCaptureWait();
+    void               clearStep();
     void               fault(OfflineRenderBoundaryError error, std::string message);
+
+    // The clock hooks hold one render step at a time.
+    struct PublishedStep {
+        OfflineRenderClockToken token;
+        OfflineRenderClockKind  kind{OfflineRenderClockKind::KeepAlive};
+    };
 
     replay::ReplaySession&                         mReplay;
     uint32_t                                       mCaptureCapacity{};
     bool                                           mCaptureArmed{};
+    // Each render of the capture step is blocked on once; a capture that misses that wait is polled for.
+    bool                                           mSubmittedCaptureAwaited{};
     OfflineRenderFrameExecutor                     mExecutor;
     std::optional<ExportFramePlan>                 mPendingFrame;
     std::optional<ExportFramePlan>                 mLastSubmittedFrame;
     std::optional<visuals::FrameTicket>            mCompletedFrameTicket;
     std::optional<runtime::OfflineReplayTickToken> mReplayTickToken;
-    std::optional<OfflineRenderClockToken>         mClockToken;
-    std::optional<OfflineRenderClockToken>         mHoldToken;
+    std::optional<PublishedStep>                   mStep;
+    // Set once a step of the pending frame carried the time since the last submitted frame.
+    bool                                           mFrameTimeSpent{};
     int64_t                                        mMaximumReplayTick{};
+    // The configured warm-up budget; it is owed again after every dimension change.
+    uint32_t                                       mWarmupFrames{};
     uint32_t                                       mWarmupFramesRemaining{};
     uint32_t                                       mWarmupStableFrames{};
-    uint32_t                                       mConvergenceRendersDone{};
-    bool                                           mConvergenceComplete{};
-    std::optional<OfflineRenderClockToken>         mConvergenceToken{};
-    // Per-frame wall clock split three ways, because tick gating before the first convergence poll is neither.
+    uint32_t                                       mExtraRendersDone{};
+    bool                                           mExtraRendersComplete{};
+    // Per-frame wall clock split three ways, because tick gating before the first extra render poll is neither.
     std::chrono::steady_clock::time_point mFrameStartedAt{};
-    std::chrono::steady_clock::time_point mConvergenceStartedAt{};
-    std::chrono::steady_clock::time_point mConvergenceEndedAt{};
+    std::chrono::steady_clock::time_point mExtraRendersStartedAt{};
+    std::chrono::steady_clock::time_point mExtraRendersEndedAt{};
     uint64_t                              mPrepareMicros{};
-    uint64_t                              mConvergenceMicros{};
+    uint64_t                              mExtraRenderMicros{};
     uint64_t                              mCaptureMicros{};
-    uint64_t                              mConvergencePasses{};
+    uint64_t                              mExtraRenderPasses{};
+    uint64_t                              mCaptureWaits{};
+    uint64_t                              mCaptureWaitsMissed{};
     uint64_t                              mProfiledFrames{};
     std::chrono::steady_clock::time_point mRenderWaitStartedAt{};
     std::chrono::steady_clock::time_point mRenderWaitLastLoggedAt{};

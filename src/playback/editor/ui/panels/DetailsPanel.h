@@ -8,7 +8,7 @@
 
 namespace playback::editor::ui {
 
-enum class InspectorPage { Selection, Export, Settings };
+enum class InspectorPage { Selection, Export, Preview, Settings };
 
 class DetailsPanel {
 public:
@@ -21,6 +21,7 @@ private:
     void drawRail(PanelContext const& ctx, float width, float height);
     void drawSelectionPage(PanelContext const& ctx);
     void drawExportPage(PanelContext const& ctx);
+    void drawPreviewPage(PanelContext const& ctx);
     void drawSettingsPage(PanelContext const& ctx);
     void drawOptiPistonSection();
 

@@ -8,6 +8,7 @@
 
 #include "playback/Playback.h"
 #include "playback/editor/graphics/ReplayUILayout.h"
+#include "playback/editor/graphics/SeekFreezeHooks.h"
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/ui/ReplayEditor.h"
 #include "playback/exporting/ExportActivity.h"
@@ -754,7 +755,7 @@ struct ImGuiRenderer::Impl {
             (void)d3d11FrameTap.capture(d3d11Device.Get(), d3d11Context.Get(), source.Get());
         }
         // The export preview reuses this copy: at Present the back buffer already holds the clean world frame.
-        if (!exporting::isExportActive(state.exportStatus.state) || captureFrame) {
+        if ((!exporting::isExportActive(state.exportStatus.state) && !isSeekDisplayFrozen()) || captureFrame) {
             d3d11Context->CopyResource(d3d11GameTexture.Get(), source.Get());
         }
 
@@ -1008,6 +1009,13 @@ struct ImGuiRenderer::Impl {
             [](ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE* cpu, D3D12_GPU_DESCRIPTOR_HANDLE* gpu) {
                 auto& impl = *static_cast<Impl*>(info->UserData);
                 allocateSrv(impl.srvUsed, impl.srvHeap.Get(), impl.srvDescSize, *cpu, *gpu);
+                // A null descriptor crashes the driver inside UpdateTexture, so report exhaustion here.
+                if (cpu->ptr == 0) {
+                    getLogger().error(
+                        "ImGui SRV descriptor heap is exhausted ({} descriptors); UI textures cannot be created",
+                        SrvDescriptorCount
+                    );
+                }
             };
         ii.SrvDescriptorFreeFn =
             [](ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE cpu, D3D12_GPU_DESCRIPTOR_HANDLE) {
@@ -1352,13 +1360,14 @@ bool ImGuiRenderer::armExportCapture(visuals::FrameTicket const& ticket) {
     return true;
 }
 
-std::optional<visuals::CapturedFrame> ImGuiRenderer::collectExportFrame() {
+std::optional<visuals::CapturedFrame> ImGuiRenderer::collectExportFrame(std::chrono::milliseconds wait) {
     std::optional<visuals::FrameTapSession> session;
     {
         std::scoped_lock lock(mImpl->captureMutex);
         session = mImpl->captureSession;
     }
     if (!session) return std::nullopt;
+    if (wait > std::chrono::milliseconds::zero()) return mImpl->frameTap.waitPop(*session, wait);
     return mImpl->frameTap.tryPop(*session);
 }
 
@@ -1428,6 +1437,21 @@ bool ImGuiRenderer::renderExportOverlay(IDXGISwapChain* swapChain) {
     return renderInternal(swapChain, true, true, true);
 }
 
+bool ImGuiRenderer::captureSubmittedScene() {
+    IDXGISwapChain* swapChain{};
+    {
+        std::scoped_lock lock(mImpl->mutex);
+        if (mImpl->initialized) swapChain = mImpl->swapChain;
+    }
+    if (!swapChain || !mImpl->frameTap.hasArmedCapture()) return false;
+    return renderInternal(swapChain, false, true, false);
+}
+
+bool ImGuiRenderer::canCaptureSubmittedScene() const {
+    std::scoped_lock lock(mImpl->mutex);
+    return mImpl->initialized && mImpl->swapChain;
+}
+
 void ImGuiRenderer::pollFrameCapture() {
     std::scoped_lock lock(mImpl->mutex);
     if (mImpl->d3d11Initialized) mImpl->d3d11FrameTap.poll(mImpl->d3d11Context.Get());
@@ -1448,16 +1472,22 @@ bool ImGuiRenderer::renderInternal(
     if (!isTimelineRenderingEnabled()) return false;
     if (!swapChain) return false;
     if (allowUi && !p.editorContext) return false;
+    // A pass without UI is not at a Present, so it may only use the backend the last Present left running; building
+    // one is left to the next Present, which is handed a swap chain that is known to exist.
+    if (!allowUi && (!p.initialized || swapChain != p.swapChain)) return false;
 
     auto const state         = p.editorContext ? p.editorContext->snapshot() : EditorState{};
     bool const browserOpen   = allowUi && state.browser.visible;
     bool const exportOverlay = allowUi && exporting::isExportActive(state.exportStatus.state);
     bool const editorOpen    = allowUi && state.editorVisible;
     bool const recordDialog  = allowUi && playback::screen::isRecordDialogVisible();
-    p.recordDialogActive     = recordDialog;
     bool const uiActive      = browserOpen || editorOpen || recordDialog || (forceExportOverlay && exportOverlay);
-    if (allowUi) input::setUiVisible(uiActive);
-    if (!forceExportOverlay || !exportOverlay) p.resetExportSurface();
+    // A pass without UI only captures, between two Presents, so it leaves what the UI owns as the last Present set it.
+    if (allowUi) {
+        p.recordDialogActive = recordDialog;
+        input::setUiVisible(uiActive);
+        if (!forceExportOverlay || !exportOverlay) p.resetExportSurface();
+    }
 
     auto const browserRevision = allowUi && state.browser.snapshot ? state.browser.snapshot->revision : 0;
     if (allowUi && (p.browserVisible != browserOpen || p.browserSnapshotRevision != browserRevision)) {
@@ -1489,7 +1519,7 @@ bool ImGuiRenderer::renderInternal(
     auto now = std::chrono::steady_clock::now();
     if (allowUi && p.initialized && swapChain == p.swapChain) p.lastPresent = now;
     if (!uiActive) {
-        setReplayMouseInputActive(false);
+        if (allowUi) setReplayMouseInputActive(false);
         if (!captureActive && !forceExportOverlay) return false;
     }
 
@@ -1524,7 +1554,8 @@ bool ImGuiRenderer::renderInternal(
         if (!p.shutdown()) return false;
     }
 
-    MouseInputAttempt ia;
+    std::optional<MouseInputAttempt> ia;
+    if (allowUi) ia.emplace();
     if (!p.initialized) {
         if (!q) q = getSwapChainQueue(swapChain);
         if (!q) {
@@ -1557,8 +1588,10 @@ bool ImGuiRenderer::renderInternal(
 
     auto const bd = f.backBuffer->GetDesc();
     if (bd.Width == 0 || bd.Height == 0) return false;
-    // The export preview reuses the editor viewport copy, since Present already holds the clean world frame.
-    bool const copyGameTexture = !exportOverlay || captureActive;
+    // The export preview reuses the editor viewport copy, since the back buffer already holds the clean world frame.
+    // A seek freeze leaves no world in the back buffer, so the viewport keeps the last copied frame.
+    bool const seekFrozen      = !exportOverlay && isSeekDisplayFrozen() && p.lastGameTextureIndex.has_value();
+    bool const copyGameTexture = (!exportOverlay && !seekFrozen) || captureActive;
 
     // Export UI goes to its own window-sized layer, so the export resolution cannot blur it.
     bool const exportUi         = uiActive && forceExportOverlay && exportOverlay;
@@ -1597,7 +1630,8 @@ bool ImGuiRenderer::renderInternal(
             replayBrowser.draw(state.browser, submit);
         } else if (state.editorVisible || exportOverlay) {
             // During export only captured frames refresh the copy, so show the latest one instead of this slot.
-            auto const textureIndex = exportOverlay ? p.lastGameTextureIndex : std::optional<UINT>{fi};
+            auto const textureIndex =
+                exportOverlay || seekFrozen ? p.lastGameTextureIndex : std::optional<UINT>{fi};
             replayEditor.setGameTexture(
                 textureIndex ? static_cast<ImTextureID>(p.frames[*textureIndex].gameSrvGpu.ptr) : ImTextureID{}
             );
@@ -1761,7 +1795,7 @@ bool ImGuiRenderer::renderInternal(
     }
     if (frameTapSubmitted) p.d3d12FrameTap.submitted(p.fence.Get(), fv);
     if (surfaceUi) p.presentExportSurface();
-    if (drawUi) ia.commit();
+    if (drawUi) ia->commit();
     return true;
 }
 

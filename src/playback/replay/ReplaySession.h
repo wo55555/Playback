@@ -28,6 +28,7 @@
 class Level;
 class Dimension;
 class LevelChunk;
+class LevelChunkPacket;
 class Actor;
 class LegacyClientNetworkHandler;
 class MinecraftScreenModel;
@@ -75,7 +76,9 @@ struct ReplayCameraViewpoint {
 
 class ReplaySession {
 private:
-    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT          = 64;
+    static constexpr size_t MAX_LEVEL_CHUNKS_IN_FLIGHT = 64;
+    // A seek waits on its batch, so it keeps more columns loading at once than normal playback.
+    static constexpr size_t SEEK_LEVEL_CHUNKS_IN_FLIGHT         = 128;
     static constexpr size_t MAX_SUB_CHUNK_ENTRIES_PER_PACKET    = 1536;
     static constexpr size_t SNAPSHOT_GAME_PACKETS_PER_TICK      = 16;
     static constexpr int    CHUNK_INJECTION_STALL_TIMEOUT_TICKS = 20 * 30;
@@ -157,6 +160,56 @@ private:
     bool                          mChunkInjectionPlanPrepared = false;
     bool                          mCenterChunksReady          = false;
     SnapshotGamePacketPhase       mSnapshotGamePacketPhase    = SnapshotGamePacketPhase::StreamingChunks;
+
+    // A seek holds timeline chunk packets back until its landing is near, so catch-up streams one merged batch.
+    // Block updates for those columns wait too, or the older chunk data would overwrite them when it lands.
+    // A packet the plan would skip anyway (blob cache, other dimension) passes through untouched.
+    struct SeekDeferredLevelChunk {
+        int      index{};
+        uint64_t sequence{};
+        ChunkPos pos;
+        bool     passthrough{};
+    };
+    struct SeekDeferredSubChunkEntry {
+        ChunkPos column;
+        int      subChunk{};
+        bool     successful{};
+    };
+    struct SeekDeferredSubChunk {
+        int                                    index{};
+        uint64_t                               sequence{};
+        bool                                   passthrough{};
+        std::vector<SeekDeferredSubChunkEntry> entries;
+    };
+    struct SeekHeldBlockPacket {
+        MinecraftPacketIds id{};
+        std::string        payload;
+        ChunkPos           column;
+        int                subChunk{};
+        uint64_t           sequence{};
+    };
+    bool                                   mSeekChunksDeferred{};
+    uint64_t                               mSeekDeferredSequence{};
+    std::vector<SeekDeferredLevelChunk>    mSeekDeferredLevelChunkPackets;
+    std::vector<SeekDeferredSubChunk>      mSeekDeferredSubChunkPackets;
+    std::unordered_map<ChunkPos, uint64_t> mSeekLatestLevelChunks;
+    // A request-mode LevelChunk for a loaded column keeps its sub chunks, so only one with block data replaces them.
+    std::unordered_map<ChunkPos, uint64_t>                          mSeekLatestBlockLevelChunks;
+    std::unordered_map<ChunkPos, std::unordered_map<int, uint64_t>> mSeekLatestSubChunks;
+    // Set until the pending injection batch that includes a seek flush completes.
+    bool                             mSeekFlushedBatch{};
+    std::vector<SeekHeldBlockPacket> mSeekHeldBlockPackets;
+    struct SeekReleasedPacket {
+        MinecraftPacketIds id{};
+        std::string        payload;
+        bool               recordedLocalPlayer{};
+    };
+    // Packets held for a flushed batch, applied in order once it lands.
+    std::vector<SeekReleasedPacket> mSeekReleasedPackets;
+    // An entity spawning into a held column that the client has not loaded stops the tick until the batch lands.
+    bool mSeekTickInterrupted{};
+    bool mSeekWindowEntered{};
+    bool mSeekTickResuming{};
 
     std::atomic<bool>                    mStopRequested{false};
     std::atomic<int>                     mRequestedSeekTick{-1};
@@ -287,22 +340,31 @@ private:
     Player*                             mReplayPlayer   = nullptr;
     LegacyClientNetworkHandler*         mNetworkHandler = nullptr;
 
-    // The container screen the replay world opened for the followed player.
-    struct ContainerPreview {
-        int id{};
-        int type{};
-        int openTick{};
+    // Open/close intervals of the recorder's container screens and server forms, seen while reading actions, so a seek
+    // can show the screen that is open at its landing. packetId is the packet that opened it.
+    struct RecordedScreen {
+        MinecraftPacketIds packetId{};
+        int                id{};
+        int                openTick{};
+        int                closeTick{-1};
+        std::string        payload;
     };
-    std::optional<ContainerPreview> mContainerPreview;
+    std::vector<RecordedScreen> mRecordedScreens;
 
-    // Open/close intervals seen while reading actions, so a seek can show the container that is open at its landing.
-    struct RecordedContainer {
-        int         id{};
-        int         openTick{};
-        int         closeTick{-1};
-        std::string payload;
+    // The screen the replay world opened for the followed player.
+    struct ScreenPreview {
+        MinecraftPacketIds packetId{};
+        int                id{};
+        int                type{};
+        int                openTick{};
+
+        [[nodiscard]] bool shows(RecordedScreen const& screen) const {
+            return packetId == screen.packetId && id == screen.id && openTick == screen.openTick;
+        }
     };
-    std::vector<RecordedContainer> mRecordedContainers;
+    std::optional<ScreenPreview> mScreenPreview;
+    // Open tick of the last interval a preview was tried for, so a skipped one is not retried every tick.
+    int mTriedScreenOpenTick{-1};
 
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
@@ -310,7 +372,9 @@ private:
     std::optional<std::filesystem::path>                        mMountedReplayPacks;
 
     std::shared_ptr<StartGamePacket const> mReplayStartGame;
-    bool                                   mRecordedBlockRegistryApplied{};
+    // applyRecordedBlockRegistry runs from two hooks that can fire concurrently while the replay world loads.
+    std::recursive_mutex mRecordedBlockRegistryMutex;
+    bool                 mRecordedBlockRegistryApplied{};
 
     // Decoded when the local world's item packet arrives. Reading it at replay start asserts: the packet locks
     // the thread item registry, which is empty on the main menu.
@@ -367,28 +431,29 @@ private:
     [[nodiscard]] bool injectChunkPacket(std::string_view payload, MinecraftPacketIds packetId);
 
     [[nodiscard]] bool applyRequestModeLevelChunkDirect(std::string_view payload);
+    [[nodiscard]] bool applyRequestModeLevelChunkData(LevelChunkPacket const& packet);
 
     [[nodiscard]] bool applySubChunkDirect(std::string_view payload);
 
     [[nodiscard]] bool
     applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer = false);
 
-    // Tracks the recorded container state; true when the packet was consumed (open/close), false to apply it normally.
-    [[nodiscard]] bool trackContainerUiPacket(MinecraftPacketIds packetId, std::string_view payload);
+    // Tracks the recorded screen state; true when the packet was consumed (open/close), false to apply it normally.
+    [[nodiscard]] bool trackScreenPacket(MinecraftPacketIds packetId, std::string_view payload);
 
     bool dispatchUiPacket(std::shared_ptr<Packet> packet);
 
-    void openContainerPreview(std::string_view payload, int openTick);
+    void openScreenPreview(RecordedScreen const& screen);
 
-    void closeContainerPreview(char const* reason);
+    void closeScreenPreview(char const* reason);
 
-    void updateContainerPreview();
+    void updateScreenPreview();
 
     // Last record whose half-open interval [openTick, closeTick) contains tick. Unread closes stay open.
-    [[nodiscard]] RecordedContainer const* recordedContainerOpenAt(int tick) const;
+    [[nodiscard]] RecordedScreen const* recordedScreenOpenAt(int tick) const;
 
-    // Brings the preview in line with the recorded container after a seek landed.
-    void syncContainerPreviewAfterSeek();
+    // Brings the preview in line with the recorded screen after a seek landed.
+    void syncScreenPreviewAfterSeek();
 
     [[nodiscard]] bool prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets);
 
@@ -405,6 +470,18 @@ private:
     [[nodiscard]] bool applyPendingSnapshotLocalPlayer();
 
     void invalidateSnapshotColumns(Packet const& packet);
+
+    [[nodiscard]] bool seekChunkDeferralOpen() const;
+
+    [[nodiscard]] bool deferSeekChunk(int index, bool levelChunk);
+
+    [[nodiscard]] bool holdSeekBlockPacket(Packet const& packet, std::string_view payload);
+
+    void flushSeekChunks();
+
+    [[nodiscard]] bool releaseSeekPackets();
+
+    void clearSeekChunkDeferral();
 
     [[nodiscard]] bool flushPendingSnapshotGamePackets(
         bool                                         playerListOnly,
@@ -695,6 +772,9 @@ public:
     [[nodiscard]] static bool isReplayLevel(Level const& level);
 
     void configureReplayDimension(DimensionArguments& arguments) const;
+
+    // Whether a level id is the replay world's. Unlike isReplayLevel it may be asked from the server thread.
+    [[nodiscard]] bool isReplayWorldLevelId(std::string_view levelId) const;
 
     void setMinecraftScreenModel(std::shared_ptr<MinecraftScreenModel> const& screenModel);
 

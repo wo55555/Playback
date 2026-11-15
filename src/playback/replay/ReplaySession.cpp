@@ -94,6 +94,7 @@
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
 #include "mc/network/packet/UpdatePlayerGameTypePacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
+#include "mc/network/packet/UpdateSubChunkNetworkBlockInfo.h"
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/resources/MinEngineVersion.h"
 #include "mc/resources/ResourcePack.h"
@@ -111,6 +112,7 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/actor/player/TrustedSkinFlag.h"
 #include "mc/world/attribute/Attribute.h"
 #include "mc/world/attribute/AttributeData.h"
 #include "mc/world/attribute/AttributeInstance.h"
@@ -125,7 +127,6 @@
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/item/registry/ItemRegistryManager.h"
 #include "mc/world/item/registry/ItemRegistryRef.h"
-#include "mc/world/level/ActorRuntimeIDManager.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/BlockSource.h"
 #include "mc/world/level/DimensionManager.h"
@@ -235,21 +236,15 @@ constexpr auto             CenterChunkInjectionBudget = std::chrono::millisecond
 constexpr auto             OuterChunkInjectionBudget  = std::chrono::milliseconds(4);
 constexpr auto             SnapshotGamePacketBudget   = std::chrono::milliseconds(2);
 // Every client tick a seek spills into is one more frame of visible catch-up, so land it in as few as possible.
-constexpr auto       SeekCatchUpBudget = std::chrono::milliseconds(2000);
+constexpr auto SeekCatchUpBudget = std::chrono::milliseconds(2000);
+// An interactive seek leaves the rest of each client tick to the editor, so it lands over a few frames instead of one.
+constexpr auto SeekFrameBudget = std::chrono::milliseconds(100);
+// Snapshot entities a seek waits on drain in one pass of up to this long instead of a few per client tick.
+constexpr auto       SeekEntityPacketBudget = std::chrono::milliseconds(50);
 constexpr std::array PlaybackSpeeds{0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f};
 // A seek keeps only the particle events from this many ticks before its landing, and ticks the level once per replay
 // tick across them. Emitters such as lingering clouds are spawned by actor ticks and live about 27 ticks.
 constexpr int SeekParticleWindowTicks = 40;
-
-bool shouldIgnoreReplayPacket(MinecraftPacketIds packetId) {
-    switch (packetId) {
-    case MinecraftPacketIds::NetworkChunkPublisherUpdate:
-    case MinecraftPacketIds::ChunkRadiusUpdated:
-        return true;
-    default:
-        return false;
-    }
-}
 
 bool isSuccessfulSubChunkResult(SubChunkPacket::SubChunkRequestResult result) {
     return result == SubChunkPacket::SubChunkRequestResult::Success
@@ -352,20 +347,6 @@ void pinReplayEntityHeadRotation(Actor& actor, float headYaw, float bodyYaw) {
     }
 }
 
-// The HUD draws health, hunger, armor and experience from the observer's own attributes, so the recorded player's
-// are copied onto it. Health never drops below 1: a dead local player would open the death screen.
-void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
-    // 26.10 only exports the const getAttributes; the map it returns lives in AttributesComponent.
-    auto* component = observer.getEntityContext().tryGetComponent<AttributesComponent>().as_ptr();
-    if (!component) return;
-    auto&             attributes = *component->mAttributes;
-    std::string const health     = SharedAttributes::HEALTH().mName->getString();
-    for (auto& data : *packet.mAttributeData) {
-        if (data.mName->getString() == health && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
-        attributes.updateOrCreateAttribute(data);
-    }
-}
-
 // The attributes the HUD draws: hearts, absorption, hunger, saturation and the experience bar.
 std::array<Attribute const*, 6> hudAttributes() {
     return {
@@ -376,6 +357,28 @@ std::array<Attribute const*, 6> hudAttributes() {
         &Player::LEVEL(),
         &Player::EXPERIENCE(),
     };
+}
+
+bool isHudAttribute(HashedString const& name) {
+    auto const attributes = hudAttributes();
+    return std::any_of(attributes.begin(), attributes.end(), [&](Attribute const* attribute) {
+        return *attribute->mName == name;
+    });
+}
+
+// The HUD draws health, hunger, armor and experience from the observer's own attributes, so the recorded player's
+// are copied onto it. Only those: movement speed would carry the recorder's sprint into the free camera's FOV.
+// Health never drops below 1: a dead local player would open the death screen.
+void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
+    // 26.10 only exports the const getAttributes; the map it returns lives in AttributesComponent.
+    auto* component = observer.getEntityContext().tryGetComponent<AttributesComponent>().as_ptr();
+    if (!component) return;
+    auto& attributes = *component->mAttributes;
+    for (auto& data : *packet.mAttributeData) {
+        if (!isHudAttribute(*data.mName)) continue;
+        if (*data.mName == *SharedAttributes::HEALTH().mName && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
+        attributes.updateOrCreateAttribute(data);
+    }
 }
 
 std::optional<FollowedHudMirror::SavedAttribute> readHudAttribute(Actor& actor, Attribute const& attribute) {
@@ -419,6 +422,7 @@ void writeHudAttribute(Player& observer, FollowedHudMirror::SavedAttribute const
 // While another player's HUD is shown, the recorder's attribute updates are kept for the restore instead of applied.
 void keepRecordedAttributes(FollowedHudMirror& mirror, UpdateAttributesPacket const& packet) {
     for (auto const& data : *packet.mAttributeData) {
+        if (!isHudAttribute(*data.mName)) continue;
         auto const found = std::find_if(mirror.savedAttributes.begin(), mirror.savedAttributes.end(), [&](auto& kept) {
             return kept.name == *data.mName;
         });
@@ -661,13 +665,31 @@ void ageReplayParticles() {
 constexpr float kServerEyeHeight = 1.62f;
 
 // ContainerClose does not dismiss the player inventory. Pop it by name so a screen opened later is left alone.
-void popReplayContainerScreen() {
+void popReplayScreen() {
     auto client = ll::service::getClientInstance();
     if (!client) return;
     auto const name = client->getTopScreenName();
     if (name != "inventory_screen" && name != "crafting_screen") return;
     client->getCurrentSceneStack()->schedulePopScreenWithExpectedNames(std::vector<std::string>{name});
-    getLogger().info("containerPreview pop screen={}", name);
+    getLogger().info("screenPreview pop screen={}", name);
+}
+
+// The replay observer cannot use every container the recorder opened, so some are not previewed.
+char const* containerPreviewSkip(Player& observer, ContainerOpenPacket& open, int& blockEntity) {
+    using Type     = SharedTypes::Legacy::ContainerType;
+    auto const raw = open.mEntityUniqueID.get().rawID;
+    // The player inventory screen does not follow the recorded player yet, so it is not previewed.
+    if (open.mType == Type::Inventory) return "skip:inventory";
+    if (raw != -1 && raw != 0) {
+        return observer.getLevel().fetchEntity(open.mEntityUniqueID.get(), false) ? nullptr : "skip:entityMissing";
+    }
+    auto const kind             = open.mType;
+    bool const needsBlockEntity = kind == Type::Container || kind == Type::Furnace || kind == Type::BrewingStand
+                               || kind == Type::Dispenser || kind == Type::Dropper || kind == Type::Hopper
+                               || kind == Type::BlastFurnace || kind == Type::Smoker;
+    if (!needsBlockEntity) return nullptr;
+    blockEntity = observer.getDimensionBlockSource().getBlockEntity(open.mPos.get()) ? 1 : 0;
+    return blockEntity ? nullptr : "skip:noBlockEntity";
 }
 
 bool sameHudStack(ItemStack const& left, ItemStack const& right) {
@@ -806,6 +828,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         settings.mLANBroadcastIntent        = false;
         settings.mDisablePlayerInteractions = true;
         settings.mDefaultSpawn              = BlockPos(Vec3{context.x, context.y, context.z});
+        if (mReplayStartGame) settings.mSeed = mReplayStartGame->mSettings->mSeed;
 
         mReplayLevelId            = createReplayLevelId();
         auto dimensionProfile     = std::make_shared<ReplayDimensionProfile>();
@@ -876,8 +899,9 @@ void ReplaySession::clearReplayData() {
     mWorldReady   = false;
     mReplayFailed = false;
     mInjectingPacket.store(nullptr, std::memory_order_release);
-    mContainerPreview.reset();
-    mRecordedContainers.clear();
+    mScreenPreview.reset();
+    mRecordedScreens.clear();
+    mTriedScreenOpenTick = -1;
     visuals::setReplayContainerKeepOpen(false);
     visuals::setReplayHudGameType(-1);
     mLevelSimFrozen       = false;
@@ -885,8 +909,9 @@ void ReplaySession::clearReplayData() {
     mSeekParticlesStale   = false;
     mChunkCompletionObserved.store(false, std::memory_order_release);
     mReplayDimension.store(nullptr, std::memory_order_release);
-    mInitialSnapshotApplied  = false;
-    mChunkInjectionPending   = false;
+    mInitialSnapshotApplied = false;
+    mChunkInjectionPending  = false;
+    clearSeekChunkDeferral();
     mChunkCenterLogKey.clear();
     mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mIsProcessingSnapshot    = false;
@@ -2114,8 +2139,8 @@ bool ReplaySession::beginExportTimeline(int startTick) {
     if (!mActive || mReplayFailed || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return false;
 
     // The export warm-up waits for a menu-free scene, so a preview from before the export must not stay open.
-    closeContainerPreview("exportBegin");
-    popReplayContainerScreen();
+    closeScreenPreview("exportBegin");
+    popReplayScreen();
     clearPreviewShot();
     setFollowRecordedPlayer(false);
     mTeleportToSubjectPending = false;
@@ -2251,7 +2276,7 @@ bool ReplaySession::finishExportTimelineInitialization() {
     mExportSeekRequested    = false;
     mSnapMovementDuringSeek = false;
     mExportTimelinePhase    = ReplayExportTimelinePhase::Continuous;
-    syncContainerPreviewAfterSeek();
+    syncScreenPreviewAfterSeek();
     return true;
 }
 
@@ -2326,7 +2351,7 @@ void ReplaySession::finishSeek() {
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();
     if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
-    syncContainerPreviewAfterSeek();
+    syncScreenPreviewAfterSeek();
 }
 
 // Per-action snapping misses entities that never moved during catch-up, so settle every recorded one here.
@@ -2373,6 +2398,8 @@ void ReplaySession::beginSeek(int targetTick) {
     mIsPaused                = true;
     mPlaybackTickAccumulator = 0.0f;
     mSeekTargetTick          = targetTick;
+    mSeekWindowEntered       = false;
+    mSeekTickResuming        = false;
     mSnapMovementDuringSeek  = !exportSeek || mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
     mSeekParticlesCleared    = false;
     mSeekParticlesStale      = false;
@@ -2419,10 +2446,9 @@ void ReplaySession::beginSeek(int targetTick) {
 
     // A reloaded world keeps the particles of the place it left, so they are dropped even when the landing ticks
     // nothing. The same interval does not close: the screen stays until the landing tick leaves it.
-    auto const* landing      = recordedContainerOpenAt(targetTick);
-    bool const  sameContainer = mContainerPreview && landing && mContainerPreview->id == landing->id
-                            && mContainerPreview->openTick == landing->openTick;
-    if (changesDimension || forceExportSnapshot || !sameContainer) closeContainerPreview("seek");
+    auto const* landing    = recordedScreenOpenAt(targetTick);
+    bool const  sameScreen = mScreenPreview && landing && mScreenPreview->shows(*landing);
+    if (changesDimension || forceExportSnapshot || !sameScreen) closeScreenPreview("seek");
     mSeekParticlesStale = true;
     mReaderIndex        = selectedReader;
     mCurrentTick        = selectedStart;
@@ -2445,7 +2471,7 @@ void ReplaySession::tick() {
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
         if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
-        updateContainerPreview();
+        updateScreenPreview();
         syncFollowedPlayerHud();
 
         if (mPendingSnapshotApply) {
@@ -2489,6 +2515,11 @@ void ReplaySession::tick() {
             if (mPendingSnapshotApply || mPendingReplayDimension) return;
         }
         if (mPendingSnapshotApply || mPendingReplayDimension) return;
+        // A seek cleared from outside, such as by an export, leaves nothing to land the held chunks.
+        if (mSeekChunksDeferred && mSeekTargetTick < 0) {
+            flushSeekChunks();
+            if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
+        }
         // Yielding the tick that finishes a snapshot lets the client rebuild its players before catch-up resumes.
         if (mChunkInjectionPending) return;
 
@@ -2497,19 +2528,45 @@ void ReplaySession::tick() {
         refreshReplayEntityList();
 
         if (mSeekTargetTick >= 0) {
-            auto const deadline = std::chrono::steady_clock::now() + SeekCatchUpBudget;
+            auto const catchUpStart     = std::chrono::steady_clock::now();
+            auto const budget           = mExportSeekRequested ? SeekCatchUpBudget : SeekFrameBudget;
+            auto const deadline         = catchUpStart + budget;
+            bool       advancedThisCall = false;
             while (mCurrentTick < mSeekTargetTick) {
                 // Draining here instead of returning keeps the rest of this client tick usable for replay.
                 if (mChunkInjectionPending) {
-                    if (!tryFinishChunkInjection(deadline)) {
+                    auto const injectDeadline =
+                        mExportSeekRequested
+                            ? deadline
+                            : std::min(deadline, std::chrono::steady_clock::now() + OuterChunkInjectionBudget * 4);
+                    if (!tryFinishChunkInjection(injectDeadline)) {
                         if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                         break;
                     }
                     if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                 }
                 if (mPendingSnapshotApply || mPendingReplayDimension) break;
+                // The terrain loaded so far is the landing's base, so it lands once as the window opens. Chunks sent
+                // inside the window stay held for the final flush instead of each stopping catch-up for a frame.
+                if (!mSeekWindowEntered && mCurrentTick >= mSeekTargetTick - SeekParticleWindowTicks) {
+                    // The flush and the plan after it each take about a frame's budget, so a frame already half spent
+                    // leaves them to the next one.
+                    auto const halfSpent = [&] {
+                        return std::chrono::steady_clock::now() - catchUpStart >= budget / 2;
+                    };
+                    if (mSeekChunksDeferred && advancedThisCall && !mExportSeekRequested && halfSpent()) break;
+                    mSeekWindowEntered = true;
+                    if (mSeekChunksDeferred) {
+                        flushSeekChunks();
+                        if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
+                        if (!mExportSeekRequested && halfSpent()) break;
+                        continue;
+                    }
+                }
                 refreshReplayPlayerRoster();
                 refreshReplaySubjectBinding();
+                // A tick resumed after its entity's chunks landed already ticked the level the first time through.
+                bool const resumingTick = std::exchange(mSeekTickResuming, false);
                 // Export seeks keep the clear at the landing frame so their first frames stay unchanged.
                 bool const inParticleWindow =
                     !mExportSeekRequested && mCurrentTick >= mSeekTargetTick - SeekParticleWindowTicks;
@@ -2525,21 +2582,28 @@ void ReplaySession::tick() {
                         syncLevelSimPause(false);
                     }
                     // Like normal playback the level ticks before each replay tick, so the landing is not aged past it.
-                    if (runtime::runNativeLevelTick()) ageReplayParticles();
-                    else mSeekParticlesStale = true;
+                    if (!resumingTick) {
+                        if (runtime::runNativeLevelTick()) ageReplayParticles();
+                        else mSeekParticlesStale = true;
+                    }
                 } else {
                     mSeekParticlesStale = true;
                 }
                 if (!advanceReplayTick(false)) {
                     getLogger().warn("Replay ended at tick {} while seeking to tick {}", mCurrentTick, mSeekTargetTick);
+                    flushSeekChunks();
+                    if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                     finishSeek();
                     return;
                 }
+                advancedThisCall = true;
                 if (std::chrono::steady_clock::now() >= deadline) break;
             }
 
             if (mCurrentTick >= mSeekTargetTick) {
                 getLogger().debug("Replay seek completed at tick {}", mCurrentTick);
+                flushSeekChunks();
+                if (mReplayFailed) throw std::runtime_error("Unable to apply replay chunks");
                 finishSeek();
                 // The next level tick runs before the next replay tick, so a paused landing is frozen from here.
                 levelFreeze.freeze = mIsPaused && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive;
@@ -2725,8 +2789,9 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mInjectingPacket.store(nullptr, std::memory_order_release);
     mChunkCompletionObserved.store(false, std::memory_order_release);
     mReplayDimension.store(nullptr, std::memory_order_release);
-    mInitialSnapshotApplied  = false;
-    mChunkInjectionPending   = false;
+    mInitialSnapshotApplied = false;
+    mChunkInjectionPending  = false;
+    clearSeekChunkDeferral();
     mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mChunkInjectionTicks     = 0;
     mChunkInjectionIdleTicks = 0;
@@ -2953,6 +3018,8 @@ void ReplaySession::logRecordedItemRegistryApplied(ItemRegistryPacket const& pac
 }
 
 void ReplaySession::applyRecordedBlockRegistry() {
+    // The check and the registration share a lock so the two hooks cannot both register.
+    std::lock_guard lock(mRecordedBlockRegistryMutex);
     if (mRecordedBlockRegistryApplied) return;
     auto startGame = mReplayStartGame;
     if (!startGame) return;
@@ -2999,6 +3066,9 @@ void ReplaySession::applyRecordedBlockRegistry() {
 
         size_t registered = 0;
         for (auto const& [name, tag] : properties) {
+            // Blocks the client already has are kept; only the recording's custom blocks are registered here.
+            if (registry.lookupByName(HashedString{name}, false)) continue;
+
             auto const* definition = findDefinition(name);
             if (!definition) continue;
 
@@ -3298,6 +3368,8 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         return;
     }
 
+    // The snapshot resends every column it covers, which supersedes chunks a seek still holds.
+    clearSeekChunkDeferral();
     mPendingSnapshotLocalPlayer.reset();
     mPendingSnapshotGamePackets.clear();
     if (!clearRecordedEntities()) {
@@ -3703,6 +3775,7 @@ void ReplaySession::completeReplayDimensionTransition() {
 }
 
 void ReplaySession::resetDimensionScopedReplayState() {
+    clearSeekChunkDeferral();
     mChunkInjectionPending      = false;
     mChunkInjectionPlanPrepared = false;
     mApplyingChunkSnapshot      = false;
@@ -4048,9 +4121,12 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 
     mDirectSnapshotColumns.clear();
     mDirectLevelChunkIndices.clear();
-    auto& chunkSource = replayDimension->getChunkSource();
+    bool const seekFlushedBatch = mSeekFlushedBatch;
+    auto&      chunkSource      = replayDimension->getChunkSource();
     for (auto const& [pos, identity] : targetColumns) {
         if (mReusableSnapshotColumns.contains(pos) || identity.levelChunkIndex < 0) continue;
+        // Applied directly, a merged seek batch left the loaded columns of a dimension it just entered empty.
+        if (seekFlushedBatch) continue;
         if (!requestModeLevelChunks.contains(pos)) {
             continue;
         }
@@ -4167,8 +4243,15 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
 bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_clock::time_point> catchUpDeadline) {
     if (!mChunkInjectionPending) return true;
     if (mSnapshotGamePacketPhase == SnapshotGamePacketPhase::WaitingAfterPlayerList) {
-        auto const deadline = std::chrono::steady_clock::now() + SnapshotGamePacketBudget;
-        if (!flushPendingSnapshotGamePackets(false, SNAPSHOT_GAME_PACKETS_PER_TICK, deadline)) {
+        // A seek is waiting on these, so it drains them in one pass instead of spreading them over client ticks.
+        bool const seeking = mSeekTargetTick >= 0 && !mExportSeekRequested;
+        auto const deadline =
+            std::chrono::steady_clock::now() + (seeking ? SeekEntityPacketBudget : SnapshotGamePacketBudget);
+        if (!flushPendingSnapshotGamePackets(
+                false,
+                seeking ? std::numeric_limits<size_t>::max() : SNAPSHOT_GAME_PACKETS_PER_TICK,
+                deadline
+            )) {
             mReplayFailed = true;
             return false;
         }
@@ -4191,6 +4274,7 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
     if (!mChunkInjectionPlanPrepared) {
         auto* player = mReplayPlayer;
         if (!player) {
+            getLogger().error("Unable to finish replay chunk injection: replay player is unavailable");
             mReplayFailed = true;
             return false;
         }
@@ -4202,6 +4286,7 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
         PlaybackView view{position.x, position.y, position.z, rotation.y, rotation.x};
         mChunkInjectionStartedAt = std::chrono::steady_clock::now();
         if (!prepareChunkInjectionPlan(view)) {
+            getLogger().error("Unable to prepare the replay chunk injection plan");
             mReplayFailed = true;
             return false;
         }
@@ -4276,7 +4361,9 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
 }
 
 bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_point deadline) {
-    size_t processed = 0;
+    size_t       processed = 0;
+    size_t const inFlightLimit =
+        mSeekTargetTick >= 0 && !mExportSeekRequested ? SEEK_LEVEL_CHUNKS_IN_FLIGHT : MAX_LEVEL_CHUNKS_IN_FLIGHT;
     while (mPendingLevelChunkCursor < mPendingLevelChunkIndices.size()) {
         if (processed != 0 && std::chrono::steady_clock::now() >= deadline) {
             break;
@@ -4286,7 +4373,7 @@ bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_poi
         bool const direct = mDirectLevelChunkIndices.contains(index);
         if (!direct) {
             std::scoped_lock lock(mPendingLevelChunksMutex);
-            if (mPendingLevelChunks.size() >= MAX_LEVEL_CHUNKS_IN_FLIGHT) {
+            if (mPendingLevelChunks.size() >= inFlightLimit) {
                 break;
             }
         }
@@ -4404,6 +4491,29 @@ void ReplaySession::updateCenterChunkReadiness() {
 }
 
 bool ReplaySession::finishChunkInjection() {
+    // Native request-mode loading can reuse a column without replacing its biomes.
+    // Apply only the last packet per column, after all native work has finished.
+    for (int index : mPendingLevelChunkIndices) {
+        if (mDirectLevelChunkIndices.contains(index)) continue;
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
+        if (!packet) {
+            mReplayFailed = true;
+            return false;
+        }
+        ReadOnlyBinaryStream stream(mChunkPackets[static_cast<size_t>(index)], false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            mReplayFailed = true;
+            return false;
+        }
+        auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
+        if (static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)
+            && !applyRequestModeLevelChunkData(levelChunk)) {
+            auto const& pos = *levelChunk.mPos;
+            getLogger().error("Unable to restore replay chunk metadata at ({}, {})", pos.x, pos.z);
+            mReplayFailed = true;
+            return false;
+        }
+    }
     updateCenterChunkReadiness();
     bool const applyingSnapshot = mApplyingChunkSnapshot;
 
@@ -4488,6 +4598,7 @@ bool ReplaySession::finishChunkInjection() {
     mPendingLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
     mPendingSubChunkPackets.clear();
+    mSeekFlushedBatch = false;
     mCenterChunkPositions.clear();
     mRemainingSubChunkPacketsByColumn.clear();
     {
@@ -4523,6 +4634,11 @@ bool ReplaySession::finishChunkInjection() {
         mDirectSubChunkPackets   = 0;
         mDirectSubChunkEntries   = 0;
         mChunkInjectionPending   = false;
+        // Block updates held behind a merged seek batch go on top of the data that just landed.
+        if (!mSeekReleasedPackets.empty() && !releaseSeekPackets()) {
+            mReplayFailed = true;
+            return false;
+        }
         return true;
     }
 
@@ -4635,6 +4751,8 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
         }
 
         if (mPendingReplayDimension) return true;
+        // The rest of the tick resumes from the same action once the batch an entity needs has landed.
+        if (mSeekTickInterrupted) return true;
 
         if (mReplayFailed) throw std::runtime_error("Unable to apply a replay action");
     }
@@ -4690,6 +4808,7 @@ void ReplaySession::handleLevelChunkCached(int index) {
         mReplayFailed = true;
         return;
     }
+    if (deferSeekChunk(index, true)) return;
     if (!mChunkInjectionPending) {
         mChunkInjectionTicks     = 0;
         mChunkInjectionIdleTicks = 0;
@@ -4706,6 +4825,7 @@ void ReplaySession::handleSubChunkCached(int index) {
         mReplayFailed = true;
         return;
     }
+    if (deferSeekChunk(index, false)) return;
     if (!mChunkInjectionPending) {
         mChunkInjectionTicks     = 0;
         mChunkInjectionIdleTicks = 0;
@@ -4715,6 +4835,263 @@ void ReplaySession::handleSubChunkCached(int index) {
     mPendingSubChunkIndices.emplace_back(index);
     mChunkInjectionPending      = true;
     mChunkInjectionPlanPrepared = false;
+}
+
+// Each timeline batch stops catch-up until the client finishes loading it, and a seek crosses many batches that
+// re-send the same columns. Held back, they load as one batch with only the latest data per column.
+bool ReplaySession::seekChunkDeferralOpen() const {
+    if (mSeekTargetTick < 0 || mExportSeekRequested || mIsProcessingSnapshot || mApplyingChunkSnapshot
+        || mPendingReplayDimension) {
+        return false;
+    }
+    // A batch already loading is left to finish; holding starts again once it lands.
+    return mSeekChunksDeferred || !mChunkInjectionPending;
+}
+
+bool ReplaySession::deferSeekChunk(int index, bool levelChunk) {
+    // A deferral cannot outlive the conditions that close it, or the held data would land over newer packets.
+    if (mSeekChunksDeferred
+        && (mExportSeekRequested || mIsProcessingSnapshot || mApplyingChunkSnapshot || mPendingReplayDimension)) {
+        flushSeekChunks();
+        if (mReplayFailed) return false;
+    }
+    if (!seekChunkDeferralOpen()) return false;
+    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+    if (!replayDimension) return false;
+
+    auto packet = MinecraftPackets::createPacket(
+        levelChunk ? MinecraftPacketIds::FullChunkData : MinecraftPacketIds::SubChunkPacket
+    );
+    if (!packet) return false;
+    ReadOnlyBinaryStream stream(mChunkPackets[static_cast<size_t>(index)], false);
+    // The normal path reports packets that do not decode.
+    if (!packet->read(stream) || !stream.ensureReadCompleted() || !packet->mHandler) return false;
+
+    auto const sequence = ++mSeekDeferredSequence;
+    if (levelChunk) {
+        auto const& chunk   = static_cast<LevelChunkPacket const&>(*packet);
+        bool const  skipped = static_cast<bool>(chunk.mCacheEnabled)
+                          || static_cast<DimensionType const&>(chunk.mDimensionId) != replayDimension->getDimensionId();
+        ChunkPos const pos = *chunk.mPos;
+        mSeekDeferredLevelChunkPackets.push_back(SeekDeferredLevelChunk{index, sequence, pos, skipped});
+        if (!skipped) {
+            mSeekLatestLevelChunks.insert_or_assign(pos, sequence);
+            if (!static_cast<bool>(chunk.mClientNeedsToRequestSubchunks)) {
+                mSeekLatestBlockLevelChunks.insert_or_assign(pos, sequence);
+            }
+        }
+    } else {
+        auto const& subChunk = static_cast<SubChunkPacket const&>(*packet);
+        bool const  skipped =
+            static_cast<bool>(subChunk.mCacheEnabled)
+            || static_cast<DimensionType const&>(subChunk.mDimensionType) != replayDimension->getDimensionId();
+        SeekDeferredSubChunk deferred{index, sequence, skipped, {}};
+        if (!skipped) {
+            auto const& center = *subChunk.mCenterPos;
+            for (auto const& entry : *subChunk.mSubChunkData) {
+                auto const&    offset = *entry.mSubChunkPosOffset;
+                ChunkPos const column{center.x + static_cast<int>(offset.mX), center.z + static_cast<int>(offset.mZ)};
+                int const      y          = center.y + static_cast<int>(offset.mY);
+                auto const     result     = static_cast<SubChunkPacket::SubChunkRequestResult const&>(entry.mResult);
+                bool const     successful = isSuccessfulSubChunkResult(result);
+                deferred.entries.push_back(SeekDeferredSubChunkEntry{column, y, successful});
+                if (successful) mSeekLatestSubChunks[column].insert_or_assign(y, sequence);
+            }
+        }
+        mSeekDeferredSubChunkPackets.push_back(std::move(deferred));
+    }
+    mSeekChunksDeferred = true;
+    return true;
+}
+
+// A block update for a held column would land under the older chunk data, so it waits for that data.
+bool ReplaySession::holdSeekBlockPacket(Packet const& packet, std::string_view payload) {
+    std::optional<BlockPos> target;
+    switch (packet.getId()) {
+    case MinecraftPacketIds::UpdateBlock:
+        target = *static_cast<UpdateBlockPacket const&>(packet).mPos;
+        break;
+    case MinecraftPacketIds::UpdateBlockSynced:
+        target = *static_cast<UpdateBlockSyncedPacket const&>(packet).mPos;
+        break;
+    case MinecraftPacketIds::UpdateSubChunkBlocks: {
+        // The entries carry block positions of one sub chunk; the header position is not guaranteed to be one.
+        auto const& subChunk = static_cast<UpdateSubChunkBlocksPacket const&>(packet);
+        auto const& changed  = *subChunk.mBlocksChanged;
+        if (!changed.mStandards->empty()) target = *changed.mStandards->front().mPos;
+        else if (!changed.mExtras->empty()) target = *changed.mExtras->front().mPos;
+        else target = *subChunk.mSubChunkBlockPosition;
+        break;
+    }
+    case MinecraftPacketIds::BlockActorData:
+        target = *static_cast<BlockActorDataPacket const&>(packet).mPos;
+        break;
+    case MinecraftPacketIds::TileEvent:
+        target = *static_cast<BlockEventPacket const&>(packet).mPos;
+        break;
+    default:
+        break;
+    }
+    if (!target) return false;
+
+    ChunkPos const column{target->x >> 4, target->z >> 4};
+    int const      y    = target->y >> 4;
+    bool           held = mSeekLatestLevelChunks.contains(column);
+    if (!held) {
+        auto const subChunks = mSeekLatestSubChunks.find(column);
+        held                 = subChunks != mSeekLatestSubChunks.end() && subChunks->second.contains(y);
+    }
+    if (!held) return false;
+
+    // A dropped update still leaves the column changed since the snapshot that a later seek may reuse.
+    invalidateSnapshotColumns(packet);
+    mSeekHeldBlockPackets.push_back(
+        SeekHeldBlockPacket{packet.getId(), std::string(payload), column, y, ++mSeekDeferredSequence}
+    );
+    return true;
+}
+
+void ReplaySession::flushSeekChunks() {
+    if (!mSeekChunksDeferred) return;
+
+    // Data older than a later packet for the same place is what the client would have overwritten anyway.
+    auto const levelChunkAfter = [this](ChunkPos const& column, uint64_t sequence) {
+        auto const latest = mSeekLatestLevelChunks.find(column);
+        return latest != mSeekLatestLevelChunks.end() && latest->second > sequence;
+    };
+    auto const blockLevelChunkAfter = [this](ChunkPos const& column, uint64_t sequence) {
+        auto const latest = mSeekLatestBlockLevelChunks.find(column);
+        return latest != mSeekLatestBlockLevelChunks.end() && latest->second > sequence;
+    };
+    auto const subChunkAfter = [this](ChunkPos const& column, int y, uint64_t sequence) {
+        auto const subChunks = mSeekLatestSubChunks.find(column);
+        if (subChunks == mSeekLatestSubChunks.end()) return false;
+        auto const latest = subChunks->second.find(y);
+        return latest != subChunks->second.end() && latest->second > sequence;
+    };
+
+    std::vector<int> levelIndices;
+    levelIndices.reserve(mSeekDeferredLevelChunkPackets.size());
+    for (auto const& deferred : mSeekDeferredLevelChunkPackets) {
+        if (!deferred.passthrough && levelChunkAfter(deferred.pos, deferred.sequence)) continue;
+        levelIndices.push_back(deferred.index);
+    }
+
+    std::vector<int> subIndices;
+    subIndices.reserve(mSeekDeferredSubChunkPackets.size());
+    for (auto const& deferred : mSeekDeferredSubChunkPackets) {
+        if (deferred.passthrough) {
+            subIndices.push_back(deferred.index);
+            continue;
+        }
+        // Most packets are either fully current or fully replaced, so only a partial overlap is decoded again.
+        size_t successful = 0;
+        size_t superseded = 0;
+        for (auto const& place : deferred.entries) {
+            if (!place.successful) continue;
+            ++successful;
+            if (blockLevelChunkAfter(place.column, deferred.sequence)
+                || subChunkAfter(place.column, place.subChunk, deferred.sequence)) {
+                ++superseded;
+            }
+        }
+        if (superseded == 0 && successful > 0) {
+            subIndices.push_back(deferred.index);
+            continue;
+        }
+        if (superseded == successful) continue;
+        auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
+        if (!packet) {
+            mReplayFailed = true;
+            return;
+        }
+        ReadOnlyBinaryStream stream(mChunkPackets[static_cast<size_t>(deferred.index)], false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+            mReplayFailed = true;
+            return;
+        }
+        auto& subChunk = static_cast<SubChunkPacket&>(*packet);
+        auto& entries  = *subChunk.mSubChunkData;
+        if (entries.size() != deferred.entries.size()) {
+            mReplayFailed = true;
+            return;
+        }
+        std::vector<SubChunkPacket::SubChunkPacketData> kept;
+        kept.reserve(entries.size() - superseded);
+        for (size_t i = 0; i < entries.size(); ++i) {
+            auto const& place = deferred.entries[i];
+            if (place.successful
+                && (blockLevelChunkAfter(place.column, deferred.sequence)
+                    || subChunkAfter(place.column, place.subChunk, deferred.sequence))) {
+                continue;
+            }
+            kept.push_back(entries[i]);
+        }
+        entries = std::move(kept);
+        PlaybackBuffer filtered;
+        subChunk.write(filtered);
+        subIndices.push_back(cacheInlineChunkPacket(MinecraftPacketIds::SubChunkPacket, std::move(filtered.mBuffer)));
+    }
+
+    for (auto& held : mSeekHeldBlockPackets) {
+        if (blockLevelChunkAfter(held.column, held.sequence)
+            || subChunkAfter(held.column, held.subChunk, held.sequence)) {
+            continue;
+        }
+        mSeekReleasedPackets.push_back(SeekReleasedPacket{held.id, std::move(held.payload), false});
+    }
+
+    mSeekChunksDeferred = false;
+    mSeekDeferredLevelChunkPackets.clear();
+    mSeekDeferredSubChunkPackets.clear();
+    mSeekLatestLevelChunks.clear();
+    mSeekLatestBlockLevelChunks.clear();
+    mSeekLatestSubChunks.clear();
+    mSeekHeldBlockPackets.clear();
+
+    if (levelIndices.empty() && subIndices.empty()) {
+        if (!releaseSeekPackets()) mReplayFailed = true;
+        return;
+    }
+    if (!mChunkInjectionPending) {
+        mChunkInjectionTicks     = 0;
+        mChunkInjectionIdleTicks = 0;
+        mCenterChunksReady       = false;
+        mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    }
+    // The plan lets a later index win per column, and anything already queued arrived after these were held.
+    mPendingLevelChunkIndices.insert(mPendingLevelChunkIndices.begin(), levelIndices.begin(), levelIndices.end());
+    mPendingSubChunkIndices.insert(mPendingSubChunkIndices.begin(), subIndices.begin(), subIndices.end());
+    mSeekFlushedBatch           = true;
+    mChunkInjectionPending      = true;
+    mChunkInjectionPlanPrepared = false;
+}
+
+bool ReplaySession::releaseSeekPackets() {
+    mSeekTickResuming    = mSeekTickInterrupted;
+    mSeekTickInterrupted = false;
+    auto packets         = std::move(mSeekReleasedPackets);
+    mSeekReleasedPackets.clear();
+    for (auto const& packet : packets) {
+        if (!applyGamePacket(packet.id, packet.payload, packet.recordedLocalPlayer)) return false;
+    }
+    return true;
+}
+
+void ReplaySession::clearSeekChunkDeferral() {
+    mSeekChunksDeferred   = false;
+    mSeekDeferredSequence = 0;
+    mSeekDeferredLevelChunkPackets.clear();
+    mSeekDeferredSubChunkPackets.clear();
+    mSeekLatestLevelChunks.clear();
+    mSeekLatestBlockLevelChunks.clear();
+    mSeekLatestSubChunks.clear();
+    mSeekHeldBlockPackets.clear();
+    mSeekReleasedPackets.clear();
+    mSeekTickInterrupted = false;
+    mSeekTickResuming    = false;
+    mSeekWindowEntered   = false;
+    mSeekFlushedBatch    = false;
 }
 
 int ReplaySession::cacheInlineChunkPacket(MinecraftPacketIds packetId, std::string payload) {
@@ -5094,55 +5471,60 @@ bool ReplaySession::dispatchUiPacket(std::shared_ptr<Packet> packet) {
     return true;
 }
 
-// Container screens are only previewed for a followed, settled, non-exporting replay; every other case skips.
-bool ReplaySession::trackContainerUiPacket(MinecraftPacketIds packetId, std::string_view payload) {
-    if (packetId != MinecraftPacketIds::ContainerOpen) {
-        for (auto it = mRecordedContainers.rbegin(); it != mRecordedContainers.rend(); ++it) {
-            if (it->openTick > mCurrentTick) continue;
+// Container screens and server forms are only previewed for a followed, settled replay; every other case skips.
+bool ReplaySession::trackScreenPacket(MinecraftPacketIds packetId, std::string_view payload) {
+    if (packetId != MinecraftPacketIds::ContainerOpen && packetId != MinecraftPacketIds::ShowModalForm) {
+        // ContainerClose leaves a form alone; ClientboundCloseScreen closes whichever screen is open.
+        auto const closes = [&](MinecraftPacketIds opener) {
+            return packetId != MinecraftPacketIds::ContainerClose || opener == MinecraftPacketIds::ContainerOpen;
+        };
+        for (auto it = mRecordedScreens.rbegin(); it != mRecordedScreens.rend(); ++it) {
+            if (it->openTick > mCurrentTick || !closes(it->packetId)) continue;
             if (it->closeTick < 0) it->closeTick = mCurrentTick;
             break;
         }
         // A seek records every packet it crosses and decides the screen once, at the landing tick.
-        if (mSeekTargetTick < 0 && mContainerPreview) {
-            closeContainerPreview(packetId == MinecraftPacketIds::ContainerClose ? "recordedClose" : "closeScreen");
-            popReplayContainerScreen();
+        if (mSeekTargetTick < 0 && mScreenPreview && closes(mScreenPreview->packetId)) {
+            closeScreenPreview(packetId == MinecraftPacketIds::ContainerClose ? "recordedClose" : "closeScreen");
+            popReplayScreen();
         }
         return true;
     }
 
-    auto packet = MinecraftPackets::createPacket(packetId);
-    if (!packet) return true;
-    ReadOnlyBinaryStream stream(payload, false);
-    if (!packet->read(stream) || !stream.ensureReadCompleted()) return true;
-    int const id = static_cast<int>(static_cast<ContainerOpenPacket&>(*packet).mContainerId);
+    int id = 0;
+    if (packetId == MinecraftPacketIds::ContainerOpen) {
+        auto packet = MinecraftPackets::createPacket(packetId);
+        if (!packet) return true;
+        ReadOnlyBinaryStream stream(payload, false);
+        if (!packet->read(stream) || !stream.ensureReadCompleted()) return true;
+        id = static_cast<int>(static_cast<ContainerOpenPacket&>(*packet).mContainerId);
+    }
 
     // Reads repeat after a backward seek, so an interval is only recorded once.
-    bool known = false;
-    for (auto& record : mRecordedContainers) {
+    RecordedScreen const* screen = nullptr;
+    for (auto& record : mRecordedScreens) {
         if (record.closeTick < 0 && record.openTick < mCurrentTick) record.closeTick = mCurrentTick;
-        if (record.openTick == mCurrentTick && record.id == id) known = true;
+        if (record.packetId == packetId && record.id == id && record.openTick == mCurrentTick) screen = &record;
     }
-    if (!known) mRecordedContainers.push_back({id, mCurrentTick, -1, std::string(payload)});
+    if (!screen) screen = &mRecordedScreens.emplace_back(packetId, id, mCurrentTick, -1, std::string(payload));
 
     if (mSeekTargetTick >= 0) return true;
-    if (mContainerPreview && (mContainerPreview->id != id || mContainerPreview->openTick != mCurrentTick)) {
-        closeContainerPreview("replaced");
-    }
-    openContainerPreview(payload, mCurrentTick);
+    if (mScreenPreview && !mScreenPreview->shows(*screen)) closeScreenPreview("replaced");
+    openScreenPreview(*screen);
     return true;
 }
 
-void ReplaySession::openContainerPreview(std::string_view payload, int openTick) {
-    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerOpen);
+void ReplaySession::openScreenPreview(RecordedScreen const& screen) {
+    mTriedScreenOpenTick = screen.openTick;
+    auto packet          = MinecraftPackets::createPacket(screen.packetId);
     if (!packet) return;
-    ReadOnlyBinaryStream stream(payload, false);
+    ReadOnlyBinaryStream stream(screen.payload, false);
     if (!packet->read(stream) || !stream.ensureReadCompleted()) return;
 
-    auto&      open      = static_cast<ContainerOpenPacket&>(*packet);
-    int const  id        = static_cast<int>(open.mContainerId);
-    int const  type      = static_cast<int>(open.mType);
-    auto const pos       = open.mPos.get();
-    auto const entityRaw = open.mEntityUniqueID.get().rawID;
+    auto* const open =
+        screen.packetId == MinecraftPacketIds::ContainerOpen ? &static_cast<ContainerOpenPacket&>(*packet) : nullptr;
+    int const  type      = open ? static_cast<int>(open->mType) : -1;
+    auto const entityRaw = open ? open->mEntityUniqueID.get().rawID : int64{-1};
     bool const following = visuals::isReplaySubjectViewDriven() && visuals::isReplaySubjectRecorder();
 
     char const* action      = "inject";
@@ -5153,48 +5535,40 @@ void ReplaySession::openContainerPreview(std::string_view payload, int openTick)
         action = "skip:seeking";
     // The export waits for a menu-free scene while it initializes; finishExportTimelineInitialization reopens it.
     else if (mExportTimelinePhase == ReplayExportTimelinePhase::Initializing) action = "skip:exportInit";
-    else if (mContainerPreview) action = "skip:alreadyOpen";
-    // The player inventory screen does not follow the recorded player yet, so it is not previewed.
-    else if (open.mType == SharedTypes::Legacy::ContainerType::Inventory) action = "skip:inventory";
-    else if (entityRaw != -1 && entityRaw != 0) {
-        if (!mReplayPlayer->getLevel().fetchEntity(open.mEntityUniqueID.get(), false)) action = "skip:entityMissing";
-    } else {
-        using Type = SharedTypes::Legacy::ContainerType;
-        auto const kind = open.mType;
-        bool const needsBlockEntity = kind == Type::Container || kind == Type::Furnace || kind == Type::BrewingStand
-                                   || kind == Type::Dispenser || kind == Type::Dropper || kind == Type::Hopper
-                                   || kind == Type::BlastFurnace || kind == Type::Smoker;
-        if (needsBlockEntity) {
-            blockEntity = mReplayPlayer->getDimensionBlockSource().getBlockEntity(pos) ? 1 : 0;
-            if (blockEntity == 0) action = "skip:noBlockEntity";
-        }
+    else if (mScreenPreview) action = "skip:alreadyOpen";
+    else if (open) {
+        if (auto const skip = containerPreviewSkip(*mReplayPlayer, *open, blockEntity)) action = skip;
     }
 
     getLogger().info(
-        "containerPreview open action={} id={} type={} entity={} blockEntity={} following={} tick={} openTick={}",
+        "screenPreview open action={} screen={} id={} type={} entity={} blockEntity={} following={} tick={} "
+        "openTick={}",
         action,
-        id,
+        open ? "container" : "form",
+        screen.id,
         type,
         entityRaw,
         blockEntity,
         following,
         mCurrentTick,
-        openTick
+        screen.openTick
     );
     if (std::string_view(action) != "inject") return;
 
-    mContainerPreview = ContainerPreview{id, type, openTick};
-    visuals::setReplayContainerKeepOpen(true);
+    mScreenPreview = ScreenPreview{screen.packetId, screen.id, type, screen.openTick};
+    if (open) visuals::setReplayContainerKeepOpen(true);
     (void)dispatchUiPacket(std::move(packet));
 }
 
-void ReplaySession::closeContainerPreview(char const* reason) {
-    if (!mContainerPreview) return;
-    auto const preview = *mContainerPreview;
-    visuals::setReplayContainerKeepOpen(false);
+void ReplaySession::closeScreenPreview(char const* reason) {
+    if (!mScreenPreview) return;
+    auto const preview   = *mScreenPreview;
+    bool const container = preview.packetId == MinecraftPacketIds::ContainerOpen;
+    if (container) visuals::setReplayContainerKeepOpen(false);
     getLogger().info(
-        "containerPreview close reason={} id={} type={} openTick={} tick={} keepOpenOverrides={}",
+        "screenPreview close reason={} screen={} id={} type={} openTick={} tick={} keepOpenOverrides={}",
         reason,
+        container ? "container" : "form",
         preview.id,
         preview.type,
         preview.openTick,
@@ -5202,7 +5576,11 @@ void ReplaySession::closeContainerPreview(char const* reason) {
         visuals::replayContainerKeepOpenOverrides()
     );
     if (mReplayPlayer && mReplayWorldJoined && mNetworkHandler) {
-        if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerClose)) {
+        if (!container) {
+            if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ClientboundCloseScreen)) {
+                (void)dispatchUiPacket(std::move(packet));
+            }
+        } else if (auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::ContainerClose)) {
             auto& close                 = static_cast<ContainerClosePacket&>(*packet);
             close.mContainerId          = static_cast<ContainerID>(preview.id);
             close.mContainerType        = static_cast<SharedTypes::Legacy::ContainerType>(preview.type);
@@ -5210,46 +5588,51 @@ void ReplaySession::closeContainerPreview(char const* reason) {
             (void)dispatchUiPacket(std::move(packet));
         }
     }
-    mContainerPreview.reset();
+    mScreenPreview.reset();
 }
 
-void ReplaySession::updateContainerPreview() {
-    if (!mContainerPreview) return;
+void ReplaySession::updateScreenPreview() {
+    bool const following = visuals::isReplaySubjectViewDriven() && visuals::isReplaySubjectRecorder();
+    if (!mScreenPreview) {
+        // Following the recorder again shows the screen it still has open, tried once per interval.
+        if (!following) mTriedScreenOpenTick = -1;
+        else if (auto const* wanted = recordedScreenOpenAt(mCurrentTick);
+                 wanted && wanted->openTick != mTriedScreenOpenTick && mSeekTargetTick < 0) {
+            openScreenPreview(*wanted);
+        }
+        return;
+    }
     // A native screen would keep the dimension loading screen from clearing, so it closes before the transition.
-    if (!visuals::isReplaySubjectViewDriven() || !visuals::isReplaySubjectRecorder())
-        closeContainerPreview("followEnded");
-    else if (mPendingReplayDimension) closeContainerPreview("dimension");
-    if (!mContainerPreview) popReplayContainerScreen();
+    if (!following) closeScreenPreview("followEnded");
+    else if (mPendingReplayDimension) closeScreenPreview("dimension");
+    if (!mScreenPreview) popReplayScreen();
 }
 
-// The landing tick has applied every action before it, so a container opened earlier and not yet closed is the one to
+// The landing tick has applied every action before it, so a screen opened earlier and not yet closed is the one to
 // show.
-ReplaySession::RecordedContainer const* ReplaySession::recordedContainerOpenAt(int tick) const {
-    RecordedContainer const* wanted = nullptr;
-    for (auto const& record : mRecordedContainers) {
+ReplaySession::RecordedScreen const* ReplaySession::recordedScreenOpenAt(int tick) const {
+    RecordedScreen const* wanted = nullptr;
+    for (auto const& record : mRecordedScreens) {
         if (record.openTick < tick && (record.closeTick < 0 || record.closeTick >= tick)) wanted = &record;
     }
     return wanted;
 }
 
-void ReplaySession::syncContainerPreviewAfterSeek() {
-    auto const* wanted = recordedContainerOpenAt(mCurrentTick);
-    if (mContainerPreview && wanted && mContainerPreview->id == wanted->id
-        && mContainerPreview->openTick == wanted->openTick) {
-        return;
-    }
-    closeContainerPreview("seek");
-    if (wanted) openContainerPreview(wanted->payload, wanted->openTick);
-    else popReplayContainerScreen();
+void ReplaySession::syncScreenPreviewAfterSeek() {
+    auto const* wanted = recordedScreenOpenAt(mCurrentTick);
+    if (mScreenPreview && wanted && mScreenPreview->shows(*wanted)) return;
+    closeScreenPreview("seek");
+    if (wanted) openScreenPreview(*wanted);
+    else popReplayScreen();
 }
 
 bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
     if (packetId == MinecraftPacketIds::ContainerOpen || packetId == MinecraftPacketIds::ContainerClose
-        || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
-        return trackContainerUiPacket(packetId, payload);
+        || packetId == MinecraftPacketIds::ShowModalForm || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
+        return trackScreenPacket(packetId, payload);
     }
-    // The replay world owns client chunk publishing.
-    if (shouldIgnoreReplayPacket(packetId)) return true;
+    // An older recording may still carry packets the recorder now ignores.
+    if (describePacketLifecycle(packetId).lifecycle == PacketLifecycle::Ignore) return true;
     // The client registry is built once; the recorded table already went in at login in place of the local one.
     if (packetId == MinecraftPacketIds::ItemRegistryPacket
         && mRecordedItemRegistryApplied.load(std::memory_order_acquire)) {
@@ -5257,10 +5640,16 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
 
     auto packet = MinecraftPackets::createPacket(packetId);
-    if (!packet || !mNetworkHandler || !packet->mHandler) return false;
+    if (!packet || !mNetworkHandler || !packet->mHandler) {
+        getLogger().error("Unable to create or bind replay game packet {}", static_cast<int>(packetId));
+        return false;
+    }
 
     ReadOnlyBinaryStream stream(payload, false);
-    if (!packet->read(stream) || !stream.ensureReadCompleted()) return false;
+    if (!packet->read(stream) || !stream.ensureReadCompleted()) {
+        getLogger().error("Unable to read or deserialize replay game packet {}", static_cast<int>(packetId));
+        return false;
+    }
 
     if (packetId == MinecraftPacketIds::SetTime) {
         mReplayTime = static_cast<SetTimePacket const&>(*packet).mTime;
@@ -5276,17 +5665,18 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 bool const recorder = mRecordedLocalPlayerId && entry.mId->rawID == mRecordedLocalPlayerId->rawID;
                 noteReplayIdentity(std::move(uuid), *entry.mName, ActorUniqueID{entry.mId->rawID}, recorder);
             }
-            // Servers may withhold a player's skin; drop only that entry so the rest of the list still spawns.
-            auto removed = std::erase_if(entries, [](PlayerListEntry const& entry) {
-                if (entry.mSkin->mSkinImpl) return false;
-                getLogger().debug("Skipping replay player-list entry '{}' without skin data", *entry.mName);
-                return true;
-            });
-            if (entries.empty()) {
-                if (removed != 0) getLogger().warn("Skipping a replay player-list packet with no usable entries");
-                return true;
-            }
+            // Servers may withhold a player's skin; give that entry the default skin instead of dropping the player.
             for (auto& entry : entries) {
+                if (!entry.mSkin->mSkinImpl) {
+                    getLogger().debug(
+                        "Replay player-list entry '{}' has no skin data; using the default skin",
+                        *entry.mName
+                    );
+                    *entry.mSkin = SerializedSkinRef{};
+                    if (!entry.mSkin->mSkinImpl) continue;
+                    // 26.10 does not export createTrustedDefaultSerializedSkin: the default skin marked as trusted.
+                    entry.mSkin->mSkinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
+                }
                 entry.mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
             }
         } else if (playerList.mAction == PlayerListPacketType::Remove) {
@@ -5310,6 +5700,16 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         }
     }
 
+    if (packetId == MinecraftPacketIds::PlayerSkin) {
+        // Same rule as the player list: a recorded skin must never be treated as the viewer's own.
+        auto& skinImpl = static_cast<PlayerSkinPacket&>(*packet).mSkin->mSkinImpl;
+        if (!skinImpl) {
+            getLogger().debug("Skipping a replay player skin packet without skin data");
+            return true;
+        }
+        skinImpl->mObject.mIsPrimaryUser = false;
+    }
+
     if (packetId == MinecraftPacketIds::ChangeDimension) {
         if (!mReplayPlayer) return false;
         auto const&        change   = static_cast<ChangeDimensionPacket const&>(*packet);
@@ -5322,28 +5722,33 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     ActorUniqueID  entityId{};
     ActorRuntimeID runtimeId{};
+    Vec3           entityPosition{};
     bool           addsEntity = true;
     switch (packetId) {
     case MinecraftPacketIds::AddActor: {
         auto const& addActor = static_cast<AddActorPacket const&>(*packet);
         entityId             = *addActor.mEntityId;
         runtimeId            = *addActor.mRuntimeId;
+        entityPosition       = *addActor.mPos;
         break;
     }
     case MinecraftPacketIds::AddItemActor: {
         auto const& addItem = static_cast<AddItemActorPacket const&>(*packet);
         entityId            = *addItem.mId;
         runtimeId           = *addItem.mRuntimeId;
+        entityPosition      = *addItem.mPos;
         break;
     }
     case MinecraftPacketIds::AddPainting: {
         auto const& addPainting = static_cast<AddPaintingPacket const&>(*packet);
         entityId                = *addPainting.mEntityId;
         runtimeId               = *addPainting.mRuntimeId;
+        entityPosition          = *addPainting.mPos;
         break;
     }
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
+        entityPosition  = *addPlayer.mPos;
         if (recordedLocalPlayer && mReplayPlayer && *addPlayer.mName == "__playback_" + addPlayer.mUuid->asString()) {
             // Older snapshots kept the original name in the player list under the synthetic UUID.
             auto const& entries = mReplayPlayer->getLevel().getPlayerList();
@@ -5387,9 +5792,32 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             return true;
         }
 
-        auto runtimeIdManager = level.getActorRuntimeIDManager();
-        if (runtimeIdManager->mLastRuntimeID->rawID < runtimeId.rawID) {
-            runtimeIdManager->mLastRuntimeID = runtimeId;
+        // Recorded IDs never raise the runtime-id allocator: that made native code drop the real local player.
+    }
+
+    if (mSeekChunksDeferred && !mIsProcessingSnapshot) {
+        if (holdSeekBlockPacket(*packet, payload)) return true;
+        if (addsEntity) {
+            // An entity added to a column the client has not loaded may never be placed, so its chunk lands first.
+            ChunkPos const column{
+                static_cast<int>(std::floor(entityPosition.x)) >> 4,
+                static_cast<int>(std::floor(entityPosition.z)) >> 4
+            };
+            auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+            if (replayDimension && mSeekLatestLevelChunks.contains(column)) {
+                auto chunk = replayDimension->getChunkSource().getExistingChunk(column);
+                if (!chunk || chunk->mIsEmptyClientChunk
+                    || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+                    flushSeekChunks();
+                    if (mReplayFailed) return false;
+                    mSeekReleasedPackets.push_back(
+                        SeekReleasedPacket{packetId, std::string(payload), recordedLocalPlayer}
+                    );
+                    mSeekTickInterrupted = mChunkInjectionPending;
+                    if (!mChunkInjectionPending) return releaseSeekPackets();
+                    return true;
+                }
+            }
         }
     }
 
@@ -5576,9 +6004,15 @@ void ReplaySession::invalidateSnapshotColumns(Packet const& packet) {
     case MinecraftPacketIds::UpdateBlockSynced:
         invalidate(*static_cast<UpdateBlockSyncedPacket const&>(packet).mPos);
         break;
-    case MinecraftPacketIds::UpdateSubChunkBlocks:
-        invalidate(*static_cast<UpdateSubChunkBlocksPacket const&>(packet).mSubChunkBlockPosition);
+    case MinecraftPacketIds::UpdateSubChunkBlocks: {
+        auto const& subChunk = static_cast<UpdateSubChunkBlocksPacket const&>(packet);
+        auto const& changed  = *subChunk.mBlocksChanged;
+        invalidate(*subChunk.mSubChunkBlockPosition);
+        for (auto const* blocks : {&*changed.mStandards, &*changed.mExtras}) {
+            for (auto const& info : *blocks) invalidate(*info.mPos);
+        }
         break;
+    }
     case MinecraftPacketIds::BlockActorData:
         invalidate(*static_cast<BlockActorDataPacket const&>(packet).mPos);
         break;
@@ -5616,7 +6050,14 @@ bool ReplaySession::flushPendingSnapshotGamePackets(
             continue;
         }
 
-        if (!applyGamePacket(packetId, payload)) return false;
+        if (!applyGamePacket(packetId, payload)) {
+            getLogger().error(
+                "Unable to apply replay snapshot game packet {} (playerListOnly={})",
+                static_cast<int>(packetId),
+                playerListOnly
+            );
+            return false;
+        }
         ++applied;
     }
     if (applied != 0) {
@@ -5655,11 +6096,6 @@ bool ReplaySession::clearRecordedEntities() {
 }
 
 bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
-    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
-    if (!replayDimension) {
-        return false;
-    }
-
     auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
     if (!packet) return false;
 
@@ -5669,6 +6105,21 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
     }
 
     auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
+    if (!applyRequestModeLevelChunkData(levelChunk)) return false;
+
+    {
+        std::scoped_lock lock(mPendingLevelChunksMutex);
+        mCompletedLevelChunkPositions.emplace(*levelChunk.mPos);
+    }
+    mChunkCompletionObserved.store(true, std::memory_order_release);
+    ++mDirectLevelChunks;
+    return true;
+}
+
+bool ReplaySession::applyRequestModeLevelChunkData(LevelChunkPacket const& levelChunk) {
+    auto const* replayDimension = mReplayDimension.load(std::memory_order_acquire);
+    if (!replayDimension) return false;
+
     if (static_cast<bool>(levelChunk.mCacheEnabled) || !static_cast<bool>(levelChunk.mClientNeedsToRequestSubchunks)
         || static_cast<DimensionType const&>(levelChunk.mDimensionId) != replayDimension->getDimensionId()) {
         return false;
@@ -5696,12 +6147,6 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
         return false;
     }
 
-    {
-        std::scoped_lock lock(mPendingLevelChunksMutex);
-        mCompletedLevelChunkPositions.emplace(pos);
-    }
-    mChunkCompletionObserved.store(true, std::memory_order_release);
-    ++mDirectLevelChunks;
     return true;
 }
 
@@ -5860,6 +6305,11 @@ bool ReplaySession::isReplayLevel(Level const& level) {
         && level.getLevelId() == session.mReplayLevelId;
 }
 
+bool ReplaySession::isReplayWorldLevelId(std::string_view levelId) const {
+    auto const profile = mReplayDimensionProfile.load(std::memory_order_acquire);
+    return profile && levelId == profile->levelId;
+}
+
 void ReplaySession::configureReplayDimension(DimensionArguments& arguments) const {
     auto profile = mReplayDimensionProfile.load(std::memory_order_acquire);
     if (!profile || arguments.mDerived->mLevel.getLevelId() != profile->levelId) return;
@@ -5900,14 +6350,20 @@ void ReplaySession::setMinecraftScreenModel(std::shared_ptr<MinecraftScreenModel
 void ReplaySession::onLevelJoined(Player& player) {
     if (!mActive) return;
     if (!isReplayLevel(player.getLevel())) {
-        getLogger().error("The replay world did not open; replay cancelled");
+        getLogger().error(
+            "The replay world did not open; replay cancelled (joinedLevelId={}, expectedLevelId={})",
+            player.getLevel().getLevelId(),
+            mReplayLevelId
+        );
         stop();
         return;
     }
 
     mReplayWorldJoined = true;
     mReplayPlayer      = &player;
-    (void)refreshReplayPlayer();
+    if (!refreshReplayPlayer()) {
+        getLogger().error("Replay player is unavailable immediately after joining the replay world");
+    }
 }
 
 void ReplaySession::onLevelStartJoin() {

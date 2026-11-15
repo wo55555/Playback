@@ -10,6 +10,7 @@
 #include "mc/client/options/IOptions.h"
 #include "mc/client/game/ClientInputCallbacks.h"
 #include "mc/client/game/ClientInstance.h"
+#include "mc/client/gui/controls/UIControl.h"
 #include "mc/client/gui/controls/renderers/HudVignetteRenderer.h"
 #include "mc/client/gui/screens/InGamePlayScreen.h"
 #include "mc/client/player/LocalPlayer.h"
@@ -20,8 +21,10 @@
 #include "mc/deps/core/math/Color.h"
 #include "mc/deps/core/math/Matrix.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
+#include "mc/entity/components/AbilitiesComponent.h"
 #include "mc/entity/components/ActorGameTypeComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
+#include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/deps/input/RectangleArea.h"
 #include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
@@ -29,11 +32,14 @@
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/player/AbilitiesIndex.h"
+#include "mc/world/actor/player/Ability.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/item/ItemStack.h"
 
 #include <Windows.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -327,6 +333,55 @@ private:
     GameType                mSaved{};
 };
 
+// The hand pass draws the observer, so the subject's swing and item-use state stands in for it during the pass.
+class ScopedHandAction {
+public:
+    ScopedHandAction(Player& observer, Player& subject) : mObserver(observer) {
+        mAttackAnim  = observer.mAttackAnim;
+        mOAttackAnim = observer.mOAttackAnim;
+        mSwingTime   = observer.mSwingTime;
+        mSwinging    = observer.mSwinging;
+        mItemInUse   = observer.mItemInUse.get();
+
+        observer.mAttackAnim  = static_cast<float>(subject.mAttackAnim);
+        observer.mOAttackAnim = static_cast<float>(subject.mOAttackAnim);
+        observer.mSwingTime   = static_cast<int>(subject.mSwingTime);
+        observer.mSwinging    = static_cast<bool>(subject.mSwinging);
+        observer.mItemInUse   = subject.mItemInUse.get();
+
+        auto& context = observer.getEntityContext();
+        if (auto current = context.tryGetComponent<ItemInUseComponent>()) mSavedUse = *current;
+        if (auto use = subject.getEntityContext().tryGetComponent<ItemInUseComponent>()) {
+            context.getOrAddComponent<ItemInUseComponent>() = *use;
+        } else if (mSavedUse) {
+            context.removeComponent<ItemInUseComponent>();
+        }
+    }
+
+    ~ScopedHandAction() {
+        mObserver.mAttackAnim  = mAttackAnim;
+        mObserver.mOAttackAnim = mOAttackAnim;
+        mObserver.mSwingTime   = mSwingTime;
+        mObserver.mSwinging    = mSwinging;
+        mObserver.mItemInUse   = mItemInUse;
+
+        auto& context = mObserver.getEntityContext();
+        if (mSavedUse) context.getOrAddComponent<ItemInUseComponent>() = *mSavedUse;
+        else context.removeComponent<ItemInUseComponent>();
+    }
+
+    ScopedHandAction(ScopedHandAction const&)            = delete;
+    ScopedHandAction& operator=(ScopedHandAction const&) = delete;
+
+private:
+    Player&                           mObserver;
+    float                             mAttackAnim{};
+    float                             mOAttackAnim{};
+    int                               mSwingTime{};
+    bool                              mSwinging{};
+    PlayerItemInUse                   mItemInUse;
+    std::optional<ItemInUseComponent> mSavedUse;
+};
 LL_TYPE_INSTANCE_HOOK(
     HandShowHook,
     ll::memory::HookPriority::High,
@@ -359,6 +414,7 @@ LL_TYPE_INSTANCE_HOOK(
     player.setOffhandSlot(subject->getOffhandSlot());
     ScopedHandPass pass(*subject);
     ScopedObserverGameType gameType(player, *subject);
+    ScopedHandAction action(player, *subject);
     ScopedHandSway sway(*this, player, *subject);
     origin(screenContext, player);
     player.setCarriedItem(savedCarried);
@@ -582,8 +638,8 @@ std::vector<uintptr_t> directCallees(uintptr_t function) {
     return callees;
 }
 
-// The screen-overlay renderers (fire, in-block, scope); every other caller keeps the observer. 1.26.20.04 draws fire
-// and in-block from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
+// The screen-overlay renderers (in-block, scope); every other caller keeps the observer. 1.26.20.04 draws in-block
+// from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
 // _renderTransparentFirstPerson3DObjects stays on the observer: 26.10 does not export the LocalPlayer portal-time
 // getters that guarded its portal overlay against a remote subject, and it hands its actor to _renderItemInHand,
 // which copies the subject's items onto the observer itself.
@@ -635,27 +691,30 @@ LL_TYPE_INSTANCE_HOOK(
     SleepVignetteHook,
     ll::memory::HookPriority::High,
     HudVignetteRenderer,
-    &HudVignetteRenderer::_renderVignette,
-    bool,
+    &HudVignetteRenderer::$render,
+    void,
     MinecraftUIRenderContext& renderContext,
     IClientInstance&          client,
-    float                     undergroundness,
-    int                       w,
-    int                       h
+    UIControl&                owner,
+    int                       pass
 ) {
-    bool const thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
+    // The fill uses the vignette control size.
+    auto const  size              = owner.mSize.get();
+    float const w                 = size.x;
+    float const h                 = size.y;
+    bool const  thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
     if (isReplaySubjectViewDriven() && !thirdPersonFollow && replaySubjectViewWeight() > 0.0f) {
         float const progress = std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
         float const alpha    = SleepFadeTargetA * progress;
         if (alpha > 0.0f) {
             renderContext.fillRectangle(
-                RectangleArea(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(h), false),
+                RectangleArea(0.0f, 0.0f, w, h, false),
                 mce::Color(SleepFadeRed, SleepFadeGreen, SleepFadeBlue, 1.0f),
                 alpha
             );
         }
     }
-    return origin(renderContext, client, undergroundness, w, h);
+    origin(renderContext, client, owner, pass);
 }
 
 // The recorded perspective is first person; a toggle while following would be undone by the follow loop anyway.
@@ -678,9 +737,6 @@ LL_TYPE_INSTANCE_HOOK(PlayerIsScopingHook, ll::memory::HookPriority::High, Playe
     return scoping || !subject || subject == this ? scoping : subject->isScoping();
 }
 
-// 26.10 does not export LocalPlayer::getPortalEffectTime/getOPortalEffectTime. Their guards only mattered while the
-// overlay received the remote subject, which isOverlayCaller no longer allows.
-
 // Vanilla grows the distortion 0.0066667 per tick while nausea lasts over 60 ticks and fades it 0.05 per tick.
 struct NauseaRamp {
     bool        valid{};
@@ -689,7 +745,15 @@ struct NauseaRamp {
     float       level{};
 };
 
+// A nether portal adds 0.0125 per tick and fades 0.05. It is not the nausea effect.
+struct PortalRamp {
+    bool        valid{};
+    long double tick{};
+    float       level{};
+};
+
 NauseaRamp       gNausea;
+PortalRamp       gPortal;
 std::atomic_bool gNauseaDistorting{false};
 
 float advanceNausea(SubjectNauseaSample const& sample) {
@@ -704,6 +768,25 @@ float advanceNausea(SubjectNauseaSample const& sample) {
     return ramp.level;
 }
 
+float advancePortal(SubjectNauseaSample const& sample) {
+    auto& ramp = gPortal;
+    // A seek backwards must not keep a warp that belongs to a later tick.
+    if (!ramp.valid || sample.tick < ramp.tick) ramp.level = 0.0f;
+    else {
+        float const ticks = static_cast<float>(std::clamp<long double>(sample.tick - ramp.tick, 0.0L, 8.0L));
+        ramp.level        = std::clamp(ramp.level + (sample.insidePortal ? 0.0125f : -0.05f) * ticks, 0.0f, 1.0f);
+    }
+    ramp.valid = true;
+    ramp.tick  = sample.tick;
+    return ramp.level;
+}
+
+void resetWarp() {
+    gNausea = NauseaRamp{};
+    gPortal = PortalRamp{};
+    gNauseaDistorting.store(false, std::memory_order_release);
+}
+
 // The distortion reads the observer's own effects, which have none; follow mode feeds it the subject's nausea.
 LL_TYPE_INSTANCE_HOOK(
     PortalDataHook,
@@ -715,18 +798,117 @@ LL_TYPE_INSTANCE_HOOK(
     auto       data   = origin();
     auto const sample = sampleReplaySubjectNausea();
     if (!sample) {
-        gNausea = NauseaRamp{};
-        gNauseaDistorting.store(false, std::memory_order_release);
+        resetWarp();
         return data;
     }
-    float const level = advanceNausea(*sample);
+    float const nausea = advanceNausea(*sample);
+    float const portal = sample->present ? 0.0f : advancePortal(*sample);
+    float const level  = std::max(nausea, portal);
     gNauseaDistorting.store(level > 0.0f && data.has_value(), std::memory_order_release);
     if (level <= 0.0f || !data) return data;
     data->mTime = std::max(data->mTime, level);
     // The game spins by speed * (frame alpha + client tick), a clock that keeps running while the replay is paused.
-    // Nausea spins at 7 per tick; drive it from the replay time so a pause freezes it and a seek rewinds it.
-    data->mRotation = static_cast<float>(7.0L * sample->tick);
+    // Confusion keeps the slow wobble for the whole effect, including its fade. A portal alone spins faster.
+    float const speed = sample->present ? 7.0f : 20.0f;
+    data->mRotation   = static_cast<float>(static_cast<long double>(speed) * sample->tick);
     return data;
+}
+
+// Lends the observer the subject's portal time and clears its NoClip for one overlay call; the overlay reads both.
+struct ScopedObserverOverlay {
+    LocalPlayer*        player{};
+    float               portal{};
+    float               oldPortal{};
+    bool                abilities{};
+    std::array<bool, 6> noclip{};
+
+    ScopedObserverOverlay(LocalPlayer& local, float level) : player(&local) {
+        portal                   = local.mPortalEffectTime;
+        oldPortal                = local.mOPortalEffectTime;
+        local.mPortalEffectTime  = level;
+        local.mOPortalEffectTime = level;
+        if (auto* component = local.getEntityContext().tryGetComponent<AbilitiesComponent>().as_ptr()) {
+            abilities    = true;
+            auto& layers = component->mAbilities->mLayers.get();
+            for (size_t i = 0; i < layers.size() && i < noclip.size(); ++i) {
+                auto& ability            = layers[i].mAbilities.get()[static_cast<size_t>(AbilitiesIndex::NoClip)];
+                noclip[i]                = ability.mValue->mBoolVal;
+                ability.mValue->mBoolVal = false;
+            }
+        }
+    }
+
+    ~ScopedObserverOverlay() {
+        if (!player) return;
+        player->mPortalEffectTime  = portal;
+        player->mOPortalEffectTime = oldPortal;
+        if (!abilities) return;
+        if (auto* component = player->getEntityContext().tryGetComponent<AbilitiesComponent>().as_ptr()) {
+            auto& layers = component->mAbilities->mLayers.get();
+            for (size_t i = 0; i < layers.size() && i < noclip.size(); ++i) {
+                layers[i].mAbilities.get()[static_cast<size_t>(AbilitiesIndex::NoClip)].mValue->mBoolVal = noclip[i];
+            }
+        }
+    }
+};
+
+thread_local bool   gOverlaySample = false;
+thread_local Actor* gOverlayLocal  = nullptr;
+
+struct ScopedOverlaySample {
+    explicit ScopedOverlaySample(Actor* local) {
+        gOverlayLocal  = local;
+        gOverlaySample = true;
+    }
+
+    ~ScopedOverlaySample() {
+        gOverlaySample = false;
+        gOverlayLocal  = nullptr;
+    }
+};
+
+// The flame quads call Actor::isOnFire on the camera actor. The observer is never burning; the subject is.
+LL_TYPE_INSTANCE_HOOK(OverlayOnFireHook, ll::memory::HookPriority::High, Actor, &Actor::$isOnFire, bool) {
+    if (gOverlaySample && this == gOverlayLocal) {
+        if (auto* subject = subjectPlayer(); subject && static_cast<Actor*>(subject) != this)
+            return subject->isOnFire();
+    }
+    return origin();
+}
+
+// The purple warp and the flames draw here. Redirecting its actor would read past a remote player.
+LL_TYPE_INSTANCE_HOOK(
+    TransparentOverlayHook,
+    ll::memory::HookPriority::High,
+    InGamePlayScreen,
+    &InGamePlayScreen::$_renderTransparentFirstPerson3DObjects,
+    void,
+    ScreenContext& screenContext,
+    LevelRenderer& levelRenderer
+) {
+    bool const firstPerson = (isReplaySubjectFollowed() || isReplaySubjectHiddenFor(SubjectHideReason::Export))
+                          && !isReplaySubjectThirdPerson();
+    auto* subject = firstPerson ? replayHiddenActorInScope() : nullptr;
+    if (!subject) {
+        origin(screenContext, levelRenderer);
+        return;
+    }
+    auto const sample = sampleReplaySubjectNausea();
+    if (!sample) {
+        resetWarp();
+        origin(screenContext, levelRenderer);
+        return;
+    }
+    float const portal = sample->present ? 0.0f : advancePortal(*sample);
+    auto        client = ll::service::getClientInstance();
+    auto*       local  = client ? client->getLocalPlayer() : nullptr;
+    if (!local) {
+        origin(screenContext, levelRenderer);
+        return;
+    }
+    ScopedObserverOverlay overlay(*local, portal);
+    ScopedOverlaySample   sampleScope(local);
+    origin(screenContext, levelRenderer);
 }
 
 struct HookSlot {
@@ -774,6 +956,8 @@ void hookReplayFirstPersonHands(bool enable, SubjectHideReason owner) {
             makeSlot<CameraTargetHook>("cameraTarget"),
             makeSlot<BobViewHook>("bobView"),
             makeSlot<PortalDataHook>("portalData"),
+            makeSlot<TransparentOverlayHook>("transparentOverlay"),
+            makeSlot<OverlayOnFireHook>("onFire"),
             makeSlot<PlayerIsScopingHook>("isScoping"),
             makeSlot<SleepVignetteHook>("sleepVignette"),
             makeSlot<TogglePerspectiveHook>("togglePerspective"),

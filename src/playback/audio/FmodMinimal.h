@@ -32,39 +32,24 @@ struct FMOD_DSP_STATE {
     int              systemobject;
 };
 
-// Resolved fmod.dll C API entry points. The probe resolves them in install(); exportcap consumes the same table so
-// GetProcAddress stays in one place. All pointers are void* because the project's FMOD types are opaque.
+// Resolved fmod.dll C API entry points, filled by hooks::install() so GetProcAddress stays in one place. All pointers
+// are void* because the project's FMOD types are opaque.
 struct CApi {
-    int (*getVersion)(void*, unsigned*){};
     int (*getOutput)(void*, int*){};
     int (*setOutput)(void*, int){};
     int (*getDriver)(void*, int*){};
     int (*setDriver)(void*, int){};
-    int (*getSoftwareFormat)(void*, int*, int*, int*){};
-    int (*getDSPBufferSize)(void*, unsigned*, int*){};
     int (*getChannelsPlaying)(void*, int*, int*){};
-    int (*get3DSettings)(void*, float*, float*, float*){};
-    int (*get3DNumListeners)(void*, int*){};
     int (*getMasterChannelGroup)(void*, void**){};
-    int (*groupGetName)(void*, char*, int){};
-    int (*groupGetNumGroups)(void*, int*){};
-    int (*groupGetGroup)(void*, int, void**){};
-    int (*groupGetVolume)(void*, float*){};
-    int (*groupGetMute)(void*, int*){};
-    int (*groupGetPaused)(void*, int*){};
-    int (*groupGetNumChannels)(void*, int*){};
+    int (*createDSP)(void*, void const* desc, void** dsp){};
     int (*groupGetNumDSPs)(void*, int*){};
     int (*groupGetDSPIndex)(void*, void*, int*){};
-    int (*soundGetName)(void*, char*, int){};
-    // Export-capture additions (C API).
-    int (*createDSP)(void*, void const* desc, void** dsp){};
     int (*groupAddDSP)(void*, int index, void* dsp){};
-    int (*groupSetMute)(void*, int mute){};
-    int (*groupStop)(void*){};
-    // Remove a DSP from a channel group (FMOD_ChannelGroup_RemoveDSP), and release the object (FMOD_DSP_Release).
     int (*groupRemoveDSP)(void*, void*){};
+    int (*groupStop)(void*){};
     int (*dspRelease)(void*){};
-    int (*systemClose)(void*){};
+    int (*channelStop)(void*){};
+    int (*groupGetName)(void*, char*, int){};
 };
 
 using FMOD_DSP_CREATE_CALLBACK  = FMOD_RESULT(PB_F_CALLBACK*)(FMOD_DSP_STATE*);

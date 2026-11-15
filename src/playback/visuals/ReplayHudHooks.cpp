@@ -1,6 +1,7 @@
 #include "ReplayHudHooks.h"
 
 #include "ReplayEntityInterpolator.h"
+#include "ReplayHudVisibility.h"
 #include "playback/Playback.h"
 
 #include "ll/api/memory/Hook.h"
@@ -27,6 +28,7 @@ bool             gSurvivalUiOk{};
 std::optional<GameType> drivenGameType() {
     // A followed mob has no hotbar or hearts to show; the spectator observer's own HUD stays.
     if (!isReplaySubjectViewDriven() || !isReplaySubjectPlayer()) return std::nullopt;
+    if (isHudElementHiddenNow(HudElement::Hotbar)) return GameType::Spectator;
     int const value = gGameType.load(std::memory_order_acquire);
     if (!isReplaySubjectRecorder()) {
         if (value == UnknownGameType) return GameType::Survival;

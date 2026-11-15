@@ -620,7 +620,11 @@ LL_TYPE_INSTANCE_HOOK(
                            && classifySubmission(render) == exporting::SceneSubmissionKind::Scene;
     origin(render, clearQuad, textVideoMemBlitter);
     useSubmittedCameraProjection(render);
-    (void)exporting::finishOfflineRenderSceneSubmission(entry, carriesScene);
+    // The back buffer is complete here. Its Present only comes with the next frame the game sends, so capturing now
+    // spares the export a second pass of the game loop for every frame.
+    if (exporting::finishOfflineRenderSceneSubmission(entry, carriesScene)) {
+        (void)gImGuiRenderer.captureSubmittedScene();
+    }
 }
 
 LL_TYPE_INSTANCE_HOOK(
