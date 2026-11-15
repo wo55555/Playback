@@ -30,8 +30,9 @@ static_assert(sizeof(WavHeader) == 44, "WAV header must be 44 bytes");
 
 WavWriter::~WavWriter() { finalize(); }
 
-bool WavWriter::open(std::filesystem::path const& path) {
+bool WavWriter::open(std::filesystem::path const& path, uint16_t channels) {
     finalize();
+    mChannels = channels <= 1 ? uint16_t{1} : MaxChannels;
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
     mFile.open(path, std::ios::binary | std::ios::trunc);
@@ -43,10 +44,10 @@ bool WavWriter::open(std::filesystem::path const& path) {
     std::memcpy(header.fmt, "fmt ", 4);
     header.fmtSize       = 16;
     header.audioFormat   = 3; // IEEE float
-    header.numChannels   = Channels;
+    header.numChannels   = mChannels;
     header.sampleRate    = SampleRate;
-    header.byteRate      = SampleRate * Channels * (BitsPerSample / 8);
-    header.blockAlign    = Channels * (BitsPerSample / 8);
+    header.byteRate      = SampleRate * mChannels * (BitsPerSample / 8);
+    header.blockAlign    = mChannels * (BitsPerSample / 8);
     header.bitsPerSample = BitsPerSample;
     std::memcpy(header.data, "data", 4);
     // riffSize/dataSize are backfilled in finalize().
@@ -63,18 +64,18 @@ void WavWriter::append(float const* data, size_t count) {
     size_t const bytes = count * sizeof(float);
     mFile.write(reinterpret_cast<char const*>(data), static_cast<std::streamsize>(bytes));
     mDataBytes         += static_cast<uint32_t>(bytes);
-    mSamplesPerChannel += count / Channels;
+    mSamplesPerChannel += count / mChannels;
 }
 
 void WavWriter::padTo(uint64_t totalSamplesPerChannel) {
     if (!mFile.is_open() || mFinalized) return;
     if (totalSamplesPerChannel <= mSamplesPerChannel) return;
-    uint64_t const         missing         = totalSamplesPerChannel - mSamplesPerChannel;
-    static constexpr float zeros[1024 * 2] = {};
-    uint64_t               remaining       = missing;
+    uint64_t const         missing                   = totalSamplesPerChannel - mSamplesPerChannel;
+    static constexpr float zeros[1024 * MaxChannels] = {};
+    uint64_t               remaining                 = missing;
     while (remaining > 0) {
         uint64_t const chunkFrames = remaining > 1024 ? 1024 : remaining;
-        append(zeros, static_cast<size_t>(chunkFrames * Channels));
+        append(zeros, static_cast<size_t>(chunkFrames * mChannels));
         remaining -= chunkFrames;
     }
 }

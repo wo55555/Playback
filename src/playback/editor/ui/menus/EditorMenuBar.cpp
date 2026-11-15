@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -44,18 +45,14 @@ namespace {
     return std::filesystem::path(std::u8string{begin, begin + value.size()});
 }
 
+// Typed digits apply as they are entered, so leaving the field any way (the export button included) keeps them.
+// The value is clamped on every edit; the field shows the clamped number once it loses focus.
 bool inputClampedInt(char const* id, int& value, int minimum, int maximum, float width) {
     ImGui::SetNextItemWidth(width);
-    bool const changed = ImGui::InputInt(
-        id,
-        &value,
-        1,
-        10,
-        ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll
-    );
-    if (ImGui::IsItemDeactivatedAfterEdit() || (changed && ImGui::IsKeyPressed(ImGuiKey_Enter))) {
-        value = std::clamp(value, minimum, maximum);
-    }
+    int        edited = value;
+    bool const changed =
+        ImGui::InputInt(id, &edited, 1, 10, ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_AutoSelectAll);
+    if (changed) value = std::clamp(edited, minimum, maximum);
     return changed;
 }
 
@@ -67,13 +64,6 @@ void sectionHeader(char const* label, float top = 10.0f) {
     float const  y     = ImGui::GetItemRectMax().y + 3.0f * metrics::scale();
     float const  right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
     ImGui::GetWindowDrawList()->AddLine({min.x, y}, {right, y}, theme::kBorder);
-    ImGui::Dummy({0.0f, 1.0f * metrics::scale()});
-}
-
-// Sub-group caption inside a section: dim text only, no hairline.
-void subHeader(char const* label, float top) {
-    ImGui::Dummy({0.0f, top * metrics::scale()});
-    ImGui::TextDisabled("%s", label);
     ImGui::Dummy({0.0f, 1.0f * metrics::scale()});
 }
 
@@ -138,53 +128,47 @@ bool frameIconButton(char const* id, char const* icon, char const* tooltip) {
     return clicked;
 }
 
-// Collapsible section title: same look as sectionHeader but clickable, with a chevron and an optional summary.
-bool collapseHeader(char const* id, char const* label, std::vector<std::string> const& summaryParts, bool open) {
-    float const s = metrics::scale();
-    ImGui::Dummy({0.0f, 10.0f * s});
-    ImVec2 const min    = ImGui::GetCursorScreenPos();
-    float const  width  = ImGui::GetContentRegionAvail().x;
-    float const  height = ImGui::GetFrameHeight() + 2.0f * s;
-    ImVec2 const max    = {min.x + width, min.y + height};
-    if (ImGui::InvisibleButton(id, {width, height})) open = !open;
-    bool const hovered = ImGui::IsItemHovered();
-    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    auto*       dl   = ImGui::GetWindowDrawList();
-    ImU32 const tone = hovered ? theme::kIconHighlight : theme::kText;
+// Row of page tabs: plain labels over a full-width hairline, the current page underlined in the accent colour.
+bool tabStrip(char const* id, char const* const* labels, int count, int& index) {
+    float const  s      = metrics::scale();
+    float const  height = ImGui::GetFrameHeight() + 4.0f * s;
+    float const  padX   = 10.0f * s;
+    ImVec2 const origin = ImGui::GetCursorScreenPos();
+    float const  right  = origin.x + ImGui::GetContentRegionAvail().x;
+    auto*        dl     = ImGui::GetWindowDrawList();
+    dl->AddLine({origin.x, origin.y + height}, {right, origin.y + height}, theme::kBorder);
 
-    float const textY = min.y + (height - ImGui::GetFontSize()) * 0.5f;
-    dl->AddText({min.x, textY}, tone, label);
-
-    // Chevron points down while closed and up while open.
-    float const  half       = 4.0f * s;
-    ImVec2 const centre     = {max.x - half - 2.0f * s, min.y + height * 0.5f};
-    float const  dir        = open ? -1.0f : 1.0f;
-    ImVec2 const chevron[3] = {
-        {centre.x - half, centre.y - dir * half * 0.5f},
-        {centre.x,        centre.y + dir * half * 0.5f},
-        {centre.x + half, centre.y - dir * half * 0.5f},
-    };
-    dl->AddPolyline(chevron, 3, hovered ? theme::kIconHighlight : theme::kIconInactive, ImDrawFlags_None, 1.5f * s);
-
-    // Drop trailing parts until the summary fits between the label and the chevron.
-    if (!open) {
-        float const rightEdge = centre.x - half - 8.0f * s;
-        float const leftEdge  = min.x + ImGui::CalcTextSize(label).x + 16.0f * s;
-        for (size_t count = summaryParts.size(); count > 0; --count) {
-            std::string text;
-            for (size_t i = 0; i < count; ++i) text += (i == 0 ? "" : " | ") + summaryParts[i];
-            float const textWidth = ImGui::CalcTextSize(text.c_str()).x;
-            if (rightEdge - textWidth >= leftEdge) {
-                dl->AddText({rightEdge - textWidth, textY}, theme::kTextDim, text.c_str());
-                break;
-            }
+    bool changed = false;
+    ImGui::PushID(id);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, ImGui::GetStyle().ItemSpacing.y});
+    // The first label lines up with the content below; its hit area extends into the window padding instead.
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - padX);
+    for (int i = 0; i < count; ++i) {
+        if (i > 0) ImGui::SameLine();
+        ImVec2 const textSize = ImGui::CalcTextSize(labels[i]);
+        ImVec2 const min      = ImGui::GetCursorScreenPos();
+        ImGui::PushID(i);
+        if (ImGui::InvisibleButton("##tab", {textSize.x + padX * 2.0f, height}) && i != index) {
+            index   = i;
+            changed = true;
+        }
+        ImGui::PopID();
+        bool const active  = i == index;
+        bool const hovered = ImGui::IsItemHovered();
+        if (hovered && !active) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImU32 const tone = active ? theme::kIconHighlight : hovered ? theme::kText : theme::kTextDim;
+        dl->AddText({min.x + padX, min.y + (height - textSize.y) * 0.5f}, tone, labels[i]);
+        if (active) {
+            dl->AddRectFilled(
+                {min.x + padX, min.y + height - 2.0f * s},
+                {min.x + padX + textSize.x, min.y + height + 1.0f},
+                theme::kAccent
+            );
         }
     }
-
-    float const lineY = max.y + 1.0f * s;
-    dl->AddLine({min.x, lineY}, {max.x, lineY}, theme::kBorder);
-    ImGui::Dummy({0.0f, 2.0f * s});
-    return open;
+    ImGui::PopStyleVar();
+    ImGui::PopID();
+    return changed;
 }
 
 struct ResolutionPreset {
@@ -197,6 +181,13 @@ constexpr ResolutionPreset kResolutionPresets[] = {
     {2560, 1440},
     {3840, 2160}
 };
+
+constexpr exporting::AudioCodec kAudioCodecs[] = {
+    exporting::AudioCodec::Aac,
+    exporting::AudioCodec::Opus,
+    exporting::AudioCodec::Flac,
+};
+constexpr uint32_t kAudioBitratesKbps[] = {128, 192, 256, 320};
 
 // Dim note on the same row, right-aligned to `rightEdge` (screen x) so it lines up with the full-width fields.
 void trailingText(char const* text, float rightEdge) {
@@ -232,11 +223,90 @@ void shortcutRow(std::string const& keys, std::string const& description) {
     ImGui::TableSetColumnIndex(0);
     ImGui::TextDisabled("%s", keys.c_str());
     ImGui::TableSetColumnIndex(1);
+    // Only wraps once the dialog is narrower than its text, i.e. on a viewport too narrow for the sheet.
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextUnformatted(description.c_str());
+    ImGui::PopTextWrapPos();
 }
 
 std::string shortcutPair(input::EditorKeybind first, input::EditorKeybind second) {
     return input::KeyMap::displayString(first) + " / " + input::KeyMap::displayString(second);
+}
+
+struct ShortcutGroup {
+    std::string                                      title;
+    std::vector<std::pair<std::string, std::string>> rows; // keys, description
+};
+
+[[nodiscard]] std::vector<ShortcutGroup> shortcutGroups() {
+    using input::EditorKeybind;
+    auto const key = [](EditorKeybind bind) { return input::KeyMap::displayString(bind); };
+    return {
+        {"playback.refactorEditor.shortcuts.playback"_tr(),
+         {
+             {key(EditorKeybind::TogglePlayback), "playback.refactorEditor.shortcuts.playPause"_tr()},
+             {shortcutPair(EditorKeybind::JumpStart, EditorKeybind::JumpEnd),
+              "playback.refactorEditor.shortcuts.jumpEdges"_tr()},
+             {shortcutPair(EditorKeybind::SeekSecondLeft, EditorKeybind::SeekSecondRight),
+              "playback.refactorEditor.shortcuts.seekSeconds"_tr()},
+             {shortcutPair(EditorKeybind::SeekTickLeft, EditorKeybind::SeekTickRight),
+              "playback.refactorEditor.shortcuts.seekTicks"_tr()},
+             {shortcutPair(EditorKeybind::PreviousEditPoint, EditorKeybind::NextEditPoint),
+              "playback.refactorEditor.shortcuts.editPoints"_tr()},
+             {shortcutPair(EditorKeybind::DecreaseSpeed, EditorKeybind::IncreaseSpeed),
+              "playback.refactorEditor.shortcuts.speed"_tr()},
+             {"Shift", "playback.refactorEditor.shortcuts.stopFollow"_tr()},
+             {"F5", "playback.refactorEditor.shortcuts.togglePerspective"_tr()},
+         }},
+        {"playback.refactorEditor.shortcuts.editing"_tr(),
+         {
+             {shortcutPair(EditorKeybind::Undo, EditorKeybind::Redo),
+              "playback.refactorEditor.shortcuts.undoRedo"_tr()},
+             {key(EditorKeybind::SaveProject), "playback.refactorEditor.shortcuts.saveProject"_tr()},
+             {key(EditorKeybind::AddKeyframe), "playback.refactorEditor.shortcuts.keyframe"_tr()},
+             {key(EditorKeybind::AddCameraTrack), "playback.refactorEditor.shortcuts.addCamera"_tr()},
+             {"1 / 2 / 3", "playback.refactorEditor.shortcuts.selectCamera"_tr()},
+             {key(EditorKeybind::DeleteSelection), "playback.refactorEditor.shortcuts.delete"_tr()},
+             {key(EditorKeybind::SelectAll), "playback.refactorEditor.shortcuts.selectAll"_tr()},
+             {"Ctrl+Click / Drag", "playback.refactorEditor.shortcuts.boxSelect"_tr()},
+             {key(EditorKeybind::ClearSelection), "playback.refactorEditor.shortcuts.clearSelection"_tr()},
+             {shortcutPair(EditorKeybind::Copy, EditorKeybind::Paste),
+              "playback.refactorEditor.shortcuts.copyPaste"_tr()},
+             {"Shift+Drag", "playback.refactorEditor.shortcuts.shiftSnap"_tr()},
+             {key(EditorKeybind::InsertMarker), "playback.refactorEditor.shortcuts.insertMarker"_tr()},
+             {shortcutPair(EditorKeybind::PreviousMarker, EditorKeybind::NextMarker),
+              "playback.refactorEditor.shortcuts.markers"_tr()},
+             {shortcutPair(EditorKeybind::ZoomOutTimeline, EditorKeybind::ZoomInTimeline),
+              "playback.refactorEditor.shortcuts.zoom"_tr()},
+             {"Alt+Wheel", "playback.refactorEditor.shortcuts.zoomWheel"_tr()},
+             {key(EditorKeybind::ResetTimelineZoom), "playback.refactorEditor.shortcuts.zoomReset"_tr()},
+             {shortcutPair(EditorKeybind::MarkExportIn, EditorKeybind::MarkExportOut),
+              "playback.refactorEditor.shortcuts.exportRange"_tr()},
+         }},
+        {"playback.refactorEditor.shortcuts.application"_tr(),
+         {
+             {key(EditorKeybind::OpenExport), "playback.refactorEditor.shortcuts.export"_tr()},
+             {key(EditorKeybind::ToggleViewportMaximized), "playback.refactorEditor.shortcuts.viewport"_tr()},
+             {shortcutPair(EditorKeybind::DecreaseUiScale, EditorKeybind::IncreaseUiScale),
+              "playback.refactorEditor.shortcuts.uiScale"_tr()},
+             {key(EditorKeybind::ResetUiScale), "playback.refactorEditor.shortcuts.uiScaleReset"_tr()},
+         }},
+    };
+}
+
+// One column of the shortcut sheet. Its groups share a key column, so every description starts on the same edge.
+struct ShortcutColumn {
+    std::vector<size_t> groups; // indices into shortcutGroups()
+    float               keyWidth{};
+    float               width{};
+    float               height{};
+};
+
+// Font size of a popup opened from the menu bar: the bar's own window runs a size up, and popups do not inherit that.
+[[nodiscard]] float popupFontSize() {
+    ImGuiStyle const& style = ImGui::GetStyle();
+    // ImGui rounds the final size to whole pixels; measuring at the unrounded size comes out a few pixels short.
+    return std::max(1.0f, std::floor(style.FontSizeBase * style.FontScaleMain * style.FontScaleDpi + 0.5f));
 }
 
 } // namespace
@@ -261,10 +331,11 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
     }
     mExportSettingsInitialized = true;
     if (!ffmpegAvailable && mExportFormat == 0) mExportFormat = 1;
-    mExportAdvancedOpen     = false;
-    mExportScrollToAdvanced = false;
-    mExportBodyHeight       = 0.0f;
-    mExportDialogOpen       = true;
+    // Always opens on the first page; the page height is measured again in case the font changed meanwhile.
+    mExportTab            = 0;
+    mExportBodyHeight     = 0.0f;
+    mExportBodyScrollable = false;
+    mExportDialogOpen     = true;
 }
 
 void EditorMenuBar::markExportPoint(bool isIn, int tick, int totalTicks) {
@@ -456,149 +527,134 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
 }
 
 void EditorMenuBar::drawShortcutDialog() {
-    if (mShortcutDialogOpen) ImGui::OpenPopup("##KeyboardShortcuts");
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    float const shortcutWidth = std::min(620.0f, std::max(420.0f, ImGui::GetMainViewport()->WorkSize.x - 32.0f));
-    ImGui::SetNextWindowSize(ImVec2(shortcutWidth, 0.0f), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal(
-            "##KeyboardShortcuts",
-            &mShortcutDialogOpen,
-            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize
-        )) {
-        ImGui::TextUnformatted("playback.refactorEditor.shortcuts.title"_tr().c_str());
-        ImGui::Separator();
-        ImGui::TextUnformatted("playback.refactorEditor.shortcuts.playback"_tr().c_str());
-        if (ImGui::BeginTable("##playback-shortcuts", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("##playback-key", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-            ImGui::TableSetupColumn("##playback-command", ImGuiTableColumnFlags_WidthStretch);
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::TogglePlayback),
-                "playback.refactorEditor.shortcuts.playPause"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::JumpStart, input::EditorKeybind::JumpEnd),
-                "playback.refactorEditor.shortcuts.jumpEdges"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::SeekSecondLeft, input::EditorKeybind::SeekSecondRight),
-                "playback.refactorEditor.shortcuts.seekSeconds"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::SeekTickLeft, input::EditorKeybind::SeekTickRight),
-                "playback.refactorEditor.shortcuts.seekTicks"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::PreviousEditPoint, input::EditorKeybind::NextEditPoint),
-                "playback.refactorEditor.shortcuts.editPoints"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::DecreaseSpeed, input::EditorKeybind::IncreaseSpeed),
-                "playback.refactorEditor.shortcuts.speed"_tr()
-            );
-            shortcutRow("Shift", "playback.refactorEditor.shortcuts.stopFollow"_tr());
-            shortcutRow("F5", "playback.refactorEditor.shortcuts.togglePerspective"_tr());
+    char const* const popupId = "##KeyboardShortcuts";
+    if (mShortcutDialogOpen) ImGui::OpenPopup(popupId);
+    if (!ImGui::IsPopupOpen(popupId)) return;
+
+    // Measured at the popup's own font size, so the sheet is sized and laid out before it opens.
+    ImGuiStyle const& style     = ImGui::GetStyle();
+    float const       font      = popupFontSize();
+    float const       scale     = std::max(1.0f, font / 14.0f);
+    ImFont* const     fontFace  = ImGui::GetFont();
+    auto const        textWidth = [&](std::string const& text) {
+        return std::ceil(fontFace->CalcTextSizeA(font, FLT_MAX, 0.0f, text.c_str()).x);
+    };
+    ImVec2 const padding{20.0f * scale, 14.0f * scale};
+    ImVec2 const cellPadding{8.0f * scale, 2.0f * scale};
+    float const  rowHeight    = font + cellPadding.y * 2.0f;
+    float const  buttonHeight = font + style.FramePadding.y * 2.0f + 6.0f * scale;
+    float const  columnGap    = 32.0f * scale;
+    float const  headerTop    = 8.0f;
+
+    std::vector<ShortcutGroup> const groups      = shortcutGroups();
+    auto const                       buildColumn = [&](std::initializer_list<size_t> indices) {
+        ShortcutColumn column;
+        float          descriptionWidth = 0.0f;
+        for (size_t const index : indices) {
+            auto const& group = groups[index];
+            column.groups.push_back(index);
+            // Mirrors sectionHeader plus one table row per shortcut.
+            column.height += (headerTop + 1.0f) * scale + font + style.ItemSpacing.y * 4.0f
+                           + rowHeight * static_cast<float>(group.rows.size());
+            column.width = std::max(column.width, textWidth(group.title));
+            for (auto const& [keys, description] : group.rows) {
+                column.keyWidth  = std::max(column.keyWidth, textWidth(keys));
+                descriptionWidth = std::max(descriptionWidth, textWidth(description));
+            }
+        }
+        // The slack keeps the longest description from wrapping over a rounding difference.
+        column.width = std::max(column.width, column.keyWidth + cellPadding.x * 2.0f + descriptionWidth + 2.0f * scale);
+        return column;
+    };
+    // Playback and application shortcuts together are about as tall as the editing list.
+    ShortcutColumn const stacked = buildColumn({0, 1, 2});
+    ShortcutColumn const left    = buildColumn({0, 2});
+    ShortcutColumn const right   = buildColumn({1});
+
+    auto const* const viewport  = ImGui::GetMainViewport();
+    float const       margin    = 12.0f * scale;
+    float const       maxWidth  = std::max(1.0f, viewport->WorkSize.x - margin * 2.0f);
+    float const       maxHeight = std::max(1.0f, viewport->WorkSize.y - margin * 2.0f);
+    // Title bar, title line, both separators and the close button around the scrolling list.
+    float const chromeHeight =
+        font + style.FramePadding.y * 2.0f + padding.y * 2.0f + font + buttonHeight + style.ItemSpacing.y * 4.0f + 2.0f;
+    // The list keeps a scrollbar's width spare, so one appearing never squeezes the text.
+    float const frameWidth     = padding.x * 2.0f + style.ScrollbarSize;
+    float const twoColumnWidth = frameWidth + left.width + columnGap + right.width;
+    // Two columns once one would not fit the viewport's height, as long as the viewport is wide enough for them.
+    bool const  twoColumns  = chromeHeight + stacked.height > maxHeight && twoColumnWidth <= maxWidth;
+    float const dialogWidth = std::min(maxWidth, twoColumns ? twoColumnWidth : frameWidth + stacked.width);
+
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize({dialogWidth, 0.0f}, ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints({dialogWidth, 0.0f}, {dialogWidth, maxHeight});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
+    bool const visible = ImGui::BeginPopupModal(
+        popupId,
+        &mShortcutDialogOpen,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+            | ImGuiWindowFlags_NoScrollWithMouse
+    );
+    ImGui::PopStyleVar(2);
+    if (!visible) return;
+
+    ImGui::TextUnformatted("playback.refactorEditor.shortcuts.title"_tr().c_str());
+    ImGui::Separator();
+
+    // Only the list scrolls on a short viewport; the close button below it always stays on screen.
+    float const footerHeight  = style.ItemSpacing.y * 2.0f + 1.0f + buttonHeight + padding.y;
+    float const maxBodyHeight = std::max(rowHeight * 4.0f, maxHeight - ImGui::GetCursorPosY() - footerHeight);
+    ImGui::SetNextWindowSizeConstraints({0.0f, 0.0f}, {FLT_MAX, maxBodyHeight});
+    ImGui::BeginChild("##shortcut-body", {0.0f, 0.0f}, ImGuiChildFlags_AutoResizeY);
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, cellPadding);
+    auto const drawColumn = [&](ShortcutColumn const& column) {
+        for (size_t const index : column.groups) {
+            auto const& group = groups[index];
+            ImGui::PushID(static_cast<int>(index));
+            sectionHeader(group.title.c_str(), headerTop);
+            if (ImGui::BeginTable("##shortcuts", 2, ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn("##key", ImGuiTableColumnFlags_WidthFixed, column.keyWidth);
+                ImGui::TableSetupColumn("##command", ImGuiTableColumnFlags_WidthStretch);
+                for (auto const& [keys, description] : group.rows) shortcutRow(keys, description);
+                ImGui::EndTable();
+            }
+            ImGui::PopID();
+        }
+    };
+    if (twoColumns) {
+        // Spacing between the two columns is twice the horizontal cell padding.
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {columnGap * 0.5f, 0.0f});
+        bool const columns = ImGui::BeginTable("##shortcut-columns", 2, ImGuiTableFlags_SizingStretchProp);
+        if (columns) {
+            ImGui::TableSetupColumn("##left", ImGuiTableColumnFlags_WidthFixed, left.width);
+            ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableNextRow();
+        }
+        ImGui::PopStyleVar();
+        if (columns) {
+            ImGui::TableSetColumnIndex(0);
+            drawColumn(left);
+            ImGui::TableSetColumnIndex(1);
+            drawColumn(right);
             ImGui::EndTable();
         }
-        ImGui::Spacing();
-        ImGui::TextUnformatted("playback.refactorEditor.shortcuts.editing"_tr().c_str());
-        if (ImGui::BeginTable("##editing-shortcuts", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("##editing-key", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-            ImGui::TableSetupColumn("##editing-command", ImGuiTableColumnFlags_WidthStretch);
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::Undo, input::EditorKeybind::Redo),
-                "playback.refactorEditor.shortcuts.undoRedo"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::SaveProject),
-                "playback.refactorEditor.shortcuts.saveProject"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::AddKeyframe),
-                "playback.refactorEditor.shortcuts.keyframe"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::AddCameraTrack),
-                "playback.refactorEditor.shortcuts.addCamera"_tr()
-            );
-            shortcutRow("1 / 2 / 3", "playback.refactorEditor.shortcuts.selectCamera"_tr());
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::DeleteSelection),
-                "playback.refactorEditor.shortcuts.delete"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::SelectAll),
-                "playback.refactorEditor.shortcuts.selectAll"_tr()
-            );
-            shortcutRow("Ctrl+Click / Drag", "playback.refactorEditor.shortcuts.boxSelect"_tr());
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::ClearSelection),
-                "playback.refactorEditor.shortcuts.clearSelection"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::Copy, input::EditorKeybind::Paste),
-                "playback.refactorEditor.shortcuts.copyPaste"_tr()
-            );
-            shortcutRow("Shift+Drag", "playback.refactorEditor.shortcuts.shiftSnap"_tr());
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::InsertMarker),
-                "playback.refactorEditor.shortcuts.insertMarker"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::PreviousMarker, input::EditorKeybind::NextMarker),
-                "playback.refactorEditor.shortcuts.markers"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::ZoomOutTimeline, input::EditorKeybind::ZoomInTimeline),
-                "playback.refactorEditor.shortcuts.zoom"_tr()
-            );
-            shortcutRow("Alt+Wheel", "playback.refactorEditor.shortcuts.zoomWheel"_tr());
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::ResetTimelineZoom),
-                "playback.refactorEditor.shortcuts.zoomReset"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::MarkExportIn, input::EditorKeybind::MarkExportOut),
-                "playback.refactorEditor.shortcuts.exportRange"_tr()
-            );
-            ImGui::EndTable();
-        }
-        ImGui::Spacing();
-        ImGui::TextUnformatted("playback.refactorEditor.shortcuts.application"_tr().c_str());
-        if (ImGui::BeginTable("##application-shortcuts", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("##application-key", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-            ImGui::TableSetupColumn("##application-command", ImGuiTableColumnFlags_WidthStretch);
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::OpenExport),
-                "playback.refactorEditor.shortcuts.export"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::ToggleViewportMaximized),
-                "playback.refactorEditor.shortcuts.viewport"_tr()
-            );
-            shortcutRow(
-                shortcutPair(input::EditorKeybind::DecreaseUiScale, input::EditorKeybind::IncreaseUiScale),
-                "playback.refactorEditor.shortcuts.uiScale"_tr()
-            );
-            shortcutRow(
-                input::KeyMap::displayString(input::EditorKeybind::ResetUiScale),
-                "playback.refactorEditor.shortcuts.uiScaleReset"_tr()
-            );
-            ImGui::EndTable();
-        }
-        ImGui::Spacing();
-        float const closeWidth = 110.0f;
-        ImGui::SetCursorPosX(
-            std::max(
-                ImGui::GetStyle().WindowPadding.x,
-                ImGui::GetWindowWidth() - closeWidth - ImGui::GetStyle().WindowPadding.x
-            )
-        );
-        if (ImGui::Button("playback.refactorEditor.shortcuts.close"_tr().c_str(), {closeWidth, 32.0f})) {
-            mShortcutDialogOpen = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
+    } else {
+        drawColumn(stacked);
     }
+    ImGui::PopStyleVar();
+    ImGui::EndChild();
+
+    ImGui::Separator();
+    std::string const closeLabel = "playback.refactorEditor.shortcuts.close"_tr();
+    float const       closeWidth =
+        std::max(96.0f * scale, ImGui::CalcTextSize(closeLabel.c_str()).x + style.FramePadding.x * 4.0f);
+    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - closeWidth - padding.x));
+    if (ImGui::Button(closeLabel.c_str(), {closeWidth, buttonHeight})) {
+        mShortcutDialogOpen = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
@@ -607,22 +663,72 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     auto const  exportActive = exporting::isExportActive(state.exportStatus.state);
 
     if (mExportDialogOpen) ImGui::OpenPopup("##ExportVideo");
-    ImVec2 const exportWorkSize = ImGui::GetMainViewport()->WorkSize;
-    float const  uiScale        = metrics::scale();
-    ImVec2 const exportDialogSize{std::max(1.0f, std::min(580.0f * uiScale, exportWorkSize.x - 24.0f)), 0.0f};
-    ImVec2 const dialogPadding{22.0f * uiScale, 16.0f * uiScale};
-    float const  advancedIndent = 14.0f * uiScale;
-    float const  insetBleed     = 8.0f * uiScale;
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    // Height fits the content and never changes; the dialog only scrolls when the viewport is shorter than that.
-    ImGui::SetNextWindowSize(exportDialogSize, ImGuiCond_Always);
-    ImGui::SetNextWindowSizeConstraints(
-        {exportDialogSize.x, 0.0f},
-        {exportDialogSize.x, std::max(1.0f, exportWorkSize.y - 24.0f)}
+    if (!ImGui::IsPopupOpen("##ExportVideo")) return;
+
+    ImGuiStyle const& style          = ImGui::GetStyle();
+    ImVec2 const      exportWorkSize = ImGui::GetMainViewport()->WorkSize;
+    float const       uiScale        = metrics::scale();
+    ImVec2 const      exportDialogSize{std::max(1.0f, std::min(580.0f * uiScale, exportWorkSize.x - 24.0f)), 0.0f};
+    ImVec2 const      dialogPadding{22.0f * uiScale, 16.0f * uiScale};
+    float const       insetBleed      = 8.0f * uiScale;
+    float const       cellPaddingY    = 2.0f * uiScale;
+    float const       fieldWidth      = 92.0f * uiScale;
+    float const       maxDialogHeight = std::max(1.0f, exportWorkSize.y - 24.0f);
+
+    // The popup draws at its own font size rather than the menu bar's, so the layout is measured at that size.
+    float const   font      = popupFontSize();
+    float const   frameH    = font + style.FramePadding.y * 2.0f;
+    float const   buttonH   = frameH + 6.0f * uiScale;
+    ImFont* const fontFace  = ImGui::GetFont();
+    auto const    textWidth = [&](std::string const& text) {
+        return std::ceil(fontFace->CalcTextSizeA(font, FLT_MAX, 0.0f, text.c_str()).x);
+    };
+
+    // One label column for every page; it must fit the longest label that carries a "(?)" hint.
+    float const hintExtra        = style.ItemInnerSpacing.x + textWidth("(?)") + style.CellPadding.x * 2.0f;
+    float       hintedLabelWidth = 0.0f;
+    for (std::string const& label :
+         {"playback.refactorEditor.export.ssaa"_tr(),
+          "playback.refactorEditor.export.warmupFrames"_tr(),
+          "playback.refactorEditor.export.hideHud"_tr(),
+          "playback.refactorEditor.export.encodeSpeed"_tr(),
+          "playback.refactorEditor.export.crf"_tr(),
+          "playback.refactorEditor.export.recordAudio"_tr(),
+          "playback.refactorEditor.export.audioCodec"_tr(),
+          "playback.refactorEditor.export.audioBitrate"_tr(),
+          "playback.refactorEditor.export.extraRenders"_tr()}) {
+        hintedLabelWidth = std::max(hintedLabelWidth, textWidth(label) + hintExtra);
+    }
+    // Fixed label column aligns every value; the capped value column stops inputs spanning the dialog.
+    float const labelWidth = std::min(
+        std::max(std::clamp(exportDialogSize.x * 0.26f, 96.0f * uiScale, 150.0f * uiScale), hintedLabelWidth),
+        exportDialogSize.x * 0.4f
     );
+    float const valueWidth = std::min(
+        320.0f * uiScale,
+        exportDialogSize.x - dialogPadding.x * 2.0f - labelWidth - style.CellPadding.x * 4.0f
+    );
+    // Width/height row: two fields plus the "x" between them; preset rows end on the same edge.
+    float const resolutionRowWidth = fieldWidth * 2.0f + textWidth("x") + style.ItemSpacing.x * 2.0f;
+
+    // Drawn below the page: gap and summary block, note strip, separator, gap and footer.
+    constexpr int kSummaryRows = 4;
+    float const   summaryRowH  = font + cellPaddingY * 2.0f;
+    float const belowBody = 6.0f * uiScale + (12.0f * uiScale + summaryRowH * kSummaryRows) + (frameH + 6.0f * uiScale)
+                          + 1.0f + 5.0f * uiScale + buttonH + style.ItemSpacing.y * 6.0f + dialogPadding.y;
+    // The shared page height was measured at one font size.
+    if (font != mExportLayoutKey) {
+        mExportLayoutKey  = font;
+        mExportBodyHeight = 0.0f;
+    }
+
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    // Height fits the content; on a viewport shorter than that the page scrolls and the footer stays in place.
+    ImGui::SetNextWindowSize(exportDialogSize, ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints({exportDialogSize.x, 0.0f}, {exportDialogSize.x, maxDialogHeight});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, dialogPadding);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * uiScale);
-    // The body child's scrollbar slot overhangs the content by one scrollbar width, so the dialog's own bars are
+    // The page child's scrollbar slot overhangs the content by one scrollbar width, so the dialog's own bars are
     // hidden.
     bool const dialogVisible = ImGui::BeginPopupModal(
         "##ExportVideo",
@@ -633,48 +739,39 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     if (dialogVisible) {
         std::string const custom                   = "playback.refactorEditor.export.custom"_tr();
         char const*       fpsOptions[]             = {"30 FPS", "60 FPS", "120 FPS", custom.c_str()};
+        char const*       fpsShortOptions[]        = {"30", "60", "120", custom.c_str()};
         constexpr int     fpsValues[]              = {30, 60, 120};
         char const*       ssaaOptions[]            = {"1x", "2x", "4x"};
         char const*       resolutionPresetLabels[] = {"720p", "1080p", "1440p", "4K"};
         static_assert(IM_ARRAYSIZE(resolutionPresetLabels) == IM_ARRAYSIZE(kResolutionPresets));
-        std::string const mp4Format            = "playback.refactorEditor.export.mp4"_tr();
-        std::string const pngFormat            = "playback.refactorEditor.export.pngSequence"_tr();
-        char const*       formatOptions[]      = {mp4Format.c_str(), pngFormat.c_str()};
-        std::string const encodeQuality        = "playback.refactorEditor.export.encodeQuality"_tr();
-        std::string const encodeFast           = "playback.refactorEditor.export.encodeFast"_tr();
-        std::string const encodeFastest        = "playback.refactorEditor.export.encodeFastest"_tr();
-        char const*       encodeSpeedOptions[] = {encodeQuality.c_str(), encodeFast.c_str(), encodeFastest.c_str()};
-        mExportSsaa                            = std::clamp(mExportSsaa, 0, 2);
-        int const maximumReplayTick            = std::max(state.totalTicks, 0);
-        // Fixed label column aligns every value; the capped value column stops inputs spanning the dialog.
-        auto const& style = ImGui::GetStyle();
-        // The label column must fit the longest label that carries a "(?)" hint.
-        float const hintExtra = style.ItemInnerSpacing.x + ImGui::CalcTextSize("(?)").x + style.CellPadding.x * 2.0f;
-        float       hintedLabelWidth = 0.0f;
-        for (std::string const& label :
-             {"playback.refactorEditor.export.ssaa"_tr(), "playback.refactorEditor.export.warmupFrames"_tr()}) {
-            hintedLabelWidth = std::max(hintedLabelWidth, ImGui::CalcTextSize(label.c_str()).x + hintExtra);
-        }
-        // Advanced labels sit one indent deeper, yet their values must stay on the shared value column.
-        for (std::string const& label :
-             {"playback.refactorEditor.export.extraRenders"_tr(),
-              "playback.refactorEditor.export.encodeSpeed"_tr(),
-              "playback.refactorEditor.export.crf"_tr()}) {
-            hintedLabelWidth =
-                std::max(hintedLabelWidth, ImGui::CalcTextSize(label.c_str()).x + hintExtra + advancedIndent);
-        }
-        float const labelWidth = std::min(
-            std::max(std::clamp(exportDialogSize.x * 0.26f, 96.0f * uiScale, 150.0f * uiScale), hintedLabelWidth),
-            exportDialogSize.x * 0.4f
-        );
-        float const fieldWidth = 92.0f * uiScale;
-        float const frameH     = ImGui::GetFrameHeight();
-        float const valueWidth = std::min(
-            320.0f * uiScale,
-            exportDialogSize.x - dialogPadding.x * 2.0f - labelWidth - style.CellPadding.x * 4.0f
-        );
-        // Width/height row: two fields plus the "x" between them; preset rows end on the same edge.
-        float const resolutionRowWidth = fieldWidth * 2.0f + ImGui::CalcTextSize("x").x + style.ItemSpacing.x * 2.0f;
+        std::string const mp4Format             = "playback.refactorEditor.export.mp4"_tr();
+        std::string const pngFormat             = "playback.refactorEditor.export.pngSequence"_tr();
+        char const*       formatOptions[]       = {mp4Format.c_str(), pngFormat.c_str()};
+        std::string const encodeQuality         = "playback.refactorEditor.export.encodeQuality"_tr();
+        std::string const encodeFast            = "playback.refactorEditor.export.encodeFast"_tr();
+        std::string const encodeFastest         = "playback.refactorEditor.export.encodeFastest"_tr();
+        char const*       encodeSpeedOptions[]  = {encodeQuality.c_str(), encodeFast.c_str(), encodeFastest.c_str()};
+        std::string const audioMono             = "playback.refactorEditor.export.audioMono"_tr();
+        std::string const audioStereo           = "playback.refactorEditor.export.audioStereo"_tr();
+        char const*       audioChannelOptions[] = {audioMono.c_str(), audioStereo.c_str()};
+        char const*       audioCodecOptions[]   = {"AAC", "Opus", "FLAC"};
+        static_assert(IM_ARRAYSIZE(audioCodecOptions) == IM_ARRAYSIZE(kAudioCodecs));
+        char const* audioBitrateOptions[] = {"128k", "192k", "256k", "320k"};
+        static_assert(IM_ARRAYSIZE(audioBitrateOptions) == IM_ARRAYSIZE(kAudioBitratesKbps));
+        std::string const tabGeneral  = "playback.refactorEditor.export.tabGeneral"_tr();
+        std::string const tabVideo    = "playback.refactorEditor.export.tabVideo"_tr();
+        std::string const tabAudio    = "playback.refactorEditor.export.tabAudio"_tr();
+        std::string const tabAdvanced = "playback.refactorEditor.export.tabAdvanced"_tr();
+        char const*       tabLabels[] = {tabGeneral.c_str(), tabVideo.c_str(), tabAudio.c_str(), tabAdvanced.c_str()};
+        enum ExportTab { TabGeneral, TabVideo, TabAudio, TabAdvanced };
+        mExportTab                  = std::clamp(mExportTab, 0, IM_ARRAYSIZE(tabLabels) - 1);
+        mExportAudioChannels        = std::clamp(mExportAudioChannels, 0, 1);
+        mExportAudioCodec           = std::clamp(mExportAudioCodec, 0, IM_ARRAYSIZE(kAudioCodecs) - 1);
+        mExportAudioBitrate         = std::clamp(mExportAudioBitrate, 0, IM_ARRAYSIZE(kAudioBitratesKbps) - 1);
+        mExportEncodeSpeed          = std::clamp(mExportEncodeSpeed, 0, 2);
+        auto const audioCodec       = kAudioCodecs[mExportAudioCodec];
+        mExportSsaa                 = std::clamp(mExportSsaa, 0, 2);
+        int const maximumReplayTick = std::max(state.totalTicks, 0);
 
         // Header: accent-tinted icon tile with title and subtitle stacked beside it.
         {
@@ -698,200 +795,202 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             dl->AddText({textX, topY + lineH + gap}, theme::kTextDim, subtitle.c_str());
             ImGui::Dummy({0.0f, box});
         }
-        float const buttonH = frameH + 6.0f * uiScale;
-        // Taller cells give the rows room to breathe without widening the label column.
-        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, 2.0f * uiScale});
 
-        // Auto height while the advanced group is closed; once open the height freezes and the body scrolls.
-        bool const frozenBody = mExportAdvancedOpen && mExportBodyHeight > 0.0f;
-        // The scrollbar slot is always reserved (and invisible while auto-sized) so content width never shifts.
+        // Settings are split over pages, so each one is short enough to show whole; the summary below spans them all.
+        ImGui::Dummy({0.0f, 2.0f * uiScale});
+        bool const tabChanged = tabStrip("##export-tabs", tabLabels, IM_ARRAYSIZE(tabLabels), mExportTab);
+
+        // Taller cells give the rows room to breathe without widening the label column.
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, cellPaddingY});
+
+        // Every page gets the height of the tallest one seen, so switching pages never resizes the dialog. On a
+        // viewport too short for that, the read-only recap gives up its space first; only when that is not enough
+        // does the page scroll, with the footer buttons still on screen.
+        bool const  fixedBody       = mExportBodyHeight > 0.0f;
+        float const roomWithSummary = maxDialogHeight - ImGui::GetCursorPosY() - belowBody;
+        bool const  showSummary     = mExportBodyHeight <= roomWithSummary;
+        float const summaryHeight   = 12.0f * uiScale + summaryRowH * kSummaryRows + style.ItemSpacing.y;
+        float const maxBodyHeight   = std::max(frameH * 4.0f, roomWithSummary + (showSummary ? 0.0f : summaryHeight));
+        // The scrollbar slot is always reserved (and invisible while nothing scrolls) so content width never shifts.
         ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, 0);
-        if (!frozenBody) {
+        if (!mExportBodyScrollable) {
             ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, 0);
             ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, 0);
             ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, 0);
         }
+        ImGui::SetNextWindowSizeConstraints({0.0f, 0.0f}, {FLT_MAX, maxBodyHeight});
         ImGui::BeginChild(
             "##export-body",
-            {ImGui::GetContentRegionAvail().x + style.ScrollbarSize, frozenBody ? mExportBodyHeight : 0.0f},
-            frozenBody ? ImGuiChildFlags_None : ImGuiChildFlags_AutoResizeY,
+            {ImGui::GetContentRegionAvail().x + style.ScrollbarSize,
+             fixedBody ? std::min(mExportBodyHeight, maxBodyHeight) : 0.0f},
+            fixedBody ? ImGuiChildFlags_None : ImGuiChildFlags_AutoResizeY,
             ImGuiWindowFlags_AlwaysVerticalScrollbar
         );
-        ImGui::PopStyleColor(frozenBody ? 1 : 4);
+        ImGui::PopStyleColor(mExportBodyScrollable ? 1 : 4);
+        if (tabChanged) ImGui::SetScrollY(0.0f);
+        // Known a frame late, which only delays the scrollbar grab appearing by that frame.
+        mExportBodyScrollable = ImGui::GetScrollMaxY() > 0.0f;
 
-        sectionHeader("playback.refactorEditor.export.output"_tr().c_str(), 8.0f);
-        if (beginPropertyTable("##export-output", labelWidth)) {
-            propertyLabel("playback.refactorEditor.export.name"_tr().c_str());
-            ImGui::SetNextItemWidth(valueWidth);
-            ImGui::InputText("##export-name", mExportName.data(), mExportName.size());
+        if (mExportTab == TabGeneral) {
+            sectionHeader("playback.refactorEditor.export.output"_tr().c_str(), 6.0f);
+            if (beginPropertyTable("##export-output", labelWidth)) {
+                propertyLabel("playback.refactorEditor.export.name"_tr().c_str());
+                ImGui::SetNextItemWidth(valueWidth);
+                ImGui::InputText("##export-name", mExportName.data(), mExportName.size());
 
-            propertyLabel("playback.refactorEditor.export.location"_tr().c_str());
-            ImGui::SetNextItemWidth(valueWidth);
-            ImGui::InputText("##export-directory", mExportDirectory.data(), mExportDirectory.size());
+                propertyLabel("playback.refactorEditor.export.location"_tr().c_str());
+                ImGui::SetNextItemWidth(valueWidth);
+                ImGui::InputText("##export-directory", mExportDirectory.data(), mExportDirectory.size());
 
-            propertyLabel("playback.refactorEditor.export.format"_tr().c_str());
-            segmented(
-                "##export-format",
-                formatOptions,
-                IM_ARRAYSIZE(formatOptions),
-                mExportFormat,
-                valueWidth,
-                capabilities.ffmpegVideoExport ? 0 : 1
-            );
-            ImGui::EndTable();
-        }
+                propertyLabel("playback.refactorEditor.export.format"_tr().c_str());
+                segmented(
+                    "##export-format",
+                    formatOptions,
+                    IM_ARRAYSIZE(formatOptions),
+                    mExportFormat,
+                    valueWidth,
+                    capabilities.ffmpegVideoExport ? 0 : 1
+                );
+                ImGui::EndTable();
+            }
 
-        sectionHeader("playback.refactorEditor.export.timeline"_tr().c_str());
-        if (beginPropertyTable("##export-timeline", labelWidth)) {
-            propertyLabel("playback.refactorEditor.export.frameRate"_tr().c_str());
-            float const presetWidth = valueWidth - (mFpsPreset == 3 ? fieldWidth + style.ItemSpacing.x : 0.0f);
-            if (segmented("##export-fps", fpsOptions, IM_ARRAYSIZE(fpsOptions), mFpsPreset, presetWidth)
-                && mFpsPreset < 3)
-                mFps = fpsValues[mFpsPreset];
-            if (mFpsPreset == 3) {
+            sectionHeader("playback.refactorEditor.export.timeline"_tr().c_str());
+            if (beginPropertyTable("##export-timeline", labelWidth)) {
+                propertyLabel("playback.refactorEditor.export.frameRate"_tr().c_str());
+                float const presetWidth = valueWidth - (mFpsPreset == 3 ? fieldWidth + style.ItemSpacing.x : 0.0f);
+                // The unit is dropped once the buttons get too narrow for it; the row label already names it.
+                float fpsLabelWidth = 0.0f;
+                for (char const* option : fpsOptions)
+                    fpsLabelWidth = std::max(fpsLabelWidth, ImGui::CalcTextSize(option).x);
+                bool const fpsUnitFits =
+                    presetWidth / IM_ARRAYSIZE(fpsOptions) >= fpsLabelWidth + style.FramePadding.x * 2.0f;
+                if (segmented(
+                        "##export-fps",
+                        fpsUnitFits ? fpsOptions : fpsShortOptions,
+                        IM_ARRAYSIZE(fpsOptions),
+                        mFpsPreset,
+                        presetWidth
+                    )
+                    && mFpsPreset < 3)
+                    mFps = fpsValues[mFpsPreset];
+                if (mFpsPreset == 3) {
+                    ImGui::SameLine();
+                    inputClampedInt("##export-custom-fps", mFps, 1, 240, fieldWidth);
+                }
+
+                std::string const usePlayhead = "playback.refactorEditor.export.usePlayhead"_tr();
+                propertyLabel("playback.refactorEditor.export.startTick"_tr().c_str());
+                float const tickRowRight = ImGui::GetCursorScreenPos().x + valueWidth;
+                inputClampedInt("##export-start-tick", mExportStartTick, 0, maximumReplayTick, fieldWidth);
                 ImGui::SameLine();
-                inputClampedInt("##export-custom-fps", mFps, 1, 240, fieldWidth);
+                if (frameIconButton("##export-start-current", ICON_CLOCK, usePlayhead.c_str()))
+                    mExportStartTick = std::clamp(state.currentTick, 0, maximumReplayTick);
+                trailingText(widgets::formatTick(mExportStartTick).c_str(), tickRowRight);
+
+                propertyLabel("playback.refactorEditor.export.endTick"_tr().c_str());
+                inputClampedInt("##export-end-tick", mExportEndTick, 0, maximumReplayTick, fieldWidth);
+                ImGui::SameLine();
+                if (frameIconButton("##export-end-current", ICON_CLOCK, usePlayhead.c_str()))
+                    mExportEndTick = std::clamp(state.currentTick, 0, maximumReplayTick);
+                trailingText(widgets::formatTick(mExportEndTick).c_str(), tickRowRight);
+
+                // Range bar under the tick fields, with the reset-to-full-replay button at its end.
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(1);
+                rangePreview(
+                    mExportStartTick,
+                    mExportEndTick,
+                    state.currentTick,
+                    maximumReplayTick,
+                    valueWidth - frameH - style.ItemSpacing.x
+                );
+                ImGui::SameLine();
+                if (frameIconButton(
+                        "##export-full-range",
+                        ICON_RESET,
+                        "playback.refactorEditor.export.fullRange"_tr().c_str()
+                    )) {
+                    mExportStartTick = 0;
+                    mExportEndTick   = maximumReplayTick;
+                }
+                ImGui::EndTable();
             }
+        } else if (mExportTab == TabVideo) {
+            sectionHeader("playback.refactorEditor.export.capture"_tr().c_str(), 6.0f);
+            if (beginPropertyTable("##export-capture", labelWidth)) {
+                propertyLabel("playback.refactorEditor.export.resolution"_tr().c_str());
+                inputClampedInt("##export-width", mExportWidth, 16, 16384, fieldWidth);
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("x");
+                ImGui::SameLine();
+                inputClampedInt("##export-height", mExportHeight, 16, 16384, fieldWidth);
 
-            std::string const usePlayhead = "playback.refactorEditor.export.usePlayhead"_tr();
-            propertyLabel("playback.refactorEditor.export.startTick"_tr().c_str());
-            float const tickRowRight = ImGui::GetCursorScreenPos().x + valueWidth;
-            inputClampedInt("##export-start-tick", mExportStartTick, 0, maximumReplayTick, fieldWidth);
-            ImGui::SameLine();
-            if (frameIconButton("##export-start-current", ICON_CLOCK, usePlayhead.c_str()))
-                mExportStartTick = std::clamp(state.currentTick, 0, maximumReplayTick);
-            trailingText(widgets::formatTick(mExportStartTick).c_str(), tickRowRight);
+                // No preset is lit while the fields hold a custom size.
+                propertyLabel("playback.refactorEditor.export.resolutionPreset"_tr().c_str());
+                int resolutionPreset = -1;
+                for (int i = 0; i < IM_ARRAYSIZE(kResolutionPresets); ++i) {
+                    if (kResolutionPresets[i].width == mExportWidth && kResolutionPresets[i].height == mExportHeight)
+                        resolutionPreset = i;
+                }
+                if (segmented(
+                        "##export-resolution-preset",
+                        resolutionPresetLabels,
+                        IM_ARRAYSIZE(resolutionPresetLabels),
+                        resolutionPreset,
+                        resolutionRowWidth
+                    )) {
+                    mExportWidth  = kResolutionPresets[resolutionPreset].width;
+                    mExportHeight = kResolutionPresets[resolutionPreset].height;
+                }
 
-            propertyLabel("playback.refactorEditor.export.endTick"_tr().c_str());
-            inputClampedInt("##export-end-tick", mExportEndTick, 0, maximumReplayTick, fieldWidth);
-            ImGui::SameLine();
-            if (frameIconButton("##export-end-current", ICON_CLOCK, usePlayhead.c_str()))
-                mExportEndTick = std::clamp(state.currentTick, 0, maximumReplayTick);
-            trailingText(widgets::formatTick(mExportEndTick).c_str(), tickRowRight);
-
-            // Range bar under the tick fields, with the reset-to-full-replay button at its end.
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(1);
-            rangePreview(
-                mExportStartTick,
-                mExportEndTick,
-                state.currentTick,
-                maximumReplayTick,
-                valueWidth - frameH - style.ItemSpacing.x
-            );
-            ImGui::SameLine();
-            if (frameIconButton(
-                    "##export-full-range",
-                    ICON_RESET,
-                    "playback.refactorEditor.export.fullRange"_tr().c_str()
-                )) {
-                mExportStartTick = 0;
-                mExportEndTick   = maximumReplayTick;
-            }
-            ImGui::EndTable();
-        }
-
-        sectionHeader("playback.refactorEditor.export.capture"_tr().c_str());
-        if (beginPropertyTable("##export-capture", labelWidth)) {
-            propertyLabel("playback.refactorEditor.export.resolution"_tr().c_str());
-            inputClampedInt("##export-width", mExportWidth, 16, 16384, fieldWidth);
-            ImGui::SameLine();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextDisabled("x");
-            ImGui::SameLine();
-            inputClampedInt("##export-height", mExportHeight, 16, 16384, fieldWidth);
-
-            // No preset is lit while the fields hold a custom size.
-            propertyLabel("playback.refactorEditor.export.resolutionPreset"_tr().c_str());
-            int resolutionPreset = -1;
-            for (int i = 0; i < IM_ARRAYSIZE(kResolutionPresets); ++i) {
-                if (kResolutionPresets[i].width == mExportWidth && kResolutionPresets[i].height == mExportHeight)
-                    resolutionPreset = i;
-            }
-            if (segmented(
-                    "##export-resolution-preset",
-                    resolutionPresetLabels,
-                    IM_ARRAYSIZE(resolutionPresetLabels),
-                    resolutionPreset,
-                    resolutionRowWidth
-                )) {
-                mExportWidth  = kResolutionPresets[resolutionPreset].width;
-                mExportHeight = kResolutionPresets[resolutionPreset].height;
-            }
-
-            propertyLabel(
-                "playback.refactorEditor.export.ssaa"_tr().c_str(),
-                "playback.refactorEditor.export.ssaaHint"_tr().c_str()
-            );
-            int ssaaDisabledMask = 0;
-            for (int i = 0; i < IM_ARRAYSIZE(ssaaOptions); ++i) {
-                if (!exporting::supersampleFits(
-                        static_cast<uint32_t>(mExportWidth),
-                        static_cast<uint32_t>(mExportHeight),
-                        1u << i
+                propertyLabel(
+                    "playback.refactorEditor.export.ssaa"_tr().c_str(),
+                    "playback.refactorEditor.export.ssaaHint"_tr().c_str()
+                );
+                int ssaaDisabledMask = 0;
+                for (int i = 0; i < IM_ARRAYSIZE(ssaaOptions); ++i) {
+                    if (!exporting::supersampleFits(
+                            static_cast<uint32_t>(mExportWidth),
+                            static_cast<uint32_t>(mExportHeight),
+                            1u << i
+                        ))
+                        ssaaDisabledMask |= 1 << i;
+                }
+                // Shrinking the output can strand the selection on a level that no longer fits.
+                while (mExportSsaa > 0 && ((ssaaDisabledMask >> mExportSsaa) & 1) != 0) --mExportSsaa;
+                if (segmented(
+                        "##export-ssaa",
+                        ssaaOptions,
+                        IM_ARRAYSIZE(ssaaOptions),
+                        mExportSsaa,
+                        resolutionRowWidth,
+                        ssaaDisabledMask
                     ))
-                    ssaaDisabledMask |= 1 << i;
+                    mExportSsaa = std::clamp(mExportSsaa, 0, 2);
+
+                propertyLabel(
+                    "playback.refactorEditor.export.warmupFrames"_tr().c_str(),
+                    "playback.refactorEditor.export.warmupHint"_tr().c_str()
+                );
+                inputClampedInt("##export-warmup", mExportWarmupFrames, 0, 3600, fieldWidth);
+
+                propertyLabel(
+                    "playback.refactorEditor.export.hideHud"_tr().c_str(),
+                    "playback.refactorEditor.export.hideHudHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-hide-hud", &mExportHideHud);
+                ImGui::EndTable();
             }
-            // Shrinking the output can strand the selection on a level that no longer fits.
-            while (mExportSsaa > 0 && ((ssaaDisabledMask >> mExportSsaa) & 1) != 0) --mExportSsaa;
-            if (segmented(
-                    "##export-ssaa",
-                    ssaaOptions,
-                    IM_ARRAYSIZE(ssaaOptions),
-                    mExportSsaa,
-                    resolutionRowWidth,
-                    ssaaDisabledMask
-                ))
-                mExportSsaa = std::clamp(mExportSsaa, 0, 2);
 
-            propertyLabel(
-                "playback.refactorEditor.export.warmupFrames"_tr().c_str(),
-                "playback.refactorEditor.export.warmupHint"_tr().c_str()
-            );
-            inputClampedInt("##export-warmup", mExportWarmupFrames, 0, 3600, fieldWidth);
-            ImGui::EndTable();
-        }
-
-        bool const               advancedWasOpen = mExportAdvancedOpen;
-        std::vector<std::string> advancedSummary;
-        if (mExportFormat == 0) {
-            advancedSummary.push_back(
-                std::string(encodeSpeedOptions[std::clamp(mExportEncodeSpeed, 0, 2)]) + " | CRF "
-                + std::to_string(mExportCrf)
-            );
-        }
-        if (mExportExtraRenders > 0) {
-            advancedSummary.push_back(
-                "playback.refactorEditor.export.advancedSummaryExtraRenders"_tr(mExportExtraRenders)
-            );
-        }
-        mExportAdvancedOpen = collapseHeader(
-            "##export-advanced",
-            "playback.refactorEditor.export.advanced"_tr().c_str(),
-            advancedSummary,
-            mExportAdvancedOpen
-        );
-        if (mExportAdvancedOpen && !advancedWasOpen) mExportScrollToAdvanced = true;
-        // The body only has its frozen height from the frame after opening, so the scroll waits until then.
-        if (mExportScrollToAdvanced && frozenBody) {
-            ImGui::SetScrollHereY(0.0f);
-            mExportScrollToAdvanced = false;
-        }
-        if (mExportAdvancedOpen) {
-            // Indented group with a hairline down its left edge; tables give back the indent so values stay aligned.
-            float const advancedTop = ImGui::GetCursorScreenPos().y;
-            float const advancedX   = ImGui::GetCursorScreenPos().x;
-            ImGui::Indent(advancedIndent);
-            float const subLabelWidth = labelWidth - advancedIndent;
-            subHeader("playback.refactorEditor.export.advancedEncode"_tr().c_str(), 4.0f);
-            if (beginPropertyTable("##export-encoding", subLabelWidth)) {
+            sectionHeader("playback.refactorEditor.export.advancedEncode"_tr().c_str());
+            if (beginPropertyTable("##export-encoding", labelWidth)) {
                 // Labels stay live so their hints work; only the encoder widgets grey out for a PNG sequence.
                 propertyLabel(
                     "playback.refactorEditor.export.encodeSpeed"_tr().c_str(),
                     "playback.refactorEditor.export.encodeSpeedHint"_tr().c_str()
                 );
                 ImGui::BeginDisabled(mExportFormat != 0);
-                mExportEncodeSpeed = std::clamp(mExportEncodeSpeed, 0, 2);
                 segmented(
                     "##export-encode-speed",
                     encodeSpeedOptions,
@@ -910,9 +1009,66 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndDisabled();
                 ImGui::EndTable();
             }
+        } else if (mExportTab == TabAudio) {
+            sectionHeader("playback.refactorEditor.export.capture"_tr().c_str(), 6.0f);
+            if (beginPropertyTable("##export-audio", labelWidth)) {
+                propertyLabel(
+                    "playback.refactorEditor.export.recordAudio"_tr().c_str(),
+                    "playback.refactorEditor.export.recordAudioHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-record-audio", &mExportAudio);
 
-            subHeader("playback.refactorEditor.export.advancedRender"_tr().c_str(), 8.0f);
-            if (beginPropertyTable("##export-rendering", subLabelWidth)) {
+                // Rows stay in place while audio is off, so the page keeps its layout.
+                propertyLabel("playback.refactorEditor.export.audioChannels"_tr().c_str());
+                ImGui::BeginDisabled(!mExportAudio);
+                segmented(
+                    "##export-audio-channels",
+                    audioChannelOptions,
+                    IM_ARRAYSIZE(audioChannelOptions),
+                    mExportAudioChannels,
+                    resolutionRowWidth
+                );
+                ImGui::EndDisabled();
+                ImGui::EndTable();
+            }
+
+            sectionHeader("playback.refactorEditor.export.advancedEncode"_tr().c_str());
+            if (beginPropertyTable("##export-audio-encoding", labelWidth)) {
+                // A PNG sequence keeps the captured sound as a WAV next to the frames, so there is nothing to encode.
+                propertyLabel(
+                    "playback.refactorEditor.export.audioCodec"_tr().c_str(),
+                    "playback.refactorEditor.export.audioCodecHint"_tr().c_str()
+                );
+                ImGui::BeginDisabled(mExportFormat != 0 || !mExportAudio);
+                segmented(
+                    "##export-audio-codec",
+                    audioCodecOptions,
+                    IM_ARRAYSIZE(audioCodecOptions),
+                    mExportAudioCodec,
+                    resolutionRowWidth
+                );
+                ImGui::EndDisabled();
+
+                propertyLabel(
+                    "playback.refactorEditor.export.audioBitrate"_tr().c_str(),
+                    "playback.refactorEditor.export.audioBitrateHint"_tr().c_str()
+                );
+                ImGui::BeginDisabled(
+                    mExportFormat != 0 || !mExportAudio || !exporting::audioCodecUsesBitrate(audioCodec)
+                );
+                segmented(
+                    "##export-audio-bitrate",
+                    audioBitrateOptions,
+                    IM_ARRAYSIZE(audioBitrateOptions),
+                    mExportAudioBitrate,
+                    valueWidth
+                );
+                ImGui::EndDisabled();
+                ImGui::EndTable();
+            }
+        } else {
+            sectionHeader("playback.refactorEditor.export.advancedRender"_tr().c_str(), 6.0f);
+            if (beginPropertyTable("##export-rendering", labelWidth)) {
                 propertyLabel(
                     "playback.refactorEditor.export.extraRenders"_tr().c_str(),
                     "playback.refactorEditor.export.extraRendersHint"_tr().c_str()
@@ -926,18 +1082,12 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 );
                 ImGui::EndTable();
             }
-            ImGui::Unindent(advancedIndent);
-            float const advancedBottom = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y;
-            ImGui::GetWindowDrawList()->AddLine(
-                {advancedX + 4.0f * uiScale, advancedTop + 2.0f * uiScale},
-                {advancedX + 4.0f * uiScale, advancedBottom},
-                theme::kBorder
-            );
         }
 
+        // Rounded up: the child's size is truncated to whole pixels, and a fraction short would bring up a scrollbar.
+        float const pageHeight = std::ceil(ImGui::GetCursorPosY() - style.ItemSpacing.y);
         ImGui::EndChild();
-        // The child's size lags a frame, so the last closed frame holds the natural height to freeze at.
-        if (!mExportAdvancedOpen) mExportBodyHeight = ImGui::GetItemRectSize().y;
+        mExportBodyHeight = std::max(mExportBodyHeight, pageHeight);
 
         int const      safeSsaaIndex = std::clamp(mExportSsaa, 0, 2);
         uint32_t const ssaaValue     = 1u << safeSsaaIndex;
@@ -975,6 +1125,11 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         previewSettings.extraRenders      = static_cast<uint32_t>(std::max(0, mExportExtraRenders));
         previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         previewSettings.videoCrf          = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
+        previewSettings.hideHud           = mExportHideHud;
+        previewSettings.audio             = mExportAudio;
+        previewSettings.audioStereo       = mExportAudioChannels == 1;
+        previewSettings.audioCodec        = audioCodec;
+        previewSettings.audioBitrateKbps  = kAudioBitratesKbps[mExportAudioBitrate];
         previewSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
 
@@ -986,7 +1141,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
         // Read-only recap on a tinted block without an outline, so it reads apart from the editable rows above.
         ImGui::Dummy({0.0f, 6.0f * uiScale});
-        {
+        if (showSummary) {
             std::string const timelineValue =
                 "playback.refactorEditor.export.summaryValue"_tr(mFps, durationSeconds, frameCount);
             std::string const captureValue = "playback.refactorEditor.export.captureValue"_tr(
@@ -1001,10 +1156,23 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 auto const u8 = compiled.plan->outputPath.filename().u8string();
                 outputValue.assign(reinterpret_cast<char const*>(u8.data()), u8.size());
             }
+            // Encoder choices live on other pages than the one open, so the recap names them: video first, then audio.
+            std::string encodeValue = mExportFormat == 0 ? std::string(encodeSpeedOptions[mExportEncodeSpeed])
+                                                               + " | CRF " + std::to_string(mExportCrf)
+                                                         : std::string("PNG");
+            if (mExportAudio) {
+                // A PNG sequence keeps its sound as a WAV file beside the frames.
+                std::string audioValue = mExportFormat == 0 ? audioCodecOptions[mExportAudioCodec] : "WAV";
+                if (mExportFormat == 0 && exporting::audioCodecUsesBitrate(audioCodec))
+                    audioValue += std::string(" ") + audioBitrateOptions[mExportAudioBitrate];
+                encodeValue += " | " + audioValue + " " + audioChannelOptions[mExportAudioChannels];
+            } else {
+                encodeValue += " | " + "playback.refactorEditor.export.audioSummaryOff"_tr();
+            }
             // The block bleeds past the window padding while its rows stay on the shared label/value columns.
             float const  padY     = 6.0f * uiScale;
             float const  rowH     = ImGui::GetTextLineHeight() + style.CellPadding.y * 2.0f;
-            float const  blockH   = padY * 2.0f + rowH * 3.0f;
+            float const  blockH   = padY * 2.0f + rowH * kSummaryRows;
             float const  blockW   = ImGui::GetContentRegionAvail().x;
             ImVec2 const blockMin = ImGui::GetCursorScreenPos();
             ImGui::GetWindowDrawList()->AddRectFilled(
@@ -1024,6 +1192,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 };
                 summaryRow("playback.refactorEditor.export.timelineSummary"_tr().c_str(), timelineValue);
                 summaryRow("playback.refactorEditor.export.captureSummary"_tr().c_str(), captureValue);
+                summaryRow("playback.refactorEditor.export.encodeSummary"_tr().c_str(), encodeValue);
                 summaryRow("playback.refactorEditor.export.outputSummary"_tr().c_str(), outputValue);
                 ImGui::EndTable();
             }
