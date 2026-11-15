@@ -15,6 +15,7 @@
     <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
     <img src="https://img.shields.io/badge/LeviLamina-26.40.*-7b68ee?style=flat-square" alt="LeviLamina 26.40">
     <img src="https://img.shields.io/badge/LeviLamina-26.51.*-7b68ee?style=flat-square" alt="LeviLamina 26.51">
+    <img src="https://img.shields.io/badge/LeviLamina-26.60.*-7b68ee?style=flat-square" alt="LeviLamina 26.60">
   </p>
 
   <p>
@@ -95,16 +96,19 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 - **Cinematic camera keyframes** — Captures position, yaw, pitch, roll, and FOV with Smooth, Linear, Ease, Hold, Hermite, and Cubic Bezier interpolation.
 - **Dimension-aware camera paths** — Splits camera tracks at every dimension change so preview and export never interpolate through unrelated worlds.
 - **First-person follow** — Views the replay through the recorder, another player, or any entity, with the recorded HUD, held maps, view bobbing, and portal and sleep effects.
-- **Experimental video export** — Renders a selected tick range to H.264 MP4 with AAC game audio, or to PNG sequences with a sidecar WAV, with configurable frame rate, resolution, SSAA, warm-up frames, and extra renders per frame.
+- **Preview controls** — Choose visible HUD elements and adjust preview volume, mute, and silence while paused without changing exported audio. Recorded containers and server forms are previewed when following the recorder in first person.
+- **Experimental video export** — Renders a selected tick range to H.264 MP4 with AAC, Opus, or FLAC audio, or to PNG sequences with a sidecar WAV. Audio is optional, in mono or stereo, with configurable frame rate, resolution, SSAA, warm-up frames, and extra renders per frame.
 - **D3D11 and D3D12 capture** — Supports the native renderer on both backends; D3D12 supports 1x/2x/4x SSAA and D3D11 uses 1x.
 - **Bilingual UI** — Localizes commands, the native replay UI, and the resource-pack main-menu button in English and Simplified Chinese.
 
 ## Latest Changes
 
-`v0.4.0` is a feature prerelease published for MC 26.10, MC 26.20, MC 26.40, and MC 26.51. Replays can be followed in first person from the recorder, another player, or any entity, with the recorded HUD, held maps, view bobbing, and portal and sleep effects; new first-person and third-person camera tracks choose who is viewed in preview and export. Video export now captures game audio. Recordings embed the server's resource packs, the local player's view can be sampled up to 120 times per second, and the pause menu gains recording controls with a save dialog and an on-screen recording indicator. The timeline adds multi-select, snapping, markers, and right-click menus.
+`v0.4.0` brings the same feature set to MC 26.10, MC 26.20, MC 26.40, MC 26.51, and MC 26.60. First- and third-person camera tracks select the recorder or another player; entities can also be followed from the viewport. Recordings retain the HUD, held maps, view effects, server resource packs, and client-generated sounds, with optional local-view sampling up to 120 Hz. The timeline adds multi-select, snapping, markers, and context menus, while the pause menu gains recording controls, a save dialog, and a recording indicator.
+
+The inspector's Preview page controls the HUD and preview audio independently of export audio. The tabbed export dialog adds audio codecs, channel and bitrate choices, and silent exports. Export timing follows replay time, including lighting effects and interface animations; dimension changes preserve the recorded seed and biomes and repeat renderer warm-up. Recording snapshots and seeking are faster, and closing a replay cleans up its temporary world, including during export. See the limitations below before using experimental renderer paths.
 
 > [!CAUTION]
-> Playback releases are still prereleases and may make destructive format or configuration changes. Replays recorded with releases before `v0.4.0` are not supported and must be recorded again: the recording layout changed while its snapshot context version stayed at `1`, so older archives are not detected and cannot be read correctly. The camera switch track was removed, and its data in earlier editor projects is dropped. The configuration version, snapshot context version, and editor project format version all stay at `1`; no migration layer is provided.
+> Playback releases are still prereleases and may make incompatible format or configuration changes. Replays recorded before `v0.4.0` are not supported and must be recorded again; older archives may not be detected as incompatible. The camera switch track was removed, and its data in earlier editor projects is dropped. Back up existing recordings and projects before upgrading; no migration is provided.
 
 > [!IMPORTANT]
 > The **Playback** main-menu button still uses a lightweight UI resource pack. Complete Lip and release-ZIP installations include it under `mods/playback/resource_packs/playback-ui/`; the Release also provides `playback-ui.mcpack` for standalone manual import.
@@ -113,7 +117,7 @@ See the full [changelog](CHANGELOG.md) for release history and detailed changes.
 
 ## Compatibility
 
-Playback maintains separate release lines for Minecraft and LeviLamina versions. Product version `0.4.0` is published for every runtime listed below; install the release that matches your instance. All four are prereleases.
+Playback maintains five separate `0.4.0` prerelease lines. Install only the release that matches your Minecraft and LeviLamina runtime; the release suffix is not always the game version.
 
 | Minecraft / LeviLamina | Playback release                                                                    | Status     |
 | ---------------------- | ----------------------------------------------------------------------------------- | ---------- |
@@ -121,8 +125,9 @@ Playback maintains separate release lines for Minecraft and LeviLamina versions.
 | `26.20.*`              | [`v0.4.0-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.20) | Prerelease |
 | `26.40.*`              | [`v0.4.0-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.40) | Prerelease |
 | `26.51.*`              | [`v0.4.0-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.50) | Prerelease |
+| `26.60.*`              | [`v0.4.0-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.60) | Prerelease |
 
-All release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods.
+All release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods. The `mc26.50` line targets Minecraft 26.51. The `mc26.60` build requires exactly Minecraft `1.26.60.5`; other 26.60 game builds are not supported. The 26.40 dependency range is `>=26.40.5 <26.50.0`.
 
 > [!NOTE]
 > `0.2.0` was deliberately skipped on MC 26.20. Video export did not work on that runtime: the 26.20 headers mis-declare a struct alignment, so the capture path read a render-item count from padding, classified every submission as overlay-only, and stalled every export on frame 0. The 26.20 line therefore goes from `v0.1.2-mc26.20` straight to `v0.2.1-mc26.20`, which carries the fix. The MC 26.10 line is unaffected and did publish `v0.2.0-mc26.10`.
@@ -161,7 +166,7 @@ Yes. Playback is client-only and can record the chunks, entities, and selected p
 
 ### Can Playback export a replay to video?
 
-Experimental H.264 MP4 and PNG-sequence export is available in `v0.4.0`. MP4 files include game audio as an AAC track, and PNG sequences get a sidecar `.audio.wav`. Export still has known limitations.
+Yes, experimentally. MP4 uses H.264 video and optional AAC, Opus, or FLAC audio; PNG sequences get an optional `.audio.wav`. Audio can be mono or stereo. AAC is the default and the most widely compatible choice; some players do not support Opus or FLAC in MP4. Preview volume and mute do not affect exports.
 
 ### Do camera keyframes interpolate across dimensions?
 
@@ -169,7 +174,7 @@ No. Every recorded dimension change splits the camera timeline, including transi
 
 ### Which Playback build should I install?
 
-Use `v0.4.0-mc26.10` for Minecraft/LeviLamina `26.10.*`, `v0.4.0-mc26.20` for `26.20.*`, `v0.4.0-mc26.40` for `26.40.*`, and `v0.4.0-mc26.50` for `26.51.*`. All four are prereleases. Do not mix release lines; see [Compatibility](#compatibility).
+Use the matching entry in [Compatibility](#compatibility). In particular, Minecraft 26.51 uses `v0.4.0-mc26.50`, and `v0.4.0-mc26.60` supports only Minecraft `1.26.60.5`. Do not mix release lines.
 
 ## Development Status and Roadmap
 
@@ -186,7 +191,8 @@ Use `v0.4.0-mc26.10` for Minecraft/LeviLamina `26.10.*`, `v0.4.0-mc26.20` for `2
 - Playback reconstructs recorded client-visible state; it is not a deterministic copy of the original server simulation.
 - Pending scheduled ticks and server-owned systems such as villages, raids, and POI state are not currently persisted as authoritative simulation state.
 - Video export is still experimental, and runtime issues may remain.
-- Vibrant Visuals is not supported yet. Recording, replay, and export are only validated with the standard renderer; turn Vibrant Visuals off before using Playback.
+- Use standard/Fancy graphics for routine recording, replay, and export. Ray tracing and Vibrant Visuals have received targeted export tests and timing fixes, but remain experimental; this is not a guarantee of broad renderer or shader-pack compatibility.
+- Regular grid/dither patterns in some exports and occasional native dimension-loading warnings remain under investigation. Report the renderer, export settings, logs, and a short reproducible clip if affected.
 - SSAA is limited to 4x on D3D12, lower when the supersampled render size does not fit, and to 1x on D3D11.
 - A camera can only render chunks present in the replay data; unrecorded terrain cannot be reconstructed.
 - The August 20, 2026 fix cannot retroactively restore server chunk or custom-entity registry data missing from an existing replay archive.
