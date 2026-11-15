@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -109,7 +110,12 @@ DWORD runFfmpeg(
 
 } // namespace
 
-bool muxIntoMp4(std::filesystem::path const& videoPath, std::filesystem::path const& sidecarWav) {
+bool muxIntoMp4(
+    std::filesystem::path const& videoPath,
+    std::filesystem::path const& sidecarWav,
+    exporting::AudioCodec        codec,
+    uint32_t                     bitrateKbps
+) {
     std::error_code ec;
     if (!std::filesystem::is_regular_file(videoPath, ec) || !std::filesystem::is_regular_file(sidecarWav, ec)) {
         logger().warn(
@@ -138,8 +144,17 @@ bool muxIntoMp4(std::filesystem::path const& videoPath, std::filesystem::path co
     command              += L" -hide_banner -loglevel error -nostdin -y";
     command              += L" -i " + quote(videoPath.wstring());
     command              += L" -i " + quote(sidecarWav.wstring());
-    command              += L" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest ";
-    command              += quote(muxed.wstring());
+    command               += L" -map 0:v:0 -map 1:a:0 -c:v copy -c:a ";
+    for (char const* c = exporting::ffmpegAudioEncoder(codec); *c != '\0'; ++c) command.push_back(wchar_t(*c));
+    // ffmpeg's own Opus encoder, and FLAC inside MP4 on older builds, only run with the experimental flag.
+    if (codec != exporting::AudioCodec::Aac) command += L" -strict -2";
+    if (exporting::audioCodecUsesBitrate(codec)) {
+        auto const kbps =
+            std::clamp(bitrateKbps, exporting::MinExportAudioBitrateKbps, exporting::MaxExportAudioBitrateKbps);
+        command += L" -b:a " + std::to_wstring(kbps) + L"k";
+    }
+    command += L" -shortest ";
+    command += quote(muxed.wstring());
 
     DWORD const exitCode = runFfmpeg(command, ffmpeg, logPath);
     std::filesystem::remove(logPath, ec);

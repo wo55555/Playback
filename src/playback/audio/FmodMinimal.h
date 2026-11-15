@@ -48,6 +48,8 @@ struct CApi {
     int (*groupRemoveDSP)(void*, void*){};
     int (*groupStop)(void*){};
     int (*dspRelease)(void*){};
+    int (*channelStop)(void*){};
+    int (*groupGetName)(void*, char*, int){};
 };
 
 using FMOD_DSP_CREATE_CALLBACK  = FMOD_RESULT(PB_F_CALLBACK*)(FMOD_DSP_STATE*);

@@ -23,6 +23,7 @@
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
 #include "playback/visuals/ReplayHudHooks.h"
+#include "playback/visuals/ReplayHudVisibility.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
 
 #include "ll/api/event/EventBus.h"
@@ -122,6 +123,7 @@ bool Playback::hook() {
         (void)audio::exportcap::install();
     }
     screen::hookRecordControls(true);
+    visuals::hookReplayHudVisibility(true);
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -228,6 +230,7 @@ bool Playback::unhook() {
     if (!editor::graphics::hookSeekFreeze(false)) {
         getSelf().getLogger().warn("Unable to remove the seek freeze hook during shutdown");
     }
+    visuals::hookReplayHudVisibility(false);
     screen::hookRecordControls(false);
     screen::hookMainMenu(false);
     getEventListeners().clear();
