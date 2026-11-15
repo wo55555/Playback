@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Recordings remain playable when the server switches dimensions again before the new world finishes loading. Stopping during that transition keeps the portion already recorded.
+- Terrain stays visible in continuous previews and video exports after rapid dimension changes.
 
 ## [0.4.0-mc26.10] - 2026-11-15
 
