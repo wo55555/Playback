@@ -14,20 +14,20 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 | `26.51.*`              | [`v0.4.0-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.50) |
 | `26.60.*`              | [`v0.4.0-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.0-mc26.60) |
 
-All five Playback releases listed above are prereleases; install only the version that matches your instance. The `26.60` release runs only on Minecraft `1.26.60.5`.
+All five release lines above are prereleases; install only the version that matches your instance. The `mc26.50` release targets Minecraft 26.51. The `mc26.60` build requires exactly Minecraft `1.26.60.5`. The 26.40 dependency range is `>=26.40.5 <26.50.0`.
 
 > [!IMPORTANT]
 > Use a clean LeviLamina instance without other third-party mods whenever possible. Broad mod compatibility is not currently guaranteed.
 
 > [!WARNING]
-> Vibrant Visuals is not supported yet. Turn it off in the video settings before recording, replaying, or exporting; leaving it on is untested and can break rendering and capture.
+> Use standard/Fancy graphics for routine use. Ray tracing and Vibrant Visuals have received targeted export tests, but remain experimental. Some exports still show grid/dither patterns, and occasional native dimension-loading warnings remain under investigation.
 
 > [!CAUTION]
-> `v0.4.0` is a prerelease on every release line. Replays recorded with releases before `v0.4.0` are not supported and must be recorded again: the recording layout changed while its snapshot context version stayed at `1`, so older archives are not detected and cannot be read correctly. The camera switch track was removed, and its data in earlier editor projects is dropped. The configuration version, snapshot context version, and editor project format version all stay at `1`; no migration is provided.
+> `v0.4.0` is a prerelease on every release line. Replays recorded before it are not supported and must be recorded again; older archives may not be detected as incompatible. The camera switch track was removed, and its data in earlier editor projects is dropped. Back up recordings and projects before upgrading; no migration is provided.
 
 ## Install with LeviLauncher and Lip
 
-The screenshots below use a `26.10` instance and are illustrative. For `26.20`, `26.40`, `26.51`, or `26.60`, follow the same steps with the matching Minecraft, LeviLamina, and Playback release.
+The screenshots below use a `26.10` instance and are illustrative. For `26.20`, `26.40`, `26.51`, or `26.60`, follow the same steps with the matching Minecraft, LeviLamina, and Playback release. Screenshots may show an earlier UI layout.
 
 1. Select **Download** in the left sidebar, find the Minecraft version you want, and use its install menu to create an instance with the **LeviLamina** loader.
 
@@ -78,7 +78,7 @@ lip install github.com/wo55555/Playback@0.4.0-mc26.40#client
 # Minecraft / LeviLamina 26.51
 lip install github.com/wo55555/Playback@0.4.0-mc26.50#client
 
-# Minecraft / LeviLamina 26.60
+# Minecraft 1.26.60.5 / LeviLamina 26.60
 lip install github.com/wo55555/Playback@0.4.0-mc26.60#client
 ```
 
@@ -115,9 +115,17 @@ record stop
 1. Add or select a camera in the timeline editor.
 2. Move the playhead to the desired tick and use **Add Keyframe at Playhead**.
 3. Edit position, yaw, pitch, roll, FOV, interpolation, and Cubic Bezier controls in the property inspector.
-4. Add more keyframes and play the replay to preview the interpolated camera. Pausing returns control to the freely movable observer camera.
+4. Add more keyframes and play or scrub the replay to preview the interpolated camera. Keyframes also update the preview while paused; hold the left mouse button over the viewport to move the free camera.
 
 Camera interpolation is automatically split at every recorded dimension change. Keyframes in different dimension segments never interpolate through each other, including when an intermediate dimension contains no camera keyframes.
+
+First-person and third-person tracks choose a recorded player between their first and last keyframes; overlapping tracks use the highest track in the list. The viewport's subject picker and context menu can also follow a player or entity. Press F5 to switch a followed player's first-/third-person view, or tap Shift alone to stop following.
+
+## Preview Options
+
+The inspector's **Preview** page selects the visible chat, boss bar, title, scoreboard, action bar, and hotbar; only the hotbar is on by default. These choices also apply to exports unless **Hide HUD** removes the entire HUD there. Recorded containers and server forms are previewed only while following the recorder in first person. Their recorded open/closed state is restored on seeks; switching away closes the preview.
+
+Preview **Mute**, **Volume**, and **Silent while paused** are saved with the editor layout and never change exported audio. **Silent while paused** is on by default and suppresses world sounds triggered while paused or seeking, rather than changing the recording.
 
 ## Keyboard Shortcuts
 
@@ -151,23 +159,23 @@ Keyboard input belongs to the editor while it is open. Hold the left mouse butto
 
 ## Experimental Video Export
 
-Open **File > Export...** in the replay editor and configure:
+Open **File > Export...** in the replay editor. Settings are arranged on four pages. Export buttons stay visible; on short windows the summary hides before the settings page scrolls:
 
-- Output name, used verbatim as the file name; an existing file gets a numbered suffix instead of being overwritten.
-- MP4 video or PNG image sequence.
-- Start and end tick.
-- Frame rate and output resolution.
-- SSAA and warm-up frames.
-- Under **Advanced**, extra renders (0 by default). Each frame is rendered that many more times before it is saved, and those renders are discarded, so ray-traced temporal effects can settle, at the cost of a full render each.
+- **General**: output name and folder, MP4 or PNG sequence, frame rate, and start/end ticks. The name is used verbatim; existing files get numbered suffixes. Use the playhead buttons or the timeline's I/O shortcuts to set a short range before testing a long export. Start with 30 FPS.
+- **Video**: output resolution, SSAA, warm-up frames, **Hide HUD**, MP4 encode speed, and CRF. Start with 1x SSAA. Warm-up runs again after dimension changes.
+- **Audio**: enable or disable game audio, choose mono or stereo, and select AAC (default), Opus, or FLAC for MP4. AAC and Opus offer 128/192/256/320 kbps; FLAC is lossless and has no bitrate setting. PNG sequences use an uncompressed sidecar `.audio.wav` when audio is enabled. Some players cannot play Opus or FLAC in MP4; choose AAC for wider compatibility.
+- **Advanced**: extra renders (default 0). Extra renders draw each output frame additional times without saving those passes, helping temporal effects settle at the cost of a full render per pass. Client ticks are accelerated automatically; there is no separate Accelerate client option.
+
+Typed numbers take effect immediately and are clamped to their allowed range. Check the summary before starting. Preview volume and mute are independent of all export audio settings.
 
 The experimental exporter renders frames from replay time rather than recording the screen in real time. MP4 uses the bundled FFmpeg/libx264 tool; PNG export remains available if FFmpeg cannot be started. Outputs are written under `mods/playback/exports` by default.
 
-| Renderer | Formats                 | Stable SSAA |
+| Backend  | Formats                 | SSAA        |
 | -------- | ----------------------- | ----------- |
 | D3D12    | H.264 MP4, PNG sequence | 1x, 2x, 4x  |
 | D3D11    | H.264 MP4, PNG sequence | 1x          |
 
 > [!IMPORTANT]
-> Video export is experimental, and Vibrant Visuals is not supported. MP4 files include game audio as an AAC track; PNG sequences get a sidecar `.audio.wav`. Camera regions must exist in the recorded replay data; Playback cannot reconstruct chunks that were never recorded. Cross-dimension loading, replay-state preparation, UI stabilization, and export warm-up use timeouts. Playback no longer requires every chunk in a fixed camera neighborhood to be present, but missing replay data can still prevent the intended scene from rendering.
+> Video export is experimental on every backend; the table describes capture capabilities, not a stability guarantee. Prefer standard/Fancy graphics and test a short clip first. Camera regions must exist in the recording: unrecorded terrain cannot be reconstructed. Cross-dimension loading, replay-state preparation, UI stabilization, and renderer warm-up use timeouts, and missing replay data can still prevent the intended scene from rendering. Keep logs if an export shows grid/dither patterns or loading warnings.
 
 For development instructions, see [Building Playback](building.md). Release history is available in the [changelog](../CHANGELOG.md).
