@@ -71,6 +71,15 @@ public:
     [[nodiscard]] UiScaleTier uiScaleTier() const override { return mUiScaleTier; }
     void                      setUiScaleTier(UiScaleTier tier) override;
 
+    [[nodiscard]] bool  isHudElementShown(visuals::HudElement element) const override;
+    void                setHudElementShown(visuals::HudElement element, bool shown) override;
+    [[nodiscard]] bool  isPreviewAudioMuted() const override;
+    void                setPreviewAudioMuted(bool muted) override;
+    [[nodiscard]] float previewAudioVolume() const override;
+    void                setPreviewAudioVolume(float volume, bool commit) override;
+    [[nodiscard]] bool  isPreviewSilentWhilePaused() const override;
+    void                setPreviewSilentWhilePaused(bool silent) override;
+
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }

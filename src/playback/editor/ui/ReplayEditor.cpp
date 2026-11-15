@@ -1,6 +1,7 @@
 #include "playback/editor/ui/ReplayEditor.h"
 
 #include "playback/Playback.h"
+#include "playback/audio/PreviewAudio.h"
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/ErrorDialog.h"
@@ -10,6 +11,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <utility>
@@ -27,6 +29,26 @@ float readFiniteFloat(nlohmann::ordered_json const& object, char const* key, flo
     float const result = value->get<float>();
     return std::isfinite(result) ? result : fallback;
 }
+
+bool readBool(nlohmann::ordered_json const& object, char const* key, bool fallback) {
+    auto const value = object.find(key);
+    return value != object.end() && value->is_boolean() ? value->get<bool>() : fallback;
+}
+
+struct HudPreferenceKey {
+    visuals::HudElement element;
+    char const*         key;
+};
+constexpr std::array<HudPreferenceKey, visuals::HudElementCount> kHudPreferenceKeys{
+    {
+     {visuals::HudElement::Chat, "chat"},
+     {visuals::HudElement::BossBar, "bossBar"},
+     {visuals::HudElement::Title, "title"},
+     {visuals::HudElement::Scoreboard, "scoreboard"},
+     {visuals::HudElement::ActionBar, "actionBar"},
+     {visuals::HudElement::Hotbar, "hotbar"},
+     }
+};
 
 } // namespace
 
@@ -71,6 +93,34 @@ void ReplayEditor::setUiScaleTier(UiScaleTier tier) {
     saveLayoutPreferences();
 }
 
+bool ReplayEditor::isHudElementShown(visuals::HudElement element) const { return visuals::isHudElementShown(element); }
+
+void ReplayEditor::setHudElementShown(visuals::HudElement element, bool shown) {
+    visuals::setHudElementShown(element, shown);
+    saveLayoutPreferences();
+}
+
+bool ReplayEditor::isPreviewAudioMuted() const { return audio::preview::isMuted(); }
+
+void ReplayEditor::setPreviewAudioMuted(bool muted) {
+    audio::preview::setMuted(muted);
+    saveLayoutPreferences();
+}
+
+float ReplayEditor::previewAudioVolume() const { return audio::preview::volume(); }
+
+void ReplayEditor::setPreviewAudioVolume(float volume, bool commit) {
+    audio::preview::setVolume(volume);
+    if (commit) saveLayoutPreferences();
+}
+
+bool ReplayEditor::isPreviewSilentWhilePaused() const { return audio::preview::isSilentWhilePaused(); }
+
+void ReplayEditor::setPreviewSilentWhilePaused(bool silent) {
+    audio::preview::setSilentWhilePaused(silent);
+    saveLayoutPreferences();
+}
+
 void ReplayEditor::loadLayoutPreferences() {
     mDetailsWidthRatio   = 0.28f;
     mTimelineHeightRatio = 0.35f;
@@ -99,6 +149,24 @@ void ReplayEditor::loadLayoutPreferences() {
             float const trackListWidthRatio =
                 readFiniteFloat(config, "trackListWidthRatio", mTimelinePanel.trackListWidthRatio());
             mTimelinePanel.setViewPreferences(trackListWidthRatio, 1.0f, 0.0f);
+
+            auto const hud = config.find("hud");
+            if (hud != config.end() && hud->is_object()) {
+                for (auto const& entry : kHudPreferenceKeys) {
+                    visuals::setHudElementShown(
+                        entry.element,
+                        readBool(*hud, entry.key, visuals::isHudElementShown(entry.element))
+                    );
+                }
+            }
+            auto const previewAudio = config.find("previewAudio");
+            if (previewAudio != config.end() && previewAudio->is_object()) {
+                audio::preview::setMuted(readBool(*previewAudio, "muted", audio::preview::isMuted()));
+                audio::preview::setVolume(readFiniteFloat(*previewAudio, "volume", audio::preview::volume()));
+                audio::preview::setSilentWhilePaused(
+                    readBool(*previewAudio, "silentWhilePaused", audio::preview::isSilentWhilePaused())
+                );
+            }
 
             auto const views = config.find("timelineViews");
             if (views != config.end() && views->is_object()) {
@@ -138,6 +206,14 @@ void ReplayEditor::saveLayoutPreferences() const {
         };
     }
 
+    nlohmann::ordered_json hud = nlohmann::ordered_json::object();
+    for (auto const& entry : kHudPreferenceKeys) hud[entry.key] = visuals::isHudElementShown(entry.element);
+    nlohmann::ordered_json previewAudio{
+        {"muted",             audio::preview::isMuted()            },
+        {"volume",            audio::preview::volume()             },
+        {"silentWhilePaused", audio::preview::isSilentWhilePaused()}
+    };
+
     nlohmann::ordered_json const config{
         {"detailsWidthRatio",   mDetailsWidthRatio                        },
         {"timelineHeightRatio", mTimelineHeightRatio                      },
@@ -145,6 +221,8 @@ void ReplayEditor::saveLayoutPreferences() const {
         {"showCameraPath",      mCameraPathVisible                        },
         {"uiScale",             std::string(uiScaleTierName(mUiScaleTier))},
         {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()      },
+        {"hud",                 std::move(hud)                            },
+        {"previewAudio",        std::move(previewAudio)                   },
         {"timelineViews",       std::move(timelineViews)                  }
     };
     std::ofstream output(kLayoutPreferencesPath, std::ios::trunc);

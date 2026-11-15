@@ -49,7 +49,8 @@ bool beginMessageDialog(char const* id, char const* icon, ImU32 tone, std::strin
     float const          font     = style.FontSizeBase * style.FontScaleMain * style.FontScaleDpi * fontScale;
     ImGuiViewport const* viewport = ImGui::GetMainViewport();
     float const          width    = std::max(font * 8.0f, std::min(font * 24.0f, viewport->WorkSize.x - font * 2.0f));
-    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
+    // Re-centred every frame, so the dialog follows the window when it is resized while open.
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, {0.5f, 0.5f});
     gMaxHeight = std::max(font * 8.0f, viewport->WorkSize.y - font * 2.0f);
     gPadding   = font * 1.2f;
     ImGui::SetNextWindowSizeConstraints({width, 0.0f}, {width, gMaxHeight});
@@ -58,8 +59,8 @@ bool beginMessageDialog(char const* id, char const* icon, ImU32 tone, std::strin
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
     ImGui::PushStyleColor(ImGuiCol_PopupBg, kDialogBg);
     ImGui::PushStyleColor(ImGuiCol_Border, kDialogBorder);
-    ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize
+                           | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
     if (!gScrolls) flags |= ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     bool const open = ImGui::BeginPopupModal(id, nullptr, flags);
     ImGui::PopStyleColor(2);
