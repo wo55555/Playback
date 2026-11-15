@@ -815,7 +815,8 @@ bool Recorder::closeRecording() {
     // endTick returns early without a local player, before it drops a rotation snapshot still in progress.
     discardRotationSnapshot();
     if (mState.load() != State::Closing) return false;
-    if (mNeedsInitialSnapshot.load(std::memory_order_acquire)) {
+    if (mNeedsInitialSnapshot.load(std::memory_order_acquire)
+        && !(mPendingDimensionSnapshot && !mMetadata.chunks.empty())) {
         auto reason = mSnapshotFailure.empty()
                         ? std::string("Recording stopped before the initial replay snapshot was ready")
                         : "Recording stopped without an initial replay snapshot: " + mSnapshotFailure;
@@ -1072,6 +1073,9 @@ void Recorder::endTick(bool close) {
         }
     }
 
+    // Keep the last completed chunk instead of forcing a snapshot of a dimension that is still loading.
+    if (close && !mHasOpenChunk && mPendingDimensionSnapshot && !mMetadata.chunks.empty()) return;
+
     auto  clientInstance   = ll::service::getClientInstance();
     auto* localPlayer      = clientInstance ? clientInstance->getLocalPlayer() : nullptr;
     bool  dimensionChanged = false;
@@ -1079,13 +1083,14 @@ void Recorder::endTick(bool close) {
         if (!localPlayer) {
             discardLocalViewFrames();
             if (!close && mDimensionTransitionPending.load(std::memory_order_acquire)) {
-                if (!flushGamePackets() || !writeTickBoundary()) return;
+                if (mHasOpenChunk && (!flushGamePackets() || !writeTickBoundary())) return;
                 return;
             }
             if (close && mHasOpenChunk) {
                 if (!flushGamePackets() || !writeTickBoundary() || !finishCurrentChunk(true)) return;
                 return;
             }
+            if (!close && mPendingDimensionSnapshot) return;
             failRecording("The local player is unavailable while recording");
             return;
         }
@@ -1099,10 +1104,18 @@ void Recorder::endTick(bool close) {
     if (dimensionChanged) {
         auto const currentDimensionId = localPlayer->getDimensionId();
 
-        // Finish the client tick in the old chunk before snapshotting the state produced by that tick.
-        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
-            || !writeLocalViewSamples() || !writeTickBoundary() || !finishCurrentChunk(close)) {
-            return;
+        if (mHasOpenChunk) {
+            // Finish the client tick in the old chunk before snapshotting the state produced by that tick.
+            if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
+                || !writeLocalViewSamples() || !writeTickBoundary() || !finishCurrentChunk(close)) {
+                return;
+            }
+        } else {
+            // The superseded dimension has no snapshot. Its queued actions must not leak into the next one.
+            discardLocalViewFrames();
+            std::scoped_lock lock(mPendingGamePacketsMutex);
+            mPendingGamePackets.clear();
+            mDeferredCompletedChunks.clear();
         }
         if (close) return;
 
@@ -2307,6 +2320,10 @@ bool Recorder::writeSnapshot() {
 }
 
 bool Recorder::writeTickBoundary() {
+    if (!mHasOpenChunk) {
+        failRecording("Cannot write a replay tick before its snapshot");
+        return false;
+    }
     if (!mAsyncReplaySaver) {
         failRecording("Replay saver is not initialized while writing a tick boundary");
         return false;
@@ -2319,7 +2336,6 @@ bool Recorder::writeTickBoundary() {
         failRecording(error.value_or("Unable to queue a replay tick boundary"));
         return false;
     }
-    mHasOpenChunk     = true;
     mOpenChunkHasData = true;
 
     ++mTicksInCurrentChunk;

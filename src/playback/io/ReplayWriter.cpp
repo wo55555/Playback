@@ -118,6 +118,9 @@ std::string ReplayWriter::popBuffer() {
     if (mWritingAction != nullptr) {
         throw std::runtime_error(std::format("popBuffer() called while still writing action {}", mWritingAction->name));
     }
+    if (mState != STATE_WRITING_DATA) {
+        throw std::runtime_error("Cannot save a replay chunk without a completed snapshot");
+    }
 
     std::string data = std::move(mStream.mBuffer);
     mStream.clear();
