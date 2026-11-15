@@ -7,11 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Recordings remain playable when the server switches dimensions again before the new world finishes loading. Stopping during that transition keeps the portion already recorded.
-- Terrain stays visible in continuous previews and video exports after rapid dimension changes.
-
 ## [0.4.0-mc26.20] - 2026-11-15
 
 ### Added
@@ -53,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Recordings remain playable when the server switches dimensions again before the new world finishes loading. Stopping during that transition keeps the portion already recorded.
+- Terrain stays visible in continuous previews and video exports after rapid dimension changes.
 - Replays from servers with custom items now record the server's item registry and apply it on playback, so recorded item ids resolve to the server's items.
 - Fixed a freeze when chunk draining re-entered the level join while recording.
 - Particles are rebuilt after a seek.
