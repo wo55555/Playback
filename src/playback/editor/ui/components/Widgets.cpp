@@ -109,13 +109,15 @@ void hoverTooltip(char const* text) {
     if (!text) return;
 
     // Panels are separate windows, so a real tooltip window can land behind one; this list draws last.
-    ImVec2 const pad      = {6.0f * metrics::scale(), 4.0f * metrics::scale()};
-    ImVec2 const textSize = ImGui::CalcTextSize(text);
-    ImVec2 const display  = ImGui::GetIO().DisplaySize;
-    ImVec2 const mouse    = ImGui::GetMousePos();
-    float const  width    = textSize.x + pad.x * 2.0f;
-    float const  height   = textSize.y + pad.y * 2.0f;
-    float const  offset   = 16.0f * metrics::scale();
+    ImVec2 const pad     = {6.0f * metrics::scale(), 4.0f * metrics::scale()};
+    ImVec2 const display = ImGui::GetIO().DisplaySize;
+    // Long hints wrap into a paragraph rather than one line wider than the screen.
+    float const  wrapWidth = std::max(1.0f, std::min(metrics::font() * 26.0f, display.x - pad.x * 4.0f));
+    ImVec2 const textSize  = ImGui::CalcTextSize(text, nullptr, false, wrapWidth);
+    ImVec2 const mouse     = ImGui::GetMousePos();
+    float const  width     = textSize.x + pad.x * 2.0f;
+    float const  height    = textSize.y + pad.y * 2.0f;
+    float const  offset    = 16.0f * metrics::scale();
     ImVec2       origin{mouse.x + offset, mouse.y + offset};
     if (origin.x + width > display.x) origin.x = std::max(0.0f, mouse.x - width - offset * 0.5f);
     if (origin.y + height > display.y) origin.y = std::max(0.0f, mouse.y - height - offset * 0.5f);
@@ -132,7 +134,7 @@ void hoverTooltip(char const* text) {
     );
     drawList->AddRectFilled(origin, max, theme::kTooltipBg, theme::kFrameRounding * 2.0f);
     drawList->AddRect(origin, max, theme::kTooltipBorder, theme::kFrameRounding * 2.0f);
-    drawList->AddText({origin.x + pad.x, origin.y + pad.y}, theme::kText, text);
+    drawList->AddText(nullptr, 0.0f, {origin.x + pad.x, origin.y + pad.y}, theme::kText, text, nullptr, wrapWidth);
 }
 
 namespace {
@@ -429,7 +431,11 @@ std::unordered_map<ImGuiID, PopupAnchor>& popupAnchors() {
     return anchors;
 }
 
-[[nodiscard]] ImVec2 menuWindowPadding() { return {10.0f * metrics::scale(), 6.0f * metrics::scale()}; }
+// Whole pixels: a constrained popup size is truncated, so fractional padding would leave the popup a fraction shorter
+// than its content and bring up a scrollbar.
+[[nodiscard]] ImVec2 menuWindowPadding() {
+    return {std::round(10.0f * metrics::scale()), std::round(6.0f * metrics::scale())};
+}
 
 void pushMenuItemSpacing() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {10.0f * metrics::scale(), 6.0f * metrics::scale()});
@@ -467,15 +473,21 @@ bool beginAnchoredPopup(char const* popupId, float minWidth) {
         ImVec2 const workMin = viewport->WorkPos;
         ImVec2 const workMax{viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y};
         ImVec2       pos{anchor->second.min.x, anchor->second.max.y + gap};
-        // Menus near the bottom edge (the timeline transport) open upwards rather than off screen.
-        if (size.y > 0.0f && pos.y + size.y > workMax.y && anchor->second.min.y - gap - size.y >= workMin.y) {
-            pos.y = anchor->second.min.y - gap - size.y;
+        // Menus near the bottom edge (the timeline transport) open upwards rather than off screen; one that fits on
+        // neither side slides up just far enough to stay on screen.
+        if (size.y > 0.0f && pos.y + size.y > workMax.y) {
+            float const above = anchor->second.min.y - gap - size.y;
+            pos.y             = above >= workMin.y ? above : std::max(workMin.y, workMax.y - size.y);
         }
         // The known minimum width keeps the first frame on screen before the real size is measured.
         float const right = std::max(size.x, width);
         if (pos.x + right > workMax.x) pos.x = std::max(workMin.x, workMax.x - right);
         ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
-        ImGui::SetNextWindowSizeConstraints({width, 0.0f}, {FLT_MAX, FLT_MAX});
+        // Never larger than the viewport: a menu with more items than fit scrolls instead of running off screen.
+        ImGui::SetNextWindowSizeConstraints(
+            {width, 0.0f},
+            {std::max(width, viewport->WorkSize.x), std::max(1.0f, viewport->WorkSize.y)}
+        );
     }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, menuWindowPadding());
     bool const open = ImGui::BeginPopup(popupId);
