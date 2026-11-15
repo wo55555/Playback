@@ -4166,6 +4166,12 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             || chunk->mSubChunks->size() != subChunkCount) {
             continue;
         }
+        {
+            // Use the native load path until this column belongs to the current replay dimension.
+            std::scoped_lock lock(mPendingLevelChunksMutex);
+            auto const       retained = mRetainedReplayChunks.find(pos);
+            if (retained == mRetainedReplayChunks.end() || retained->second != chunk) continue;
+        }
 
         mDirectSnapshotColumns.emplace(pos);
         mDirectLevelChunkIndices.emplace(identity.levelChunkIndex);
