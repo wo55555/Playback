@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The inspector has a Preview page for choosing which HUD elements a replay shows: chat, boss bar, title text, scoreboard, action bar and hotbar. Only the hotbar is on by default; the choices are saved and also apply to exported video. The export dialog's Hide HUD option leaves the whole HUD out of an export.
+- The export dialog's Audio page can turn export audio off and record it in mono or stereo. MP4 audio can be encoded as AAC, Opus or FLAC, with a bitrate of 128 to 320 kbps for AAC and Opus; PNG sequences keep an uncompressed `.audio.wav`.
+- The inspector's Preview page has audio controls for the editor preview: mute, volume, and Silent while paused, which keeps sounds triggered while the replay is paused or seeking from playing. They are saved and do not affect exported audio.
+
 ### Changed
 
 - Recording the world snapshot no longer stalls the game: unchanged chunk columns are reused and changed ones are serialized on background threads.
@@ -14,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exports now always run a client tick as soon as they ask for one instead of waiting for the game's 20 Hz timer, which the experimental Accelerate client option used to turn on. The option is removed.
 - Exports on DirectX 12 now draw a frame once instead of two or more times, which shortens them; a frame is only drawn again while the replay is still preparing the next one. Ray-traced lighting therefore adapts about once per exported frame, so how quickly it follows a change such as the time of day no longer depends on how fast the export happens to run.
 - The export setting Convergence frames is now called Extra renders, which is what it does: each frame is rendered that many more times before it is saved. What it does and its default of 0 are unchanged.
+- The export dialog is split into General, Video, Audio and Advanced pages, picked from tabs at the top; the summary, which now also names the encoder settings, and the export buttons stay visible on every page. On a short window the summary makes room first, and only then does the page scroll.
 
 ### Fixed
 
@@ -39,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replay worlds now use the recorded world's seed instead of choosing a new one.
 - Replays and exports now preserve the recorded biomes when returning to a dimension, keeping the sky and water colors consistent with the recording.
 - Closing the game from a replay now waits for its temporary world to close and be removed, including when an export is in progress.
+- The replay list's selection summary separates the file count and the total size with a middle dot instead of a garbled character.
+- Editor dialogs and menus stay inside the game window at any size. The keyboard shortcut sheet and message dialogs stay centred when the window is resized, the shortcut sheet switches to two columns or scrolls on a short window, menus too long for the window scroll, and long tooltips wrap. On a narrow window the replay list toolbar shrinks the search box first, then drops the import and sort labels and finally the title.
+- Numbers typed into the export dialog take effect at once, without pressing Enter, so starting the export straight after typing uses them. Out-of-range values are clamped as they are typed.
 
 ## [0.4.0-mc26.20] - 2026-11-01
 

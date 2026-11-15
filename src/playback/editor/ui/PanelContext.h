@@ -5,6 +5,7 @@
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorState.h"
 #include "playback/state/editing/models/SelectionModel.h"
+#include "playback/visuals/ReplayHudVisibility.h"
 
 #include <functional>
 #include <utility>
@@ -51,6 +52,17 @@ public:
 
     [[nodiscard]] virtual UiScaleTier uiScaleTier() const              = 0;
     virtual void                      setUiScaleTier(UiScaleTier tier) = 0;
+
+    // What the replay shows and plays; the HUD choices carry over to an export, the audio ones are preview-only.
+    [[nodiscard]] virtual bool  isHudElementShown(visuals::HudElement element) const        = 0;
+    virtual void                setHudElementShown(visuals::HudElement element, bool shown) = 0;
+    [[nodiscard]] virtual bool  isPreviewAudioMuted() const                                 = 0;
+    virtual void                setPreviewAudioMuted(bool muted)                            = 0;
+    [[nodiscard]] virtual float previewAudioVolume() const                                  = 0;
+    // `commit` is false while a slider is still being dragged: the change is heard at once but saved on release.
+    virtual void               setPreviewAudioVolume(float volume, bool commit) = 0;
+    [[nodiscard]] virtual bool isPreviewSilentWhilePaused() const               = 0;
+    virtual void               setPreviewSilentWhilePaused(bool silent)         = 0;
 };
 
 // Everything a panel needs for one frame, so panels stay callable without the editor singleton.
