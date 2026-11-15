@@ -2,8 +2,10 @@
 #include "WindowCloseGuard.h"
 
 #include "playback/Playback.h"
+#include "playback/audio/PreviewAudio.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/ReplayMouseHook.h"
+#include "playback/exporting/ExportActivity.h"
 #include "playback/exporting/ExportEcoMode.h"
 #include "playback/exporting/OfflineRenderClockHooks.h"
 #include "playback/record/ChunkMutationBarrier.h"
@@ -191,6 +193,12 @@ LL_TYPE_INSTANCE_HOOK(
     editor::graphics::updateReplayMouseOwnership(*this);
     auto& replay = ReplaySession::getInstance();
     replay.updateControlPlane();
+    audio::preview::update(
+        replay.isActive(),
+        replay.isPaused(),
+        replay.isSeekPending(),
+        exporting::isExportActivityActive()
+    );
     // Gates the editor overlay, so loading, progress and sign-in screens must clear first.
     bool hudVisible = false;
     if (isInitFinished && replay.isActive() && replay.hasJoinedReplayWorld()) {
