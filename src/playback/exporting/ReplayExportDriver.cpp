@@ -10,6 +10,7 @@
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
 #include "playback/state/editing/models/EditorStateExt.h"
+#include "playback/visuals/ReplayHudVisibility.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -111,6 +112,7 @@ bool ReplayExportDriver::start(
         return false;
     }
     if (mPlan->settings.audio) playback::audio::exportcap::exportBegin(mPlan->settings);
+    visuals::setHudHiddenForExport(mPlan->settings.hideHud);
 
     bool const previousPaused = mReplay.isPaused();
     if (!mReplay.setPaused(true)) {
@@ -142,7 +144,7 @@ bool ReplayExportDriver::start(
     mPhase = Phase::Rendering;
     getLogger().info(
         "Video export started: output={}, frames={}, ticks={}-{}, fps={}/{}, resolution={}x{}, ssaa={}, "
-        "warmup={}, extraRenders={}, x264={}/crf{}",
+        "warmup={}, extraRenders={}, x264={}/crf{}, hideHud={}, audio={} ({} ch, {} {}k)",
         mPlan->outputPath,
         mPlan->frameCount,
         mPlan->settings.startTick,
@@ -155,7 +157,12 @@ bool ReplayExportDriver::start(
         mPlan->settings.warmupFrames,
         mPlan->settings.extraRenders,
         x264Preset(mPlan->settings.encodeSpeed),
-        mPlan->settings.videoCrf
+        mPlan->settings.videoCrf,
+        mPlan->settings.hideHud,
+        mPlan->settings.audio,
+        mPlan->settings.audioStereo ? 2 : 1,
+        ffmpegAudioEncoder(mPlan->settings.audioCodec),
+        mPlan->settings.audioBitrateKbps
     );
     return true;
 }
@@ -177,7 +184,12 @@ void ReplayExportDriver::tick() try {
                 && std::filesystem::file_size(sidecar, sidecarEc) > 44 && !sidecarEc;
             if (hasAudio) {
                 if (mPlan->settings.format == ExportFormat::Mp4Video) {
-                    playback::audio::exportmux::muxIntoMp4(mPlan->outputPath, sidecar);
+                    playback::audio::exportmux::muxIntoMp4(
+                        mPlan->outputPath,
+                        sidecar,
+                        mPlan->settings.audioCodec,
+                        mPlan->settings.audioBitrateKbps
+                    );
                 } else {
                     getLogger().info("Export audio written to {}", sidecar);
                 }
@@ -455,6 +467,7 @@ void ReplayExportDriver::fail(ExportError error, std::string message) {
 void ReplayExportDriver::restoreReplayState() {
     // exportEnd is idempotent and must run on every exit path (success, cancel, fault); this is the common funnel.
     playback::audio::exportcap::exportEnd();
+    visuals::setHudHiddenForExport(false);
     if (!mPreviousPaused) return;
     bool const previousPaused = *mPreviousPaused;
     mPreviousPaused.reset();

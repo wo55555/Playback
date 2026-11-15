@@ -1,6 +1,7 @@
 #include "AudioHooks.h"
 
 #include "FmodMinimal.h"
+#include "PreviewAudio.h"
 
 #include "playback/Playback.h"
 
@@ -13,6 +14,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <utility>
 
 namespace playback::audio::hooks {
@@ -21,6 +23,7 @@ namespace {
 
 // FMOD 2.02.35 (fmod.dll in 1.26.60.05); the C handle and the C++ object are the same pointer.
 using InitFn = int (*)(void* system, int maxChannels, unsigned flags, void* extra);
+using PlaySoundFn = int (*)(void* system, void* sound, void* group, bool paused, void** channel);
 
 // SoundSystemFMOD on 1.26.60.05.
 constexpr uintptr_t SoundSystemFmodVtableRva = 0xF333930;
@@ -48,6 +51,7 @@ Hook gUpdateFloatHook;
 Hook gEnableHook;
 Hook gSetOutputDeviceHook;
 Hook gStreamPauseHook;
+Hook gPlaySoundHook;
 
 fmod::CApi         gApi;
 Policy             gPolicy;
@@ -72,6 +76,18 @@ int updateDetour(void* system) {
 int initDetour(void* system, int maxChannels, unsigned flags, void* extra) {
     int const result = reinterpret_cast<InitFn>(gInitHook.original)(system, maxChannels, flags, extra);
     if (result == 0 && gPolicy.onSystemReady) gPolicy.onSystemReady(system);
+    return result;
+}
+
+int playSoundDetour(void* system, void* sound, void* group, bool paused, void** channel) {
+    int const result = reinterpret_cast<PlaySoundFn>(gPlaySoundHook.original)(system, sound, group, paused, channel);
+    if (result == 0 && channel && *channel && group && preview::shouldDropNewSounds() && gApi.channelStop
+        && gApi.groupGetName) {
+        // Stop only world sounds; music and accessibility speech have separate groups.
+        char name[128]{};
+        if (gApi.groupGetName(group, name, sizeof(name)) == 0 && std::strncmp(name, "Sound", 5) == 0)
+            gApi.channelStop(*channel);
+    }
     return result;
 }
 
@@ -167,6 +183,8 @@ bool install() {
     resolve(fmod, "FMOD_ChannelGroup_RemoveDSP", gApi.groupRemoveDSP);
     resolve(fmod, "FMOD_ChannelGroup_Stop", gApi.groupStop);
     resolve(fmod, "FMOD_DSP_Release", gApi.dspRelease);
+    resolve(fmod, "FMOD_Channel_Stop", gApi.channelStop);
+    resolve(fmod, "FMOD_ChannelGroup_GetName", gApi.groupGetName);
 
     gUpdateHook.target = reinterpret_cast<void*>(GetProcAddress(fmod, "?update@System@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"));
     gInitHook.target =
@@ -176,6 +194,13 @@ bool install() {
     gSetOutputDeviceHook.target =
         resolveSoundSystemSlot(SetOutputDeviceVtableSlot, SetOutputDeviceRva, "setOutputDevice");
     gStreamPauseHook.target = resolveSoundSystemSlot(StreamPauseVtableSlot, StreamPauseRva, "stream pause");
+
+    gPlaySoundHook.target = reinterpret_cast<void*>(GetProcAddress(
+        fmod,
+        "?playSound@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEAVSound@2@PEAVChannelGroup@2@_NPEAPEAVChannel@2@@Z"
+    ));
+    if (!installHook(gPlaySoundHook, &playSoundDetour, "System::playSound") || !gApi.channelStop || !gApi.groupGetName)
+        logger().warn("Preview audio: silent while paused is unavailable");
 
     std::array const installed{
         installHook(gUpdateHook, &updateDetour, "System::update"),
@@ -191,8 +216,10 @@ bool install() {
 }
 
 void uninstall() {
+    preview::reset();
     gPolicy = {};
     gGateUpdateFloat.store(false, std::memory_order_relaxed);
+    removeHook(gPlaySoundHook, &playSoundDetour);
     removeHook(gStreamPauseHook, &streamPauseDetour);
     removeHook(gSetOutputDeviceHook, &setOutputDeviceDetour);
     removeHook(gEnableHook, &enableDetour);
