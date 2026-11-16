@@ -16,21 +16,19 @@
 namespace playback::keyframe {
 
 struct CameraTimelineEvaluation {
-    CameraRenderState                      state;
-    std::string                            cameraId;
-    state::editing::model::CameraTrackKind kind{state::editing::model::CameraTrackKind::Keyframe};
+    CameraRenderState                       state;
+    std::string                             cameraId;
+    state::editing::model::CameraKeyframeMode mode{state::editing::model::CameraKeyframeMode::Interpolated};
 };
 
-// The camera track that owns a tick: the highest one in the list whose first and last keys cover it.
+// The camera track that owns a tick: the highest one in the list with an active keyframe at or before the tick.
 struct CameraShot {
     state::editing::model::CameraEntity const* camera{};
-    // Person tracks only: the replay player the key at or before the tick names. Empty means the recorder.
+    state::editing::model::CameraKeyframeMode  mode{state::editing::model::CameraKeyframeMode::Interpolated};
+    // Person keyframes only: the replay player the key at or before the tick names. Empty means the recorder.
     std::string subject;
 
     [[nodiscard]] explicit operator bool() const noexcept { return camera != nullptr; }
-    [[nodiscard]] state::editing::model::CameraTrackKind kind() const noexcept {
-        return camera ? camera->kind : state::editing::model::CameraTrackKind::Keyframe;
-    }
 };
 
 // The view of replay player `subject` (empty is the recorder) at `time`; `thirdPerson` pulls the camera behind it
@@ -55,14 +53,21 @@ private:
     SubjectViewSampler                                               mSubjectSampler;
 
 private:
-    [[nodiscard]] std::optional<CameraRenderState>
-    sampleKeyframes(state::editing::model::CameraEntity const& camera, long double tick, bool clamp) const;
+    [[nodiscard]] std::optional<CameraRenderState> sampleKeyframes(
+        state::editing::model::CameraEntity const& camera,
+        long double                                tick,
+        bool                                       clamp,
+        bool                                       allowBeforeFirst = false
+    ) const;
 
     [[nodiscard]] std::optional<CameraTimelineEvaluation>
     sampleTrack(state::editing::model::CameraEntity const& camera, visuals::ReplaySampleTime const& time) const;
 
 public:
-    [[nodiscard]] size_t dimensionSegmentForTick(long double tick) const noexcept;
+    [[nodiscard]] size_t                  dimensionSegmentForTick(long double tick) const noexcept;
+    [[nodiscard]] std::vector<int> const& dimensionTransitionTicks() const noexcept {
+        return mDimensionTransitionTicks;
+    }
     [[nodiscard]] std::span<state::editing::model::CameraEntity const> cameras() const noexcept {
         return mProject.cameras;
     }

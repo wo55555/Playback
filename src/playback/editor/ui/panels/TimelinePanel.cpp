@@ -85,6 +85,23 @@ void drawKeyframeSquare(ImDrawList* drawList, float x, float centerY, float radi
     drawList->AddRect({x - h, centerY - h}, {x + h, centerY + h}, outline, 0.0f, 0, 1.0f);
 }
 
+void drawKeyframeCircle(
+    ImDrawList* drawList,
+    float       x,
+    float       centerY,
+    float       radius,
+    ImU32       fill,
+    ImU32       outline,
+    bool        thirdPerson
+) {
+    float const r = radius * 0.9f;
+    drawList->AddCircleFilled({x, centerY}, r, fill);
+    drawList->AddCircle({x, centerY}, r, outline, 0, 1.0f);
+    if (thirdPerson) {
+        drawList->AddCircleFilled({x, centerY}, std::max(1.5f, r * 0.36f), outline);
+    }
+}
+
 } // namespace
 
 void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScale, float horizontalScroll) {
@@ -618,24 +635,8 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     );
     float const controlSize = metrics::iconButton();
     ImGui::SetCursorPos({metrics::gutter() * 0.5f, std::max(0.0f, (layout.headerHeight - controlSize) * 0.5f)});
-    if (iconButton("timeline-add", ICON_ADD, "playback.refactorEditor.timeline.addTrack"_tr().c_str()))
-        widgets::openAnchoredPopup("##timeline-add-menu");
-    if (widgets::beginAnchoredPopup("##timeline-add-menu")) {
-        // An empty name lets the ops layer pick the next free localized default.
-        // The action kind picks the track kind: keyframe, first person or third person.
-        std::string const labels[] = {
-            "playback.refactorEditor.details.addFreeCamera"_tr(),
-            "playback.refactorEditor.timeline.addFirstPersonTrack"_tr(),
-            "playback.refactorEditor.timeline.addThirdPersonTrack"_tr(),
-        };
-        for (int kind = 0; kind < static_cast<int>(std::size(labels)); ++kind) {
-            if (ImGui::MenuItem(labels[kind].c_str())) {
-                EditorAction action{EditorActionType::AddFreeCamera};
-                action.kind = kind;
-                ctx.submitAction(std::move(action));
-            }
-        }
-        widgets::endAnchoredPopup();
+    if (iconButton("timeline-add", ICON_ADD, "playback.refactorEditor.timeline.addTrack"_tr().c_str())) {
+        ctx.submitAction({EditorActionType::AddFreeCamera});
     }
     ImGui::SameLine(0.0f, 1.0f);
     if (iconToggle(
@@ -729,7 +730,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         float const iconBox   = metrics::iconGlyph();
         widgets::drawIconAtCentre(
             drawList,
-            row.trackKind == state::editing::model::CameraTrackKind::Keyframe ? ICON_CAMERA : ICON_USER,
+            ICON_CAMERA,
             {labelX + iconBox * 0.5f, widgets::textInkCentre(textY, label.c_str())},
             textColor
         );
@@ -935,6 +936,32 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                 );
                 ImGui::Separator();
             }
+            using CameraKeyframeMode = state::editing::model::CameraKeyframeMode;
+            auto const setLensMode = [&](char const* label, CameraKeyframeMode mode) {
+                if (ImGui::MenuItem(label, nullptr, !group && key->mode == mode, editable)) {
+                    EditorAction action{group ? EditorActionType::SetKeyframesMode : EditorActionType::SetKeyframeMode};
+                    action.id   = camera->id;
+                    action.tick = mKeyframeMenuTick;
+                    action.kind = static_cast<int>(mode);
+                    if (group) action.keyframeRefs = selectedKeyframeRefs(ctx);
+                    ctx.submitAction(std::move(action));
+                }
+            };
+            if (ImGui::BeginMenu("playback.refactorEditor.details.lensMode"_tr().c_str(), editable)) {
+                setLensMode(
+                    "playback.refactorEditor.details.lensModeType.interpolated"_tr().c_str(),
+                    CameraKeyframeMode::Interpolated
+                );
+                setLensMode(
+                    "playback.refactorEditor.details.lensModeType.firstPerson"_tr().c_str(),
+                    CameraKeyframeMode::FirstPerson
+                );
+                setLensMode(
+                    "playback.refactorEditor.details.lensModeType.thirdPerson"_tr().c_str(),
+                    CameraKeyframeMode::ThirdPerson
+                );
+                ImGui::EndMenu();
+            }
             auto const setInterpolation = [&](char const* label, CameraInterpolationType type) {
                 if (ImGui::MenuItem(label, nullptr, !group && key->interpolationType == type, editable)) {
                     EditorAction action{
@@ -947,7 +974,8 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     ctx.submitAction(std::move(action));
                 }
             };
-            if (ImGui::BeginMenu("playback.refactorEditor.details.interpolation"_tr().c_str(), editable)) {
+            bool const interpEnabled = editable && (group || key->mode == CameraKeyframeMode::Interpolated);
+            if (ImGui::BeginMenu("playback.refactorEditor.details.interpolation"_tr().c_str(), interpEnabled)) {
                 setInterpolation(
                     "playback.refactorEditor.details.interpolationType.smooth"_tr().c_str(),
                     CameraInterpolationType::Smooth
@@ -1020,7 +1048,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     "playback.refactorEditor.timeline.applyKeyframe"_tr().c_str(),
                     nullptr,
                     false,
-                    ctx.state.replayVisible && camera->kind == state::editing::model::CameraTrackKind::Keyframe
+                    ctx.state.replayVisible && key->mode == CameraKeyframeMode::Interpolated
                 )) {
                 ctx.selection.clear();
                 EditorAction action{EditorActionType::MoveViewToKeyframe};
@@ -1033,7 +1061,6 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     nullptr,
                     false,
                     state::editing::model::isCameraRenderable(*camera)
-                        && camera->kind == state::editing::model::CameraTrackKind::Keyframe
                 )) {
                 EditorAction action{EditorActionType::SetPreviewCamera};
                 action.id = camera->id;
@@ -1166,7 +1193,6 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                         nullptr,
                         false,
                         state::editing::model::isCameraRenderable(*camera)
-                            && camera->kind == state::editing::model::CameraTrackKind::Keyframe
                     )) {
                     EditorAction action{EditorActionType::SetPreviewCamera};
                     action.id = camera->id;
@@ -1689,15 +1715,81 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                  && ctx.selection.getAs<state::editing::model::SelectedCamera>()->cameraId == camera.id)
                 || (selectedKeyframe && selectedKeyframe->trackId == camera.id);
             ImU32 const trackColor = theme::trackColor(row.cameraIndex);
+            float const amount     = mAnimator.animate("canvas-selected", camera.id, cameraSelected ? 1.0f : 0.0f);
             {
-                float const amount = mAnimator.animate("canvas-selected", camera.id, cameraSelected ? 1.0f : 0.0f);
-                ImU32 const fill   = camera.enabled ? lerpColor(
-                                                        theme::withAlpha(trackColor, theme::kTrackFillAlpha),
-                                                        theme::withAlpha(trackColor, theme::kTrackFillSelectedAlpha),
-                                                        amount
-                                                    )
-                                                    : theme::withAlpha(theme::kTrackDisabled, 0x80);
-                drawList->AddRectFilled({layout.canvasLeft, y + 3.0f}, {layout.fullMax.x, rowBottom - 3.0f}, fill);
+                ImU32 const baseFill = camera.enabled
+                                         ? lerpColor(
+                                               theme::withAlpha(trackColor, 0x0c),
+                                               theme::withAlpha(trackColor, 0x1c),
+                                               amount
+                                           )
+                                         : theme::withAlpha(theme::kTrackDisabled, 0x40);
+                drawList->AddRectFilled({layout.canvasLeft, y + 3.0f}, {layout.fullMax.x, rowBottom - 3.0f}, baseFill);
+            }
+            auto const intervalEndForTick = [&](int tick) -> int {
+                if (!state.cameraTimeline) return state.totalTicks;
+                auto const& transitions = state.cameraTimeline->dimensionTransitionTicks();
+                auto const  it = std::lower_bound(transitions.begin(), transitions.end(), tick);
+                return it == transitions.end() ? state.totalTicks : std::min(state.totalTicks, *it);
+            };
+            {
+                using Mode = state::editing::model::CameraKeyframeMode;
+                float const laneTop    = y + 3.0f;
+                float const laneBottom = rowBottom - 3.0f;
+                for (auto it = camera.keysByTick.begin(); it != camera.keysByTick.end(); ++it) {
+                    int const  t0     = it->first;
+                    auto const nextIt = std::next(it);
+                    bool const hasNext = nextIt != camera.keysByTick.end();
+
+                    ImU32 spanColor  = trackColor;
+                    ImU32 edgeColor  = trackColor;
+                    int   spanEnd    = state.totalTicks;
+                    bool  heldSpan   = false;
+                    char const* badge = nullptr;
+
+                    if (it->second.mode == Mode::Interpolated) {
+                        int const dimEnd     = intervalEndForTick(t0);
+                        spanEnd              = hasNext ? std::min(nextIt->first, dimEnd) : dimEnd;
+                        bool const nextSame  = hasNext && nextIt->second.mode == Mode::Interpolated
+                                            && intervalEndForTick(nextIt->first) == dimEnd;
+                        heldSpan = !nextSame
+                                || it->second.interpolationType == state::editing::model::CameraInterpolationType::Hold;
+                    } else {
+                        spanEnd   = hasNext ? nextIt->first : state.totalTicks;
+                        spanColor = it->second.mode == Mode::FirstPerson ? theme::kKeyframeFirstPerson
+                                                                         : theme::kKeyframeThirdPerson;
+                        edgeColor = spanColor;
+                        badge     = it->second.mode == Mode::FirstPerson ? "1P" : "3P";
+                    }
+                    if (spanEnd <= t0) continue;
+
+                    float const rawX0 = scale.xAt(static_cast<float>(t0));
+                    float const rawX1 = scale.xAt(static_cast<float>(spanEnd));
+                    float const x0    = std::max(layout.canvasLeft, rawX0);
+                    float const x1    = std::min(layout.fullMax.x, rawX1);
+                    if (x1 <= x0) continue;
+
+                    int const fillAlpha = !camera.enabled ? 0x26
+                                        : heldSpan        ? static_cast<int>(std::lerp(24.0f, 44.0f, amount))
+                                                          : static_cast<int>(
+                                                         std::lerp(
+                                                             static_cast<float>(theme::kTrackFillAlpha),
+                                                             static_cast<float>(theme::kTrackFillSelectedAlpha),
+                                                             amount
+                                                         )
+                                                     );
+                    drawList->AddRectFilled({x0, laneTop}, {x1, laneBottom}, theme::withAlpha(spanColor, fillAlpha));
+                    ImU32 const barEdge = theme::withAlpha(edgeColor, !camera.enabled ? 0x40 : (heldSpan ? 0x70 : 0xb8));
+                    drawList->AddLine({x0, laneTop}, {x1, laneTop}, barEdge, 1.5f);
+                    if (badge && camera.enabled) {
+                        float const labelX = std::max(x0, rawX0 + keyRadius + 5.0f);
+                        ImVec2 const textSize = ImGui::CalcTextSize(badge);
+                        if (labelX + textSize.x + 4.0f <= x1) {
+                            float const textY = widgets::textYForCentre(centerY, badge);
+                            drawList->AddText({labelX, textY}, theme::withAlpha(spanColor, 0xd8), badge);
+                        }
+                    }
+                }
             }
 
             for (auto const& [keyTick, key] : camera.keysByTick) {
@@ -1714,12 +1806,29 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
 
                 bool const  lit     = selected || inBox;
                 float const radius  = lit ? keyRadius + 1.0f : keyRadius;
+                ImU32 const modeColor =
+                    key.mode == state::editing::model::CameraKeyframeMode::FirstPerson ? theme::kKeyframeFirstPerson
+                    : key.mode == state::editing::model::CameraKeyframeMode::ThirdPerson
+                        ? theme::kKeyframeThirdPerson
+                        : theme::kKeyframe;
                 ImU32 const fill    = !camera.enabled ? theme::kKeyframeDisabled
                                     : lit             ? theme::kKeyframeSelected
-                                                      : theme::kKeyframe;
+                                                      : modeColor;
                 ImU32 const outline = lit ? theme::kIconHighlight : theme::kKeyframeOutline;
-                if (hold) drawKeyframeSquare(drawList, x, centerY, radius, fill, outline);
-                else drawKeyframeDiamond(drawList, x, centerY, radius, fill, outline);
+                if (key.mode == state::editing::model::CameraKeyframeMode::Interpolated) {
+                    if (hold) drawKeyframeSquare(drawList, x, centerY, radius, fill, outline);
+                    else drawKeyframeDiamond(drawList, x, centerY, radius, fill, outline);
+                } else {
+                    drawKeyframeCircle(
+                        drawList,
+                        x,
+                        centerY,
+                        radius,
+                        fill,
+                        outline,
+                        key.mode == state::editing::model::CameraKeyframeMode::ThirdPerson
+                    );
+                }
                 ImVec2 const keyMouse = ImGui::GetMousePos();
                 bool const   overKey  = std::abs(keyMouse.x - x) <= radius + 3.0f && keyMouse.y >= y
                                    && keyMouse.y <= rowBottom;
