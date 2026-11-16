@@ -32,6 +32,9 @@ void applyRotationShake(CameraRenderState& state, state::editing::model::CameraS
             (static_cast<long double>(shake.endTick) - tick) / static_cast<long double>(shake.endTick - shake.startTick)
         )
     );
+    state.x     += std::sin(phase * 1.37f) * shake.positionAmplitude * envelope;
+    state.y     += std::cos(phase * 1.19f) * shake.positionAmplitude * envelope;
+    state.z     += std::sin(phase * 0.83f) * shake.positionAmplitude * envelope;
     state.yaw   += std::sin(phase * 1.11f) * shake.rotationAmplitude * envelope;
     state.pitch += std::cos(phase * 0.91f) * shake.rotationAmplitude * envelope;
 }

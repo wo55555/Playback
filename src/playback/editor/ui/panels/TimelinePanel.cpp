@@ -1,5 +1,6 @@
 ﻿#include "TimelinePanel.h"
 
+#include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/TimelineScale.h"
@@ -576,7 +577,7 @@ void TimelinePanel::drawTransportGroup(PanelContext const& ctx, int displayTick,
     }
 }
 
-void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick, bool allowInput) {
+void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick) {
     float const height   = metrics::toolbarRow();
     float const width    = layout.fullMax.x - layout.fullMin.x;
     auto*       drawList = ImGui::GetWindowDrawList();
@@ -596,7 +597,6 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
         resetZoom();
     ImGui::EndChild();
     ImGui::PopStyleVar();
-    (void)allowInput;
 }
 
 void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layout, bool allowInput) {
@@ -644,7 +644,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             "playback.refactorEditor.timeline.snapTooltip"_tr().c_str(),
             mSnapEnabled
         )) {
-        mSnapEnabled = !mSnapEnabled;
+        ctx.commands.setSnapEnabled(!mSnapEnabled);
     }
     ImGui::SameLine(0.0f, metrics::gutter() * 0.5f);
     // The input is frame-height, not button-height; centre it on the same line as the buttons.
@@ -769,9 +769,11 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             }
             if (clicked && mouse.x < eyeX) {
                 ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
-                EditorAction action{EditorActionType::SetPreviewCamera};
-                action.id = row.cameraId;
-                ctx.submitAction(std::move(action));
+                if (ctx.commands.isAutoPreviewEnabled()) {
+                    EditorAction action{EditorActionType::SetPreviewCamera};
+                    action.id = row.cameraId;
+                    ctx.submitAction(std::move(action));
+                }
             } else if (rowRightClicked && mouse.x < eyeX) {
                 ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
                 mTrackMenuCameraId = row.cameraId;
@@ -787,12 +789,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     drawList->AddLine({listLeft + listW, layout.rulerTop}, {listLeft + listW, layout.fullMax.y}, theme::kLine);
 }
 
-void TimelinePanel::drawRuler(
-    PanelContext const&  ctx,
-    Layout const&        layout,
-    TimelineScale const& scale,
-    int                  displayTick
-) {
+void TimelinePanel::drawRuler(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale) {
     auto const& state    = ctx.state;
     auto*       drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(
@@ -830,7 +827,6 @@ void TimelinePanel::drawRuler(
             lastLabelEnd = labelX + labelWidth;
         }
     }
-    (void)displayTick;
 }
 
 void TimelinePanel::drawTrackGrid(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale) {
@@ -984,7 +980,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             if (ImGui::MenuItem(
                     group ? "playback.refactorEditor.timeline.copyKeyframes"_tr(ctx.selection.keyframeCount()).c_str()
                           : "playback.refactorEditor.timeline.copyKeyframe"_tr().c_str(),
-                    "Ctrl+C"
+                    input::KeyMap::displayString(input::EditorKeybind::Copy).c_str()
                 )) {
                 if (group) copySelection(ctx);
                 else mKeyframeClipboard = {ClipboardKey{camera->id, 0, *key}};
@@ -1041,7 +1037,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             if (ImGui::MenuItem(
                     group ? "playback.refactorEditor.details.deleteKeyframes"_tr(ctx.selection.keyframeCount()).c_str()
                           : "playback.refactorEditor.details.deleteKeyframe"_tr().c_str(),
-                    "Delete",
+                    input::KeyMap::displayString(input::EditorKeybind::DeleteSelection).c_str(),
                     false,
                     editable
                 )) {
@@ -1087,7 +1083,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     mKeyframeClipboard.size() > 1
                         ? "playback.refactorEditor.timeline.pasteKeyframes"_tr(mKeyframeClipboard.size()).c_str()
                         : "playback.refactorEditor.timeline.pasteKeyframe"_tr().c_str(),
-                    nullptr,
+                    input::KeyMap::displayString(input::EditorKeybind::Paste).c_str(),
                     false,
                     editable && !mKeyframeClipboard.empty()
                 )) {
@@ -1269,7 +1265,10 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("playback.refactorEditor.timeline.seekToMarker"_tr().c_str())) seekTo(ctx, marker->tick);
-            if (ImGui::MenuItem("playback.refactorEditor.timeline.deleteMarker"_tr().c_str(), "Delete")) {
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeline.deleteMarker"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::DeleteSelection).c_str()
+                )) {
                 EditorAction action{EditorActionType::DeleteMarker};
                 action.id = marker->id;
                 ctx.submitAction(std::move(action));
@@ -1376,11 +1375,11 @@ void TimelinePanel::drawRangeBar(PanelContext const& ctx, Layout const& layout, 
         mRangeDragOriginScroll = mScrollX;
         mRangeDragOriginZoom   = mZoomScale;
     }
-    if (ImGui::IsItemDeactivated()) mRangeDragMode = 0;
-    if (!ImGui::IsItemActive() || mRangeDragMode == 0) {
-        if (ImGui::IsItemDeactivated() && mRangeDragMode == 4) resetZoom();
-        return;
+    if (ImGui::IsItemDeactivated()) {
+        if (mRangeDragMode == 4) resetZoom();
+        mRangeDragMode = 0;
     }
+    if (!ImGui::IsItemActive() || mRangeDragMode == 0) return;
 
     float const spanBefore      = std::clamp(1.0f / std::max(kMinZoomScale, mRangeDragOriginZoom), 0.02f, 1.0f);
     float const maxScrollBefore = maxScrollFor(layout.canvasWidth, mRangeDragOriginZoom, state.totalTicks);
@@ -1467,7 +1466,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     auto* drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(fullMin, layout.fullMax, theme::kTimelineBg);
 
-    drawTitleRow(ctx, layout, displayTick, allowInput);
+    drawTitleRow(ctx, layout, displayTick);
 
     float const fitPixelsPerTick = layout.canvasWidth / static_cast<float>(std::max(1, state.totalTicks));
     float const pixelsPerTick    = fitPixelsPerTick * mZoomScale;
@@ -1512,7 +1511,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     drawList
         ->AddRectFilled({layout.canvasLeft, layout.bodyTop}, {layout.fullMax.x, layout.bodyBottom}, theme::kTimelineBg);
     drawList->PushClipRect({layout.canvasLeft, layout.rulerTop}, {layout.fullMax.x, layout.bodyBottom}, true);
-    drawRuler(ctx, layout, scale, displayTick);
+    drawRuler(ctx, layout, scale);
 
     ImGui::SetCursorScreenPos({layout.canvasLeft, layout.rulerTop});
     ImGui::InvisibleButton("##timeline-ruler", {layout.canvasWidth, layout.bodyTop - layout.rulerTop});
@@ -1744,9 +1743,11 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 if (allowInput && !clickConsumed && overKey && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed = true;
                     ctx.selection.select(state::editing::model::SelectedKeyframe{camera.id, keyTick});
-                    EditorAction previewAction{EditorActionType::SetPreviewCamera};
-                    previewAction.id = camera.id;
-                    ctx.submitAction(std::move(previewAction));
+                    if (ctx.commands.isAutoPreviewEnabled()) {
+                        EditorAction previewAction{EditorActionType::SetPreviewCamera};
+                        previewAction.id = camera.id;
+                        ctx.submitAction(std::move(previewAction));
+                    }
                     if (camera.locked || !camera.enabled) {
                         submitSeek(ctx, keyTick);
                     } else {
@@ -1948,9 +1949,11 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 // A Ctrl+click that never became a box leaves the selection alone.
             } else if (!mBoxClickCameraId.empty()) {
                 ctx.selection.select(state::editing::model::SelectedCamera{mBoxClickCameraId});
-                EditorAction action{EditorActionType::SetPreviewCamera};
-                action.id = mBoxClickCameraId;
-                ctx.submitAction(std::move(action));
+                if (ctx.commands.isAutoPreviewEnabled()) {
+                    EditorAction action{EditorActionType::SetPreviewCamera};
+                    action.id = mBoxClickCameraId;
+                    ctx.submitAction(std::move(action));
+                }
             } else {
                 submitSeek(ctx, std::clamp(scale.tickAt(mBoxStart.x), 0, state.totalTicks));
             }

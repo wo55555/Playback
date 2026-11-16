@@ -363,6 +363,37 @@ void SetCameraKeyframeSubject::execute(model::EditorStateExt& state) {
 void        SetCameraKeyframeSubject::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string SetCameraKeyframeSubject::label() const { return "Set Keyframe Subject"; }
 
+SetCameraShake::SetCameraShake(std::string cameraId, std::optional<model::CameraShake> shake)
+: mCameraId(std::move(cameraId)),
+  mShake(shake) {}
+
+void SetCameraShake::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked || camera->kind != model::CameraTrackKind::Keyframe) {
+        mBefore.reset();
+        return;
+    }
+
+    std::optional<model::CameraShake> normalized = mShake;
+    if (normalized) {
+        normalized->startTick         = std::clamp(normalized->startTick, 0, state.totalTicks);
+        normalized->endTick           = std::clamp(normalized->endTick, normalized->startTick, state.totalTicks);
+        normalized->positionAmplitude = std::max(0.0f, normalized->positionAmplitude);
+        normalized->rotationAmplitude = std::max(0.0f, normalized->rotationAmplitude);
+        normalized->frequency         = std::clamp(normalized->frequency, 0.01f, 100.0f);
+    }
+    if (camera->shake == normalized) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore       = state;
+    camera->shake = normalized;
+}
+
+void        SetCameraShake::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraShake::label() const { return "Set Camera Shake"; }
+
 MoveKeyframes::MoveKeyframes(std::vector<model::KeyframeRef> refs, int delta) : mRefs(std::move(refs)), mDelta(delta) {}
 
 void MoveKeyframes::execute(model::EditorStateExt& state) {
