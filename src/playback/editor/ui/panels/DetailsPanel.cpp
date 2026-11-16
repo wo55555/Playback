@@ -7,6 +7,7 @@
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/integration/OptiPistonBridge.h"
+#include "playback/utils/ShellUtils.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -144,7 +145,6 @@ void DetailsPanel::drawRail(PanelContext const& ctx, float width, float height) 
         std::string   tooltip;
         bool          enabled;
     };
-    bool const       exportActive = exporting::isExportActive(ctx.state.exportStatus.state);
     std::array const entries{
         Entry{InspectorPage::Selection, ICON_PANEL_LEFT, "playback.refactorEditor.inspector.selection"_tr(), true},
         Entry{InspectorPage::Export,    ICON_EXPORT,     "playback.refactorEditor.inspector.export"_tr(),    true},
@@ -165,7 +165,6 @@ void DetailsPanel::drawRail(PanelContext const& ctx, float width, float height) 
         }
         y += button + 2.0f;
     }
-    (void)exportActive;
 }
 
 void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
@@ -463,6 +462,114 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                     submit(std::move(action));
                 }
             }
+            if (camera->kind == state::editing::model::CameraTrackKind::Keyframe) {
+                property::separator();
+                bool hasShake = camera->shake.has_value();
+                if (ImGui::Checkbox("playback.refactorEditor.details.cameraShake"_tr().c_str(), &hasShake)) {
+                    EditorAction action{EditorActionType::SetCameraShake};
+                    action.id = camera->id;
+                    if (hasShake) {
+                        int startTick = std::clamp(ctx.state.currentTick, 0, project->totalTicks);
+                        int endTick   = std::clamp(startTick + 40, startTick, project->totalTicks);
+                        if (camera->keysByTick.size() >= 2) {
+                            startTick = camera->keysByTick.begin()->first;
+                            endTick   = camera->keysByTick.rbegin()->first;
+                        }
+                        action.shake = state::editing::model::CameraShake{
+                            startTick,
+                            endTick,
+                            0.0f,
+                            1.0f,
+                            1.0f,
+                        };
+                    }
+                    submit(std::move(action));
+                }
+                if (camera->shake) {
+                    auto            shake      = *camera->shake;
+                    bool            edited     = false;
+                    constexpr float labelWidth = 72.0f;
+                    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {4.0f, 5.0f});
+                    if (ImGui::BeginTable(
+                            "##camera-shake-properties",
+                            2,
+                            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+                        )) {
+                        ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+                        ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.start"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::SetNextItemWidth(-1.0f);
+                        ImGui::InputInt("##shake-start", &shake.startTick, 0, 0);
+                        if (ImGui::IsItemDeactivatedAfterEdit()) {
+                            shake.startTick = std::clamp(shake.startTick, 0, project->totalTicks);
+                            shake.endTick   = std::max(shake.endTick, shake.startTick);
+                            edited          = true;
+                        }
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.end"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::SetNextItemWidth(-1.0f);
+                        ImGui::InputInt("##shake-end", &shake.endTick, 0, 0);
+                        if (ImGui::IsItemDeactivatedAfterEdit()) {
+                            shake.endTick = std::clamp(shake.endTick, shake.startTick, project->totalTicks);
+                            edited        = true;
+                        }
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakePositionAmplitude"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::SetNextItemWidth(-1.0f);
+                        ImGui::InputFloat("##shake-pos", &shake.positionAmplitude, 0.0f, 0.0f, "%.2f");
+                        if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(shake.positionAmplitude)) {
+                            shake.positionAmplitude = std::max(0.0f, shake.positionAmplitude);
+                            edited                  = true;
+                        }
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeRotationAmplitude"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::SetNextItemWidth(-1.0f);
+                        ImGui::InputFloat("##shake-rot", &shake.rotationAmplitude, 0.0f, 0.0f, "%.2f°");
+                        if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(shake.rotationAmplitude)) {
+                            shake.rotationAmplitude = std::max(0.0f, shake.rotationAmplitude);
+                            edited                  = true;
+                        }
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeFrequency"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::SetNextItemWidth(-1.0f);
+                        ImGui::InputFloat("##shake-freq", &shake.frequency, 0.0f, 0.0f, "%.2f");
+                        if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(shake.frequency)) {
+                            shake.frequency = std::clamp(shake.frequency, 0.01f, 100.0f);
+                            edited          = true;
+                        }
+
+                        ImGui::EndTable();
+                    }
+                    ImGui::PopStyleVar();
+                    if (edited) {
+                        EditorAction action{EditorActionType::SetCameraShake};
+                        action.id    = camera->id;
+                        action.shake = shake;
+                        submit(std::move(action));
+                    }
+                }
+            }
             property::separator();
             if (property::actionButton("playback.refactorEditor.details.addKeyframeAtPlayhead"_tr().c_str())) {
                 EditorAction action{EditorActionType::AddCameraKeyframe};
@@ -632,7 +739,10 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextDisabled("%s", "playback.refactorEditor.details.rotation"_tr().c_str());
                     ImGui::TableNextColumn();
-                    static constexpr std::array rotationLabels{"Yaw", "Pitch", "Roll"};
+                    auto const       yawLabel   = "playback.refactorEditor.details.yaw"_tr();
+                    auto const       pitchLabel = "playback.refactorEditor.details.pitch"_tr();
+                    auto const       rollLabel  = "playback.refactorEditor.details.roll"_tr();
+                    std::array const rotationLabels{yawLabel.c_str(), pitchLabel.c_str(), rollLabel.c_str()};
                     if (vectorInput("rotation", rotation, rotationLabels, nullptr, "%.2f")
                         && std::ranges::all_of(rotation, [](float value) { return std::isfinite(value); })) {
                         EditorAction action{EditorActionType::SetKeyframeRotation};
@@ -646,7 +756,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
                     ImGui::AlignTextToFramePadding();
-                    ImGui::TextDisabled("FOV");
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.fov"_tr().c_str());
                     ImGui::TableNextColumn();
                     ImGui::SetNextItemWidth(-1.0f);
                     ImGui::InputFloat("##fov", &fov, 0.0f, 0.0f, "%.2f°");
@@ -852,13 +962,18 @@ void DetailsPanel::drawExportPage(PanelContext const& ctx) {
     );
 
     if (property::beginSection("playback.refactorEditor.export.output"_tr().c_str())) {
+        // Mirrors what the export dialog will start with: its frame rate and the I/O range (-1 means unset).
+        int const rangeStart = std::clamp(ctx.commands.exportStartTick(), 0, state.totalTicks);
+        int const rangeEnd   = ctx.commands.exportEndTick() < 0
+                                 ? state.totalTicks
+                                 : std::clamp(ctx.commands.exportEndTick(), 0, state.totalTicks);
         property::textRow(
             "playback.refactorEditor.export.frameRate"_tr().c_str(),
-            (std::to_string(static_cast<int>(state.project->fps)) + " FPS").c_str()
+            (std::to_string(ctx.commands.exportFps()) + " FPS").c_str()
         );
         property::textRow(
             "playback.refactorEditor.export.timeline"_tr().c_str(),
-            (formatTick(0) + " - " + formatTick(state.totalTicks)).c_str()
+            (formatTick(rangeStart) + " - " + formatTick(std::max(rangeStart, rangeEnd))).c_str()
         );
         if (!state.capabilities.ffmpegVideoExport) {
             ImGui::TextDisabled("%s  %s", ICON_INFO, "playback.refactorEditor.export.ffmpegUnavailable"_tr().c_str());
@@ -889,6 +1004,10 @@ void DetailsPanel::drawExportPage(PanelContext const& ctx) {
             }
             if (property::actionButton("playback.refactorEditor.export.cancel"_tr().c_str(), exportActive)) {
                 ctx.submitAction({EditorActionType::CancelExport});
+            }
+            if (status.state == exporting::ExportState::Completed && !status.outputPath.empty()
+                && property::actionButton("playback.refactorEditor.export.showInFolder"_tr().c_str(), true)) {
+                playback::utils::revealInExplorer(status.outputPath);
             }
         }
         property::endSection();
@@ -1016,20 +1135,8 @@ void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {
     drawOptiPistonSection();
 
     if (property::beginSection("playback.refactorEditor.viewport.aspectTooltip"_tr().c_str())) {
-        struct Preset {
-            char const* label;
-            float       ratio;
-        };
-        static constexpr std::array presets{
-            Preset{"16:9",   16.0f / 9.0f},
-            Preset{"21:9",   21.0f / 9.0f},
-            Preset{"4:3",    4.0f / 3.0f },
-            Preset{"1:1",    1.0f        },
-            Preset{"9:16",   9.0f / 16.0f},
-            Preset{"2.39:1", 2.39f       },
-        };
         float const current = ctx.commands.videoAspectRatio();
-        for (auto const& preset : presets) {
+        for (auto const& preset : widgets::kAspectPresets) {
             if (ImGui::RadioButton(preset.label, std::abs(current - preset.ratio) < 0.01f))
                 ctx.commands.setVideoAspectRatio(preset.ratio);
         }
