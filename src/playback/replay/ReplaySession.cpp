@@ -1204,7 +1204,7 @@ void ReplaySession::clearPreviewShot() {
 // user's follow; a person track follows its subject; with no track the user's follow comes back.
 void ReplaySession::updatePreviewShot() {
     if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return;
-    using state::editing::model::CameraTrackKind;
+    using state::editing::model::CameraKeyframeMode;
     auto                       mode = PreviewShotMode::None;
     std::optional<std::string> subject;
     bool                       third = false;
@@ -1213,12 +1213,12 @@ void ReplaySession::updatePreviewShot() {
         if (auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
             auto const time = getCameraRenderSampleTime();
             auto const shot = timeline->shotAt(time ? time->floorTick() : getCurrentTick());
-            if (shot && shot.kind() == CameraTrackKind::Keyframe) {
+            if (shot && shot.mode == CameraKeyframeMode::Interpolated) {
                 mode = PreviewShotMode::Keyframe;
             } else if (shot) {
                 mode    = PreviewShotMode::Person;
                 subject = shot.subject;
-                third   = shot.kind() == CameraTrackKind::ThirdPerson;
+                third   = shot.mode == CameraKeyframeMode::ThirdPerson;
             }
         }
     }
@@ -2140,7 +2140,7 @@ void ReplaySession::syncPreviewObserverForTick(int targetTick, bool onlyIfMoved)
     }
 
     auto const shot = timeline->shotAt(targetTick);
-    if (!shot || shot.kind() == state::editing::model::CameraTrackKind::Keyframe) return;
+    if (!shot || shot.mode == state::editing::model::CameraKeyframeMode::Interpolated) return;
     auto const id = resolveReplaySubjectId(shot.subject);
     if (!id) return;
     auto* actor = mReplayPlayer->getLevel().fetchEntity(*id, false);

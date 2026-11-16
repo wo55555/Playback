@@ -33,6 +33,19 @@ T const* findById(std::vector<T> const& values, std::string const& id) {
 
 using widgets::formatTick;
 
+std::string keyframeModeName(state::editing::model::CameraKeyframeMode mode) {
+    using Mode = state::editing::model::CameraKeyframeMode;
+    switch (mode) {
+    case Mode::FirstPerson:
+        return "playback.refactorEditor.details.lensModeType.firstPerson"_tr();
+    case Mode::ThirdPerson:
+        return "playback.refactorEditor.details.lensModeType.thirdPerson"_tr();
+    case Mode::Interpolated:
+    default:
+        return "playback.refactorEditor.details.lensModeType.interpolated"_tr();
+    }
+}
+
 std::string interpolationName(state::editing::model::CameraInterpolationType interpolation) {
     using Interpolation = state::editing::model::CameraInterpolationType;
     switch (interpolation) {
@@ -484,112 +497,110 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                     submit(std::move(action));
                 }
             }
-            if (camera->kind == state::editing::model::CameraTrackKind::Keyframe) {
-                property::separator();
-                bool hasShake = camera->shake.has_value();
-                if (ImGui::Checkbox("playback.refactorEditor.details.cameraShake"_tr().c_str(), &hasShake)) {
-                    EditorAction action{EditorActionType::SetCameraShake};
-                    action.id = camera->id;
-                    if (hasShake) {
-                        int startTick = std::clamp(ctx.state.currentTick, 0, project->totalTicks);
-                        int endTick   = std::clamp(startTick + 40, startTick, project->totalTicks);
-                        if (camera->keysByTick.size() >= 2) {
-                            startTick = camera->keysByTick.begin()->first;
-                            endTick   = camera->keysByTick.rbegin()->first;
-                        }
-                        action.shake = state::editing::model::CameraShake{
-                            startTick,
-                            endTick,
-                            0.0f,
-                            1.0f,
-                            1.0f,
-                        };
+            property::separator();
+            bool hasShake = camera->shake.has_value();
+            if (ImGui::Checkbox("playback.refactorEditor.details.cameraShake"_tr().c_str(), &hasShake)) {
+                EditorAction action{EditorActionType::SetCameraShake};
+                action.id = camera->id;
+                if (hasShake) {
+                    int startTick = std::clamp(ctx.state.currentTick, 0, project->totalTicks);
+                    int endTick   = std::clamp(startTick + 40, startTick, project->totalTicks);
+                    if (camera->keysByTick.size() >= 2) {
+                        startTick = camera->keysByTick.begin()->first;
+                        endTick   = camera->keysByTick.rbegin()->first;
                     }
-                    submit(std::move(action));
+                    action.shake = state::editing::model::CameraShake{
+                        startTick,
+                        endTick,
+                        0.0f,
+                        1.0f,
+                        1.0f,
+                    };
                 }
-                if (camera->shake) {
-                    auto            shake      = *camera->shake;
-                    bool            edited     = false;
-                    constexpr float labelWidth = 72.0f;
-                    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {4.0f, 5.0f});
-                    if (ImGui::BeginTable(
-                            "##camera-shake-properties",
-                            2,
-                            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
-                        )) {
-                        ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
-                        ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+                submit(std::move(action));
+            }
+            if (camera->shake) {
+                auto            shake      = *camera->shake;
+                bool            edited     = false;
+                constexpr float labelWidth = 72.0f;
+                ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {4.0f, 5.0f});
+                if (ImGui::BeginTable(
+                        "##camera-shake-properties",
+                        2,
+                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+                    )) {
+                    ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+                    ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
 
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.start"_tr().c_str());
-                        ImGui::TableNextColumn();
-                        ImGui::SetNextItemWidth(-1.0f);
-                        ImGui::InputInt("##shake-start", &shake.startTick, 0, 0);
-                        if (ImGui::IsItemDeactivatedAfterEdit()) {
-                            shake.startTick = std::clamp(shake.startTick, 0, project->totalTicks);
-                            shake.endTick   = std::max(shake.endTick, shake.startTick);
-                            edited          = true;
-                        }
-
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.end"_tr().c_str());
-                        ImGui::TableNextColumn();
-                        ImGui::SetNextItemWidth(-1.0f);
-                        ImGui::InputInt("##shake-end", &shake.endTick, 0, 0);
-                        if (ImGui::IsItemDeactivatedAfterEdit()) {
-                            shake.endTick = std::clamp(shake.endTick, shake.startTick, project->totalTicks);
-                            edited        = true;
-                        }
-
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakePositionAmplitude"_tr().c_str());
-                        ImGui::TableNextColumn();
-                        ImGui::SetNextItemWidth(-1.0f);
-                        ImGui::InputFloat("##shake-pos", &shake.positionAmplitude, 0.0f, 0.0f, "%.2f");
-                        if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(shake.positionAmplitude)) {
-                            shake.positionAmplitude = std::max(0.0f, shake.positionAmplitude);
-                            edited                  = true;
-                        }
-
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeRotationAmplitude"_tr().c_str());
-                        ImGui::TableNextColumn();
-                        ImGui::SetNextItemWidth(-1.0f);
-                        ImGui::InputFloat("##shake-rot", &shake.rotationAmplitude, 0.0f, 0.0f, "%.2f°");
-                        if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(shake.rotationAmplitude)) {
-                            shake.rotationAmplitude = std::max(0.0f, shake.rotationAmplitude);
-                            edited                  = true;
-                        }
-
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeFrequency"_tr().c_str());
-                        ImGui::TableNextColumn();
-                        ImGui::SetNextItemWidth(-1.0f);
-                        ImGui::InputFloat("##shake-freq", &shake.frequency, 0.0f, 0.0f, "%.2f");
-                        if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(shake.frequency)) {
-                            shake.frequency = std::clamp(shake.frequency, 0.01f, 100.0f);
-                            edited          = true;
-                        }
-
-                        ImGui::EndTable();
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.start"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputInt("##shake-start", &shake.startTick, 0, 0);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                        shake.startTick = std::clamp(shake.startTick, 0, project->totalTicks);
+                        shake.endTick   = std::max(shake.endTick, shake.startTick);
+                        edited          = true;
                     }
-                    ImGui::PopStyleVar();
-                    if (edited) {
-                        EditorAction action{EditorActionType::SetCameraShake};
-                        action.id    = camera->id;
-                        action.shake = shake;
-                        submit(std::move(action));
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.end"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputInt("##shake-end", &shake.endTick, 0, 0);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                        shake.endTick = std::clamp(shake.endTick, shake.startTick, project->totalTicks);
+                        edited        = true;
                     }
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakePositionAmplitude"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputFloat("##shake-pos", &shake.positionAmplitude, 0.0f, 0.0f, "%.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(shake.positionAmplitude)) {
+                        shake.positionAmplitude = std::max(0.0f, shake.positionAmplitude);
+                        edited                  = true;
+                    }
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeRotationAmplitude"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputFloat("##shake-rot", &shake.rotationAmplitude, 0.0f, 0.0f, "%.2f°");
+                    if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(shake.rotationAmplitude)) {
+                        shake.rotationAmplitude = std::max(0.0f, shake.rotationAmplitude);
+                        edited                  = true;
+                    }
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.shakeFrequency"_tr().c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::InputFloat("##shake-freq", &shake.frequency, 0.0f, 0.0f, "%.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(shake.frequency)) {
+                        shake.frequency = std::clamp(shake.frequency, 0.01f, 100.0f);
+                        edited          = true;
+                    }
+
+                    ImGui::EndTable();
+                }
+                ImGui::PopStyleVar();
+                if (edited) {
+                    EditorAction action{EditorActionType::SetCameraShake};
+                    action.id    = camera->id;
+                    action.shake = shake;
+                    submit(std::move(action));
                 }
             }
             property::separator();
@@ -623,8 +634,11 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
 
     std::vector<state::editing::model::KeyframeRef> refs;
     std::optional<int>                              shared;
-    bool                                            mixed   = false;
-    int                                             tracks  = 0;
+    bool                                            mixed = false;
+    std::optional<int>                              sharedMode;
+    bool                                            mixedMode       = false;
+    bool                                            anyInterpolated = false;
+    int                                             tracks          = 0;
     std::string                                     lastTrack;
     for (auto const& entry : selection.keyframes()) {
         refs.push_back({entry.trackId, entry.tick, std::nullopt});
@@ -636,6 +650,10 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
         if (!camera) continue;
         auto const key = camera->keysByTick.find(entry.tick);
         if (key == camera->keysByTick.end()) continue;
+        int const mode = static_cast<int>(key->second.mode);
+        if (!sharedMode) sharedMode = mode;
+        else if (*sharedMode != mode) mixedMode = true;
+        if (key->second.mode == state::editing::model::CameraKeyframeMode::Interpolated) anyInterpolated = true;
         int const type = static_cast<int>(key->second.interpolationType);
         if (!shared) shared = type;
         else if (*shared != type) mixed = true;
@@ -649,23 +667,46 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
         property::textRow("playback.refactorEditor.details.trackCount"_tr().c_str(), std::to_string(tracks).c_str());
         property::separator();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.lensMode"_tr().c_str());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1.0f);
-        std::string const preview =
-            mixed || !shared ? "playback.refactorEditor.details.mixed"_tr()
-                             : interpolationName(static_cast<state::editing::model::CameraInterpolationType>(*shared));
-        if (widgets::beginCombo("##batch-interpolation", preview.c_str())) {
-            for (int index = 0; index < 8; ++index) {
-                auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
-                if (ImGui::Selectable(interpolationName(value).c_str(), !mixed && shared == index)) {
-                    EditorAction action{EditorActionType::SetKeyframesInterpolation};
+        std::string const modePreview =
+            mixedMode || !sharedMode
+                ? "playback.refactorEditor.details.mixed"_tr()
+                : keyframeModeName(static_cast<state::editing::model::CameraKeyframeMode>(*sharedMode));
+        if (widgets::beginCombo("##batch-lens-mode", modePreview.c_str())) {
+            for (int index = 0; index < 3; ++index) {
+                auto const value = static_cast<state::editing::model::CameraKeyframeMode>(index);
+                if (ImGui::Selectable(keyframeModeName(value).c_str(), !mixedMode && sharedMode == index)) {
+                    EditorAction action{EditorActionType::SetKeyframesMode};
                     action.keyframeRefs = refs;
                     action.kind         = index;
                     ctx.submitAction(std::move(action));
                 }
             }
             widgets::endCombo();
+        }
+        if (anyInterpolated) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.0f);
+            std::string const preview =
+                mixed || !shared
+                    ? "playback.refactorEditor.details.mixed"_tr()
+                    : interpolationName(static_cast<state::editing::model::CameraInterpolationType>(*shared));
+            if (widgets::beginCombo("##batch-interpolation", preview.c_str())) {
+                for (int index = 0; index < 8; ++index) {
+                    auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+                    if (ImGui::Selectable(interpolationName(value).c_str(), !mixed && shared == index)) {
+                        EditorAction action{EditorActionType::SetKeyframesInterpolation};
+                        action.keyframeRefs = refs;
+                        action.kind         = index;
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+                widgets::endCombo();
+            }
         }
         property::separator();
         if (property::actionButton(
@@ -704,7 +745,8 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
             ImGui::TextUnformatted(camera->name.c_str());
             property::separator();
             ImGui::BeginDisabled(camera->locked);
-            bool const      person       = camera->kind != state::editing::model::CameraTrackKind::Keyframe;
+            bool const person =
+                key->second.mode != state::editing::model::CameraKeyframeMode::Interpolated;
             int const       originalTick = key->first;
             int             tick         = originalTick;
             constexpr float labelWidth   = 72.0f;
@@ -732,7 +774,28 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     submit(std::move(action));
                 }
 
-                // Person tracks only use their keys for range and subject; the view comes from the player.
+                int const currentMode = static_cast<int>(key->second.mode);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.lensMode"_tr().c_str());
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
+                if (widgets::beginCombo("##lens-mode", keyframeModeName(key->second.mode).c_str())) {
+                    for (int index = 0; index < 3; ++index) {
+                        auto const value = static_cast<state::editing::model::CameraKeyframeMode>(index);
+                        if (ImGui::Selectable(keyframeModeName(value).c_str(), index == currentMode)) {
+                            EditorAction action{EditorActionType::SetKeyframeMode};
+                            action.id   = camera->id;
+                            action.tick = originalTick;
+                            action.kind = index;
+                            submit(std::move(action));
+                        }
+                    }
+                    widgets::endCombo();
+                }
+
+                // Person keyframes take their view from the replay player; interpolated keyframes use explicit pose.
                 if (!person) {
                     float position[3] = {key->second.position.x, key->second.position.y, key->second.position.z};
                     ImGui::TableNextRow();
@@ -964,8 +1027,11 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
             }
             ImGui::PopStyleVar();
             if (person) {
-                // The subject holds from this key until the next key on the same track.
+                // The subject holds from this key until the next key on the same track (or end of replay).
                 property::separator();
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.personApplyHint"_tr().c_str());
+                ImGui::PopTextWrapPos();
                 std::string const current = playerSubjectLabel(ctx.state.replayPlayers, key->second.subject);
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeSubject"_tr().c_str());
                 ImGui::SameLine();
