@@ -62,6 +62,7 @@ namespace Playback::ReplayEditor::Icons {
 #define ICON_CLOSE        "\ue1b2" // x
 #define ICON_MOVE         "\ue121" // move
 #define ICON_FILE_PLUS    "\ue0c9" // file-plus
+#define ICON_FOLDER_OPEN  "\ue247" // folder-open
 #define ICON_LIST         "\ue106" // list
 #define ICON_GRID         "\ue0ff" // layout-grid
 #define ICON_MORE         "\ue0b7" // ellipsis-vertical
