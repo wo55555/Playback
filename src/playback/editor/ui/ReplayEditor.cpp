@@ -4,10 +4,12 @@
 #include "playback/audio/PreviewAudio.h"
 #include "playback/editor/input/EditorInput.h"
 #include "playback/editor/input/KeyMap.h"
+#include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/ErrorDialog.h"
 #include "playback/editor/ui/components/Widgets.h"
 
 #include "imgui.h"
+#include "ll/api/i18n/I18n.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -18,10 +20,13 @@
 
 namespace playback::editor::ui {
 
+using namespace ll::i18n_literals;
+
 namespace {
 
 constexpr char  kLayoutPreferencesPath[] = "mods/playback/editor-layout.json";
 constexpr float kExitHoldDuration        = 0.8f;
+constexpr float kExitHoldFeedbackDelay   = 0.12f;
 
 float readFiniteFloat(nlohmann::ordered_json const& object, char const* key, float fallback) {
     auto const value = object.find(key);
@@ -74,6 +79,7 @@ void ReplayEditor::shutdown() {
     mSelection.clear();
     mLastExportState = exporting::ExportState::Idle;
     mExitHoldSeconds = 0.0f;
+    mExitHoldBlocked = false;
 }
 
 void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
@@ -84,6 +90,21 @@ void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
 
 void ReplayEditor::toggleCameraPath() {
     mCameraPathVisible = !mCameraPathVisible;
+    saveLayoutPreferences();
+}
+
+void ReplayEditor::setInfoOverlayVisible(bool visible) {
+    mViewportPanel.setInfoOverlayVisible(visible);
+    saveLayoutPreferences();
+}
+
+void ReplayEditor::setAutoPreviewEnabled(bool enabled) {
+    mViewportPanel.setAutoPreviewEnabled(enabled);
+    saveLayoutPreferences();
+}
+
+void ReplayEditor::setSnapEnabled(bool enabled) {
+    mTimelinePanel.setSnapEnabled(enabled);
     saveLayoutPreferences();
 }
 
@@ -127,6 +148,9 @@ void ReplayEditor::loadLayoutPreferences() {
     mVideoAspectRatio    = 16.0f / 9.0f;
     mCameraPathVisible   = true;
     mUiScaleTier         = UiScaleTier::Auto;
+    mViewportPanel.setInfoOverlayVisible(true);
+    mViewportPanel.setAutoPreviewEnabled(true);
+    mTimelinePanel.setSnapEnabled(true);
     mTimelinePanel.setViewPreferences(0.30f, 1.0f, 0.0f);
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
@@ -137,6 +161,13 @@ void ReplayEditor::loadLayoutPreferences() {
         if (config.is_object()) {
             auto const cameraPath = config.find("showCameraPath");
             if (cameraPath != config.end() && cameraPath->is_boolean()) mCameraPathVisible = cameraPath->get<bool>();
+            mViewportPanel.setInfoOverlayVisible(
+                readBool(config, "infoOverlay", mViewportPanel.isInfoOverlayVisible())
+            );
+            mViewportPanel.setAutoPreviewEnabled(
+                readBool(config, "autoPreview", mViewportPanel.isAutoPreviewEnabled())
+            );
+            mTimelinePanel.setSnapEnabled(readBool(config, "snap", mTimelinePanel.isSnapEnabled()));
             auto const uiScale = config.find("uiScale");
             if (uiScale != config.end() && uiScale->is_string()) {
                 mUiScaleTier = uiScaleTierFromName(uiScale->get<std::string>());
@@ -219,6 +250,9 @@ void ReplayEditor::saveLayoutPreferences() const {
         {"timelineHeightRatio", mTimelineHeightRatio                      },
         {"videoAspectRatio",    mVideoAspectRatio                         },
         {"showCameraPath",      mCameraPathVisible                        },
+        {"infoOverlay",         mViewportPanel.isInfoOverlayVisible()     },
+        {"autoPreview",         mViewportPanel.isAutoPreviewEnabled()     },
+        {"snap",                mTimelinePanel.isSnapEnabled()            },
         {"uiScale",             std::string(uiScaleTierName(mUiScaleTier))},
         {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()      },
         {"hud",                 std::move(hud)                            },
@@ -342,12 +376,16 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     }
     mLastExportState = state.exportStatus.state;
 
+    bool const escapeConsumedByUi = !exportActive
+                                 && (mViewportMaximized || ImGui::GetIO().WantTextInput
+                                     || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId));
+
     auto const ctx = frameContext();
     if (mModeManager.current() == EditorMode::Render) mRenderMode.draw(ctx);
     else mEditMode.draw(ctx);
 
     ErrorDialog::getInstance().draw();
-    updateExitHold();
+    updateExitHold(escapeConsumedByUi);
     if (!exportActive) {
         handleKeyboardShortcuts();
         updateFollowExitTap();
@@ -357,9 +395,17 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     mSubmit     = nullptr;
 }
 
-void ReplayEditor::updateExitHold() {
+// `escapeConsumedByUi` is sampled before the panels draw: a press that closes a popup, leaves a text field or
+// restores the maximized viewport is already spent and must not also count towards leaving the editor.
+void ReplayEditor::updateExitHold(bool escapeConsumedByUi) {
     ImGuiIO const& io = ImGui::GetIO();
     if (!ImGui::IsKeyDown(ImGuiKey_Escape)) {
+        mExitHoldSeconds = 0.0f;
+        mExitHoldBlocked = false;
+        return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) mExitHoldBlocked = escapeConsumedByUi;
+    if (mExitHoldBlocked) {
         mExitHoldSeconds = 0.0f;
         return;
     }
@@ -368,7 +414,33 @@ void ReplayEditor::updateExitHold() {
     mExitHoldSeconds     += io.DeltaTime;
     if (previous < kExitHoldDuration && mExitHoldSeconds >= kExitHoldDuration) {
         submitAction({playback::state::EditorActionType::StopReplay});
+        return;
     }
+    if (mExitHoldSeconds < kExitHoldFeedbackDelay) return;
+
+    float const  progress = std::clamp(mExitHoldSeconds / kExitHoldDuration, 0.0f, 1.0f);
+    auto const   label    = "playback.refactorEditor.menu.exitHoldPrompt"_tr();
+    float const  pad      = 10.0f * metrics::scale();
+    ImVec2 const textSize = ImGui::CalcTextSize(label.c_str());
+    ImVec2 const size{textSize.x + pad * 2.0f, textSize.y + pad * 2.0f};
+    ImVec2 const origin{
+        ImGui::GetMainViewport()->Pos.x + (ImGui::GetMainViewport()->Size.x - size.x) * 0.5f,
+        ImGui::GetMainViewport()->Pos.y + metrics::font() * 3.0f
+    };
+    float const barHeight = std::max(3.0f, 3.0f * metrics::scale());
+
+    auto* drawList = ImGui::GetForegroundDrawList();
+    drawList->AddRectFilled(origin, {origin.x + size.x, origin.y + size.y}, theme::kOverlayBg, size.y * 0.5f);
+    drawList->AddText({origin.x + pad, origin.y + pad}, theme::kText, label.c_str());
+    ImVec2 const barMin{origin.x + size.y * 0.5f, origin.y + size.y - barHeight - 3.0f};
+    float const  barWidth = size.x - size.y;
+    drawList->AddRectFilled(barMin, {barMin.x + barWidth, barMin.y + barHeight}, theme::kRangeTrack, barHeight * 0.5f);
+    drawList->AddRectFilled(
+        barMin,
+        {barMin.x + barWidth * progress, barMin.y + barHeight},
+        theme::kWarning,
+        barHeight * 0.5f
+    );
 }
 
 // A lone Shift tap leaves spectating, so Shift+click and Ctrl+Shift chords stay free.

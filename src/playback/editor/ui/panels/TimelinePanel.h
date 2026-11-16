@@ -93,14 +93,10 @@ private:
     ) const;
     void drawMarkers(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale);
 
-    void drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick, bool allowInput);
+    void drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick);
     void drawTrackHeaders(PanelContext const& ctx, Layout const& layout, bool allowInput);
-    void drawRuler(
-        PanelContext const&  ctx,
-        Layout const&        layout,
-        TimelineScale const& scale,
-        int                  displayTick
-    ); // Drawn after the track rows so the row bands do not cover it.
+    // Drawn after the track rows so the row bands do not cover it.
+    void drawRuler(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale);
     void drawTrackGrid(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale);
     // In/out markers for the export range, drawn over the canvas and draggable by their handles.
     void drawExportRange(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale, bool allowInput);

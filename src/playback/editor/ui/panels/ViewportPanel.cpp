@@ -25,26 +25,6 @@ using namespace ll::i18n_literals;
 
 namespace {
 
-struct AspectPreset {
-    char const* label;
-    float       ratio;
-};
-
-constexpr std::array kAspectPresets{
-    AspectPreset{"16:9",   16.0f / 9.0f},
-    AspectPreset{"21:9",   21.0f / 9.0f},
-    AspectPreset{"4:3",    4.0f / 3.0f },
-    AspectPreset{"1:1",    1.0f        },
-    AspectPreset{"9:16",   9.0f / 16.0f},
-    AspectPreset{"2.39:1", 2.39f       },
-};
-
-char const* aspectLabel(float ratio) {
-    for (auto const& preset : kAspectPresets)
-        if (std::abs(preset.ratio - ratio) < 0.01f) return preset.label;
-    return nullptr;
-}
-
 // Pixels around an entity's projected box that still count as clicking it.
 constexpr float kPickSlackPixels = 6.0f;
 // Entries in the nearby entities menu.
@@ -220,7 +200,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
         if (camera != project->cameras.end()) {
             cameraLabel = camera->name;
-            cameraIcon  = ICON_CAMERA;
+            cameraIcon  = camera->kind == state::editing::model::CameraTrackKind::Keyframe ? ICON_CAMERA : ICON_USER;
         }
     }
     if (widgets::dropdownChip(
@@ -245,15 +225,18 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         }
         if (project && !project->cameras.empty()) ImGui::Separator();
         if (project) {
-            // Person tracks have no pose of their own to preview; they play from the timeline.
+            // Person tracks have no pose of their own to preview, so picking one only selects it.
             for (auto const& camera : project->cameras) {
-                if (camera.kind != state::editing::model::CameraTrackKind::Keyframe) continue;
-                bool const current = !following && selectedCamera && selectedCamera->cameraId == camera.id;
-                if (ImGui::MenuItem(camera.name.c_str(), nullptr, current)) {
+                bool const        keyframeTrack = camera.kind == state::editing::model::CameraTrackKind::Keyframe;
+                bool const        current       = !following && selectedCamera && selectedCamera->cameraId == camera.id;
+                std::string const label         = camera.name + "##cam-" + camera.id;
+                if (ImGui::MenuItem(label.c_str(), nullptr, current)) {
                     ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
-                    EditorAction action{EditorActionType::SetPreviewCamera};
-                    action.id = camera.id;
-                    ctx.submitAction(std::move(action));
+                    if (keyframeTrack) {
+                        EditorAction action{EditorActionType::SetPreviewCamera};
+                        action.id = camera.id;
+                        ctx.submitAction(std::move(action));
+                    }
                 }
             }
         }
@@ -320,7 +303,8 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
 
     ImGui::SameLine(0.0f, metrics::gutter());
     char aspectText[32]{};
-    if (char const* label = aspectLabel(mVideoAspectRatio)) std::snprintf(aspectText, sizeof(aspectText), "%s", label);
+    if (char const* label = widgets::aspectPresetLabel(mVideoAspectRatio))
+        std::snprintf(aspectText, sizeof(aspectText), "%s", label);
     else std::snprintf(aspectText, sizeof(aspectText), "%.2f:1", mVideoAspectRatio);
     if (widgets::dropdownChip(
             "viewport-aspect",
@@ -330,7 +314,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         widgets::openAnchoredPopup("##viewport-aspect-menu");
     }
     if (widgets::beginAnchoredPopup("##viewport-aspect-menu")) {
-        for (auto const& preset : kAspectPresets) {
+        for (auto const& preset : widgets::kAspectPresets) {
             bool const current = std::abs(preset.ratio - mVideoAspectRatio) < 0.01f;
             // Routed through the editor so the choice reaches the persisted layout preferences.
             if (ImGui::MenuItem(preset.label, nullptr, current)) ctx.commands.setVideoAspectRatio(preset.ratio);
@@ -340,10 +324,13 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
 
     ImGui::SameLine(0.0f, metrics::gutter() * 2.0f);
     ImGui::SetCursorPosY((height - ImGui::GetFrameHeight()) * 0.5f);
-    ImGui::Checkbox(
-        ("playback.refactorEditor.viewport.autoPreview"_tr() + "##viewport-auto-preview").c_str(),
-        &mAutoPreview
-    );
+    bool autoPreview = mAutoPreview;
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.viewport.autoPreview"_tr() + "##viewport-auto-preview").c_str(),
+            &autoPreview
+        )) {
+        ctx.commands.setAutoPreviewEnabled(autoPreview);
+    }
     widgets::itemTooltip("playback.refactorEditor.viewport.autoPreviewTooltip"_tr().c_str());
 
     // Maximize sits with the transport controls; the camera-path toggle stays in the View menu.
@@ -355,7 +342,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             "playback.refactorEditor.viewport.infoOverlay"_tr().c_str(),
             mInfoOverlayVisible
         )) {
-        mInfoOverlayVisible = !mInfoOverlayVisible;
+        ctx.commands.setInfoOverlayVisible(!mInfoOverlayVisible);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -392,7 +379,12 @@ void ViewportPanel::drawInfoOverlay(PanelContext const& ctx, ImVec2 const& video
         pose.yaw,
         pose.pitch
     );
-    std::snprintf(lens, sizeof(lens), "FOV %.1f    Tick %d", pose.fov, ctx.state.currentTick);
+    std::snprintf(
+        lens,
+        sizeof(lens),
+        "%s",
+        "playback.refactorEditor.viewport.lensOverlay"_tr(pose.fov, ctx.state.currentTick).c_str()
+    );
 
     float const pad   = metrics::gutter();
     float const lineY = ImGui::GetFontSize() + 2.0f;
@@ -437,18 +429,28 @@ void ViewportPanel::drawFloatingTransport(PanelContext const& ctx, ImVec2 const&
     float const startX = capsuleMin.x + pad * 2.0f + textWidth;
     float const y      = capsuleMin.y + pad * 0.5f;
     using widgets::VectorIcon;
-    auto const button = [&](char const* id, int index, VectorIcon icon) {
+    auto const button = [&](char const* id, int index, VectorIcon icon, std::string const& tooltip) {
         ImGui::SetCursorScreenPos({startX + (unit + gap) * static_cast<float>(index), y});
-        return widgets::vectorIconButton(id, icon, nullptr);
+        return widgets::vectorIconButton(id, icon, tooltip.c_str());
     };
 
-    if (button("##fv-start", 0, VectorIcon::SkipStart)) ctx.commands.seekTo(0);
-    if (button("##fv-back", 1, VectorIcon::StepBack)) ctx.commands.seekRelative(-widgets::kTicksPerSecond);
-    if (button("##fv-play", 2, state.paused ? VectorIcon::Play : VectorIcon::Pause))
+    if (button("##fv-start", 0, VectorIcon::SkipStart, "playback.refactorEditor.timeline.skipToStart"_tr()))
+        ctx.commands.seekTo(0);
+    if (button("##fv-back", 1, VectorIcon::StepBack, "playback.refactorEditor.timeline.previousTick"_tr()))
+        ctx.commands.seekRelative(-1);
+    if (button(
+            "##fv-play",
+            2,
+            state.paused ? VectorIcon::Play : VectorIcon::Pause,
+            state.paused ? "playback.refactorEditor.timeline.play"_tr() : "playback.refactorEditor.timeline.pause"_tr()
+        ))
         ctx.submitAction({EditorActionType::TogglePause});
-    if (button("##fv-forward", 3, VectorIcon::StepForward)) ctx.commands.seekRelative(widgets::kTicksPerSecond);
-    if (button("##fv-end", 4, VectorIcon::SkipEnd)) ctx.commands.seekTo(state.totalTicks);
-    if (button("##fv-restore", 5, VectorIcon::Restore)) ctx.commands.toggleViewportMaximized();
+    if (button("##fv-forward", 3, VectorIcon::StepForward, "playback.refactorEditor.timeline.nextTick"_tr()))
+        ctx.commands.seekRelative(1);
+    if (button("##fv-end", 4, VectorIcon::SkipEnd, "playback.refactorEditor.timeline.skipToEnd"_tr()))
+        ctx.commands.seekTo(state.totalTicks);
+    if (button("##fv-restore", 5, VectorIcon::Restore, "playback.refactorEditor.timeline.restore"_tr()))
+        ctx.commands.toggleViewportMaximized();
 }
 
 void ViewportPanel::setGameTexture(ImTextureID texture) { mGameTexture = texture; }

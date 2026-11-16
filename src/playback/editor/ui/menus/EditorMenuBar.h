@@ -9,13 +9,13 @@ namespace playback::editor::ui {
 
 class EditorMenuBar {
 public:
-    void               draw(PanelContext const& ctx);
-    void               openExportDialog(int totalTicks, bool ffmpegAvailable);
-    [[nodiscard]] bool isAnyMenuOpen() const;
+    void draw(PanelContext const& ctx);
+    void openExportDialog(int totalTicks, bool ffmpegAvailable);
 
     // The timeline draws these as in/out markers and can drag them; -1 means "whole replay".
     [[nodiscard]] int exportStartTick() const { return mExportStartTick; }
     [[nodiscard]] int exportEndTick() const { return mExportEndTick; }
+    [[nodiscard]] int exportFps() const { return mFps; }
     void              setExportStartTick(int tick) { mExportStartTick = tick; }
     void              setExportEndTick(int tick) { mExportEndTick = tick; }
     // Marks in/out at the playhead, clearing the range back to unset once it covers everything.
