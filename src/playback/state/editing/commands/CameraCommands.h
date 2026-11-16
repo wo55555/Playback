@@ -299,4 +299,20 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
+class SetCameraKeyframeBezierControls final : public model::IEditCommand {
+public:
+    SetCameraKeyframeBezierControls(std::string cameraId, int tick, model::Vec2 ctrl1, model::Vec2 ctrl2);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    model::Vec2                          mCtrl1;
+    model::Vec2                          mCtrl2;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
 } // namespace playback::state::editing::command

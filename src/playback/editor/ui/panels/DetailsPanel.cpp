@@ -100,13 +100,35 @@ bool vectorInput(
     return edited;
 }
 
+bool vectorInput2(char const* id, float (&values)[2], std::array<char const*, 2> const& labels, char const* format) {
+    bool edited = false;
+    ImGui::PushID(id);
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {3.0f, 0.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {4.0f, 3.0f});
+    if (ImGui::BeginTable("##axes2", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
+        for (int axis = 0; axis < 2; ++axis) {
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", labels[axis]);
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::PushID(axis);
+            ImGui::InputFloat("##value", &values[axis], 0.0f, 0.0f, format);
+            edited |= ImGui::IsItemDeactivatedAfterEdit();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar(2);
+    ImGui::PopID();
+    return edited;
+}
+
 } // namespace
 
 void DetailsPanel::draw(PanelContext const& ctx) {
     ImVec2 const origin = ImGui::GetCursorScreenPos();
     ImVec2 const avail  = ImGui::GetContentRegionAvail();
     float const  railW  = metrics::rail();
-    drawRail(ctx, railW, avail.y);
+    drawRail(railW, avail.y);
 
     ImGui::SetCursorScreenPos({origin.x + railW, origin.y});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {theme::kPanelPadding, theme::kPanelPadding});
@@ -133,7 +155,7 @@ void DetailsPanel::draw(PanelContext const& ctx) {
     ImGui::PopStyleVar();
 }
 
-void DetailsPanel::drawRail(PanelContext const& ctx, float width, float height) {
+void DetailsPanel::drawRail(float width, float height) {
     ImVec2 const origin   = ImGui::GetCursorScreenPos();
     auto*        drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, theme::kRailBg);
@@ -790,6 +812,152 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                             }
                         }
                         widgets::endCombo();
+                    }
+
+                    if (key->second.interpolationType == state::editing::model::CameraInterpolationType::CubicBezier) {
+                        if (mBezierDragHandle != 0
+                            && (mBezierDragCameraId != camera->id || mBezierDragTick != originalTick)) {
+                            mBezierDragHandle = 0;
+                        }
+                        auto ctrl1 = mBezierDragHandle != 0 ? mBezierDraftCtrl1 : key->second.bezierCtrl1;
+                        auto ctrl2 = mBezierDragHandle != 0 ? mBezierDraftCtrl2 : key->second.bezierCtrl2;
+                        ctrl1.x    = std::clamp(ctrl1.x, 0.0f, 1.0f);
+                        ctrl1.y    = std::clamp(ctrl1.y, 0.0f, 1.0f);
+                        ctrl2.x    = std::clamp(ctrl2.x, 0.0f, 1.0f);
+                        ctrl2.y    = std::clamp(ctrl2.y, 0.0f, 1.0f);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierCurve"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        {
+                            float const  uiScale  = metrics::scale();
+                            float const  availW   = std::max(64.0f, ImGui::GetContentRegionAvail().x);
+                            float const  boxH     = std::clamp(availW, 96.0f * uiScale, 140.0f * uiScale);
+                            float const  pad      = 8.0f * uiScale;
+                            ImVec2 const boxMin   = ImGui::GetCursorScreenPos();
+                            ImVec2 const boxMax   = {boxMin.x + availW, boxMin.y + boxH};
+                            ImVec2 const innerMin = {boxMin.x + pad, boxMin.y + pad};
+                            ImVec2 const innerMax = {boxMax.x - pad, boxMax.y - pad};
+                            float const  innerW   = std::max(1.0f, innerMax.x - innerMin.x);
+                            float const  innerH   = std::max(1.0f, innerMax.y - innerMin.y);
+
+                            auto const toScreen = [&](state::editing::model::Vec2 p) -> ImVec2 {
+                                return {innerMin.x + p.x * innerW, innerMax.y - p.y * innerH};
+                            };
+                            auto const fromScreen = [&](ImVec2 s) -> state::editing::model::Vec2 {
+                                return {
+                                    std::clamp((s.x - innerMin.x) / innerW, 0.0f, 1.0f),
+                                    std::clamp((innerMax.y - s.y) / innerH, 0.0f, 1.0f),
+                                };
+                            };
+
+                            ImGui::InvisibleButton("##bezier-canvas", {availW, boxH});
+                            bool const   hovered = ImGui::IsItemHovered();
+                            ImVec2 const mouse   = ImGui::GetMousePos();
+                            ImVec2 const p0      = toScreen({0.0f, 0.0f});
+                            ImVec2       p1      = toScreen(ctrl1);
+                            ImVec2       p2      = toScreen(ctrl2);
+                            ImVec2 const p3      = toScreen({1.0f, 1.0f});
+
+                            auto const distSq = [](ImVec2 a, ImVec2 b) {
+                                float const dx = a.x - b.x;
+                                float const dy = a.y - b.y;
+                                return dx * dx + dy * dy;
+                            };
+                            float const hitR2    = (9.0f * uiScale) * (9.0f * uiScale);
+                            float const d1       = distSq(mouse, p1);
+                            float const d2       = distSq(mouse, p2);
+                            int         hoveredH = 0;
+                            if (hovered && !camera->locked) {
+                                if (d1 <= hitR2 && (d1 <= d2 || d2 > hitR2)) hoveredH = 1;
+                                else if (d2 <= hitR2) hoveredH = 2;
+                            }
+                            if (hoveredH != 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                mBezierDragCameraId = camera->id;
+                                mBezierDragTick     = originalTick;
+                                mBezierDragHandle   = hoveredH;
+                                mBezierDraftCtrl1   = ctrl1;
+                                mBezierDraftCtrl2   = ctrl2;
+                            }
+                            if (mBezierDragHandle != 0) {
+                                if (!camera->locked && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                                    if (mBezierDragHandle == 1) mBezierDraftCtrl1 = fromScreen(mouse);
+                                    else mBezierDraftCtrl2 = fromScreen(mouse);
+                                    ctrl1 = mBezierDraftCtrl1;
+                                    ctrl2 = mBezierDraftCtrl2;
+                                    p1    = toScreen(ctrl1);
+                                    p2    = toScreen(ctrl2);
+                                } else {
+                                    EditorAction action{EditorActionType::SetKeyframeBezierControls};
+                                    action.id          = camera->id;
+                                    action.tick        = originalTick;
+                                    action.bezierCtrl1 = mBezierDraftCtrl1;
+                                    action.bezierCtrl2 = mBezierDraftCtrl2;
+                                    mBezierDragHandle  = 0;
+                                    submit(std::move(action));
+                                }
+                            }
+                            if (hoveredH != 0 || mBezierDragHandle != 0) {
+                                ImGui::SetMouseCursor(
+                                    mBezierDragHandle != 0 ? theme::kCursorGrabbing : theme::kCursorGrab
+                                );
+                            }
+
+                            auto* dl = ImGui::GetWindowDrawList();
+                            dl->AddRectFilled(boxMin, boxMax, theme::kInputBg, 4.0f * uiScale);
+                            dl->AddRect(boxMin, boxMax, theme::kBorder, 4.0f * uiScale);
+                            dl->AddLine(p0, p3, theme::kFineDivider, 1.0f);
+                            dl->AddLine(p0, p1, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
+                            dl->AddLine(p3, p2, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
+                            dl->AddBezierCubic(p0, p1, p2, p3, theme::kAccent, 2.0f * uiScale, 32);
+                            dl->AddCircleFilled(p0, 2.5f * uiScale, theme::kTextDim);
+                            dl->AddCircleFilled(p3, 2.5f * uiScale, theme::kTextDim);
+
+                            float const handleR = 4.5f * uiScale;
+                            ImU32 const c1Color =
+                                (mBezierDragHandle == 1 || hoveredH == 1) ? theme::kSelected : theme::kKeyframe;
+                            ImU32 const c2Color =
+                                (mBezierDragHandle == 2 || hoveredH == 2) ? theme::kSelected : theme::kKeyframe;
+                            dl->AddCircleFilled(p1, handleR, c1Color);
+                            dl->AddCircle(p1, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
+                            dl->AddCircleFilled(p2, handleR, c2Color);
+                            dl->AddCircle(p2, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
+                        }
+
+                        static constexpr std::array xyLabels{"X", "Y"};
+                        float                       c1[2] = {ctrl1.x, ctrl1.y};
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl1"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        if (vectorInput2("bezier-c1", c1, xyLabels, "%.2f") && std::isfinite(c1[0])
+                            && std::isfinite(c1[1])) {
+                            EditorAction action{EditorActionType::SetKeyframeBezierControls};
+                            action.id          = camera->id;
+                            action.tick        = originalTick;
+                            action.bezierCtrl1 = {std::clamp(c1[0], 0.0f, 1.0f), std::clamp(c1[1], 0.0f, 1.0f)};
+                            action.bezierCtrl2 = ctrl2;
+                            submit(std::move(action));
+                        }
+
+                        float c2[2] = {ctrl2.x, ctrl2.y};
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl2"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        if (vectorInput2("bezier-c2", c2, xyLabels, "%.2f") && std::isfinite(c2[0])
+                            && std::isfinite(c2[1])) {
+                            EditorAction action{EditorActionType::SetKeyframeBezierControls};
+                            action.id          = camera->id;
+                            action.tick        = originalTick;
+                            action.bezierCtrl1 = ctrl1;
+                            action.bezierCtrl2 = {std::clamp(c2[0], 0.0f, 1.0f), std::clamp(c2[1], 0.0f, 1.0f)};
+                            submit(std::move(action));
+                        }
                     }
                 }
                 ImGui::EndTable();
