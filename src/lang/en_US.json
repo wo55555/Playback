@@ -154,6 +154,7 @@
                 "selectAll": "Select All Keyframes",
                 "copy": "Copy Keyframes",
                 "paste": "Paste Keyframes at Playhead",
+                "maximizeViewport": "Maximize Viewport",
                 "shortcuts": "Keyboard Shortcuts"
             },
             "common": {
@@ -226,6 +227,9 @@
                 "roll": "Roll",
                 "fov": "FOV",
                 "interpolation": "Interpolation",
+                "bezierCurve": "Curve",
+                "bezierControl1": "Control 1",
+                "bezierControl2": "Control 2",
                 "deleteKeyframe": "Delete Keyframe",
                 "marker": "Marker",
                 "markerMissing": "Marker no longer exists.",
