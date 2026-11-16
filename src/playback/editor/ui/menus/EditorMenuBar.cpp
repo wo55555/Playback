@@ -506,7 +506,7 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
             }
             ImGui::Separator();
             if (ImGui::MenuItem(
-                    "playback.refactorEditor.timeline.maximize"_tr().c_str(),
+                    "playback.refactorEditor.menu.maximizeViewport"_tr().c_str(),
                     input::KeyMap::displayString(input::EditorKeybind::ToggleViewportMaximized).c_str(),
                     ctx.commands.isViewportMaximized(),
                     viewEnabled
@@ -1290,9 +1290,16 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         ImGui::PushStyleColor(ImGuiCol_Button, theme::withAlpha(theme::kButton, 0x00));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kButtonHover);
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kButtonActive);
-        if (ImGui::Button(cancelLabel.c_str(), {cancelWidth, buttonH})) {
+        auto const closeDialog = [&] {
             mExportDialogOpen = false;
+            if (mExportStartTick <= 0 && mExportEndTick >= maximumReplayTick) {
+                mExportStartTick = -1;
+                mExportEndTick   = -1;
+            }
             ImGui::CloseCurrentPopup();
+        };
+        if (ImGui::Button(cancelLabel.c_str(), {cancelWidth, buttonH})) {
+            closeDialog();
         }
         ImGui::PopStyleColor(3);
         ImGui::SameLine(0.0f, footerGap);
@@ -1305,16 +1312,14 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             EditorAction action{EditorActionType::StartExport};
             action.exportSettings = std::move(previewSettings);
             ctx.submitAction(std::move(action));
-            mExportDialogOpen = false;
-            ImGui::CloseCurrentPopup();
+            closeDialog();
         }
         ImGui::PopStyleColor(4);
         ImGui::EndDisabled();
         ImGui::PopStyleVar();
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-            mExportDialogOpen = false;
-            ImGui::CloseCurrentPopup();
+            closeDialog();
         }
         ImGui::EndPopup();
     }

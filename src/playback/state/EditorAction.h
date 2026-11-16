@@ -48,6 +48,7 @@ enum class EditorActionType {
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
     SetKeyframeInterpolation,
+    SetKeyframeBezierControls,
     SetKeyframePosition,
     SetKeyframeRotation,
     SetKeyframeFov,
@@ -88,6 +89,8 @@ struct EditorAction {
     int                                      kind{};
     bool                                     value{};
     state::editing::model::Vec3              position{};
+    state::editing::model::Vec2              bezierCtrl1{};
+    state::editing::model::Vec2              bezierCtrl2{};
     std::optional<exporting::ExportSettings> exportSettings;
     std::vector<std::string>                 replayIds;
     // Set only when pasting a copied keyframe. An empty value captures the live camera, as before.

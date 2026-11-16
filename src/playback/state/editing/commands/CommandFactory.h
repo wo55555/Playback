@@ -32,6 +32,8 @@ public:
     static std::unique_ptr<model::IEditCommand>
     createSetKeyframeInterpolation(const std::string& id, int tick, model::CameraInterpolationType interpolation);
     static std::unique_ptr<model::IEditCommand>
+    createSetCameraKeyframeBezierControls(const std::string& id, int tick, model::Vec2 ctrl1, model::Vec2 ctrl2);
+    static std::unique_ptr<model::IEditCommand>
     createSetCameraKeyframePosition(const std::string& id, int tick, model::Vec3 position);
     static std::unique_ptr<model::IEditCommand>
     createSetCameraKeyframeRotation(const std::string& id, int tick, model::Vec3 rotation);

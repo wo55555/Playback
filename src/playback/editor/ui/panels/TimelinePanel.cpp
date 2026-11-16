@@ -855,6 +855,7 @@ void TimelinePanel::drawExportRange(
     int const inTick  = ctx.commands.exportStartTick();
     int const outTick = ctx.commands.exportEndTick();
     if (inTick < 0 || outTick < 0) return;
+    if (mExportMarkerDrag == 0 && inTick <= 0 && outTick >= total) return;
 
     auto*       drawList = ImGui::GetWindowDrawList();
     float const left     = scale.xAt(static_cast<float>(std::clamp(inTick, 0, total)));
@@ -890,6 +891,10 @@ void TimelinePanel::drawExportRange(
     if (mExportMarkerDrag == 0) return;
     if (!allowInput || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         mExportMarkerDrag = 0;
+        if (inTick <= 0 && outTick >= total) {
+            ctx.commands.setExportStartTick(-1);
+            ctx.commands.setExportEndTick(-1);
+        }
         return;
     }
     // Shift snaps to keyframes, markers and the playhead, matching the modifier used elsewhere on the timeline.
@@ -1212,17 +1217,28 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             int const tick = std::clamp(mRulerMenuTick, 0, std::max(0, total - 1));
             int       out  = ctx.commands.exportEndTick();
             if (out <= tick) out = total;
-            ctx.commands.setExportStartTick(tick);
-            ctx.commands.setExportEndTick(out);
+            if (tick <= 0 && out >= total) {
+                ctx.commands.setExportStartTick(-1);
+                ctx.commands.setExportEndTick(-1);
+            } else {
+                ctx.commands.setExportStartTick(tick);
+                ctx.commands.setExportEndTick(out);
+            }
         }
         if (ImGui::MenuItem("playback.refactorEditor.timeline.setOutPoint"_tr().c_str(), nullptr, false, total > 0)) {
             int const tick = std::clamp(mRulerMenuTick, std::min(1, total), total);
             int       in   = ctx.commands.exportStartTick();
             if (in < 0 || in >= tick) in = 0;
-            ctx.commands.setExportStartTick(in);
-            ctx.commands.setExportEndTick(tick);
+            if (in <= 0 && tick >= total) {
+                ctx.commands.setExportStartTick(-1);
+                ctx.commands.setExportEndTick(-1);
+            } else {
+                ctx.commands.setExportStartTick(in);
+                ctx.commands.setExportEndTick(tick);
+            }
         }
-        bool const ranged = ctx.commands.exportStartTick() >= 0 || ctx.commands.exportEndTick() >= 0;
+        bool const ranged = ctx.commands.exportStartTick() > 0
+                         || (ctx.commands.exportEndTick() >= 0 && ctx.commands.exportEndTick() < total);
         if (ImGui::MenuItem("playback.refactorEditor.timeline.clearExportRange"_tr().c_str(), nullptr, false, ranged)) {
             ctx.commands.setExportStartTick(-1);
             ctx.commands.setExportEndTick(-1);
