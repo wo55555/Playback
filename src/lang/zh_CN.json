@@ -154,6 +154,7 @@
                 "selectAll": "全选关键帧",
                 "copy": "复制关键帧",
                 "paste": "在播放头处粘贴关键帧",
+                "maximizeViewport": "最大化视口",
                 "shortcuts": "快捷键"
             },
             "common": {
@@ -226,6 +227,9 @@
                 "roll": "翻滚",
                 "fov": "FOV",
                 "interpolation": "插值",
+                "bezierCurve": "曲线",
+                "bezierControl1": "控制点 1",
+                "bezierControl2": "控制点 2",
                 "deleteKeyframe": "删除关键帧",
                 "marker": "标记",
                 "markerMissing": "标记已不存在。",

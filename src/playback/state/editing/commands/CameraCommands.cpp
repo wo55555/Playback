@@ -394,6 +394,46 @@ void SetCameraShake::execute(model::EditorStateExt& state) {
 void        SetCameraShake::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string SetCameraShake::label() const { return "Set Camera Shake"; }
 
+SetCameraKeyframeBezierControls::SetCameraKeyframeBezierControls(
+    std::string cameraId,
+    int         tick,
+    model::Vec2 ctrl1,
+    model::Vec2 ctrl2
+)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mCtrl1(ctrl1),
+  mCtrl2(ctrl2) {}
+
+void SetCameraKeyframeBezierControls::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked || camera->kind != model::CameraTrackKind::Keyframe) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end()) {
+        mBefore.reset();
+        return;
+    }
+
+    model::Vec2 const ctrl1{std::clamp(mCtrl1.x, 0.0f, 1.0f), std::clamp(mCtrl1.y, 0.0f, 1.0f)};
+    model::Vec2 const ctrl2{std::clamp(mCtrl2.x, 0.0f, 1.0f), std::clamp(mCtrl2.y, 0.0f, 1.0f)};
+    if (key->second.bezierCtrl1.x == ctrl1.x && key->second.bezierCtrl1.y == ctrl1.y
+        && key->second.bezierCtrl2.x == ctrl2.x && key->second.bezierCtrl2.y == ctrl2.y) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore                 = state;
+    key->second.bezierCtrl1 = ctrl1;
+    key->second.bezierCtrl2 = ctrl2;
+}
+
+void        SetCameraKeyframeBezierControls::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraKeyframeBezierControls::label() const { return "Set Keyframe Bezier Controls"; }
+
 MoveKeyframes::MoveKeyframes(std::vector<model::KeyframeRef> refs, int delta) : mRefs(std::move(refs)), mDelta(delta) {}
 
 void MoveKeyframes::execute(model::EditorStateExt& state) {
