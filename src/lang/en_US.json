@@ -226,6 +226,13 @@
                 "pitch": "Pitch",
                 "roll": "Roll",
                 "fov": "FOV",
+                "lensMode": "Lens Mode",
+                "lensModeType": {
+                    "interpolated": "Interpolated",
+                    "firstPerson": "First Person",
+                    "thirdPerson": "Third Person"
+                },
+                "personApplyHint": "Applies from this keyframe until the next keyframe or end of replay.",
                 "interpolation": "Interpolation",
                 "bezierCurve": "Curve",
                 "bezierControl1": "Control 1",
@@ -414,8 +421,6 @@
                 "title": "Timeline",
                 "trackCount": "{} cameras",
                 "speedTooltip": "Playback speed",
-                "addFirstPersonTrack": "Add first-person track",
-                "addThirdPersonTrack": "Add third-person track",
                 "copyKeyframe": "Copy keyframe",
                 "pasteKeyframe": "Paste keyframe",
                 "copyKeyframes": "Copy {} keyframes",
@@ -508,8 +513,6 @@
             },
             "defaults": {
                 "camera": "Camera {}",
-                "firstPersonCamera": "First person {}",
-                "thirdPersonCamera": "Third person {}",
                 "marker": "Marker {}"
             }
         }

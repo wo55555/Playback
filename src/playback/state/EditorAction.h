@@ -39,7 +39,6 @@ enum class EditorActionType {
     SetFollowThirdPerson,
     UndoEditorEdit,
     RedoEditorEdit,
-    // kind: 0 keyframe track, 1 first-person track, 2 third-person track.
     AddFreeCamera,
     SplitWorldActor,
     TrimWorldActor,
@@ -47,12 +46,13 @@ enum class EditorActionType {
     AddCameraKeyframe,
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
+    SetKeyframeMode,
     SetKeyframeInterpolation,
     SetKeyframeBezierControls,
     SetKeyframePosition,
     SetKeyframeRotation,
     SetKeyframeFov,
-    // A person track key's subject in secondaryId; empty is the recorder.
+    // A person keyframe's subject in secondaryId; empty is the recorder.
     SetKeyframeSubject,
     SetCameraEnabled,
     SetCameraLocked,
@@ -68,6 +68,7 @@ enum class EditorActionType {
     MoveViewToKeyframe,
     MoveCameraKeyframes,
     DeleteCameraKeyframes,
+    SetKeyframesMode,
     SetKeyframesInterpolation,
     AddCameraKeyframes,
     AddMarker,
