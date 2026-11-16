@@ -95,7 +95,7 @@ std::optional<CameraTimelineSample> sampleCameraTimeline(
         auto const evaluation =
             cameraId.empty() ? current->timeline->sample(time) : current->timeline->sampleCameraById(cameraId, time);
         if (!evaluation) return std::nullopt;
-        return CameraTimelineSample{evaluation->state, evaluation->cameraId, evaluation->kind};
+        return CameraTimelineSample{evaluation->state, evaluation->cameraId, evaluation->mode};
     } catch (...) {
         return std::nullopt;
     }

@@ -108,6 +108,7 @@ json toJson(CameraKeyframe const& key) {
         {"pitch",             key.pitch                              },
         {"roll",              key.roll                               },
         {"fov",               key.fov                                },
+        {"mode",              static_cast<int>(key.mode)             },
         {"interpolationType", static_cast<int>(key.interpolationType)},
         {"bezierCtrl1",       toJson(key.bezierCtrl1)                },
         {"bezierCtrl2",       toJson(key.bezierCtrl2)                },
@@ -122,6 +123,7 @@ CameraKeyframe keyframeFrom(json const& node) {
     key.pitch             = finiteOr(node, "pitch", key.pitch);
     key.roll              = finiteOr(node, "roll", key.roll);
     key.fov               = finiteOr(node, "fov", key.fov);
+    key.mode              = enumOr(node, "mode", key.mode, static_cast<int>(CameraKeyframeMode::ThirdPerson));
     key.interpolationType = enumOr(
         node,
         "interpolationType",
@@ -145,7 +147,6 @@ json toJson(CameraEntity const& camera) {
     json result{
         {"id",                camera.id               },
         {"name",              camera.name             },
-        {"kind",              static_cast<int>(camera.kind)},
         {"enabled",           camera.enabled          },
         {"locked",            camera.locked           },
         {"bindingEntityUuid", camera.bindingEntityUuid},
@@ -176,7 +177,7 @@ CameraEntity cameraFrom(json const& node) {
     CameraEntity camera;
     camera.id                = stringOr(node, "id");
     camera.name              = stringOr(node, "name");
-    camera.kind = enumOr(node, "kind", camera.kind, static_cast<int>(CameraTrackKind::ThirdPerson));
+    int const legacyKind     = intOr(node, "kind", 0);
     camera.enabled           = boolOr(node, "enabled", true);
     camera.locked            = boolOr(node, "locked", false);
     camera.bindingEntityUuid = stringOr(node, "bindingEntityUuid");
@@ -186,7 +187,12 @@ CameraEntity cameraFrom(json const& node) {
     if (auto const* keys = arrayAt(node, "keys")) {
         for (auto const& entry : *keys) {
             if (!entry.is_object()) continue;
-            camera.keysByTick.insert_or_assign(intOr(entry, "tick", 0), keyframeFrom(entry));
+            auto key = keyframeFrom(entry);
+            // Migrate legacy track-level person kinds onto keyframes that lack an explicit mode.
+            if (!entry.contains("mode") && (legacyKind == 1 || legacyKind == 2)) {
+                key.mode = legacyKind == 2 ? CameraKeyframeMode::ThirdPerson : CameraKeyframeMode::FirstPerson;
+            }
+            camera.keysByTick.insert_or_assign(intOr(entry, "tick", 0), std::move(key));
         }
     }
     if (auto const* shake = objectAt(node, "shake")) {

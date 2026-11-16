@@ -69,7 +69,7 @@ private:
 
 class AddFreeCamera final : public model::IEditCommand {
 public:
-    AddFreeCamera(std::string name, model::CameraTrackKind kind);
+    explicit AddFreeCamera(std::string name);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -77,7 +77,6 @@ public:
 
 private:
     std::string                          mName;
-    model::CameraTrackKind               mKind;
     std::optional<model::EditorStateExt> mBefore;
 };
 
@@ -312,6 +311,35 @@ private:
     int                                  mTick;
     model::Vec2                          mCtrl1;
     model::Vec2                          mCtrl2;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetCameraKeyframeMode final : public model::IEditCommand {
+public:
+    SetCameraKeyframeMode(std::string cameraId, int tick, model::CameraKeyframeMode mode);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    model::CameraKeyframeMode            mMode;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetKeyframesMode final : public model::IEditCommand {
+public:
+    SetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    model::CameraKeyframeMode            mMode;
     std::optional<model::EditorStateExt> mBefore;
 };
 

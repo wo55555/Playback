@@ -23,13 +23,9 @@ struct CameraLimiter {
     bool enabled{};
 };
 
-// Keyframe tracks interpolate their own poses; person tracks view a replay player between their first and last key.
-enum class CameraTrackKind : uint8_t { Keyframe, FirstPerson, ThirdPerson };
-
 struct CameraEntity {
     std::string                   id;
     std::string                   name;
-    CameraTrackKind               kind{CameraTrackKind::Keyframe};
     bool                          enabled{true};
     std::map<int, CameraKeyframe> keysByTick;
     std::optional<CameraShake>    shake;

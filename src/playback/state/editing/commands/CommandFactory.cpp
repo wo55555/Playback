@@ -17,9 +17,8 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createTrimWorldActor(const 
 std::unique_ptr<model::IEditCommand> CommandFactory::createRippleDeleteWorldActorSegment(const std::string& id) {
     return std::make_unique<RippleDeleteWorldActorSeg>(id);
 }
-std::unique_ptr<model::IEditCommand>
-CommandFactory::createAddFreeCamera(const std::string& name, model::CameraTrackKind kind) {
-    return std::make_unique<AddFreeCamera>(name, kind);
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddFreeCamera(const std::string& name) {
+    return std::make_unique<AddFreeCamera>(name);
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteCamera(const std::string& id) {
     return std::make_unique<DeleteCamera>(id);
@@ -79,6 +78,10 @@ std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetCameraKeyframeSubject(const std::string& id, int tick, const std::string& subject) {
     return std::make_unique<SetCameraKeyframeSubject>(id, tick, subject);
 }
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetCameraKeyframeMode(const std::string& id, int tick, model::CameraKeyframeMode mode) {
+    return std::make_unique<SetCameraKeyframeMode>(id, tick, mode);
+}
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraEnabled(const std::string& id, bool enabled) {
     return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::Enabled, enabled);
 }
@@ -112,6 +115,10 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetKeyframesInterpola
     model::CameraInterpolationType  interpolation
 ) {
     return std::make_unique<SetKeyframesInterpolation>(std::move(refs), interpolation);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode) {
+    return std::make_unique<SetKeyframesMode>(std::move(refs), mode);
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddCameraKeyframes(std::vector<model::KeyframeRef> refs) {
     return std::make_unique<AddKeyframes>(std::move(refs));

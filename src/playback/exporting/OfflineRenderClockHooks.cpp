@@ -342,14 +342,14 @@ LL_TYPE_INSTANCE_HOOK(
             ScopedTimerOverride                         timerOverride(timer, sample->sample);
             ScopedRenderSample                          renderSample(sample->token, sample->renderSerial);
             keyframe::ScopedCameraTimelineRenderContext cameraContext(sample->cameraContext);
-            // A first-person track renders from inside the subject, so its model hides for exactly these frames.
-            // A third-person track keeps the model, like vanilla F5.
-            auto const kind = sample->cameraContext && sample->cameraContext->sample
-                                ? sample->cameraContext->sample->kind
-                                : state::editing::model::CameraTrackKind::Keyframe;
-            bool const firstPerson = kind == state::editing::model::CameraTrackKind::FirstPerson;
+            // A first-person keyframe renders from inside the subject, so its model hides for exactly these frames.
+            // A third-person keyframe keeps the model, like vanilla F5.
+            auto const mode = sample->cameraContext && sample->cameraContext->sample
+                                ? sample->cameraContext->sample->mode
+                                : state::editing::model::CameraKeyframeMode::Interpolated;
+            bool const firstPerson = mode == state::editing::model::CameraKeyframeMode::FirstPerson;
             visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Export, firstPerson);
-            visuals::setReplaySubjectThirdPerson(kind == state::editing::model::CameraTrackKind::ThirdPerson);
+            visuals::setReplaySubjectThirdPerson(mode == state::editing::model::CameraKeyframeMode::ThirdPerson);
             // The hand and sleep-vignette hooks read the view weight sampled for the frame being drawn.
             if (firstPerson) (void)visuals::sampleReplaySubjectViewWeight(sample->sample.replayTime);
             auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
