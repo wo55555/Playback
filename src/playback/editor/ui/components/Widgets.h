@@ -2,11 +2,34 @@
 
 #include "imgui.h"
 
+#include <array>
+#include <cmath>
 #include <string>
 
 namespace playback::editor::ui::widgets {
 
 constexpr int kTicksPerSecond = 20;
+
+struct AspectPreset {
+    char const* label;
+    float       ratio;
+};
+
+inline constexpr std::array kAspectPresets{
+    AspectPreset{"16:9",   16.0f / 9.0f},
+    AspectPreset{"21:9",   21.0f / 9.0f},
+    AspectPreset{"4:3",    4.0f / 3.0f },
+    AspectPreset{"1:1",    1.0f        },
+    AspectPreset{"9:16",   9.0f / 16.0f},
+    AspectPreset{"2.39:1", 2.39f       },
+};
+
+[[nodiscard]] inline char const* aspectPresetLabel(float ratio) {
+    for (auto const& preset : kAspectPresets) {
+        if (std::abs(preset.ratio - ratio) < 0.01f) return preset.label;
+    }
+    return nullptr;
+}
 
 // mm:ss.cc, shared by every panel that shows a timeline position.
 [[nodiscard]] std::string formatTick(int tick);

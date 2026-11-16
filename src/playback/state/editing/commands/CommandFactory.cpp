@@ -78,6 +78,10 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraLocked(const
     return std::make_unique<SetCameraTrackState>(id, SetCameraTrackState::Property::Locked, locked);
 }
 std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetCameraShake(const std::string& id, std::optional<model::CameraShake> shake) {
+    return std::make_unique<SetCameraShake>(id, shake);
+}
+std::unique_ptr<model::IEditCommand>
 CommandFactory::createRenameCamera(const std::string& id, const std::string& name) {
     return std::make_unique<RenameCamera>(id, name);
 }

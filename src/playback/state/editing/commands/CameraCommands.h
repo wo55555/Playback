@@ -285,4 +285,18 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
+class SetCameraShake final : public model::IEditCommand {
+public:
+    SetCameraShake(std::string cameraId, std::optional<model::CameraShake> shake);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    std::optional<model::CameraShake>    mShake;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
 } // namespace playback::state::editing::command
