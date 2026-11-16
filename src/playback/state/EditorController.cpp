@@ -147,8 +147,8 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
 
     mProject             = {};
     mProject.projectPath = std::string(replayPath);
-    mProject.totalTicks  = totalTicks;
-    state::editing::CameraBindingOps::addFreeCamera(mProject, {}, state::editing::model::CameraTrackKind::Keyframe);
+    mProject.totalTicks = totalTicks;
+    state::editing::CameraBindingOps::addFreeCamera(mProject, {});
     mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
     mPreviewCameraId.reset();
@@ -180,7 +180,7 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
     loaded.totalTicks            = mProject.totalTicks;
     loaded.worldActor.totalTicks = mProject.totalTicks;
     if (loaded.cameras.empty()) {
-        state::editing::CameraBindingOps::addFreeCamera(loaded, {}, state::editing::model::CameraTrackKind::Keyframe);
+        state::editing::CameraBindingOps::addFreeCamera(loaded, {});
     }
     if (loaded.worldActor.segments.empty()) {
         loaded.worldActor.segments.push_back({"worldActor", 0, mProject.totalTicks, 0});
@@ -231,13 +231,9 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::RedoEditorEdit:
         (void)mCommandStack.redo(mProject);
         break;
-    case EditorActionType::AddFreeCamera: {
-        auto const kind = action.kind == 1 ? state::editing::model::CameraTrackKind::FirstPerson
-                        : action.kind == 2 ? state::editing::model::CameraTrackKind::ThirdPerson
-                                           : state::editing::model::CameraTrackKind::Keyframe;
-        mCommandStack.push(CommandFactory::createAddFreeCamera(action.name, kind), mProject);
+    case EditorActionType::AddFreeCamera:
+        mCommandStack.push(CommandFactory::createAddFreeCamera(action.name), mProject);
         break;
-    }
     case EditorActionType::SplitWorldActor:
         mCommandStack.push(CommandFactory::createSplitWorldActor(action.tick), mProject);
         break;
@@ -280,6 +276,16 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::DeleteCameraKeyframe:
         mCommandStack.push(CommandFactory::createDeleteCameraKeyframe(action.id, action.tick), mProject);
+        break;
+    case EditorActionType::SetKeyframeMode:
+        mCommandStack.push(
+            CommandFactory::createSetCameraKeyframeMode(
+                action.id,
+                action.tick,
+                static_cast<state::editing::model::CameraKeyframeMode>(action.kind)
+            ),
+            mProject
+        );
         break;
     case EditorActionType::SetKeyframeInterpolation:
         mCommandStack.push(
@@ -356,6 +362,15 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::DeleteCameraKeyframes:
         mCommandStack.push(CommandFactory::createDeleteCameraKeyframes(action.keyframeRefs), mProject);
         break;
+    case EditorActionType::SetKeyframesMode:
+        mCommandStack.push(
+            CommandFactory::createSetKeyframesMode(
+                action.keyframeRefs,
+                static_cast<state::editing::model::CameraKeyframeMode>(action.kind)
+            ),
+            mProject
+        );
+        break;
     case EditorActionType::SetKeyframesInterpolation:
         mCommandStack.push(
             CommandFactory::createSetKeyframesInterpolation(
@@ -384,8 +399,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
         if (std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
-                return camera.id == action.id && state::editing::model::isCameraRenderable(camera)
-                    && camera.kind == state::editing::model::CameraTrackKind::Keyframe;
+                return camera.id == action.id && state::editing::model::isCameraRenderable(camera);
             })) {
             mPreviewCameraId = action.id;
         }
@@ -421,8 +435,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     }
 
     if (mPreviewCameraId && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
-            return camera.id == *mPreviewCameraId && state::editing::model::isCameraRenderable(camera)
-                && camera.kind == state::editing::model::CameraTrackKind::Keyframe;
+            return camera.id == *mPreviewCameraId && state::editing::model::isCameraRenderable(camera);
         })) {
         mPreviewCameraId.reset();
     }

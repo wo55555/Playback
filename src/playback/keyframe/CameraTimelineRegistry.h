@@ -17,9 +17,9 @@ enum class CameraTimelineSource : uint8_t { Preview, Export };
 using CameraTimelineHandle = std::shared_ptr<CameraTimelineEvaluator const>;
 
 struct CameraTimelineSample {
-    CameraRenderState                      state;
-    std::string                            cameraId;
-    state::editing::model::CameraTrackKind kind{state::editing::model::CameraTrackKind::Keyframe};
+    CameraRenderState                         state;
+    std::string                               cameraId;
+    state::editing::model::CameraKeyframeMode mode{state::editing::model::CameraKeyframeMode::Interpolated};
 };
 
 using CameraTimelineAppliedFlag = std::shared_ptr<std::atomic_bool>;

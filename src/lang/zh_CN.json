@@ -226,6 +226,13 @@
                 "pitch": "俯仰",
                 "roll": "翻滚",
                 "fov": "FOV",
+                "lensMode": "镜头模式",
+                "lensModeType": {
+                    "interpolated": "插值镜头",
+                    "firstPerson": "第一人称",
+                    "thirdPerson": "第三人称"
+                },
+                "personApplyHint": "从该关键帧起应用到下一关键帧或录像末尾。",
                 "interpolation": "插值",
                 "bezierCurve": "曲线",
                 "bezierControl1": "控制点 1",
@@ -414,8 +421,6 @@
                 "title": "时间轴",
                 "trackCount": "{} 个相机",
                 "speedTooltip": "播放速度",
-                "addFirstPersonTrack": "添加第一人称轨",
-                "addThirdPersonTrack": "添加第三人称轨",
                 "copyKeyframe": "复制关键帧",
                 "pasteKeyframe": "粘贴关键帧",
                 "copyKeyframes": "复制 {} 个关键帧",
@@ -508,8 +513,6 @@
             },
             "defaults": {
                 "camera": "相机 {}",
-                "firstPersonCamera": "第一人称 {}",
-                "thirdPersonCamera": "第三人称 {}",
                 "marker": "标记 {}"
             }
         }

@@ -51,15 +51,7 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
         const auto& camera = state.cameras[index];
         if (!cameraMatchesSearch(camera, state.worldActor, mSearch)) continue;
         mRows.push_back(
-            {TrackRowKind::Camera,
-             "camera:" + camera.id,
-             camera.name,
-             camera.id,
-             index,
-             cameraHeight,
-             camera.locked,
-             camera.enabled,
-             camera.kind}
+            {TrackRowKind::Camera, "camera:" + camera.id, camera.name, camera.id, index, cameraHeight, camera.locked, camera.enabled}
         );
     }
 }

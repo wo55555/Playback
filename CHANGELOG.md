@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the first-person and third-person camera track types with a lens mode on each keyframe: interpolated, first person or third person. A keyframe applies until the next keyframe on its track, and a person keyframe keeps its subject across dimension changes until the replay ends. The timeline marks each mode with its own keyframe shape and a `1P` or `3P` bar, the inspector and the keyframe menu change the mode of one or several keyframes, and the "+" button adds a camera track directly.
+
 ### Fixed
 
 - The free camera no longer freezes in a replay while the recording held the player's input locked, such as with `/inputpermission` or a cutscene add-on, and no longer snaps back to positions the server corrected the recording player to. The recording player's input-permission and movement-correction packets are no longer recorded or applied to the replay viewer.
