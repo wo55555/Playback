@@ -318,6 +318,9 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::SetCameraLocked:
         mCommandStack.push(CommandFactory::createSetCameraLocked(action.id, action.value), mProject);
         break;
+    case EditorActionType::SetCameraShake:
+        mCommandStack.push(CommandFactory::createSetCameraShake(action.id, action.shake), mProject);
+        break;
     case EditorActionType::RenameCamera:
         mCommandStack.push(CommandFactory::createRenameCamera(action.id, action.name), mProject);
         break;

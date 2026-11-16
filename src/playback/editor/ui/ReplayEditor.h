@@ -56,16 +56,17 @@ public:
     bool               selectCameraByIndex(std::size_t index);
 
     [[nodiscard]] bool  isInfoOverlayVisible() const override { return mViewportPanel.isInfoOverlayVisible(); }
-    void                setInfoOverlayVisible(bool visible) override { mViewportPanel.setInfoOverlayVisible(visible); }
+    void                      setInfoOverlayVisible(bool visible) override;
     [[nodiscard]] bool  isAutoPreviewEnabled() const override { return mViewportPanel.isAutoPreviewEnabled(); }
-    void                setAutoPreviewEnabled(bool enabled) override { mViewportPanel.setAutoPreviewEnabled(enabled); }
+    void                      setAutoPreviewEnabled(bool enabled) override;
     [[nodiscard]] bool  isSnapEnabled() const override { return mTimelinePanel.isSnapEnabled(); }
-    void                setSnapEnabled(bool enabled) override { mTimelinePanel.setSnapEnabled(enabled); }
+    void                      setSnapEnabled(bool enabled) override;
     [[nodiscard]] float videoAspectRatio() const override { return mVideoAspectRatio; }
     void                setVideoAspectRatio(float ratio) override;
     void                openExportDialog() override;
     [[nodiscard]] int   exportStartTick() const override { return mMenuBar.exportStartTick(); }
     [[nodiscard]] int   exportEndTick() const override { return mMenuBar.exportEndTick(); }
+    [[nodiscard]] int         exportFps() const override { return mMenuBar.exportFps(); }
     void                setExportStartTick(int tick) override { mMenuBar.setExportStartTick(tick); }
     void                setExportEndTick(int tick) override { mMenuBar.setExportEndTick(tick); }
     [[nodiscard]] UiScaleTier uiScaleTier() const override { return mUiScaleTier; }
@@ -111,6 +112,7 @@ private:
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
 
     bool  mFollowExitTapArmed{false};
+    bool  mExitHoldBlocked{false};
     float mExitHoldSeconds{};
 
     float       mDetailsWidthRatio{0.28f};
@@ -129,7 +131,7 @@ private:
     void loadLayoutPreferences();
     void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
-    void updateExitHold();
+    void updateExitHold(bool escapeConsumedByUi);
 
     friend class EditMode;
     friend class RenderMode;

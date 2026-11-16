@@ -5,6 +5,7 @@
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
+#include "playback/utils/ShellUtils.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -372,7 +373,6 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
     auto const  saveShortcut   = input::KeyMap::displayString(input::EditorKeybind::SaveProject);
     if (ImGui::BeginMenuBar()) {
         if (widgets::beginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
-            ImGui::MenuItem("playback.refactorEditor.menu.openReplay"_tr().c_str(), nullptr, false, false);
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.saveProject"_tr().c_str(),
                     saveShortcut.c_str(),
@@ -399,7 +399,10 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                 openExportDialog(state.totalTicks, capabilities.ffmpegVideoExport);
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("playback.refactorEditor.menu.exit"_tr().c_str(), "Esc (hold)")) {
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.exit"_tr().c_str(),
+                    "playback.refactorEditor.menu.exitShortcut"_tr().c_str()
+                )) {
                 ctx.submitAction({playback::state::EditorActionType::StopReplay});
             }
             widgets::endMenu();
@@ -515,9 +518,6 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
 
         if (widgets::beginMenu("playback.refactorEditor.menu.help"_tr().c_str())) {
             if (ImGui::MenuItem("playback.refactorEditor.menu.shortcuts"_tr().c_str())) mShortcutDialogOpen = true;
-            ImGui::MenuItem("playback.refactorEditor.menu.documentation"_tr().c_str(), nullptr, false, false);
-            ImGui::Separator();
-            ImGui::MenuItem("playback.refactorEditor.menu.about"_tr().c_str(), nullptr, false, false);
             widgets::endMenu();
         }
 
@@ -838,8 +838,24 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::InputText("##export-name", mExportName.data(), mExportName.size());
 
                 propertyLabel("playback.refactorEditor.export.location"_tr().c_str());
-                ImGui::SetNextItemWidth(valueWidth);
+                ImGui::SetNextItemWidth(valueWidth - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
                 ImGui::InputText("##export-directory", mExportDirectory.data(), mExportDirectory.size());
+                ImGui::SameLine();
+                if (frameIconButton(
+                        "##export-browse",
+                        ICON_FOLDER_OPEN,
+                        "playback.refactorEditor.export.browseLocation"_tr().c_str()
+                    )) {
+                    if (auto const picked = playback::utils::pickFolder(utf8Path(mExportDirectory.data()))) {
+                        auto const text = picked->u8string();
+                        std::snprintf(
+                            mExportDirectory.data(),
+                            mExportDirectory.size(),
+                            "%s",
+                            reinterpret_cast<char const*>(text.c_str())
+                        );
+                    }
+                }
 
                 propertyLabel("playback.refactorEditor.export.format"_tr().c_str());
                 segmented(
@@ -1303,7 +1319,5 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         ImGui::EndPopup();
     }
 }
-
-bool EditorMenuBar::isAnyMenuOpen() const { return ImGui::IsAnyItemHovered(); }
 
 } // namespace playback::editor::ui

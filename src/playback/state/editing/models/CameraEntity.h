@@ -14,6 +14,8 @@ struct CameraShake {
     float positionAmplitude{};
     float rotationAmplitude{};
     float frequency{1.0f};
+
+    bool operator==(CameraShake const&) const = default;
 };
 struct CameraLimiter {
     Vec3 min{};
