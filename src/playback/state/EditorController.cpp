@@ -291,6 +291,17 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mProject
         );
         break;
+    case EditorActionType::SetKeyframeBezierControls:
+        mCommandStack.push(
+            CommandFactory::createSetCameraKeyframeBezierControls(
+                action.id,
+                action.tick,
+                action.bezierCtrl1,
+                action.bezierCtrl2
+            ),
+            mProject
+        );
+        break;
     case EditorActionType::SetKeyframePosition:
         mCommandStack.push(
             CommandFactory::createSetCameraKeyframePosition(action.id, action.tick, action.position),

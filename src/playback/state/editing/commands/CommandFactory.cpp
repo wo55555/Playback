@@ -55,6 +55,14 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetKeyframeInterpolat
 ) {
     return std::make_unique<SetKeyframeInterpolation>(id, tick, interpolation);
 }
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraKeyframeBezierControls(
+    const std::string& id,
+    int                tick,
+    model::Vec2        ctrl1,
+    model::Vec2        ctrl2
+) {
+    return std::make_unique<SetCameraKeyframeBezierControls>(id, tick, ctrl1, ctrl2);
+}
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetCameraKeyframePosition(const std::string& id, int tick, model::Vec3 position) {
     return std::make_unique<SetCameraKeyframePosition>(id, tick, position);

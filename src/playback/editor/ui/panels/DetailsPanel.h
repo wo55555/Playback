@@ -18,7 +18,7 @@ public:
     void                        setPage(InspectorPage page) { mPage = page; }
 
 private:
-    void drawRail(PanelContext const& ctx, float width, float height);
+    void drawRail(float width, float height);
     void drawSelectionPage(PanelContext const& ctx);
     void drawExportPage(PanelContext const& ctx);
     void drawPreviewPage(PanelContext const& ctx);
@@ -38,9 +38,14 @@ private:
     InspectorPage        mPage{InspectorPage::Selection};
     std::optional<float> mPistonDurationDraft;
     // The label field edits a local copy so typing is not overwritten by the project each frame.
-    std::string           mMarkerLabelId;
-    std::array<char, 128> mMarkerLabelBuffer{};
-    bool                  mMarkerLabelEditing{};
+    std::string                 mMarkerLabelId;
+    std::array<char, 128>       mMarkerLabelBuffer{};
+    bool                        mMarkerLabelEditing{};
+    std::string                 mBezierDragCameraId;
+    int                         mBezierDragTick{-1};
+    int                         mBezierDragHandle{};
+    state::editing::model::Vec2 mBezierDraftCtrl1{0.42f, 0.0f};
+    state::editing::model::Vec2 mBezierDraftCtrl2{0.58f, 1.0f};
 };
 
 } // namespace playback::editor::ui
