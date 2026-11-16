@@ -190,7 +190,11 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     char const* cameraIcon  = nullptr;
     if (activeCamera) {
         cameraLabel = activeCamera->name;
-        cameraIcon  = activeCamera->kind == state::editing::model::CameraTrackKind::Keyframe ? ICON_CAMERA : ICON_USER;
+        auto const activeMode =
+            state.cameraTimeline
+                ? state.cameraTimeline->shotAt(state.currentTick).mode
+                : state::editing::model::CameraKeyframeMode::Interpolated;
+        cameraIcon = activeMode == state::editing::model::CameraKeyframeMode::Interpolated ? ICON_CAMERA : ICON_USER;
     } else if (following) {
         auto const subject = playerSubjectLabel(state.replayPlayers, state.replaySubjectChoice);
         cameraLabel        = state.followThirdPerson ? "playback.refactorEditor.viewport.followSubjectThird"_tr(subject)
@@ -200,7 +204,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
         if (camera != project->cameras.end()) {
             cameraLabel = camera->name;
-            cameraIcon  = camera->kind == state::editing::model::CameraTrackKind::Keyframe ? ICON_CAMERA : ICON_USER;
+            cameraIcon  = ICON_CAMERA;
         }
     }
     if (widgets::dropdownChip(
@@ -225,18 +229,14 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         }
         if (project && !project->cameras.empty()) ImGui::Separator();
         if (project) {
-            // Person tracks have no pose of their own to preview, so picking one only selects it.
             for (auto const& camera : project->cameras) {
-                bool const        keyframeTrack = camera.kind == state::editing::model::CameraTrackKind::Keyframe;
-                bool const        current       = !following && selectedCamera && selectedCamera->cameraId == camera.id;
-                std::string const label         = camera.name + "##cam-" + camera.id;
+                bool const        current = !following && selectedCamera && selectedCamera->cameraId == camera.id;
+                std::string const label   = camera.name + "##cam-" + camera.id;
                 if (ImGui::MenuItem(label.c_str(), nullptr, current)) {
                     ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
-                    if (keyframeTrack) {
-                        EditorAction action{EditorActionType::SetPreviewCamera};
-                        action.id = camera.id;
-                        ctx.submitAction(std::move(action));
-                    }
+                    EditorAction action{EditorActionType::SetPreviewCamera};
+                    action.id = camera.id;
+                    ctx.submitAction(std::move(action));
                 }
             }
         }

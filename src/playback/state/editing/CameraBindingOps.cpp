@@ -31,11 +31,9 @@ model::SubActor* findSubActor(model::EditorStateExt& state, std::string const& i
 }
 
 // Counting cameras would reuse a name after a delete, so probe upwards until the name is free.
-std::string defaultCameraName(model::EditorStateExt const& state, model::CameraTrackKind kind) {
+std::string defaultCameraName(model::EditorStateExt const& state) {
     for (size_t next = state.cameras.size() + 1;; ++next) {
-        auto name = kind == model::CameraTrackKind::FirstPerson ? "playback.refactorEditor.defaults.firstPersonCamera"_tr(next)
-                  : kind == model::CameraTrackKind::ThirdPerson ? "playback.refactorEditor.defaults.thirdPersonCamera"_tr(next)
-                                                                : "playback.refactorEditor.defaults.camera"_tr(next);
+        auto name = "playback.refactorEditor.defaults.camera"_tr(next);
         if (std::none_of(state.cameras.begin(), state.cameras.end(), [&name](auto const& camera) {
                 return camera.name == name;
             })) {
@@ -46,11 +44,10 @@ std::string defaultCameraName(model::EditorStateExt const& state, model::CameraT
 } // namespace
 
 
-std::string addFreeCamera(model::EditorStateExt& state, std::string const& name, model::CameraTrackKind kind) {
+std::string addFreeCamera(model::EditorStateExt& state, std::string const& name) {
     model::CameraEntity camera;
     camera.id   = makeCameraId(state);
-    camera.kind = kind;
-    camera.name = name.empty() ? defaultCameraName(state, kind) : name;
+    camera.name = name.empty() ? defaultCameraName(state) : name;
     state.cameras.push_back(camera);
     return camera.id;
 }

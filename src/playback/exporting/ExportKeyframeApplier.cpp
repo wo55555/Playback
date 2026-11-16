@@ -21,11 +21,13 @@ void ExportKeyframeApplier::configure(
         Playback::getInstance().getSelf().getLogger().warn("Export camera timeline skipped: project has no cameras");
         return;
     }
-    size_t keyframeCount    = 0;
-    size_t personTrackCount = 0;
+    size_t keyframeCount       = 0;
+    size_t personKeyframeCount = 0;
     for (auto const& camera : project.cameras) {
         keyframeCount += camera.keysByTick.size();
-        if (camera.kind != state::editing::model::CameraTrackKind::Keyframe) ++personTrackCount;
+        for (auto const& [_, key] : camera.keysByTick) {
+            if (key.mode != state::editing::model::CameraKeyframeMode::Interpolated) ++personKeyframeCount;
+        }
     }
     auto& session                  = replay::ReplaySession::getInstance();
     auto  dimensionTransitionTicks = session.getDimensionTransitionTicks();
@@ -34,7 +36,7 @@ void ExportKeyframeApplier::configure(
         std::move(cameraFallback),
         true,
         std::move(dimensionTransitionTicks),
-        // Binds the track's subject, then samples it. The render hook refreshes the sleep weight for the frame it
+        // Binds the keyframe's subject, then samples it. The render hook refreshes the sleep weight for the frame it
         // actually draws.
         [&session](visuals::ReplaySampleTime const& time, std::string const& subject, bool thirdPerson)
             -> std::optional<keyframe::CameraRenderState> {
@@ -46,10 +48,10 @@ void ExportKeyframeApplier::configure(
     );
     keyframe::publishCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline);
     Playback::getInstance().getSelf().getLogger().debug(
-        "Export camera pose timeline ready (cameras={}, keyframes={}, personTracks={})",
+        "Export camera pose timeline ready (cameras={}, keyframes={}, personKeyframes={})",
         project.cameras.size(),
         keyframeCount,
-        personTrackCount
+        personKeyframeCount
     );
 }
 

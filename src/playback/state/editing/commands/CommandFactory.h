@@ -17,8 +17,7 @@ public:
     static std::unique_ptr<model::IEditCommand> createTrimWorldActor(const std::string& id, int start, int end);
 
     static std::unique_ptr<model::IEditCommand> createRippleDeleteWorldActorSegment(const std::string& id);
-    static std::unique_ptr<model::IEditCommand>
-    createAddFreeCamera(const std::string& name, model::CameraTrackKind kind);
+    static std::unique_ptr<model::IEditCommand> createAddFreeCamera(const std::string& name);
     static std::unique_ptr<model::IEditCommand> createDeleteCamera(const std::string& id);
     static std::unique_ptr<model::IEditCommand>
     createCreateBindingCamera(const std::string& id, const std::string& name);
@@ -40,6 +39,8 @@ public:
     static std::unique_ptr<model::IEditCommand> createSetCameraKeyframeFov(const std::string& id, int tick, float fov);
     static std::unique_ptr<model::IEditCommand>
     createSetCameraKeyframeSubject(const std::string& id, int tick, const std::string& subject);
+    static std::unique_ptr<model::IEditCommand>
+    createSetCameraKeyframeMode(const std::string& id, int tick, model::CameraKeyframeMode mode);
     static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
     static std::unique_ptr<model::IEditCommand> createSetCameraLocked(const std::string& id, bool locked);
     static std::unique_ptr<model::IEditCommand>
@@ -53,6 +54,8 @@ public:
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframes(std::vector<model::KeyframeRef> refs);
     static std::unique_ptr<model::IEditCommand>
     createSetKeyframesInterpolation(std::vector<model::KeyframeRef> refs, model::CameraInterpolationType interpolation);
+    static std::unique_ptr<model::IEditCommand>
+    createSetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode);
     static std::unique_ptr<model::IEditCommand> createAddCameraKeyframes(std::vector<model::KeyframeRef> refs);
 
     static std::unique_ptr<model::IEditCommand>
