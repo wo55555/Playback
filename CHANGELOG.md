@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Camera tracks can be reordered to change their priority. Drag a track in the timeline's track list, or use Move to top, Raise priority, Lower priority and Move to bottom in its right-click menu. Where tracks overlap, the track higher in the list plays, in preview and in export. Reordering can be undone and is saved with the project.
+- Camera tracks can be reordered to change their priority. Drag a track in the timeline's track list, or use Move to top, Raise priority, Lower priority and Move to bottom in its right-click menu. Where tracks overlap, the track higher in the list plays, in preview and in export. Reordering can be undone and is saved with the project. A new camera track is added at the top of the list, so it takes priority over the existing ones.
 
 ### Changed
 
