@@ -575,6 +575,29 @@ void SetKeyframesMode::execute(model::EditorStateExt& state) {
 void        SetKeyframesMode::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string SetKeyframesMode::label() const { return "Set Keyframes Mode"; }
 
+SetKeyframesSubject::SetKeyframesSubject(std::vector<model::KeyframeRef> refs, std::string subject)
+: mRefs(std::move(refs)),
+  mSubject(std::move(subject)) {}
+
+void SetKeyframesSubject::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked) continue;
+        auto const key = camera->keysByTick.find(ref.tick);
+        if (key == camera->keysByTick.end()) continue;
+        if (key->second.mode == model::CameraKeyframeMode::Interpolated || key->second.subject == mSubject) continue;
+        key->second.subject = mSubject;
+        changed             = true;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        SetKeyframesSubject::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframesSubject::label() const { return "Set Keyframes Subject"; }
+
 MoveCamera::MoveCamera(std::string cameraId, int targetIndex)
 : mCameraId(std::move(cameraId)),
   mTargetIndex(targetIndex) {}

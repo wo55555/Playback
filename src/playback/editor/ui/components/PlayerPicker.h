@@ -32,13 +32,15 @@ bool drawPlayerPicker(
 
 // The same search and list drawn inline at the available width, for the inspector. Returns true on a pick.
 // `focusSearch` puts the caret in the search box this frame (the segment menu jumping here).
+// `mixed` suppresses the active check mark and missing-subject row when multiple keys disagree.
 bool drawPlayerList(
-    char const*                             listId,
-    PlayerPickerMode                        mode,
+    char const*                              listId,
+    PlayerPickerMode                         mode,
     std::span<state::ReplayPlayerView const> players,
-    std::string_view                        current,
-    bool                                    focusSearch,
-    PlayerPickerResult&                     result
+    std::string_view                         current,
+    bool                                     focusSearch,
+    PlayerPickerResult&                      result,
+    bool                                     mixed = false
 );
 
 } // namespace playback::editor::ui

@@ -343,6 +343,20 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
+class SetKeyframesSubject final : public model::IEditCommand {
+public:
+    SetKeyframesSubject(std::vector<model::KeyframeRef> refs, std::string subject);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    std::string                          mSubject;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
 // Moves a camera to `targetIndex` in the camera list. The list order is the shot priority: a
 // camera earlier in the list wins when several have an active keyframe at the same tick.
 class MoveCamera final : public model::IEditCommand {
