@@ -680,8 +680,9 @@ public:
         std::string label;
         bool        player{};
         bool        recorder{};
-        float       x{}, y{}, z{};    // feet
-        float       height{};         // collision box height
+        float       x{}, y{}, z{}; // feet
+        float       height{};      // collision box height
+        float       distance{};    // distance to the observer
     };
 
     // Living mobs and players in the replay, observer excluded, nearest to the observer first, as of the last

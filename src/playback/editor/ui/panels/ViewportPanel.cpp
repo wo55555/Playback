@@ -245,7 +245,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
                 : state::editing::model::CameraKeyframeMode::Interpolated;
         cameraIcon = activeMode == state::editing::model::CameraKeyframeMode::Interpolated ? ICON_CAMERA : ICON_USER;
     } else if (following) {
-        auto const subject = playerSubjectLabel(state.replayPlayers, state.replaySubjectChoice);
+        auto const subject = playerSubjectLabel(state.replayPlayers, state.replayEntities, state.replaySubjectChoice);
         cameraLabel        = state.followThirdPerson ? "playback.refactorEditor.viewport.followSubjectThird"_tr(subject)
                                                      : "playback.refactorEditor.viewport.followSubject"_tr(subject);
     } else if (project && selectedCamera) {
@@ -301,22 +301,19 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         if (ImGui::MenuItem(
                 "playback.refactorEditor.viewport.firstPerson"_tr().c_str(),
                 nullptr,
-                following && !replay::ReplaySession::parseEntityChoice(state.replaySubjectChoice),
+                following,
                 state.replayVisible
             )) {
             ImGui::CloseCurrentPopup();
             openPlayerPicker = true;
         }
-        // Any living mob, nearest first. Players stay in the picker above.
-        auto const entities  = replay::ReplaySession::getInstance().replayEntities();
-        bool const hasEntity = std::ranges::any_of(entities, [](auto const& entity) { return !entity.player; });
+        // Quick access to the nearest living mobs; players and full search live in the picker above.
         if (ImGui::BeginMenu(
                 "playback.refactorEditor.viewport.nearbyEntities"_tr().c_str(),
-                state.replayVisible && hasEntity
+                state.replayVisible && !state.replayEntities.empty()
             )) {
             size_t shown = 0;
-            for (auto const& entity : entities) {
-                if (entity.player) continue;
+            for (auto const& entity : state.replayEntities) {
                 if (shown++ >= kNearbyEntityLimit) break;
                 bool const        selected = following && state.replaySubjectChoice == entity.choice;
                 std::string const label    = entity.label + "##" + entity.choice;
@@ -337,6 +334,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             "##viewport-player-picker",
             PlayerPickerMode::Follow,
             state.replayPlayers,
+            state.replayEntities,
             state.replaySubjectChoice,
             following,
             playerPick
