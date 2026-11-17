@@ -457,6 +457,8 @@
                 "followSubject": "第一人称：{}",
                 "nearbyEntities": "附近的实体",
                 "followEntity": "第一人称：{}",
+                "setKeyframeSubject": "设为关键帧主体：{}",
+                "setKeyframesSubject": "设为 {} 个关键帧的主体：{}",
                 "noEntityHere": "这里没有实体",
                 "followSubjectThird": "第三人称：{}",
                 "cameraTooltip": "预览相机",

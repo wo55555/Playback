@@ -383,6 +383,12 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mProject
         );
         break;
+    case EditorActionType::SetKeyframesSubject:
+        mCommandStack.push(
+            CommandFactory::createSetKeyframesSubject(action.keyframeRefs, action.secondaryId),
+            mProject
+        );
+        break;
     case EditorActionType::AddCameraKeyframes:
         mCommandStack.push(CommandFactory::createAddCameraKeyframes(action.keyframeRefs), mProject);
         break;
