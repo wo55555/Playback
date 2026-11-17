@@ -150,10 +150,8 @@ void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward)
         }
     };
 
-    for (auto const& segment : project->worldActor.segments) {
-        consider(segment.startTick);
-        consider(segment.endTick);
-    }
+    consider(0);
+    consider(state.totalTicks);
     for (auto const& camera : project->cameras) {
         for (auto const& [tick, _] : camera.keysByTick) consider(tick);
     }
