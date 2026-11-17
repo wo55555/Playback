@@ -58,6 +58,8 @@ enum class EditorActionType {
     SetCameraLocked,
     SetCameraShake,
     RenameCamera,
+    // id is the camera, kind its new index in the camera list (the list order is the shot priority).
+    MoveCamera,
     ClearCameraKeyframes,
     DeleteCamera,
     UnbindCamera,

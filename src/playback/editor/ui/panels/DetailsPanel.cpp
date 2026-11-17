@@ -69,6 +69,21 @@ std::string interpolationName(state::editing::model::CameraInterpolationType int
     }
 }
 
+float keyframeLabelWidth() {
+    float width = 72.0f;
+    for (auto const& label : {
+             "playback.refactorEditor.details.tick"_tr(),
+             "playback.refactorEditor.details.lensMode"_tr(),
+             "playback.refactorEditor.details.position"_tr(),
+             "playback.refactorEditor.details.rotation"_tr(),
+             "playback.refactorEditor.details.fov"_tr(),
+             "playback.refactorEditor.details.interpolation"_tr(),
+         }) {
+        width = std::max(width, ImGui::CalcTextSize(label.c_str()).x + 8.0f);
+    }
+    return width;
+}
+
 std::string categoryName(state::editing::model::SubActorCategory category) {
     using Category = state::editing::model::SubActorCategory;
     switch (category) {
@@ -749,7 +764,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                 key->second.mode != state::editing::model::CameraKeyframeMode::Interpolated;
             int const       originalTick = key->first;
             int             tick         = originalTick;
-            constexpr float labelWidth   = 72.0f;
+            float const     labelWidth   = keyframeLabelWidth();
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {4.0f, 5.0f});
             if (ImGui::BeginTable(
                     "##keyframe-properties",
