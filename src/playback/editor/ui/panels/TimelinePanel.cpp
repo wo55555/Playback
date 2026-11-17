@@ -115,6 +115,8 @@ void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScal
     mDraggingKeyframeCameraId.clear();
     mDraggingKeyframeStartTick = -1;
     mDraggingKeyframeMoved     = false;
+    mTrackDragCameraId.clear();
+    mTrackDragCancelled        = false;
     mRangeDragMode             = 0;
 }
 
@@ -486,7 +488,12 @@ void TimelinePanel::resetZoom() {
     mScrollX   = 0.0f;
 }
 
-void TimelinePanel::drawTitleLabel(PanelContext const& ctx, float height) {
+float TimelinePanel::titleLabelRight(PanelContext const&) const {
+    std::string const title = "playback.refactorEditor.timeline.title"_tr();
+    return metrics::gutter() + ImGui::CalcTextSize(title.c_str()).x;
+}
+
+void TimelinePanel::drawTitleLabel(PanelContext const& ctx, float height, float transportLeft) {
     auto const        project = ctx.state.project;
     std::string const title   = "playback.refactorEditor.timeline.title"_tr();
     float const       rowY    = std::max(0.0f, widgets::textOffsetInBox(height, title.c_str()));
@@ -494,11 +501,15 @@ void TimelinePanel::drawTitleLabel(PanelContext const& ctx, float height) {
     ImGui::SetCursorPos({metrics::gutter(), rowY});
     ImGui::TextDisabled("%s", title.c_str());
     if (!project) return;
+    std::string const count = "playback.refactorEditor.timeline.trackCount"_tr(project->cameras.size());
+    // The transport group is centered, so the count only shows when it fits in front of it.
+    float const countRight = titleLabelRight(ctx) + metrics::gutter() + ImGui::CalcTextSize(count.c_str()).x;
+    if (countRight + metrics::gutter() > transportLeft) return;
     ImGui::SameLine(0.0f, metrics::gutter());
-    ImGui::TextDisabled("%s", "playback.refactorEditor.timeline.trackCount"_tr(project->cameras.size()).c_str());
+    ImGui::TextDisabled("%s", count.c_str());
 }
 
-void TimelinePanel::drawTransportGroup(PanelContext const& ctx, int displayTick, float width) {
+float TimelinePanel::drawTransportGroup(PanelContext const& ctx, int displayTick, float width, float minStartX) {
     auto const&       state    = ctx.state;
     float const       unit     = metrics::iconButton();
     float const       rowY     = std::max(0.0f, (metrics::toolbarRow() - unit) * 0.5f);
@@ -510,7 +521,7 @@ void TimelinePanel::drawTransportGroup(PanelContext const& ctx, int displayTick,
     float const speedWidth = widgets::dropdownChipWidth(speedLabel);
     float const groupWidth = timeWidth + metrics::gutter() * 2.0f + unit * 5.0f + 4.0f + metrics::gutter() * 2.0f
                            + speedWidth + metrics::gutter() * 2.0f + unit;
-    float const startX = std::max(0.0f, (width - groupWidth) * 0.5f);
+    float const startX = std::max(minStartX, (width - groupWidth) * 0.5f);
 
     // SameLine() restores Y to the line's first item, so the timecode is drawn rather than submitted.
     ImGui::SetCursorPos({startX, rowY});
@@ -592,6 +603,7 @@ void TimelinePanel::drawTransportGroup(PanelContext const& ctx, int displayTick,
         )) {
         ctx.commands.toggleViewportMaximized();
     }
+    return startX;
 }
 
 void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick) {
@@ -604,8 +616,9 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
     ImGui::SetCursorScreenPos(layout.fullMin);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::BeginChild("##TimelineTitle", {width, height}, false, ImGuiWindowFlags_NoScrollbar);
-    drawTitleLabel(ctx, height);
-    drawTransportGroup(ctx, displayTick, width);
+    float const transportLeft =
+        drawTransportGroup(ctx, displayTick, width, titleLabelRight(ctx) + metrics::gutter() * 2.0f);
+    drawTitleLabel(ctx, height, transportLeft);
 
     // Zooming lives on the range bar handles now; only the reset-to-fit affordance stays here.
     float const unit = metrics::iconButton();
@@ -673,9 +686,13 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         ImGuiWindowFlags_NoScrollbar
     );
     drawList->PushClipRect({listLeft, layout.bodyTop}, {listLeft + listW, layout.bodyBottom}, true);
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) mTrackDragCancelled = false;
 
     auto const* selectedCamera   = ctx.selection.getAs<state::editing::model::SelectedCamera>();
     auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
+    bool        openTrackMenu    = false;
+    ImVec2      trackMenuMin{};
+    ImVec2      trackMenuMax{};
     float       rowY             = layout.bodyTop - mScrollY;
     for (auto const& row : mTrackTree.rows()) {
         float const rowBottom = rowY + row.height;
@@ -692,6 +709,8 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         bool const  hovered        = ImGui::IsItemHovered();
         bool const  clicked        = allowInput && ImGui::IsItemClicked(ImGuiMouseButton_Left);
         bool const  rowRightClicked = allowInput && ImGui::IsItemClicked(ImGuiMouseButton_Right);
+        bool const  rowActive       = ImGui::IsItemActive();
+        bool const  rowStationary   = hovered && ImGui::IsItemHovered(ImGuiHoveredFlags_Stationary);
         float const selectedAmount = mAnimator.animate("row-selected", row.id, selected ? 1.0f : 0.0f);
         float const hoverAmount    = mAnimator.animate("row-hover", row.id, hovered ? 1.0f : 0.0f);
         float const highlight      = std::max(selectedAmount, hoverAmount);
@@ -768,6 +787,16 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                     theme::kTextDim
                 );
             }
+            // Reordering changes which camera wins a tick, so it is only offered on the unfiltered list.
+            if (allowInput && !mTrackDragCancelled && rowActive && mTrackDragCameraId.empty() && mTrackSearch.empty()
+                && mTrackTree.rows().size() > 1
+                && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f * metrics::scale())
+                && ImGui::GetIO().MouseClickedPos[ImGuiMouseButton_Left].x < eyeX) {
+                mTrackDragCameraId = row.cameraId;
+            }
+            if (rowStationary && !eyeHovered && mTrackDragCameraId.empty() && mTrackTree.rows().size() > 1) {
+                widgets::hoverTooltip("playback.refactorEditor.timeline.priorityHint"_tr().c_str());
+            }
             if (clicked && mouse.x < eyeX) {
                 ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
                 if (ctx.commands.isAutoPreviewEnabled()) {
@@ -775,17 +804,74 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                     action.id = row.cameraId;
                     ctx.submitAction(std::move(action));
                 }
-            } else if (rowRightClicked && mouse.x < eyeX) {
+            } else if (rowRightClicked && mouse.x < eyeX && mTrackDragCameraId.empty()) {
                 ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
                 mTrackMenuCameraId = row.cameraId;
-                widgets::openAnchoredPopup("##timeline-track-menu");
+                trackMenuMin       = ImGui::GetItemRectMin();
+                trackMenuMax       = ImGui::GetItemRectMax();
+                openTrackMenu      = true;
             }
         }
         rowY = rowBottom;
     }
+    if (!mTrackDragCameraId.empty()) {
+        // The slot is the boundary before row `slot`; the camera lands where that boundary is.
+        auto const& rows     = mTrackTree.rows();
+        float const mouseY   = ImGui::GetMousePos().y;
+        float       boundary = layout.bodyTop - mScrollY;
+        float       lineY    = boundary;
+        int         slot     = 0;
+        for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
+            if (mouseY > boundary + rows[index].height * 0.5f) {
+                slot  = index + 1;
+                lineY = boundary + rows[index].height;
+            }
+            boundary += rows[index].height;
+        }
+        float rowTop = layout.bodyTop - mScrollY;
+        for (auto const& row : rows) {
+            if (row.cameraId == mTrackDragCameraId) {
+                drawList->AddRectFilled(
+                    {listLeft, rowTop},
+                    {listLeft + listW, rowTop + row.height},
+                    theme::withAlpha(theme::kAccent, 0x33)
+                );
+            }
+            rowTop += row.height;
+        }
+        drawList->AddLine(
+            {listLeft + metrics::trackSwatch(), lineY},
+            {listLeft + listW, lineY},
+            theme::kAccent,
+            3.0f * metrics::scale()
+        );
+        if (!allowInput || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            mTrackDragCameraId.clear();
+            mTrackDragCancelled = true;
+        } else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (project) {
+                auto const found =
+                    std::ranges::find(project->cameras, mTrackDragCameraId, &state::editing::model::CameraEntity::id);
+                if (found != project->cameras.end()) {
+                    int const from = static_cast<int>(found - project->cameras.begin());
+                    int const to   = slot <= from ? slot : slot - 1;
+                    if (to != from) {
+                        EditorAction action{EditorActionType::MoveCamera};
+                        action.id   = mTrackDragCameraId;
+                        action.kind = to;
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+            }
+            mTrackDragCameraId.clear();
+        }
+    }
     drawList->PopClipRect();
     ImGui::EndChild();
     ImGui::PopStyleVar();
+    if (openTrackMenu) {
+        widgets::openAnchoredPopup("##timeline-track-menu", trackMenuMin, trackMenuMax);
+    }
 
     drawList->AddLine({listLeft + listW, layout.rulerTop}, {listLeft + listW, layout.fullMax.y}, theme::kLine);
 }
@@ -1198,6 +1284,43 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     action.id = camera->id;
                     ctx.submitAction(std::move(action));
                 }
+                ImGui::Separator();
+                int const  cameraIndex = static_cast<int>(camera - project->cameras.data());
+                int const  lastIndex   = static_cast<int>(project->cameras.size()) - 1;
+                auto const moveTo      = [&](int target) {
+                    EditorAction action{EditorActionType::MoveCamera};
+                    action.id   = camera->id;
+                    action.kind = target;
+                    ctx.submitAction(std::move(action));
+                };
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.moveTrackTop"_tr().c_str(),
+                        nullptr,
+                        false,
+                        cameraIndex > 0
+                    ))
+                    moveTo(0);
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.moveTrackUp"_tr().c_str(),
+                        nullptr,
+                        false,
+                        cameraIndex > 0
+                    ))
+                    moveTo(cameraIndex - 1);
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.moveTrackDown"_tr().c_str(),
+                        nullptr,
+                        false,
+                        cameraIndex < lastIndex
+                    ))
+                    moveTo(cameraIndex + 1);
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.moveTrackBottom"_tr().c_str(),
+                        nullptr,
+                        false,
+                        cameraIndex < lastIndex
+                    ))
+                    moveTo(lastIndex);
                 ImGui::Separator();
                 if (ImGui::MenuItem(
                         "playback.refactorEditor.timeline.clearKeyframes"_tr(camera->keysByTick.size()).c_str(),
