@@ -2,7 +2,6 @@
 
 #include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/IEditCommand.h"
-#include "playback/state/editing/models/SubActor.h"
 
 #include <memory>
 #include <optional>
@@ -13,15 +12,8 @@ namespace playback::state::editing::command {
 
 class CommandFactory {
 public:
-    static std::unique_ptr<model::IEditCommand> createSplitWorldActor(int tick);
-    static std::unique_ptr<model::IEditCommand> createTrimWorldActor(const std::string& id, int start, int end);
-
-    static std::unique_ptr<model::IEditCommand> createRippleDeleteWorldActorSegment(const std::string& id);
     static std::unique_ptr<model::IEditCommand> createAddFreeCamera(const std::string& name);
     static std::unique_ptr<model::IEditCommand> createDeleteCamera(const std::string& id);
-    static std::unique_ptr<model::IEditCommand>
-    createCreateBindingCamera(const std::string& id, const std::string& name);
-    static std::unique_ptr<model::IEditCommand> createUnbindCamera(const std::string& id);
     static std::unique_ptr<model::IEditCommand> createAddCameraKeyframe(const std::string& id, int tick);
     static std::unique_ptr<model::IEditCommand>
     createAddCameraKeyframe(const std::string& id, int tick, std::optional<model::CameraKeyframe> captured);
@@ -48,8 +40,6 @@ public:
     static std::unique_ptr<model::IEditCommand> createRenameCamera(const std::string& id, const std::string& name);
     static std::unique_ptr<model::IEditCommand> createClearCameraKeyframes(const std::string& id);
     static std::unique_ptr<model::IEditCommand> createMoveCamera(const std::string& id, int targetIndex);
-    static std::unique_ptr<model::IEditCommand>
-    createSetSubActorDetails(const std::string& id, model::AgentDetails details);
 
     static std::unique_ptr<model::IEditCommand> createMoveCameraKeyframes(std::vector<model::KeyframeRef> refs, int delta);
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframes(std::vector<model::KeyframeRef> refs);
