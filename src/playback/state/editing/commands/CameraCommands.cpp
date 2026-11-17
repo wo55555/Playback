@@ -52,36 +52,6 @@ void DeleteCamera::execute(model::EditorStateExt& state) {
 void        DeleteCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string DeleteCamera::label() const { return "Delete Camera"; }
 
-CreateBindingCamera::CreateBindingCamera(std::string subActorId, std::string name)
-: mSubActorId(std::move(subActorId)),
-  mName(std::move(name)) {}
-
-void CreateBindingCamera::execute(model::EditorStateExt& state) {
-    auto before = state;
-    if (CameraBindingOps::createBindingCamera(state, mSubActorId, mName).empty()) {
-        mBefore.reset();
-        return;
-    }
-    mBefore = std::move(before);
-}
-
-void        CreateBindingCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string CreateBindingCamera::label() const { return "Create Binding Camera"; }
-
-UnbindCamera::UnbindCamera(std::string id) : mId(std::move(id)) {}
-
-void UnbindCamera::execute(model::EditorStateExt& state) {
-    auto before = state;
-    if (!CameraBindingOps::unbindCamera(state, mId)) {
-        mBefore.reset();
-        return;
-    }
-    mBefore = std::move(before);
-}
-
-void        UnbindCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string UnbindCamera::label() const { return "Unbind Camera"; }
-
 AddKeyframe::AddKeyframe(std::string cameraId, int tick) : mCameraId(std::move(cameraId)), mTick(tick) {}
 
 AddKeyframe::AddKeyframe(std::string cameraId, int tick, std::optional<model::CameraKeyframe> captured)

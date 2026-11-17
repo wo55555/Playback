@@ -93,33 +93,6 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class CreateBindingCamera final : public model::IEditCommand {
-public:
-    CreateBindingCamera(std::string subActorId, std::string name);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mSubActorId;
-    std::string                          mName;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
-class UnbindCamera final : public model::IEditCommand {
-public:
-    explicit UnbindCamera(std::string id);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mId;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
 class AddKeyframe final : public model::IEditCommand {
 public:
     AddKeyframe(std::string cameraId, int tick);
