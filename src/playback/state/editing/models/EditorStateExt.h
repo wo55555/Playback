@@ -2,7 +2,6 @@
 
 #include "CameraEntity.h"
 #include "Track.h"
-#include "WorldActor.h"
 
 #include <string>
 #include <vector>
@@ -18,7 +17,6 @@ struct EditorStateExt {
     bool  playing{};
     float playbackSpeed{1.0f};
 
-    WorldActor                worldActor;
     std::vector<CameraEntity> cameras;
 
     std::vector<Track> videoTracks;
