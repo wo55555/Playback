@@ -1469,7 +1469,8 @@ std::optional<ActorUniqueID> ReplaySession::resolveReplaySubjectId(std::string c
 void ReplaySession::refreshReplayEntityList() {
     std::vector<ReplayEntityInfo> entities;
     if (mReplayPlayer) {
-        auto& level = mReplayPlayer->getLevel();
+        auto&                                    level    = mReplayPlayer->getLevel();
+        auto const                               observer = mReplayPlayer->getPosition();
         std::unordered_map<int64_t, std::string> playerUuids;
         {
             std::lock_guard lock(mReplayPlayersMutex);
@@ -1495,25 +1496,22 @@ void ReplaySession::refreshReplayEntityList() {
             }
             info.label = plainNameTag(actor->getNameTag());
             if (info.label.empty()) info.label = entityTypeLabel(*actor);
-            auto const position = actor->getPosition();
-            auto const& box     = actor->getAABB();
-            info.x              = position.x;
-            info.y              = player ? box.min.y : position.y;
-            info.z              = position.z;
-            info.height         = box.max.y - box.min.y;
+            auto const  position = actor->getPosition();
+            auto const& box      = actor->getAABB();
+            info.x               = position.x;
+            info.y               = player ? box.min.y : position.y;
+            info.z               = position.z;
+            info.height          = box.max.y - box.min.y;
             if (!std::isfinite(info.x) || !std::isfinite(info.y) || !std::isfinite(info.z)) continue;
             if (!std::isfinite(info.height) || info.height <= 0.0f) info.height = 1.0f;
+            float const dx = info.x - observer.x;
+            float const dy = info.y - observer.y;
+            float const dz = info.z - observer.z;
+            info.distance  = std::sqrt(dx * dx + dy * dy + dz * dz);
             entities.push_back(std::move(info));
         }
-        auto const observer   = mReplayPlayer->getPosition();
-        auto const distanceSq = [&observer](ReplayEntityInfo const& entity) {
-            float const dx = entity.x - observer.x;
-            float const dy = entity.y - observer.y;
-            float const dz = entity.z - observer.z;
-            return dx * dx + dy * dy + dz * dz;
-        };
-        std::sort(entities.begin(), entities.end(), [&](ReplayEntityInfo const& a, ReplayEntityInfo const& b) {
-            return distanceSq(a) < distanceSq(b);
+        std::sort(entities.begin(), entities.end(), [](ReplayEntityInfo const& a, ReplayEntityInfo const& b) {
+            return a.distance < b.distance;
         });
     }
     std::lock_guard lock(mReplayEntitiesMutex);
