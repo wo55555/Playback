@@ -1,6 +1,8 @@
 ﻿#include "ReplayEntityInterpolator.h"
 
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
+#include "mc/deps/vanilla_components/AABBShapeComponent.h"
+#include "mc/deps/vanilla_components/OffsetsComponent.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
@@ -283,6 +285,8 @@ struct ScopedReplayEntityPose::State {
         Vec3                           statePosition{};
         Vec3                           statePositionPrevious{};
         Vec3                           statePositionDelta{};
+        AABBShapeComponent*            aabbShape{};
+        AABB                           aabbValue{};
         RenderPositionComponent*       renderPosition{};
         Vec3                           renderPositionValue{};
         Vec3                           exportPosition{};
@@ -327,6 +331,7 @@ struct ScopedReplayEntityPose::State {
             state->stateVector->mPos      = state->statePosition;
             state->stateVector->mPosPrev  = state->statePositionPrevious;
             state->stateVector->mPosDelta = state->statePositionDelta;
+            if (state->aabbShape) state->aabbShape->mAABB = state->aabbValue;
             state->renderPosition->mValue = state->renderPositionValue;
             if (state->movementInterpolator) {
                 *state->movementInterpolator->mPos          = state->movementPosition;
@@ -448,6 +453,7 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             auto* renderRotation       = context.tryGetComponent<RenderRotationComponent>().as_ptr();
             auto* movementInterpolator = context.tryGetComponent<MovementInterpolatorComponent>().as_ptr();
             auto* stateVector          = target.actor->mBuiltInComponents->mStateVectorComponent.get();
+            auto* aabbShape            = target.actor->mBuiltInComponents->mAABBShapeComponent.get();
             auto* actorRotation        = target.actor->mBuiltInComponents->mActorRotationComponent.get();
             auto* headRotation         = context.tryGetComponent<ActorHeadRotationComponent>().as_ptr();
             auto* bodyRotation         = context.tryGetComponent<MobBodyRotationComponent>().as_ptr();
@@ -464,6 +470,8 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                     stateVector->mPos.get(),
                     stateVector->mPosPrev.get(),
                     stateVector->mPosDelta.get(),
+                    aabbShape,
+                    aabbShape ? aabbShape->mAABB.get() : AABB{},
                     renderPosition,
                     renderPosition->mValue.get(),
                     Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
@@ -505,6 +513,13 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                 applied.movementInterpolator->mRotationSteps = 0;
                 applied.movementInterpolator->mHeadYawSteps  = 0;
             }
+            // Replay positions are written straight into the state, so the bounding box the game moves along with
+            // them stays wherever the entity was spawned or last teleported. The fire overlay, culling and the
+            // viewport's entity picking read it, so it follows the drawn pose and restores when the scope ends.
+            if (applied.aabbShape) {
+                Vec3 const position = positioned ? applied.exportPosition : Vec3{stateVector->mPos};
+                syncReplayEntityBoundingBox(*target.actor, position);
+            }
             if (applied.renderRotation) {
                 applied.renderRotation->mRot = Vec2{sampled.pitch, sampled.yaw};
             }
@@ -529,6 +544,27 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
     } catch (...) {
         return {};
     }
+}
+
+void syncReplayEntityBoundingBox(Actor& actor, Vec3 const& position) {
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)) {
+        return;
+    }
+    auto* shape = actor.mBuiltInComponents->mAABBShapeComponent.get();
+    if (!shape) return;
+    auto const* offsets = actor.getEntityContext().tryGetComponent<OffsetsComponent>().as_ptr();
+    Vec2 const  size    = shape->mBBDim;
+    if (!std::isfinite(size.x) || !std::isfinite(size.y)) return;
+    float const width  = std::max(0.0f, static_cast<float>(size.x));
+    float const height = std::max(0.0f, static_cast<float>(size.y));
+    // Players stand eye height above their box; most entities stand on it.
+    float const rawLift = offsets ? static_cast<float>(offsets->mHeightOffset) : 0.0f;
+    float const lift    = std::isfinite(rawLift) ? rawLift : 0.0f;
+    float const half    = width * 0.5f;
+    shape->mAABB        = AABB{
+        Vec3{position.x - half, position.y - lift,          position.z - half},
+        Vec3{position.x + half, position.y - lift + height, position.z + half}
+    };
 }
 
 void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, EntityRenderPose current) {

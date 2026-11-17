@@ -9,6 +9,7 @@
 
 class Actor;
 class StrictEntityContext;
+class Vec3;
 struct RenderPositionComponent;
 
 namespace playback::visuals {
@@ -43,6 +44,9 @@ class ScopedReplayEntityPose;
 
 [[nodiscard]] std::unique_ptr<ScopedReplayEntityPose>
 createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, ReplaySampleTime const& sample);
+
+// Rebuilds an entity's bounding box around position from its current dimensions and height offset.
+void syncReplayEntityBoundingBox(Actor& actor, Vec3 const& position);
 
 void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, EntityRenderPose current);
 
