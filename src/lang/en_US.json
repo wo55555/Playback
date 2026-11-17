@@ -457,6 +457,8 @@
                 "followSubject": "First person: {}",
                 "nearbyEntities": "Nearby entities",
                 "followEntity": "First person: {}",
+                "setKeyframeSubject": "Set keyframe subject: {}",
+                "setKeyframesSubject": "Set subject for {} keyframes: {}",
                 "noEntityHere": "No entity here",
                 "followSubjectThird": "Third person: {}",
                 "cameraTooltip": "Preview camera",
