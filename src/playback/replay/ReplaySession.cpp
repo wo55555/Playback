@@ -317,6 +317,7 @@ void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 
     actor.mBuiltInComponents->mStateVectorComponent->mPosDelta  = Vec3{};
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    visuals::syncReplayEntityBoundingBox(actor, position);
 
     auto& context = actor.getEntityContext();
     context.removeComponent<MovementWasCorrectedComponent>();
@@ -510,6 +511,7 @@ void applyReplayEntityMovement(
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    visuals::syncReplayEntityBoundingBox(actor, position);
 
     auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
     if (!interpolator) return;
