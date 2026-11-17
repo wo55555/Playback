@@ -277,6 +277,7 @@ struct ListOptions {
     // Resets the highlight to the current subject and puts the caret in the search box.
     bool             appearing{};
     bool             focusSearch{};
+    bool             mixed{};
     int              maxRows{kPopupRows};
 };
 
@@ -366,7 +367,7 @@ void drawListBody(
         recorderUuid = player.uuid;
         break;
     }
-    if (appearing) {
+    if (appearing && !options.mixed) {
         int seen = -1;
         for (auto const& row : rows) {
             if (!row.selectable) continue;
@@ -382,7 +383,7 @@ void drawListBody(
     if (edit.move != 0) moveHighlight(rows, ui.highlight, edit.move);
     int const highlightedRow = selectableIndex(rows, ui.highlight);
 
-    bool currentMissing = !current.empty() && current != recorderUuid;
+    bool currentMissing = !options.mixed && !current.empty() && current != recorderUuid;
     if (currentMissing) {
         for (auto const& player : players) {
             if (player.uuid == current) currentMissing = false;
@@ -405,7 +406,7 @@ void drawListBody(
         bool const hovered = ImGui::IsItemHovered();
         ImGui::PopID();
         bool const selected = !pinned && index == highlightedRow;
-        bool const active   = !pinned && rowIsCurrent(row, current, recorderUuid);
+        bool const active   = !pinned && !options.mixed && rowIsCurrent(row, current, recorderUuid);
         if (selected || (hovered && row.selectable)) {
             listDraw->AddRectFilled(minimum, maximum, theme::kRowHighlight);
         }
@@ -534,7 +535,8 @@ bool drawPlayerList(
     std::span<state::ReplayPlayerView const> players,
     std::string_view                         current,
     bool                                     focusSearch,
-    PlayerPickerResult&                      result
+    PlayerPickerResult&                      result,
+    bool                                     mixed
 ) {
     result                 = {};
     ImGuiID const id       = ImGui::GetID(listId);
@@ -544,6 +546,7 @@ bool drawPlayerList(
     options.mode        = mode;
     options.appearing   = inserted || focusSearch;
     options.focusSearch = focusSearch;
+    options.mixed       = mixed;
     options.maxRows     = kEmbeddedRows;
     drawListBody(entry->second, players, current, options, result);
     ImGui::PopID();

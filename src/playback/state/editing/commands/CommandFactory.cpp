@@ -123,6 +123,10 @@ std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode) {
     return std::make_unique<SetKeyframesMode>(std::move(refs), mode);
 }
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetKeyframesSubject(std::vector<model::KeyframeRef> refs, const std::string& subject) {
+    return std::make_unique<SetKeyframesSubject>(std::move(refs), subject);
+}
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddCameraKeyframes(std::vector<model::KeyframeRef> refs) {
     return std::make_unique<AddKeyframes>(std::move(refs));
 }
