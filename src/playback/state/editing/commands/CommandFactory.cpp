@@ -2,33 +2,14 @@
 
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
-#include "playback/state/editing/commands/SubActorCommands.h"
-#include "playback/state/editing/commands/WorldActorCommands.h"
 
 namespace playback::state::editing::command {
 
-std::unique_ptr<model::IEditCommand> CommandFactory::createSplitWorldActor(int tick) {
-    return std::make_unique<SplitWorldActorAtPlayhead>(tick);
-}
-std::unique_ptr<model::IEditCommand> CommandFactory::createTrimWorldActor(const std::string& id, int start, int end) {
-    return std::make_unique<TrimWorldActorSegment>(id, start, end);
-}
-
-std::unique_ptr<model::IEditCommand> CommandFactory::createRippleDeleteWorldActorSegment(const std::string& id) {
-    return std::make_unique<RippleDeleteWorldActorSeg>(id);
-}
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddFreeCamera(const std::string& name) {
     return std::make_unique<AddFreeCamera>(name);
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteCamera(const std::string& id) {
     return std::make_unique<DeleteCamera>(id);
-}
-std::unique_ptr<model::IEditCommand>
-CommandFactory::createCreateBindingCamera(const std::string& id, const std::string& name) {
-    return std::make_unique<CreateBindingCamera>(id, name);
-}
-std::unique_ptr<model::IEditCommand> CommandFactory::createUnbindCamera(const std::string& id) {
-    return std::make_unique<UnbindCamera>(id);
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddCameraKeyframe(const std::string& id, int tick) {
     return std::make_unique<AddKeyframe>(id, tick);
@@ -101,10 +82,6 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createClearCameraKeyframes(
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createMoveCamera(const std::string& id, int targetIndex) {
     return std::make_unique<MoveCamera>(id, targetIndex);
-}
-std::unique_ptr<model::IEditCommand>
-CommandFactory::createSetSubActorDetails(const std::string& id, model::AgentDetails details) {
-    return std::make_unique<SetSubActorDetails>(id, std::move(details));
 }
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createMoveCameraKeyframes(std::vector<model::KeyframeRef> refs, int delta) {

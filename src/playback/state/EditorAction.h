@@ -6,7 +6,6 @@
 #include "playback/state/editing/models/MathTypes.h"
 
 #include <filesystem>
-#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -40,9 +39,6 @@ enum class EditorActionType {
     UndoEditorEdit,
     RedoEditorEdit,
     AddFreeCamera,
-    SplitWorldActor,
-    TrimWorldActor,
-    RippleDeleteWorldActorSegment,
     AddCameraKeyframe,
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
@@ -62,9 +58,6 @@ enum class EditorActionType {
     MoveCamera,
     ClearCameraKeyframes,
     DeleteCamera,
-    UnbindCamera,
-    CreateBindingCamera,
-    SetSubActorDetails,
     SetPreviewCamera,
     ClearPreviewCamera,
     MoveViewToKeyframe,
@@ -100,7 +93,6 @@ struct EditorAction {
     // Set only when pasting a copied keyframe. An empty value captures the live camera, as before.
     std::optional<editing::model::CameraKeyframe> keyframe;
     std::optional<editing::model::CameraShake>    shake;
-    std::map<std::string, std::string>            details;
     // Batch keyframe edits (multi-select move / delete / interpolation / paste).
     std::vector<editing::model::KeyframeRef> keyframeRefs;
 };
