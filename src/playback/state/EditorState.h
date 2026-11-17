@@ -31,6 +31,12 @@ struct ReplayPlayerView {
     bool        present{};
 };
 
+struct ReplayEntityView {
+    std::string choice;
+    std::string label;
+    float       distance{};
+};
+
 struct EditorState {
     bool                                                         replayVisible{};
     bool                                                         editorVisible{};
@@ -42,6 +48,7 @@ struct EditorState {
     // The camera track under the playhead, if any.
     std::string                                                  activeCameraId;
     std::vector<ReplayPlayerView>                                replayPlayers;
+    std::vector<ReplayEntityView>                                replayEntities;
     float                                                        playbackSpeed{1.0f};
     int                                                          currentTick{};
     int                                                          totalTicks{};
