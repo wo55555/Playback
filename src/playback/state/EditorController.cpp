@@ -135,21 +135,16 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
 
     // Metadata settles a few frames in; growing the timeline must not discard the loaded project.
     if (mProject.projectPath == replayPath && !replayPath.empty()) {
-        mProject.totalTicks            = totalTicks;
-        mProject.worldActor.totalTicks = totalTicks;
-        for (auto& segment : mProject.worldActor.segments) {
-            if (segment.endTick == mProjectTotalTicks) segment.endTick = totalTicks;
-        }
-        mProjectTotalTicks = totalTicks;
+        mProject.totalTicks = totalTicks;
+        mProjectTotalTicks  = totalTicks;
         publishCameraTimeline();
         return;
     }
 
     mProject             = {};
     mProject.projectPath = std::string(replayPath);
-    mProject.totalTicks = totalTicks;
+    mProject.totalTicks  = totalTicks;
     state::editing::CameraBindingOps::addFreeCamera(mProject, {});
-    mProject.worldActor.segments.push_back({"worldActor", 0, totalTicks, 0});
     mCommandStack.clear();
     mPreviewCameraId.reset();
     mProjectTotalTicks = totalTicks;
@@ -176,14 +171,10 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
     }
 
     // The replay on disk is authoritative for length; a stale project must not shrink the timeline.
-    loaded.projectPath           = mProject.projectPath;
-    loaded.totalTicks            = mProject.totalTicks;
-    loaded.worldActor.totalTicks = mProject.totalTicks;
+    loaded.projectPath = mProject.projectPath;
+    loaded.totalTicks  = mProject.totalTicks;
     if (loaded.cameras.empty()) {
         state::editing::CameraBindingOps::addFreeCamera(loaded, {});
-    }
-    if (loaded.worldActor.segments.empty()) {
-        loaded.worldActor.segments.push_back({"worldActor", 0, mProject.totalTicks, 0});
     }
     mProject = std::move(loaded);
     logger().debug("Loaded editor project {}", mProjectFile);
@@ -233,15 +224,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::AddFreeCamera:
         mCommandStack.push(CommandFactory::createAddFreeCamera(action.name), mProject);
-        break;
-    case EditorActionType::SplitWorldActor:
-        mCommandStack.push(CommandFactory::createSplitWorldActor(action.tick), mProject);
-        break;
-    case EditorActionType::TrimWorldActor:
-        mCommandStack.push(CommandFactory::createTrimWorldActor(action.id, action.tick, action.kind), mProject);
-        break;
-    case EditorActionType::RippleDeleteWorldActorSegment:
-        mCommandStack.push(CommandFactory::createRippleDeleteWorldActorSegment(action.id), mProject);
         break;
     case EditorActionType::AddCameraKeyframe:
         if (action.keyframe) {
@@ -349,15 +331,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::DeleteCamera:
         mCommandStack.push(CommandFactory::createDeleteCamera(action.id), mProject);
-        break;
-    case EditorActionType::UnbindCamera:
-        mCommandStack.push(CommandFactory::createUnbindCamera(action.id), mProject);
-        break;
-    case EditorActionType::CreateBindingCamera:
-        mCommandStack.push(CommandFactory::createCreateBindingCamera(action.id, action.name), mProject);
-        break;
-    case EditorActionType::SetSubActorDetails:
-        mCommandStack.push(CommandFactory::createSetSubActorDetails(action.id, action.details), mProject);
         break;
     case EditorActionType::MoveCameraKeyframes:
         mCommandStack.push(CommandFactory::createMoveCameraKeyframes(action.keyframeRefs, action.tick), mProject);
@@ -713,7 +686,6 @@ void EditorController::tick(bool hudVisible) {
             }
             loaded.projectPath           = mProject.projectPath;
             loaded.totalTicks            = mProject.totalTicks;
-            loaded.worldActor.totalTicks = mProject.totalTicks;
             mProject                     = std::move(loaded);
             mProjectFile                 = target;
             mProjectError.clear();

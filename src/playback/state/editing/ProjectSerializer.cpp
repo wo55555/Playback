@@ -145,14 +145,11 @@ json toJson(CameraEntity const& camera) {
     }
 
     json result{
-        {"id",                camera.id               },
-        {"name",              camera.name             },
-        {"enabled",           camera.enabled          },
-        {"locked",            camera.locked           },
-        {"bindingEntityUuid", camera.bindingEntityUuid},
-        {"bindingMode",       camera.bindingMode      },
-        {"bindingDamping",    camera.bindingDamping   },
-        {"keys",              std::move(keys)         }
+        {"id",      camera.id      },
+        {"name",    camera.name    },
+        {"enabled", camera.enabled },
+        {"locked",  camera.locked  },
+        {"keys",    std::move(keys)}
     };
     if (camera.shake) {
         result["shake"] = {
@@ -175,14 +172,11 @@ json toJson(CameraEntity const& camera) {
 
 CameraEntity cameraFrom(json const& node) {
     CameraEntity camera;
-    camera.id                = stringOr(node, "id");
-    camera.name              = stringOr(node, "name");
-    int const legacyKind     = intOr(node, "kind", 0);
-    camera.enabled           = boolOr(node, "enabled", true);
-    camera.locked            = boolOr(node, "locked", false);
-    camera.bindingEntityUuid = stringOr(node, "bindingEntityUuid");
-    camera.bindingMode       = intOr(node, "bindingMode", 0);
-    camera.bindingDamping    = finiteOr(node, "bindingDamping", 0.1f);
+    camera.id            = stringOr(node, "id");
+    camera.name          = stringOr(node, "name");
+    int const legacyKind = intOr(node, "kind", 0);
+    camera.enabled       = boolOr(node, "enabled", true);
+    camera.locked        = boolOr(node, "locked", false);
 
     if (auto const* keys = arrayAt(node, "keys")) {
         for (auto const& entry : *keys) {
@@ -212,65 +206,6 @@ CameraEntity cameraFrom(json const& node) {
         };
     }
     return camera;
-}
-
-json toJson(WorldActorSegment const& segment) {
-    return {
-        {"id",         segment.id           },
-        {"startTick",  segment.startTick    },
-        {"endTick",    segment.endTick      },
-        {"sourceTick", segment.sourceTick   },
-        {"speed",      segment.speed        },
-        {"color",      toJson(segment.color)},
-        {"locked",     segment.locked       }
-    };
-}
-
-WorldActorSegment worldActorSegmentFrom(json const& node) {
-    WorldActorSegment segment;
-    segment.id         = stringOr(node, "id");
-    segment.startTick  = intOr(node, "startTick", 0);
-    segment.endTick    = intOr(node, "endTick", 0);
-    segment.sourceTick = intOr(node, "sourceTick", 0);
-    segment.speed      = finiteOr(node, "speed", 1.0f);
-    segment.color      = colorFrom(node, "color", segment.color);
-    segment.locked     = boolOr(node, "locked", false);
-    return segment;
-}
-
-json toJson(SubActor const& actor) {
-    auto details = json::object();
-    for (auto const& [key, value] : actor.agentDetails) details[key] = value;
-
-    return {
-        {"id",             actor.id                        },
-        {"name",           actor.name                      },
-        {"category",       static_cast<int>(actor.category)},
-        {"position",       toJson(actor.position)          },
-        {"rotation",       toJson(actor.rotation)          },
-        {"agentDetails",   std::move(details)              },
-        {"boundCameraIds", actor.boundCameraIds            }
-    };
-}
-
-SubActor subActorFrom(json const& node) {
-    SubActor actor;
-    actor.id       = stringOr(node, "id");
-    actor.name     = stringOr(node, "name");
-    actor.category = enumOr(node, "category", actor.category, static_cast<int>(SubActorCategory::Entities));
-    actor.position = vec3From(node, "position", {});
-    actor.rotation = vec2From(node, "rotation", {});
-    if (auto const* details = objectAt(node, "agentDetails")) {
-        for (auto const& [key, value] : details->items()) {
-            if (value.is_string()) actor.agentDetails.insert_or_assign(key, value.get<std::string>());
-        }
-    }
-    if (auto const* bound = arrayAt(node, "boundCameraIds")) {
-        for (auto const& entry : *bound) {
-            if (entry.is_string()) actor.boundCameraIds.push_back(entry.get<std::string>());
-        }
-    }
-    return actor;
 }
 
 json toJson(Marker const& marker) {
@@ -374,12 +309,6 @@ std::string serializeProject(model::EditorStateExt const& project) {
     auto cameras = json::array();
     for (auto const& camera : project.cameras) cameras.push_back(toJson(camera));
 
-    auto worldSegments = json::array();
-    for (auto const& segment : project.worldActor.segments) worldSegments.push_back(toJson(segment));
-
-    auto subActors = json::array();
-    for (auto const& actor : project.worldActor.subActors) subActors.push_back(toJson(actor));
-
     auto markers = json::array();
     for (auto const& marker : project.markers) markers.push_back(toJson(marker));
 
@@ -398,14 +327,6 @@ std::string serializeProject(model::EditorStateExt const& project) {
         {"fps",                 project.fps                },
         {"activeVideoTrackIdx", project.activeVideoTrackIdx},
         {"cameras",             std::move(cameras)         },
-        {"worldActor",
-         json{
-             {"id", project.worldActor.id},
-             {"name", project.worldActor.name},
-             {"totalTicks", project.worldActor.totalTicks},
-             {"segments", std::move(worldSegments)},
-             {"subActors", std::move(subActors)}
-         }                                                 },
         {"markers",             std::move(markers)         },
         {"videoTracks",         std::move(videoTracks)     },
         {"transitions",         std::move(transitions)     }
@@ -443,21 +364,6 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
     if (auto const* cameras = arrayAt(document, "cameras")) {
         for (auto const& entry : *cameras) {
             if (entry.is_object()) loaded.cameras.push_back(cameraFrom(entry));
-        }
-    }
-    if (auto const* worldActor = objectAt(document, "worldActor")) {
-        loaded.worldActor.id         = stringOr(*worldActor, "id");
-        loaded.worldActor.name       = stringOr(*worldActor, "name");
-        loaded.worldActor.totalTicks = intOr(*worldActor, "totalTicks", loaded.totalTicks);
-        if (auto const* segments = arrayAt(*worldActor, "segments")) {
-            for (auto const& entry : *segments) {
-                if (entry.is_object()) loaded.worldActor.segments.push_back(worldActorSegmentFrom(entry));
-            }
-        }
-        if (auto const* subActors = arrayAt(*worldActor, "subActors")) {
-            for (auto const& entry : *subActors) {
-                if (entry.is_object()) loaded.worldActor.subActors.push_back(subActorFrom(entry));
-            }
         }
     }
     if (auto const* markers = arrayAt(document, "markers")) {

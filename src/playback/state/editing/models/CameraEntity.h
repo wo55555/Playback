@@ -30,9 +30,6 @@ struct CameraEntity {
     std::map<int, CameraKeyframe> keysByTick;
     std::optional<CameraShake>    shake;
     std::optional<CameraLimiter>  limiter;
-    std::string                   bindingEntityUuid;
-    int                           bindingMode{};
-    float                         bindingDamping{0.1f};
     bool                          locked{};
 };
 

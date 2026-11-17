@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdio>
 
 namespace playback::editor::ui {
 using namespace playback::state;
@@ -82,21 +81,6 @@ float keyframeLabelWidth() {
         width = std::max(width, ImGui::CalcTextSize(label.c_str()).x + 8.0f);
     }
     return width;
-}
-
-std::string categoryName(state::editing::model::SubActorCategory category) {
-    using Category = state::editing::model::SubActorCategory;
-    switch (category) {
-    case Category::Players:
-        return "playback.refactorEditor.details.categoryName.players"_tr();
-    case Category::Creatures:
-        return "playback.refactorEditor.details.categoryName.creatures"_tr();
-    case Category::Entities:
-        return "playback.refactorEditor.details.categoryName.entities"_tr();
-    case Category::Default:
-    default:
-        return "playback.refactorEditor.details.categoryName.default"_tr();
-    }
 }
 
 bool vectorInput(
@@ -221,13 +205,7 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     auto const  project   = ctx.state.project;
     auto const& selection = ctx.selection;
     std::string subject   = "playback.refactorEditor.details.noSelection"_tr();
-    if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
-        subject = "playback.refactorEditor.details.worldActor"_tr();
-    } else if (selection.getAs<state::editing::model::SelectedWorldActorSegment>()) {
-        subject = "playback.refactorEditor.details.worldActorSegment"_tr();
-    } else if (selection.getAs<state::editing::model::SelectedSubActor>()) {
-        subject = "playback.refactorEditor.details.subActor"_tr();
-    } else if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
+    if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
         auto const* camera = findById(project->cameras, selectedCamera->cameraId);
         subject            = camera ? camera->name : "playback.refactorEditor.details.camera"_tr();
     } else if (selection.keyframeCount() > 1) {
@@ -239,233 +217,11 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
-    if (drawWorldActor(ctx)) return;
-    if (drawWorldActorSegment(ctx)) return;
-    if (drawSubActor(ctx)) return;
     if (drawCamera(ctx)) return;
     if (drawKeyframes(ctx)) return;
     if (drawKeyframe(ctx)) return;
     if (drawMarker(ctx)) return;
     drawOverview(ctx);
-}
-
-bool DetailsPanel::drawWorldActor(PanelContext const& ctx) {
-    auto const  project   = ctx.state.project;
-    auto const& selection = ctx.selection;
-
-    if (selection.getAs<state::editing::model::SelectedWorldActor>()) {
-        if (property::beginSection("playback.refactorEditor.details.worldActor"_tr().c_str())) {
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.name"_tr(
-                    project->worldActor.name.empty() ? "playback.refactorEditor.details.untitled"_tr()
-                                                     : project->worldActor.name
-                )
-                    .c_str()
-            );
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.total"_tr(formatTick(project->worldActor.totalTicks)).c_str()
-            );
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.segments"_tr(project->worldActor.segments.size()).c_str()
-            );
-            for (auto const& segment : project->worldActor.segments) {
-                if (ImGui::Selectable((formatTick(segment.startTick) + " - " + formatTick(segment.endTick)).c_str())) {
-                    ctx.selection.select(state::editing::model::SelectedWorldActorSegment{segment.id});
-                }
-            }
-            property::separator();
-            if (property::beginSection("playback.refactorEditor.details.subActors"_tr().c_str())) {
-                static constexpr std::array<state::editing::model::SubActorCategory, 4> categories{
-                    state::editing::model::SubActorCategory::Default,
-                    state::editing::model::SubActorCategory::Players,
-                    state::editing::model::SubActorCategory::Creatures,
-                    state::editing::model::SubActorCategory::Entities,
-                };
-                for (auto category : categories) {
-                    auto const&  actors = project->worldActor.subActors;
-                    size_t const count =
-                        static_cast<size_t>(std::count_if(actors.begin(), actors.end(), [category](auto const& actor) {
-                            return actor.category == category;
-                        }));
-                    std::string const header = categoryName(category) + " (" + std::to_string(count) + ")";
-                    if (count > 0 && ImGui::CollapsingHeader(header.c_str())) {
-                        size_t shown = 0;
-                        for (auto const& actor : actors) {
-                            if (actor.category != category) continue;
-                            if (shown >= 100) {
-                                ImGui::TextDisabled(
-                                    "%s",
-                                    "playback.refactorEditor.details.moreActors"_tr(count - shown).c_str()
-                                );
-                                break;
-                            }
-                            ++shown;
-                            if (ImGui::Selectable(actor.name.empty() ? actor.id.c_str() : actor.name.c_str())) {
-                                ctx.selection.select(state::editing::model::SelectedSubActor{actor.id});
-                            }
-                        }
-                    }
-                }
-                property::endSection();
-            }
-            property::endSection();
-        }
-        return true;
-    }
-    return false;
-}
-
-bool DetailsPanel::drawWorldActorSegment(PanelContext const& ctx) {
-    auto const  project   = ctx.state.project;
-    auto const& selection = ctx.selection;
-    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
-
-    if (auto const* selected = selection.getAs<state::editing::model::SelectedWorldActorSegment>()) {
-        auto const* segment = findById(project->worldActor.segments, selected->segmentId);
-        if (!segment) {
-            ImGui::TextDisabled("%s", "playback.refactorEditor.details.worldActorSegmentMissing"_tr().c_str());
-            return true;
-        }
-        bool const isFirst = &project->worldActor.segments.front() == segment;
-        bool const isLast  = &project->worldActor.segments.back() == segment;
-        if (property::beginSection("playback.refactorEditor.details.worldActorSegment"_tr().c_str())) {
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.range"_tr(formatTick(segment->startTick), formatTick(segment->endTick))
-                    .c_str()
-            );
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.duration"_tr(segment->endTick - segment->startTick).c_str()
-            );
-            ImGui::TextUnformatted("playback.refactorEditor.details.sourceTick"_tr(segment->sourceTick).c_str());
-            ImGui::BeginDisabled(segment->locked);
-            int        startTick  = segment->startTick;
-            int        endTick    = segment->endTick;
-            auto const startLabel = "playback.refactorEditor.details.start"_tr();
-            auto const endLabel   = "playback.refactorEditor.details.end"_tr();
-            ImGui::BeginDisabled(isFirst);
-            if (ImGui::InputInt(startLabel.c_str(), &startTick) && ImGui::IsItemDeactivatedAfterEdit()) {
-                EditorAction action{EditorActionType::TrimWorldActor};
-                action.id   = segment->id;
-                action.tick = std::clamp(startTick, 1, endTick - 1);
-                action.kind = endTick;
-                submit(std::move(action));
-            }
-            ImGui::EndDisabled();
-            ImGui::BeginDisabled(isLast);
-            if (ImGui::InputInt(endLabel.c_str(), &endTick) && ImGui::IsItemDeactivatedAfterEdit()) {
-                EditorAction action{EditorActionType::TrimWorldActor};
-                action.id   = segment->id;
-                action.tick = startTick;
-                action.kind = std::clamp(endTick, startTick + 1, project->totalTicks);
-                submit(std::move(action));
-            }
-            ImGui::EndDisabled();
-            if (property::actionButton("playback.refactorEditor.details.splitAtPlayhead"_tr().c_str())) {
-                EditorAction action{EditorActionType::SplitWorldActor};
-                action.tick = ctx.state.currentTick;
-                submit(std::move(action));
-            }
-            if (property::actionButton("playback.refactorEditor.details.rippleDelete"_tr().c_str())) {
-                EditorAction action{EditorActionType::RippleDeleteWorldActorSegment};
-                action.id = segment->id;
-                submit(std::move(action));
-            }
-            ImGui::EndDisabled();
-            if (segment->locked) {
-                ImGui::TextDisabled("%s", "playback.refactorEditor.details.segmentLocked"_tr().c_str());
-            }
-            property::endSection();
-        }
-        return true;
-    }
-    return false;
-}
-
-bool DetailsPanel::drawSubActor(PanelContext const& ctx) {
-    auto const  project   = ctx.state.project;
-    auto const& selection = ctx.selection;
-    auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
-
-    if (auto const* selected = selection.getAs<state::editing::model::SelectedSubActor>()) {
-        auto const* actor = findById(project->worldActor.subActors, selected->subActorId);
-        if (!actor) {
-            ImGui::TextDisabled("%s", "playback.refactorEditor.details.subActorMissing"_tr().c_str());
-            return true;
-        }
-        if (property::beginSection("playback.refactorEditor.details.subActor"_tr().c_str())) {
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.name"_tr(actor->name.empty() ? actor->id : actor->name).c_str()
-            );
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.category"_tr(categoryName(actor->category)).c_str()
-            );
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.positionValue"_tr(
-                    actor->position.x,
-                    actor->position.y,
-                    actor->position.z
-                )
-                    .c_str()
-            );
-            ImGui::TextUnformatted(
-                "playback.refactorEditor.details.rotationValue"_tr(actor->rotation.x, actor->rotation.y).c_str()
-            );
-            if (actor->boundCameraIds.empty()) {
-                ImGui::TextUnformatted("playback.refactorEditor.details.noBoundCameras"_tr().c_str());
-            } else {
-                ImGui::TextUnformatted("playback.refactorEditor.details.boundCamerasLabel"_tr().c_str());
-                for (auto const& cameraId : actor->boundCameraIds) {
-                    auto const* camera = findById(project->cameras, cameraId);
-                    ImGui::BulletText("%s", camera ? camera->name.c_str() : cameraId.c_str());
-                }
-            }
-            property::separator();
-            if (!actor->agentDetails.empty()) {
-                if (property::beginSection("playback.refactorEditor.details.agentDetails"_tr().c_str())) {
-                    auto updated = actor->agentDetails;
-                    bool edited  = false;
-                    for (auto& [key, value] : updated) {
-                        char buf[256]{};
-                        std::snprintf(buf, sizeof(buf), "%s", value.c_str());
-                        ImGui::SetNextItemWidth(-1.0f);
-                        if (ImGui::InputText(("##agent-" + key).c_str(), buf, sizeof(buf))) value = buf;
-                        if (ImGui::IsItemDeactivatedAfterEdit()) edited = true;
-                    }
-                    if (edited) {
-                        EditorAction action{EditorActionType::SetSubActorDetails};
-                        action.id      = actor->id;
-                        action.details = std::move(updated);
-                        submit(std::move(action));
-                    }
-                    property::endSection();
-                }
-            }
-            static char newDetailKey[64]{};
-            auto const  newFieldHint = "playback.refactorEditor.details.newDetailField"_tr();
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputTextWithHint("##agent-new-key", newFieldHint.c_str(), newDetailKey, sizeof(newDetailKey));
-            if (property::actionButton("playback.refactorEditor.details.addDetailField"_tr().c_str())
-                && newDetailKey[0] != '\0') {
-                auto details          = actor->agentDetails;
-                details[newDetailKey] = "";
-                EditorAction action{EditorActionType::SetSubActorDetails};
-                action.id      = actor->id;
-                action.details = std::move(details);
-                submit(std::move(action));
-                newDetailKey[0] = '\0';
-            }
-            ImGui::Spacing();
-            if (property::actionButton("playback.refactorEditor.details.createBindingCamera"_tr().c_str())) {
-                EditorAction action{EditorActionType::CreateBindingCamera};
-                action.id   = actor->id;
-                action.name = "playback.refactorEditor.details.bindingCameraName"_tr(actor->name);
-                submit(std::move(action));
-            }
-            property::endSection();
-        }
-        return true;
-    }
-    return false;
 }
 
 bool DetailsPanel::drawCamera(PanelContext const& ctx) {
@@ -499,19 +255,6 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                 submit(std::move(action));
             }
             ImGui::BeginDisabled(camera->locked);
-            if (!camera->bindingEntityUuid.empty()) {
-                property::separator();
-                auto const* actor = findById(project->worldActor.subActors, camera->bindingEntityUuid);
-                ImGui::TextUnformatted(
-                    "playback.refactorEditor.details.boundTo"_tr(actor ? actor->name : camera->bindingEntityUuid)
-                        .c_str()
-                );
-                if (property::actionButton("playback.refactorEditor.details.unbindCamera"_tr().c_str())) {
-                    EditorAction action{EditorActionType::UnbindCamera};
-                    action.id = camera->id;
-                    submit(std::move(action));
-                }
-            }
             property::separator();
             bool hasShake = camera->shake.has_value();
             if (ImGui::Checkbox("playback.refactorEditor.details.cameraShake"_tr().c_str(), &hasShake)) {
@@ -1215,18 +958,8 @@ void DetailsPanel::drawOverview(PanelContext const& ctx) {
     if (property::beginSection("playback.refactorEditor.details.overview"_tr().c_str())) {
         ImGui::TextDisabled("%s", "playback.refactorEditor.details.selectionHint"_tr().c_str());
         ImGui::Spacing();
-        ImGui::TextUnformatted(
-            "playback.refactorEditor.details.name"_tr(
-                project->worldActor.name.empty() ? "playback.refactorEditor.details.untitled"_tr()
-                                                 : project->worldActor.name
-            )
-                .c_str()
-        );
         ImGui::TextUnformatted("playback.refactorEditor.details.total"_tr(formatTick(project->totalTicks)).c_str());
         ImGui::TextUnformatted("playback.refactorEditor.details.cameras"_tr(project->cameras.size()).c_str());
-        ImGui::TextUnformatted(
-            "playback.refactorEditor.details.segments"_tr(project->worldActor.segments.size()).c_str()
-        );
         ImGui::Spacing();
         if (property::actionButton("playback.refactorEditor.details.addFreeCamera"_tr().c_str())) {
             submit({EditorActionType::AddFreeCamera});

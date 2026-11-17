@@ -27,13 +27,8 @@ bool containsInsensitive(std::string_view value, std::string_view query) {
         != value.end();
 }
 
-bool cameraMatchesSearch(const CameraEntity& camera, const WorldActor& worldActor, std::string_view query) {
-    if (containsInsensitive(camera.name, query)) return true;
-    auto subActor =
-        std::find_if(worldActor.subActors.begin(), worldActor.subActors.end(), [&camera](const SubActor& actor) {
-            return actor.id == camera.bindingEntityUuid;
-        });
-    return subActor != worldActor.subActors.end() && containsInsensitive(subActor->name, query);
+bool cameraMatchesSearch(const CameraEntity& camera, std::string_view query) {
+    return containsInsensitive(camera.name, query);
 }
 
 } // namespace
@@ -49,7 +44,7 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
     // Cameras are the only editable tracks; the world and marker rows had nothing to show.
     for (int index = 0; index < static_cast<int>(state.cameras.size()); ++index) {
         const auto& camera = state.cameras[index];
-        if (!cameraMatchesSearch(camera, state.worldActor, mSearch)) continue;
+        if (!cameraMatchesSearch(camera, mSearch)) continue;
         mRows.push_back(
             {TrackRowKind::Camera, "camera:" + camera.id, camera.name, camera.id, index, cameraHeight, camera.locked, camera.enabled}
         );
