@@ -341,6 +341,9 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::RenameCamera:
         mCommandStack.push(CommandFactory::createRenameCamera(action.id, action.name), mProject);
         break;
+    case EditorActionType::MoveCamera:
+        mCommandStack.push(CommandFactory::createMoveCamera(action.id, action.kind), mProject);
+        break;
     case EditorActionType::ClearCameraKeyframes:
         mCommandStack.push(CommandFactory::createClearCameraKeyframes(action.id), mProject);
         break;

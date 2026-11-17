@@ -442,6 +442,11 @@
                 "lockTrack": "Lock track",
                 "unlockTrack": "Unlock track",
                 "clearKeyframes": "Clear keyframes ({})",
+                "moveTrackTop": "Move to top (highest priority)",
+                "moveTrackUp": "Raise priority",
+                "moveTrackDown": "Lower priority",
+                "moveTrackBottom": "Move to bottom (lowest priority)",
+                "priorityHint": "A track higher in the list wins when several tracks have an active keyframe at the same time. Drag a track to reorder.",
                 "deleteTrack": "Delete track"
             },
             "viewport": {
