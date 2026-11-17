@@ -1,6 +1,8 @@
 ﻿#include "ReplayEntityInterpolator.h"
 
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
+#include "mc/deps/vanilla_components/AABBShapeComponent.h"
+#include "mc/deps/vanilla_components/OffsetsComponent.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
@@ -493,6 +495,21 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                 applied.movementInterpolator->mRotationSteps = 0;
                 applied.movementInterpolator->mHeadYawSteps  = 0;
             }
+            // Replay positions are written straight into the state, so the bounding box the game moves along with
+            // them stays wherever the entity was spawned or last teleported. The fire overlay, culling and the
+            // viewport's entity picking read it, so it follows the drawn pose. It is not restored: nothing in a
+            // replay simulates physics from it.
+            auto&      shape    = *target.actor->mBuiltInComponents->mAABBShapeComponent;
+            auto*      offsets  = context.tryGetComponent<OffsetsComponent>().as_ptr();
+            Vec3 const position = positioned ? applied.exportPosition : Vec3{stateVector->mPos};
+            Vec2 const size     = shape.mBBDim;
+            // Players stand eye height above their box; most entities stand on it.
+            float const lift = offsets ? static_cast<float>(offsets->mHeightOffset) : 0.0f;
+            float const half = size.x * 0.5f;
+            shape.mAABB      = AABB{
+                Vec3{position.x - half, position.y - lift,          position.z - half},
+                Vec3{position.x + half, position.y - lift + size.y, position.z + half}
+            };
             if (applied.renderRotation) {
                 applied.renderRotation->mRot = Vec2{sampled.pitch, sampled.yaw};
             }

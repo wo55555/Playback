@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Burning entities in replays show their fire on their bodies instead of floating above or beside them. Replay entities' bounding boxes stayed where they spawned or last teleported, and the fire overlay, culling and viewport picking read them; they now follow the drawn pose.
+
 ## [0.4.0-mc26.20] - 2026-11-15
 
 ### Added
