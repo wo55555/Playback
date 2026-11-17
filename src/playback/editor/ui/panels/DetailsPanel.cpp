@@ -653,7 +653,10 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
     std::optional<int>                              sharedMode;
     bool                                            mixedMode       = false;
     bool                                            anyInterpolated = false;
-    int                                             tracks          = 0;
+    bool                                            anyPerson       = false;
+    std::optional<std::string>                      sharedSubject;
+    bool                                            mixedSubject = false;
+    int                                             tracks       = 0;
     std::string                                     lastTrack;
     for (auto const& entry : selection.keyframes()) {
         refs.push_back({entry.trackId, entry.tick, std::nullopt});
@@ -668,7 +671,13 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
         int const mode = static_cast<int>(key->second.mode);
         if (!sharedMode) sharedMode = mode;
         else if (*sharedMode != mode) mixedMode = true;
-        if (key->second.mode == state::editing::model::CameraKeyframeMode::Interpolated) anyInterpolated = true;
+        if (key->second.mode == state::editing::model::CameraKeyframeMode::Interpolated) {
+            anyInterpolated = true;
+        } else {
+            anyPerson = true;
+            if (!sharedSubject) sharedSubject = key->second.subject;
+            else if (*sharedSubject != key->second.subject) mixedSubject = true;
+        }
         int const type = static_cast<int>(key->second.interpolationType);
         if (!shared) shared = type;
         else if (*shared != type) mixed = true;
@@ -721,6 +730,33 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                     }
                 }
                 widgets::endCombo();
+            }
+        }
+        if (anyPerson) {
+            property::separator();
+            std::string const current = mixedSubject || !sharedSubject
+                                          ? "playback.refactorEditor.details.mixed"_tr()
+                                          : playerSubjectLabel(ctx.state.replayPlayers, *sharedSubject);
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeSubject"_tr().c_str());
+            ImGui::SameLine();
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(current.c_str());
+            ImGui::PopTextWrapPos();
+            PlayerPickerResult picked;
+            if (drawPlayerList(
+                    "##keyframes-subject-list",
+                    PlayerPickerMode::SegmentSubject,
+                    ctx.state.replayPlayers,
+                    sharedSubject.value_or(std::string{}),
+                    false,
+                    picked,
+                    mixedSubject
+                )
+                && (mixedSubject || !sharedSubject || picked.uuid != *sharedSubject)) {
+                EditorAction action{EditorActionType::SetKeyframesSubject};
+                action.keyframeRefs = refs;
+                action.secondaryId  = std::move(picked.uuid);
+                ctx.submitAction(std::move(action));
             }
         }
         property::separator();

@@ -72,6 +72,7 @@ enum class EditorActionType {
     DeleteCameraKeyframes,
     SetKeyframesMode,
     SetKeyframesInterpolation,
+    SetKeyframesSubject,
     AddCameraKeyframes,
     AddMarker,
     DeleteMarker,

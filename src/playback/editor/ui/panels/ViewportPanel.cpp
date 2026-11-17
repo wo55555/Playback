@@ -42,6 +42,30 @@ std::string entityMenuLabel(replay::ReplaySession::ReplayEntityInfo const& entit
     return entity.label;
 }
 
+struct SubjectSelectionInfo {
+    std::vector<editing::model::KeyframeRef> refs;
+    bool                                     anyUnlocked{};
+    bool                                     allSameSubject{true};
+};
+
+SubjectSelectionInfo collectSelectedPersonKeyframes(PanelContext const& ctx, std::string_view choice) {
+    SubjectSelectionInfo info;
+    auto const           project = ctx.state.project;
+    if (!project) return info;
+    for (auto const& entry : ctx.selection.keyframes()) {
+        auto const it =
+            std::ranges::find_if(project->cameras, [&](auto const& camera) { return camera.id == entry.trackId; });
+        if (it == project->cameras.end()) continue;
+        auto const key = it->keysByTick.find(entry.tick);
+        if (key == it->keysByTick.end()) continue;
+        if (key->second.mode == editing::model::CameraKeyframeMode::Interpolated) continue;
+        info.refs.push_back({entry.trackId, entry.tick, std::nullopt});
+        info.anyUnlocked    |= !it->locked;
+        info.allSameSubject &= (key->second.subject == choice);
+    }
+    return info;
+}
+
 } // namespace
 
 std::optional<replay::ReplaySession::ReplayEntityInfo>
@@ -104,6 +128,31 @@ void ViewportPanel::drawEntityPickMenu(PanelContext const& ctx) {
         std::string const label =
             "playback.refactorEditor.viewport.followEntity"_tr(entityMenuLabel(entity)) + "##pick-follow";
         if (ImGui::MenuItem(label.c_str(), nullptr, selected)) submitFollow(ctx, entity.choice);
+        auto target = collectSelectedPersonKeyframes(ctx, entity.choice);
+        if (!target.refs.empty()) {
+            std::string const setLabel =
+                (target.refs.size() == 1
+                     ? "playback.refactorEditor.viewport.setKeyframeSubject"_tr(entityMenuLabel(entity))
+                     : "playback.refactorEditor.viewport.setKeyframesSubject"_tr(
+                           target.refs.size(),
+                           entityMenuLabel(entity)
+                       ))
+                + "##pick-keyframe-subject";
+            if (ImGui::MenuItem(setLabel.c_str(), nullptr, target.allSameSubject, target.anyUnlocked)) {
+                if (target.refs.size() == 1) {
+                    EditorAction action{EditorActionType::SetKeyframeSubject};
+                    action.id          = target.refs[0].cameraId;
+                    action.tick        = target.refs[0].tick;
+                    action.secondaryId = entity.choice;
+                    ctx.submitAction(std::move(action));
+                } else {
+                    EditorAction action{EditorActionType::SetKeyframesSubject};
+                    action.keyframeRefs = std::move(target.refs);
+                    action.secondaryId  = entity.choice;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+        }
     } else {
         ImGui::TextDisabled("%s", "playback.refactorEditor.viewport.noEntityHere"_tr().c_str());
     }
