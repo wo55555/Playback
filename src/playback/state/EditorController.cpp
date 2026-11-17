@@ -445,6 +445,11 @@ void EditorController::publishState(bool hudVisible) {
     for (auto const& player : replayPlayers) {
         state.replayPlayers.push_back({player.uuid, player.name, player.recorder, player.present});
     }
+    auto const replayEntities = session.replayEntities();
+    state.replayEntities.reserve(replayEntities.size());
+    for (auto const& entity : replayEntities) {
+        if (!entity.player) state.replayEntities.push_back({entity.choice, entity.label, entity.distance});
+    }
     state.playbackSpeed = session.getPlaybackSpeed();
     state.currentTick             = std::max(0, session.getCurrentTick());
     state.totalTicks              = std::max(0, session.getTotalTicks());

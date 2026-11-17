@@ -437,13 +437,15 @@
                 "lensOverlay": "FOV {:.1f}    游戏刻 {}"
             },
             "playerPicker": {
-                "searchHint": "搜索玩家名或 UUID",
+                "searchHint": "搜索玩家、实体或 ID",
                 "recorder": "录制者",
                 "present": "在场玩家",
+                "nearbyEntities": "附近实体",
+                "moreEntities": "…… 另有 {} 个，请搜索筛选",
                 "absent": "不在场",
                 "absentHint": "跳到该玩家在场的时间再选择",
                 "unnamed": "未命名玩家",
-                "noMatch": "没有匹配的玩家",
+                "noMatch": "没有匹配的玩家或实体",
                 "noPlayers": "没有其他在场玩家",
                 "stopFollow": "停止跟随"
             },
