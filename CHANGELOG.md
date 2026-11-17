@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Camera tracks can be reordered to change their priority. Drag a track in the timeline's track list, or use Move to top, Raise priority, Lower priority and Move to bottom in its right-click menu. Where tracks overlap, the track higher in the list plays, in preview and in export. Reordering can be undone and is saved with the project.
+
 ### Changed
 
 - Replaced the first-person and third-person camera track types with a lens mode on each keyframe: interpolated, first person or third person. A keyframe applies until the next keyframe on its track, and a person keyframe keeps its subject across dimension changes until the replay ends. The timeline marks each mode with its own keyframe shape and a `1P` or `3P` bar, the inspector and the keyframe menu change the mode of one or several keyframes, and the "+" button adds a camera track directly.

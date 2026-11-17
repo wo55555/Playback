@@ -99,6 +99,9 @@ CommandFactory::createRenameCamera(const std::string& id, const std::string& nam
 std::unique_ptr<model::IEditCommand> CommandFactory::createClearCameraKeyframes(const std::string& id) {
     return std::make_unique<ClearCameraKeyframes>(id);
 }
+std::unique_ptr<model::IEditCommand> CommandFactory::createMoveCamera(const std::string& id, int targetIndex) {
+    return std::make_unique<MoveCamera>(id, targetIndex);
+}
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetSubActorDetails(const std::string& id, model::AgentDetails details) {
     return std::make_unique<SetSubActorDetails>(id, std::move(details));

@@ -104,8 +104,9 @@ private:
     void drawContextMenus(PanelContext const& ctx);
 
     void drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput);
-    void drawTitleLabel(PanelContext const& ctx, float height);
-    void drawTransportGroup(PanelContext const& ctx, int displayTick, float width);
+    float titleLabelRight(PanelContext const& ctx) const;
+    void  drawTitleLabel(PanelContext const& ctx, float height, float transportLeft);
+    float drawTransportGroup(PanelContext const& ctx, int displayTick, float width, float minStartX);
 
     TrackTreeModel mTrackTree;
     Animator       mAnimator;
@@ -139,6 +140,10 @@ private:
     std::string                                           mLaneMenuCameraId;
     int                                                   mLaneMenuTick{-1};
     std::string                                           mTrackMenuCameraId;
+    // The camera whose track row is being dragged to a new priority; empty when no reorder is in progress.
+    std::string mTrackDragCameraId;
+    // Set after Escape cancels a track drag so holding the button down does not immediately start it again.
+    bool                                                  mTrackDragCancelled{};
     int                                                   mRulerMenuTick{-1};
     // Inline rename field of the track menu; refilled whenever the menu targets another camera.
     std::string                                           mRenameCameraId;

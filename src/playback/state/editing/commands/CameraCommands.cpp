@@ -575,4 +575,24 @@ void SetKeyframesMode::execute(model::EditorStateExt& state) {
 void        SetKeyframesMode::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string SetKeyframesMode::label() const { return "Set Keyframes Mode"; }
 
+MoveCamera::MoveCamera(std::string cameraId, int targetIndex)
+: mCameraId(std::move(cameraId)),
+  mTargetIndex(targetIndex) {}
+
+void MoveCamera::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto const found = std::ranges::find(state.cameras, mCameraId, &model::CameraEntity::id);
+    if (found == state.cameras.end()) return;
+    auto const from = static_cast<int>(std::distance(state.cameras.begin(), found));
+    auto const to   = std::clamp(mTargetIndex, 0, static_cast<int>(state.cameras.size()) - 1);
+    if (from == to) return;
+    auto before = state;
+    if (from < to) std::rotate(found, std::next(found), std::next(state.cameras.begin(), to + 1));
+    else std::rotate(std::next(state.cameras.begin(), to), found, std::next(found));
+    mBefore = std::move(before);
+}
+
+void        MoveCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string MoveCamera::label() const { return "Move Camera"; }
+
 } // namespace playback::state::editing::command
