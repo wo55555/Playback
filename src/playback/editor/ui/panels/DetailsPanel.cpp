@@ -477,9 +477,10 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
         }
         if (anyPerson) {
             property::separator();
-            std::string const current = mixedSubject || !sharedSubject
-                                          ? "playback.refactorEditor.details.mixed"_tr()
-                                          : playerSubjectLabel(ctx.state.replayPlayers, *sharedSubject);
+            std::string const current =
+                mixedSubject || !sharedSubject
+                    ? "playback.refactorEditor.details.mixed"_tr()
+                    : playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, *sharedSubject);
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeSubject"_tr().c_str());
             ImGui::SameLine();
             ImGui::PushTextWrapPos(0.0f);
@@ -490,6 +491,7 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                     "##keyframes-subject-list",
                     PlayerPickerMode::SegmentSubject,
                     ctx.state.replayPlayers,
+                    ctx.state.replayEntities,
                     sharedSubject.value_or(std::string{}),
                     false,
                     picked,
@@ -826,7 +828,8 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                 ImGui::PushTextWrapPos(0.0f);
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.personApplyHint"_tr().c_str());
                 ImGui::PopTextWrapPos();
-                std::string const current = playerSubjectLabel(ctx.state.replayPlayers, key->second.subject);
+                std::string const current =
+                    playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, key->second.subject);
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeSubject"_tr().c_str());
                 ImGui::SameLine();
                 ImGui::PushTextWrapPos(0.0f);
@@ -837,6 +840,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                         "##keyframe-subject-list",
                         PlayerPickerMode::SegmentSubject,
                         ctx.state.replayPlayers,
+                        ctx.state.replayEntities,
                         key->second.subject,
                         false,
                         picked

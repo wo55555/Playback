@@ -437,13 +437,15 @@
                 "lensOverlay": "FOV {:.1f}    Tick {}"
             },
             "playerPicker": {
-                "searchHint": "Search name or UUID",
+                "searchHint": "Search player, entity, or ID",
                 "recorder": "Recorder",
                 "present": "Present players",
+                "nearbyEntities": "Nearby entities",
+                "moreEntities": "... {} more, search to filter",
                 "absent": "Not present",
                 "absentHint": "Seek to when this player is present to select them",
                 "unnamed": "Unnamed player",
-                "noMatch": "No matching players",
+                "noMatch": "No matching players or entities",
                 "noPlayers": "No other players present",
                 "stopFollow": "Stop following"
             },
