@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Replaced the first-person and third-person camera track types with a lens mode on each keyframe: interpolated, first person or third person. A keyframe applies until the next keyframe on its track, and a person keyframe keeps its subject across dimension changes until the replay ends. The timeline marks each mode with its own keyframe shape and a `1P` or `3P` bar, the inspector and the keyframe menu change the mode of one or several keyframes, and the "+" button adds a camera track directly.
+- Replaced the first-person and third-person camera track types with a lens mode on each keyframe: interpolated, first person or third person. A keyframe applies until the next keyframe on its track, and a person keyframe keeps its subject across dimension changes until the replay ends. The timeline marks each mode with its own keyframe shape and a `1P` or `3P` bar, the inspector and the keyframe menu change the mode of one or several keyframes, and the "+" button adds a camera track directly. When person keyframes are selected, the inspector can change the subject for all of them at once, and right-clicking a player or mob in the viewport can assign that entity as the selected keyframe's subject.
 
 ### Fixed
 

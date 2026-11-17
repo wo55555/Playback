@@ -57,6 +57,8 @@ public:
     createSetKeyframesInterpolation(std::vector<model::KeyframeRef> refs, model::CameraInterpolationType interpolation);
     static std::unique_ptr<model::IEditCommand>
     createSetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode);
+    static std::unique_ptr<model::IEditCommand>
+    createSetKeyframesSubject(std::vector<model::KeyframeRef> refs, const std::string& subject);
     static std::unique_ptr<model::IEditCommand> createAddCameraKeyframes(std::vector<model::KeyframeRef> refs);
 
     static std::unique_ptr<model::IEditCommand>
