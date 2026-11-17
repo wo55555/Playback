@@ -47,6 +47,7 @@ public:
     createSetCameraShake(const std::string& id, std::optional<model::CameraShake> shake);
     static std::unique_ptr<model::IEditCommand> createRenameCamera(const std::string& id, const std::string& name);
     static std::unique_ptr<model::IEditCommand> createClearCameraKeyframes(const std::string& id);
+    static std::unique_ptr<model::IEditCommand> createMoveCamera(const std::string& id, int targetIndex);
     static std::unique_ptr<model::IEditCommand>
     createSetSubActorDetails(const std::string& id, model::AgentDetails details);
 
