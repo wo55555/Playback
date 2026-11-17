@@ -560,8 +560,17 @@ void syncPausedParkedCamera(replay::ReplaySession& replay) noexcept {
     if (gPausedAppliedPose == sample->state && gPausedAppliedSeekCount == seekCount) return;
     gPausedAppliedPose      = sample->state;
     gPausedAppliedSeekCount = seekCount;
-    gParkedObserverCamera.reset();
+    // The observer is teleported onto the pose without a roll; keep the pose only when the camera has to be rewritten.
+    if (exportNeedsRoll(sample->state)) gParkedObserverCamera = sample->state;
+    else gParkedObserverCamera.reset();
     gPausedFov = sample->state.fov;
+}
+
+// Vanilla builds the view from the camera components, so a roll has to be written there before the frame renders.
+void applyPreviewRollEcs(keyframe::CameraRenderState const& state) noexcept {
+    if (!exportNeedsRoll(state)) return;
+    size_t targets = 0;
+    (void)applyCameraEcsPose(state, false, targets);
 }
 
 void setPreviewSubjectHidden(bool hidden) noexcept {
@@ -592,6 +601,7 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept 
     if (replay.isPaused()) {
         clear();
         syncPausedParkedCamera(replay);
+        if (gPausedAppliedPose && observerStillParked()) applyPreviewRollEcs(*gPausedAppliedPose);
         return {};
     }
     gPausedAppliedPose.reset();
@@ -612,6 +622,7 @@ keyframe::CameraTimelineRenderContextHandle makePreviewRenderContext() noexcept 
     keyframe::setPreviewCameraApplied(true);
     keyframe::setLastPreviewPose(sample->state);
     gParkedObserverCamera = sample->state;
+    applyPreviewRollEcs(sample->state);
     return keyframe::publishCameraTimelineRenderContext(
         keyframe::CameraTimelineRenderContext{
             *time,
