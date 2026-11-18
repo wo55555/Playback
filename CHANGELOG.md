@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-person camera views no longer jitter or clip into nearby blocks from integrated-server movement corrections.
 - First-person follow for other players now lowers the camera while crawling or gliding, and hides entities riding the followed player.
 - Burning entities in replays show their fire on their bodies instead of floating above or beside them. Replay entities' bounding boxes now follow their current and interpolated poses, so fire overlays, culling, and viewport entity picking stay aligned with where entities are drawn.
+- Opening a replay from a world with custom blocks that use custom components no longer crashes.
 
 ## [0.4.0-mc26.60] - 2026-11-15
 
