@@ -3105,7 +3105,8 @@ void ReplaySession::applyRecordedBlockRegistry() {
         auto const preloadedGeometry = preloadRecordedBlockGeometry(properties);
         definitions->digestServerBlockProperties(properties);
 
-        size_t registered = 0;
+        size_t                              registered = 0;
+        std::vector<BlockDefinition const*> newlyRegisteredDefinitions;
         for (auto const& [name, tag] : properties) {
             // Blocks the client already has are kept; only the recording's custom blocks are registered here.
             if (registry.lookupByName(HashedString{name}, false)) continue;
@@ -3118,14 +3119,20 @@ void ReplaySession::applyRecordedBlockRegistry() {
 
             blockType->createBlockPermutations(*updaterVersion);
             definitions->initBlockTypeFromDefinition(*blockType, *definition);
+            newlyRegisteredDefinitions.push_back(definition);
             ++registered;
         }
 
         auto const injectedVisuals = injectRecordedBlockMaterialComponents(properties);
 
+        // Component descriptions require mAllowModifyingComponents == true, so initialize newly registered blocks
+        // (and never already-finalized vanilla/prior blocks) before finalizeBlockComponentStorage() locks them.
+        for (auto const* definition : newlyRegisteredDefinitions) {
+            definitions->initializeBlockFromDefinition(*definition, *level);
+        }
+
         registry.setupDirectAccessBlocks();
         registry.finalizeBlockComponentStorage();
-        definitions->initializeBlocks(*level);
 
         auto& palette = level->getBlockPalette();
         palette.initFromBlockDefinitions();
@@ -3265,7 +3272,6 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(
                 if (!permutation) continue;
                 permutation->mComponents->allowComponentReplacement();
                 description.$initializeComponent(*permutation->mComponents);
-                permutation->finalizeBlockComponentStorage();
                 BlockComponentStorageFinalizer{}.finalizeComponentData(*permutation);
             }
         };
