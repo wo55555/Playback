@@ -2062,16 +2062,68 @@ void ReplaySession::updateObserverPreview() {
     mObserverPreviewInRange = true;
 
     // First-person spectator: camera sits at the feet, so the pose is the feet position.
-    Vec3 const     feetPosition{sample->state.x, sample->state.y, sample->state.z};
-    Vec2 const     rotation{sample->state.pitch, sample->state.yaw};
+    Vec3 const feetPosition{sample->state.x, sample->state.y, sample->state.z};
+    Vec2 const rotation{sample->state.pitch, sample->state.yaw};
+    mLastObserverPreviewFeet     = feetPosition;
+    mLastObserverPreviewRotation = rotation;
+    moveObserverTo(feetPosition, rotation);
+}
+
+void ReplaySession::moveObserverTo(Vec3 const& feetPosition, Vec2 const& rotation) {
+    forceFirstPersonCamera();
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
                                || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    mLastObserverPreviewFeet     = feetPosition;
-    mLastObserverPreviewRotation = rotation;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
+}
+
+void ReplaySession::syncPreviewObserverForTick(int targetTick, bool onlyIfMoved) {
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || !mReplayPlayer || !mReplayWorldJoined
+        || !mNetworkHandler || mPendingReplayDimension) {
+        return;
+    }
+    if (isFollowViewActive() || editor::input::isGameInputCaptured()) return;
+    auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
+    if (!timeline) return;
+
+    auto const moveIfNeeded = [&](Vec3 const& feetPosition, Vec2 const& rotation) {
+        if (onlyIfMoved && mReplayPlayer->getPosition().distanceToSqr(feetPosition) <= 1e-4f) return;
+        moveObserverTo(feetPosition, rotation);
+    };
+
+    auto const sampleTime = visuals::ReplaySampleTime::fromPreview(targetTick, 0.0f);
+    if (sampleTime) {
+        if (auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *sampleTime)) {
+            moveIfNeeded(
+                Vec3{sample->state.x, sample->state.y, sample->state.z},
+                Vec2{sample->state.pitch, sample->state.yaw}
+            );
+            return;
+        }
+    }
+
+    auto const shot = timeline->shotAt(targetTick);
+    if (!shot || shot.kind() == state::editing::model::CameraTrackKind::Keyframe) return;
+    auto const id = resolveReplaySubjectId(shot.subject);
+    if (!id) return;
+    auto* actor = mReplayPlayer->getLevel().fetchEntity(*id, false);
+    if (!actor || actor == mReplayPlayer) return;
+    moveIfNeeded(actor->getPosition(), actor->getRotation());
+}
+
+void ReplaySession::syncSeekObserver() {
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler || mPendingReplayDimension) return;
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) {
+        if (!mExportCameraViewpoint) return;
+        Vec3 const target{mExportCameraViewpoint->x, mExportCameraViewpoint->y, mExportCameraViewpoint->z};
+        if (mReplayPlayer->getPosition().distanceToSqr(target) > 1e-4f) {
+            updateExportObserver(*mExportCameraViewpoint);
+        }
+        return;
+    }
+    syncPreviewObserverForTick(mSeekTargetTick, true);
 }
 
 void ReplaySession::markReplayTickAdvanced() noexcept {
@@ -2179,15 +2231,7 @@ void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint)
         return;
     }
 
-    forceFirstPersonCamera();
-    Vec3 const     feetPosition{viewpoint.x, viewpoint.y, viewpoint.z};
-    Vec2 const     rotation{viewpoint.pitch, viewpoint.yaw};
-    ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
-    bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    teleportReplayPlayer(feetPosition, rotation);
-    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
-    if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
+    moveObserverTo(Vec3{viewpoint.x, viewpoint.y, viewpoint.z}, Vec2{viewpoint.pitch, viewpoint.yaw});
 }
 
 std::unique_ptr<visuals::ScopedReplayEntityPose>
@@ -2550,6 +2594,7 @@ void ReplaySession::tick() {
                 }
                 refreshReplayPlayerRoster();
                 refreshReplaySubjectBinding();
+                syncSeekObserver();
                 // A tick resumed after its entity's chunks landed already ticked the level the first time through.
                 bool const resumingTick = std::exchange(mSeekTickResuming, false);
                 // Export seeks keep the clear at the landing frame so their first frames stay unchanged.
@@ -2620,6 +2665,7 @@ void ReplaySession::tick() {
              tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
              ++tick) {
             int const before = mCurrentTick;
+            syncPreviewObserverForTick(before + 1);
             if (!advanceReplayTick(true)) break;
             if (mCurrentTick != before) markReplayTickAdvanced();
         }
@@ -3406,8 +3452,8 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
     } else if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive && mExportCameraViewpoint) {
         auto const& position = *mExportCameraViewpoint;
-        auto const& rotation = replayPlayer->getRotation();
-        view                 = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
+        view                 = PlaybackView{position.x, position.y, position.z, position.yaw, position.pitch};
+        replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
     } else {
         auto const& position = replayPlayer->getPosition();
         auto const& rotation = replayPlayer->getRotation();
