@@ -583,6 +583,19 @@ void dispatchPacket(
         return;
     }
     if (auto& replaySession = ReplaySession::getInstance(); replaySession.isIsolatingReplayWorld()) {
+        // The integrated server runs an empty void world without recorded terrain or movement inputs, so its movement
+        // reconciliation packets inject DynamicRenderOffsetComponent onto the observer and push the first-person
+        // camera into nearby blocks.
+        if (packet->getId() == MinecraftPacketIds::CorrectPlayerMovePredictionPacket
+            && !replaySession.isInjectingPacket(packet.get())) {
+            return;
+        }
+        // Once the replay world is joined, any non-injected MovePlayerPacket outside a dimension transition comes
+        // from the integrated server (e.g. echoing syncObserverServerPosition at server eye offset).
+        if (packet->getId() == MinecraftPacketIds::MovePlayer && replaySession.hasJoinedReplayWorld()
+            && !replaySession.isDimensionTransitionPending() && !replaySession.isInjectingPacket(packet.get())) {
+            return;
+        }
         // The server's own table carries the data-driven item versions and components (icons) that a table rebuilt
         // from the client registry loses. The client builds its registry from the first table only, so during replay
         // the local world's table is swapped for the recorded one.
