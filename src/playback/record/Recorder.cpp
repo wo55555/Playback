@@ -2437,15 +2437,13 @@ bool Recorder::writeEntityMovements() {
     // Reuse last tick's buckets instead of rebuilding the map every tick.
     auto& current = mCurrentEntityMovements;
     current.clear();
-    auto actors = localPlayer->getLevel().getRuntimeActorList();
-    changed.reserve(actors.size());
-    current.reserve(actors.size());
+    auto&      level     = localPlayer->getLevel();
+    auto const dimension = localPlayer->getDimensionId();
+    auto       actors    = level.getRuntimeActorList();
+    changed.reserve(actors.size() + 1);
+    current.reserve(actors.size() + 1);
 
-    for (auto const* actor : actors) {
-        if (!actor || !actor->isAlive() || actor->getDimensionId() != localPlayer->getDimensionId()) {
-            continue;
-        }
-
+    auto const recordActor = [&](Actor const* actor) {
         auto position = actor->getPosition();
         auto rotation = actor->getRotation();
 
@@ -2481,7 +2479,26 @@ bool Recorder::writeEntityMovements() {
         if (previous == mLastEntityMovements.end() || !previous->second.sameAs(it->second)) {
             changed.push_back({id, it->second});
         }
+        return true;
+    };
+
+    // Keep the recording player's position through death and respawn, independently of the runtime actor list.
+    if (!recordActor(localPlayer)) return false;
+    for (auto const* actor : actors) {
+        if (!actor || actor == localPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) {
+            continue;
+        }
+        if (!recordActor(actor)) return false;
     }
+
+    // The runtime actor list only walks mRuntimeIdMap, which can lose player entries when a client-side entity
+    // allocates a colliding runtime ID and erases that key on despawn.
+    level.forEachPlayer([&](Player& player) {
+        if (&player == localPlayer || !player.isAlive() || player.getDimensionId() != dimension) return true;
+        if (current.contains(player.getOrCreateUniqueID())) return true;
+        recordActor(&player);
+        return true;
+    });
     mLastEntityMovements.swap(current);
 
     if (changed.empty()) return true;
