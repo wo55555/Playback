@@ -361,7 +361,14 @@ ScopedReplayEntityPose::~ScopedReplayEntityPose() = default;
 
 bool isReplayEntityHiddenInScope(Actor const& actor) {
     auto const* state = ScopedReplayEntityPose::State::gActiveState;
-    return state && state->hidden && state->hidden->actor == &actor;
+    if (!state || !state->hidden) return false;
+    if (state->hidden->actor == &actor) return true;
+    // Hide passengers (such as server disguise blocks) riding the first-person subject.
+    int depth = 0;
+    for (auto const* vehicle = actor.getVehicle(); vehicle && depth < 16; vehicle = vehicle->getVehicle(), ++depth) {
+        if (vehicle == state->hidden->actor) return true;
+    }
+    return false;
 }
 
 Actor* replayHiddenActorInScope() {
@@ -636,7 +643,8 @@ void noteReplaySubjectPosture(int64_t tick, bool snap, ReplaySubjectPosture cons
     bool const  recorder = isReplaySubjectRecorder();
     // The measured offsets are a player's; another entity keeps its own eye height.
     bool const  player   = isReplaySubjectPlayer();
-    float const target   = !recorder && player && posture.swimming ? kSwimCameraOffsetY
+    float const target   = !recorder && player && (posture.swimming || posture.crawling || posture.gliding)
+                             ? kSwimCameraOffsetY
                          : !recorder && player && posture.sneaking ? kSneakCameraOffsetY
                                                                    : 0.0f;
     bool const  sleeping = player && (posture.sleeping || posture.actorSleeping);

@@ -1871,6 +1871,7 @@ void ReplaySession::updateReplaySubjectPosture(bool snap) {
             actor->getStatusFlag(ActorFlags::Sneaking),
             actor->getStatusFlag(ActorFlags::Swimming),
             actor->getStatusFlag(ActorFlags::Crawling),
+            actor->getStatusFlag(ActorFlags::Gliding),
             actor->getStatusFlag(ActorFlags::Sleeping),
             actor->isSleeping(),
         }
