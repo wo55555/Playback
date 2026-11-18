@@ -501,6 +501,9 @@ private:
     void releasePreviewObserver();
 
     void updatePausedObserverPreview();
+    void moveObserverTo(::Vec3 const& feetPosition, ::Vec2 const& rotation);
+    void syncPreviewObserverForTick(int targetTick, bool onlyIfMoved = false);
+    void syncSeekObserver();
 
     // Parks the observer on the recorded player for a pending teleport or while following; true if following.
     [[nodiscard]] bool updateSubjectFollow();
