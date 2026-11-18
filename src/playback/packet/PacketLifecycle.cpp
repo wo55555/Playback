@@ -20,6 +20,10 @@ constexpr auto PacketLifecycleTable = std::to_array<PacketLifecycleEntry>({
     {MinecraftPacketIds::MovePlayer,                              {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::NetworkChunkPublisherUpdate,             {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::ChunkRadiusUpdated,                      {PacketLifecycle::Ignore}                        },
+    // The recording player's own movement authority: in a replay the local player is the free camera, which an input
+    // lock (/inputpermission, cutscene add-ons) would freeze and a server correction would snap back.
+    {MinecraftPacketIds::PlayerClientInputPermissions,            {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::CorrectPlayerMovePredictionPacket,       {PacketLifecycle::Ignore}                        },
     // Screens the server opens for the recording player to answer. A replay can neither answer nor close them, and an
     // open one keeps the input from the free camera. Forms are previewed instead, with the close the recorder adds.
     {MinecraftPacketIds::ServerSettingsResponse,                  {PacketLifecycle::Ignore}                        },
