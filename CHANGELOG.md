@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Recorded player positions and replay player lists no longer drop players during respawn or when another entity reuses their runtime ID.
 - Piston animations now stay aligned when camera tracks or cuts move the view across long distances during preview and export.
+- First-person camera views no longer jitter or clip into nearby blocks from integrated-server movement corrections.
 
 ## [0.4.0-mc26.40] - 2026-11-15
 
