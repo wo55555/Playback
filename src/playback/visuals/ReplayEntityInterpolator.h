@@ -77,11 +77,12 @@ void setReplaySubjectEntity(bool player, float eyeHeight) noexcept;
 [[nodiscard]] bool hasReplaySubject() noexcept;
 
 // Flags of the followed replay actor, read once per replay tick. Other players have no recorded camera
-// offset, so sneak and swim use the offsets measured on the local player. Crawl is recorded but not applied.
+// offset, so sneak, swim, crawl, and glide use the offsets measured on the local player.
 struct ReplaySubjectPosture {
     bool sneaking{};
     bool swimming{};
     bool crawling{};
+    bool gliding{};
     bool sleeping{};
     bool actorSleeping{};
 };
