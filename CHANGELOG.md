@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The free camera no longer freezes in a replay while the recording held the player's input locked, such as with `/inputpermission` or a cutscene add-on, and no longer snaps back to positions the server corrected the recording player to. The recording player's input-permission and movement-correction packets are no longer recorded or applied to the replay viewer.
+- Recorded player positions and replay player lists no longer drop players during respawn or when another entity reuses their runtime ID.
 
 ## [0.4.0-mc26.20] - 2026-11-15
 
