@@ -20,6 +20,7 @@
 #include "mc/network/NetworkIdentifier.h"
 #include "mc/network/Packet.h"
 #include "mc/network/ServerNetworkHandler.h"
+#include "mc/network/packet/CorrectPlayerMovePredictionPacket.h"
 #include "mc/network/packet/InventoryContentPacket.h"
 #include "mc/network/packet/InventorySlotPacket.h"
 #include "mc/network/packet/ItemData.h"
@@ -27,6 +28,7 @@
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelSoundEventPacket.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
+#include "mc/network/packet/MovePlayerPacket.h"
 #include "mc/network/packet/PlayerHotbarPacket.h"
 #include "mc/network/packet/ResourcePackStackPacket.h"
 #include "mc/network/packet/ResourcePacksInfoPacket.h"
@@ -67,6 +69,8 @@ struct NetworkHookState {
     bool levelChunk{};
     bool subChunk{};
     bool setTime{};
+    bool correctPlayerMovePrediction{};
+    bool movePlayer{};
     bool resourcePacksInfo{};
     bool resourcePackStack{};
     bool startGame{};
@@ -258,6 +262,42 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     auto& replaySession = replay::ReplaySession::getInstance();
     if (replaySession.isIsolatingReplayWorld() && !replaySession.isInjectingPacket(&packet)) return;
+    origin(source, packet);
+}
+
+// The integrated server runs an empty void world without recorded terrain or movement inputs, so its movement
+// reconciliation packets inject DynamicRenderOffsetComponent onto the observer and push the first-person camera into
+// nearby blocks.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackCorrectPlayerMovePredictionHook,
+    ll::memory::HookPriority::Normal,
+    ClientNetworkHandler,
+    &ClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const&                 source,
+    CorrectPlayerMovePredictionPacket const& packet
+) {
+    auto& replaySession = replay::ReplaySession::getInstance();
+    if (replaySession.isIsolatingReplayWorld() && !replaySession.isInjectingPacket(&packet)) return;
+    origin(source, packet);
+}
+
+// Once the replay world is joined, any non-injected MovePlayerPacket outside a dimension transition comes from the
+// integrated server (e.g. echoing syncObserverServerPosition at server eye offset) and must not snap the observer.
+LL_TYPE_INSTANCE_HOOK(
+    PlaybackMovePlayerHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const& source,
+    MovePlayerPacket const&  packet
+) {
+    auto& replaySession = replay::ReplaySession::getInstance();
+    if (replaySession.isIsolatingReplayWorld() && replaySession.hasJoinedReplayWorld()
+        && !replaySession.isDimensionTransitionPending() && !replaySession.isInjectingPacket(&packet)) {
+        return;
+    }
     origin(source, packet);
 }
 
@@ -655,21 +695,23 @@ bool hookNetwork(bool enable) {
 
     auto allInstalled = [&] {
         return state.dimensionConstructor && state.levelChunk && state.subChunk && state.setTime
-            && state.resourceHandlersInstalled() && state.completion && state.packetRead && state.renderFinalizer
-            && state.renderedFov && state.localViewFrame && state.hudHandlersInstalled()
-            && state.soundHandlersInstalled() && state.endTick;
+            && state.correctPlayerMovePrediction && state.movePlayer && state.resourceHandlersInstalled()
+            && state.completion && state.packetRead && state.renderFinalizer && state.renderedFov
+            && state.localViewFrame && state.hudHandlersInstalled() && state.soundHandlersInstalled() && state.endTick;
     };
     auto noneInstalled = [&] {
         return !state.dimensionConstructor && !state.levelChunk && !state.subChunk && !state.setTime
-            && state.resourceHandlersRemoved() && !state.completion && !state.packetRead && !state.renderFinalizer
-            && !state.renderedFov && !state.localViewFrame && state.hudHandlersRemoved() && state.soundHandlersRemoved()
-            && !state.endTick;
+            && !state.correctPlayerMovePrediction && !state.movePlayer && state.resourceHandlersRemoved()
+            && !state.completion && !state.packetRead && !state.renderFinalizer && !state.renderedFov
+            && !state.localViewFrame && state.hudHandlersRemoved() && state.soundHandlersRemoved() && !state.endTick;
     };
     auto installAll = [&] {
         return installNetworkHook<PlaybackDimensionConstructorHook>(state.dimensionConstructor)
             && installNetworkHook<PlaybackLevelChunkHook>(state.levelChunk)
             && installNetworkHook<PlaybackSubChunkHook>(state.subChunk)
             && installNetworkHook<PlaybackSetTimeHook>(state.setTime)
+            && installNetworkHook<PlaybackCorrectPlayerMovePredictionHook>(state.correctPlayerMovePrediction)
+            && installNetworkHook<PlaybackMovePlayerHook>(state.movePlayer)
             && installNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo)
             && installNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack)
             && installNetworkHook<PlaybackStartGameHook>(state.startGame)
@@ -703,6 +745,8 @@ bool hookNetwork(bool enable) {
         removeNetworkHook<PlaybackStartGameHook>(state.startGame);
         removeNetworkHook<PlaybackResourcePackStackHook>(state.resourcePackStack);
         removeNetworkHook<PlaybackResourcePacksInfoHook>(state.resourcePacksInfo);
+        removeNetworkHook<PlaybackMovePlayerHook>(state.movePlayer);
+        removeNetworkHook<PlaybackCorrectPlayerMovePredictionHook>(state.correctPlayerMovePrediction);
         removeNetworkHook<PlaybackSetTimeHook>(state.setTime);
         removeNetworkHook<PlaybackSubChunkHook>(state.subChunk);
         removeNetworkHook<PlaybackLevelChunkHook>(state.levelChunk);
