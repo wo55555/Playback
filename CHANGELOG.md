@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Recorded player positions and replay player lists no longer drop players during respawn or when another entity reuses their runtime ID.
+
 ## [0.4.0-mc26.10] - 2026-11-15
 
 ### Added
