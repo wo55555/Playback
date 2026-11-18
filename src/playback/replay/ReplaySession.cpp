@@ -1360,8 +1360,9 @@ void ReplaySession::clearReplayPlayers(bool clearChoice) {
 void ReplaySession::refreshReplayPlayerRoster() {
     if (!mReplayPlayer || mPendingReplayDimension || mPendingSnapshotApply || mChunkInjectionPending) return;
 
+    auto&      level     = mReplayPlayer->getLevel();
     auto const dimension = mReplayPlayer->getDimensionId();
-    auto const actors    = mReplayPlayer->getLevel().getRuntimeActorList();
+    auto const actors    = level.getRuntimeActorList();
     struct LivePlayer {
         ActorUniqueID id;
         std::string   name;
@@ -1369,18 +1370,22 @@ void ReplaySession::refreshReplayPlayerRoster() {
     };
     std::unordered_map<std::string, LivePlayer> live;
     live.reserve(actors.size());
+    auto const collectPlayer = [&](Player const& player) {
+        if (&player == mReplayPlayer || player.getDimensionId() != dimension) return;
+        std::string uuid = player.getUuid().asString();
+        if (uuid.empty()) return;
+        auto const uniqueId = player.getOrCreateUniqueID();
+        bool const recorder = mRecordedLocalPlayerId && uniqueId == *mRecordedLocalPlayerId;
+        live.insert_or_assign(std::move(uuid), LivePlayer{uniqueId, firstNameLine(player.getNameTag()), recorder});
+    };
     for (auto const* actor : actors) {
-        if (!actor || actor == mReplayPlayer || !actor->isPlayer()) continue;
-        if (actor->getDimensionId() != dimension) continue;
-        auto const* player = static_cast<Player const*>(actor);
-        std::string uuid   = player->getUuid().asString();
-        if (uuid.empty()) continue;
-        bool const recorder = mRecordedLocalPlayerId && actor->getOrCreateUniqueID() == *mRecordedLocalPlayerId;
-        live.insert_or_assign(
-            std::move(uuid),
-            LivePlayer{actor->getOrCreateUniqueID(), firstNameLine(actor->getNameTag()), recorder}
-        );
+        if (!actor || !actor->isPlayer()) continue;
+        collectPlayer(static_cast<Player const&>(*actor));
     }
+    level.forEachPlayer([&](Player& player) {
+        collectPlayer(player);
+        return true;
+    });
 
     std::lock_guard                 lock(mReplayPlayersMutex);
     bool                            changed = false;
