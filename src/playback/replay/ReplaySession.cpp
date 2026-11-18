@@ -43,11 +43,13 @@
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
+#include "mc/entity/components/DynamicRenderOffsetComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/ItemInUseTicksDuringMovementComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/entity/components/MovementWasCorrectedComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
@@ -316,7 +318,17 @@ void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
 
-    auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
+    auto& context = actor.getEntityContext();
+    context.removeComponent<MovementWasCorrectedComponent>();
+    if (auto dynamicOffset = context.tryGetComponent<DynamicRenderOffsetComponent>()) {
+        dynamicOffset->mCurrentOffset      = Vec3{};
+        dynamicOffset->mNormalizedOffset   = Vec3{};
+        dynamicOffset->mPreviousOffset     = Vec3{};
+        dynamicOffset->mInterpolationSpeed = 0.0f;
+        dynamicOffset->mCurrentPosDelta    = Vec3{};
+    }
+
+    auto const interpolator = context.tryGetComponent<MovementInterpolatorComponent>();
     if (!interpolator) return;
 
     *interpolator->mPos          = position;
