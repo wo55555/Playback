@@ -66,7 +66,19 @@ void drawIconCentred(ImDrawList* drawList, char const* icon, ImVec2 const& origi
 void drawIconAtCentre(ImDrawList* drawList, char const* icon, ImVec2 const& centre, ImU32 color);
 
 // Transport and window glyphs drawn from primitives so they share one weight and exact centring.
-enum class VectorIcon { SkipStart, StepBack, Play, Pause, StepForward, SkipEnd, Maximize, Restore };
+enum class VectorIcon {
+    SkipStart,
+    StepBack,
+    Play,
+    Pause,
+    StepForward,
+    SkipEnd,
+    Maximize,
+    Restore,
+    SelectCursor,
+    PenTool,
+    SnapMagnet
+};
 
 void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, ImU32 color, VectorIcon icon);
 

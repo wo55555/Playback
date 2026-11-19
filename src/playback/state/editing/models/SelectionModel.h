@@ -16,16 +16,11 @@ struct SelectedKeyframe {
 };
 
 struct SelectedClip {
-    std::string trackId;
     std::string clipId;
 };
 
 struct SelectedMarker {
     std::string markerId;
-};
-
-struct SelectedTrack {
-    std::string trackId;
 };
 
 struct SelectedTransition {
@@ -36,8 +31,7 @@ struct SelectedCamera {
     std::string cameraId;
 };
 
-using Selection =
-    std::variant<SelectedKeyframe, SelectedClip, SelectedMarker, SelectedTrack, SelectedTransition, SelectedCamera>;
+using Selection = std::variant<SelectedKeyframe, SelectedClip, SelectedMarker, SelectedTransition, SelectedCamera>;
 
 struct EditorStateExt;
 

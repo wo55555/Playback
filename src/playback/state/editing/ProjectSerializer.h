@@ -6,7 +6,7 @@
 
 namespace playback::state::editing {
 
-constexpr int kProjectFormatVersion = 1;
+constexpr int kProjectFormatVersion = 2;
 
 [[nodiscard]] std::string serializeProject(model::EditorStateExt const& project);
 

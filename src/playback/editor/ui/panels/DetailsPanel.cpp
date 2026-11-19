@@ -7,6 +7,7 @@
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/integration/OptiPistonBridge.h"
+#include "playback/state/editing/ClipOps.h"
 #include "playback/utils/ShellUtils.h"
 
 #include "ll/api/i18n/I18n.h"
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 
 namespace playback::editor::ui {
 using namespace playback::state;
@@ -134,6 +136,38 @@ bool vectorInput2(char const* id, float (&values)[2], std::array<char const*, 2>
     return edited;
 }
 
+[[nodiscard]] float speedToSliderT(float speed) {
+    float const safe = std::max(speed, 0.01f);
+    if (safe <= 1.0f) return 0.5f * (1.0f + std::clamp(std::log2(safe) / 2.0f, -1.0f, 0.0f));
+    return 0.5f + 0.5f * std::clamp(std::log2(safe) / 3.0f, 0.0f, 1.0f);
+}
+
+[[nodiscard]] float sliderTToSpeed(float t) {
+    float const clamped = std::clamp(t, 0.0f, 1.0f);
+    if (clamped <= 0.5f) return std::exp2(4.0f * clamped - 2.0f);
+    return std::exp2(6.0f * clamped - 3.0f);
+}
+
+[[nodiscard]] ImU32 speedAccentColor(float speed) {
+    if (speed > 1.001f) return theme::kSpeedFast;
+    if (speed < 0.999f) return theme::kSpeedSlow;
+    return theme::kAccent;
+}
+
+[[nodiscard]] ImU32 brightenColor(ImU32 color, float amount) {
+    ImVec4 c = ImGui::ColorConvertU32ToFloat4(color);
+    c.x      = c.x + (1.0f - c.x) * amount;
+    c.y      = c.y + (1.0f - c.y) * amount;
+    c.z      = c.z + (1.0f - c.z) * amount;
+    return ImGui::ColorConvertFloat4ToU32(c);
+}
+
+[[nodiscard]] ImU32 scaleAlpha(ImU32 color, float alphaScale) {
+    int const alpha =
+        static_cast<int>(std::lround(static_cast<float>((color >> IM_COL32_A_SHIFT) & 0xff) * alphaScale));
+    return theme::withAlpha(color, std::clamp(alpha, 0, 255));
+}
+
 } // namespace
 
 void DetailsPanel::draw(PanelContext const& ctx) {
@@ -205,7 +239,11 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     auto const  project   = ctx.state.project;
     auto const& selection = ctx.selection;
     std::string subject   = "playback.refactorEditor.details.noSelection"_tr();
-    if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
+    if (auto const* selectedClip = selection.getAs<state::editing::model::SelectedClip>()) {
+        auto const hit = state::editing::ClipOps::findClipWithCamera(*project, selectedClip->clipId);
+        subject        = hit ? ("playback.refactorEditor.details.clip"_tr() + " (" + hit.camera->name + ")")
+                             : "playback.refactorEditor.details.clip"_tr();
+    } else if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
         auto const* camera = findById(project->cameras, selectedCamera->cameraId);
         subject            = camera ? camera->name : "playback.refactorEditor.details.camera"_tr();
     } else if (selection.keyframeCount() > 1) {
@@ -217,11 +255,377 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
+    if (drawClip(ctx)) return;
     if (drawCamera(ctx)) return;
     if (drawKeyframes(ctx)) return;
     if (drawKeyframe(ctx)) return;
     if (drawMarker(ctx)) return;
     drawOverview(ctx);
+}
+
+bool DetailsPanel::drawClip(PanelContext const& ctx) {
+    auto const* selected = ctx.selection.getAs<state::editing::model::SelectedClip>();
+    if (!selected) return false;
+
+    auto const project = ctx.state.project;
+    auto const hit     = state::editing::ClipOps::findClipWithCamera(*project, selected->clipId);
+    if (!hit) {
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.clipMissing"_tr().c_str());
+        return true;
+    }
+    auto const* camera = hit.camera;
+    auto const* clip   = hit.clip;
+
+    if (property::beginSection("playback.refactorEditor.details.clip"_tr().c_str())) {
+        property::textRow("playback.refactorEditor.details.clipLane"_tr().c_str(), camera->name.c_str());
+        bool const editable = !camera->locked && !clip->locked;
+        float const scale    = metrics::scale();
+
+        int minIn  = 0;
+        int maxOut = std::max(1, project->totalTicks);
+        for (auto const& other : camera->clips) {
+            if (other.id == clip->id) continue;
+            if (other.outTick <= clip->inTick) minIn = std::max(minIn, other.outTick);
+            if (other.inTick >= clip->outTick) maxOut = std::min(maxOut, other.inTick);
+        }
+        minIn  = std::clamp(minIn, 0, project->totalTicks);
+        maxOut = std::clamp(maxOut, minIn, project->totalTicks);
+
+        int const   sourceTicks       = std::max(0, clip->outTick - clip->inTick);
+        float const sourceSec         = static_cast<float>(sourceTicks) / static_cast<float>(widgets::kTicksPerSecond);
+        float       outputDurationSec = sourceSec / std::max(state::editing::model::MinClipSpeed, clip->speed);
+        auto const  submitSpeed       = [&](float nextSpeed) {
+            float const clamped =
+                std::clamp(nextSpeed, state::editing::model::MinClipSpeed, state::editing::model::MaxClipSpeed);
+            if (std::abs(clamped - clip->speed) > 1e-4f) {
+                EditorAction action{EditorActionType::SetClipSpeed};
+                action.id    = clip->id;
+                action.speed = clamped;
+                ctx.submitAction(std::move(action));
+            }
+        };
+
+        ImGui::BeginDisabled(!editable);
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {4.0f, 5.0f});
+        if (ImGui::BeginTable(
+                "##clip-properties",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, 84.0f);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            int inTick = clip->inTick;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.start"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputInt("##clip-in", &inTick, 0, 0);
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                inTick = std::clamp(inTick, minIn, std::max(minIn, clip->outTick - 1));
+                if (inTick != clip->inTick) {
+                    EditorAction action{EditorActionType::MoveAndTrimClip};
+                    action.id            = clip->id;
+                    action.tick          = inTick;
+                    action.secondaryTick = clip->outTick;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+            ImGui::TextDisabled("%s", formatTick(clip->inTick).c_str());
+
+            int outTick = clip->outTick;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.end"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputInt("##clip-out", &outTick, 0, 0);
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                outTick = std::clamp(outTick, std::min(maxOut, clip->inTick + 1), maxOut);
+                if (outTick != clip->outTick) {
+                    EditorAction action{EditorActionType::MoveAndTrimClip};
+                    action.id            = clip->id;
+                    action.tick          = clip->inTick;
+                    action.secondaryTick = outTick;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+            ImGui::TextDisabled("%s", formatTick(clip->outTick).c_str());
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.duration"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(formatTick(sourceTicks).c_str());
+
+            float speed = clip->speed;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.speed"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputFloat("##clip-speed", &speed, 0.0f, 0.0f, "%.2fx");
+            if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(speed)) {
+                submitSpeed(speed);
+            }
+            ImGui::TextDisabled("%.0f%%", static_cast<double>(clip->speed * 100.0f));
+
+            float editedDurationSec = outputDurationSec;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.outputDuration"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputFloat("##clip-out-duration", &editedDurationSec, 0.0f, 0.0f, "%.2f s");
+            if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(editedDurationSec) && editedDurationSec > 0.001f
+                && sourceSec > 0.0f) {
+                submitSpeed(sourceSec / editedDurationSec);
+            }
+
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        // Piecewise log2 speed slider centered at 1.0x.
+        {
+            float const  availW     = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+            float const  sliderH    = std::round(18.0f * scale);
+            float const  thumbR     = 5.5f * scale;
+            float const  railH      = 4.0f * scale;
+            float const  alphaScale = editable ? 1.0f : ImGui::GetStyle().Alpha;
+            ImVec2 const min        = ImGui::GetCursorScreenPos();
+            ImVec2 const max        = {min.x + availW, min.y + sliderH};
+
+            ImGui::InvisibleButton("##clip-speed-slider", {availW, sliderH});
+            bool const    hovered    = ImGui::IsItemHovered();
+            bool const    active     = ImGui::IsItemActive();
+            ImGuiID const sliderId   = ImGui::GetItemID();
+            ImGuiStorage* storage    = ImGui::GetStateStorage();
+            bool          ignoreDrag = storage->GetBool(sliderId, false);
+            if (!active) {
+                ignoreDrag = false;
+                storage->SetBool(sliderId, false);
+            }
+
+            float const trackMinX = min.x + thumbR;
+            float const trackMaxX = std::max(trackMinX + 1.0f, max.x - thumbR);
+            float const trackW    = trackMaxX - trackMinX;
+            float const centerX   = min.x + availW * 0.5f;
+            float const centerY   = (min.y + max.y) * 0.5f;
+
+            if (editable) {
+                if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    ignoreDrag = true;
+                    storage->SetBool(sliderId, true);
+                    submitSpeed(1.0f);
+                } else if (active && !ignoreDrag && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    float const rawT     = std::clamp((ImGui::GetMousePos().x - trackMinX) / trackW, 0.0f, 1.0f);
+                    float       newSpeed = sliderTToSpeed(rawT);
+                    if (ImGui::GetIO().KeyShift) {
+                        constexpr float kSnapPresets[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f, 8.0f};
+                        float           bestDist       = std::abs(rawT - speedToSliderT(kSnapPresets[0]));
+                        float           bestPreset     = kSnapPresets[0];
+                        for (int i = 1; i < IM_ARRAYSIZE(kSnapPresets); ++i) {
+                            float const dist = std::abs(rawT - speedToSliderT(kSnapPresets[i]));
+                            if (dist < bestDist) {
+                                bestDist   = dist;
+                                bestPreset = kSnapPresets[i];
+                            }
+                        }
+                        newSpeed = bestPreset;
+                    }
+                    submitSpeed(newSpeed);
+                }
+            }
+
+            float const t          = speedToSliderT(clip->speed);
+            float const thumbX     = trackMinX + t * trackW;
+            float const railTop    = centerY - railH * 0.5f;
+            float const railBottom = centerY + railH * 0.5f;
+            float const railRound  = railH * 0.5f;
+            auto* const dl         = ImGui::GetWindowDrawList();
+
+            dl->AddRectFilled(
+                {trackMinX, railTop},
+                {trackMaxX, railBottom},
+                scaleAlpha(theme::kInputBg, alphaScale),
+                railRound
+            );
+            dl->AddRect(
+                {trackMinX, railTop},
+                {trackMaxX, railBottom},
+                scaleAlpha(theme::kBorder, alphaScale),
+                railRound,
+                0,
+                1.0f
+            );
+
+            // Center 1.0x reference tick.
+            dl->AddLine(
+                {centerX, railTop - 3.0f * scale},
+                {centerX, railBottom + 3.0f * scale},
+                scaleAlpha(theme::kLine, alphaScale),
+                std::max(1.0f, 1.25f * scale)
+            );
+
+            ImU32 const accent = speedAccentColor(clip->speed);
+            if (clip->speed > 1.001f || clip->speed < 0.999f) {
+                float const fillLeft  = std::min(centerX, thumbX);
+                float const fillRight = std::max(centerX, thumbX);
+                if (fillRight - fillLeft > 0.5f) {
+                    dl->AddRectFilled(
+                        {fillLeft, railTop},
+                        {fillRight, railBottom},
+                        scaleAlpha(accent, alphaScale),
+                        railRound
+                    );
+                }
+            }
+
+            ImU32 const thumbCol =
+                (editable && (hovered || active)) ? brightenColor(accent, active ? 0.30f : 0.18f) : accent;
+            dl->AddCircleFilled({thumbX, centerY}, thumbR, scaleAlpha(thumbCol, alphaScale));
+            dl->AddCircle({thumbX, centerY}, thumbR, scaleAlpha(theme::kKeyframeOutline, alphaScale), 0, 1.0f * scale);
+
+            char tip[64]{};
+            std::snprintf(
+                tip,
+                sizeof(tip),
+                "%.2fx (%.0f%%) | %.2f s",
+                static_cast<double>(clip->speed),
+                static_cast<double>(clip->speed * 100.0f),
+                static_cast<double>(outputDurationSec)
+            );
+            widgets::itemTooltip(tip);
+        }
+
+        // Equal-width speed preset chips.
+        {
+            constexpr float kSpeedPresets[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+            constexpr int   kPresetCount    = IM_ARRAYSIZE(kSpeedPresets);
+            float const     spacing         = 3.0f * scale;
+            float const     availW          = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+            float const     chipW           = std::max(
+                1.0f,
+                (availW - spacing * static_cast<float>(kPresetCount - 1)) / static_cast<float>(kPresetCount)
+            );
+            float const chipH = std::round(ImGui::GetFontSize() + 6.0f * scale);
+
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {spacing, spacing});
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f * scale);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {2.0f * scale, 0.0f});
+            for (int i = 0; i < kPresetCount; ++i) {
+                if (i > 0) ImGui::SameLine();
+                float const preset       = kSpeedPresets[i];
+                bool const  active       = std::abs(clip->speed - preset) < 0.001f;
+                ImU32 const presetAccent = speedAccentColor(preset);
+                char        label[16]{};
+                std::snprintf(label, sizeof(label), "%.2gx", static_cast<double>(preset));
+
+                float const w =
+                    (i == kPresetCount - 1) ? std::max(1.0f, ImGui::GetContentRegionAvail().x) : std::floor(chipW);
+                if (active) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+                    ImGui::PushStyleColor(ImGuiCol_Button, theme::withAlpha(presetAccent, 0x44));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::withAlpha(presetAccent, 0x5c));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::withAlpha(presetAccent, 0x70));
+                    ImGui::PushStyleColor(ImGuiCol_Border, presetAccent);
+                    ImGui::PushStyleColor(ImGuiCol_Text, presetAccent);
+                } else {
+                    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, theme::kFineDividerWidth);
+                    ImGui::PushStyleColor(ImGuiCol_Button, theme::kButton);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kButtonHover);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kButtonActive);
+                    ImGui::PushStyleColor(ImGuiCol_Border, theme::kFineDivider);
+                    ImGui::PushStyleColor(ImGuiCol_Text, theme::kText);
+                }
+                if (ImGui::Button(label, {w, chipH})) {
+                    submitSpeed(preset);
+                }
+                ImGui::PopStyleColor(5);
+                ImGui::PopStyleVar();
+            }
+            ImGui::PopStyleVar(3);
+        }
+
+        bool muted = clip->muted;
+        if (ImGui::Checkbox("playback.refactorEditor.details.muted"_tr().c_str(), &muted)) {
+            EditorAction action{EditorActionType::SetClipMuted};
+            action.id    = clip->id;
+            action.value = muted;
+            ctx.submitAction(std::move(action));
+        }
+        ImGui::EndDisabled();
+
+        ImGui::BeginDisabled(camera->locked);
+        bool exportEnabled = clip->exportEnabled;
+        if (ImGui::Checkbox("playback.refactorEditor.details.exportEnabled"_tr().c_str(), &exportEnabled)) {
+            EditorAction action{EditorActionType::SetClipExportEnabled};
+            action.id    = clip->id;
+            action.value = exportEnabled;
+            ctx.submitAction(std::move(action));
+        }
+
+        bool locked = clip->locked;
+        if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+            EditorAction action{EditorActionType::SetClipLocked};
+            action.id    = clip->id;
+            action.value = locked;
+            ctx.submitAction(std::move(action));
+        }
+        ImGui::EndDisabled();
+
+        property::separator();
+        int const  playhead = ctx.state.currentTick;
+        bool const canSplit = editable && clip->inTick < playhead && playhead < clip->outTick;
+        if (property::actionButton("playback.refactorEditor.details.splitClipAtPlayhead"_tr().c_str(), canSplit)) {
+            EditorAction action{EditorActionType::SplitClip};
+            action.id   = clip->id;
+            action.tick = playhead;
+            ctx.submitAction(std::move(action));
+        }
+        bool const canTrimIn = editable && minIn <= playhead && playhead < clip->outTick && playhead != clip->inTick;
+        if (property::actionButton("playback.refactorEditor.details.trimClipInToPlayhead"_tr().c_str(), canTrimIn)) {
+            EditorAction action{EditorActionType::MoveAndTrimClip};
+            action.id            = clip->id;
+            action.tick          = playhead;
+            action.secondaryTick = clip->outTick;
+            ctx.submitAction(std::move(action));
+        }
+        bool const canTrimOut = editable && clip->inTick < playhead && playhead <= maxOut && playhead != clip->outTick;
+        if (property::actionButton("playback.refactorEditor.details.trimClipOutToPlayhead"_tr().c_str(), canTrimOut)) {
+            EditorAction action{EditorActionType::MoveAndTrimClip};
+            action.id            = clip->id;
+            action.tick          = clip->inTick;
+            action.secondaryTick = playhead;
+            ctx.submitAction(std::move(action));
+        }
+        bool const canExport = ctx.state.capabilities.videoExport
+                            && !exporting::isExportActive(ctx.state.exportStatus.state) && project->totalTicks > 0;
+        if (property::actionButton("playback.refactorEditor.details.exportClip"_tr().c_str(), canExport)) {
+            ctx.commands.openExportSingleClip(clip->id);
+        }
+        if (property::actionButton("playback.refactorEditor.details.deleteClip"_tr().c_str(), editable)) {
+            EditorAction action{EditorActionType::DeleteClip};
+            action.id = clip->id;
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        if (camera->locked) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.cameraLocked"_tr().c_str());
+        } else if (clip->locked) {
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.clipLocked"_tr().c_str());
+        }
+        property::endSection();
+    }
+    return true;
 }
 
 bool DetailsPanel::drawCamera(PanelContext const& ctx) {
@@ -239,6 +643,13 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
             property::textRow("playback.refactorEditor.details.nameLabel"_tr().c_str(), camera->name.c_str());
             std::string const keyframeCount = std::to_string(camera->keysByTick.size());
             property::textRow("playback.refactorEditor.details.keyframesLabel"_tr().c_str(), keyframeCount.c_str());
+            size_t enabledClips = 0;
+            for (auto const& clip : camera->clips) {
+                if (clip.exportEnabled) ++enabledClips;
+            }
+            ImGui::TextUnformatted(
+                "playback.refactorEditor.details.clipsSummary"_tr(camera->clips.size(), enabledClips).c_str()
+            );
             bool       enabled      = camera->enabled;
             auto const enabledLabel = "playback.refactorEditor.details.enabled"_tr();
             if (ImGui::Checkbox(enabledLabel.c_str(), &enabled)) {
@@ -368,6 +779,16 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                 action.tick = ctx.state.currentTick;
                 submit(std::move(action));
             }
+            bool const canResetClips = !camera->locked && project->totalTicks > 0
+                                    && std::ranges::none_of(camera->clips, &state::editing::model::Clip::locked);
+            if (property::actionButton(
+                    "playback.refactorEditor.details.resetTrackClipsToFull"_tr().c_str(),
+                    canResetClips
+                )) {
+                EditorAction action{EditorActionType::ResetClipsToFullRange};
+                action.id = camera->id;
+                submit(std::move(action));
+            }
             property::separator();
             if (property::actionButton("playback.refactorEditor.details.deleteCamera"_tr().c_str())) {
                 EditorAction action{EditorActionType::DeleteCamera};
@@ -399,7 +820,9 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
     bool                                            anyPerson       = false;
     std::optional<std::string>                      sharedSubject;
     bool                                            mixedSubject = false;
-    int                                             tracks       = 0;
+    std::optional<bool>                             sharedIgnore;
+    bool                                            mixedIgnore = false;
+    int                                             tracks      = 0;
     std::string                                     lastTrack;
     for (auto const& entry : selection.keyframes()) {
         refs.push_back({entry.trackId, entry.tick, std::nullopt});
@@ -424,6 +847,8 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
         int const type = static_cast<int>(key->second.interpolationType);
         if (!shared) shared = type;
         else if (*shared != type) mixed = true;
+        if (!sharedIgnore) sharedIgnore = key->second.ignoreClipSpeed;
+        else if (*sharedIgnore != key->second.ignoreClipSpeed) mixedIgnore = true;
     }
 
     if (property::beginSection("playback.refactorEditor.details.multiKeyframe"_tr().c_str())) {
@@ -503,6 +928,21 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                 action.secondaryId  = std::move(picked.uuid);
                 ctx.submitAction(std::move(action));
             }
+        }
+        property::separator();
+        {
+            bool              ignoreValue = !mixedIgnore && sharedIgnore.value_or(false);
+            std::string const ignoreLabel =
+                mixedIgnore ? ("playback.refactorEditor.details.ignoreClipSpeed"_tr() + " ("
+                               + "playback.refactorEditor.details.mixed"_tr() + ")##batch-ignore-clip-speed")
+                            : ("playback.refactorEditor.details.ignoreClipSpeed"_tr() + "##batch-ignore-clip-speed");
+            if (ImGui::Checkbox(ignoreLabel.c_str(), &ignoreValue)) {
+                EditorAction action{EditorActionType::SetKeyframesIgnoreClipSpeed};
+                action.keyframeRefs = refs;
+                action.value        = ignoreValue;
+                ctx.submitAction(std::move(action));
+            }
+            widgets::itemTooltip("playback.refactorEditor.details.ignoreClipSpeedHint"_tr().c_str());
         }
         property::separator();
         if (property::actionButton(
@@ -854,6 +1294,18 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                 }
             }
             property::separator();
+            {
+                bool ignoreClipSpeed = key->second.ignoreClipSpeed;
+                if (ImGui::Checkbox("playback.refactorEditor.details.ignoreClipSpeed"_tr().c_str(), &ignoreClipSpeed)) {
+                    EditorAction action{EditorActionType::SetKeyframeIgnoreClipSpeed};
+                    action.id    = camera->id;
+                    action.tick  = originalTick;
+                    action.value = ignoreClipSpeed;
+                    submit(std::move(action));
+                }
+                widgets::itemTooltip("playback.refactorEditor.details.ignoreClipSpeedHint"_tr().c_str());
+            }
+            property::separator();
             if (property::actionButton("playback.refactorEditor.details.deleteKeyframe"_tr().c_str())) {
                 EditorAction action{EditorActionType::DeleteCameraKeyframe};
                 action.id   = camera->id;
@@ -960,13 +1412,36 @@ void DetailsPanel::drawOverview(PanelContext const& ctx) {
     auto const submit  = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
 
     if (property::beginSection("playback.refactorEditor.details.overview"_tr().c_str())) {
+        auto const* activeScene  = state::editing::ClipOps::activeScene(*project);
+        size_t      clipCount    = 0;
+        size_t      enabledCount = 0;
+        for (auto const& camera : project->cameras) {
+            clipCount += camera.clips.size();
+            for (auto const& clip : camera.clips) {
+                if (clip.exportEnabled) ++enabledCount;
+            }
+        }
         ImGui::TextDisabled("%s", "playback.refactorEditor.details.selectionHint"_tr().c_str());
         ImGui::Spacing();
+        if (activeScene) {
+            ImGui::TextUnformatted("playback.refactorEditor.details.sceneName"_tr(activeScene->name).c_str());
+        }
         ImGui::TextUnformatted("playback.refactorEditor.details.total"_tr(formatTick(project->totalTicks)).c_str());
         ImGui::TextUnformatted("playback.refactorEditor.details.cameras"_tr(project->cameras.size()).c_str());
+        ImGui::TextUnformatted("playback.refactorEditor.details.clipsSummary"_tr(clipCount, enabledCount).c_str());
         ImGui::Spacing();
         if (property::actionButton("playback.refactorEditor.details.addFreeCamera"_tr().c_str())) {
             submit({EditorActionType::AddFreeCamera});
+        }
+        if (property::actionButton("playback.refactorEditor.details.addScene"_tr().c_str())) {
+            submit({EditorActionType::AddScene});
+        }
+        bool const canReset =
+            project->totalTicks > 0 && std::ranges::none_of(project->cameras, [](auto const& camera) {
+                return camera.locked || std::ranges::any_of(camera.clips, &state::editing::model::Clip::locked);
+            });
+        if (property::actionButton("playback.refactorEditor.details.resetClipsToFull"_tr().c_str(), canReset)) {
+            submit({EditorActionType::ResetClipsToFullRange});
         }
         property::endSection();
     }
