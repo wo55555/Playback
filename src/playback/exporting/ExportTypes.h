@@ -27,6 +27,9 @@ enum class ExportRangeMode : uint8_t {
     SingleClip    = 2,
 };
 
+constexpr uint32_t MinTimelapseIntervalMs = 50;        // 1 replay tick (0.05s)
+constexpr uint32_t MaxTimelapseIntervalMs = 3'600'000; // 1 hour
+
 // Maps to the libx264 preset: faster presets trade file size and some sharpness for encode speed.
 enum class VideoEncodeSpeed : uint8_t { Quality, Fast, Fastest };
 
@@ -106,6 +109,8 @@ struct ExportSettings {
     bool                     hideHud{false};
     ExportRangeMode          rangeMode{ExportRangeMode::EnabledClips};
     std::vector<std::string> selectedClipIds;
+    bool                     timelapse{false};
+    uint32_t                 timelapseIntervalMs{1000};
 };
 
 enum class ExportError : uint8_t {
