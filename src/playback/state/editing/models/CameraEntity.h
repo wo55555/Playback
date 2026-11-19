@@ -1,10 +1,12 @@
 ﻿#pragma once
 
 #include "CameraKeyframe.h"
+#include "Track.h"
 
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace playback::state::editing::model {
 
@@ -28,6 +30,7 @@ struct CameraEntity {
     std::string                   name;
     bool                          enabled{true};
     std::map<int, CameraKeyframe> keysByTick;
+    std::vector<Clip>             clips;
     std::optional<CameraShake>    shake;
     std::optional<CameraLimiter>  limiter;
     bool                          locked{};

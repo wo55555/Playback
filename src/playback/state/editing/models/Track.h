@@ -2,12 +2,15 @@
 
 #include "MathTypes.h"
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
 namespace playback::state::editing::model {
 
-enum class TrackKind : uint8_t { Video = 0, Camera, Marker };
+constexpr float MinClipSpeed = 0.05f;
+constexpr float MaxClipSpeed = 32.0f;
 
 struct Clip {
     std::string id;
@@ -15,12 +18,12 @@ struct Clip {
     int         inTick{};
     int         outTick{};
     int         trackTick{};
-    int         activeCameraTrackIdx{0};
     float       speed{1.0f};
     std::string name;
     Color4      color{0, 0, 1, 1};
     bool        muted{false};
     bool        locked{false};
+    bool        exportEnabled{true};
 };
 
 enum class TransitionKind : uint8_t { Cut = 0, Fade, CrossDissolve };
@@ -37,16 +40,6 @@ struct Transition {
     [[nodiscard]] float blendAlpha(int tickInTransition) const;
 };
 
-struct Track {
-    std::string       id;
-    std::string       name;
-    TrackKind         kind{TrackKind::Video};
-    std::vector<Clip> clips;
-    bool              visible{true};
-    bool              locked{false};
-    int               height{48};
-};
-
 struct Marker {
     std::string id;
     std::string label;
@@ -59,6 +52,20 @@ inline float Transition::blendAlpha(int tickInTransition) const {
     if (t <= 0.0f) return 0.0f;
     if (t >= 1.0f) return 1.0f;
     return t;
+}
+
+[[nodiscard]] inline float clampClipSpeed(float speed) noexcept {
+    if (!std::isfinite(speed)) return 1.0f;
+    return std::clamp(speed, MinClipSpeed, MaxClipSpeed);
+}
+
+[[nodiscard]] inline int clipSourceDurationTicks(Clip const& clip) noexcept {
+    return std::max(0, clip.outTick - clip.inTick);
+}
+
+[[nodiscard]] inline double clipOutputDurationSeconds(Clip const& clip) noexcept {
+    return static_cast<double>(clipSourceDurationTicks(clip))
+         / (20.0 * static_cast<double>(clampClipSpeed(clip.speed)));
 }
 
 } // namespace playback::state::editing::model

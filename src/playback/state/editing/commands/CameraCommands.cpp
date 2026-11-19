@@ -2,6 +2,7 @@
 
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/state/editing/CameraBindingOps.h"
+#include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
 #include <iterator>
@@ -32,6 +33,7 @@ void AddFreeCamera::execute(model::EditorStateExt& state) {
         mBefore.reset();
         return;
     }
+    ClipOps::syncActiveSceneFromWorking(state);
     mBefore = std::move(before);
 }
 
@@ -46,6 +48,7 @@ void DeleteCamera::execute(model::EditorStateExt& state) {
         mBefore.reset();
         return;
     }
+    ClipOps::syncActiveSceneFromWorking(state);
     mBefore = std::move(before);
 }
 
@@ -587,5 +590,56 @@ void MoveCamera::execute(model::EditorStateExt& state) {
 
 void        MoveCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string MoveCamera::label() const { return "Move Camera"; }
+
+SetCameraKeyframeIgnoreClipSpeed::SetCameraKeyframeIgnoreClipSpeed(std::string cameraId, int tick, bool ignoreClipSpeed)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mIgnoreClipSpeed(ignoreClipSpeed) {}
+
+void SetCameraKeyframeIgnoreClipSpeed::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end() || key->second.mode != model::CameraKeyframeMode::Interpolated
+        || key->second.ignoreClipSpeed == mIgnoreClipSpeed) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore                     = state;
+    key->second.ignoreClipSpeed = mIgnoreClipSpeed;
+}
+
+void        SetCameraKeyframeIgnoreClipSpeed::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraKeyframeIgnoreClipSpeed::label() const { return "Set Keyframe Ignore Clip Speed"; }
+
+SetKeyframesIgnoreClipSpeed::SetKeyframesIgnoreClipSpeed(std::vector<model::KeyframeRef> refs, bool ignoreClipSpeed)
+: mRefs(std::move(refs)),
+  mIgnoreClipSpeed(ignoreClipSpeed) {}
+
+void SetKeyframesIgnoreClipSpeed::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked) continue;
+        auto const key = camera->keysByTick.find(ref.tick);
+        if (key == camera->keysByTick.end() || key->second.mode != model::CameraKeyframeMode::Interpolated
+            || key->second.ignoreClipSpeed == mIgnoreClipSpeed) {
+            continue;
+        }
+        key->second.ignoreClipSpeed = mIgnoreClipSpeed;
+        changed                     = true;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        SetKeyframesIgnoreClipSpeed::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframesIgnoreClipSpeed::label() const { return "Set Keyframes Ignore Clip Speed"; }
 
 } // namespace playback::state::editing::command

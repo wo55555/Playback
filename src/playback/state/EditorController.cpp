@@ -1,12 +1,15 @@
 ﻿#include "EditorController.h"
 
 #include "playback/Playback.h"
+#include "playback/audio/PreviewAudio.h"
+#include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/io/ReplayLibrary.h"
 #include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/CameraBindingOps.h"
+#include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/ProjectStore.h"
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/CommandFactory.h"
@@ -45,6 +48,30 @@ std::string replayPreferenceKey(std::filesystem::path const& path) {
 constexpr auto kAutosaveInterval = std::chrono::seconds(30);
 
 auto& logger() { return Playback::getInstance().getSelf().getLogger(); }
+
+std::optional<state::editing::model::EditorStateExt>
+resolveExportJobProject(state::editing::model::EditorStateExt const& project, QueuedExportJob const& job) {
+    std::optional<state::editing::model::EditorStateExt> result;
+    if (job.sceneId.empty()) {
+        result = project;
+    } else {
+        auto const* scene = state::editing::ClipOps::findScene(project, job.sceneId);
+        if (!scene) return std::nullopt;
+        result = state::editing::ClipOps::buildProjectForScene(project, *scene);
+    }
+    if (job.settings.rangeMode == exporting::ExportRangeMode::SingleClip && job.settings.selectedClipIds.size() == 1) {
+        if (auto const hit =
+                state::editing::ClipOps::findClipWithCamera(*result, job.settings.selectedClipIds.front())) {
+            state::editing::model::CameraEntity isolated = *hit.camera;
+            isolated.enabled                             = true;
+            for (auto& c : isolated.clips) {
+                if (c.id == hit.clip->id) c.exportEnabled = true;
+            }
+            result->cameras = {std::move(isolated)};
+        }
+    }
+    return result;
+}
 
 } // namespace
 
@@ -94,6 +121,7 @@ std::optional<state::editing::model::CameraKeyframe> EditorController::captureCa
 
 void EditorController::reset() {
     flushProjectOnClose();
+    clearExportBatch();
     if (mExportDriver) mExportDriver->reset();
     else mExportCoordinator.reset();
     mBrowserVisible   = false;
@@ -102,6 +130,7 @@ void EditorController::reset() {
     mBrowserSnapshot = std::make_shared<ReplayBrowserSnapshot>();
     mProject         = {};
     mPreviewCameraId.reset();
+    audio::preview::setClipMuted(false);
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
     mCommandStack.clear();
     mActiveReplayPath.clear();
@@ -117,6 +146,7 @@ void EditorController::tickExportBeforeClientUpdate() {
     mExportTickedBeforeClientUpdate = false;
     if (!mExportDriver || !mExportDriver->isActive()) return;
     mExportDriver->tick();
+    advanceExportBatchIfNeeded();
     mExportTickedBeforeClientUpdate = true;
 }
 
@@ -126,6 +156,7 @@ void EditorController::tickExportDuringGraphics() {
     if (mExportTickReentered) return;
     mExportTickReentered = true;
     mExportDriver->tick();
+    advanceExportBatchIfNeeded();
     mExportTickReentered = false;
 }
 
@@ -135,8 +166,11 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
 
     // Metadata settles a few frames in; growing the timeline must not discard the loaded project.
     if (mProject.projectPath == replayPath && !replayPath.empty()) {
-        mProject.totalTicks = totalTicks;
-        mProjectTotalTicks  = totalTicks;
+        int const previousTotalTicks = mProject.totalTicks;
+        mProject.totalTicks          = totalTicks;
+        mProjectTotalTicks           = totalTicks;
+        state::editing::ClipOps::ensureDefaultScene(mProject);
+        state::editing::ClipOps::syncTotalTicks(mProject, previousTotalTicks);
         publishCameraTimeline();
         return;
     }
@@ -145,6 +179,7 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     mProject.projectPath = std::string(replayPath);
     mProject.totalTicks  = totalTicks;
     state::editing::CameraBindingOps::addFreeCamera(mProject, {});
+    state::editing::ClipOps::ensureDefaultScene(mProject);
     mCommandStack.clear();
     mPreviewCameraId.reset();
     mProjectTotalTicks = totalTicks;
@@ -171,11 +206,11 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
     }
 
     // The replay on disk is authoritative for length; a stale project must not shrink the timeline.
-    loaded.projectPath = mProject.projectPath;
-    loaded.totalTicks  = mProject.totalTicks;
-    if (loaded.cameras.empty()) {
-        state::editing::CameraBindingOps::addFreeCamera(loaded, {});
-    }
+    int const loadedTotalTicks = loaded.totalTicks;
+    loaded.projectPath         = mProject.projectPath;
+    loaded.totalTicks          = mProject.totalTicks;
+    state::editing::ClipOps::ensureDefaultScene(loaded);
+    state::editing::ClipOps::syncTotalTicks(loaded, loadedTotalTicks);
     mProject = std::move(loaded);
     logger().debug("Loaded editor project {}", mProjectFile);
 }
@@ -183,6 +218,7 @@ void EditorController::loadProjectForReplay(std::string_view replayPath) {
 bool EditorController::saveProject(std::filesystem::path const& path) {
     if (path.empty()) return false;
 
+    state::editing::ClipOps::syncActiveSceneFromWorking(mProject);
     std::string error;
     if (!state::editing::ProjectStore::save(mProject, path, error)) {
         mProjectError = error;
@@ -214,6 +250,8 @@ void EditorController::flushProjectOnClose() {
 
 void EditorController::applyEditorAction(EditorAction const& action) {
     using namespace state::editing::command;
+
+    state::editing::ClipOps::syncActiveSceneFromWorking(mProject);
 
     switch (action.type) {
     case EditorActionType::UndoEditorEdit:
@@ -377,6 +415,89 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::RenameMarker:
         mCommandStack.push(CommandFactory::createRenameMarker(action.id, action.name), mProject);
         break;
+    case EditorActionType::SetKeyframeIgnoreClipSpeed:
+        mCommandStack.push(
+            CommandFactory::createSetCameraKeyframeIgnoreClipSpeed(action.id, action.tick, action.value),
+            mProject
+        );
+        break;
+    case EditorActionType::SetKeyframesIgnoreClipSpeed:
+        mCommandStack.push(
+            CommandFactory::createSetKeyframesIgnoreClipSpeed(action.keyframeRefs, action.value),
+            mProject
+        );
+        break;
+    case EditorActionType::AddClip:
+        mCommandStack.push(
+            CommandFactory::createAddClip(
+                action.id,
+                action.tick,
+                action.secondaryTick,
+                action.name,
+                action.speed > 0.0f ? action.speed : 1.0f
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SplitClip:
+        mCommandStack.push(CommandFactory::createSplitClip(action.id, action.tick, action.name), mProject);
+        break;
+    case EditorActionType::MoveAndTrimClip:
+        mCommandStack.push(
+            CommandFactory::createMoveAndTrimClip(action.id, action.tick, action.secondaryTick),
+            mProject
+        );
+        break;
+    case EditorActionType::SetClipSpeed:
+        mCommandStack.push(CommandFactory::createSetClipSpeed(action.id, action.speed), mProject);
+        break;
+    case EditorActionType::RenameClip:
+        mCommandStack.push(CommandFactory::createRenameClip(action.id, action.name), mProject);
+        break;
+    case EditorActionType::SetClipMuted:
+        mCommandStack.push(CommandFactory::createSetClipMuted(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetClipLocked:
+        mCommandStack.push(CommandFactory::createSetClipLocked(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetClipExportEnabled:
+        mCommandStack.push(CommandFactory::createSetClipExportEnabled(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetAllClipsExportEnabled:
+        mCommandStack.push(CommandFactory::createSetAllClipsExportEnabled(action.value, action.id), mProject);
+        break;
+    case EditorActionType::ResetClipsToFullRange:
+        mCommandStack.push(CommandFactory::createResetClipsToFullRange(action.id, action.name), mProject);
+        break;
+    case EditorActionType::DeleteClip:
+        mCommandStack.push(CommandFactory::createDeleteClip(action.id), mProject);
+        break;
+    case EditorActionType::AddScene:
+        mCommandStack.push(CommandFactory::createAddScene(action.name), mProject);
+        break;
+    case EditorActionType::DuplicateScene:
+        mCommandStack.push(CommandFactory::createDuplicateScene(action.id, action.name), mProject);
+        break;
+    case EditorActionType::RenameScene:
+        mCommandStack.push(CommandFactory::createRenameScene(action.id, action.name), mProject);
+        break;
+    case EditorActionType::MoveScene:
+        mCommandStack.push(CommandFactory::createMoveScene(action.id, action.kind), mProject);
+        break;
+    case EditorActionType::DeleteScene:
+        mCommandStack.push(CommandFactory::createDeleteScene(action.id), mProject);
+        break;
+    case EditorActionType::SwitchScene:
+        if (!action.id.empty() && action.id != mProject.activeSceneId
+            && state::editing::ClipOps::findScene(mProject, action.id) != nullptr) {
+            state::editing::ClipOps::syncActiveSceneFromWorking(mProject);
+            mProject.activeSceneId = action.id;
+            state::editing::ClipOps::loadWorkingFromActiveScene(mProject);
+        }
+        break;
+    case EditorActionType::SetSceneExportRange:
+        mCommandStack.push(CommandFactory::createSetSceneExportRange(action.tick, action.secondaryTick), mProject);
+        break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
@@ -415,6 +536,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     default:
         break;
     }
+
+    state::editing::ClipOps::syncActiveSceneFromWorking(mProject);
 
     if (mPreviewCameraId && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
             return camera.id == *mPreviewCameraId && state::editing::model::isCameraRenderable(camera);
@@ -488,7 +611,15 @@ void EditorController::publishState(bool hudVisible) {
     state.capabilities.ffmpegVideoExport =
         state.capabilities.videoExport
         && exporting::ExportCoordinator::isFormatAvailable(exporting::ExportFormat::Mp4Video);
-    state.exportStatus      = mExportCoordinator.status();
+    state.exportStatus = mExportCoordinator.status();
+    if (!mPendingExportBatch.empty() && state.exportStatus.state == exporting::ExportState::Completed) {
+        state.exportStatus.state = exporting::ExportState::Preparing;
+    }
+    if (mExportBatchTotal > 1) {
+        state.exportStatus.batchIndex = mExportBatchIndex;
+        state.exportStatus.batchTotal = mExportBatchTotal;
+        state.exportStatus.batchLabel = mExportBatchLabel;
+    }
     state.browser.visible   = mBrowserVisible;
     state.browser.operation = mBrowserOperation;
     state.browser.error     = mBrowserError;
@@ -513,6 +644,78 @@ ReplayBrowserEntry const* EditorController::findBrowserEntry(std::string_view re
         [replayId](ReplayBrowserEntry const& entry) { return entry.replayId == replayId; }
     );
     return it == mBrowserSnapshot->replays.end() ? nullptr : &*it;
+}
+
+void EditorController::clearExportBatch() {
+    mPendingExportBatch.clear();
+    mExportBatchIndex = 0;
+    mExportBatchTotal = 0;
+    mExportBatchLabel.clear();
+}
+
+void EditorController::startExportBatch(std::vector<QueuedExportJob> jobs, bool hudVisible) {
+    clearExportBatch();
+    if (!mExportDriver || jobs.empty()) return;
+
+    state::editing::ClipOps::syncActiveSceneFromWorking(mProject);
+
+    for (auto const& job : jobs) {
+        auto jobProject = resolveExportJobProject(mProject, job);
+        if (!jobProject) {
+            mExportCoordinator.fail(exporting::ExportError::InvalidTimeline, "The selected scene no longer exists");
+            publishState(hudVisible);
+            return;
+        }
+        auto compiled = exporting::ExportPlanCompiler::compile(job.settings, *jobProject);
+        if (!compiled) {
+            mExportCoordinator.fail(compiled.error, std::move(compiled.message));
+            publishState(hudVisible);
+            return;
+        }
+    }
+
+    mExportBatchTotal = static_cast<uint32_t>(jobs.size());
+    mExportBatchIndex = 1;
+    mExportBatchLabel = jobs.front().label;
+    for (size_t i = 1; i < jobs.size(); ++i) mPendingExportBatch.push_back(std::move(jobs[i]));
+
+    auto       firstProject   = resolveExportJobProject(mProject, jobs.front());
+    auto const cameraFallback = (jobs.front().sceneId.empty() || jobs.front().sceneId == mProject.activeSceneId)
+                                  ? mPreviewCameraId
+                                  : std::nullopt;
+    if (!firstProject || !mExportDriver->start(std::move(jobs.front().settings), *firstProject, cameraFallback)) {
+        clearExportBatch();
+        return;
+    }
+    publishState(hudVisible);
+}
+
+void EditorController::advanceExportBatchIfNeeded() {
+    if (mPendingExportBatch.empty() || !mExportDriver || mExportDriver->isActive()) return;
+    auto const status = mExportCoordinator.status();
+    if (exporting::isExportActive(status.state)) return;
+    if (status.state != exporting::ExportState::Completed) {
+        clearExportBatch();
+        return;
+    }
+
+    auto nextJob = std::move(mPendingExportBatch.front());
+    mPendingExportBatch.pop_front();
+    ++mExportBatchIndex;
+    mExportBatchLabel = nextJob.label;
+
+    auto jobProject = resolveExportJobProject(mProject, nextJob);
+    if (!jobProject) {
+        clearExportBatch();
+        mExportCoordinator.fail(exporting::ExportError::InvalidTimeline, "The selected scene no longer exists");
+        return;
+    }
+    auto const cameraFallback =
+        (nextJob.sceneId.empty() || nextJob.sceneId == mProject.activeSceneId) ? mPreviewCameraId : std::nullopt;
+    mExportDriver->reset();
+    if (!mExportDriver->start(std::move(nextJob.settings), *jobProject, cameraFallback)) {
+        clearExportBatch();
+    }
 }
 
 void EditorController::tick(bool hudVisible) {
@@ -546,21 +749,26 @@ void EditorController::tick(bool hudVisible) {
             session.setPlaybackSpeed(action.speed);
             break;
         case EditorActionType::StopReplay:
+            clearExportBatch();
             if (mExportDriver) mExportDriver->cancel();
             session.requestStop();
             break;
         case EditorActionType::StartExport: {
-            auto settings = action.exportSettings.value_or(exporting::ExportSettings{});
-            if (!action.exportSettings) {
-                settings.startTick = 0;
-                settings.endTick   = std::max<int64_t>(0, session.getTotalTicks());
+            std::vector<QueuedExportJob> jobs = action.exportJobs;
+            if (jobs.empty()) {
+                auto settings = action.exportSettings.value_or(exporting::ExportSettings{});
+                if (!action.exportSettings) {
+                    settings.rangeMode = exporting::ExportRangeMode::SequenceInOut;
+                    settings.startTick = 0;
+                    settings.endTick   = std::max<int64_t>(0, session.getTotalTicks());
+                }
+                jobs.push_back(QueuedExportJob{std::move(settings), {}, {}});
             }
-            if (mExportDriver && mExportDriver->start(std::move(settings), mProject, mPreviewCameraId)) {
-                publishState(hudVisible);
-            }
+            startExportBatch(std::move(jobs), hudVisible);
             break;
         }
         case EditorActionType::CancelExport:
+            clearExportBatch();
             if (mExportDriver) mExportDriver->cancel();
             break;
         case EditorActionType::OpenReplayBrowser:
@@ -689,8 +897,11 @@ void EditorController::tick(bool hudVisible) {
                 mProjectError = error;
                 break;
             }
-            loaded.projectPath           = mProject.projectPath;
-            loaded.totalTicks            = mProject.totalTicks;
+            int const loadedTotalTicks = loaded.totalTicks;
+            loaded.projectPath         = mProject.projectPath;
+            loaded.totalTicks          = mProject.totalTicks;
+            state::editing::ClipOps::ensureDefaultScene(loaded);
+            state::editing::ClipOps::syncTotalTicks(loaded, loadedTotalTicks);
             mProject                     = std::move(loaded);
             mProjectFile                 = target;
             mProjectError.clear();
@@ -700,13 +911,24 @@ void EditorController::tick(bool hudVisible) {
             publishCameraTimeline();
             break;
         }
+        default:
+            break;
         }
     }
 
     if (mExportDriver && !mExportTickedBeforeClientUpdate) mExportDriver->tick();
     mExportTickedBeforeClientUpdate = false;
+    advanceExportBatchIfNeeded();
     autosaveIfDue();
     publishState(hudVisible);
+    if (session.isActive() && (!mExportDriver || !mExportDriver->isActive())) {
+        int const currentTick = std::max(0, session.getCurrentTick());
+        session.setClipSpeedScale(state::editing::ClipOps::activeClipSpeedAt(mProject, currentTick));
+        audio::preview::setClipMuted(state::editing::ClipOps::isClipMutedAt(mProject, currentTick));
+    } else {
+        session.setClipSpeedScale(1.0f);
+        audio::preview::setClipMuted(false);
+    }
 }
 
 } // namespace playback::state

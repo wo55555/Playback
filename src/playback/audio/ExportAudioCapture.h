@@ -25,7 +25,7 @@ void exportEnd();
 
 // Advance the sample ledger once per accepted frame. Called from ExportCoordinator::trySubmit after the writer
 // accepts a frame; this is the only audio-advance entry point.
-void onFrameAccepted(uint64_t frameIndex);
+void onFrameAccepted(uint64_t frameIndex, bool hardCut = false, bool muteAudio = false);
 
 // Close the sidecar WAV after the video is fully written, so the muxer can consume it.
 void finalizeSidecar();

@@ -3,23 +3,34 @@
 #include "playback/editor/ui/PanelContext.h"
 
 #include <array>
+#include <cstddef>
 #include <string>
+#include <vector>
 
 namespace playback::editor::ui {
 
 class EditorMenuBar {
 public:
     void draw(PanelContext const& ctx);
-    void openExportDialog(int totalTicks, bool ffmpegAvailable);
+    void openExportDialog(int totalTicks, bool ffmpegAvailable, int exportInTick, int exportOutTick);
+    void openExportSingleClip(
+        std::string const& clipId,
+        int                totalTicks,
+        bool               ffmpegAvailable,
+        int                exportInTick,
+        int                exportOutTick
+    );
+    void openExportScene(
+        std::string const& sceneId,
+        std::string const& activeSceneId,
+        std::size_t        sceneCount,
+        int                totalTicks,
+        bool               ffmpegAvailable,
+        int                exportInTick,
+        int                exportOutTick
+    );
 
-    // The timeline draws these as in/out markers and can drag them; -1 means "whole replay".
-    [[nodiscard]] int exportStartTick() const { return mExportStartTick; }
-    [[nodiscard]] int exportEndTick() const { return mExportEndTick; }
     [[nodiscard]] int exportFps() const { return mFps; }
-    void              setExportStartTick(int tick) { mExportStartTick = tick; }
-    void              setExportEndTick(int tick) { mExportEndTick = tick; }
-    // Marks in/out at the playhead, clearing the range back to unset once it covers everything.
-    void markExportPoint(bool isIn, int tick, int totalTicks);
 
 private:
     void drawMenus(PanelContext const& ctx);
@@ -50,11 +61,19 @@ private:
     float mExportBodyHeight{0.0f};
     bool  mExportBodyScrollable{false};
     // Font size the page height was measured at.
-    float                 mExportLayoutKey{0.0f};
-    int                   mExportStartTick{-1};
-    int                   mExportEndTick{-1};
-    std::array<char, 128> mExportName{"replay-export"};
-    std::array<char, 260> mExportDirectory{"mods/playback/exports"};
+    float                    mExportLayoutKey{0.0f};
+    int                      mExportLayoutRangeMode{-1};
+    int                      mExportLayoutSceneScope{-1};
+    bool                     mExportLayoutMultiScene{false};
+    int                      mExportStartTick{-1};
+    int                      mExportEndTick{-1};
+    int                      mExportRangeMode{0};
+    int                      mExportSceneScope{0}; // 0: active scene, 1: selected scenes
+    bool                     mExportSplitClips{false};
+    std::string              mExportSingleClipId;
+    std::vector<std::string> mExportSelectedSceneIds;
+    std::array<char, 128>    mExportName{"replay-export"};
+    std::array<char, 260>    mExportDirectory{"mods/playback/exports"};
 };
 
 } // namespace playback::editor::ui
