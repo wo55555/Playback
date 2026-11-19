@@ -3,6 +3,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace playback::editor::ui::theme {
 
@@ -16,12 +17,14 @@ constexpr ImU32 kBgHeader = IM_COL32(0x22, 0x22, 0x22, 0xff);
 constexpr ImU32 kBorder   = IM_COL32(0x2c, 0x2c, 0x2c, 0xff);
 constexpr ImU32 kText     = IM_COL32(0xd4, 0xd4, 0xd4, 0xff);
 constexpr ImU32 kTextDim  = IM_COL32(0x8a, 0x8a, 0x8a, 0xff);
-constexpr ImU32 kAccent   = IM_COL32(0x3a, 0x8c, 0xf0, 0xff);
-constexpr ImU32 kSelected = IM_COL32(0xff, 0xd2, 0x3c, 0xff);
-constexpr ImU32 kHover    = IM_COL32(0x3a, 0x5a, 0x8c, 0x99);
-constexpr ImU32 kSuccess  = IM_COL32(0x66, 0xc8, 0x7a, 0xff);
-constexpr ImU32 kWarning  = IM_COL32(0xf2, 0xa3, 0x3c, 0xff);
-constexpr ImU32 kError    = IM_COL32(0xf0, 0x60, 0x5c, 0xff);
+constexpr ImU32 kAccent    = IM_COL32(0x3a, 0x8c, 0xf0, 0xff);
+constexpr ImU32 kSelected  = IM_COL32(0xff, 0xd2, 0x3c, 0xff);
+constexpr ImU32 kHover     = IM_COL32(0x3a, 0x5a, 0x8c, 0x99);
+constexpr ImU32 kSuccess   = IM_COL32(0x66, 0xc8, 0x7a, 0xff);
+constexpr ImU32 kWarning   = IM_COL32(0xf2, 0xa3, 0x3c, 0xff);
+constexpr ImU32 kSpeedFast = IM_COL32(0xf5, 0x9e, 0x0b, 0xff);
+constexpr ImU32 kSpeedSlow = IM_COL32(0x38, 0xbd, 0xf8, 0xff);
+constexpr ImU32 kError     = IM_COL32(0xf0, 0x60, 0x5c, 0xff);
 
 // Generic controls.
 constexpr ImU32 kInputBg       = IM_COL32(0x12, 0x12, 0x12, 0xff);
@@ -134,21 +137,22 @@ namespace playback::editor::ui::metrics {
 // Ratio of the live font size to the rasterised base, i.e. the active UI scale.
 [[nodiscard]] inline float scale() { return std::max(1.0f, font() / 14.0f); }
 
-[[nodiscard]] inline float iconButton() { return font() + 16.0f * scale(); }
+[[nodiscard]] inline float iconButton() { return std::round(font() + 9.0f * scale()); }
 // Above body-text size so icons read as controls; Lucide fills its em box, so the margin stays small.
-[[nodiscard]] inline float iconGlyph() { return font() * 1.22f; }
-[[nodiscard]] inline float toolbarRow() { return iconButton() + 6.0f * scale(); }
-[[nodiscard]] inline float ruler() { return font() + 8.0f * scale(); }
-[[nodiscard]] inline float statusBar() { return font() + 6.0f * scale(); }
-[[nodiscard]] inline float cameraRow() { return font() * 1.85f; }
+[[nodiscard]] inline float iconGlyph() { return font() * 1.12f; }
+[[nodiscard]] inline float toolbarRow() { return iconButton() + 4.0f * scale(); }
+[[nodiscard]] inline float sceneTabRow() { return std::max(22.0f, std::round(font() * 1.45f)); }
+[[nodiscard]] inline float ruler() { return std::max(22.0f, std::round(font() * 1.45f)); }
+[[nodiscard]] inline float statusBar() { return font() + 4.0f * scale(); }
+[[nodiscard]] inline float cameraRow() { return std::round(font() * 2.38f); }
 [[nodiscard]] inline float subRow() { return font() * 1.55f; }
 [[nodiscard]] inline float propertyRow() { return font() + 8.0f * scale(); }
-[[nodiscard]] inline float rail() { return font() * 2.3f; }
-[[nodiscard]] inline float rangeBar() { return font() * 1.2f; }
+[[nodiscard]] inline float rail() { return iconButton() + 6.0f * scale(); }
+[[nodiscard]] inline float rangeBar() { return std::max(20.0f, std::round(font() * 1.30f)); }
 [[nodiscard]] inline float labelColumn() { return font() * 4.6f; }
 [[nodiscard]] inline float splitter() { return 4.0f * scale(); }
 [[nodiscard]] inline float trackSwatch() { return std::max(3.0f, 3.0f * scale()); }
-[[nodiscard]] inline float keyframeRadius() { return std::max(4.0f, font() * 0.34f); }
+[[nodiscard]] inline float keyframeRadius() { return std::max(3.5f, font() * 0.31f); }
 [[nodiscard]] inline float gutter() { return 6.0f * scale(); }
 
 } // namespace playback::editor::ui::metrics

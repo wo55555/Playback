@@ -65,11 +65,9 @@ std::vector<std::string> SelectionModel::selectedIds() const {
             if constexpr (std::is_same_v<T, SelectedKeyframe>) {
                 return {sel.trackId, std::to_string(sel.tick)};
             } else if constexpr (std::is_same_v<T, SelectedClip>) {
-                return {sel.trackId, sel.clipId};
+                return {sel.clipId};
             } else if constexpr (std::is_same_v<T, SelectedMarker>) {
                 return {sel.markerId};
-            } else if constexpr (std::is_same_v<T, SelectedTrack>) {
-                return {sel.trackId};
             } else if constexpr (std::is_same_v<T, SelectedTransition>) {
                 return {sel.transitionId};
             } else if constexpr (std::is_same_v<T, SelectedCamera>) {
@@ -116,6 +114,10 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
             } else if constexpr (std::is_same_v<T, SelectedMarker>) {
                 return std::ranges::any_of(state.markers, [&](auto const& marker) {
                     return marker.id == sel.markerId;
+                });
+            } else if constexpr (std::is_same_v<T, SelectedClip>) {
+                return std::ranges::any_of(state.cameras, [&](auto const& cam) {
+                    return std::ranges::any_of(cam.clips, [&](auto const& clip) { return clip.id == sel.clipId; });
                 });
             }
             return true;

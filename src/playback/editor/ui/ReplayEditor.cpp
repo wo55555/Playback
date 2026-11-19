@@ -7,6 +7,7 @@
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/ErrorDialog.h"
 #include "playback/editor/ui/components/Widgets.h"
+#include "playback/state/editing/ClipOps.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -16,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <fstream>
+#include <ranges>
 #include <utility>
 
 namespace playback::editor::ui {
@@ -143,15 +145,15 @@ void ReplayEditor::setPreviewSilentWhilePaused(bool silent) {
 }
 
 void ReplayEditor::loadLayoutPreferences() {
-    mDetailsWidthRatio   = 0.28f;
-    mTimelineHeightRatio = 0.35f;
+    mDetailsWidthRatio   = 0.22f;
+    mTimelineHeightRatio = 0.24f;
     mVideoAspectRatio    = 16.0f / 9.0f;
     mCameraPathVisible   = true;
     mUiScaleTier         = UiScaleTier::Auto;
     mViewportPanel.setInfoOverlayVisible(true);
     mViewportPanel.setAutoPreviewEnabled(true);
     mTimelinePanel.setSnapEnabled(true);
-    mTimelinePanel.setViewPreferences(0.30f, 1.0f, 0.0f);
+    mTimelinePanel.setViewPreferences(0.18f, 1.0f, 0.0f);
     mTimelineViewPreferences.clear();
     mActiveReplayPath.clear();
 
@@ -175,7 +177,7 @@ void ReplayEditor::loadLayoutPreferences() {
             mDetailsWidthRatio =
                 std::clamp(readFiniteFloat(config, "detailsWidthRatio", mDetailsWidthRatio), 0.15f, 0.50f);
             mTimelineHeightRatio =
-                std::clamp(readFiniteFloat(config, "timelineHeightRatio", mTimelineHeightRatio), 0.18f, 0.65f);
+                std::clamp(readFiniteFloat(config, "timelineHeightRatio", mTimelineHeightRatio), 0.15f, 0.65f);
             mVideoAspectRatio = std::clamp(readFiniteFloat(config, "videoAspectRatio", mVideoAspectRatio), 0.25f, 4.0f);
             float const trackListWidthRatio =
                 readFiniteFloat(config, "trackListWidthRatio", mTimelinePanel.trackListWidthRatio());
@@ -305,8 +307,80 @@ void ReplayEditor::openExportDialog() {
         || exporting::isExportActive(currentState.exportStatus.state)) {
         return;
     }
-    mMenuBar.openExportDialog(currentState.totalTicks, currentState.capabilities.ffmpegVideoExport);
+    mMenuBar.openExportDialog(
+        currentState.totalTicks,
+        currentState.capabilities.ffmpegVideoExport,
+        exportStartTick(),
+        exportEndTick()
+    );
 }
+
+void ReplayEditor::openExportSingleClip(std::string const& clipId) {
+    auto const& currentState = state();
+    if (!currentState.capabilities.videoExport || currentState.totalTicks <= 0
+        || exporting::isExportActive(currentState.exportStatus.state)) {
+        return;
+    }
+    mMenuBar.openExportSingleClip(
+        clipId,
+        currentState.totalTicks,
+        currentState.capabilities.ffmpegVideoExport,
+        exportStartTick(),
+        exportEndTick()
+    );
+}
+
+void ReplayEditor::openExportScene(std::string const& sceneId) {
+    auto const& currentState = state();
+    if (!currentState.capabilities.videoExport || currentState.totalTicks <= 0
+        || exporting::isExportActive(currentState.exportStatus.state)) {
+        return;
+    }
+    std::string const activeSceneId = currentState.project ? currentState.project->activeSceneId : std::string{};
+    size_t const      sceneCount    = currentState.project ? currentState.project->scenes.size() : size_t{0};
+    mMenuBar.openExportScene(
+        sceneId,
+        activeSceneId,
+        sceneCount,
+        currentState.totalTicks,
+        currentState.capabilities.ffmpegVideoExport,
+        exportStartTick(),
+        exportEndTick()
+    );
+}
+
+int ReplayEditor::exportStartTick() const { return state().project ? state().project->exportInTick : -1; }
+
+int ReplayEditor::exportEndTick() const { return state().project ? state().project->exportOutTick : -1; }
+
+void ReplayEditor::setExportRange(int inTick, int outTick) {
+    playback::state::EditorAction action{playback::state::EditorActionType::SetSceneExportRange};
+    action.tick          = inTick;
+    action.secondaryTick = outTick;
+    submitAction(std::move(action));
+}
+
+void ReplayEditor::markExportPoint(bool isIn) {
+    int const totalTicks = std::max(0, state().totalTicks);
+    if (totalTicks <= 0) return;
+    int const tick  = std::clamp(state().currentTick, 0, totalTicks);
+    int       start = exportStartTick() < 0 ? 0 : std::clamp(exportStartTick(), 0, totalTicks);
+    int       end   = exportEndTick() < 0 ? totalTicks : std::clamp(exportEndTick(), 0, totalTicks);
+    if (isIn) {
+        if (tick >= end) end = totalTicks;
+        start = tick;
+    } else {
+        if (tick <= start) start = 0;
+        end = tick;
+    }
+    if (start >= end || (start <= 0 && end >= totalTicks)) {
+        setExportRange(-1, -1);
+    } else {
+        setExportRange(start, end);
+    }
+}
+
+void ReplayEditor::clearExportRange() { setExportRange(-1, -1); }
 
 PanelContext ReplayEditor::frameContext() {
     static SubmitAction const noSubmit{};
@@ -328,6 +402,75 @@ bool ReplayEditor::copySelection() { return mTimelinePanel.copySelection(frameCo
 bool ReplayEditor::pasteAtPlayhead() { return mTimelinePanel.pasteAtPlayhead(frameContext()); }
 
 bool ReplayEditor::addMarkerAtPlayhead() { return mTimelinePanel.addMarkerAtPlayhead(frameContext()); }
+
+bool ReplayEditor::canSplitClipAtPlayhead() { return mTimelinePanel.canSplitClipAtPlayhead(frameContext()); }
+
+bool ReplayEditor::splitClipAtPlayhead() { return mTimelinePanel.splitClipAtPlayhead(frameContext()); }
+
+bool ReplayEditor::canTrimClipAtPlayhead(bool trimIn) {
+    return mTimelinePanel.canTrimClipAtPlayhead(frameContext(), trimIn);
+}
+
+bool ReplayEditor::trimClipAtPlayhead(bool trimIn) { return mTimelinePanel.trimClipAtPlayhead(frameContext(), trimIn); }
+
+bool ReplayEditor::toggleSelectedClipExport() {
+    auto const project = state().project;
+    if (!project) return false;
+    int const tick       = state().currentTick;
+    int const totalTicks = state().totalTicks;
+
+    state::editing::model::Clip const* clip = nullptr;
+    if (auto const* selectedClip = mSelection.getAs<state::editing::model::SelectedClip>()) {
+        if (auto const hit = state::editing::ClipOps::findClipWithCamera(*project, selectedClip->clipId);
+            hit && !hit.camera->locked) {
+            clip = hit.clip;
+        }
+    } else {
+        std::string selectedCameraId;
+        if (auto const* selectedCamera = mSelection.getAs<state::editing::model::SelectedCamera>()) {
+            selectedCameraId = selectedCamera->cameraId;
+        } else if (auto const* selectedKeyframe = mSelection.getAs<state::editing::model::SelectedKeyframe>()) {
+            selectedCameraId = selectedKeyframe->trackId;
+        }
+        if (!selectedCameraId.empty()) {
+            auto const camIt =
+                std::ranges::find(project->cameras, selectedCameraId, &state::editing::model::CameraEntity::id);
+            if (camIt != project->cameras.end() && !camIt->locked) {
+                for (auto const& candidate : camIt->clips) {
+                    if (state::editing::ClipOps::clipCoversTick(candidate, tick, totalTicks)) {
+                        clip = &candidate;
+                        break;
+                    }
+                }
+            }
+        } else {
+            static std::vector<int> const emptyTransitions;
+            auto const&                   transitions =
+                state().cameraTimeline ? state().cameraTimeline->dimensionTransitionTicks() : emptyTransitions;
+            if (auto const active = state::editing::ClipOps::activeClipAt(*project, tick, false, transitions);
+                active && !active.camera->locked) {
+                clip = active.clip;
+            } else {
+                for (auto const& camera : project->cameras) {
+                    if (camera.locked) continue;
+                    for (auto const& candidate : camera.clips) {
+                        if (state::editing::ClipOps::clipCoversTick(candidate, tick, totalTicks)) {
+                            clip = &candidate;
+                            break;
+                        }
+                    }
+                    if (clip) break;
+                }
+            }
+        }
+    }
+    if (!clip) return false;
+    playback::state::EditorAction action{playback::state::EditorActionType::SetClipExportEnabled};
+    action.id    = clip->id;
+    action.value = !clip->exportEnabled;
+    submitAction(std::move(action));
+    return true;
+}
 
 bool ReplayEditor::selectCameraByIndex(std::size_t index) {
     auto const project = state().project;
@@ -512,6 +655,38 @@ void ReplayEditor::handleKeyboardShortcuts() {
         (void)addMarkerAtPlayhead();
         return;
     }
+    if (input::KeyMap::pressed(EditorKeybind::SelectTool)) {
+        setTimelineTool(TimelineTool::Select);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::RazorTool)) {
+        setTimelineTool(TimelineTool::Razor);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::PenTool)) {
+        setTimelineTool(TimelineTool::Pen);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::SplitClip)) {
+        (void)splitClipAtPlayhead();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ToggleClipExport)) {
+        (void)toggleSelectedClipExport();
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::TrimClipInToPlayhead)) {
+        (void)trimClipAtPlayhead(true);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::TrimClipOutToPlayhead)) {
+        (void)trimClipAtPlayhead(false);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::ClearExportRange)) {
+        clearExportRange();
+        return;
+    }
     if (input::KeyMap::pressed(EditorKeybind::PreviousMarker, true)) {
         mTimelinePanel.seekAdjacentMarker(frameContext(), false);
         return;
@@ -633,11 +808,11 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::MarkExportIn)) {
-        mMenuBar.markExportPoint(true, state().currentTick, state().totalTicks);
+        markExportPoint(true);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::MarkExportOut)) {
-        mMenuBar.markExportPoint(false, state().currentTick, state().totalTicks);
+        markExportPoint(false);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::DecreaseSpeed, true)) {

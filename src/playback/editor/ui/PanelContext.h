@@ -8,9 +8,12 @@
 #include "playback/visuals/ReplayHudVisibility.h"
 
 #include <functional>
+#include <string>
 #include <utility>
 
 namespace playback::editor::ui {
+
+enum class TimelineTool { Select, Razor, Pen };
 
 using SubmitAction = std::function<void(playback::state::EditorAction)>;
 
@@ -31,6 +34,13 @@ public:
     virtual bool               copySelection()             = 0;
     virtual bool               pasteAtPlayhead()           = 0;
     virtual bool               addMarkerAtPlayhead()       = 0;
+    virtual bool                       canSplitClipAtPlayhead()           = 0;
+    virtual bool                       splitClipAtPlayhead()              = 0;
+    virtual bool                       canTrimClipAtPlayhead(bool trimIn) = 0;
+    virtual bool                       trimClipAtPlayhead(bool trimIn)    = 0;
+    virtual bool                       toggleSelectedClipExport()         = 0;
+    [[nodiscard]] virtual TimelineTool timelineTool() const               = 0;
+    virtual void                       setTimelineTool(TimelineTool tool) = 0;
 
     // View preferences the inspector's settings page edits; they live in the panels that consume them.
     [[nodiscard]] virtual bool  isInfoOverlayVisible() const        = 0;
@@ -42,14 +52,17 @@ public:
     [[nodiscard]] virtual float videoAspectRatio() const            = 0;
     virtual void                setVideoAspectRatio(float ratio)    = 0;
     virtual void                openExportDialog()                  = 0;
+    virtual void                openExportSingleClip(std::string const& clipId) = 0;
+    virtual void                openExportScene(std::string const& sceneId)     = 0;
     // Shows the selected camera-switch segment in the inspector with its subject search focused.
 
-    // The export range is owned by the export dialog but drawn on the timeline as in/out markers.
-    [[nodiscard]] virtual int exportStartTick() const      = 0;
-    [[nodiscard]] virtual int exportEndTick() const        = 0;
-    [[nodiscard]] virtual int exportFps() const            = 0;
-    virtual void              setExportStartTick(int tick) = 0;
-    virtual void              setExportEndTick(int tick)   = 0;
+    // The export range belongs to the active scene and is drawn on the timeline as in/out markers.
+    [[nodiscard]] virtual int exportStartTick() const                 = 0;
+    [[nodiscard]] virtual int exportEndTick() const                   = 0;
+    [[nodiscard]] virtual int exportFps() const                       = 0;
+    virtual void              setExportRange(int inTick, int outTick) = 0;
+    virtual void              markExportPoint(bool isIn)              = 0;
+    virtual void              clearExportRange()                      = 0;
 
     [[nodiscard]] virtual UiScaleTier uiScaleTier() const              = 0;
     virtual void                      setUiScaleTier(UiScaleTier tier) = 0;

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <ranges>
 
 namespace playback::editor::ui {
 
@@ -39,14 +40,13 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
     mRows.clear();
     mRows.reserve(state.cameras.size());
 
-    float const cameraHeight = metrics::cameraRow();
+    float const rowHeight = metrics::cameraRow();
 
-    // Cameras are the only editable tracks; the world and marker rows had nothing to show.
     for (int index = 0; index < static_cast<int>(state.cameras.size()); ++index) {
         const auto& camera = state.cameras[index];
         if (!cameraMatchesSearch(camera, mSearch)) continue;
         mRows.push_back(
-            {TrackRowKind::Camera, "camera:" + camera.id, camera.name, camera.id, index, cameraHeight, camera.locked, camera.enabled}
+            {"camera:" + camera.id, camera.name, camera.id, index, rowHeight, camera.locked, camera.enabled}
         );
     }
 }

@@ -148,6 +148,7 @@ private:
     bool                                  mDimensionLoadingForced{};
     bool                                  mTimelineInitialized{};
     bool                                  mInitializationTickObserved{};
+    bool                                  mPendingCutHandled{};
     OfflineRenderBoundaryState            mState{OfflineRenderBoundaryState::Closed};
     OfflineRenderBoundaryError            mError{OfflineRenderBoundaryError::None};
     OfflineRenderWaitReason               mLastWaitReason{OfflineRenderWaitReason::Unknown};

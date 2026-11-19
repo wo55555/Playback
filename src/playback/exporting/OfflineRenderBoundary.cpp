@@ -100,6 +100,7 @@ bool OfflineRenderBoundary::open(
 
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
+    mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mWarmupFrames                  = settings.warmupFrames;
     mWarmupFramesRemaining         = mWarmupFrames;
@@ -173,6 +174,7 @@ void OfflineRenderBoundary::close() {
     mTickGateSuspendedForDimension = false;
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
+    mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Closed;
     mError                         = OfflineRenderBoundaryError::None;
@@ -204,6 +206,7 @@ void OfflineRenderBoundary::cancel() {
     mTickGateSuspendedForDimension = false;
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
+    mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Cancelled;
     mError                         = OfflineRenderBoundaryError::None;
@@ -266,6 +269,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
             return waiting(OfflineRenderWaitReason::CaptureCapacity, OfflineRenderStepResult::Backpressured);
         }
         mPendingFrame           = frame;
+        mPendingCutHandled      = false;
         mFrameTimeSpent         = false;
         mExtraRendersDone       = 0;
         mExtraRendersComplete   = false;
@@ -276,6 +280,33 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         mState = !mTimelineInitialized ? OfflineRenderBoundaryState::InitializingReplay
                : warmupComplete()      ? OfflineRenderBoundaryState::PreparingReplay
                                        : OfflineRenderBoundaryState::WarmingUp;
+    }
+
+    if (mTimelineInitialized && !mPendingCutHandled) {
+        mPendingCutHandled  = true;
+        int const  nextTick = targetTick(*mPendingFrame);
+        int const  applied  = mReplay.getAppliedReplayTick();
+        bool const hardCut  = mPendingFrame->hardCut;
+        bool const needSeek = hardCut || nextTick < applied;
+        if (needSeek) {
+            if (!mReplay.beginExportCutSeek(nextTick, true)) {
+                fault(
+                    OfflineRenderBoundaryError::ReplayUnavailable,
+                    "The replay could not seek to the next export segment"
+                );
+                return OfflineRenderStepResult::Failed;
+            }
+            mTimelineInitialized        = false;
+            mInitializationTickObserved = false;
+            mCaptureArmed               = false;
+            if (hardCut) {
+                mWarmupFramesRemaining = mWarmupFrames;
+                mWarmupStableFrames    = 0;
+                mWarmupStartedAt       = {};
+                mWarmupLastLoggedAt    = {};
+            }
+            mState = OfflineRenderBoundaryState::InitializingReplay;
+        }
     }
 
     if (mTickGateOpen && mReplay.isDimensionTransitionPending()
@@ -404,7 +435,10 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
                 );
                 return OfflineRenderStepResult::Failed;
             }
-            if (!mTimelineInitialized) mInitializationTickObserved = true;
+            if (!mTimelineInitialized && completion->replayTickAfter == targetTick(*mPendingFrame)
+                && !mReplay.isSeekPending()) {
+                mInitializationTickObserved = true;
+            }
             mReplayTickToken.reset();
             mReplayTickRequestedAt = {};
         }
@@ -682,7 +716,7 @@ std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(Expor
 
     long double delta             = 0.0L;
     int64_t     previousWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
-    if (mLastSubmittedFrame) {
+    if (mLastSubmittedFrame && !frame.hardCut) {
         delta = current
               - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
                     / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
@@ -938,6 +972,7 @@ void OfflineRenderBoundary::fault(OfflineRenderBoundaryError error, std::string 
     mWarmupStartedAt               = {};
     mWarmupLastLoggedAt            = {};
     mTickGateSuspendedForDimension = false;
+    mPendingCutHandled             = false;
     mState                         = OfflineRenderBoundaryState::Faulted;
     mError                         = error;
     mMessage                       = std::move(message);

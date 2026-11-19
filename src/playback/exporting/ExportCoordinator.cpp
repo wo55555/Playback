@@ -161,6 +161,8 @@ FrameWriterSubmitResult ExportCoordinator::trySubmit(visuals::CapturedFrame& fra
     std::scoped_lock operationLock(mImpl->operationMutex);
     IFrameWriter*    writer = nullptr;
     bool             invalidTicket{};
+    bool             hardCut{};
+    bool             muteAudio{};
     {
         std::scoped_lock lock(mImpl->mutex);
         if (mImpl->currentStatus.state != ExportState::Running || !mImpl->writer || !mImpl->compiledPlan) {
@@ -175,6 +177,9 @@ FrameWriterSubmitResult ExportCoordinator::trySubmit(visuals::CapturedFrame& fra
                 "The captured frame ticket does not match the export plan"
             );
             invalidTicket = true;
+        } else {
+            hardCut   = expected->hardCut;
+            muteAudio = expected->muteAudio;
         }
         writer = mImpl->writer.get();
     }
@@ -186,7 +191,7 @@ FrameWriterSubmitResult ExportCoordinator::trySubmit(visuals::CapturedFrame& fra
     auto const result = writer->trySubmit(frame);
     // Advance the export audio ledger exactly once per accepted frame (warm-up and extra renders never reach here).
     if (result == FrameWriterSubmitResult::Accepted)
-        playback::audio::exportcap::onFrameAccepted(frame.ticket.frameIndex);
+        playback::audio::exportcap::onFrameAccepted(frame.ticket.frameIndex, hardCut, muteAudio);
     auto const writerStatus = writer->status();
     bool       writerFailed = result == FrameWriterSubmitResult::Failed || writerStatus.error != ExportError::None;
     {

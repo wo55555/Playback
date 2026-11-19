@@ -221,8 +221,10 @@ private:
     bool                                 mSeekParticlesStale{};
     ReplayExportTimelinePhase            mExportTimelinePhase{ReplayExportTimelinePhase::Inactive};
     int                                  mExportTargetTick{-1};
+    bool                                 mExportForceSnapshotOnSeek{false};
     std::optional<ReplayCameraViewpoint> mExportCameraViewpoint;
     float                                mPlaybackSpeed{1.0f};
+    float                                mClipSpeedScale{1.0f};
     float                                mPlaybackTickAccumulator{};
     std::atomic<SteadyTimePoint>         mTickAdvancedAt{};
     std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
@@ -719,6 +721,8 @@ public:
     }
 
     [[nodiscard]] float getPlaybackSpeed() const { return mPlaybackSpeed; }
+    [[nodiscard]] float effectivePlaybackSpeed() const noexcept;
+    void                setClipSpeedScale(float scale) noexcept;
 
     void adjustPlaybackSpeed(int direction);
 
@@ -729,6 +733,7 @@ public:
     [[nodiscard]] bool setPaused(bool paused);
 
     [[nodiscard]] bool beginExportTimeline(int startTick);
+    [[nodiscard]] bool beginExportCutSeek(int targetTick, bool forceSnapshot = true);
 
     void setExportCameraViewpoint(std::optional<ReplayCameraViewpoint> viewpoint) noexcept;
     [[nodiscard]] std::optional<ReplayCameraViewpoint> currentCameraViewpoint() const noexcept;

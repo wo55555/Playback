@@ -53,7 +53,14 @@ public:
     bool               copySelection() override;
     bool               pasteAtPlayhead() override;
     bool               addMarkerAtPlayhead() override;
-    bool               selectCameraByIndex(std::size_t index);
+    bool                       canSplitClipAtPlayhead() override;
+    bool                       splitClipAtPlayhead() override;
+    bool                       canTrimClipAtPlayhead(bool trimIn) override;
+    bool                       trimClipAtPlayhead(bool trimIn) override;
+    bool                       toggleSelectedClipExport() override;
+    [[nodiscard]] TimelineTool timelineTool() const override { return mTimelinePanel.tool(); }
+    void                       setTimelineTool(TimelineTool tool) override { mTimelinePanel.setTool(tool); }
+    bool                       selectCameraByIndex(std::size_t index);
 
     [[nodiscard]] bool  isInfoOverlayVisible() const override { return mViewportPanel.isInfoOverlayVisible(); }
     void                      setInfoOverlayVisible(bool visible) override;
@@ -64,11 +71,14 @@ public:
     [[nodiscard]] float videoAspectRatio() const override { return mVideoAspectRatio; }
     void                setVideoAspectRatio(float ratio) override;
     void                openExportDialog() override;
-    [[nodiscard]] int   exportStartTick() const override { return mMenuBar.exportStartTick(); }
-    [[nodiscard]] int   exportEndTick() const override { return mMenuBar.exportEndTick(); }
+    void                      openExportSingleClip(std::string const& clipId) override;
+    void                      openExportScene(std::string const& sceneId) override;
+    [[nodiscard]] int         exportStartTick() const override;
+    [[nodiscard]] int         exportEndTick() const override;
     [[nodiscard]] int         exportFps() const override { return mMenuBar.exportFps(); }
-    void                setExportStartTick(int tick) override { mMenuBar.setExportStartTick(tick); }
-    void                setExportEndTick(int tick) override { mMenuBar.setExportEndTick(tick); }
+    void                      setExportRange(int inTick, int outTick) override;
+    void                      markExportPoint(bool isIn) override;
+    void                      clearExportRange() override;
     [[nodiscard]] UiScaleTier uiScaleTier() const override { return mUiScaleTier; }
     void                      setUiScaleTier(UiScaleTier tier) override;
 
@@ -115,8 +125,8 @@ private:
     bool  mExitHoldBlocked{false};
     float mExitHoldSeconds{};
 
-    float       mDetailsWidthRatio{0.28f};
-    float       mTimelineHeightRatio{0.35f};
+    float       mDetailsWidthRatio{0.22f};
+    float       mTimelineHeightRatio{0.24f};
     float       mVideoAspectRatio{16.0f / 9.0f};
     UiScaleTier mUiScaleTier{UiScaleTier::Auto};
 
