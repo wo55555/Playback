@@ -20,6 +20,7 @@ private:
     Clock::time_point mFirstFrameAt{};
     uint64_t          mFirstFrameCount{};
     bool              mHasFirstFrame{false};
+    uint32_t          mLastBatchIndex{0};
 };
 
 } // namespace playback::editor::ui

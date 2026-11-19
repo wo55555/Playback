@@ -21,7 +21,7 @@ struct CameraTimelineEvaluation {
     state::editing::model::CameraKeyframeMode mode{state::editing::model::CameraKeyframeMode::Interpolated};
 };
 
-// The camera track that owns a tick: the highest one in the list with an active keyframe at or before the tick.
+// The camera track that owns a tick: the highest one covering the tick with an active keyframe at or before it.
 struct CameraShot {
     state::editing::model::CameraEntity const* camera{};
     state::editing::model::CameraKeyframeMode  mode{state::editing::model::CameraKeyframeMode::Interpolated};
@@ -38,21 +38,48 @@ using SubjectViewSampler = std::function<
 
 class CameraTimelineEvaluator {
 private:
+    struct SpeedSpan {
+        int         startTick{};
+        int         endTick{};
+        long double speed{1.0L};
+        long double startUnscaled{0.0L};
+    };
+
+    struct SegmentInterval {
+        long double rStart{};
+        long double rEnd{};
+        long double uStart{};
+        int         kStartTick{};
+        int         kEndTick{};
+        bool        ignoreClipSpeed{false};
+    };
+
     struct CameraTrackSegment {
-        size_t        dimensionSegment{};
-        int           firstTick{};
-        int           lastTick{};
-        KeyframeTrack track;
+        size_t                       dimensionSegment{};
+        int                          firstTick{};
+        int                          lastTick{};
+        KeyframeTrack                track;
+        std::vector<SegmentInterval> intervals;
+        bool                         hasUnscaledIntervals{false};
     };
 
     state::editing::model::EditorStateExt                            mProject;
     std::optional<std::string>                                       mManualCameraId;
     bool                                                             mHoldOutsideTracks{};
+    bool                                                             mAnyCameraHasClips{false};
     std::vector<int>                                                 mDimensionTransitionTicks;
+    std::vector<SpeedSpan>                                           mSpeedSpans;
+    long double                                                      mSpeedSpanEndU{0.0L};
     std::unordered_map<std::string, std::vector<CameraTrackSegment>> mKeyframeTracks;
     SubjectViewSampler                                               mSubjectSampler;
 
 private:
+    void               buildSpeedSpans();
+    [[nodiscard]] bool cameraCoversTick(state::editing::model::CameraEntity const& camera, int64_t tick) const noexcept;
+
+    [[nodiscard]] long double
+    mapSegmentSampleTick(CameraTrackSegment const& segment, long double replayTick) const noexcept;
+
     [[nodiscard]] std::optional<CameraRenderState> sampleKeyframes(
         state::editing::model::CameraEntity const& camera,
         long double                                tick,
@@ -65,6 +92,8 @@ private:
 
 public:
     [[nodiscard]] size_t                  dimensionSegmentForTick(long double tick) const noexcept;
+    [[nodiscard]] long double             unscaledTicksAt(long double replayTick) const noexcept;
+    [[nodiscard]] long double             replayTickForUnscaled(long double unscaledTicks) const noexcept;
     [[nodiscard]] std::vector<int> const& dimensionTransitionTicks() const noexcept {
         return mDimensionTransitionTicks;
     }

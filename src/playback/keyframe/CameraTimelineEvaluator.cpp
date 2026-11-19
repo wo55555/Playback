@@ -1,7 +1,8 @@
-#include "CameraTimelineEvaluator.h"
+﻿#include "CameraTimelineEvaluator.h"
 
 #include "CameraKeyframeHandler.h"
 #include "KeyframeTrack.h"
+#include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,13 +37,6 @@ void applyRotationShake(CameraRenderState& state, state::editing::model::CameraS
     state.pitch += std::cos(phase * 0.91f) * shake.rotationAmplitude * envelope;
 }
 
-CameraKeyframe const* keyAtOrBefore(CameraEntity const& camera, int64_t tick) noexcept {
-    if (!isUsableCamera(camera)) return nullptr;
-    auto const upper = camera.keysByTick.upper_bound(static_cast<int>(std::min<int64_t>(tick, 2147483647LL)));
-    if (upper == camera.keysByTick.begin()) return nullptr;
-    return &std::prev(upper)->second;
-}
-
 std::pair<int, CameraKeyframe const*> keyEntryAtOrBefore(CameraEntity const& camera, int64_t tick) noexcept {
     if (!isUsableCamera(camera)) return {-1, nullptr};
     auto const upper = camera.keysByTick.upper_bound(static_cast<int>(std::min<int64_t>(tick, 2147483647LL)));
@@ -63,6 +57,7 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
 : mProject(std::move(project)),
   mManualCameraId(std::move(manualCameraId)),
   mHoldOutsideTracks(holdOutsideTracks),
+  mAnyCameraHasClips(std::ranges::any_of(mProject.cameras, [](auto const& c) { return !c.clips.empty(); })),
   mDimensionTransitionTicks(std::move(dimensionTransitionTicks)),
   mSubjectSampler(std::move(subjectSampler)) {
     std::erase_if(mDimensionTransitionTicks, [this](int tick) { return tick < 0 || tick > mProject.totalTicks; });
@@ -71,6 +66,7 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
         std::unique(mDimensionTransitionTicks.begin(), mDimensionTransitionTicks.end()),
         mDimensionTransitionTicks.end()
     );
+    buildSpeedSpans();
 
     for (auto& camera : mProject.cameras) {
         if (camera.keysByTick.empty()) continue;
@@ -80,12 +76,45 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
         size_t                          segmentIndex  = 0;
         auto                            appendSegment = [&] {
             if (segmentKeys.empty()) return;
+            int const                    firstTick = segmentKeys.begin()->first;
+            int const                    lastTick  = segmentKeys.rbegin()->first;
+            std::vector<SegmentInterval> intervals;
+            bool                         hasUnscaledIntervals = false;
+
+            if (segmentKeys.size() >= 2) {
+                intervals.reserve(segmentKeys.size() - 1);
+                long double rCursor = static_cast<long double>(firstTick);
+                for (auto it = segmentKeys.begin(), next = std::next(it); next != segmentKeys.end();
+                     it = next, ++next) {
+                    int const         tk     = it->first;
+                    int const         tkNext = next->first;
+                    long double const span   = static_cast<long double>(tkNext - tk);
+                    if (it->second.ignoreClipSpeed) {
+                        hasUnscaledIntervals     = true;
+                        long double const uStart = unscaledTicksAt(rCursor);
+                        long double const uEnd   = uStart + span;
+                        long double const rEnd   = replayTickForUnscaled(uEnd);
+                        intervals.push_back(SegmentInterval{rCursor, rEnd, uStart, tk, tkNext, true});
+                        rCursor = rEnd;
+                    } else {
+                        long double const rStart = rCursor;
+                        long double const rEnd   = (rCursor == static_cast<long double>(tk))
+                                                     ? static_cast<long double>(tkNext)
+                                                     : (rStart + span);
+                        intervals.push_back(SegmentInterval{rStart, rEnd, 0.0L, tk, tkNext, false});
+                        rCursor = rEnd;
+                    }
+                }
+            }
+
             segments.emplace_back(
                 CameraTrackSegment{
                     segmentIndex,
-                    segmentKeys.begin()->first,
-                    segmentKeys.rbegin()->first,
+                    firstTick,
+                    lastTick,
                     KeyframeTrack{segmentKeys},
+                    std::move(intervals),
+                    hasUnscaledIntervals,
                 }
             );
             segmentKeys.clear();
@@ -109,6 +138,123 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
         appendSegment();
         if (!segments.empty()) mKeyframeTracks.emplace(camera.id, std::move(segments));
     }
+}
+
+bool CameraTimelineEvaluator::cameraCoversTick(CameraEntity const& camera, int64_t tick) const noexcept {
+    if (!camera.enabled) return false;
+    if (!mAnyCameraHasClips || mProject.totalTicks <= 0) return true;
+    int const clampedTick = static_cast<int>(std::clamp<int64_t>(tick, 0, mProject.totalTicks));
+    return state::editing::ClipOps::cameraHasActiveClipAt(camera, clampedTick, mProject.totalTicks, false);
+}
+
+void CameraTimelineEvaluator::buildSpeedSpans() {
+    mSpeedSpans.clear();
+    mSpeedSpanEndU = 0.0L;
+
+    auto const slices = state::editing::ClipOps::collectCompositedSlices(mProject, false, mDimensionTransitionTicks);
+
+    int horizonTick = std::max(0, mProject.totalTicks);
+    for (auto const& camera : mProject.cameras) {
+        if (!camera.keysByTick.empty()) {
+            horizonTick = std::max(horizonTick, camera.keysByTick.rbegin()->first);
+        }
+    }
+    for (auto const& slice : slices) {
+        if (slice.inTick < slice.outTick) horizonTick = std::max(horizonTick, slice.outTick);
+    }
+    if (horizonTick <= 0) return;
+
+    std::vector<int> boundaries{0, horizonTick};
+    for (auto const& slice : slices) {
+        int const start = std::clamp(slice.inTick, 0, horizonTick);
+        int const end   = std::clamp(slice.outTick, 0, horizonTick);
+        if (start < end) {
+            boundaries.push_back(start);
+            boundaries.push_back(end);
+        }
+    }
+    std::sort(boundaries.begin(), boundaries.end());
+    boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
+
+    long double cumU = 0.0L;
+    for (size_t i = 0; i + 1 < boundaries.size(); ++i) {
+        int const bStart = boundaries[i];
+        int const bEnd   = boundaries[i + 1];
+        if (bStart >= bEnd) continue;
+
+        long double speed = 1.0L;
+        for (auto const& slice : slices) {
+            if (slice.inTick < slice.outTick && slice.inTick <= bStart && bEnd <= slice.outTick) {
+                speed = static_cast<long double>(state::editing::model::clampClipSpeed(slice.speed));
+                break;
+            }
+        }
+
+        if (!mSpeedSpans.empty() && mSpeedSpans.back().endTick == bStart && mSpeedSpans.back().speed == speed) {
+            mSpeedSpans.back().endTick = bEnd;
+        } else {
+            mSpeedSpans.push_back(SpeedSpan{bStart, bEnd, speed, cumU});
+        }
+        cumU += static_cast<long double>(bEnd - bStart) / speed;
+    }
+    mSpeedSpanEndU = cumU;
+}
+
+long double CameraTimelineEvaluator::unscaledTicksAt(long double replayTick) const noexcept {
+    if (mSpeedSpans.empty()) return replayTick;
+    if (replayTick <= static_cast<long double>(mSpeedSpans.front().startTick)) {
+        return mSpeedSpans.front().startUnscaled
+             + (replayTick - static_cast<long double>(mSpeedSpans.front().startTick));
+    }
+    if (replayTick >= static_cast<long double>(mSpeedSpans.back().endTick)) {
+        return mSpeedSpanEndU + (replayTick - static_cast<long double>(mSpeedSpans.back().endTick));
+    }
+    auto const upper = std::upper_bound(
+        mSpeedSpans.begin(),
+        mSpeedSpans.end(),
+        replayTick,
+        [](long double value, SpeedSpan const& span) { return value < static_cast<long double>(span.endTick); }
+    );
+    auto const& span = (upper == mSpeedSpans.end()) ? mSpeedSpans.back() : *upper;
+    return span.startUnscaled + (replayTick - static_cast<long double>(span.startTick)) / span.speed;
+}
+
+long double CameraTimelineEvaluator::replayTickForUnscaled(long double unscaledTicks) const noexcept {
+    if (mSpeedSpans.empty()) return unscaledTicks;
+    if (unscaledTicks <= mSpeedSpans.front().startUnscaled) {
+        return static_cast<long double>(mSpeedSpans.front().startTick)
+             + (unscaledTicks - mSpeedSpans.front().startUnscaled);
+    }
+    if (unscaledTicks >= mSpeedSpanEndU) {
+        return static_cast<long double>(mSpeedSpans.back().endTick) + (unscaledTicks - mSpeedSpanEndU);
+    }
+    auto const upper = std::upper_bound(
+        mSpeedSpans.begin(),
+        mSpeedSpans.end(),
+        unscaledTicks,
+        [](long double value, SpeedSpan const& span) { return value < span.startUnscaled; }
+    );
+    auto const& span = (upper == mSpeedSpans.begin()) ? mSpeedSpans.front() : *std::prev(upper);
+    return static_cast<long double>(span.startTick) + (unscaledTicks - span.startUnscaled) * span.speed;
+}
+
+long double CameraTimelineEvaluator::mapSegmentSampleTick(
+    CameraTrackSegment const& segment,
+    long double               replayTick
+) const noexcept {
+    if (!segment.hasUnscaledIntervals || segment.intervals.empty()) return replayTick;
+    if (replayTick < segment.intervals.front().rStart) {
+        return static_cast<long double>(segment.firstTick) + (replayTick - segment.intervals.front().rStart);
+    }
+    for (auto const& iv : segment.intervals) {
+        if (replayTick <= iv.rEnd) {
+            long double const raw =
+                iv.ignoreClipSpeed ? static_cast<long double>(iv.kStartTick) + (unscaledTicksAt(replayTick) - iv.uStart)
+                                   : static_cast<long double>(iv.kStartTick) + (replayTick - iv.rStart);
+            return std::clamp(raw, static_cast<long double>(iv.kStartTick), static_cast<long double>(iv.kEndTick));
+        }
+    }
+    return static_cast<long double>(segment.lastTick) + (replayTick - segment.intervals.back().rEnd);
 }
 
 size_t CameraTimelineEvaluator::dimensionSegmentForTick(long double tick) const noexcept {
@@ -143,12 +289,13 @@ std::optional<CameraRenderState> CameraTimelineEvaluator::sampleKeyframes(
     }
     if (!matched) return std::nullopt;
 
-    auto const keyTick = clamp ? std::clamp(
-                                     tick,
+    auto const mappedTick = mapSegmentSampleTick(*matched, tick);
+    auto const keyTick    = clamp ? std::clamp(
+                                     mappedTick,
                                      static_cast<long double>(matched->firstTick),
                                      static_cast<long double>(matched->lastTick)
                                  )
-                               : tick;
+                                  : mappedTick;
     auto change = matched->track.createChange(keyTick);
     if (!change) return std::nullopt;
 
@@ -156,7 +303,7 @@ std::optional<CameraRenderState> CameraTimelineEvaluator::sampleKeyframes(
     change->apply(handler);
     auto state = handler.state();
     if (!state) return std::nullopt;
-    applyRotationShake(*state, camera.shake.value_or(state::editing::model::CameraShake{}), tick);
+    applyRotationShake(*state, camera.shake.value_or(state::editing::model::CameraShake{}), mappedTick);
     return state;
 }
 
@@ -182,6 +329,7 @@ CameraTimelineEvaluator::sampleTrack(CameraEntity const& camera, visuals::Replay
 CameraShot CameraTimelineEvaluator::shotAt(int64_t tick) const {
     auto const curSegment = dimensionSegmentForTick(static_cast<long double>(tick));
     for (auto const& camera : mProject.cameras) {
+        if (!cameraCoversTick(camera, tick)) continue;
         auto const [keyTick, key] = keyEntryAtOrBefore(camera, tick);
         if (!key) continue;
         if (key->mode == CameraKeyframeMode::Interpolated) {
@@ -200,6 +348,7 @@ std::optional<CameraTimelineEvaluation> CameraTimelineEvaluator::sample(visuals:
     auto const curSegment = dimensionSegmentForTick(time.value());
 
     for (auto const& camera : mProject.cameras) {
+        if (!cameraCoversTick(camera, tick)) continue;
         auto const [keyTick, key] = keyEntryAtOrBefore(camera, tick);
         if (!key) continue;
         if (key->mode == CameraKeyframeMode::Interpolated
@@ -217,6 +366,12 @@ std::optional<CameraTimelineEvaluation> CameraTimelineEvaluator::sample(visuals:
     }
     if (!mHoldOutsideTracks) return std::nullopt;
     for (auto const& camera : mProject.cameras) {
+        if (!isUsableCamera(camera) || !cameraCoversTick(camera, tick)) continue;
+        if (auto state = sampleKeyframes(camera, time.value(), true, true)) {
+            return CameraTimelineEvaluation{*state, camera.id, CameraKeyframeMode::Interpolated};
+        }
+    }
+    for (auto const& camera : mProject.cameras) {
         if (!isUsableCamera(camera)) continue;
         if (auto state = sampleKeyframes(camera, time.value(), true, true)) {
             return CameraTimelineEvaluation{*state, camera.id, CameraKeyframeMode::Interpolated};
@@ -231,6 +386,7 @@ CameraTimelineEvaluator::sampleKeyframePath(visuals::ReplaySampleTime const& tim
     auto const tick       = time.floorTick();
     auto const curSegment = dimensionSegmentForTick(time.value());
     for (auto const& camera : mProject.cameras) {
+        if (!cameraCoversTick(camera, tick)) continue;
         auto const [keyTick, key] = keyEntryAtOrBefore(camera, tick);
         if (!key || key->mode != CameraKeyframeMode::Interpolated) continue;
         if (dimensionSegmentForTick(static_cast<long double>(keyTick)) != curSegment) continue;

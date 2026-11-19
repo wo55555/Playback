@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -37,6 +38,9 @@ private:
     bool               saveProject(std::filesystem::path const& path);
     void               autosaveIfDue();
     void               flushProjectOnClose();
+    void               clearExportBatch();
+    void               startExportBatch(std::vector<QueuedExportJob> jobs, bool hudVisible);
+    void               advanceExportBatchIfNeeded();
     [[nodiscard]] bool isProjectDirty() const { return mCommandStack.revision() != mSavedRevision; }
     [[nodiscard]] std::optional<state::editing::model::CameraKeyframe> captureCameraKeyframe() const;
     void                                                               refreshBrowser();
@@ -71,6 +75,11 @@ private:
     std::chrono::steady_clock::time_point mLastAutosave{};
     bool                                  mEditorVisibleLogged{};
     bool                                  mEditorReadyLatched{};
+
+    std::deque<QueuedExportJob> mPendingExportBatch;
+    std::uint32_t               mExportBatchIndex{0};
+    std::uint32_t               mExportBatchTotal{0};
+    std::string                 mExportBatchLabel;
 };
 
 } // namespace playback::state

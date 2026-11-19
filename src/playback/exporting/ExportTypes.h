@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace playback::state::editing::model {
 struct EditorStateExt;
@@ -19,6 +20,12 @@ struct FrameRate {
 };
 
 enum class ExportFormat : uint8_t { Mp4Video, PngSequence };
+
+enum class ExportRangeMode : uint8_t {
+    EnabledClips  = 0,
+    SequenceInOut = 1,
+    SingleClip    = 2,
+};
 
 // Maps to the libx264 preset: faster presets trade file size and some sharpness for encode speed.
 enum class VideoEncodeSpeed : uint8_t { Quality, Fast, Fastest };
@@ -96,7 +103,9 @@ struct ExportSettings {
     AudioCodec audioCodec{AudioCodec::Aac};
     uint32_t   audioBitrateKbps{192};
     // Leave the whole HUD out of the captured frames, whatever the preview shows.
-    bool hideHud{false};
+    bool                     hideHud{false};
+    ExportRangeMode          rangeMode{ExportRangeMode::EnabledClips};
+    std::vector<std::string> selectedClipIds;
 };
 
 enum class ExportError : uint8_t {
@@ -143,21 +152,40 @@ struct ExportStatus {
     uint64_t              submittedFrames{};
     uint64_t              writtenFrames{};
     uint64_t              totalFrames{};
+    uint32_t              batchIndex{0};
+    uint32_t              batchTotal{0};
+    std::string           batchLabel;
 };
 
 struct ExportFramePlan {
     int64_t              replayTickNumerator{};
     int64_t              replayTickDenominator{1};
     visuals::FrameTicket ticket;
+    bool                 hardCut{false};
+    bool                 muteAudio{false};
+};
+
+struct CompiledExportSegment {
+    int64_t  inTick{};
+    int64_t  outTick{};
+    uint64_t firstFrame{};
+    uint64_t frameCount{};
+    int64_t  replayStartNumerator{};
+    int64_t  replayStepNumerator{};
+    int64_t  replayDenominator{1};
+    int64_t  maxNumerator{};
+    bool     hardCutBefore{false};
+    bool     muteAudio{false};
 };
 
 struct CompiledExportPlan {
-    ExportSettings        settings;
-    std::filesystem::path outputPath;
-    uint64_t              frameCount{};
-    int64_t               replayTickStartNumerator{};
-    int64_t               replayTickStepNumerator{};
-    int64_t               replayTickDenominator{1};
+    ExportSettings                     settings;
+    std::filesystem::path              outputPath;
+    uint64_t                           frameCount{};
+    int64_t                            replayTickStartNumerator{};
+    int64_t                            replayTickStepNumerator{};
+    int64_t                            replayTickDenominator{1};
+    std::vector<CompiledExportSegment> segments;
 
     [[nodiscard]] std::optional<ExportFramePlan> frame(uint64_t frameIndex) const;
 };

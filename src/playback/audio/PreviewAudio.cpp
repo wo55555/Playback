@@ -19,6 +19,7 @@ namespace {
 using namespace playback::audio::fmod;
 
 std::atomic_bool   gMuted{false};
+std::atomic_bool   gClipMuted{false};
 std::atomic<float> gVolume{1.0f};
 std::atomic_bool   gSilentWhilePaused{true};
 
@@ -97,6 +98,8 @@ void setMuted(bool muted) { gMuted.store(muted, std::memory_order_relaxed); }
 
 bool isMuted() { return gMuted.load(std::memory_order_relaxed); }
 
+void setClipMuted(bool muted) { gClipMuted.store(muted, std::memory_order_relaxed); }
+
 void setVolume(float volume) { gVolume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_relaxed); }
 
 float volume() { return gVolume.load(std::memory_order_relaxed); }
@@ -110,7 +113,8 @@ void update(bool replayActive, bool replayPaused, bool replaySeeking, bool expor
     bool const dropping =
         previewing && (replayPaused || replaySeeking) && gSilentWhilePaused.load(std::memory_order_relaxed);
     gDropNewSounds.store(dropping, std::memory_order_relaxed);
-    float const gain = !previewing ? 1.0f : gMuted.load(std::memory_order_relaxed) ? 0.0f : volume();
+    bool const  muted = gMuted.load(std::memory_order_relaxed) || gClipMuted.load(std::memory_order_relaxed);
+    float const gain  = !previewing ? 1.0f : muted ? 0.0f : volume();
     gGain.store(gain, std::memory_order_relaxed);
 
     // The export owns the mixer while it runs, so the chain is left alone until it is done.
@@ -140,6 +144,7 @@ bool shouldDropNewSounds() {
 }
 
 void reset() {
+    gClipMuted.store(false, std::memory_order_relaxed);
     gDropNewSounds.store(false, std::memory_order_relaxed);
     gGain.store(1.0f, std::memory_order_relaxed);
     detach(hooks::fmodApi());

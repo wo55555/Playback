@@ -71,10 +71,13 @@ void endSection() {
 }
 
 void textRow(char const* label, char const* value) {
+    float const scale      = uiScale();
+    float const startX     = ImGui::GetCursorPosX();
     float const width      = ImGui::GetContentRegionAvail().x;
-    float const labelWidth = std::clamp(width * 0.38f, 72.0f, 160.0f);
+    float const labelWidth = std::clamp(width * 0.38f, 72.0f * scale, 160.0f * scale);
+    float const textEndX   = startX + ImGui::CalcTextSize(label).x + 8.0f * scale;
     ImGui::TextDisabled("%s", label);
-    ImGui::SameLine(labelWidth);
+    ImGui::SameLine(std::max(startX + labelWidth, textEndX));
     ImGui::TextUnformatted(value);
     separator();
 }

@@ -1,0 +1,90 @@
+﻿#pragma once
+
+#include "playback/state/editing/models/EditorStateExt.h"
+
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace playback::state::editing::ClipOps {
+
+struct ClipWithCamera {
+    model::CameraEntity const* camera{};
+    model::Clip const*         clip{};
+
+    [[nodiscard]] explicit operator bool() const noexcept { return camera != nullptr && clip != nullptr; }
+};
+
+struct MutableClipWithCamera {
+    model::CameraEntity* camera{};
+    model::Clip*         clip{};
+
+    [[nodiscard]] explicit operator bool() const noexcept { return camera != nullptr && clip != nullptr; }
+};
+
+struct CompositedClipSlice {
+    int                        inTick{};
+    int                        outTick{};
+    model::CameraEntity const* camera{};
+    model::Clip const*         clip{};
+    float                      speed{1.0f};
+    bool                       muted{false};
+    bool                       exportEnabled{true};
+};
+
+[[nodiscard]] bool clipCoversTick(model::Clip const& clip, int tick, int totalTicks) noexcept;
+[[nodiscard]] bool cameraHasActiveClipAt(
+    model::CameraEntity const& camera,
+    int                        tick,
+    int                        totalTicks,
+    bool                       onlyExportEnabled = false
+) noexcept;
+
+[[nodiscard]] std::string nextClipId(model::EditorStateExt const& state);
+[[nodiscard]] std::string defaultClipName(model::EditorStateExt const& state);
+[[nodiscard]] std::string nextSceneId(model::EditorStateExt const& state);
+
+[[nodiscard]] model::Scene const* findScene(model::EditorStateExt const& state, std::string_view sceneId) noexcept;
+[[nodiscard]] model::Scene*       findScene(model::EditorStateExt& state, std::string_view sceneId) noexcept;
+[[nodiscard]] model::Scene const* activeScene(model::EditorStateExt const& state) noexcept;
+[[nodiscard]] model::Scene*       activeScene(model::EditorStateExt& state) noexcept;
+
+void syncActiveSceneFromWorking(model::EditorStateExt& state);
+void loadWorkingFromActiveScene(model::EditorStateExt& state);
+
+[[nodiscard]] model::EditorStateExt buildProjectForScene(model::EditorStateExt const& state, model::Scene const& scene);
+
+void ensureDefaultScene(
+    model::EditorStateExt& state,
+    std::string            defaultSceneName = {},
+    std::string            defaultClipName  = {}
+);
+
+void syncTotalTicks(model::EditorStateExt& state, int previousTotalTicks, std::string defaultClipName = {});
+
+[[nodiscard]] ClipWithCamera activeClipAt(
+    model::EditorStateExt const& state,
+    int                          tick,
+    bool                         onlyExportEnabled    = false,
+    std::span<int const>         dimensionTransitions = {}
+) noexcept;
+
+[[nodiscard]] float activeClipSpeedAt(model::EditorStateExt const& state, int tick) noexcept;
+[[nodiscard]] bool  isClipMutedAt(model::EditorStateExt const& state, int tick) noexcept;
+
+[[nodiscard]] std::vector<CompositedClipSlice> collectCompositedSlices(
+    model::EditorStateExt const& state,
+    bool                         onlyExportEnabled    = true,
+    std::span<int const>         dimensionTransitions = {}
+);
+
+[[nodiscard]] std::vector<ClipWithCamera>     collectAllClipsWithCamera(model::EditorStateExt const& state);
+[[nodiscard]] std::vector<model::Clip const*> collectOrderedClips(model::EditorStateExt const& state);
+[[nodiscard]] std::vector<model::Clip const*> collectEnabledClips(model::EditorStateExt const& state);
+[[nodiscard]] ClipWithCamera findClipWithCamera(model::EditorStateExt const& state, std::string_view clipId) noexcept;
+[[nodiscard]] MutableClipWithCamera findClipWithCamera(model::EditorStateExt& state, std::string_view clipId) noexcept;
+[[nodiscard]] model::Clip const*    findClipById(model::EditorStateExt const& state, std::string_view clipId) noexcept;
+[[nodiscard]] model::Clip*          findClipById(model::EditorStateExt& state, std::string_view clipId) noexcept;
+
+} // namespace playback::state::editing::ClipOps
