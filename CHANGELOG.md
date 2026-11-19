@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Camera tracks can be reordered to change their priority. Drag a track in the timeline's track list, or use Move to top, Raise priority, Lower priority and Move to bottom in its right-click menu. Where tracks overlap, the track higher in the list plays, in preview and in export. Reordering can be undone and is saved with the project. A new camera track is added at the top of the list, so it takes priority over the existing ones.
+- Added a horizontal scene bar above the timeline for adding, duplicating, renaming, reordering, switching and deleting independent scenes, each with its own camera tracks, markers and export range. Clips and keyframes are edited directly on each camera track, where higher tracks cover lower tracks across active clips and uncover them across gaps; a left tool strip provides Select (`V`), Razor (`C`) and Pen (`P`) tools, and clips default to the full replay and can be split (`Ctrl+B`, `Ctrl+K` or Razor), trimmed (`Alt+[`, `Alt+]` or edge drag), moved within free gaps, renamed, muted, locked, toggled for export directly on the timeline (`Shift+E`), or deleted without shifting later clips.
+- Clips support playback speeds from `0.05x` to `32x` in both preview and export, with muted clips silencing preview and exported audio. Interpolated camera keyframes can enable Ignore clip speed to keep 1x camera motion across sped-up or slowed-down clips, marked with a `1x` badge on the timeline.
+- Video export can render the active scene (enabled clips, in/out range, or a single clip) or batch-export multiple selected scenes sequentially, with an option to merge multiple enabled clips into one video or export them as separate videos, cutting cleanly across gaps and disabled clips.
+- Camera tracks can be reordered to change their priority. Drag a track in the timeline's track list, or use Move to top, Raise priority, Lower priority and Move to bottom in its right-click menu. Where tracks overlap, the track higher in the list plays, in preview and in export. Reordering can be undone and is saved with the project.
 
 ### Changed
 

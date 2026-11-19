@@ -44,6 +44,14 @@ enum class EditorKeybind : uint8_t {
     InsertMarker,
     PreviousMarker,
     NextMarker,
+    SelectTool,
+    RazorTool,
+    PenTool,
+    SplitClip,
+    ToggleClipExport,
+    TrimClipInToPlayhead,
+    TrimClipOutToPlayhead,
+    ClearExportRange,
     NamedOnly,
 };
 

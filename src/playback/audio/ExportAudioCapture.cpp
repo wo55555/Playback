@@ -534,7 +534,7 @@ void exportEnd() {
     gWavOk       = false;
 }
 
-void onFrameAccepted(uint64_t frameIndex) {
+void onFrameAccepted(uint64_t frameIndex, bool hardCut, bool muteAudio) {
     if (!gArmed.load()) return;
     std::lock_guard lock(gMutex);
     if (!gSoundSystem || !gCapturing) return;
@@ -557,9 +557,22 @@ void onFrameAccepted(uint64_t frameIndex) {
         logger().info("Export audio capture: first frame accepted, seek sounds stopped");
     } else if (frameIndex <= gLastFrameIndex) {
         return; // retry dedup
+    } else if (hardCut) {
+        // Cut boundary between non-contiguous clips: stop sounds spawned during the cut seek and flush the stop ramp.
+        gApi->groupStop(gMaster);
+        gPhase = int(Phase::Discarding);
+        for (int i = 0; i < FirstFrameFlushUpdates; ++i) mixOneBlockLocked();
+        {
+            std::lock_guard plock(gPcmMutex);
+            gPcm.clear();
+        }
+        gPadDebt = 0;
+        gPhase   = int(Phase::Capturing);
     }
     gLastFrameIndex = frameIndex;
     ++gAcceptedFrames;
+
+    gPhase = muteAudio ? int(Phase::Discarding) : int(Phase::Capturing);
 
     // One game-layer audio tick per frame: unpause new channels, submit listeners, clean up finished sounds. Its inner
     // System::update mixes the frame's first block.
@@ -582,10 +595,23 @@ void onFrameAccepted(uint64_t frameIndex) {
         }
     }
 
+    int64_t const need = idealSamples(gAcceptedFrames) - gWritten;
+    if (muteAudio) {
+        {
+            std::lock_guard plock(gPcmMutex);
+            gPcm.clear();
+        }
+        gPadDebt = 0;
+        if (gWavOk && need > 0) gWav.padTo(uint64_t(gWritten + need));
+        gWritten += std::max<int64_t>(0, need);
+        gPhase    = int(Phase::Capturing);
+        if (gAcceptedFrames % SummaryEvery == 0) logWindowLocked("frames");
+        return;
+    }
+
     // Mix until the queue covers this frame (plus any samples owed for earlier padding), then take exactly that.
-    int64_t const need     = idealSamples(gAcceptedFrames) - gWritten;
-    int const     maxMixes = int(need / 512) + ExtraUpdatesPerFrame;
-    int           mixes    = 0;
+    int const maxMixes = int(need / 512) + ExtraUpdatesPerFrame;
+    int       mixes    = 0;
     while (queuedFrames() - gPadDebt < need && mixes < maxMixes) {
         int64_t const before = gBlocks.load();
         mixOneBlockLocked();

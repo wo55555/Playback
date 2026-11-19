@@ -346,4 +346,33 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
+class SetCameraKeyframeIgnoreClipSpeed final : public model::IEditCommand {
+public:
+    SetCameraKeyframeIgnoreClipSpeed(std::string cameraId, int tick, bool ignoreClipSpeed);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    bool                                 mIgnoreClipSpeed;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetKeyframesIgnoreClipSpeed final : public model::IEditCommand {
+public:
+    SetKeyframesIgnoreClipSpeed(std::vector<model::KeyframeRef> refs, bool ignoreClipSpeed);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    bool                                 mIgnoreClipSpeed;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
 } // namespace playback::state::editing::command

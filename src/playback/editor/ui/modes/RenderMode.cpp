@@ -77,6 +77,7 @@ void RenderMode::reset() {
     mFirstFrameAt    = {};
     mFirstFrameCount = 0;
     mHasFirstFrame   = false;
+    mLastBatchIndex  = 0;
 }
 
 void RenderMode::draw(PanelContext const& ctx) {
@@ -135,6 +136,14 @@ void RenderMode::draw(PanelContext const& ctx) {
         float const progress =
             status.totalFrames > 0 ? static_cast<float>(progressFrames) / static_cast<float>(status.totalFrames) : 0.0f;
 
+        if (status.batchIndex != mLastBatchIndex) {
+            mStartedAt       = Clock::now();
+            mFirstFrameAt    = {};
+            mFirstFrameCount = 0;
+            mHasFirstFrame   = false;
+            mLastBatchIndex  = status.batchIndex;
+        }
+
         // Speed is measured from the first delivered frame so warm-up does not drag the estimate down.
         auto const now = Clock::now();
         if (!mHasFirstFrame && progressFrames > 0) {
@@ -175,7 +184,12 @@ void RenderMode::draw(PanelContext const& ctx) {
                 2.5f * uiScale,
                 cancelling ? theme::kWarning : theme::kAccentHover
             );
-            std::string const title = exportStateLabel(status.state);
+            std::string const title = status.batchTotal > 1 ? "playback.refactorEditor.render.batchTitle"_tr(
+                                                                  exportStateLabel(status.state),
+                                                                  status.batchIndex,
+                                                                  status.batchTotal
+                                                              )
+                                                            : exportStateLabel(status.state);
             float const       textX = origin.x + box + style.ItemSpacing.x * 3.0f;
             float const       lineH = ImGui::GetFontSize();
             float const       gap   = 3.0f * uiScale;
@@ -183,7 +197,10 @@ void RenderMode::draw(PanelContext const& ctx) {
             float const       right = origin.x + ImGui::GetContentRegionAvail().x;
             dl->AddText({textX, topY}, cancelling ? theme::kWarning : theme::kText, title.c_str());
             dl->PushClipRect({textX, origin.y}, {right, origin.y + box}, true);
-            dl->AddText({textX, topY + lineH + gap}, SecondaryText, fileName.c_str());
+            std::string const subtitle = (status.batchTotal > 1 && !status.batchLabel.empty())
+                                           ? (status.batchLabel + " - " + fileName)
+                                           : fileName;
+            dl->AddText({textX, topY + lineH + gap}, SecondaryText, subtitle.c_str());
             dl->PopClipRect();
             ImGui::Dummy({0.0f, box});
         }
