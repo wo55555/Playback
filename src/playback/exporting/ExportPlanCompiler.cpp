@@ -256,12 +256,18 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     if (settings.videoCrf > MaxExportCrf || settings.encodeSpeed > VideoEncodeSpeed::Fastest) {
         return failure(ExportError::InvalidSettings, "The video encoder quality or speed setting is invalid");
     }
+    if (settings.timelapse
+        && (settings.timelapseIntervalMs < MinTimelapseIntervalMs
+            || settings.timelapseIntervalMs > MaxTimelapseIntervalMs)) {
+        return failure(ExportError::InvalidSettings, "The timelapse interval is invalid");
+    }
     if (project.totalTicks < 0) {
         return failure(ExportError::InvalidTimeline, "The replay duration is invalid");
     }
 
     ExportSettings normalized = settings;
     normalized.frameRate      = normalizeFrameRate(normalized.frameRate);
+    if (normalized.timelapse) normalized.audio = false;
 
     std::vector<ExportSlice> slices;
     switch (normalized.rangeMode) {
@@ -342,13 +348,22 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
 
         int64_t stepRawNum = 0;
         int64_t stepRawDen = 0;
-        int64_t tmpDen     = 0;
-        if (!checkedSignedMultiply(ReplayTicksPerSecond, normalized.frameRate.denominator, tmpDen)
-            || !checkedSignedMultiply(tmpDen, speedNum, stepRawNum)) {
-            return failure(ExportError::InvalidSettings, "The export frame rate is too large");
-        }
-        if (!checkedSignedMultiply(normalized.frameRate.numerator, speedDen, stepRawDen)) {
-            return failure(ExportError::InvalidSettings, "The export frame rate is too large");
+        if (!normalized.timelapse) {
+            int64_t tmpDen = 0;
+            if (!checkedSignedMultiply(ReplayTicksPerSecond, normalized.frameRate.denominator, tmpDen)
+                || !checkedSignedMultiply(tmpDen, speedNum, stepRawNum)) {
+                return failure(ExportError::InvalidSettings, "The export frame rate is too large");
+            }
+            if (!checkedSignedMultiply(normalized.frameRate.numerator, speedDen, stepRawDen)) {
+                return failure(ExportError::InvalidSettings, "The export frame rate is too large");
+            }
+        } else {
+            if (!checkedSignedMultiply(static_cast<int64_t>(normalized.timelapseIntervalMs), speedNum, stepRawNum)) {
+                return failure(ExportError::InvalidSettings, "The timelapse interval is too large");
+            }
+            if (!checkedSignedMultiply(50, speedDen, stepRawDen)) {
+                return failure(ExportError::InvalidSettings, "The timelapse speed denominator is too large");
+            }
         }
 
         int64_t const stepGcd   = gcd(stepRawNum, stepRawDen);

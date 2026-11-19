@@ -100,6 +100,7 @@ bool OfflineRenderBoundary::open(
 
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
+    mTimelapse                     = settings.timelapse;
     mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mWarmupFrames                  = settings.warmupFrames;
@@ -174,6 +175,7 @@ void OfflineRenderBoundary::close() {
     mTickGateSuspendedForDimension = false;
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
+    mTimelapse                     = false;
     mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Closed;
@@ -206,6 +208,7 @@ void OfflineRenderBoundary::cancel() {
     mTickGateSuspendedForDimension = false;
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
+    mTimelapse                     = false;
     mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Cancelled;
@@ -287,9 +290,9 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         int const  nextTick = targetTick(*mPendingFrame);
         int const  applied  = mReplay.getAppliedReplayTick();
         bool const hardCut  = mPendingFrame->hardCut;
-        bool const needSeek = hardCut || nextTick < applied;
+        bool const needSeek = hardCut || nextTick < applied || (mTimelapse && nextTick - applied > 1);
         if (needSeek) {
-            if (!mReplay.beginExportCutSeek(nextTick, true)) {
+            if (!mReplay.beginExportCutSeek(nextTick, hardCut || nextTick < applied)) {
                 fault(
                     OfflineRenderBoundaryError::ReplayUnavailable,
                     "The replay could not seek to the next export segment"
@@ -972,6 +975,7 @@ void OfflineRenderBoundary::fault(OfflineRenderBoundaryError error, std::string 
     mWarmupStartedAt               = {};
     mWarmupLastLoggedAt            = {};
     mTickGateSuspendedForDimension = false;
+    mTimelapse                     = false;
     mPendingCutHandled             = false;
     mState                         = OfflineRenderBoundaryState::Faulted;
     mError                         = error;
