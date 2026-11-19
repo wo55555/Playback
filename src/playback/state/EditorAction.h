@@ -71,6 +71,32 @@ enum class EditorActionType {
     DeleteMarker,
     MoveMarker,
     RenameMarker,
+    SetKeyframeIgnoreClipSpeed,
+    SetKeyframesIgnoreClipSpeed,
+    AddClip,
+    SplitClip,
+    MoveAndTrimClip,
+    SetClipSpeed,
+    RenameClip,
+    SetClipMuted,
+    SetClipLocked,
+    SetClipExportEnabled,
+    SetAllClipsExportEnabled,
+    ResetClipsToFullRange,
+    DeleteClip,
+    AddScene,
+    DuplicateScene,
+    RenameScene,
+    MoveScene,
+    DeleteScene,
+    SwitchScene,
+    SetSceneExportRange,
+};
+
+struct QueuedExportJob {
+    exporting::ExportSettings settings;
+    std::string               sceneId;
+    std::string               label;
 };
 
 struct EditorAction {
@@ -89,6 +115,7 @@ struct EditorAction {
     state::editing::model::Vec2              bezierCtrl1{};
     state::editing::model::Vec2              bezierCtrl2{};
     std::optional<exporting::ExportSettings> exportSettings;
+    std::vector<QueuedExportJob>             exportJobs;
     std::vector<std::string>                 replayIds;
     // Set only when pasting a copied keyframe. An empty value captures the live camera, as before.
     std::optional<editing::model::CameraKeyframe> keyframe;

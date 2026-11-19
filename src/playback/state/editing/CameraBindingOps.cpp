@@ -1,8 +1,10 @@
 ﻿#include "CameraBindingOps.h"
 
 #include "ll/api/i18n/I18n.h"
+#include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace playback::state::editing::CameraBindingOps {
 
@@ -40,8 +42,18 @@ std::string addFreeCamera(model::EditorStateExt& state, std::string const& name)
     model::CameraEntity camera;
     camera.id   = makeCameraId(state);
     camera.name = name.empty() ? defaultCameraName(state) : name;
-    state.cameras.insert(state.cameras.begin(), camera);
-    return camera.id;
+    if (state.totalTicks > 0) {
+        model::Clip clip;
+        clip.id            = ClipOps::nextClipId(state);
+        clip.name          = ClipOps::defaultClipName(state);
+        clip.inTick        = 0;
+        clip.outTick       = state.totalTicks;
+        clip.speed         = 1.0f;
+        clip.exportEnabled = true;
+        camera.clips.push_back(std::move(clip));
+    }
+    state.cameras.push_back(std::move(camera));
+    return state.cameras.back().id;
 }
 
 bool deleteCamera(model::EditorStateExt& state, std::string const& cameraId) {

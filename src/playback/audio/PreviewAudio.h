@@ -5,6 +5,7 @@ namespace playback::audio::preview {
 
 void                setMuted(bool muted);
 [[nodiscard]] bool  isMuted();
+void                setClipMuted(bool muted);
 void                setVolume(float volume);
 [[nodiscard]] float volume();
 void                setSilentWhilePaused(bool silent);

@@ -1,6 +1,7 @@
 ﻿#include "CommandFactory.h"
 
 #include "playback/state/editing/commands/CameraCommands.h"
+#include "playback/state/editing/commands/ClipCommands.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
 
 namespace playback::state::editing::command {
@@ -108,6 +109,14 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createAddCameraKeyframes(st
     return std::make_unique<AddKeyframes>(std::move(refs));
 }
 std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetCameraKeyframeIgnoreClipSpeed(const std::string& id, int tick, bool ignoreClipSpeed) {
+    return std::make_unique<SetCameraKeyframeIgnoreClipSpeed>(id, tick, ignoreClipSpeed);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetKeyframesIgnoreClipSpeed(std::vector<model::KeyframeRef> refs, bool ignoreClipSpeed) {
+    return std::make_unique<SetKeyframesIgnoreClipSpeed>(std::move(refs), ignoreClipSpeed);
+}
+std::unique_ptr<model::IEditCommand>
 CommandFactory::createAddMarker(const std::string& id, int tick, const std::string& label) {
     return std::make_unique<AddMarker>(id, tick, label);
 }
@@ -120,6 +129,74 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createMoveMarker(const std:
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createRenameMarker(const std::string& id, const std::string& label) {
     return std::make_unique<RenameMarker>(id, label);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddClip(
+    const std::string& cameraId,
+    int                inTick,
+    int                outTick,
+    const std::string& name,
+    float              speed
+) {
+    return std::make_unique<AddClip>(cameraId, inTick, outTick, name, speed);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSplitClip(const std::string& clipId, int splitTick, const std::string& newClipName) {
+    return std::make_unique<SplitClip>(clipId, splitTick, newClipName);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createMoveAndTrimClip(const std::string& clipId, int newInTick, int newOutTick) {
+    return std::make_unique<MoveAndTrimClip>(clipId, newInTick, newOutTick);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetClipSpeed(const std::string& clipId, float speed) {
+    return std::make_unique<SetClipSpeed>(clipId, speed);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createRenameClip(const std::string& clipId, const std::string& name) {
+    return std::make_unique<RenameClip>(clipId, name);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetClipMuted(const std::string& clipId, bool muted) {
+    return std::make_unique<SetClipMuted>(clipId, muted);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetClipLocked(const std::string& clipId, bool locked) {
+    return std::make_unique<SetClipLocked>(clipId, locked);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetClipExportEnabled(const std::string& clipId, bool exportEnabled) {
+    return std::make_unique<SetClipExportEnabled>(clipId, exportEnabled);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetAllClipsExportEnabled(bool exportEnabled, const std::string& cameraId) {
+    return std::make_unique<SetAllClipsExportEnabled>(exportEnabled, cameraId);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createResetClipsToFullRange(const std::string& cameraId, const std::string& defaultClipName) {
+    return std::make_unique<ResetClipsToFullRange>(cameraId, defaultClipName);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteClip(const std::string& clipId) {
+    return std::make_unique<DeleteClip>(clipId);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddScene(const std::string& name) {
+    return std::make_unique<AddScene>(name);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createDuplicateScene(const std::string& sceneId, const std::string& copyName) {
+    return std::make_unique<DuplicateScene>(sceneId, copyName);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createRenameScene(const std::string& sceneId, const std::string& name) {
+    return std::make_unique<RenameScene>(sceneId, name);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createMoveScene(const std::string& sceneId, int targetIndex) {
+    return std::make_unique<MoveScene>(sceneId, targetIndex);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteScene(const std::string& sceneId) {
+    return std::make_unique<DeleteScene>(sceneId);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSwitchScene(const std::string& sceneId) {
+    return std::make_unique<SwitchScene>(sceneId);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetSceneExportRange(int inTick, int outTick) {
+    return std::make_unique<SetSceneExportRange>(inTick, outTick);
 }
 
 } // namespace playback::state::editing::command

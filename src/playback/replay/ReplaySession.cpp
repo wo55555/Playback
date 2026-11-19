@@ -930,10 +930,12 @@ void ReplaySession::clearReplayData() {
     mSeekTargetTick          = -1;
     mExportSeekRequested     = false;
     mSnapMovementDuringSeek  = false;
-    mExportTimelinePhase     = ReplayExportTimelinePhase::Inactive;
-    mExportTargetTick        = -1;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Inactive;
+    mExportTargetTick          = -1;
+    mExportForceSnapshotOnSeek = false;
     mExportCameraViewpoint.reset();
     mPlaybackSpeed           = 1.0f;
+    mClipSpeedScale          = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
     mObserverPreviewInRange  = false;
     mPausedPreviewPose.reset();
@@ -2164,7 +2166,7 @@ void ReplaySession::markReplayTickAdvanced() noexcept {
 // Backdate the tick start by the frozen fraction so the first resumed frame keeps the paused pose.
 void ReplaySession::resumePreviewClockFromFrozenPartial() noexcept {
     auto const frozen = mFrozenPreviewPartial.exchange(-1.0f, std::memory_order_acq_rel);
-    auto const speed  = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
+    auto const speed  = effectivePlaybackSpeed();
     auto const offset = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         std::chrono::duration<float>(std::max(0.0f, frozen) / (20.0f * speed))
     );
@@ -2178,7 +2180,7 @@ float ReplaySession::previewPartialTick() const noexcept {
     auto const advancedAt = mTickAdvancedAt.load(std::memory_order_acquire);
     if (advancedAt == SteadyTimePoint{}) return 0.0f;
 
-    auto const speed = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
+    auto const speed = effectivePlaybackSpeed();
     auto const elapsed =
         std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - advancedAt).count();
     constexpr float SecondsPerTick = 1.0f / 20.0f;
@@ -2216,15 +2218,41 @@ bool ReplaySession::beginExportTimeline(int startTick) {
     mPlaybackTickAccumulator  = 0.0f;
 
     mRequestedSeekTick.store(startTick, std::memory_order_release);
-    mSeekTargetTick         = -1;
-    mExportSeekRequested    = true;
-    mSnapMovementDuringSeek = false;
-    mExportTargetTick       = startTick;
-    mExportTimelinePhase    = ReplayExportTimelinePhase::Initializing;
+    mSeekTargetTick            = -1;
+    mExportSeekRequested       = true;
+    mSnapMovementDuringSeek    = false;
+    mExportTargetTick          = startTick;
+    mExportForceSnapshotOnSeek = true;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Initializing;
     mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
     mObserverServerPositionDirty = false;
     mLastObserverServerSyncChunk.reset();
     getLogger().debug("Export timeline initialization queued (startTick={}, currentTick={})", startTick, mCurrentTick);
+    return true;
+}
+
+bool ReplaySession::beginExportCutSeek(int targetTick, bool forceSnapshot) {
+    if (!mActive || mReplayFailed || mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) return false;
+
+    targetTick               = std::clamp(targetTick, 0, getTotalTicks());
+    mIsPaused                = true;
+    mPlaybackTickAccumulator = 0.0f;
+    mRequestedSeekTick.store(targetTick, std::memory_order_release);
+    mSeekTargetTick            = -1;
+    mExportSeekRequested       = true;
+    mSnapMovementDuringSeek    = false;
+    mExportTargetTick          = targetTick;
+    mExportForceSnapshotOnSeek = forceSnapshot;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Initializing;
+    mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
+    mObserverServerPositionDirty = false;
+    mLastObserverServerSyncChunk.reset();
+    getLogger().debug(
+        "Export cut seek queued (targetTick={}, currentTick={}, forceSnapshot={})",
+        targetTick,
+        mCurrentTick,
+        forceSnapshot
+    );
     return true;
 }
 
@@ -2332,9 +2360,10 @@ bool ReplaySession::finishExportTimelineInitialization() {
         return false;
     }
 
-    mExportSeekRequested    = false;
-    mSnapMovementDuringSeek = false;
-    mExportTimelinePhase    = ReplayExportTimelinePhase::Continuous;
+    mExportSeekRequested       = false;
+    mSnapMovementDuringSeek    = false;
+    mExportForceSnapshotOnSeek = false;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Continuous;
     syncScreenPreviewAfterSeek();
     return true;
 }
@@ -2342,11 +2371,12 @@ bool ReplaySession::finishExportTimelineInitialization() {
 void ReplaySession::endExportTimeline() {
     bool const wasActive = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
     mRequestedSeekTick.store(-1, std::memory_order_release);
-    mSeekTargetTick         = -1;
-    mExportSeekRequested    = false;
-    mSnapMovementDuringSeek = false;
-    mExportTargetTick       = -1;
-    mExportTimelinePhase    = ReplayExportTimelinePhase::Inactive;
+    mSeekTargetTick            = -1;
+    mExportSeekRequested       = false;
+    mSnapMovementDuringSeek    = false;
+    mExportTargetTick          = -1;
+    mExportForceSnapshotOnSeek = false;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Inactive;
     mExportCameraViewpoint.reset();
     if (wasActive) {
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
@@ -2361,6 +2391,15 @@ void ReplaySession::endExportTimeline() {
 }
 
 int ReplaySession::getTotalTicks() const { return std::max(0, mMeta.totalTicks); }
+
+float ReplaySession::effectivePlaybackSpeed() const noexcept {
+    float const base = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
+    return std::clamp(base * mClipSpeedScale, 0.05f, 32.0f);
+}
+
+void ReplaySession::setClipSpeedScale(float scale) noexcept {
+    mClipSpeedScale = std::isfinite(scale) ? std::clamp(scale, 0.05f, 32.0f) : 1.0f;
+}
 
 void ReplaySession::adjustPlaybackSpeed(int direction) {
     if (!mActive || direction == 0) return;
@@ -2483,7 +2522,8 @@ void ReplaySession::beginSeek(int targetTick) {
         }
     }
     bool const followRecordedPlayer = changesDimension || crossesForcedSnapshot;
-    bool const forceExportSnapshot  = exportSeek && mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
+    bool const forceExportSnapshot  = exportSeek && mExportTimelinePhase == ReplayExportTimelinePhase::Initializing
+                                  && (mExportForceSnapshotOnSeek || selectedReader != mReaderIndex);
     if (targetTick >= mCurrentTick && !followRecordedPlayer && !forceExportSnapshot) {
         if (exportSeek) mSnapMovementDuringSeek = mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
         getLogger().debug(
@@ -2687,7 +2727,8 @@ void ReplaySession::tick() {
             holdItemUseBetweenTicks();
             return;
         }
-        mPlaybackTickAccumulator += mPlaybackSpeed;
+        float const speed          = effectivePlaybackSpeed();
+        mPlaybackTickAccumulator  += speed;
         int const ticksToAdvance  = static_cast<int>(mPlaybackTickAccumulator);
         mPlaybackTickAccumulator -= static_cast<float>(ticksToAdvance);
         if (ticksToAdvance == 0) holdItemUseBetweenTicks();
@@ -2701,7 +2742,7 @@ void ReplaySession::tick() {
         }
         // The next client tick runs before its replay tick, so freeze it only when that replay tick will not advance.
         bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
-        levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + mPlaybackSpeed < 1.0f;
+        levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + speed < 1.0f;
     } catch (std::exception const& e) {
         getLogger().error("Replay session failed: {}", e.what());
         stop();
@@ -2829,10 +2870,12 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mSeekTargetTick          = -1;
     mExportSeekRequested     = false;
     mSnapMovementDuringSeek  = false;
-    mExportTimelinePhase     = ReplayExportTimelinePhase::Inactive;
-    mExportTargetTick        = -1;
-    mPlaybackSpeed           = 1.0f;
-    mPlaybackTickAccumulator = 0.0f;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Inactive;
+    mExportTargetTick          = -1;
+    mExportForceSnapshotOnSeek = false;
+    mPlaybackSpeed             = 1.0f;
+    mClipSpeedScale            = 1.0f;
+    mPlaybackTickAccumulator   = 0.0f;
     mReplayTime.reset();
     mPendingReplayDimension.reset();
     mPendingSnapshotApply.reset();

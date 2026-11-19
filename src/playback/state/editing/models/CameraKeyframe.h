@@ -39,6 +39,8 @@ struct CameraKeyframe {
 
     // First- and third-person keyframes only: the replay player viewed from this key on. Empty means the recorder.
     std::string subject;
+    // Interpolated keyframes only: advance in real output time instead of scaling with clip speed.
+    bool ignoreClipSpeed{false};
 };
 
 // Addresses one keyframe in a batch edit. `pose` is only filled when pasting.
