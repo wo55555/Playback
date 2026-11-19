@@ -72,6 +72,8 @@ private:
     bool                     mExportSplitClips{false};
     std::string              mExportSingleClipId;
     std::vector<std::string> mExportSelectedSceneIds;
+    bool                     mExportTimelapse{false};
+    int                      mExportTimelapseIntervalMs{1000};
     std::array<char, 128>    mExportName{"replay-export"};
     std::array<char, 260>    mExportDirectory{"mods/playback/exports"};
 };

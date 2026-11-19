@@ -189,7 +189,7 @@ bool frameIconButton(char const* id, char const* icon, char const* tooltip) {
 }
 
 // Row of page tabs: plain labels over a full-width hairline, the current page underlined in the accent colour.
-bool tabStrip(char const* id, char const* const* labels, int count, int& index) {
+bool tabStrip(char const* id, char const* const* labels, int count, int& index, int disabledMask = 0) {
     float const  s      = metrics::scale();
     float const  height = ImGui::GetFrameHeight() + 4.0f * s;
     float const  padX   = 10.0f * s;
@@ -205,18 +205,22 @@ bool tabStrip(char const* id, char const* const* labels, int count, int& index) 
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() - padX);
     for (int i = 0; i < count; ++i) {
         if (i > 0) ImGui::SameLine();
+        bool const   disabled = (disabledMask >> i) & 1;
         ImVec2 const textSize = ImGui::CalcTextSize(labels[i]);
         ImVec2 const min      = ImGui::GetCursorScreenPos();
         ImGui::PushID(i);
-        if (ImGui::InvisibleButton("##tab", {textSize.x + padX * 2.0f, height}) && i != index) {
+        if (ImGui::InvisibleButton("##tab", {textSize.x + padX * 2.0f, height}) && !disabled && i != index) {
             index   = i;
             changed = true;
         }
         ImGui::PopID();
         bool const active  = i == index;
-        bool const hovered = ImGui::IsItemHovered();
+        bool const hovered = !disabled && ImGui::IsItemHovered();
         if (hovered && !active) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        ImU32 const tone = active ? theme::kIconHighlight : hovered ? theme::kText : theme::kTextDim;
+        ImU32 const tone = disabled ? theme::withAlpha(theme::kTextDim, 0x66)
+                         : active   ? theme::kIconHighlight
+                         : hovered  ? theme::kText
+                                    : theme::kTextDim;
         dl->AddText({min.x + padX, min.y + (height - textSize.y) * 0.5f}, tone, labels[i]);
         if (active) {
             dl->AddRectFilled(
@@ -859,7 +863,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
           "playback.refactorEditor.export.recordAudio"_tr(),
           "playback.refactorEditor.export.audioCodec"_tr(),
           "playback.refactorEditor.export.audioBitrate"_tr(),
-          "playback.refactorEditor.export.extraRenders"_tr()}) {
+          "playback.refactorEditor.export.extraRenders"_tr(),
+          "playback.refactorEditor.export.timelapse"_tr(),
+          "playback.refactorEditor.export.timelapseInterval"_tr()}) {
         hintedLabelWidth = std::max(hintedLabelWidth, textWidth(label) + hintExtra);
     }
     // Fixed label column aligns every value; the capped value column stops inputs spanning the dialog.
@@ -956,12 +962,18 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             mExportBodyHeight       = 0.0f;
         }
         mExportTab                  = std::clamp(mExportTab, 0, IM_ARRAYSIZE(tabLabels) - 1);
+        if (mExportTimelapse && mExportTab == TabAudio) mExportTab = TabGeneral;
         mExportAudioChannels        = std::clamp(mExportAudioChannels, 0, 1);
         mExportAudioCodec           = std::clamp(mExportAudioCodec, 0, IM_ARRAYSIZE(kAudioCodecs) - 1);
         mExportAudioBitrate         = std::clamp(mExportAudioBitrate, 0, IM_ARRAYSIZE(kAudioBitratesKbps) - 1);
         mExportEncodeSpeed          = std::clamp(mExportEncodeSpeed, 0, 2);
         auto const audioCodec       = kAudioCodecs[mExportAudioCodec];
         mExportSsaa                 = std::clamp(mExportSsaa, 0, 2);
+        mExportTimelapseIntervalMs  = std::clamp(
+            mExportTimelapseIntervalMs,
+            static_cast<int>(exporting::MinTimelapseIntervalMs),
+            static_cast<int>(exporting::MaxTimelapseIntervalMs)
+        );
         int const maximumReplayTick = std::max(state.totalTicks, 0);
 
         // Header: accent-tinted icon tile with title and subtitle stacked beside it.
@@ -989,7 +1001,13 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
         // Settings are split over pages, so each one is short enough to show whole; the summary below spans them all.
         ImGui::Dummy({0.0f, 2.0f * uiScale});
-        bool const tabChanged = tabStrip("##export-tabs", tabLabels, IM_ARRAYSIZE(tabLabels), mExportTab);
+        bool const tabChanged = tabStrip(
+            "##export-tabs",
+            tabLabels,
+            IM_ARRAYSIZE(tabLabels),
+            mExportTab,
+            mExportTimelapse ? (1 << TabAudio) : 0
+        );
 
         // Taller cells give the rows room to breathe without widening the label column.
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, cellPaddingY});
@@ -1271,6 +1289,46 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                         widgets::endCombo();
                     }
                 }
+
+                propertyLabel(
+                    "playback.refactorEditor.export.timelapse"_tr().c_str(),
+                    "playback.refactorEditor.export.timelapseHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-timelapse", &mExportTimelapse);
+
+                propertyLabel(
+                    "playback.refactorEditor.export.timelapseInterval"_tr().c_str(),
+                    "playback.refactorEditor.export.timelapseIntervalHint"_tr().c_str()
+                );
+                ImGui::BeginDisabled(!mExportTimelapse);
+                {
+                    constexpr int     kIntervalPresets[] = {50, 250, 1000, 5000, 60000};
+                    char const* const kPresetLabels[]    = {"50ms", "250ms", "1s", "5s", "60s"};
+                    int               presetIdx          = -1;
+                    for (int i = 0; i < IM_ARRAYSIZE(kIntervalPresets); ++i) {
+                        if (mExportTimelapseIntervalMs == kIntervalPresets[i]) presetIdx = i;
+                    }
+                    float const presetsWidth = valueWidth - fieldWidth - style.ItemSpacing.x;
+                    if (segmented(
+                            "##export-timelapse-presets",
+                            kPresetLabels,
+                            IM_ARRAYSIZE(kPresetLabels),
+                            presetIdx,
+                            presetsWidth
+                        )
+                        && presetIdx >= 0) {
+                        mExportTimelapseIntervalMs = kIntervalPresets[presetIdx];
+                    }
+                    ImGui::SameLine();
+                    inputClampedInt(
+                        "##export-timelapse-ms",
+                        mExportTimelapseIntervalMs,
+                        static_cast<int>(exporting::MinTimelapseIntervalMs),
+                        static_cast<int>(exporting::MaxTimelapseIntervalMs),
+                        fieldWidth
+                    );
+                }
+                ImGui::EndDisabled();
                 ImGui::EndTable();
             }
         } else if (mExportTab == TabVideo) {
@@ -1368,6 +1426,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndTable();
             }
         } else if (mExportTab == TabAudio) {
+            ImGui::BeginDisabled(mExportTimelapse);
             sectionHeader("playback.refactorEditor.export.capture"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-audio", labelWidth)) {
                 propertyLabel(
@@ -1424,6 +1483,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndDisabled();
                 ImGui::EndTable();
             }
+            ImGui::EndDisabled();
         } else {
             sectionHeader("playback.refactorEditor.export.advancedRender"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-rendering", labelWidth)) {
@@ -1523,7 +1583,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         baseSettings.encodeSpeed      = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         baseSettings.videoCrf         = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         baseSettings.hideHud          = mExportHideHud;
-        baseSettings.audio            = mExportAudio;
+        baseSettings.audio            = mExportAudio && !mExportTimelapse;
         baseSettings.audioStereo      = mExportAudioChannels == 1;
         baseSettings.audioCodec       = audioCodec;
         baseSettings.audioBitrateKbps = kAudioBitratesKbps[mExportAudioBitrate];
@@ -1533,6 +1593,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         if (baseSettings.rangeMode == exporting::ExportRangeMode::SingleClip && !mExportSingleClipId.empty()) {
             baseSettings.selectedClipIds = {mExportSingleClipId};
         }
+        baseSettings.timelapse           = mExportTimelapse;
+        baseSettings.timelapseIntervalMs = static_cast<uint32_t>(mExportTimelapseIntervalMs);
 
         std::vector<QueuedExportJob>    previewJobs;
         std::string const               baseStem = stripMp4Extension(mExportName.data());
