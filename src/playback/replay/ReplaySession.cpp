@@ -1207,7 +1207,7 @@ void ReplaySession::updatePreviewShot() {
         if (auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
             auto const time = getCameraRenderSampleTime();
             auto const shot = timeline->shotAt(time ? time->floorTick() : getCurrentTick());
-            if (shot && shot.mode == CameraKeyframeMode::Interpolated) {
+            if (shot && shot.isEvaluatorDriven()) {
                 mode = PreviewShotMode::Keyframe;
             } else if (shot) {
                 mode    = PreviewShotMode::Person;
@@ -1232,6 +1232,99 @@ void ReplaySession::updatePreviewShot() {
 
 keyframe::CameraRenderState ReplaySession::thirdPersonView(keyframe::CameraRenderState const& eye) const {
     return mReplayPlayer ? thirdPersonFollowPose(*mReplayPlayer, eye) : eye;
+}
+
+std::optional<keyframe::CameraRenderState>
+ReplaySession::sampleEntityAnchor(visuals::ReplaySampleTime const& time, std::string const& choice) const {
+    std::optional<int64_t> rawId;
+    if (choice.empty()) {
+        std::lock_guard lock(mEntityAnchorMutex);
+        rawId = mRecorderAnchorId;
+    } else if (auto const parsed = parseEntityChoice(choice)) {
+        rawId = *parsed;
+    } else if (auto const resolved = resolveReplaySubjectId(choice)) {
+        rawId = resolved->rawID;
+    }
+    if (!rawId) return std::nullopt;
+
+    EntityAnchorMeta meta;
+    {
+        std::lock_guard lock(mEntityAnchorMutex);
+        auto const      it = mEntityAnchors.find(*rawId);
+        if (it == mEntityAnchors.end()) return std::nullopt;
+        meta = it->second;
+    }
+
+    if (meta.renderKey) {
+        if (auto const pose = visuals::sampleReplayEntityPose(
+                *meta.renderKey,
+                time,
+                meta.isRecorder,
+                meta.isPlayer,
+                meta.eyeHeight,
+                meta.postureOffsetY
+            )) {
+            return keyframe::CameraRenderState{
+                pose->position.x,
+                pose->position.y,
+                pose->position.z,
+                pose->yaw,
+                pose->pitch,
+                0.0f,
+                70.0f,
+            };
+        }
+    }
+
+    if (!std::isfinite(meta.fallbackX) || !std::isfinite(meta.fallbackY) || !std::isfinite(meta.fallbackZ)) {
+        return std::nullopt;
+    }
+    return keyframe::CameraRenderState{
+        meta.fallbackX,
+        meta.fallbackY,
+        meta.fallbackZ,
+        meta.fallbackYaw,
+        meta.fallbackPitch,
+        0.0f,
+        70.0f,
+    };
+}
+
+state::editing::model::Vec3 ReplaySession::clipCameraRay(
+    state::editing::model::Vec3 const& anchor,
+    state::editing::model::Vec3 const& target
+) const {
+    if (!mReplayPlayer || !mReplayWorldJoined || mPendingReplayDimension) return target;
+    float const dx       = target.x - anchor.x;
+    float const dy       = target.y - anchor.y;
+    float const dz       = target.z - anchor.z;
+    float const distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (!std::isfinite(distance) || distance <= 1e-4f) return target;
+
+    constexpr float WallMargin = 0.2f;
+    ::Vec3 const    start{anchor.x, anchor.y, anchor.z};
+    ::Vec3 const    end{target.x, target.y, target.z};
+    auto const      hit = mReplayPlayer->getDimensionBlockSource().clip(
+        start,
+        end,
+        false,
+        ShapeType::CollisionForCamera,
+        static_cast<int>(std::ceil(distance)) + 1,
+        false,
+        false,
+        nullptr,
+        [](BlockSource const&, Block const&, bool) { return true; },
+        false
+    );
+    if (hit.mType != HitResultType::Tile) return target;
+
+    float const hx      = hit.mPos.x - anchor.x;
+    float const hy      = hit.mPos.y - anchor.y;
+    float const hz      = hit.mPos.z - anchor.z;
+    float const hitDist = std::sqrt(hx * hx + hy * hy + hz * hz);
+    float const clamped = std::clamp(hitDist - WallMargin, 0.0f, distance);
+    float const scale   = clamped / distance;
+    return {anchor.x + dx * scale, anchor.y + dy * scale, anchor.z + dz * scale};
 }
 
 void ReplaySession::parkObserverAfterFollow() {
@@ -1336,6 +1429,11 @@ void ReplaySession::clearReplayPlayers(bool clearChoice) {
     {
         std::lock_guard entitiesLock(mReplayEntitiesMutex);
         mReplayEntities.clear();
+    }
+    {
+        std::lock_guard anchorLock(mEntityAnchorMutex);
+        mEntityAnchors.clear();
+        mRecorderAnchorId.reset();
     }
     mObserverOriginalSkin.reset();
     mObserverSkinApplied = false;
@@ -1478,7 +1576,9 @@ std::optional<ActorUniqueID> ReplaySession::resolveReplaySubjectId(std::string c
 }
 
 void ReplaySession::refreshReplayEntityList() {
-    std::vector<ReplayEntityInfo> entities;
+    std::vector<ReplayEntityInfo>                 entities;
+    std::unordered_map<int64_t, EntityAnchorMeta> anchors;
+    std::optional<int64_t>                        recorderAnchorId;
     if (mReplayPlayer) {
         auto&                                    level    = mReplayPlayer->getLevel();
         auto const                               observer = mReplayPlayer->getPosition();
@@ -1487,43 +1587,111 @@ void ReplaySession::refreshReplayEntityList() {
             std::lock_guard lock(mReplayPlayersMutex);
             for (auto const& [uuid, record] : mReplayPlayers) playerUuids.emplace(record.id.rawID, uuid);
         }
-        // Every recorded add, not only the actors that moved: a mob standing still has no render key yet.
-        entities.reserve(mRecordedEntityIds.size());
-        for (auto const& id : mRecordedEntityIds) {
+
+        auto processEntity = [&](ActorUniqueID const& id, bool addToList) {
             Actor* actor = level.fetchEntity(id, false);
-            if (!actor || actor == mReplayPlayer || actor->mRemoved || !actor->isAlive()) continue;
+            if (!actor || actor == mReplayPlayer || actor->mRemoved) return;
             bool const player = actor->isPlayer();
-            if (!player && !actor->hasCategory(ActorCategory::Mob)) continue;
+            bool const isMob  = !player && actor->hasCategory(ActorCategory::Mob);
+            if ((player || isMob) && !actor->isAlive()) return;
+
+            bool const isRecorder = player && mRecordedLocalPlayerId && *mRecordedLocalPlayerId == id;
+            if (isRecorder) recorderAnchorId = id.rawID;
+
+            auto const  position  = actor->getPosition();
+            auto const& box       = actor->getAABB();
+            float const boxHeight = std::isfinite(box.max.y - box.min.y) ? std::max(0.0f, box.max.y - box.min.y) : 0.0f;
+
+            float eyeHeight = 0.0f;
+            if (!player) {
+                if (isMob) {
+                    eyeHeight = entityEyeHeight(*actor);
+                } else {
+                    float const eye = actor->getEyePos().y - position.y;
+                    if (std::isfinite(eye) && eye > 0.05f && eye < 64.0f) {
+                        eyeHeight = eye;
+                    } else if (boxHeight > 0.05f) {
+                        eyeHeight = boxHeight * 0.5f;
+                    }
+                }
+            }
+
+            float postureOffsetY = 0.0f;
+            if (player && !isRecorder) {
+                if (actor->getStatusFlag(ActorFlags::Swimming) || actor->getStatusFlag(ActorFlags::Crawling)
+                    || actor->getStatusFlag(ActorFlags::Gliding)) {
+                    postureOffsetY = -1.22f;
+                } else if (actor->getStatusFlag(ActorFlags::Sneaking)) {
+                    postureOffsetY = -0.35f;
+                }
+            }
+
+            std::optional<visuals::EntityRenderKey> renderKey;
+            if (auto const rk = mEntityRenderKeys.find(id); rk != mEntityRenderKeys.end()) {
+                renderKey = rk->second;
+            } else {
+                renderKey = replayEntityRenderKey(level, id);
+            }
+
+            auto const       pose = replayRenderPose(*actor);
+            EntityAnchorMeta meta;
+            meta.renderKey      = renderKey;
+            meta.isRecorder     = isRecorder;
+            meta.isPlayer       = player;
+            meta.eyeHeight      = eyeHeight;
+            meta.postureOffsetY = postureOffsetY;
+            meta.fallbackX      = pose.position.x;
+            meta.fallbackY      = pose.position.y + (player ? (isRecorder ? 0.0f : postureOffsetY) : eyeHeight);
+            meta.fallbackZ      = pose.position.z;
+            meta.fallbackYaw    = player ? pose.yaw : pose.headYaw;
+            meta.fallbackPitch  = pose.pitch;
+            anchors.insert_or_assign(id.rawID, meta);
+
+            if (!addToList) return;
+
             ReplayEntityInfo info;
-            info.player = player;
-            if (player && mRecordedLocalPlayerId && *mRecordedLocalPlayerId == id) {
-                info.recorder = true; // the empty choice
+            info.player   = player;
+            info.mob      = isMob;
+            info.recorder = isRecorder;
+            if (isRecorder) {
+                // the empty choice
             } else if (player) {
                 auto const uuid = playerUuids.find(id.rawID);
-                if (uuid == playerUuids.end()) continue;
+                if (uuid == playerUuids.end()) return;
                 info.choice = uuid->second;
             } else {
                 info.choice = entityChoice(id.rawID);
             }
             info.label = plainNameTag(actor->getNameTag());
             if (info.label.empty()) info.label = entityTypeLabel(*actor);
-            auto const  position = actor->getPosition();
-            auto const& box      = actor->getAABB();
-            info.x               = position.x;
-            info.y               = player ? box.min.y : position.y;
-            info.z               = position.z;
-            info.height          = box.max.y - box.min.y;
-            if (!std::isfinite(info.x) || !std::isfinite(info.y) || !std::isfinite(info.z)) continue;
-            if (!std::isfinite(info.height) || info.height <= 0.0f) info.height = 1.0f;
+            info.x      = position.x;
+            info.y      = player ? box.min.y : position.y;
+            info.z      = position.z;
+            info.height = boxHeight > 0.0f ? boxHeight : 1.0f;
+            if (!std::isfinite(info.x) || !std::isfinite(info.y) || !std::isfinite(info.z)) return;
             float const dx = info.x - observer.x;
             float const dy = info.y - observer.y;
             float const dz = info.z - observer.z;
             info.distance  = std::sqrt(dx * dx + dy * dy + dz * dz);
             entities.push_back(std::move(info));
+        };
+
+        // Every recorded add, not only the actors that moved: a stationary entity has no render key yet.
+        entities.reserve(mRecordedEntityIds.size());
+        anchors.reserve(mRecordedEntityIds.size() + 1);
+        for (auto const& id : mRecordedEntityIds) processEntity(id, true);
+        if (mRecordedLocalPlayerId && !anchors.contains(mRecordedLocalPlayerId->rawID)) {
+            processEntity(*mRecordedLocalPlayerId, true);
         }
+
         std::sort(entities.begin(), entities.end(), [](ReplayEntityInfo const& a, ReplayEntityInfo const& b) {
             return a.distance < b.distance;
         });
+    }
+    {
+        std::lock_guard anchorLock(mEntityAnchorMutex);
+        mEntityAnchors    = std::move(anchors);
+        mRecorderAnchorId = recorderAnchorId;
     }
     std::lock_guard lock(mReplayEntitiesMutex);
     mReplayEntities = std::move(entities);
@@ -1798,7 +1966,8 @@ void ReplaySession::rebindReplaySubject() {
         setReplaySubjectChoice({});
     };
     Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
-    if (!actor || actor == mReplayPlayer || (entityRaw && (actor->mRemoved || !actor->isAlive()))) {
+    if (!actor || actor == mReplayPlayer
+        || (entityRaw && (actor->mRemoved || (actor->hasCategory(ActorCategory::Mob) && !actor->isAlive())))) {
         if (entityRaw) loseEntity();
         else loseSubject(choice);
         return;
@@ -2134,7 +2303,7 @@ void ReplaySession::syncPreviewObserverForTick(int targetTick, bool onlyIfMoved)
     }
 
     auto const shot = timeline->shotAt(targetTick);
-    if (!shot || shot.mode == state::editing::model::CameraKeyframeMode::Interpolated) return;
+    if (!shot || shot.isEvaluatorDriven()) return;
     auto const id = resolveReplaySubjectId(shot.subject);
     if (!id) return;
     auto* actor = mReplayPlayer->getLevel().fetchEntity(*id, false);
@@ -2443,6 +2612,7 @@ void ReplaySession::finishSeek() {
     mSnapMovementDuringSeek = false;
     mSeekFinishCount.fetch_add(1, std::memory_order_acq_rel);
     settleAfterSeek();
+    refreshReplayEntityList();
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();
     if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
@@ -2713,8 +2883,11 @@ void ReplaySession::tick() {
             if (mCurrentTick > mExportTargetTick) {
                 throw std::runtime_error("Continuous export replay tick moved past its frame target");
             }
-            if (mCurrentTick < mExportTargetTick && !advanceReplayTick(false)) {
-                throw std::runtime_error("Replay ended before the continuous export frame target");
+            if (mCurrentTick < mExportTargetTick) {
+                if (!advanceReplayTick(false)) {
+                    throw std::runtime_error("Replay ended before the continuous export frame target");
+                }
+                refreshReplayEntityList();
             }
             return;
         }

@@ -4,6 +4,7 @@
 #include "playback/audio/PreviewAudio.h"
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/io/ReplayLibrary.h"
+#include "playback/keyframe/CameraFollowMath.h"
 #include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/ClientCameraCapture.h"
@@ -18,6 +19,7 @@
 #include "ll/api/i18n/I18n.h"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <utility>
 
@@ -93,15 +95,27 @@ void EditorController::publishCameraTimeline() {
         keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
         return;
     }
-    auto dimensionTransitionTicks = replay::ReplaySession::getInstance().getDimensionTransitionTicks();
-    // No subject sampler: the replay session follows a person track's subject natively, like the user's follow.
+    auto& session                  = replay::ReplaySession::getInstance();
+    auto  dimensionTransitionTicks = session.getDimensionTransitionTicks();
+    // No subject sampler: the replay session follows legacy person tracks natively, like the user's follow.
+    // Entity pose sampler and ray clipper still power custom third-person and Free Look-At tracks.
     keyframe::publishCameraTimeline(
         keyframe::CameraTimelineSource::Preview,
         std::make_shared<keyframe::CameraTimelineEvaluator>(
             mProject,
             mPreviewCameraId,
             false,
-            std::move(dimensionTransitionTicks)
+            std::move(dimensionTransitionTicks),
+            keyframe::SubjectViewSampler{},
+            [&session](visuals::ReplaySampleTime const& time, std::string const& subject)
+                -> std::optional<keyframe::CameraRenderState> {
+                // Entity pose history spans [appliedTick - 1, appliedTick], matching ScopedReplayEntityPose.
+                auto const entityTime = session.getEntityRenderSampleTime().value_or(time);
+                return session.sampleEntityAnchor(entityTime, subject);
+            },
+            [&session](state::editing::model::Vec3 const& anchor, state::editing::model::Vec3 const& target) {
+                return session.clipCameraRay(anchor, target);
+            }
         )
     );
 }
@@ -263,7 +277,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::AddFreeCamera:
         mCommandStack.push(CommandFactory::createAddFreeCamera(action.name), mProject);
         break;
-    case EditorActionType::AddCameraKeyframe:
+    case EditorActionType::AddCameraKeyframe: {
         if (action.keyframe) {
             mCommandStack.push(
                 CommandFactory::createAddCameraKeyframe(action.id, action.tick, action.keyframe),
@@ -271,10 +285,79 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             );
             break;
         }
+        auto& session = replay::ReplaySession::getInstance();
+        state::editing::model::CameraKeyframe const* prevKey = nullptr;
+        if (auto const camIt = std::ranges::find(mProject.cameras, action.id, &state::editing::model::CameraEntity::id);
+            camIt != mProject.cameras.end() && !camIt->keysByTick.empty()) {
+            auto const upper = camIt->keysByTick.upper_bound(action.tick);
+            if (upper != camIt->keysByTick.begin()) prevKey = &std::prev(upper)->second;
+        }
+
+        auto const sampleTime = [&]() -> visuals::ReplaySampleTime {
+            if (auto const live = session.getEntityRenderSampleTime()) return *live;
+            if (auto const live = session.getCameraRenderSampleTime()) return *live;
+            return visuals::ReplaySampleTime{std::max(0, action.tick), 1};
+        }();
+
+        if (prevKey && prevKey->mode == state::editing::model::CameraKeyframeMode::ThirdPerson
+            && prevKey->thirdPersonCustom) {
+            state::editing::model::CameraKeyframe key;
+            key.mode                      = state::editing::model::CameraKeyframeMode::ThirdPerson;
+            key.thirdPersonCustom         = true;
+            key.subject                   = prevKey->subject;
+            key.thirdPersonFollowRotation = prevKey->thirdPersonFollowRotation;
+            key.thirdPersonCollideBlocks  = prevKey->thirdPersonCollideBlocks;
+            key.interpolationType         = prevKey->interpolationType;
+            key.bezierCtrl1               = prevKey->bezierCtrl1;
+            key.bezierCtrl2               = prevKey->bezierCtrl2;
+            key.ignoreClipSpeed           = prevKey->ignoreClipSpeed;
+            key.thirdPersonDistance       = prevKey->thirdPersonDistance;
+            key.thirdPersonYaw            = prevKey->thirdPersonYaw;
+            key.thirdPersonPitch          = prevKey->thirdPersonPitch;
+            key.thirdPersonRoll           = prevKey->thirdPersonRoll;
+            key.thirdPersonFov            = prevKey->thirdPersonFov;
+            key.thirdPersonOffset         = prevKey->thirdPersonOffset;
+
+            auto const freeCam    = keyframe::captureClientCamera();
+            auto const subjectEye = session.sampleEntityAnchor(sampleTime, key.subject);
+            if (freeCam) {
+                key.position = {freeCam->x, freeCam->y, freeCam->z};
+                key.yaw      = freeCam->yaw;
+                key.pitch    = freeCam->pitch;
+                key.roll     = freeCam->roll;
+                key.fov      = freeCam->fov;
+            }
+            if (freeCam && subjectEye) {
+                auto const params = keyframe::captureCustomThirdPersonFromFreeCamera(
+                    *freeCam,
+                    *subjectEye,
+                    key.thirdPersonFollowRotation
+                );
+                key.thirdPersonOffset   = params.offset;
+                key.thirdPersonDistance = params.distance;
+                key.thirdPersonYaw      = params.yaw;
+                key.thirdPersonPitch    = params.pitch;
+                if (std::abs(params.roll) > 1e-3f) key.thirdPersonRoll = params.roll;
+                key.thirdPersonFov      = params.fov;
+            }
+            logger().debug("Captured custom third-person keyframe (camera={}, tick={})", action.id, action.tick);
+            mCommandStack.push(
+                CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(key)),
+                mProject
+            );
+            break;
+        }
+
         if (auto captured = captureCameraKeyframe()) {
             logger().debug("Captured camera keyframe (camera={}, tick={})", action.id, action.tick);
             // A person track's first key views whoever the user follows; later keys keep the previous subject.
-            captured->subject = replay::ReplaySession::getInstance().userReplaySubjectChoice();
+            captured->subject = session.userReplaySubjectChoice();
+            if (prevKey && prevKey->mode == state::editing::model::CameraKeyframeMode::Interpolated
+                && prevKey->lookAtEnabled) {
+                captured->lookAtEnabled = true;
+                captured->lookAtTarget  = prevKey->lookAtTarget;
+                captured->lookAtOffsetY = prevKey->lookAtOffsetY;
+            }
             mCommandStack.push(
                 CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(captured)),
                 mProject
@@ -288,6 +371,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mCommandStack.push(CommandFactory::createAddCameraKeyframe(action.id, action.tick), mProject);
         }
         break;
+    }
     case EditorActionType::MoveCameraKeyframe:
         mCommandStack.push(
             CommandFactory::createMoveCameraKeyframe(action.id, action.tick, action.secondaryTick),
@@ -427,6 +511,130 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mProject
         );
         break;
+    case EditorActionType::SetKeyframeThirdPersonSettings: {
+        if (!action.keyframe) break;
+        auto settings = *action.keyframe;
+        if (auto const camIt = std::ranges::find(mProject.cameras, action.id, &state::editing::model::CameraEntity::id);
+            camIt != mProject.cameras.end()) {
+            if (auto const keyIt = camIt->keysByTick.find(std::clamp(action.tick, 0, mProject.totalTicks));
+                keyIt != camIt->keysByTick.end()) {
+                auto const& existing = keyIt->second;
+                if (existing.mode == state::editing::model::CameraKeyframeMode::ThirdPerson && existing.thirdPersonCustom
+                    && settings.thirdPersonCustom
+                    && settings.thirdPersonFollowRotation != existing.thirdPersonFollowRotation) {
+                    bool const onlyFollowRotationToggled =
+                        settings.thirdPersonDistance == existing.thirdPersonDistance
+                        && settings.thirdPersonYaw == existing.thirdPersonYaw
+                        && settings.thirdPersonPitch == existing.thirdPersonPitch
+                        && settings.thirdPersonRoll == existing.thirdPersonRoll
+                        && settings.thirdPersonFov == existing.thirdPersonFov
+                        && settings.thirdPersonOffset.x == existing.thirdPersonOffset.x
+                        && settings.thirdPersonOffset.y == existing.thirdPersonOffset.y
+                        && settings.thirdPersonOffset.z == existing.thirdPersonOffset.z;
+                    if (action.value || onlyFollowRotationToggled) {
+                        auto&      session    = replay::ReplaySession::getInstance();
+                        auto const sampleTime = session.getEntityRenderSampleTime().value_or(
+                            session.getCameraRenderSampleTime().value_or(
+                                visuals::ReplaySampleTime{std::max(0, action.tick), 1}
+                            )
+                        );
+                        if (auto const subjectEye = session.sampleEntityAnchor(sampleTime, existing.subject)) {
+                            auto const converted = keyframe::convertThirdPersonFollowRotation(
+                                *subjectEye,
+                                existing.thirdPersonOffset,
+                                existing.thirdPersonYaw,
+                                existing.thirdPersonPitch,
+                                existing.thirdPersonFollowRotation,
+                                settings.thirdPersonFollowRotation
+                            );
+                            settings.thirdPersonOffset = converted.offset;
+                            settings.thirdPersonYaw    = converted.yaw;
+                            settings.thirdPersonPitch  = converted.pitch;
+                        }
+                    }
+                }
+            }
+        }
+        mCommandStack.push(
+            CommandFactory::createSetCameraKeyframeThirdPersonSettings(action.id, action.tick, std::move(settings)),
+            mProject
+        );
+        break;
+    }
+    case EditorActionType::SetKeyframesThirdPersonCustom:
+        mCommandStack.push(
+            CommandFactory::createSetKeyframesThirdPersonCustom(action.keyframeRefs, action.value),
+            mProject
+        );
+        break;
+    case EditorActionType::SetKeyframeLookAt:
+        mCommandStack.push(
+            CommandFactory::createSetCameraKeyframeLookAt(
+                action.id,
+                action.tick,
+                action.value,
+                action.secondaryId,
+                action.speed
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SetKeyframesLookAt: {
+        std::optional<float> const offsetY =
+            (action.secondaryTick == 0 && std::isfinite(action.speed)) ? std::optional<float>{action.speed} : std::nullopt;
+        mCommandStack.push(
+            CommandFactory::createSetKeyframesLookAt(action.keyframeRefs, action.value, action.secondaryId, offsetY),
+            mProject
+        );
+        break;
+    }
+    case EditorActionType::CaptureKeyframeFromView: {
+        auto const camIt = std::ranges::find(mProject.cameras, action.id, &state::editing::model::CameraEntity::id);
+        if (camIt == mProject.cameras.end()) break;
+        auto const keyIt = camIt->keysByTick.find(std::clamp(action.tick, 0, mProject.totalTicks));
+        if (keyIt == camIt->keysByTick.end()) break;
+        auto const freeCam = keyframe::captureClientCamera();
+        if (!freeCam) break;
+
+        auto updated = keyIt->second;
+        if (updated.mode == state::editing::model::CameraKeyframeMode::Interpolated) {
+            updated.position = {freeCam->x, freeCam->y, freeCam->z};
+            updated.yaw      = freeCam->yaw;
+            updated.pitch    = freeCam->pitch;
+            if (std::abs(freeCam->roll) > 1e-3f) updated.roll = freeCam->roll;
+            updated.fov      = freeCam->fov;
+            mCommandStack.push(
+                CommandFactory::createUpdateCameraKeyframePose(action.id, action.tick, std::move(updated)),
+                mProject
+            );
+        } else if (updated.mode == state::editing::model::CameraKeyframeMode::ThirdPerson
+                   && updated.thirdPersonCustom) {
+            auto&      session    = replay::ReplaySession::getInstance();
+            auto const sampleTime = session.getEntityRenderSampleTime().value_or(
+                session.getCameraRenderSampleTime().value_or(
+                    visuals::ReplaySampleTime{std::max(0, action.tick), 1}
+                )
+            );
+            if (auto const subjectEye = session.sampleEntityAnchor(sampleTime, updated.subject)) {
+                auto const params = keyframe::captureCustomThirdPersonFromFreeCamera(
+                    *freeCam,
+                    *subjectEye,
+                    updated.thirdPersonFollowRotation
+                );
+                updated.thirdPersonOffset   = params.offset;
+                updated.thirdPersonDistance = params.distance;
+                updated.thirdPersonYaw      = params.yaw;
+                updated.thirdPersonPitch    = params.pitch;
+                if (std::abs(params.roll) > 1e-3f) updated.thirdPersonRoll = params.roll;
+                updated.thirdPersonFov      = params.fov;
+                mCommandStack.push(
+                    CommandFactory::createUpdateCameraKeyframePose(action.id, action.tick, std::move(updated)),
+                    mProject
+                );
+            }
+        }
+        break;
+    }
     case EditorActionType::AddClip:
         mCommandStack.push(
             CommandFactory::createAddClip(
@@ -519,18 +727,54 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         auto& session = replay::ReplaySession::getInstance();
         session.setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
-        auto const& pose = key->second;
-        session.requestParkObserver(
-            keyframe::CameraRenderState{
-                pose.position.x,
-                pose.position.y,
-                pose.position.z,
-                pose.yaw,
-                pose.pitch,
-                pose.roll,
-                pose.fov,
-            }
+        auto const& pose       = key->second;
+        auto const  sampleTime = session.getEntityRenderSampleTime().value_or(
+            session.getCameraRenderSampleTime().value_or(visuals::ReplaySampleTime{std::max(0, action.tick), 1})
         );
+        if (pose.mode == state::editing::model::CameraKeyframeMode::ThirdPerson && pose.thirdPersonCustom) {
+            if (auto const subjectEye = session.sampleEntityAnchor(sampleTime, pose.subject)) {
+                auto result = keyframe::computeCustomThirdPersonPose(
+                    *subjectEye,
+                    pose.thirdPersonOffset,
+                    pose.thirdPersonDistance,
+                    pose.thirdPersonYaw,
+                    pose.thirdPersonPitch,
+                    pose.thirdPersonRoll,
+                    pose.thirdPersonFov,
+                    pose.thirdPersonFollowRotation
+                );
+                if (pose.thirdPersonCollideBlocks && pose.thirdPersonDistance > 0.0f) {
+                    auto const clipped =
+                        session.clipCameraRay(result.anchor, {result.camera.x, result.camera.y, result.camera.z});
+                    result.camera.x = clipped.x;
+                    result.camera.y = clipped.y;
+                    result.camera.z = clipped.z;
+                }
+                session.requestParkObserver(result.camera);
+            }
+            break;
+        }
+        keyframe::CameraRenderState target{
+            pose.position.x,
+            pose.position.y,
+            pose.position.z,
+            pose.yaw,
+            pose.pitch,
+            pose.roll,
+            pose.fov,
+        };
+        if (pose.mode == state::editing::model::CameraKeyframeMode::Interpolated && pose.lookAtEnabled) {
+            if (auto const subjectEye = session.sampleEntityAnchor(sampleTime, pose.lookAtTarget)) {
+                if (auto const aim = keyframe::aimAngles(
+                        pose.position,
+                        {subjectEye->x, subjectEye->y + pose.lookAtOffsetY, subjectEye->z}
+                    )) {
+                    target.yaw   = aim->first;
+                    target.pitch = aim->second;
+                }
+            }
+        }
+        session.requestParkObserver(target);
         break;
     }
     default:
@@ -571,7 +815,7 @@ void EditorController::publishState(bool hudVisible) {
     auto const replayEntities = session.replayEntities();
     state.replayEntities.reserve(replayEntities.size());
     for (auto const& entity : replayEntities) {
-        if (!entity.player) state.replayEntities.push_back({entity.choice, entity.label, entity.distance});
+        if (!entity.player) state.replayEntities.push_back({entity.choice, entity.label, entity.distance, entity.mob});
     }
     state.playbackSpeed = session.getPlaybackSpeed();
     state.currentTick             = std::max(0, session.getCurrentTick());
@@ -876,6 +1120,14 @@ void EditorController::tick(bool hudVisible) {
             if (!legal) {
                 for (auto const& player : session.replayPlayers()) {
                     if (player.uuid == action.id && player.present) {
+                        legal = true;
+                        break;
+                    }
+                }
+            }
+            if (!legal && replay::ReplaySession::parseEntityChoice(action.id).has_value()) {
+                for (auto const& entity : session.replayEntities()) {
+                    if (entity.choice == action.id) {
                         legal = true;
                         break;
                     }

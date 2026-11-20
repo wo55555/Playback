@@ -35,6 +35,7 @@ struct ReplayEntityView {
     std::string choice;
     std::string label;
     float       distance{};
+    bool        mob{};
 };
 
 struct EditorState {

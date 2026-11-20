@@ -116,6 +116,38 @@ std::unique_ptr<model::IEditCommand>
 CommandFactory::createSetKeyframesIgnoreClipSpeed(std::vector<model::KeyframeRef> refs, bool ignoreClipSpeed) {
     return std::make_unique<SetKeyframesIgnoreClipSpeed>(std::move(refs), ignoreClipSpeed);
 }
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraKeyframeThirdPersonSettings(
+    const std::string&    id,
+    int                   tick,
+    model::CameraKeyframe settings
+) {
+    return std::make_unique<SetCameraKeyframeThirdPersonSettings>(id, tick, std::move(settings));
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetKeyframesThirdPersonCustom(std::vector<model::KeyframeRef> refs, bool custom) {
+    return std::make_unique<SetKeyframesThirdPersonCustom>(std::move(refs), custom);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetCameraKeyframeLookAt(
+    const std::string& id,
+    int                tick,
+    bool               enabled,
+    const std::string& target,
+    float              offsetY
+) {
+    return std::make_unique<SetCameraKeyframeLookAt>(id, tick, enabled, target, offsetY);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetKeyframesLookAt(
+    std::vector<model::KeyframeRef> refs,
+    bool                            enabled,
+    const std::string&              target,
+    std::optional<float>            offsetY
+) {
+    return std::make_unique<SetKeyframesLookAt>(std::move(refs), enabled, target, offsetY);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createUpdateCameraKeyframePose(const std::string& id, int tick, model::CameraKeyframe pose) {
+    return std::make_unique<UpdateCameraKeyframePose>(id, tick, std::move(pose));
+}
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createAddMarker(const std::string& id, int tick, const std::string& label) {
     return std::make_unique<AddMarker>(id, tick, label);
