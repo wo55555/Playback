@@ -2011,7 +2011,8 @@ void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& r
     move.mRot           = rotation;
     move.mYHeadRot      = rotation.y;
     move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
-    move.mOnGround      = true;
+    // The spectator observer flies with noclip, so setting on-ground leaves ground friction stuck on it.
+    move.mOnGround = false;
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
