@@ -159,18 +159,24 @@ ButtonFrame squareButton(char const* id, bool enabled, bool active) {
     bool const held    = ImGui::IsItemActive();
     ImGui::EndDisabled();
 
-    ImU32 fill = active ? theme::withAlpha(theme::kAccent, 0x59) : IM_COL32(0, 0, 0, 0);
-    if (enabled && held) fill = active ? theme::kAccent : theme::kButtonActive;
-    else if (enabled && hovered)
-        fill = active ? theme::withAlpha(theme::kAccent, 0x80) : theme::withAlpha(theme::kButtonHover, 0x80);
+    ImU32 fill   = active ? theme::withAlpha(theme::kAccent, 0x48) : IM_COL32(0, 0, 0, 0);
+    ImU32 border = active ? theme::withAlpha(theme::kAccent, 0x98) : IM_COL32(0, 0, 0, 0);
+    if (enabled && held) {
+        fill   = active ? theme::kAccent : theme::kButtonActive;
+        border = active ? theme::kButtonPrimaryBorder : theme::kButtonBorder;
+    } else if (enabled && hovered) {
+        fill   = active ? theme::withAlpha(theme::kAccent, 0x70) : theme::withAlpha(theme::kButtonHover, 0xb0);
+        border = active ? theme::kButtonPrimaryBorder : theme::kButtonBorder;
+    }
 
+    float const rounding = theme::kButtonRounding * metrics::scale();
+    ImVec2 const maxPos{frame.origin.x + frame.size, frame.origin.y + frame.size};
+    auto*        drawList = ImGui::GetWindowDrawList();
     if ((fill & IM_COL32_A_MASK) != 0) {
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            frame.origin,
-            {frame.origin.x + frame.size, frame.origin.y + frame.size},
-            fill,
-            theme::kFrameRounding
-        );
+        drawList->AddRectFilled(frame.origin, maxPos, fill, rounding);
+    }
+    if ((border & IM_COL32_A_MASK) != 0) {
+        drawList->AddRect(frame.origin, maxPos, border, rounding, 0, 1.0f);
     }
     frame.color = !enabled ? theme::kTextDim : (hovered || active) ? theme::kIconHighlight : theme::kIconInactive;
     return frame;
@@ -446,7 +452,10 @@ bool dropdownChip(char const* id, char const* label, char const* tooltip, bool e
 
     auto*       drawList = ImGui::GetWindowDrawList();
     ImU32 const fill     = held ? theme::kInputBgActive : hovered ? theme::kInputBgHover : theme::kInputBg;
-    drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, fill, theme::kFrameRounding);
+    ImU32 const border   = (enabled && (hovered || held)) ? theme::kButtonBorder : theme::kFineDivider;
+    float const rounding = theme::kButtonRounding * metrics::scale();
+    drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, fill, rounding);
+    drawList->AddRect(origin, {origin.x + width, origin.y + height}, border, rounding, 0, 1.0f);
     ImU32 const textColor = enabled ? theme::kText : theme::kTextDim;
     ImU32 const iconColor = enabled ? (hovered ? theme::kIconHighlight : theme::kIconInactive) : theme::kTextDim;
 
