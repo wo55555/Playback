@@ -135,7 +135,9 @@ void drawKeyframeCircle(
     float       radius,
     ImU32       fill,
     ImU32       outline,
-    bool        thirdPerson
+    bool        thirdPerson,
+    bool        thirdPersonCustom = false,
+    bool        hold              = false
 ) {
     float const r     = radius * 0.92f;
     int const   alpha = static_cast<int>((fill >> IM_COL32_A_SHIFT) & 0xff);
@@ -143,7 +145,18 @@ void drawKeyframeCircle(
     drawList->AddCircle({x, centerY}, r, outline, 0, 1.5f);
     if (thirdPerson) {
         drawList->AddCircleFilled({x, centerY}, r * 0.58f, IM_COL32(0x16, 0x18, 0x20, alpha));
-        drawList->AddCircleFilled({x, centerY}, std::max(1.1f, r * 0.24f), fill);
+        if (thirdPersonCustom) {
+            ImU32 const core = IM_COL32(0xf4, 0xf8, 0xff, alpha);
+            if (hold) {
+                float const h = std::max(1.25f, r * 0.34f);
+                drawList->AddRectFilled({x - h, centerY - h}, {x + h, centerY + h}, core);
+            } else {
+                float const d = std::max(1.5f, r * 0.46f);
+                drawList->AddQuadFilled({x, centerY - d}, {x + d, centerY}, {x, centerY + d}, {x - d, centerY}, core);
+            }
+        } else {
+            drawList->AddCircleFilled({x, centerY}, std::max(1.1f, r * 0.24f), fill);
+        }
     } else {
         drawList->AddCircleFilled({x, centerY}, std::max(1.25f, r * 0.30f), IM_COL32(0xf4, 0xf8, 0xff, alpha));
     }
@@ -1964,7 +1977,10 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     ctx.submitAction(std::move(action));
                 }
             };
-            bool const interpEnabled = editable && (group || key->mode == CameraKeyframeMode::Interpolated);
+            bool const keyIsEvaluator =
+                key->mode == CameraKeyframeMode::Interpolated
+                || (key->mode == CameraKeyframeMode::ThirdPerson && key->thirdPersonCustom);
+            bool const interpEnabled = editable && (group || keyIsEvaluator);
             if (ImGui::BeginMenu("playback.refactorEditor.details.interpolation"_tr().c_str(), interpEnabled)) {
                 setInterpolation(
                     "playback.refactorEditor.details.interpolationType.smooth"_tr().c_str(),
@@ -2016,7 +2032,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                         "playback.refactorEditor.timeline.ignoreClipSpeed"_tr().c_str(),
                         nullptr,
                         allIgnore,
-                        editable
+                        editable && (group || keyIsEvaluator)
                     )) {
                     EditorAction action{
                         group ? EditorActionType::SetKeyframesIgnoreClipSpeed
@@ -2062,12 +2078,24 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             }
 
             if (ImGui::MenuItem("playback.refactorEditor.timeline.seekHere"_tr().c_str())) seekTo(ctx, mKeyframeMenuTick);
+            if (!group
+                && ImGui::MenuItem(
+                    "playback.refactorEditor.timeline.captureKeyframe"_tr().c_str(),
+                    nullptr,
+                    false,
+                    ctx.state.replayVisible && !camera->locked && keyIsEvaluator
+                )) {
+                EditorAction action{EditorActionType::CaptureKeyframeFromView};
+                action.id   = camera->id;
+                action.tick = mKeyframeMenuTick;
+                ctx.submitAction(std::move(action));
+            }
             // Apply: the free camera jumps to this keyframe's pose without touching the track.
             if (ImGui::MenuItem(
                     "playback.refactorEditor.timeline.applyKeyframe"_tr().c_str(),
                     nullptr,
                     false,
-                    ctx.state.replayVisible && key->mode == CameraKeyframeMode::Interpolated
+                    ctx.state.replayVisible && keyIsEvaluator
                 )) {
                 ctx.selection.clear();
                 EditorAction action{EditorActionType::MoveViewToKeyframe};
@@ -3772,10 +3800,23 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                                            && intervalEndForTick(nextIt->first) == dimEnd;
                         heldSpan = !nextSame
                                 || it->second.interpolationType == state::editing::model::CameraInterpolationType::Hold;
+                    } else if (it->second.mode == Mode::ThirdPerson && it->second.thirdPersonCustom) {
+                        int const dimEnd    = intervalEndForTick(t0);
+                        spanEnd             = hasNext ? nextIt->first : state.totalTicks;
+                        spanColor           = theme::kKeyframeThirdPerson;
+                        bool const nextSame = hasNext && nextIt->second.mode == Mode::ThirdPerson
+                                           && nextIt->second.thirdPersonCustom
+                                           && nextIt->second.subject == it->second.subject
+                                           && nextIt->second.thirdPersonFollowRotation
+                                                  == it->second.thirdPersonFollowRotation
+                                           && intervalEndForTick(nextIt->first) == dimEnd;
+                        heldSpan = !nextSame
+                                || it->second.interpolationType == state::editing::model::CameraInterpolationType::Hold;
                     } else {
                         spanEnd   = hasNext ? nextIt->first : state.totalTicks;
                         spanColor = it->second.mode == Mode::FirstPerson ? theme::kKeyframeFirstPerson
                                                                          : theme::kKeyframeThirdPerson;
+                        heldSpan  = it->second.mode == Mode::ThirdPerson;
                     }
                     if (spanEnd <= t0) continue;
 
@@ -3852,7 +3893,9 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                             radius,
                             fill,
                             outline,
-                            key.mode == Mode::ThirdPerson
+                            key.mode == Mode::ThirdPerson,
+                            key.mode == Mode::ThirdPerson && key.thirdPersonCustom,
+                            hold
                         );
                     }
 
@@ -3864,9 +3907,19 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         belowColor    = theme::kKeyframeFirstPerson;
                         labelPriority = 2;
                     } else if (key.mode == Mode::ThirdPerson) {
-                        belowText     = "3P";
+                        belowText     = key.thirdPersonCustom ? "3P+" : "3P";
                         belowColor    = theme::kKeyframeThirdPerson;
                         labelPriority = 2;
+                    } else if (key.lookAtEnabled) {
+                        bool const samePrevAim = it != camera.keysByTick.begin()
+                                              && std::prev(it)->second.mode == Mode::Interpolated
+                                              && std::prev(it)->second.lookAtEnabled
+                                              && std::prev(it)->second.lookAtTarget == key.lookAtTarget;
+                        if (!samePrevAim) {
+                            belowText     = "Aim";
+                            belowColor    = theme::kKeyframe;
+                            labelPriority = 2;
+                        }
                     } else if (it != camera.keysByTick.begin() && std::prev(it)->second.mode != Mode::Interpolated) {
                         belowText     = "Free";
                         belowColor    = theme::kKeyframe;

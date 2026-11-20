@@ -66,6 +66,32 @@ SubjectSelectionInfo collectSelectedPersonKeyframes(PanelContext const& ctx, std
     return info;
 }
 
+struct LookAtSelectionInfo {
+    std::vector<editing::model::KeyframeRef> refs;
+    bool                                     anyUnlocked{};
+    bool                                     allSameTarget{true};
+    float                                    firstOffsetY{0.0f};
+};
+
+LookAtSelectionInfo collectSelectedFreeKeyframes(PanelContext const& ctx, std::string_view choice) {
+    LookAtSelectionInfo info;
+    auto const          project = ctx.state.project;
+    if (!project) return info;
+    for (auto const& entry : ctx.selection.keyframes()) {
+        auto const it =
+            std::ranges::find_if(project->cameras, [&](auto const& camera) { return camera.id == entry.trackId; });
+        if (it == project->cameras.end()) continue;
+        auto const key = it->keysByTick.find(entry.tick);
+        if (key == it->keysByTick.end()) continue;
+        if (key->second.mode != editing::model::CameraKeyframeMode::Interpolated) continue;
+        if (info.refs.empty()) info.firstOffsetY = key->second.lookAtOffsetY;
+        info.refs.push_back({entry.trackId, entry.tick, std::nullopt});
+        info.anyUnlocked   |= !it->locked;
+        info.allSameTarget &= (key->second.lookAtEnabled && key->second.lookAtTarget == choice);
+    }
+    return info;
+}
+
 } // namespace
 
 std::optional<replay::ReplaySession::ReplayEntityInfo>
@@ -149,6 +175,35 @@ void ViewportPanel::drawEntityPickMenu(PanelContext const& ctx) {
                     EditorAction action{EditorActionType::SetKeyframesSubject};
                     action.keyframeRefs = std::move(target.refs);
                     action.secondaryId  = entity.choice;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+        }
+        auto lookAtTarget = collectSelectedFreeKeyframes(ctx, entity.choice);
+        if (!lookAtTarget.refs.empty()) {
+            std::string const lookAtLabel =
+                (lookAtTarget.refs.size() == 1
+                     ? "playback.refactorEditor.viewport.lookAtEntity"_tr(entityMenuLabel(entity))
+                     : "playback.refactorEditor.viewport.lookAtEntityKeyframes"_tr(
+                           lookAtTarget.refs.size(),
+                           entityMenuLabel(entity)
+                       ))
+                + "##pick-keyframe-lookat";
+            if (ImGui::MenuItem(lookAtLabel.c_str(), nullptr, lookAtTarget.allSameTarget, lookAtTarget.anyUnlocked)) {
+                if (lookAtTarget.refs.size() == 1) {
+                    EditorAction action{EditorActionType::SetKeyframeLookAt};
+                    action.id          = lookAtTarget.refs[0].cameraId;
+                    action.tick        = lookAtTarget.refs[0].tick;
+                    action.value       = true;
+                    action.secondaryId = entity.choice;
+                    action.speed       = lookAtTarget.firstOffsetY;
+                    ctx.submitAction(std::move(action));
+                } else {
+                    EditorAction action{EditorActionType::SetKeyframesLookAt};
+                    action.keyframeRefs  = std::move(lookAtTarget.refs);
+                    action.value         = true;
+                    action.secondaryId   = entity.choice;
+                    action.secondaryTick = 1;
                     ctx.submitAction(std::move(action));
                 }
             }
@@ -307,14 +362,15 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             ImGui::CloseCurrentPopup();
             openPlayerPicker = true;
         }
-        // Quick access to the nearest living mobs; players and full search live in the picker above.
+        // Quick access to nearby entities, prioritizing living mobs; players and full search live in the picker above.
         if (ImGui::BeginMenu(
                 "playback.refactorEditor.viewport.nearbyEntities"_tr().c_str(),
                 state.replayVisible && !state.replayEntities.empty()
             )) {
-            size_t shown = 0;
-            for (auto const& entity : state.replayEntities) {
-                if (shown++ >= kNearbyEntityLimit) break;
+            size_t     shown          = 0;
+            auto const emitEntityItem = [&](state::ReplayEntityView const& entity) {
+                if (shown >= kNearbyEntityLimit) return;
+                ++shown;
                 bool const        selected = following && state.replaySubjectChoice == entity.choice;
                 std::string const label    = entity.label + "##" + entity.choice;
                 if (ImGui::MenuItem(label.c_str(), nullptr, selected)) {
@@ -323,6 +379,12 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
                     action.id    = entity.choice;
                     ctx.submitAction(std::move(action));
                 }
+            };
+            for (auto const& entity : state.replayEntities) {
+                if (entity.mob) emitEntityItem(entity);
+            }
+            for (auto const& entity : state.replayEntities) {
+                if (!entity.mob) emitEntityItem(entity);
             }
             ImGui::EndMenu();
         }

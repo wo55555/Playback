@@ -39,6 +39,7 @@ CameraKeyframeChange::interpolate(CameraKeyframeChange const& left, CameraKeyfra
         interpolateAngle(left.pitch, right.pitch, amount),
         interpolateAngle(left.roll, right.roll, amount),
         left.fov + (right.fov - left.fov) * amount,
+        left.mDistance + (right.mDistance - left.mDistance) * amount,
     };
 }
 
