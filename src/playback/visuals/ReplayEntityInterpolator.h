@@ -175,6 +175,16 @@ void queueReplaySubjectCameraOffset(
 // The subject's entity pose with the recorded camera offset added to its position, i.e. the first-person view.
 [[nodiscard]] std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample);
 
+// Thread-safe pose sample for an arbitrary replay entity without reading or modifying global subject state.
+[[nodiscard]] std::optional<EntityRenderPose> sampleReplayEntityPose(
+    EntityRenderKey         key,
+    ReplaySampleTime const& sample,
+    bool                    isRecorder,
+    bool                    isPlayer,
+    float                   eyeHeight,
+    float                   postureOffsetY
+);
+
 // How much of the recorded game camera view (sleeping) replaces the entity pose, 0 to 1.
 [[nodiscard]] float sampleReplaySubjectViewWeight(ReplaySampleTime const& sample);
 

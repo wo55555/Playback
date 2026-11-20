@@ -19,7 +19,7 @@ KeyframeTrack::KeyframeTrack(KeyMap const& keyframes) : mKeyframes(keyframes.beg
 bool KeyframeTrack::empty() const noexcept { return mKeyframes.empty(); }
 
 CameraKeyframeChange KeyframeTrack::changeFromKeyframe(CameraKeyframe const& key) const {
-    return {key.position, key.yaw, key.pitch, key.roll, key.fov};
+    return {key.position, key.yaw, key.pitch, key.roll, key.fov, key.thirdPersonDistance};
 }
 
 CameraKeyframeChange KeyframeTrack::smoothChange(KeyMapIter left, float amount) const {
@@ -61,6 +61,16 @@ CameraKeyframeChange KeyframeTrack::smoothChange(KeyMapIter left, float amount) 
         angle(beforeKey.pitch, leftKey.pitch, rightKey.pitch, afterKey.pitch),
         angle(beforeKey.roll, leftKey.roll, rightKey.roll, afterKey.roll),
         centripetalCatmullRom(beforeKey.fov, leftKey.fov, rightKey.fov, afterKey.fov, time1, time2, time3, amount),
+        centripetalCatmullRom(
+            beforeKey.thirdPersonDistance,
+            leftKey.thirdPersonDistance,
+            rightKey.thirdPersonDistance,
+            afterKey.thirdPersonDistance,
+            time1,
+            time2,
+            time3,
+            amount
+        ),
     };
 }
 
@@ -84,6 +94,7 @@ CameraKeyframeChange KeyframeTrack::hermiteChange(KeyMapIter left, long double t
     std::vector<float> pitch;
     std::vector<float> roll;
     std::vector<float> fov;
+    std::vector<float> distance;
     ticks.reserve(static_cast<size_t>(std::distance(runStart, runEnd)));
     for (auto it = runStart; it != runEnd; ++it) {
         auto const& keyframe = it->second;
@@ -95,6 +106,7 @@ CameraKeyframeChange KeyframeTrack::hermiteChange(KeyMapIter left, long double t
         pitch.push_back(pitch.empty() ? keyframe.pitch : unwrapFrom(pitch.back(), keyframe.pitch));
         roll.push_back(roll.empty() ? keyframe.roll : unwrapFrom(roll.back(), keyframe.roll));
         fov.push_back(keyframe.fov);
+        distance.push_back(keyframe.thirdPersonDistance);
     }
 
     Vec3 const position{
@@ -108,6 +120,7 @@ CameraKeyframeChange KeyframeTrack::hermiteChange(KeyMapIter left, long double t
         wrapDegrees(interpolatePolynomial(ticks, pitch, tick)),
         wrapDegrees(interpolatePolynomial(ticks, roll, tick)),
         interpolatePolynomial(ticks, fov, tick),
+        interpolatePolynomial(ticks, distance, tick),
     };
 }
 

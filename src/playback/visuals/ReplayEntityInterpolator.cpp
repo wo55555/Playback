@@ -777,11 +777,14 @@ bool isReplaySubjectViewDriven() {
     return (gSubjectHidden.load(std::memory_order_acquire) & mask) != 0;
 }
 
-std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample) {
-    auto const subject = subjectKey();
-    if (!subject) return std::nullopt;
-    EntityRenderKey const key = *subject;
-
+std::optional<EntityRenderPose> sampleReplayEntityPose(
+    EntityRenderKey         key,
+    ReplaySampleTime const& sample,
+    bool                    isRecorder,
+    bool                    isPlayer,
+    float                   eyeHeight,
+    float                   postureOffsetY
+) {
     std::optional<EntityRenderPose> found;
     if (auto const poses = gEntityPoses.load(std::memory_order_acquire)) {
         if (auto const entry = poses->find(key); entry != poses->end()) {
@@ -797,15 +800,15 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
     if (!found) return std::nullopt;
     auto pose = *found;
     // Any other entity records its feet and turns its head independently of its body.
-    if (!isReplaySubjectPlayer()) {
-        pose.position.y += gSubjectEyeHeight.load(std::memory_order_relaxed);
+    if (!isPlayer) {
+        pose.position.y += std::isfinite(eyeHeight) ? std::max(0.0f, eyeHeight) : 0.0f;
         pose.yaw = pose.headYaw;
         return pose;
     }
     // Recorded player positions are already standing eye height. The recorder uses its recorded camera offset.
     // Another player has no such track, so sneak and swim add the offset measured on the local player.
-    if (!isReplaySubjectRecorder()) {
-        pose.position.y += replaySubjectPostureOffsetY();
+    if (!isRecorder) {
+        pose.position.y += std::isfinite(postureOffsetY) ? postureOffsetY : 0.0f;
         return pose;
     }
     if (auto const camera = sampleSubjectCamera(sample)) {
@@ -826,6 +829,19 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
         }
     }
     return pose;
+}
+
+std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample) {
+    auto const subject = subjectKey();
+    if (!subject) return std::nullopt;
+    return sampleReplayEntityPose(
+        *subject,
+        sample,
+        isReplaySubjectRecorder(),
+        isReplaySubjectPlayer(),
+        gSubjectEyeHeight.load(std::memory_order_relaxed),
+        replaySubjectPostureOffsetY()
+    );
 }
 
 float sampleReplaySubjectViewWeight(ReplaySampleTime const& sample) {

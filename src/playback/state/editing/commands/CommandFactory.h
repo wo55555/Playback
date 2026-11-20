@@ -54,6 +54,20 @@ public:
     createSetCameraKeyframeIgnoreClipSpeed(const std::string& id, int tick, bool ignoreClipSpeed);
     static std::unique_ptr<model::IEditCommand>
     createSetKeyframesIgnoreClipSpeed(std::vector<model::KeyframeRef> refs, bool ignoreClipSpeed);
+    static std::unique_ptr<model::IEditCommand>
+    createSetCameraKeyframeThirdPersonSettings(const std::string& id, int tick, model::CameraKeyframe settings);
+    static std::unique_ptr<model::IEditCommand>
+    createSetKeyframesThirdPersonCustom(std::vector<model::KeyframeRef> refs, bool custom);
+    static std::unique_ptr<model::IEditCommand>
+    createSetCameraKeyframeLookAt(const std::string& id, int tick, bool enabled, const std::string& target, float offsetY);
+    static std::unique_ptr<model::IEditCommand> createSetKeyframesLookAt(
+        std::vector<model::KeyframeRef> refs,
+        bool                            enabled,
+        const std::string&              target,
+        std::optional<float>            offsetY
+    );
+    static std::unique_ptr<model::IEditCommand>
+    createUpdateCameraKeyframePose(const std::string& id, int tick, model::CameraKeyframe pose);
 
     static std::unique_ptr<model::IEditCommand>
     createAddMarker(const std::string& id, int tick, const std::string& label);

@@ -2,6 +2,7 @@
 
 #include "playback/keyframe/CameraRenderState.h"
 #include "playback/record/Recorder.h"
+#include "playback/state/editing/models/MathTypes.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
 #include "mc/deps/core/math/Vec2.h"
@@ -649,6 +650,14 @@ public:
     // Pulls an eye pose back behind the subject like vanilla F5, stopping short of walls.
     [[nodiscard]] keyframe::CameraRenderState thirdPersonView(keyframe::CameraRenderState const& eye) const;
 
+    // Thread-safe eye/anchor pose of any replay player or entity (`choice` empty = recorder).
+    [[nodiscard]] std::optional<keyframe::CameraRenderState>
+    sampleEntityAnchor(visuals::ReplaySampleTime const& time, std::string const& choice) const;
+
+    // Clips a camera ray from `anchor` to `target` against camera-colliding blocks.
+    [[nodiscard]] state::editing::model::Vec3
+    clipCameraRay(state::editing::model::Vec3 const& anchor, state::editing::model::Vec3 const& target) const;
+
     struct ReplayPlayerInfo {
         std::string uuid;
         std::string name;
@@ -681,12 +690,13 @@ public:
         std::string label;
         bool        player{};
         bool        recorder{};
+        bool        mob{};
         float       x{}, y{}, z{}; // feet
         float       height{};      // collision box height
         float       distance{};    // distance to the observer
     };
 
-    // Living mobs and players in the replay, observer excluded, nearest to the observer first, as of the last
+    // Players, mobs, and other entities in the replay, observer excluded, nearest to the observer first, as of the last
     // replay tick.
     [[nodiscard]] std::vector<ReplayEntityInfo> replayEntities() const;
 
@@ -828,6 +838,23 @@ public:
 private:
     ReplaySession();
     ~ReplaySession();
+
+    struct EntityAnchorMeta {
+        std::optional<visuals::EntityRenderKey> renderKey;
+        bool                                    isRecorder{};
+        bool                                    isPlayer{};
+        float                                   eyeHeight{};
+        float                                   postureOffsetY{};
+        float                                   fallbackX{};
+        float                                   fallbackY{};
+        float                                   fallbackZ{};
+        float                                   fallbackYaw{};
+        float                                   fallbackPitch{};
+    };
+
+    mutable std::mutex                            mEntityAnchorMutex;
+    std::unordered_map<int64_t, EntityAnchorMeta> mEntityAnchors;
+    std::optional<int64_t>                        mRecorderAnchorId;
 
     mutable std::mutex            mReplayEntitiesMutex;
     std::vector<ReplayEntityInfo> mReplayEntities;

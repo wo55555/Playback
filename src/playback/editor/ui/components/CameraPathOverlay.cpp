@@ -476,15 +476,17 @@ void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImD
         if (marker.dimensionSegment != dimension) continue;
         drawCameraGlyph(painter, marker.pose, aspect, fade(theme::kCameraPath, marker.opacity), kGlyphThickness);
     }
-    // The playhead glyph marks an interpolated keyframe's pose; person keyframes and follow view show the player itself.
+    // The playhead glyph marks an evaluator-driven shot's pose (interpolated or custom third-person); fixed person
+    // keyframes and follow view show the player itself.
     auto const shot         = timeline->shotAt(ctx.state.currentTick);
-    bool const keyframeView = shot ? shot.mode == state::editing::model::CameraKeyframeMode::Interpolated
-                                   : !ctx.state.followingRecordedPlayer;
+    bool const keyframeView = shot ? shot.isEvaluatorDriven() : !ctx.state.followingRecordedPlayer;
     if (ctx.state.paused && keyframeView) {
         // Reuse the render frame's sample time so the glyph matches the pose the camera was drawn with.
         auto const time =
             ctx.cameraProjection->sampleTime.value_or(visuals::ReplaySampleTime{ctx.state.currentTick, 1});
-        if (auto const current = timeline->sample(time)) {
+        auto current = timeline->sample(time);
+        if (!current) current = timeline->sampleKeyframePath(time);
+        if (current) {
             drawCameraGlyph(painter, current->state, aspect, theme::kCameraPathPlayhead, kGlyphThickness);
         }
     }
