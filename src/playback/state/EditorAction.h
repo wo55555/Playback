@@ -73,6 +73,18 @@ enum class EditorActionType {
     RenameMarker,
     SetKeyframeIgnoreClipSpeed,
     SetKeyframesIgnoreClipSpeed,
+    // id + tick + keyframe (carries updated thirdPerson* fields); value=true converts offset/yaw/pitch when
+    // toggling thirdPersonFollowRotation to preserve the world camera view.
+    SetKeyframeThirdPersonSettings,
+    // keyframeRefs + value (new thirdPersonCustom flag for ThirdPerson keyframes).
+    SetKeyframesThirdPersonCustom,
+    // id + tick + value (lookAtEnabled) + secondaryId (lookAtTarget) + speed (lookAtOffsetY).
+    SetKeyframeLookAt,
+    // keyframeRefs + value (lookAtEnabled) + secondaryId (lookAtTarget) + speed (lookAtOffsetY when secondaryTick == 0
+    // and speed is finite; set secondaryTick != 0 or NaN speed to preserve each keyframe's existing lookAtOffsetY).
+    SetKeyframesLookAt,
+    // id + tick: captures the live client camera pose into a Free or Custom Third-Person keyframe.
+    CaptureKeyframeFromView,
     AddClip,
     SplitClip,
     MoveAndTrimClip,

@@ -88,6 +88,11 @@ float keyframeLabelWidth() {
         "playback.refactorEditor.details.rotation"_tr(),
         "playback.refactorEditor.details.fov"_tr(),
         "playback.refactorEditor.details.interpolation"_tr(),
+        "playback.refactorEditor.details.thirdPersonDistance"_tr(),
+        "playback.refactorEditor.details.thirdPersonOffset"_tr(),
+        "playback.refactorEditor.details.lookAtOffsetY"_tr(),
+        "playback.refactorEditor.details.bezierControl1"_tr(),
+        "playback.refactorEditor.details.bezierControl2"_tr(),
     });
 }
 
@@ -1005,9 +1010,18 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
     std::optional<int>                              shared;
     bool                                            mixed = false;
     std::optional<int>                              sharedMode;
-    bool                                            mixedMode       = false;
-    bool                                            anyInterpolated = false;
-    bool                                            anyPerson       = false;
+    bool                                            mixedMode              = false;
+    bool                                            anyInterpolated        = false;
+    bool                                            anyPerson              = false;
+    bool                                            anyThirdPerson         = false;
+    bool                                            anyCustomThirdPerson   = false;
+    std::optional<bool>                             sharedThirdPersonCustom;
+    bool                                            mixedThirdPersonCustom = false;
+    bool                                            anyLookAtEnabled       = false;
+    std::optional<bool>                             sharedLookAtEnabled;
+    bool                                            mixedLookAtEnabled = false;
+    std::optional<std::string>                      sharedLookAtTarget;
+    bool                                            mixedLookAtTarget = false;
     std::optional<std::string>                      sharedSubject;
     bool                                            mixedSubject = false;
     std::optional<bool>                             sharedIgnore;
@@ -1027,18 +1041,38 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
         int const mode = static_cast<int>(key->second.mode);
         if (!sharedMode) sharedMode = mode;
         else if (*sharedMode != mode) mixedMode = true;
+        bool isEvaluator = false;
         if (key->second.mode == state::editing::model::CameraKeyframeMode::Interpolated) {
             anyInterpolated = true;
+            isEvaluator     = true;
+            if (!sharedLookAtEnabled) sharedLookAtEnabled = key->second.lookAtEnabled;
+            else if (*sharedLookAtEnabled != key->second.lookAtEnabled) mixedLookAtEnabled = true;
+            if (key->second.lookAtEnabled) {
+                anyLookAtEnabled = true;
+                if (!sharedLookAtTarget) sharedLookAtTarget = key->second.lookAtTarget;
+                else if (*sharedLookAtTarget != key->second.lookAtTarget) mixedLookAtTarget = true;
+            }
         } else {
             anyPerson = true;
             if (!sharedSubject) sharedSubject = key->second.subject;
             else if (*sharedSubject != key->second.subject) mixedSubject = true;
+            if (key->second.mode == state::editing::model::CameraKeyframeMode::ThirdPerson) {
+                anyThirdPerson = true;
+                if (!sharedThirdPersonCustom) sharedThirdPersonCustom = key->second.thirdPersonCustom;
+                else if (*sharedThirdPersonCustom != key->second.thirdPersonCustom) mixedThirdPersonCustom = true;
+                if (key->second.thirdPersonCustom) {
+                    anyCustomThirdPerson = true;
+                    isEvaluator          = true;
+                }
+            }
         }
-        int const type = static_cast<int>(key->second.interpolationType);
-        if (!shared) shared = type;
-        else if (*shared != type) mixed = true;
-        if (!sharedIgnore) sharedIgnore = key->second.ignoreClipSpeed;
-        else if (*sharedIgnore != key->second.ignoreClipSpeed) mixedIgnore = true;
+        if (isEvaluator) {
+            int const type = static_cast<int>(key->second.interpolationType);
+            if (!shared) shared = type;
+            else if (*shared != type) mixed = true;
+            if (!sharedIgnore) sharedIgnore = key->second.ignoreClipSpeed;
+            else if (*sharedIgnore != key->second.ignoreClipSpeed) mixedIgnore = true;
+        }
     }
 
     if (property::beginSection("playback.refactorEditor.details.multiKeyframe"_tr().c_str())) {
@@ -1086,7 +1120,7 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                     widgets::endCombo();
                 }
 
-                if (anyInterpolated) {
+                if (anyInterpolated || anyCustomThirdPerson) {
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
                     ImGui::AlignTextToFramePadding();
@@ -1113,6 +1147,21 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                 ImGui::EndTable();
             }
             ImGui::PopStyleVar();
+        }
+        if (anyThirdPerson) {
+            property::separator();
+            bool              customValue = !mixedThirdPersonCustom && sharedThirdPersonCustom.value_or(false);
+            std::string const customLabel =
+                mixedThirdPersonCustom
+                    ? ("playback.refactorEditor.details.thirdPersonCustom"_tr() + " ("
+                       + "playback.refactorEditor.details.mixed"_tr() + ")##batch-3p-custom")
+                    : ("playback.refactorEditor.details.thirdPersonCustom"_tr() + "##batch-3p-custom");
+            if (ImGui::Checkbox(customLabel.c_str(), &customValue)) {
+                EditorAction action{EditorActionType::SetKeyframesThirdPersonCustom};
+                action.keyframeRefs = refs;
+                action.value        = customValue;
+                ctx.submitAction(std::move(action));
+            }
         }
         if (anyPerson) {
             property::separator();
@@ -1143,8 +1192,56 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                 ctx.submitAction(std::move(action));
             }
         }
-        property::separator();
-        {
+        if (anyInterpolated) {
+            property::separator();
+            bool              lookAtValue = !mixedLookAtEnabled && sharedLookAtEnabled.value_or(false);
+            std::string const lookAtLabel =
+                mixedLookAtEnabled
+                    ? ("playback.refactorEditor.details.lookAtEntity"_tr() + " ("
+                       + "playback.refactorEditor.details.mixed"_tr() + ")##batch-lookat-enabled")
+                    : ("playback.refactorEditor.details.lookAtEntity"_tr() + "##batch-lookat-enabled");
+            if (ImGui::Checkbox(lookAtLabel.c_str(), &lookAtValue)) {
+                EditorAction action{EditorActionType::SetKeyframesLookAt};
+                action.keyframeRefs  = refs;
+                action.value         = lookAtValue;
+                action.secondaryId   = sharedLookAtTarget.value_or(std::string{});
+                action.secondaryTick = 1;
+                ctx.submitAction(std::move(action));
+            }
+            if (anyLookAtEnabled) {
+                bool const        targetMixed = mixedLookAtEnabled || mixedLookAtTarget || !sharedLookAtTarget;
+                std::string const currentTarget =
+                    targetMixed
+                        ? "playback.refactorEditor.details.mixed"_tr()
+                        : playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, *sharedLookAtTarget);
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.lookAtTarget"_tr().c_str());
+                ImGui::SameLine();
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(currentTarget.c_str());
+                ImGui::PopTextWrapPos();
+                PlayerPickerResult picked;
+                if (drawPlayerList(
+                        "##keyframes-lookat-list",
+                        PlayerPickerMode::SegmentSubject,
+                        ctx.state.replayPlayers,
+                        ctx.state.replayEntities,
+                        sharedLookAtTarget.value_or(std::string{}),
+                        false,
+                        picked,
+                        targetMixed
+                    )
+                    && (targetMixed || picked.uuid != *sharedLookAtTarget)) {
+                    EditorAction action{EditorActionType::SetKeyframesLookAt};
+                    action.keyframeRefs  = refs;
+                    action.value         = true;
+                    action.secondaryId   = std::move(picked.uuid);
+                    action.secondaryTick = 1;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+        }
+        if (anyInterpolated || anyCustomThirdPerson) {
+            property::separator();
             bool              ignoreValue = !mixedIgnore && sharedIgnore.value_or(false);
             std::string const ignoreLabel =
                 mixedIgnore ? ("playback.refactorEditor.details.ignoreClipSpeed"_tr() + " ("
@@ -1178,6 +1275,174 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
     return true;
 }
 
+void DetailsPanel::drawKeyframeInterpolationRows(
+    PanelContext const&                          ctx,
+    state::editing::model::CameraEntity const&   camera,
+    int                                          originalTick,
+    state::editing::model::CameraKeyframe const& keyframe
+) {
+    auto const submit        = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
+    int const  interpolation = static_cast<int>(keyframe.interpolationType);
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-1.0f);
+    if (widgets::beginCombo("##interpolation", interpolationName(keyframe.interpolationType).c_str())) {
+        for (int index = 0; index < 8; ++index) {
+            auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+            if (ImGui::Selectable(interpolationName(value).c_str(), index == interpolation)) {
+                EditorAction action{EditorActionType::SetKeyframeInterpolation};
+                action.id   = camera.id;
+                action.tick = originalTick;
+                action.kind = index;
+                submit(std::move(action));
+            }
+        }
+        widgets::endCombo();
+    }
+
+    if (keyframe.interpolationType == state::editing::model::CameraInterpolationType::CubicBezier) {
+        if (mBezierDragHandle != 0 && (mBezierDragCameraId != camera.id || mBezierDragTick != originalTick)) {
+            mBezierDragHandle = 0;
+        }
+        auto ctrl1 = mBezierDragHandle != 0 ? mBezierDraftCtrl1 : keyframe.bezierCtrl1;
+        auto ctrl2 = mBezierDragHandle != 0 ? mBezierDraftCtrl2 : keyframe.bezierCtrl2;
+        ctrl1.x    = std::clamp(ctrl1.x, 0.0f, 1.0f);
+        ctrl1.y    = std::clamp(ctrl1.y, 0.0f, 1.0f);
+        ctrl2.x    = std::clamp(ctrl2.x, 0.0f, 1.0f);
+        ctrl2.y    = std::clamp(ctrl2.y, 0.0f, 1.0f);
+
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierCurve"_tr().c_str());
+        ImGui::TableNextColumn();
+        {
+            float const  uiScale  = metrics::scale();
+            float const  availW   = std::max(64.0f, ImGui::GetContentRegionAvail().x);
+            float const  boxH     = std::clamp(availW, 96.0f * uiScale, 140.0f * uiScale);
+            float const  pad      = 8.0f * uiScale;
+            ImVec2 const boxMin   = ImGui::GetCursorScreenPos();
+            ImVec2 const boxMax   = {boxMin.x + availW, boxMin.y + boxH};
+            ImVec2 const innerMin = {boxMin.x + pad, boxMin.y + pad};
+            ImVec2 const innerMax = {boxMax.x - pad, boxMax.y - pad};
+            float const  innerW   = std::max(1.0f, innerMax.x - innerMin.x);
+            float const  innerH   = std::max(1.0f, innerMax.y - innerMin.y);
+
+            auto const toScreen = [&](state::editing::model::Vec2 p) -> ImVec2 {
+                return {innerMin.x + p.x * innerW, innerMax.y - p.y * innerH};
+            };
+            auto const fromScreen = [&](ImVec2 s) -> state::editing::model::Vec2 {
+                return {
+                    std::clamp((s.x - innerMin.x) / innerW, 0.0f, 1.0f),
+                    std::clamp((innerMax.y - s.y) / innerH, 0.0f, 1.0f),
+                };
+            };
+
+            ImGui::InvisibleButton("##bezier-canvas", {availW, boxH});
+            bool const   hovered = ImGui::IsItemHovered();
+            ImVec2 const mouse   = ImGui::GetMousePos();
+            ImVec2 const p0      = toScreen({0.0f, 0.0f});
+            ImVec2       p1      = toScreen(ctrl1);
+            ImVec2       p2      = toScreen(ctrl2);
+            ImVec2 const p3      = toScreen({1.0f, 1.0f});
+
+            auto const distSq = [](ImVec2 a, ImVec2 b) {
+                float const dx = a.x - b.x;
+                float const dy = a.y - b.y;
+                return dx * dx + dy * dy;
+            };
+            float const hitR2    = (9.0f * uiScale) * (9.0f * uiScale);
+            float const d1       = distSq(mouse, p1);
+            float const d2       = distSq(mouse, p2);
+            int         hoveredH = 0;
+            if (hovered && !camera.locked) {
+                if (d1 <= hitR2 && (d1 <= d2 || d2 > hitR2)) hoveredH = 1;
+                else if (d2 <= hitR2) hoveredH = 2;
+            }
+            if (hoveredH != 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                mBezierDragCameraId = camera.id;
+                mBezierDragTick     = originalTick;
+                mBezierDragHandle   = hoveredH;
+                mBezierDraftCtrl1   = ctrl1;
+                mBezierDraftCtrl2   = ctrl2;
+            }
+            if (mBezierDragHandle != 0) {
+                if (!camera.locked && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    if (mBezierDragHandle == 1) mBezierDraftCtrl1 = fromScreen(mouse);
+                    else mBezierDraftCtrl2 = fromScreen(mouse);
+                    ctrl1 = mBezierDraftCtrl1;
+                    ctrl2 = mBezierDraftCtrl2;
+                    p1    = toScreen(ctrl1);
+                    p2    = toScreen(ctrl2);
+                } else {
+                    EditorAction action{EditorActionType::SetKeyframeBezierControls};
+                    action.id          = camera.id;
+                    action.tick        = originalTick;
+                    action.bezierCtrl1 = mBezierDraftCtrl1;
+                    action.bezierCtrl2 = mBezierDraftCtrl2;
+                    mBezierDragHandle  = 0;
+                    submit(std::move(action));
+                }
+            }
+            if (hoveredH != 0 || mBezierDragHandle != 0) {
+                ImGui::SetMouseCursor(mBezierDragHandle != 0 ? theme::kCursorGrabbing : theme::kCursorGrab);
+            }
+
+            auto* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(boxMin, boxMax, theme::kInputBg, 4.0f * uiScale);
+            dl->AddRect(boxMin, boxMax, theme::kBorder, 4.0f * uiScale);
+            dl->AddLine(p0, p3, theme::kFineDivider, 1.0f);
+            dl->AddLine(p0, p1, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
+            dl->AddLine(p3, p2, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
+            dl->AddBezierCubic(p0, p1, p2, p3, theme::kAccent, 2.0f * uiScale, 32);
+            dl->AddCircleFilled(p0, 2.5f * uiScale, theme::kTextDim);
+            dl->AddCircleFilled(p3, 2.5f * uiScale, theme::kTextDim);
+
+            float const handleR = 4.5f * uiScale;
+            ImU32 const c1Color = (mBezierDragHandle == 1 || hoveredH == 1) ? theme::kSelected : theme::kKeyframe;
+            ImU32 const c2Color = (mBezierDragHandle == 2 || hoveredH == 2) ? theme::kSelected : theme::kKeyframe;
+            dl->AddCircleFilled(p1, handleR, c1Color);
+            dl->AddCircle(p1, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
+            dl->AddCircleFilled(p2, handleR, c2Color);
+            dl->AddCircle(p2, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
+        }
+
+        static constexpr std::array xyLabels{"X", "Y"};
+        float                       c1[2] = {ctrl1.x, ctrl1.y};
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl1"_tr().c_str());
+        ImGui::TableNextColumn();
+        if (vectorInput2("bezier-c1", c1, xyLabels, "%.2f") && std::isfinite(c1[0]) && std::isfinite(c1[1])) {
+            EditorAction action{EditorActionType::SetKeyframeBezierControls};
+            action.id          = camera.id;
+            action.tick        = originalTick;
+            action.bezierCtrl1 = {std::clamp(c1[0], 0.0f, 1.0f), std::clamp(c1[1], 0.0f, 1.0f)};
+            action.bezierCtrl2 = ctrl2;
+            submit(std::move(action));
+        }
+
+        float c2[2] = {ctrl2.x, ctrl2.y};
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl2"_tr().c_str());
+        ImGui::TableNextColumn();
+        if (vectorInput2("bezier-c2", c2, xyLabels, "%.2f") && std::isfinite(c2[0]) && std::isfinite(c2[1])) {
+            EditorAction action{EditorActionType::SetKeyframeBezierControls};
+            action.id          = camera.id;
+            action.tick        = originalTick;
+            action.bezierCtrl1 = ctrl1;
+            action.bezierCtrl2 = {std::clamp(c2[0], 0.0f, 1.0f), std::clamp(c2[1], 0.0f, 1.0f)};
+            submit(std::move(action));
+        }
+    }
+}
+
 bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
     auto const  project   = ctx.state.project;
     auto const& selection = ctx.selection;
@@ -1197,13 +1462,46 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
         if (property::beginSection("playback.refactorEditor.details.cameraKeyframe"_tr().c_str())) {
             property::textRow("playback.refactorEditor.details.camera"_tr().c_str(), camera->name.c_str());
             property::separator();
+            int const  originalTick  = key->first;
+            bool const isFree        = key->second.mode == state::editing::model::CameraKeyframeMode::Interpolated;
+            bool const isThirdPerson = key->second.mode == state::editing::model::CameraKeyframeMode::ThirdPerson;
+            bool const isCustomThird = isThirdPerson && key->second.thirdPersonCustom;
+            bool const isPerson      = !isFree;
+            if (ctx.state.replayVisible && (isFree || isCustomThird)) {
+                std::string const captureLabel = "playback.refactorEditor.details.captureFromView"_tr();
+                std::string const jumpLabel    = "playback.refactorEditor.details.jumpToKeyframe"_tr();
+                int const         viewChoice   = property::actionButtonPair(
+                    {captureLabel.c_str(), ICON_CAMERA, property::ButtonVariant::Secondary, !camera->locked},
+                    {jumpLabel.c_str(), ICON_EYE, property::ButtonVariant::Secondary, true}
+                );
+                if (viewChoice == 0) {
+                    EditorAction action{EditorActionType::CaptureKeyframeFromView};
+                    action.id   = camera->id;
+                    action.tick = originalTick;
+                    submit(std::move(action));
+                } else if (viewChoice == 1) {
+                    EditorAction action{EditorActionType::MoveViewToKeyframe};
+                    action.id   = camera->id;
+                    action.tick = originalTick;
+                    submit(std::move(action));
+                }
+                property::separator();
+            }
             ImGui::BeginDisabled(camera->locked);
-            bool const person =
-                key->second.mode != state::editing::model::CameraKeyframeMode::Interpolated;
-            int const   originalTick = key->first;
-            int         tick         = originalTick;
-            float const scale        = metrics::scale();
-            float const labelWidth   = keyframeLabelWidth();
+            int         tick       = originalTick;
+            float const scale      = metrics::scale();
+            float const labelWidth = keyframeLabelWidth();
+            static constexpr std::array axisLabels{"X", "Y", "Z"};
+            static std::array const     axisColors{
+                ImGui::ColorConvertU32ToFloat4(theme::kAxisX),
+                ImGui::ColorConvertU32ToFloat4(theme::kAxisY),
+                ImGui::ColorConvertU32ToFloat4(theme::kAxisZ),
+            };
+            auto const       yawLabel   = "playback.refactorEditor.details.yaw"_tr();
+            auto const       pitchLabel = "playback.refactorEditor.details.pitch"_tr();
+            auto const       rollLabel  = "playback.refactorEditor.details.roll"_tr();
+            std::array const rotationLabels{yawLabel.c_str(), pitchLabel.c_str(), rollLabel.c_str()};
+
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
             if (ImGui::BeginTable(
                     "##keyframe-properties",
@@ -1249,21 +1547,15 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     widgets::endCombo();
                 }
 
-                // Person keyframes take their view from the replay player; interpolated keyframes use explicit pose.
-                if (!person) {
+                // Interpolated keyframes use explicit world pose and curve controls.
+                if (isFree) {
                     float position[3] = {key->second.position.x, key->second.position.y, key->second.position.z};
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextDisabled("%s", "playback.refactorEditor.details.position"_tr().c_str());
                     ImGui::TableNextColumn();
-                    static constexpr std::array positionLabels{"X", "Y", "Z"};
-                    static std::array const     positionColors{
-                        ImGui::ColorConvertU32ToFloat4(theme::kAxisX),
-                        ImGui::ColorConvertU32ToFloat4(theme::kAxisY),
-                        ImGui::ColorConvertU32ToFloat4(theme::kAxisZ),
-                    };
-                    if (vectorInput("position", position, positionLabels, &positionColors, "%.3f")
+                    if (vectorInput("position", position, axisLabels, &axisColors, "%.3f")
                         && std::ranges::all_of(position, [](float value) { return std::isfinite(value); })) {
                         EditorAction action{EditorActionType::SetKeyframePosition};
                         action.id       = camera->id;
@@ -1278,10 +1570,6 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextDisabled("%s", "playback.refactorEditor.details.rotation"_tr().c_str());
                     ImGui::TableNextColumn();
-                    auto const       yawLabel   = "playback.refactorEditor.details.yaw"_tr();
-                    auto const       pitchLabel = "playback.refactorEditor.details.pitch"_tr();
-                    auto const       rollLabel  = "playback.refactorEditor.details.roll"_tr();
-                    std::array const rotationLabels{yawLabel.c_str(), pitchLabel.c_str(), rollLabel.c_str()};
                     if (vectorInput("rotation", rotation, rotationLabels, nullptr, "%.2f")
                         && std::ranges::all_of(rotation, [](float value) { return std::isfinite(value); })) {
                         EditorAction action{EditorActionType::SetKeyframeRotation};
@@ -1307,185 +1595,115 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                         submit(std::move(action));
                     }
 
-                    int interpolation = static_cast<int>(key->second.interpolationType);
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
-                    ImGui::TableNextColumn();
-                    ImGui::SetNextItemWidth(-1.0f);
-                    if (widgets::beginCombo(
-                            "##interpolation",
-                            interpolationName(key->second.interpolationType).c_str()
-                        )) {
-                        for (int index = 0; index < 8; ++index) {
-                            auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
-                            if (ImGui::Selectable(interpolationName(value).c_str(), index == interpolation)) {
-                                EditorAction action{EditorActionType::SetKeyframeInterpolation};
-                                action.id   = camera->id;
-                                action.tick = originalTick;
-                                action.kind = index;
-                                submit(std::move(action));
-                            }
-                        }
-                        widgets::endCombo();
-                    }
-
-                    if (key->second.interpolationType == state::editing::model::CameraInterpolationType::CubicBezier) {
-                        if (mBezierDragHandle != 0
-                            && (mBezierDragCameraId != camera->id || mBezierDragTick != originalTick)) {
-                            mBezierDragHandle = 0;
-                        }
-                        auto ctrl1 = mBezierDragHandle != 0 ? mBezierDraftCtrl1 : key->second.bezierCtrl1;
-                        auto ctrl2 = mBezierDragHandle != 0 ? mBezierDraftCtrl2 : key->second.bezierCtrl2;
-                        ctrl1.x    = std::clamp(ctrl1.x, 0.0f, 1.0f);
-                        ctrl1.y    = std::clamp(ctrl1.y, 0.0f, 1.0f);
-                        ctrl2.x    = std::clamp(ctrl2.x, 0.0f, 1.0f);
-                        ctrl2.y    = std::clamp(ctrl2.y, 0.0f, 1.0f);
-
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierCurve"_tr().c_str());
-                        ImGui::TableNextColumn();
-                        {
-                            float const  uiScale  = metrics::scale();
-                            float const  availW   = std::max(64.0f, ImGui::GetContentRegionAvail().x);
-                            float const  boxH     = std::clamp(availW, 96.0f * uiScale, 140.0f * uiScale);
-                            float const  pad      = 8.0f * uiScale;
-                            ImVec2 const boxMin   = ImGui::GetCursorScreenPos();
-                            ImVec2 const boxMax   = {boxMin.x + availW, boxMin.y + boxH};
-                            ImVec2 const innerMin = {boxMin.x + pad, boxMin.y + pad};
-                            ImVec2 const innerMax = {boxMax.x - pad, boxMax.y - pad};
-                            float const  innerW   = std::max(1.0f, innerMax.x - innerMin.x);
-                            float const  innerH   = std::max(1.0f, innerMax.y - innerMin.y);
-
-                            auto const toScreen = [&](state::editing::model::Vec2 p) -> ImVec2 {
-                                return {innerMin.x + p.x * innerW, innerMax.y - p.y * innerH};
-                            };
-                            auto const fromScreen = [&](ImVec2 s) -> state::editing::model::Vec2 {
-                                return {
-                                    std::clamp((s.x - innerMin.x) / innerW, 0.0f, 1.0f),
-                                    std::clamp((innerMax.y - s.y) / innerH, 0.0f, 1.0f),
-                                };
-                            };
-
-                            ImGui::InvisibleButton("##bezier-canvas", {availW, boxH});
-                            bool const   hovered = ImGui::IsItemHovered();
-                            ImVec2 const mouse   = ImGui::GetMousePos();
-                            ImVec2 const p0      = toScreen({0.0f, 0.0f});
-                            ImVec2       p1      = toScreen(ctrl1);
-                            ImVec2       p2      = toScreen(ctrl2);
-                            ImVec2 const p3      = toScreen({1.0f, 1.0f});
-
-                            auto const distSq = [](ImVec2 a, ImVec2 b) {
-                                float const dx = a.x - b.x;
-                                float const dy = a.y - b.y;
-                                return dx * dx + dy * dy;
-                            };
-                            float const hitR2    = (9.0f * uiScale) * (9.0f * uiScale);
-                            float const d1       = distSq(mouse, p1);
-                            float const d2       = distSq(mouse, p2);
-                            int         hoveredH = 0;
-                            if (hovered && !camera->locked) {
-                                if (d1 <= hitR2 && (d1 <= d2 || d2 > hitR2)) hoveredH = 1;
-                                else if (d2 <= hitR2) hoveredH = 2;
-                            }
-                            if (hoveredH != 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                                mBezierDragCameraId = camera->id;
-                                mBezierDragTick     = originalTick;
-                                mBezierDragHandle   = hoveredH;
-                                mBezierDraftCtrl1   = ctrl1;
-                                mBezierDraftCtrl2   = ctrl2;
-                            }
-                            if (mBezierDragHandle != 0) {
-                                if (!camera->locked && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                                    if (mBezierDragHandle == 1) mBezierDraftCtrl1 = fromScreen(mouse);
-                                    else mBezierDraftCtrl2 = fromScreen(mouse);
-                                    ctrl1 = mBezierDraftCtrl1;
-                                    ctrl2 = mBezierDraftCtrl2;
-                                    p1    = toScreen(ctrl1);
-                                    p2    = toScreen(ctrl2);
-                                } else {
-                                    EditorAction action{EditorActionType::SetKeyframeBezierControls};
-                                    action.id          = camera->id;
-                                    action.tick        = originalTick;
-                                    action.bezierCtrl1 = mBezierDraftCtrl1;
-                                    action.bezierCtrl2 = mBezierDraftCtrl2;
-                                    mBezierDragHandle  = 0;
-                                    submit(std::move(action));
-                                }
-                            }
-                            if (hoveredH != 0 || mBezierDragHandle != 0) {
-                                ImGui::SetMouseCursor(
-                                    mBezierDragHandle != 0 ? theme::kCursorGrabbing : theme::kCursorGrab
-                                );
-                            }
-
-                            auto* dl = ImGui::GetWindowDrawList();
-                            dl->AddRectFilled(boxMin, boxMax, theme::kInputBg, 4.0f * uiScale);
-                            dl->AddRect(boxMin, boxMax, theme::kBorder, 4.0f * uiScale);
-                            dl->AddLine(p0, p3, theme::kFineDivider, 1.0f);
-                            dl->AddLine(p0, p1, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
-                            dl->AddLine(p3, p2, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
-                            dl->AddBezierCubic(p0, p1, p2, p3, theme::kAccent, 2.0f * uiScale, 32);
-                            dl->AddCircleFilled(p0, 2.5f * uiScale, theme::kTextDim);
-                            dl->AddCircleFilled(p3, 2.5f * uiScale, theme::kTextDim);
-
-                            float const handleR = 4.5f * uiScale;
-                            ImU32 const c1Color =
-                                (mBezierDragHandle == 1 || hoveredH == 1) ? theme::kSelected : theme::kKeyframe;
-                            ImU32 const c2Color =
-                                (mBezierDragHandle == 2 || hoveredH == 2) ? theme::kSelected : theme::kKeyframe;
-                            dl->AddCircleFilled(p1, handleR, c1Color);
-                            dl->AddCircle(p1, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
-                            dl->AddCircleFilled(p2, handleR, c2Color);
-                            dl->AddCircle(p2, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
-                        }
-
-                        static constexpr std::array xyLabels{"X", "Y"};
-                        float                       c1[2] = {ctrl1.x, ctrl1.y};
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl1"_tr().c_str());
-                        ImGui::TableNextColumn();
-                        if (vectorInput2("bezier-c1", c1, xyLabels, "%.2f") && std::isfinite(c1[0])
-                            && std::isfinite(c1[1])) {
-                            EditorAction action{EditorActionType::SetKeyframeBezierControls};
-                            action.id          = camera->id;
-                            action.tick        = originalTick;
-                            action.bezierCtrl1 = {std::clamp(c1[0], 0.0f, 1.0f), std::clamp(c1[1], 0.0f, 1.0f)};
-                            action.bezierCtrl2 = ctrl2;
-                            submit(std::move(action));
-                        }
-
-                        float c2[2] = {ctrl2.x, ctrl2.y};
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn();
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl2"_tr().c_str());
-                        ImGui::TableNextColumn();
-                        if (vectorInput2("bezier-c2", c2, xyLabels, "%.2f") && std::isfinite(c2[0])
-                            && std::isfinite(c2[1])) {
-                            EditorAction action{EditorActionType::SetKeyframeBezierControls};
-                            action.id          = camera->id;
-                            action.tick        = originalTick;
-                            action.bezierCtrl1 = ctrl1;
-                            action.bezierCtrl2 = {std::clamp(c2[0], 0.0f, 1.0f), std::clamp(c2[1], 0.0f, 1.0f)};
-                            submit(std::move(action));
-                        }
-                    }
+                    drawKeyframeInterpolationRows(ctx, *camera, originalTick, key->second);
                 }
                 ImGui::EndTable();
             }
             ImGui::PopStyleVar();
-            if (person) {
-                // The subject holds from this key until the next key on the same track (or end of replay).
+
+            if (isFree) {
                 property::separator();
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextDisabled("%s", "playback.refactorEditor.details.personApplyHint"_tr().c_str());
-                ImGui::PopTextWrapPos();
+                bool lookAtEnabled = key->second.lookAtEnabled;
+                if (ImGui::Checkbox(
+                        ("playback.refactorEditor.details.lookAtEntity"_tr() + "##keyframe-lookat-enabled").c_str(),
+                        &lookAtEnabled
+                    )) {
+                    EditorAction action{EditorActionType::SetKeyframeLookAt};
+                    action.id          = camera->id;
+                    action.tick        = originalTick;
+                    action.value       = lookAtEnabled;
+                    action.secondaryId = key->second.lookAtTarget;
+                    action.speed       = key->second.lookAtOffsetY;
+                    submit(std::move(action));
+                }
+                if (key->second.lookAtEnabled) {
+                    ImGui::PushTextWrapPos(0.0f);
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.lookAtRotationHint"_tr().c_str());
+                    ImGui::PopTextWrapPos();
+
+                    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+                    if (ImGui::BeginTable(
+                            "##keyframe-lookat-properties",
+                            2,
+                            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+                        )) {
+                        ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+                        ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+                        float offsetY = key->second.lookAtOffsetY;
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.lookAtOffsetY"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::SetNextItemWidth(-1.0f);
+                        bool const offsetChanged =
+                            ImGui::InputFloat("##keyframe-lookat-offsety", &offsetY, 0.1f, 0.5f, "%.2f");
+                        if ((ImGui::IsItemDeactivatedAfterEdit() || (offsetChanged && !ImGui::IsItemActive()))
+                            && std::isfinite(offsetY) && std::abs(offsetY - key->second.lookAtOffsetY) > 1e-5f) {
+                            EditorAction action{EditorActionType::SetKeyframeLookAt};
+                            action.id          = camera->id;
+                            action.tick        = originalTick;
+                            action.value       = true;
+                            action.secondaryId = key->second.lookAtTarget;
+                            action.speed       = offsetY;
+                            submit(std::move(action));
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::PopStyleVar();
+
+                    std::string const currentTarget =
+                        playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, key->second.lookAtTarget);
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.lookAtTarget"_tr().c_str());
+                    ImGui::SameLine();
+                    ImGui::PushTextWrapPos(0.0f);
+                    ImGui::TextUnformatted(currentTarget.c_str());
+                    ImGui::PopTextWrapPos();
+                    PlayerPickerResult picked;
+                    if (drawPlayerList(
+                            "##keyframe-lookat-list",
+                            PlayerPickerMode::SegmentSubject,
+                            ctx.state.replayPlayers,
+                            ctx.state.replayEntities,
+                            key->second.lookAtTarget,
+                            false,
+                            picked
+                        )
+                        && picked.uuid != key->second.lookAtTarget) {
+                        EditorAction action{EditorActionType::SetKeyframeLookAt};
+                        action.id          = camera->id;
+                        action.tick        = originalTick;
+                        action.value       = true;
+                        action.secondaryId = std::move(picked.uuid);
+                        action.speed       = key->second.lookAtOffsetY;
+                        submit(std::move(action));
+                    }
+                }
+            }
+
+            if (isPerson) {
+                property::separator();
+                if (isThirdPerson) {
+                    bool customThird = key->second.thirdPersonCustom;
+                    if (ImGui::Checkbox(
+                            ("playback.refactorEditor.details.thirdPersonCustom"_tr() + "##keyframe-3p-custom").c_str(),
+                            &customThird
+                        )) {
+                        EditorAction action{EditorActionType::SetKeyframeThirdPersonSettings};
+                        action.id                          = camera->id;
+                        action.tick                        = originalTick;
+                        action.keyframe                    = key->second;
+                        action.keyframe->thirdPersonCustom = customThird;
+                        submit(std::move(action));
+                    }
+                }
+                if (!isCustomThird) {
+                    // The subject holds from this key until the next key on the same track (or end of replay).
+                    ImGui::PushTextWrapPos(0.0f);
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.personApplyHint"_tr().c_str());
+                    ImGui::PopTextWrapPos();
+                }
                 std::string const current =
                     playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, key->second.subject);
                 ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeSubject"_tr().c_str());
@@ -1510,9 +1728,122 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     action.secondaryId = std::move(picked.uuid);
                     submit(std::move(action));
                 }
+
+                if (isCustomThird) {
+                    property::separator();
+                    auto const submitThirdPerson = [&](state::editing::model::CameraKeyframe updated,
+                                                       bool                                  convertFollow = false) {
+                        EditorAction action{EditorActionType::SetKeyframeThirdPersonSettings};
+                        action.id       = camera->id;
+                        action.tick     = originalTick;
+                        action.value    = convertFollow;
+                        action.keyframe = std::move(updated);
+                        submit(std::move(action));
+                    };
+
+                    bool followRotation = key->second.thirdPersonFollowRotation;
+                    if (ImGui::Checkbox(
+                            ("playback.refactorEditor.details.thirdPersonFollowRotation"_tr()
+                             + "##keyframe-3p-follow-rot")
+                                .c_str(),
+                            &followRotation
+                        )) {
+                        auto updated                      = key->second;
+                        updated.thirdPersonFollowRotation = followRotation;
+                        submitThirdPerson(std::move(updated), true);
+                    }
+                    bool collideBlocks = key->second.thirdPersonCollideBlocks;
+                    if (ImGui::Checkbox(
+                            ("playback.refactorEditor.details.thirdPersonCollideBlocks"_tr() + "##keyframe-3p-collide")
+                                .c_str(),
+                            &collideBlocks
+                        )) {
+                        auto updated                     = key->second;
+                        updated.thirdPersonCollideBlocks = collideBlocks;
+                        submitThirdPerson(std::move(updated));
+                    }
+
+                    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+                    if (ImGui::BeginTable(
+                            "##keyframe-3p-properties",
+                            2,
+                            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+                        )) {
+                        ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+                        ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+                        float distance = key->second.thirdPersonDistance;
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.thirdPersonDistance"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::SetNextItemWidth(-1.0f);
+                        ImGui::InputFloat("##keyframe-3p-distance", &distance, 0.0f, 0.0f, "%.2f");
+                        if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(distance)) {
+                            auto updated                = key->second;
+                            updated.thirdPersonDistance = std::max(0.0f, distance);
+                            submitThirdPerson(std::move(updated));
+                        }
+
+                        float offset[3] = {
+                            key->second.thirdPersonOffset.x,
+                            key->second.thirdPersonOffset.y,
+                            key->second.thirdPersonOffset.z,
+                        };
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.thirdPersonOffset"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        if (vectorInput("3p-offset", offset, axisLabels, &axisColors, "%.3f")
+                            && std::ranges::all_of(offset, [](float value) { return std::isfinite(value); })) {
+                            auto updated              = key->second;
+                            updated.thirdPersonOffset = {offset[0], offset[1], offset[2]};
+                            submitThirdPerson(std::move(updated));
+                        }
+
+                        float rotation[3] = {
+                            key->second.thirdPersonYaw,
+                            key->second.thirdPersonPitch,
+                            key->second.thirdPersonRoll,
+                        };
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.rotation"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        if (vectorInput("3p-rotation", rotation, rotationLabels, nullptr, "%.2f")
+                            && std::ranges::all_of(rotation, [](float value) { return std::isfinite(value); })) {
+                            auto updated             = key->second;
+                            updated.thirdPersonYaw   = rotation[0];
+                            updated.thirdPersonPitch = rotation[1];
+                            updated.thirdPersonRoll  = rotation[2];
+                            submitThirdPerson(std::move(updated));
+                        }
+
+                        float fov = key->second.thirdPersonFov;
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", "playback.refactorEditor.details.fov"_tr().c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::SetNextItemWidth(-1.0f);
+                        ImGui::InputFloat("##keyframe-3p-fov", &fov, 0.0f, 0.0f, "%.2f°");
+                        if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(fov)) {
+                            auto updated           = key->second;
+                            updated.thirdPersonFov = std::clamp(fov, 1.0f, 179.0f);
+                            submitThirdPerson(std::move(updated));
+                        }
+
+                        drawKeyframeInterpolationRows(ctx, *camera, originalTick, key->second);
+                        ImGui::EndTable();
+                    }
+                    ImGui::PopStyleVar();
+                }
             }
-            property::separator();
-            {
+            if (isFree || isCustomThird) {
+                property::separator();
                 bool ignoreClipSpeed = key->second.ignoreClipSpeed;
                 if (ImGui::Checkbox("playback.refactorEditor.details.ignoreClipSpeed"_tr().c_str(), &ignoreClipSpeed)) {
                     EditorAction action{EditorActionType::SetKeyframeIgnoreClipSpeed};

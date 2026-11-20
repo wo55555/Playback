@@ -32,6 +32,12 @@ private:
     bool drawKeyframe(PanelContext const& ctx);
     bool drawMarker(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
+    void drawKeyframeInterpolationRows(
+        PanelContext const&                          ctx,
+        state::editing::model::CameraEntity const&   camera,
+        int                                          originalTick,
+        state::editing::model::CameraKeyframe const& keyframe
+    );
 
     InspectorPage        mPage{InspectorPage::Selection};
     std::optional<float> mPistonDurationDraft;

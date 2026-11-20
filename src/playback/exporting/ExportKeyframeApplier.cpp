@@ -44,6 +44,11 @@ void ExportKeyframeApplier::configure(
             auto state = keyframe::sampleRecordedPlayerView(time);
             if (state && thirdPerson) state = session.thirdPersonView(*state);
             return state;
+        },
+        [&session](visuals::ReplaySampleTime const& time, std::string const& subject)
+            -> std::optional<keyframe::CameraRenderState> { return session.sampleEntityAnchor(time, subject); },
+        [&session](state::editing::model::Vec3 const& anchor, state::editing::model::Vec3 const& target) {
+            return session.clipCameraRay(anchor, target);
         }
     );
     keyframe::publishCameraTimeline(keyframe::CameraTimelineSource::Export, mTimeline);

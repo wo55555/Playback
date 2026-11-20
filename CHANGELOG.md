@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Video export can render the active scene (enabled clips, in/out range, or a single clip) or batch-export multiple selected scenes sequentially, with an option to merge multiple enabled clips into one video or export them as separate videos, cutting cleanly across gaps and disabled clips.
 - Video export includes a Timelapse mode that samples the replay at fixed real-time intervals (50 ms to 3,600,000 ms, with presets and custom input) while disabling audio export.
 - Camera tracks can be reordered to change their priority. Drag a track in the timeline's track list, or use Move to top, Raise priority, Lower priority and Move to bottom in its right-click menu. Where tracks overlap, the track higher in the list plays, in preview and in export. Reordering can be undone and is saved with the project.
+- Third-person keyframes can now enable Custom orbit / interpolate (`3P+`) to smoothly interpolate distance, anchor offset, yaw, pitch, roll and FOV around a subject using any interpolation curve (and Ignore clip speed), with options to follow the subject's rotation, clip against blocks, and capture or jump to the current free-camera view; existing fixed third-person keyframes stay unchanged.
+- Interpolated free-camera keyframes can enable Look at entity (`Aim`) to keep yaw and pitch aimed at a chosen player, mob or non-mob entity (with vertical offset, smooth blending across target or free transitions, and viewport right-click assignment), and the entity picker now also lists non-mob entities such as boats, minecarts and projectiles in a collapsible section.
 
 ### Changed
 
