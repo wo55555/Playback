@@ -27,13 +27,27 @@ constexpr ImU32 kSpeedSlow = IM_COL32(0x38, 0xbd, 0xf8, 0xff);
 constexpr ImU32 kError     = IM_COL32(0xf0, 0x60, 0x5c, 0xff);
 
 // Generic controls.
-constexpr ImU32 kInputBg       = IM_COL32(0x12, 0x12, 0x12, 0xff);
-constexpr ImU32 kInputBgHover  = IM_COL32(0x1e, 0x1e, 0x1e, 0xff);
-constexpr ImU32 kInputBgActive = IM_COL32(0x24, 0x24, 0x24, 0xff);
-constexpr ImU32 kButton        = IM_COL32(0x2a, 0x2a, 0x2a, 0xff);
-constexpr ImU32 kButtonHover   = IM_COL32(0x38, 0x38, 0x38, 0xff);
-constexpr ImU32 kButtonActive  = IM_COL32(0x44, 0x44, 0x44, 0xff);
-constexpr ImU32 kScrollThumb   = IM_COL32(0x50, 0x50, 0x50, 0xff);
+constexpr ImU32 kInputBg             = IM_COL32(0x12, 0x12, 0x12, 0xff);
+constexpr ImU32 kInputBgHover        = IM_COL32(0x1e, 0x1e, 0x1e, 0xff);
+constexpr ImU32 kInputBgActive       = IM_COL32(0x24, 0x24, 0x24, 0xff);
+constexpr ImU32 kButton              = IM_COL32(0x2c, 0x2e, 0x33, 0xff);
+constexpr ImU32 kButtonHover         = IM_COL32(0x38, 0x3b, 0x42, 0xff);
+constexpr ImU32 kButtonActive        = IM_COL32(0x44, 0x48, 0x52, 0xff);
+constexpr ImU32 kButtonBorder        = IM_COL32(0x46, 0x4a, 0x54, 0xd0);
+constexpr ImU32 kButtonPrimary       = kAccent;
+constexpr ImU32 kButtonPrimaryHover  = IM_COL32(0x52, 0x9c, 0xf6, 0xff);
+constexpr ImU32 kButtonPrimaryActive = IM_COL32(0x2e, 0x76, 0xd4, 0xff);
+constexpr ImU32 kButtonPrimaryBorder = IM_COL32(0x6c, 0xb2, 0xff, 0x90);
+constexpr ImU32 kButtonDanger        = IM_COL32(0x3a, 0x20, 0x22, 0xff);
+constexpr ImU32 kButtonDangerHover   = IM_COL32(0x5a, 0x26, 0x29, 0xff);
+constexpr ImU32 kButtonDangerActive  = IM_COL32(0x74, 0x2c, 0x30, 0xff);
+constexpr ImU32 kButtonDangerBorder  = IM_COL32(0xc8, 0x48, 0x48, 0xb8);
+constexpr ImU32 kButtonDangerText    = IM_COL32(0xf2, 0x86, 0x82, 0xff);
+constexpr ImU32 kButtonSubtle        = IM_COL32(0x21, 0x22, 0x25, 0xff);
+constexpr ImU32 kButtonSubtleHover   = IM_COL32(0x2d, 0x2f, 0x35, 0xff);
+constexpr ImU32 kButtonSubtleActive  = IM_COL32(0x38, 0x3b, 0x42, 0xff);
+constexpr ImU32 kButtonSubtleBorder  = IM_COL32(0x38, 0x3a, 0x40, 0xb0);
+constexpr ImU32 kScrollThumb         = IM_COL32(0x50, 0x50, 0x50, 0xff);
 // Timeline zoom bar: a thin grey bar with ring handles, brightening on hover and drag.
 constexpr ImU32 kRangeTrack       = IM_COL32(0x30, 0x30, 0x30, 0xff);
 constexpr ImU32 kRangeThumb       = IM_COL32(0x5a, 0x5a, 0x5a, 0xff);
@@ -120,10 +134,13 @@ constexpr ImU32 kCameraPath         = IM_COL32(0xff, 0xff, 0x20, 0xeb);
 constexpr ImU32 kCameraPathSelected = IM_COL32(0xff, 0x30, 0x30, 0xff);
 constexpr ImU32 kCameraPathPlayhead = IM_COL32(0x20, 0xff, 0x20, 0xff);
 
-constexpr float kPanelPadding     = 6.0f;
-constexpr float kItemSpacing      = 3.0f;
-constexpr float kFrameRounding    = 2.0f;
-constexpr float kFineDividerWidth = 0.75f;
+constexpr float kPanelPadding      = 6.0f;
+constexpr float kInspectorPaddingX = 12.0f;
+constexpr float kInspectorPaddingY = 10.0f;
+constexpr float kItemSpacing       = 3.0f;
+constexpr float kFrameRounding     = 3.0f;
+constexpr float kButtonRounding    = 4.0f;
+constexpr float kFineDividerWidth  = 0.75f;
 
 void apply();
 
