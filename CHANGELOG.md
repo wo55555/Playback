@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refined the replay editor's right inspector and status bar with consistent inner padding, bordered inputs and checkboxes, styled primary/secondary/destructive action buttons with icons, responsive paired actions and two-column toggle grids, proportional clip speed chips, and aligned multi-axis keyframe inputs.
 - Replaced the first-person and third-person camera track types with a lens mode on each keyframe: interpolated, first person or third person. A keyframe applies until the next keyframe on its track, and a person keyframe keeps its subject across dimension changes until the replay ends. The timeline marks each mode with its own keyframe shape and a `1P` or `3P` bar, the inspector and the keyframe menu change the mode of one or several keyframes, and the "+" button adds a camera track directly. When person keyframes are selected, the inspector can change the subject for all of them at once, and players or nearby mobs can be chosen from the searchable subject picker in the viewport and inspector as well as by right-clicking them in the viewport.
 
 ### Fixed
