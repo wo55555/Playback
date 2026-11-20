@@ -11,16 +11,16 @@ void apply() {
     float const scale = metrics::scale();
 
     style.WindowPadding     = {kPanelPadding * scale, kPanelPadding * scale};
-    style.FramePadding      = {(kItemSpacing + 1.0f) * scale, kItemSpacing * scale};
+    style.FramePadding      = {(kItemSpacing + 1.5f) * scale, kItemSpacing * scale};
     style.ItemSpacing       = {kItemSpacing * scale, kItemSpacing * scale};
-    style.ItemInnerSpacing  = {kItemSpacing * scale, kItemSpacing * scale};
-    style.FrameRounding     = kFrameRounding;
+    style.ItemInnerSpacing  = {(kItemSpacing + 1.0f) * scale, kItemSpacing * scale};
+    style.FrameRounding     = kFrameRounding * scale;
     style.WindowRounding    = 0.0f;
     style.ChildRounding     = 0.0f;
-    style.GrabRounding      = kFrameRounding;
-    style.PopupRounding     = kFrameRounding;
+    style.GrabRounding      = kFrameRounding * scale;
+    style.PopupRounding     = kButtonRounding * scale;
     style.ScrollbarSize     = 10.0f * scale;
-    style.ScrollbarRounding = 2.0f;
+    style.ScrollbarRounding = 4.0f * scale;
     style.WindowBorderSize  = 1.0f;
     style.PopupBorderSize   = 1.0f;
     style.FrameBorderSize   = 0.0f;
@@ -36,7 +36,7 @@ void apply() {
     colors[ImGuiCol_TextDisabled]         = ImColor(static_cast<int>(kTextDim));
     colors[ImGuiCol_Button]               = ImColor(static_cast<int>(kButton));
     colors[ImGuiCol_ButtonHovered]        = ImColor(static_cast<int>(kButtonHover));
-    colors[ImGuiCol_ButtonActive]         = ImColor(static_cast<int>(kAccent));
+    colors[ImGuiCol_ButtonActive]         = ImColor(static_cast<int>(kButtonActive));
     colors[ImGuiCol_Header]               = ImColor(static_cast<int>(kHover));
     colors[ImGuiCol_HeaderHovered]        = ImColor(static_cast<int>(kHover));
     colors[ImGuiCol_HeaderActive]         = ImColor(static_cast<int>(kAccent));
