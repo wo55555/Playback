@@ -105,17 +105,29 @@ Color4 colorFrom(json const& node, char const* key, Color4 fallback) {
 
 json toJson(CameraKeyframe const& key) {
     return {
-        {"position",          toJson(key.position)                   },
-        {"yaw",               key.yaw                                },
-        {"pitch",             key.pitch                              },
-        {"roll",              key.roll                               },
-        {"fov",               key.fov                                },
-        {"mode",              static_cast<int>(key.mode)             },
-        {"interpolationType", static_cast<int>(key.interpolationType)},
-        {"bezierCtrl1",       toJson(key.bezierCtrl1)                },
-        {"bezierCtrl2",       toJson(key.bezierCtrl2)                },
-        {"subject",           key.subject                            },
-        {"ignoreClipSpeed",   key.ignoreClipSpeed                    }
+        {"position",                  toJson(key.position)                   },
+        {"yaw",                       key.yaw                                },
+        {"pitch",                     key.pitch                              },
+        {"roll",                      key.roll                               },
+        {"fov",                       key.fov                                },
+        {"mode",                      static_cast<int>(key.mode)             },
+        {"interpolationType",         static_cast<int>(key.interpolationType)},
+        {"bezierCtrl1",               toJson(key.bezierCtrl1)                },
+        {"bezierCtrl2",               toJson(key.bezierCtrl2)                },
+        {"subject",                   key.subject                            },
+        {"ignoreClipSpeed",           key.ignoreClipSpeed                    },
+        {"thirdPersonCustom",         key.thirdPersonCustom                  },
+        {"thirdPersonDistance",       key.thirdPersonDistance                },
+        {"thirdPersonYaw",            key.thirdPersonYaw                     },
+        {"thirdPersonPitch",          key.thirdPersonPitch                   },
+        {"thirdPersonRoll",           key.thirdPersonRoll                    },
+        {"thirdPersonFov",            key.thirdPersonFov                     },
+        {"thirdPersonOffset",         toJson(key.thirdPersonOffset)          },
+        {"thirdPersonFollowRotation", key.thirdPersonFollowRotation          },
+        {"thirdPersonCollideBlocks",  key.thirdPersonCollideBlocks           },
+        {"lookAtEnabled",             key.lookAtEnabled                      },
+        {"lookAtTarget",              key.lookAtTarget                       },
+        {"lookAtOffsetY",             key.lookAtOffsetY                      },
     };
 }
 
@@ -133,10 +145,22 @@ CameraKeyframe keyframeFrom(json const& node) {
         key.interpolationType,
         static_cast<int>(CameraInterpolationType::CubicBezier)
     );
-    key.bezierCtrl1     = vec2From(node, "bezierCtrl1", key.bezierCtrl1);
-    key.bezierCtrl2     = vec2From(node, "bezierCtrl2", key.bezierCtrl2);
-    key.subject         = stringOr(node, "subject");
-    key.ignoreClipSpeed = boolOr(node, "ignoreClipSpeed", false);
+    key.bezierCtrl1               = vec2From(node, "bezierCtrl1", key.bezierCtrl1);
+    key.bezierCtrl2               = vec2From(node, "bezierCtrl2", key.bezierCtrl2);
+    key.subject                   = stringOr(node, "subject");
+    key.ignoreClipSpeed           = boolOr(node, "ignoreClipSpeed", false);
+    key.thirdPersonCustom         = boolOr(node, "thirdPersonCustom", false);
+    key.thirdPersonDistance       = std::max(0.0f, finiteOr(node, "thirdPersonDistance", key.thirdPersonDistance));
+    key.thirdPersonYaw            = finiteOr(node, "thirdPersonYaw", key.thirdPersonYaw);
+    key.thirdPersonPitch          = finiteOr(node, "thirdPersonPitch", key.thirdPersonPitch);
+    key.thirdPersonRoll           = finiteOr(node, "thirdPersonRoll", key.thirdPersonRoll);
+    key.thirdPersonFov            = std::clamp(finiteOr(node, "thirdPersonFov", key.thirdPersonFov), 1.0f, 179.0f);
+    key.thirdPersonOffset         = vec3From(node, "thirdPersonOffset", key.thirdPersonOffset);
+    key.thirdPersonFollowRotation = boolOr(node, "thirdPersonFollowRotation", false);
+    key.thirdPersonCollideBlocks  = boolOr(node, "thirdPersonCollideBlocks", true);
+    key.lookAtEnabled             = boolOr(node, "lookAtEnabled", false);
+    key.lookAtTarget              = stringOr(node, "lookAtTarget");
+    key.lookAtOffsetY             = finiteOr(node, "lookAtOffsetY", 0.0f);
     return key;
 }
 

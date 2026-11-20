@@ -26,10 +26,12 @@ constexpr int kEntityDisplayLimit = 100;
 constexpr int kEntityMeasureLimit = 30;
 
 struct PickerUi {
-    char search[128]{};
-    int  highlight{-1};
-    bool entitiesOpen{true};
-    bool absentOpen{false};
+    char        search[128]{};
+    int         highlight{-1};
+    bool        entitiesOpen{true};
+    bool        otherEntitiesOpen{false};
+    bool        absentOpen{false};
+    std::string lastCurrent;
 };
 
 std::unordered_map<ImGuiID, PickerUi>& pickerUi() {
@@ -107,6 +109,7 @@ struct Row {
     std::string hint;
     bool        selectable{false};
     bool        entitiesHeader{false};
+    bool        otherEntitiesHeader{false};
     bool        absentHeader{false};
 };
 
@@ -115,6 +118,7 @@ struct Row {
     std::span<state::ReplayEntityView const> entities,
     std::string_view                         query,
     bool                                     entitiesOpen,
+    bool                                     otherEntitiesOpen,
     bool                                     absentOpen,
     size_t                                   entityLimit = kEntityDisplayLimit
 ) {
@@ -200,26 +204,31 @@ struct Row {
 
     std::unordered_map<std::string_view, int> entityLabelCounts;
     entityLabelCounts.reserve(entities.size());
-    std::vector<state::ReplayEntityView const*> matchingEntities;
-    matchingEntities.reserve(entities.size());
+    std::vector<state::ReplayEntityView const*> matchingMobs;
+    std::vector<state::ReplayEntityView const*> matchingOtherEntities;
+    matchingMobs.reserve(entities.size());
     for (auto const& entity : entities) {
         ++entityLabelCounts[entity.label];
-        if (matches(entity.label, entity.choice) || containsFolded(entityIdTag(entity.choice), query)) {
-            matchingEntities.push_back(&entity);
-        }
+        if (!matches(entity.label, entity.choice) && !containsFolded(entityIdTag(entity.choice), query)) continue;
+        if (entity.mob) matchingMobs.push_back(&entity);
+        else matchingOtherEntities.push_back(&entity);
     }
-    int const entityMatches = static_cast<int>(matchingEntities.size());
-    if (entityMatches > 0) {
+
+    auto const appendEntityGroup = [&](std::vector<state::ReplayEntityView const*> const& group,
+                                       std::string const&                                 headerLabel,
+                                       bool                                               isMobsHeader,
+                                       bool                                               open) {
+        if (group.empty()) return;
         Row header;
-        header.kind           = Row::Kind::Header;
-        header.entitiesHeader = true;
-        header.label =
-            "playback.refactorEditor.playerPicker.nearbyEntities"_tr() + "  " + std::to_string(entityMatches);
+        header.kind                = Row::Kind::Header;
+        header.entitiesHeader      = isMobsHeader;
+        header.otherEntitiesHeader = !isMobsHeader;
+        header.label               = headerLabel + "  " + std::to_string(group.size());
         rows.push_back(std::move(header));
-        if (entitiesOpen || !query.empty()) {
-            size_t const shown = std::min(matchingEntities.size(), entityLimit);
+        if (open || !query.empty()) {
+            size_t const shown = std::min(group.size(), entityLimit);
             for (size_t index = 0; index < shown; ++index) {
-                auto const* entity = matchingEntities[index];
+                auto const* entity = group[index];
                 Row         row;
                 row.kind         = Row::Kind::Entity;
                 row.uuid         = entity->choice;
@@ -233,14 +242,22 @@ struct Row {
                 row.hint = std::move(hint);
                 rows.push_back(std::move(row));
             }
-            if (matchingEntities.size() > shown) {
+            if (group.size() > shown) {
                 Row note;
                 note.kind  = Row::Kind::Note;
-                note.label = "playback.refactorEditor.playerPicker.moreEntities"_tr(matchingEntities.size() - shown);
+                note.label = "playback.refactorEditor.playerPicker.moreEntities"_tr(group.size() - shown);
                 rows.push_back(std::move(note));
             }
         }
-    }
+    };
+
+    appendEntityGroup(matchingMobs, "playback.refactorEditor.playerPicker.nearbyMobs"_tr(), true, entitiesOpen);
+    appendEntityGroup(
+        matchingOtherEntities,
+        "playback.refactorEditor.playerPicker.otherEntities"_tr(),
+        false,
+        otherEntitiesOpen
+    );
 
     int const absentMatches = static_cast<int>(std::ranges::count_if(absent, [&](auto const* player) {
         return matches(rawName(*player), player->uuid);
@@ -335,7 +352,7 @@ constexpr int kEmbeddedRows = 10;
     float const iconBox = metrics::iconButton();
     float       widest =
         ImGui::CalcTextSize("playback.refactorEditor.playerPicker.searchHint"_tr().c_str()).x + iconBox * 2.0f;
-    auto const rows = buildRows(players, entities, {}, true, true, kEntityMeasureLimit);
+    auto const rows = buildRows(players, entities, {}, true, true, true, kEntityMeasureLimit);
     for (auto const& row : rows) {
         float width = ImGui::CalcTextSize(row.label.c_str()).x + 16.0f * scale + iconBox;
         if (!row.hint.empty()) width += 8.0f * scale + ImGui::CalcTextSize(row.hint.c_str()).x;
@@ -434,10 +451,21 @@ void drawListBody(
     }
     ImGui::SetCursorScreenPos({origin.x, origin.y + rowHeight + 4.0f * scale});
 
-    std::string_view const query        = trim(ui.search);
-    bool const             showEntities = ui.entitiesOpen || !query.empty();
-    bool const             showAbsent   = ui.absentOpen || !query.empty();
-    auto                   rows         = buildRows(players, entities, query, showEntities, showAbsent);
+    if ((appearing || current != ui.lastCurrent) && !options.mixed && !current.empty()) {
+        for (auto const& entity : entities) {
+            if (!entity.mob && entity.choice == current) {
+                ui.otherEntitiesOpen = true;
+                break;
+            }
+        }
+    }
+    ui.lastCurrent = std::string(current);
+
+    std::string_view const query             = trim(ui.search);
+    bool const             showEntities      = ui.entitiesOpen || !query.empty();
+    bool const             showOtherEntities = ui.otherEntitiesOpen || !query.empty();
+    bool const             showAbsent        = ui.absentOpen || !query.empty();
+    auto                   rows              = buildRows(players, entities, query, showEntities, showOtherEntities, showAbsent);
     std::string            recorderUuid;
     for (auto const& player : players) {
         if (!player.recorder) continue;
@@ -542,12 +570,14 @@ void drawListBody(
         Row const& row = rows[static_cast<size_t>(index)];
         if (row.kind == Row::Kind::Header) {
             ImGui::PushID(index);
-            bool const  collapsible = row.entitiesHeader || row.absentHeader;
-            bool const  open        = row.entitiesHeader ? showEntities : showAbsent;
-            std::string header      = row.label;
+            bool const  collapsible = row.entitiesHeader || row.otherEntitiesHeader || row.absentHeader;
+            bool const  open =
+                row.entitiesHeader ? showEntities : (row.otherEntitiesHeader ? showOtherEntities : showAbsent);
+            std::string header = row.label;
             if (collapsible) header = std::string(open ? "-  " : "+  ") + header;
             if (ImGui::Selectable(header.c_str(), false, collapsible ? 0 : ImGuiSelectableFlags_Disabled)) {
                 if (row.entitiesHeader && query.empty()) ui.entitiesOpen = !ui.entitiesOpen;
+                if (row.otherEntitiesHeader && query.empty()) ui.otherEntitiesOpen = !ui.otherEntitiesOpen;
                 if (row.absentHeader && query.empty()) ui.absentOpen = !ui.absentOpen;
             }
             ImGui::PopID();
