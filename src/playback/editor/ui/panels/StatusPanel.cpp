@@ -96,7 +96,7 @@ void StatusPanel::draw(PanelContext const& ctx) {
     drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, theme::kBgHeader);
     drawList->AddLine(origin, {origin.x + width, origin.y}, theme::kBorder);
 
-    float const pad         = theme::kPanelPadding;
+    float const pad         = 10.0f * metrics::scale();
     float const textY       = origin.y + (height - ImGui::GetFontSize()) * 0.5f;
     float const statusWidth = ImGui::CalcTextSize(statusText.c_str()).x;
     // A narrow window clips the file text at the status text instead of dropping it.
