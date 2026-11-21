@@ -21,11 +21,24 @@ constexpr auto PacketLifecycleTable = std::to_array<PacketLifecycleEntry>({
     {MinecraftPacketIds::NetworkChunkPublisherUpdate,             {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::ChunkRadiusUpdated,                      {PacketLifecycle::Ignore}                        },
     // The recording player's own movement authority: in a replay the local player is the free camera, which an input
-    // lock (/inputpermission, cutscene add-ons) would freeze and a server correction would snap back.
+    // lock (/inputpermission, cutscene add-ons), camera command, or game-mode override would freeze or break.
     {MinecraftPacketIds::PlayerClientInputPermissions,            {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::CorrectPlayerMovePredictionPacket,       {PacketLifecycle::Ignore}                        },
-    // Screens the server opens for the recording player to answer. A replay can neither answer nor close them, and an
-    // open one keeps the input from the free camera. Forms are previewed instead, with the close the recorder adds.
+    {MinecraftPacketIds::ServerPlayerPostMovePosition,            {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::CameraInstruction,                       {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::CameraAimAssist,                         {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::ClientCameraAimAssist,                   {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::ClientboundControlSchemeSetPacket,       {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::SetPlayerGameType,                       {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::SetDefaultGameType,                      {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::PlayerVideoCapturePacket,                {PacketLifecycle::Ignore}                        },
+    // Session transitions and screens the server opens for the recording player to answer. A replay can neither answer
+    // nor close them, and an open one keeps the input from the free camera. Forms are previewed instead, with the close
+    // the recorder adds.
+    {MinecraftPacketIds::Disconnect,                              {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::Transfer,                                {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::ShowCredits,                             {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::CodeBuilderPacket,                       {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::ServerSettingsResponse,                  {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::ClientboundDataDrivenUIShowScreen,       {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::ClientboundDataDrivenUICloseScreen,      {PacketLifecycle::Ignore}                        },
