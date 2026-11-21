@@ -294,6 +294,7 @@ private:
     std::unordered_set<ChunkPos>                                mDirtySnapshotColumns;
     std::unordered_set<ChunkPos>                                mReusableSnapshotColumns;
     std::unordered_set<ChunkPos>                                mDirectSnapshotColumns;
+    std::unordered_set<ChunkPos>                                mDirectSubChunkColumns;
     std::unordered_set<int>                                     mDirectLevelChunkIndices;
     std::vector<int>                                            mPendingSubChunkIndices;
     std::vector<PendingSubChunkPacket>                          mPendingSubChunkPackets;
@@ -451,6 +452,8 @@ private:
     void closeScreenPreview(char const* reason);
 
     void updateScreenPreview();
+
+    void compactPendingChunkInjectionQueue();
 
     // Last record whose half-open interval [openTick, closeTick) contains tick. Unread closes stay open.
     [[nodiscard]] RecordedScreen const* recordedScreenOpenAt(int tick) const;

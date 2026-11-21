@@ -997,6 +997,7 @@ void ReplaySession::clearReplayData() {
     mDirtySnapshotColumns.clear();
     mReusableSnapshotColumns.clear();
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
     mPendingSubChunkPackets.clear();
@@ -3091,6 +3092,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mDirtySnapshotColumns.clear();
     mReusableSnapshotColumns.clear();
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
     mPendingLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
@@ -3626,22 +3628,25 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         snapshotContext.yaw,
         snapshotContext.pitch
     };
-    PlaybackView transitionView = snapshotView;
-    if (!followRecordedPlayer) {
+    auto const   targetDimension  = DimensionType{snapshotContext.dimensionId};
+    bool const   changesDimension = replayPlayer->getDimensionId() != targetDimension;
+    bool const   useSnapshotView  = followRecordedPlayer || changesDimension || mTeleportToSubjectPending;
+    PlaybackView transitionView   = snapshotView;
+    if (!useSnapshotView) {
         auto const& position = replayPlayer->getPosition();
         auto const& rotation = replayPlayer->getRotation();
         transitionView       = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
     }
     // Actor::teleport lands one eye height above the request. Snapshot and observer positions are already eye height.
     transitionView.y                   -= kServerEyeHeight;
-    bool const relocateWithinDimension  = followRecordedPlayer && !serverPlayerRelocated;
-    if (!ensureReplayDimension(DimensionType{snapshotContext.dimensionId}, transitionView, relocateWithinDimension)) {
+    bool const relocateWithinDimension  = useSnapshotView && !serverPlayerRelocated;
+    if (!ensureReplayDimension(targetDimension, transitionView, relocateWithinDimension)) {
         if (!mReplayFailed) {
             auto const generation = mDimensionTransitionRequest ? mDimensionTransitionRequest->generation : 0;
             mPendingSnapshotApply = PendingSnapshotApply{
                 mReaderIndex,
-                followRecordedPlayer,
-                serverPlayerRelocated || followRecordedPlayer,
+                followRecordedPlayer || changesDimension,
+                serverPlayerRelocated || useSnapshotView,
                 generation
             };
         }
@@ -3687,6 +3692,7 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
     mPendingSnapshotColumns.clear();
     mReusableSnapshotColumns.clear();
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
     mInjectedLevelChunks     = 0;
     mInjectedSubChunkPackets = 0;
@@ -3725,12 +3731,12 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
     );
 
     PlaybackView view;
-    if (followRecordedPlayer) {
-        view = snapshotView;
-        replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
-    } else if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive && mExportCameraViewpoint) {
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive && mExportCameraViewpoint) {
         auto const& position = *mExportCameraViewpoint;
         view                 = PlaybackView{position.x, position.y, position.z, position.yaw, position.pitch};
+        replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
+    } else if (useSnapshotView) {
+        view = snapshotView;
         replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
     } else {
         auto const& position = replayPlayer->getPosition();
@@ -3774,21 +3780,26 @@ bool ReplaySession::ensureReplayDimension(
     bool                relocateWithinDimension
 ) {
     if (!mReplayPlayer) return false;
+    if (mPendingReplayDimension) {
+        if (*mPendingReplayDimension == target) return false;
+        getLogger().info(
+            "Superseding pending replay dimension transition to {} with new target {}",
+            mPendingReplayDimension->mValue,
+            target.mValue
+        );
+        mDimensionTransitionGeneration.fetch_add(1, std::memory_order_acq_rel);
+        if (mDimensionTransitionRequest) {
+            mDimensionTransitionRequest->status.store(DimensionTransitionStatus::Cancelled, std::memory_order_release);
+            mDimensionTransitionRequest.reset();
+        }
+        mPendingReplayDimension.reset();
+        mDimensionTransitionSettledUpdates = 0;
+        mDimensionTransitionStartedAt      = {};
+    }
     bool const changesDimension = mReplayPlayer->getDimensionId() != target;
     if (!changesDimension && !relocateWithinDimension) {
         mReplayDimension.store(&mReplayPlayer->getDimension(), std::memory_order_release);
         return true;
-    }
-    if (mPendingReplayDimension) {
-        if (*mPendingReplayDimension != target) {
-            getLogger().error(
-                "Replay requested dimension {} while dimension {} is still pending",
-                target.mValue,
-                mPendingReplayDimension->mValue
-            );
-            mReplayFailed = true;
-        }
-        return false;
     }
     if (changesDimension && mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) {
         mExportCameraViewpoint.reset();
@@ -4053,6 +4064,7 @@ void ReplaySession::completeReplayDimensionTransition() {
     mDimensionTransitionStartedAt      = {};
     mCompletedDimensionGeneration      = completedGeneration;
     resetDimensionScopedReplayState();
+    mChunkIsolationDimension = mReplayPlayer->getDimensionId();
     // The observer keeps its old coordinates in the new dimension; bring it to the recorded player once that is known.
     if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) mTeleportToSubjectPending = true;
 }
@@ -4077,6 +4089,7 @@ void ReplaySession::resetDimensionScopedReplayState() {
     mDirtySnapshotColumns.clear();
     mReusableSnapshotColumns.clear();
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
     mCenterChunkPositions.clear();
     mRecordedEntityIds.clear();
@@ -4276,6 +4289,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     auto& protectedChunks = mApplyingChunkSnapshot ? mApplyingSnapshotChunks : mSnapshotChunks;
     protectedChunks.insert(levelChunkPositions.begin(), levelChunkPositions.end());
 
+    auto& chunkSource = replayDimension->getChunkSource();
+
     std::vector<PrioritizedSubChunk> subChunks;
     subChunks.reserve(mPendingSubChunkIndices.size());
     mRemainingSubChunkPacketsByColumn.clear();
@@ -4344,7 +4359,11 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
                     );
                     return false;
                 }
-                continue;
+                auto existing = chunkSource.getExistingChunk(target);
+                if (!existing || existing->mIsEmptyClientChunk
+                    || existing->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+                    continue;
+                }
             }
 
             playableEntries.emplace_back(entry);
@@ -4382,6 +4401,16 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         auto applied = mAppliedSnapshotColumns.find(pos);
         if (identity.levelChunkIndex >= 0 && applied != mAppliedSnapshotColumns.end() && applied->second == identity
             && !mDirtySnapshotColumns.contains(pos)) {
+            auto chunk = chunkSource.getExistingChunk(pos);
+            if (!chunk || chunk->mIsEmptyClientChunk
+                || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+                continue;
+            }
+            {
+                std::scoped_lock lock(mPendingLevelChunksMutex);
+                auto const       retained = mRetainedReplayChunks.find(pos);
+                if (retained == mRetainedReplayChunks.end() || retained->second != chunk) continue;
+            }
             mReusableSnapshotColumns.emplace(pos);
         }
     }
@@ -4397,9 +4426,21 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     }
 
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
+    if (!mApplyingChunkSnapshot) {
+        // Already-loaded columns with no LevelChunk in this batch do not reset subchunks to NeedsRequest, so vanilla
+        // SubChunkPacket handling would ignore their updates; apply them directly instead.
+        for (auto const& [pos, _] : subChunkIndicesByColumn) {
+            if (levelChunkPositions.contains(pos)) continue;
+            auto existing = chunkSource.getExistingChunk(pos);
+            if (existing && !existing->mIsEmptyClientChunk
+                && existing->mLoadState->load(std::memory_order_acquire) == ChunkState::Loaded) {
+                mDirectSubChunkColumns.emplace(pos);
+            }
+        }
+    }
     bool const seekFlushedBatch = mSeekFlushedBatch;
-    auto&      chunkSource      = replayDimension->getChunkSource();
     for (auto const& [pos, identity] : targetColumns) {
         if (mReusableSnapshotColumns.contains(pos) || identity.levelChunkIndex < 0) continue;
         // Applied directly, a merged seek batch left the loaded columns of a dimension it just entered empty.
@@ -4549,6 +4590,7 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
         mDirtySnapshotColumns.clear();
         mReusableSnapshotColumns.clear();
         mDirectSnapshotColumns.clear();
+        mDirectSubChunkColumns.clear();
         mDirectLevelChunkIndices.clear();
         mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
         mChunkInjectionPending   = false;
@@ -4667,8 +4709,7 @@ bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_poi
             applied = applyRequestModeLevelChunkDirect(mChunkPackets[static_cast<size_t>(index)]);
             if (!applied) {
                 getLogger().debug("Direct replay LevelChunk update unavailable; using native loading");
-                mDirectLevelChunkIndices.clear();
-                mDirectSnapshotColumns.clear();
+                mDirectLevelChunkIndices.erase(index);
                 continue;
             }
         } else {
@@ -4710,7 +4751,8 @@ bool ReplaySession::injectReadySubChunkPackets(
             continue;
         }
         bool const direct = std::all_of(pending.targets.begin(), pending.targets.end(), [this](ChunkPos const& pos) {
-            return mDirectSnapshotColumns.contains(pos) || mReusableSnapshotColumns.contains(pos);
+            return mDirectSubChunkColumns.contains(pos) || mDirectSnapshotColumns.contains(pos)
+                || mReusableSnapshotColumns.contains(pos);
         });
         std::string_view payload = pending.payload.empty()
                                      ? std::string_view{mChunkPackets[static_cast<size_t>(pending.index)]}
@@ -4719,7 +4761,10 @@ bool ReplaySession::injectReadySubChunkPackets(
             direct ? applySubChunkDirect(payload) : injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
         if (direct && !applied) {
             getLogger().debug("Direct replay SubChunk update unavailable; using native loading");
-            for (auto const& target : pending.targets) mDirectSnapshotColumns.erase(target);
+            for (auto const& target : pending.targets) {
+                mDirectSubChunkColumns.erase(target);
+                mDirectSnapshotColumns.erase(target);
+            }
             applied = injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
         }
         if (!applied) {
@@ -4908,6 +4953,7 @@ bool ReplaySession::finishChunkInjection() {
         mPendingSnapshotColumns.clear();
         mReusableSnapshotColumns.clear();
         mDirectSnapshotColumns.clear();
+        mDirectSubChunkColumns.clear();
         mDirectLevelChunkIndices.clear();
         mInjectedLevelChunks     = 0;
         mInjectedSubChunkPackets = 0;
@@ -4990,6 +5036,35 @@ bool ReplaySession::sendRecordedTickPacket() {
 
 bool ReplaySession::hasPendingReplayReaderBoundary() const {
     return mReaderIndex < mReaders.size() && !mReaders[mReaderIndex]->hasRemainingActions();
+}
+
+void ReplaySession::compactPendingChunkInjectionQueue() {
+    if (!mChunkInjectionPlanPrepared) return;
+
+    if (mPendingLevelChunkCursor > 0) {
+        auto const eraseCount = std::min(mPendingLevelChunkCursor, mPendingLevelChunkIndices.size());
+        mPendingLevelChunkIndices.erase(
+            mPendingLevelChunkIndices.begin(),
+            mPendingLevelChunkIndices.begin() + static_cast<std::ptrdiff_t>(eraseCount)
+        );
+        mPendingLevelChunkCursor = 0;
+    }
+
+    std::vector<int> remainingSubChunkIndices;
+    remainingSubChunkIndices.reserve(mPendingSubChunkPackets.size());
+    for (auto const& pending : mPendingSubChunkPackets) {
+        if (!pending.injected && pending.index >= 0) {
+            remainingSubChunkIndices.push_back(pending.index);
+        }
+    }
+    if (!remainingSubChunkIndices.empty()) {
+        remainingSubChunkIndices
+            .insert(remainingSubChunkIndices.end(), mPendingSubChunkIndices.begin(), mPendingSubChunkIndices.end());
+        mPendingSubChunkIndices = std::move(remainingSubChunkIndices);
+    }
+    mPendingSubChunkPackets.clear();
+    mPendingSubChunkCursor      = 0;
+    mChunkInjectionPlanPrepared = false;
 }
 
 bool ReplaySession::advanceReplayReader(bool stopAtEnd) {
@@ -5097,6 +5172,8 @@ void ReplaySession::handleLevelChunkCached(int index) {
         mChunkInjectionIdleTicks = 0;
         mCenterChunksReady       = false;
         mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    } else {
+        compactPendingChunkInjectionQueue();
     }
     mPendingLevelChunkIndices.emplace_back(index);
     mChunkInjectionPending      = true;
@@ -5114,6 +5191,8 @@ void ReplaySession::handleSubChunkCached(int index) {
         mChunkInjectionIdleTicks = 0;
         mCenterChunksReady       = false;
         mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    } else {
+        compactPendingChunkInjectionQueue();
     }
     mPendingSubChunkIndices.emplace_back(index);
     mChunkInjectionPending      = true;
@@ -5342,6 +5421,8 @@ void ReplaySession::flushSeekChunks() {
         mChunkInjectionIdleTicks = 0;
         mCenterChunksReady       = false;
         mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    } else {
+        compactPendingChunkInjectionQueue();
     }
     // The plan lets a later index win per column, and anything already queued arrived after these were held.
     mPendingLevelChunkIndices.insert(mPendingLevelChunkIndices.begin(), levelIndices.begin(), levelIndices.end());
@@ -6420,6 +6501,7 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
     auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
     if (!applyRequestModeLevelChunkData(levelChunk)) return false;
 
+    mDirectSubChunkColumns.emplace(*levelChunk.mPos);
     {
         std::scoped_lock lock(mPendingLevelChunksMutex);
         mCompletedLevelChunkPositions.emplace(*levelChunk.mPos);
@@ -6656,7 +6738,11 @@ bool ReplaySession::shouldSuppressNativeChunk(ChunkPos const& pos, DimensionType
     if (mPendingReplayDimension && *mPendingReplayDimension == packetDimension) return false;
     if (mChunkIsolationDimension && *mChunkIsolationDimension != packetDimension) return false;
 
-    if (!mChunkInjectionPlanPrepared && (!mWorldReady || mApplyingChunkSnapshot)) return true;
+    if (!mChunkInjectionPlanPrepared
+        && (!mWorldReady || mApplyingChunkSnapshot || mPendingSnapshotApply
+            || (mSnapshotChunks.empty() && mChunkIsolationDimension && *mChunkIsolationDimension == packetDimension))) {
+        return true;
+    }
 
     return mSnapshotChunks.contains(pos) || mApplyingSnapshotChunks.contains(pos);
 }
