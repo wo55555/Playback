@@ -1103,11 +1103,68 @@ void Recorder::endTick(bool close) {
 
     if (dimensionChanged) {
         auto const currentDimensionId = localPlayer->getDimensionId();
+        auto const previousDimension  = *mRecordingDimension;
+
+        // Destination chunks can arrive on the same tick as ChangeDimension; hold them for the new dimension instead
+        // of flushing them into the old chunk or dropping them with a superseded dimension.
+        std::vector<PlaybackSerializedGamePacket> newDimensionPackets;
+        std::vector<DeferredCompletedChunk>       newDimensionDeferred;
+        {
+            std::scoped_lock                          lock(mPendingGamePacketsMutex);
+            std::vector<PlaybackSerializedGamePacket> oldDimensionPackets;
+            std::vector<DeferredCompletedChunk>       oldDimensionDeferred;
+            oldDimensionPackets.reserve(mPendingGamePackets.size());
+            size_t deferredIndex             = 0;
+            bool   seenTargetChangeDimension = false;
+            for (auto& pending : mPendingGamePackets) {
+                bool belongsToNewDimension = seenTargetChangeDimension;
+                if (!seenTargetChangeDimension
+                    && pending.mPacketId == static_cast<int32_t>(MinecraftPacketIds::ChangeDimension)) {
+                    auto                 packet = MinecraftPackets::createPacket(MinecraftPacketIds::ChangeDimension);
+                    ReadOnlyBinaryStream input(pending.mPayload, false);
+                    if (packet && packet->read(input) && input.ensureReadCompleted()
+                        && *static_cast<ChangeDimensionPacket const&>(*packet).mDimensionId == currentDimensionId) {
+                        seenTargetChangeDimension = true;
+                        belongsToNewDimension     = true;
+                    }
+                }
+                if (pending.mPacketId == DeferredChunkPacketId) {
+                    if (deferredIndex < mDeferredCompletedChunks.size()) {
+                        auto& deferred        = mDeferredCompletedChunks[deferredIndex];
+                        belongsToNewDimension = belongsToNewDimension || deferred.dimensionId == currentDimensionId;
+                        if (belongsToNewDimension) newDimensionDeferred.push_back(std::move(deferred));
+                        else oldDimensionDeferred.push_back(std::move(deferred));
+                    }
+                    ++deferredIndex;
+                } else if (!belongsToNewDimension
+                           && pending.mPacketId == static_cast<int32_t>(MinecraftPacketIds::FullChunkData)) {
+                    auto                 packet = MinecraftPackets::createPacket(MinecraftPacketIds::FullChunkData);
+                    ReadOnlyBinaryStream input(pending.mPayload, false);
+                    if (packet && packet->read(input)) {
+                        belongsToNewDimension =
+                            *static_cast<LevelChunkPacket const&>(*packet).mDimensionId == currentDimensionId;
+                    }
+                } else if (!belongsToNewDimension
+                           && pending.mPacketId == static_cast<int32_t>(MinecraftPacketIds::SubChunkPacket)) {
+                    auto                 packet = MinecraftPackets::createPacket(MinecraftPacketIds::SubChunkPacket);
+                    ReadOnlyBinaryStream input(pending.mPayload, false);
+                    if (packet && packet->read(input)) {
+                        belongsToNewDimension =
+                            *static_cast<SubChunkPacket const&>(*packet).mDimensionType == currentDimensionId;
+                    }
+                }
+                if (belongsToNewDimension) newDimensionPackets.push_back(std::move(pending));
+                else oldDimensionPackets.push_back(std::move(pending));
+            }
+            mPendingGamePackets      = std::move(oldDimensionPackets);
+            mDeferredCompletedChunks = std::move(oldDimensionDeferred);
+        }
 
         if (mHasOpenChunk) {
-            // Finish the client tick in the old chunk before snapshotting the state produced by that tick.
-            if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
-                || !writeLocalViewSamples() || !writeTickBoundary() || !finishCurrentChunk(close)) {
+            // The local player is already in the new dimension, so flush only the old-dimension packets and close the
+            // old chunk without writing new-dimension player/entity/camera samples into its tail.
+            discardLocalViewFrames();
+            if (!flushGamePackets() || !writeTickBoundary() || !finishCurrentChunk(close)) {
                 return;
             }
         } else {
@@ -1117,7 +1174,27 @@ void Recorder::endTick(bool close) {
             mPendingGamePackets.clear();
             mDeferredCompletedChunks.clear();
         }
+        {
+            std::scoped_lock lock(mPendingPortableChunksMutex);
+            mPendingPortableChunks.erase(previousDimension);
+        }
         if (close) return;
+
+        if (!newDimensionPackets.empty()) {
+            std::scoped_lock lock(mPendingGamePacketsMutex);
+            newDimensionPackets.insert(
+                newDimensionPackets.end(),
+                std::make_move_iterator(mPendingGamePackets.begin()),
+                std::make_move_iterator(mPendingGamePackets.end())
+            );
+            newDimensionDeferred.insert(
+                newDimensionDeferred.end(),
+                std::make_move_iterator(mDeferredCompletedChunks.begin()),
+                std::make_move_iterator(mDeferredCompletedChunks.end())
+            );
+            mPendingGamePackets      = std::move(newDimensionPackets);
+            mDeferredCompletedChunks = std::move(newDimensionDeferred);
+        }
 
         // The new dimension has no columns yet, so defer the snapshot to the retrying initial-snapshot path.
         mRecordingDimension       = currentDimensionId;
@@ -1142,7 +1219,7 @@ void Recorder::endTick(bool close) {
     bool rotateChunk = false;
     if (rotationDue && !mRotationJob) {
         auto launched = launchRotationSnapshot(ChunkRotationBarrierTimeout);
-        if (launched != SnapshotCaptureResult::Success) {
+        if (launched == SnapshotCaptureResult::Failed) {
             getLogger().error("Replay snapshot launch failed: {}", mSnapshotFailure);
             failRecording(mSnapshotFailure.empty() ? "Unable to prepare the replay chunk snapshot" : mSnapshotFailure);
             return;
@@ -1171,7 +1248,7 @@ void Recorder::endTick(bool close) {
         auto                                captureResult = finishRotationSnapshot(barrierWait);
         auto                                elapsed       = std::chrono::steady_clock::now() - captureStart;
 
-        if (captureResult != SnapshotCaptureResult::Success) {
+        if (captureResult == SnapshotCaptureResult::Failed) {
             getLogger().error(
                 "Replay snapshot capture failed after {:.3f} ms: {}",
                 std::chrono::duration<double, std::milli>(elapsed).count(),
@@ -1181,12 +1258,14 @@ void Recorder::endTick(bool close) {
             return;
         }
 
-        if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
-            || !writeLocalViewSamples() || !writeTickBoundary() || !finishCurrentChunk(false) || !writeSnapshot()
-            || !commitChunkSnapshot(elapsed, barrierWait)) {
+        if (captureResult == SnapshotCaptureResult::Success) {
+            if (!writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements() || !writeLocalCameraOffset()
+                || !writeLocalViewSamples() || !writeTickBoundary() || !finishCurrentChunk(false) || !writeSnapshot()
+                || !commitChunkSnapshot(elapsed, barrierWait)) {
+                return;
+            }
             return;
         }
-        return;
     }
 
     if (!writeInitialSnapshotIfNeeded() || !writeLocalPlayerState() || !flushGamePackets() || !writeEntityMovements()
@@ -1647,6 +1726,7 @@ Recorder::SnapshotCaptureResult Recorder::finishRotationSnapshot(std::chrono::st
     if (!mRotationJob->finalPass) {
         auto const begun = beginSnapshotFinalPass();
         if (begun != SnapshotCaptureResult::Success) return begun;
+        if (mPendingDimensionSnapshot) dropPendingSnapshotColumnPackets(*mRotationJob);
     }
 
     auto& job = *mRotationJob;
@@ -2166,7 +2246,60 @@ bool Recorder::isDimensionLoading() const {
     auto const dimension = context.tryGetComponent<DimensionStateComponent>();
     if (dimension && dimension->mDimensionState != DimensionStateComponent::DimensionState::Ready) return true;
     auto const loading = context.tryGetComponent<LoadingStateComponent>();
-    return loading && loading->mLoadingState != LoadingState::Done;
+    if (loading && loading->mLoadingState != LoadingState::Done) return true;
+
+    // Request-mode columns can report Loaded before the player's and surrounding subchunks arrive; wait briefly so
+    // the first dimension snapshot does not capture hollow placeholder terrain.
+    constexpr auto DimensionSubChunkReadyTimeout = std::chrono::seconds{5};
+    if (std::chrono::steady_clock::now() - mDimensionEnteredAt <= DimensionSubChunkReadyTimeout) {
+        auto&      dim   = player->getDimension();
+        auto const pos   = player->getPosition();
+        auto const cPos  = ChunkPos{static_cast<int>(std::floor(pos.x)) >> 4, static_cast<int>(std::floor(pos.z)) >> 4};
+        auto       chunk = dim.getChunkSource().getExistingChunk(cPos);
+        if (!chunk || chunk->mIsEmptyClientChunk
+            || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+            return true;
+        }
+        auto const isPendingSubChunkState = [](SubChunk::SubChunkState state) {
+            return state == SubChunk::SubChunkState::NeedsRequest
+                || state == SubChunk::SubChunkState::ReceivedResponseFromServer
+                || state == SubChunk::SubChunkState::ProcessingSubChunk
+                || state == SubChunk::SubChunkState::WaitingForCacheResponse;
+        };
+        auto const& subChunks = *chunk->mSubChunks;
+        if (!subChunks.empty()) {
+            int const   minSubY    = static_cast<int>(dim.mHeightRange->mMin) / 16;
+            int const   playerSubY = static_cast<int>(std::floor(pos.y)) >> 4;
+            int const   index      = std::clamp(playerSubY - minSubY, 0, static_cast<int>(subChunks.size()) - 1);
+            auto const& sub        = subChunks[static_cast<size_t>(index)];
+            if (sub.isPlaceHolderSubChunk() || isPendingSubChunkState(sub.mSubChunkState)) {
+                return true;
+            }
+            for (auto const& ownSub : subChunks) {
+                if (isPendingSubChunkState(ownSub.mSubChunkState)) return true;
+            }
+        }
+
+        size_t loadedNear  = 0;
+        size_t pendingNear = 0;
+        for (auto const& [nearPos, weakNear] : dim.getChunkSource().getStorage()) {
+            if (std::abs(nearPos.x - cPos.x) > 3 || std::abs(nearPos.z - cPos.z) > 3) continue;
+            auto nearChunk = weakNear.lock();
+            if (!nearChunk || nearChunk->mIsEmptyClientChunk
+                || nearChunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+                continue;
+            }
+            ++loadedNear;
+            for (auto const& sub : *nearChunk->mSubChunks) {
+                if (isPendingSubChunkState(sub.mSubChunkState)) {
+                    ++pendingNear;
+                    break;
+                }
+            }
+        }
+        if (loadedNear < 9 || pendingNear > 0) return true;
+    }
+    return false;
 }
 
 void Recorder::dropPendingSnapshotColumnPackets(SnapshotColumnsJob const& job) {
@@ -2202,6 +2335,13 @@ void Recorder::dropPendingSnapshotColumnPackets(SnapshotColumnsJob const& job) {
     }
     mPendingGamePackets      = std::move(keptPackets);
     mDeferredCompletedChunks = std::move(keptDeferred);
+
+    std::scoped_lock portableLock(mPendingPortableChunksMutex);
+    if (auto const byDimension = mPendingPortableChunks.find(job.dimension);
+        byDimension != mPendingPortableChunks.end()) {
+        for (auto const& pos : columns) byDimension->second.erase(pos);
+        if (byDimension->second.empty()) mPendingPortableChunks.erase(byDimension);
+    }
 }
 
 void Recorder::dropPendingSpawnPackets() {
