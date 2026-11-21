@@ -29,7 +29,7 @@ constexpr auto MaxFreezeDuration = std::chrono::seconds(30);
 // bgfx presents a frame after the main thread submits it, so the first resumed presents can still be empty.
 constexpr uint32_t ResumeGuardFrames = 3;
 
-enum class FreezeEnd : uint8_t { SeekDone, Dimension, Export, Inactive, Timeout };
+enum class FreezeEnd : uint8_t { SeekDone, Dimension, ScreenClose, Export, Inactive, Timeout };
 
 std::string_view freezeEndName(FreezeEnd end) {
     switch (end) {
@@ -37,6 +37,8 @@ std::string_view freezeEndName(FreezeEnd end) {
         return "seekDone";
     case FreezeEnd::Dimension:
         return "dimension";
+    case FreezeEnd::ScreenClose:
+        return "screenClose";
     case FreezeEnd::Export:
         return "export";
     case FreezeEnd::Inactive:
@@ -66,6 +68,8 @@ std::optional<FreezeEnd> freezeBlocker(replay::ReplaySession const& replay) {
     if (!replay.isSeekPending()) return FreezeEnd::SeekDone;
     // The native dimension loading screen needs graphics to advance.
     if (replay.isDimensionTransitionPending()) return FreezeEnd::Dimension;
+    // A native container/trade screen needs graphics/SceneStack to advance so it pops before entities are cleared.
+    if (replay.isWaitingForScreenClose()) return FreezeEnd::ScreenClose;
     return std::nullopt;
 }
 
