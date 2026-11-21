@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A keyframe's roll now shows in the editor preview, both while paused and while playing. Before, only the export applied it.
 - Moving the free camera in the replay editor no longer slows down after adding keyframes, pausing a camera preview, or jumping to a keyframe or player.
 - Fixed missing chunks and stalled terrain loading when recording or scrubbing across repeated dimension transitions.
+- Fixed free-camera lockups and backward-seek crashes when scrubbing across villager trade, mount equipment, or other previewed screens.
 
 ## [0.4.0-mc26.40] - 2026-11-15
 

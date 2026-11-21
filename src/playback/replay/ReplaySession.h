@@ -362,6 +362,7 @@ private:
         int                id{};
         int                type{};
         int                openTick{};
+        int64_t            entityRaw{-1};
 
         [[nodiscard]] bool shows(RecordedScreen const& screen) const {
             return packetId == screen.packetId && id == screen.id && openTick == screen.openTick;
@@ -369,7 +370,12 @@ private:
     };
     std::optional<ScreenPreview> mScreenPreview;
     // Open tick of the last interval a preview was tried for, so a skipped one is not retried every tick.
-    int mTriedScreenOpenTick{-1};
+    int               mTriedScreenOpenTick{-1};
+    int               mScreenCloseWaitTicks{0};
+    std::atomic<bool> mWaitingForScreenClose{false};
+    int               mScreenPreviewTicks{0};
+    int               mLastScreenSkipTick{-1};
+    std::string       mLastScreenSkipAction;
 
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
@@ -454,7 +460,14 @@ private:
 
     void updateScreenPreview();
 
+    [[nodiscard]] bool hasPoppableReplayScreenOpen() const;
+
+    // Closes any open preview/native screen and waits for SceneStack to pop it before entity-removing mutations.
+    [[nodiscard]] bool ensureReplayScreenClosedForMutation(char const* reason);
+
     void compactPendingChunkInjectionQueue();
+
+    [[nodiscard]] bool nextReaderForcesSnapshot() const;
 
     // Last record whose half-open interval [openTick, closeTick) contains tick. Unread closes stay open.
     [[nodiscard]] RecordedScreen const* recordedScreenOpenAt(int tick) const;
@@ -721,6 +734,9 @@ public:
     [[nodiscard]] int getAppliedReplayTick() const { return mCurrentTick; }
 
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
+    [[nodiscard]] bool isWaitingForScreenClose() const noexcept {
+        return mWaitingForScreenClose.load(std::memory_order_acquire);
+    }
     [[nodiscard]] std::optional<visuals::ReplaySampleTime> getCameraRenderSampleTime() const noexcept;
     [[nodiscard]] std::optional<visuals::ReplaySampleTime> getEntityRenderSampleTime() const noexcept;
     void                                                   markReplayTickAdvanced() noexcept;
