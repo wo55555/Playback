@@ -6,6 +6,7 @@
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/FreezeTimelineEvaluator.h"
+#include "playback/keyframe/TimelapseTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/visuals/ReplaySampleTime.h"
 
@@ -102,8 +103,9 @@ bool OfflineRenderBoundary::open(
             "Export camera timeline has no sample at the start tick; using the observer viewpoint"
         );
     }
+    bool const keyframeTimelapse = keyframe::hasActiveTimelapseTrack(project);
     if (!mReplay.beginExportTimeline(static_cast<int>([&]() -> int64_t {
-            if (!settings.timelapse && keyframe::hasActiveFreezeTrack(project)) {
+            if ((!settings.timelapse || keyframeTimelapse) && keyframe::hasActiveFreezeTrack(project)) {
                 auto const freezeEval =
                     keyframe::evaluateFreezeAt(project.freezeTrack, static_cast<long double>(startTick));
                 if (freezeEval.frozen) {
@@ -125,7 +127,7 @@ bool OfflineRenderBoundary::open(
 
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
-    mTimelapse                     = settings.timelapse;
+    mTimelapse                     = settings.timelapse || keyframeTimelapse;
     mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mWarmupFrames                  = settings.warmupFrames;

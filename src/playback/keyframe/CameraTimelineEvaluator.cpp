@@ -5,6 +5,7 @@
 #include "InterpolationHelpers.h"
 #include "KeyframeTrack.h"
 #include "SpeedTimelineEvaluator.h"
+#include "TimelapseTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
@@ -210,7 +211,7 @@ void CameraTimelineEvaluator::buildSpeedSpans() {
     mSpeedSpans.clear();
     mSpeedSpanEndU = 0.0L;
 
-    if (!hasActiveSpeedCurve(mProject)) return;
+    if (!hasActiveSpeedCurve(mProject) && !hasActiveTimelapseTrack(mProject)) return;
 
     int horizonTick = std::max(0, mProject.totalTicks);
     for (auto const& camera : mProject.cameras) {
@@ -227,7 +228,7 @@ void CameraTimelineEvaluator::buildSpeedSpans() {
     for (int bStart = 0; bStart < horizonTick; ++bStart) {
         int const         bEnd  = bStart + 1;
         long double const mid   = static_cast<long double>(bStart) + 0.5L;
-        long double const speed = static_cast<long double>(sampleSpeedTrackAt(mProject.speedTrack, mid));
+        long double const speed = static_cast<long double>(effectiveSpeedAt(mProject, mid));
 
         if (!mSpeedSpans.empty() && mSpeedSpans.back().endTick == bStart && mSpeedSpans.back().speed == speed) {
             mSpeedSpans.back().endTick = bEnd;

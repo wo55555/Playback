@@ -8,6 +8,7 @@
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/SpeedTimelineEvaluator.h"
+#include "playback/keyframe/TimelapseTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/utils/ShellUtils.h"
 
@@ -586,6 +587,9 @@ void DetailsPanel::draw(PanelContext const& ctx) {
         mSpeedBezierDragTick   = -1;
         mFreezeDelayDragging   = false;
         mFreezeDelayDragTick   = -1;
+        mTimelapseTextTick.reset();
+        mTimelapseTextBuffer.fill('\0');
+        mTimelapseTextEditing = false;
         widgets::noActiveProjectPlaceholder();
     } else {
         if (mPage != InspectorPage::Selection) {
@@ -595,6 +599,9 @@ void DetailsPanel::draw(PanelContext const& ctx) {
             mSpeedBezierDragTick   = -1;
             mFreezeDelayDragging   = false;
             mFreezeDelayDragTick   = -1;
+            mTimelapseTextTick.reset();
+            mTimelapseTextBuffer.fill('\0');
+            mTimelapseTextEditing = false;
         }
         switch (mPage) {
         case InspectorPage::Selection:
@@ -684,6 +691,10 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
         subject = "playback.refactorEditor.freeze.keyframeDetailsTitle"_tr();
     } else if (selection.isFreezeTrackSelected()) {
         subject = "playback.refactorEditor.freeze.trackDetailsTitle"_tr();
+    } else if (selection.selectedTimelapseKeyframe()) {
+        subject = "playback.refactorEditor.timelapse.keyframeDetailsTitle"_tr();
+    } else if (selection.isTimelapseTrackSelected()) {
+        subject = "playback.refactorEditor.timelapse.trackDetailsTitle"_tr();
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
@@ -696,6 +707,8 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawSpeedTrack(ctx)) return;
     if (drawFreezeKeyframe(ctx)) return;
     if (drawFreezeTrack(ctx)) return;
+    if (drawTimelapseKeyframe(ctx)) return;
+    if (drawTimelapseTrack(ctx)) return;
     drawOverview(ctx);
 }
 
@@ -2596,6 +2609,326 @@ bool DetailsPanel::drawFreezeTrack(PanelContext const& ctx) {
                 ICON_TRASH
             )) {
             ctx.submitAction(EditorAction{EditorActionType::RemoveFreezeTrack});
+            ctx.selection.clear();
+        }
+        if (track.locked) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    }
+    return true;
+}
+
+bool DetailsPanel::drawTimelapseKeyframe(PanelContext const& ctx) {
+    auto const selectedTick = ctx.selection.selectedTimelapseKeyframe();
+    if (!selectedTick) {
+        mTimelapseTextTick.reset();
+        mTimelapseTextEditing = false;
+        return false;
+    }
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->timelapseTrack;
+    auto const  key     = track.keysByTick.find(*selectedTick);
+    if (key == track.keysByTick.end()) {
+        mTimelapseTextTick.reset();
+        mTimelapseTextEditing = false;
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
+        return true;
+    }
+
+    int const  originalTick = key->first;
+    bool const editable     = !track.locked;
+    if (!editable) {
+        mTimelapseTextEditing = false;
+    }
+
+    auto const syncTextBuffer = [&](int tickKey, int outTicks) {
+        mTimelapseTextTick = tickKey;
+        mTimelapseTextBuffer.fill('\0');
+        std::string const formatted = formatTick(outTicks);
+        formatted.copy(mTimelapseTextBuffer.data(), mTimelapseTextBuffer.size() - 1);
+    };
+
+    if (property::beginSection("playback.refactorEditor.timelapse.keyframeDetailsTitle"_tr().c_str())) {
+        float const scale      = metrics::scale();
+        float const labelWidth = measureLabelColumn({
+            "playback.refactorEditor.details.tick"_tr(),
+            "playback.refactorEditor.timelapse.outputTime"_tr(),
+            "playback.refactorEditor.timelapse.outputTicks"_tr(),
+        });
+
+        auto const submitOutputTicks = [&](int nextOutputTicks) {
+            int const clamped = state::editing::model::clampTimelapseOutputTicks(nextOutputTicks);
+            if (clamped != key->second.outputTicks) {
+                EditorAction action{EditorActionType::SetTimelapseKeyframeOutputTicks};
+                action.tick          = originalTick;
+                action.secondaryTick = clamped;
+                ctx.submitAction(std::move(action));
+            }
+        };
+
+        if (mTimelapseTextTick != originalTick || !mTimelapseTextEditing) {
+            syncTextBuffer(originalTick, key->second.outputTicks);
+        }
+
+        ImGui::BeginDisabled(!editable);
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##timelapse-keyframe-properties",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            int tick = originalTick;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
+            ImGui::TableNextColumn();
+            drawInputWithHint(formatTick(originalTick), [&] {
+                ImGui::InputInt("##timelapse-key-tick", &tick, 0, 0);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    tick = std::clamp(tick, 0, std::max(0, project->totalTicks));
+                    if (tick != originalTick && !track.keysByTick.contains(tick)) {
+                        mTimelapseTextTick.reset();
+                        mTimelapseTextEditing = false;
+                        EditorAction action{EditorActionType::MoveTimelapseKeyframe};
+                        action.tick          = originalTick;
+                        action.secondaryTick = tick;
+                        ctx.submitAction(std::move(action));
+                        ctx.selection.selectTimelapseKeyframe(tick);
+                    }
+                }
+            });
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.timelapse.outputTime"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputText("##timelapse-output-time", mTimelapseTextBuffer.data(), mTimelapseTextBuffer.size());
+            mTimelapseTextEditing = ImGui::IsItemActive();
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                if (auto const parsed = keyframe::parseTimelapseDurationTicks(mTimelapseTextBuffer.data())) {
+                    submitOutputTicks(*parsed);
+                    syncTextBuffer(originalTick, *parsed);
+                } else {
+                    syncTextBuffer(originalTick, key->second.outputTicks);
+                }
+            }
+
+            int outputTicks = key->second.outputTicks;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.timelapse.outputTicks"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputInt("##timelapse-output-ticks", &outputTicks, 0, 0);
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                int const clamped = state::editing::model::clampTimelapseOutputTicks(outputTicks);
+                submitOutputTicks(clamped);
+                syncTextBuffer(originalTick, clamped);
+            }
+
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.timelapse.outputTimeHint"_tr().c_str());
+        ImGui::PopTextWrapPos();
+
+        bool const hasPrev = key != track.keysByTick.begin();
+        auto const prevIt  = hasPrev ? std::prev(key) : track.keysByTick.end();
+        int const  baseOut = hasPrev ? prevIt->second.outputTicks : 0;
+        {
+            static constexpr int kTimelapseDeltaSecPresets[] = {1, 5, 10, 30};
+            ImGui::PushID("timelapse-delta-presets");
+            drawPresetChips<int>(
+                kTimelapseDeltaSecPresets,
+                [](int sec) {
+                    char buf[16]{};
+                    std::snprintf(buf, sizeof(buf), "+%ds", sec);
+                    return std::string(buf);
+                },
+                [&](int sec) {
+                    int const target =
+                        state::editing::model::clampTimelapseOutputTicks(baseOut + sec * widgets::kTicksPerSecond);
+                    return key->second.outputTicks == target;
+                },
+                [](int) { return theme::kAccent; },
+                [&](int sec) {
+                    int const target =
+                        state::editing::model::clampTimelapseOutputTicks(baseOut + sec * widgets::kTicksPerSecond);
+                    submitOutputTicks(target);
+                    syncTextBuffer(originalTick, target);
+                }
+            );
+            ImGui::PopID();
+        }
+        ImGui::EndDisabled();
+
+        if (track.keysByTick.size() < 2) {
+            property::separator();
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(
+                ImGui::ColorConvertU32ToFloat4(theme::kWarning),
+                "%s",
+                "playback.refactorEditor.timelapse.requiresTwoKeyframes"_tr().c_str()
+            );
+            ImGui::PopTextWrapPos();
+        } else if (hasPrev) {
+            property::separator();
+            if (key->second.outputTicks <= prevIt->second.outputTicks) {
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextColored(
+                    ImGui::ColorConvertU32ToFloat4(theme::kError),
+                    "%s",
+                    "playback.refactorEditor.timelapse.invalidOrderHint"_tr().c_str()
+                );
+                ImGui::PopTextWrapPos();
+            } else {
+                int const         deltaOut = key->second.outputTicks - prevIt->second.outputTicks;
+                int const         deltaIn  = originalTick - prevIt->first;
+                std::string const segDur   = formatTick(deltaOut) + " (" + std::to_string(deltaOut) + "t)";
+                double const      rawSpeed = static_cast<double>(deltaIn) / static_cast<double>(deltaOut);
+                double const      speed    = std::clamp(
+                    rawSpeed,
+                    state::editing::model::MinTimelapseSpeed,
+                    state::editing::model::MaxTimelapseSpeed
+                );
+                char speedBuf[32]{};
+                std::snprintf(speedBuf, sizeof(speedBuf), "%.2fx", speed);
+                property::textRow("playback.refactorEditor.timelapse.segmentDuration"_tr().c_str(), segDur.c_str());
+                property::textRow("playback.refactorEditor.timelapse.effectiveSpeed"_tr().c_str(), speedBuf);
+            }
+        }
+
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.timelapse.deleteKeyframe"_tr().c_str(),
+                editable,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            mTimelapseTextTick.reset();
+            mTimelapseTextEditing = false;
+            EditorAction action{EditorActionType::DeleteTimelapseKeyframe};
+            action.tick = originalTick;
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        if (!editable) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    } else {
+        mTimelapseTextTick.reset();
+        mTimelapseTextEditing = false;
+    }
+    return true;
+}
+
+bool DetailsPanel::drawTimelapseTrack(PanelContext const& ctx) {
+    if (!ctx.selection.isTimelapseTrackSelected()) return false;
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->timelapseTrack;
+    if (!track.isVisible()) return false;
+
+    if (property::beginSection("playback.refactorEditor.timelapse.trackDetailsTitle"_tr().c_str())) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.timelapse.trackHint"_tr().c_str());
+        if (keyframe::hasActiveTimelapseTrack(*project)) {
+            ImGui::TextColored(
+                ImGui::ColorConvertU32ToFloat4(theme::kWarning),
+                "%s  %s",
+                ICON_INFO,
+                "playback.refactorEditor.timelapse.overrideNotice"_tr().c_str()
+            );
+        }
+        ImGui::PopTextWrapPos();
+        property::separator();
+
+        auto const   segments = keyframe::collectTimelapseSegments(track);
+        size_t const validCount =
+            static_cast<size_t>(std::ranges::count_if(segments, &keyframe::TimelapseSegment::valid));
+        property::textRow(
+            "playback.refactorEditor.timelapse.keyframeCount"_tr().c_str(),
+            std::to_string(track.keysByTick.size()).c_str()
+        );
+        property::textRow(
+            "playback.refactorEditor.timelapse.validSegments"_tr().c_str(),
+            std::to_string(validCount).c_str()
+        );
+        if (track.keysByTick.empty()) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", "playback.refactorEditor.timelapse.emptyHint"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        } else if (track.keysByTick.size() == 1) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(
+                ImGui::ColorConvertU32ToFloat4(theme::kWarning),
+                "%s",
+                "playback.refactorEditor.timelapse.requiresTwoKeyframes"_tr().c_str()
+            );
+            ImGui::PopTextWrapPos();
+        }
+
+        property::separator();
+        bool enabled = track.enabled;
+        if (ImGui::Checkbox("playback.refactorEditor.details.enabled"_tr().c_str(), &enabled)) {
+            EditorAction action{EditorActionType::SetTimelapseTrackEnabled};
+            action.value = enabled;
+            ctx.submitAction(std::move(action));
+        }
+        bool locked = track.locked;
+        if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+            EditorAction action{EditorActionType::SetTimelapseTrackLocked};
+            action.value = locked;
+            ctx.submitAction(std::move(action));
+        }
+
+        property::separator();
+        int const  playheadTick = std::clamp(ctx.state.currentTick, 0, std::max(0, project->totalTicks));
+        bool const canAdd       = !track.locked && !track.keysByTick.contains(playheadTick);
+        if (property::actionButton(
+                "playback.refactorEditor.timelapse.addKeyframeAtPlayhead"_tr().c_str(),
+                canAdd,
+                property::ButtonVariant::Primary,
+                ICON_ADD_KEYFRAME
+            )) {
+            EditorAction action{EditorActionType::AddTimelapseKeyframe};
+            action.tick          = playheadTick;
+            action.secondaryTick = keyframe::suggestTimelapseOutputTicks(track, playheadTick);
+            ctx.submitAction(std::move(action));
+        }
+        bool const canClear = !track.locked && !track.keysByTick.empty();
+        if (property::actionButton(
+                "playback.refactorEditor.timelapse.clearKeyframes"_tr().c_str(),
+                canClear,
+                property::ButtonVariant::Subtle,
+                ICON_RESET
+            )) {
+            ctx.submitAction(EditorAction{EditorActionType::ClearTimelapseKeyframes});
+        }
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.timelapse.removeTrack"_tr().c_str(),
+                !track.locked,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            ctx.submitAction(EditorAction{EditorActionType::RemoveTimelapseTrack});
             ctx.selection.clear();
         }
         if (track.locked) {
