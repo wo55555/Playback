@@ -2,6 +2,7 @@
 
 #include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/keyframe/SpeedTimelineEvaluator.h"
+#include "playback/keyframe/TimelapseTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 
@@ -249,7 +250,8 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     if (settings.videoCrf > MaxExportCrf || settings.encodeSpeed > VideoEncodeSpeed::Fastest) {
         return failure(ExportError::InvalidSettings, "The video encoder quality or speed setting is invalid");
     }
-    if (settings.timelapse
+    bool const keyframeTimelapse = keyframe::hasActiveTimelapseTrack(project);
+    if (!keyframeTimelapse && settings.timelapse
         && (settings.timelapseIntervalMs < MinTimelapseIntervalMs
             || settings.timelapseIntervalMs > MaxTimelapseIntervalMs)) {
         return failure(ExportError::InvalidSettings, "The timelapse interval is invalid");
@@ -260,6 +262,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
 
     ExportSettings normalized = settings;
     normalized.frameRate      = normalizeFrameRate(normalized.frameRate);
+    if (keyframeTimelapse) normalized.timelapse = false;
     if (normalized.timelapse) normalized.audio = false;
 
     std::vector<ExportSlice> slices;
@@ -332,7 +335,8 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     uint64_t                     totalFrames = 0;
     int64_t                      maxOutTick  = 0;
 
-    if ((keyframe::hasActiveSpeedCurve(project) || keyframe::hasActiveFreezeTrack(project)) && !normalized.timelapse) {
+    if ((keyframeTimelapse || keyframe::hasActiveSpeedCurve(project) || keyframe::hasActiveFreezeTrack(project))
+        && !normalized.timelapse) {
         constexpr int64_t SpeedRampTickDenominator = 1'000'000;
         int64_t           projectMaxNum            = 0;
         if (!checkedSignedMultiply(project.totalTicks, SpeedRampTickDenominator, projectMaxNum)) {
@@ -388,7 +392,8 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
                     project.freezeTrack,
                     static_cast<long double>(qNum) / static_cast<long double>(SpeedRampTickDenominator)
                 );
-                int64_t cNum = qNum;
+                auto const tlEval = keyframe::evaluateTimelapseAt(project.timelapseTrack, cursor);
+                int64_t    cNum   = qNum;
                 if (freezeEval.frozen) {
                     cNum = static_cast<int64_t>(
                         std::llround(freezeEval.clientTick * static_cast<long double>(SpeedRampTickDenominator))
@@ -409,7 +414,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
                 framePlan.ticket.ptsNumerator   = ptsNumerator;
                 framePlan.ticket.ptsDenominator = normalized.frameRate.numerator;
                 framePlan.hardCut               = (segFrameCount == 0 && slice.hardCutBefore);
-                framePlan.muteAudio             = slice.muteAudio || freezeEval.worldFrozen;
+                framePlan.muteAudio             = slice.muteAudio || freezeEval.worldFrozen || tlEval.active;
                 framePlan.worldFrozen           = freezeEval.worldFrozen;
                 precomputedFrames.push_back(framePlan);
 
@@ -421,8 +426,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
                     int64_t const     cell         = static_cast<int64_t>(std::floor(cursor));
                     long double const nextBoundary = std::min(endTick, static_cast<long double>(cell + 1));
                     long double const cellSample   = static_cast<long double>(cell) + 0.5L;
-                    long double const speed =
-                        static_cast<long double>(keyframe::sampleSpeedTrackAt(project.speedTrack, cellSample));
+                    long double const speed = static_cast<long double>(keyframe::effectiveSpeedAt(project, cellSample));
                     long double const maxUnscaled = (nextBoundary - cursor) / speed;
                     if (remainingFrame <= maxUnscaled) {
                         cursor         += remainingFrame * speed;
