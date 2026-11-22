@@ -50,7 +50,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/AppData/Local/.xmake/packages
-          key: xmake-packages-source-windows-2025-${{ steps.package-repositories.outputs.revisions }}-${{ hashFiles('xmake.lua') }}
+          key: xmake-packages-source-windows-2025-vs14.44-${{ steps.package-repositories.outputs.revisions }}-${{ hashFiles('xmake.lua') }}
 
       - name: Setup LLVM
         uses: ZhongRuoyu/setup-llvm@v0
@@ -58,7 +58,7 @@ jobs:
           llvm-version: 22
 
       - run: |
-          xmake f -a x64 -m release -p windows -v --target_type=client -y
+          xmake f -a x64 -m release -p windows -v --target_type=client --vs_toolset=14.44 -y
         env:
           XMAKE_PKG_CACHEDIR: ${{ runner.temp }}/xmake-package-cache-${{ github.run_id }}
 
