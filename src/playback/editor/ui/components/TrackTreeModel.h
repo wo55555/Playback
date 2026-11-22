@@ -2,6 +2,7 @@
 
 #include "playback/state/editing/models/CameraEntity.h"
 
+#include <cstdint>
 #include <set>
 #include <string>
 #include <string_view>
@@ -13,14 +14,17 @@ struct EditorStateExt;
 
 namespace playback::editor::ui {
 
+enum class TrackRowKind : uint8_t { Camera, Speed };
+
 struct TrackTreeRow {
-    std::string id;
-    std::string name;
-    std::string cameraId;
-    int         cameraIndex{-1};
-    float       height{};
-    bool        locked{};
-    bool        enabled{true};
+    TrackRowKind kind{TrackRowKind::Camera};
+    std::string  id;
+    std::string  name;
+    std::string  cameraId;
+    int          cameraIndex{-1};
+    float        height{};
+    bool         locked{};
+    bool         enabled{true};
 };
 
 class TrackTreeModel {
