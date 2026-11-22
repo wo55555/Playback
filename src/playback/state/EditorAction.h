@@ -90,7 +90,6 @@ enum class EditorActionType {
     SplitClip,
     MoveAndTrimClip,
     RenameClip,
-    SetClipMuted,
     SetClipLocked,
     SetClipExportEnabled,
     SetAllClipsExportEnabled,
@@ -134,6 +133,28 @@ enum class EditorActionType {
     SetTimelapseTrackEnabled,
     SetTimelapseTrackLocked,
     ClearTimelapseKeyframes,
+    // name (optional track name).
+    AddAudioTrack,
+    // id (trackId).
+    RemoveAudioTrack,
+    // id (trackId) + name.
+    RenameAudioTrack,
+    // id (trackId) + value (enabled).
+    SetAudioTrackEnabled,
+    // id (trackId) + value (muted).
+    SetAudioTrackMuted,
+    // id (trackId) + value (locked).
+    SetAudioTrackLocked,
+    // id (trackId) + volume.
+    SetAudioTrackVolume,
+    // id (trackId) + path (filePath) + tick (startTick) + name (optional clip name).
+    AddAudioClip,
+    // id (trackId) + secondaryId (clipId).
+    RemoveAudioClip,
+    // id (trackId) + secondaryId (clipId) + tick (startTick).
+    MoveAudioClip,
+    // id (trackId) + secondaryId (clipId) + path (filePath) + trimStartSeconds + durationSeconds + volume + muted.
+    SetAudioClipProps,
 };
 
 struct QueuedExportJob {
@@ -153,8 +174,12 @@ struct EditorAction {
     std::string                              secondaryId;
     float                                    speed{};
     float                                    speedValue{1.0f};
+    double                                   trimStartSeconds{0.0};
+    double                                   durationSeconds{0.0};
+    float                                    volume{1.0f};
     int                                      kind{};
     bool                                     value{};
+    bool                                     muted{false};
     state::editing::model::Vec3              position{};
     state::editing::model::Vec2              bezierCtrl1{};
     state::editing::model::Vec2              bezierCtrl2{};
