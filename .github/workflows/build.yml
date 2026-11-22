@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
         with:
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/AppData/Local/.xmake/packages
-          key: xmake-packages-source-${{ runner.os }}-${{ steps.package-repositories.outputs.revisions }}-${{ hashFiles('xmake.lua') }}
+          key: xmake-packages-source-windows-2025-${{ steps.package-repositories.outputs.revisions }}-${{ hashFiles('xmake.lua') }}
 
       - name: Setup LLVM
         uses: ZhongRuoyu/setup-llvm@v0
