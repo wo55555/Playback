@@ -1,6 +1,7 @@
 ﻿#include "SpeedTimelineEvaluator.h"
 
 #include "InterpolationHelpers.h"
+#include "TimelapseTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
@@ -132,6 +133,9 @@ double sampleSpeedTrackAt(SpeedTrack const& track, long double replayTick) {
 
 double effectiveSpeedAt(state::editing::model::EditorStateExt const& project, long double replayTick) {
     if (!std::isfinite(replayTick)) return 1.0;
+    if (auto const timelapseSpeed = sampleTimelapseSpeedAt(project.timelapseTrack, replayTick)) {
+        return *timelapseSpeed;
+    }
     return sampleSpeedTrackAt(project.speedTrack, replayTick);
 }
 
@@ -199,18 +203,18 @@ SpeedTimeMapping::totalOutputSecondsForEnabledSlices(state::editing::model::Edit
     auto const slices = state::editing::ClipOps::collectCompositedSlices(project, true);
     if (slices.empty()) return 0.0;
 
-    bool const  curveActive  = hasActiveSpeedCurve(project);
+    bool const  variableTime = hasActiveSpeedCurve(project) || hasActiveTimelapseTrack(project);
     long double totalSeconds = 0.0L;
     for (auto const& slice : slices) {
         if (slice.inTick >= slice.outTick) continue;
-        if (!curveActive) {
+        if (!variableTime) {
             totalSeconds += static_cast<long double>(slice.outTick - slice.inTick) / 20.0L;
             continue;
         }
         int const sStart = std::max(0, slice.inTick);
         int const sEnd   = std::max(sStart, slice.outTick);
         for (int k = sStart; k < sEnd; ++k) {
-            double const effSpeed  = sampleSpeedTrackAt(project.speedTrack, static_cast<long double>(k) + 0.5L);
+            double const effSpeed  = effectiveSpeedAt(project, static_cast<long double>(k) + 0.5L);
             totalSeconds          += 1.0L / (20.0L * static_cast<long double>(effSpeed));
         }
     }

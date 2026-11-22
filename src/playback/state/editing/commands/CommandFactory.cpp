@@ -5,6 +5,7 @@
 #include "playback/state/editing/commands/FreezeCommands.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
 #include "playback/state/editing/commands/SpeedCommands.h"
+#include "playback/state/editing/commands/TimelapseCommands.h"
 
 namespace playback::state::editing::command {
 
@@ -283,6 +284,33 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetFreezeTrackLocked(
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createClearFreezeKeyframes() {
     return std::make_unique<ClearFreezeKeyframes>();
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddTimelapseTrack() {
+    return std::make_unique<AddTimelapseTrack>();
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createRemoveTimelapseTrack() {
+    return std::make_unique<RemoveTimelapseTrack>();
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddTimelapseKeyframe(int tick, int outputTicks) {
+    return std::make_unique<AddTimelapseKeyframe>(tick, outputTicks);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createMoveTimelapseKeyframe(int fromTick, int toTick) {
+    return std::make_unique<MoveTimelapseKeyframe>(fromTick, toTick);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteTimelapseKeyframe(int tick) {
+    return std::make_unique<DeleteTimelapseKeyframe>(tick);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetTimelapseKeyframeOutputTicks(int tick, int outputTicks) {
+    return std::make_unique<SetTimelapseKeyframeOutputTicks>(tick, outputTicks);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetTimelapseTrackEnabled(bool enabled) {
+    return std::make_unique<SetTimelapseTrackState>(SetTimelapseTrackState::Property::Enabled, enabled);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetTimelapseTrackLocked(bool locked) {
+    return std::make_unique<SetTimelapseTrackState>(SetTimelapseTrackState::Property::Locked, locked);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createClearTimelapseKeyframes() {
+    return std::make_unique<ClearTimelapseKeyframes>();
 }
 
 } // namespace playback::state::editing::command
