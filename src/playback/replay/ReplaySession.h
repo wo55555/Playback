@@ -3,6 +3,7 @@
 #include "playback/keyframe/CameraRenderState.h"
 #include "playback/record/Recorder.h"
 #include "playback/state/editing/models/MathTypes.h"
+#include "playback/state/editing/models/Track.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
 #include "mc/deps/core/math/Vec2.h"
@@ -229,6 +230,10 @@ private:
     float                                mPlaybackTickAccumulator{};
     std::atomic<SteadyTimePoint>         mTickAdvancedAt{};
     std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
+    mutable std::mutex                   mPreviewFreezeMutex;
+    state::editing::model::FreezeTrack   mPreviewFreezeTrack;
+    int                                  mPreviewPlayheadTick{0};
+    bool                                 mResumeAfterFreezeSeek{false};
 
     bool                                        mObserverPreviewInRange{false};
     std::optional<keyframe::CameraRenderState>  mPausedPreviewPose;
@@ -538,6 +543,9 @@ private:
 
     void finishWorldCleanup();
 
+    [[nodiscard]] state::editing::model::FreezeTrack previewFreezeTrackCopy() const;
+    [[nodiscard]] int                                previewWorldTargetTick(int playheadTick) const;
+
     void beginSeek(int targetTick);
 
     void finishSeek();
@@ -726,11 +734,16 @@ public:
     [[nodiscard]] int getCurrentTick() const {
         int const requestedTick = mRequestedSeekTick.load(std::memory_order_acquire);
         if (requestedTick >= 0) return requestedTick;
+        if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+            return mPreviewPlayheadTick;
+        }
         return mSeekTargetTick >= 0 ? mSeekTargetTick : mCurrentTick;
     }
 
     // Unlike getCurrentTick(), this is never replaced by a pending seek target.
     [[nodiscard]] int getAppliedReplayTick() const { return mCurrentTick; }
+
+    void setPreviewFreezeTrack(state::editing::model::FreezeTrack const& track);
 
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
     [[nodiscard]] bool isWaitingForScreenClose() const noexcept {

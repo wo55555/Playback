@@ -6,6 +6,7 @@
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/io/ReplayResourcePacks.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
+#include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/record/Recorder.h"
 #include "playback/runtime/ClientTickHooks.h"
@@ -988,6 +989,12 @@ void ReplaySession::clearReplayData() {
     mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mIsProcessingSnapshot    = false;
     mCurrentTick             = 0;
+    mPreviewPlayheadTick     = 0;
+    mResumeAfterFreezeSeek   = false;
+    {
+        std::scoped_lock lock(mPreviewFreezeMutex);
+        mPreviewFreezeTrack = {};
+    }
     mReaderIndex             = 0;
     mSeekTargetTick          = -1;
     mExportSeekRequested     = false;
@@ -2388,7 +2395,7 @@ void ReplaySession::syncSeekObserver() {
         }
         return;
     }
-    syncPreviewObserverForTick(mSeekTargetTick, true);
+    syncPreviewObserverForTick(mPreviewPlayheadTick, true);
 }
 
 void ReplaySession::markReplayTickAdvanced() noexcept {
@@ -2420,12 +2427,33 @@ float ReplaySession::previewPartialTick() const noexcept {
     return std::clamp(elapsed * speed / SecondsPerTick, 0.0f, 1.0f);
 }
 
+void ReplaySession::setPreviewFreezeTrack(state::editing::model::FreezeTrack const& track) {
+    std::scoped_lock lock(mPreviewFreezeMutex);
+    mPreviewFreezeTrack = track;
+}
+
+state::editing::model::FreezeTrack ReplaySession::previewFreezeTrackCopy() const {
+    std::scoped_lock lock(mPreviewFreezeMutex);
+    return mPreviewFreezeTrack;
+}
+
+int ReplaySession::previewWorldTargetTick(int playheadTick) const {
+    int const clampedPlayhead = std::clamp(playheadTick, 0, getTotalTicks());
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return clampedPlayhead;
+    auto const track = previewFreezeTrackCopy();
+    if (!keyframe::hasActiveFreezeTrack(track)) return clampedPlayhead;
+    auto const eval = keyframe::evaluateFreezeAt(track, static_cast<long double>(clampedPlayhead));
+    if (!eval.frozen) return clampedPlayhead;
+    auto const worldTick = static_cast<int64_t>(std::floor(eval.clientTick));
+    return static_cast<int>(std::clamp<int64_t>(worldTick, 0, getTotalTicks()));
+}
+
 // Native render alpha uses a different clock and can move replay sampling backwards.
 std::optional<visuals::ReplaySampleTime> ReplaySession::getCameraRenderSampleTime() const noexcept {
     if (!mActive || !mReplayWorldJoined) return std::nullopt;
 
-    auto const appliedTick = std::max(0, mCurrentTick);
-    return visuals::ReplaySampleTime::fromPreview(appliedTick, previewPartialTick());
+    auto const playheadTick = std::max(0, mPreviewPlayheadTick);
+    return visuals::ReplaySampleTime::fromPreview(playheadTick, previewPartialTick());
 }
 
 // Pose history spans [appliedTick - 1, appliedTick], so entity sampling trails the camera by one tick.
@@ -2434,7 +2462,23 @@ std::optional<visuals::ReplaySampleTime> ReplaySession::getEntityRenderSampleTim
 
     auto const appliedTick = std::max(0, mCurrentTick);
     if (appliedTick == 0) return std::nullopt;
-    return visuals::ReplaySampleTime::fromPreview(appliedTick - 1, previewPartialTick());
+    auto const partial = previewPartialTick();
+    if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+        auto const track = previewFreezeTrackCopy();
+        if (keyframe::hasActiveFreezeTrack(track)) {
+            long double const playhead =
+                static_cast<long double>(std::max(0, mPreviewPlayheadTick)) + static_cast<long double>(partial);
+            auto const eval = keyframe::evaluateFreezeAt(track, playhead);
+            if (eval.frozen) {
+                long double const entityTime = eval.clientTick - 1.0L;
+                if (entityTime < 0.0L) return std::nullopt;
+                auto const whole = static_cast<int64_t>(std::floor(entityTime));
+                auto const frac  = static_cast<float>(entityTime - static_cast<long double>(whole));
+                return visuals::ReplaySampleTime::fromPreview(whole, frac);
+            }
+        }
+    }
+    return visuals::ReplaySampleTime::fromPreview(appliedTick - 1, partial);
 }
 
 bool ReplaySession::beginExportTimeline(int startTick) {
@@ -2449,6 +2493,8 @@ bool ReplaySession::beginExportTimeline(int startTick) {
     startTick                 = std::clamp(startTick, 0, getTotalTicks());
     mIsPaused                 = true;
     mPlaybackTickAccumulator  = 0.0f;
+    mResumeAfterFreezeSeek    = false;
+    mPreviewPlayheadTick      = startTick;
 
     mRequestedSeekTick.store(startTick, std::memory_order_release);
     mSeekTargetTick            = -1;
@@ -2611,6 +2657,8 @@ void ReplaySession::endExportTimeline() {
     mExportForceSnapshotOnSeek = false;
     mExportTimelinePhase       = ReplayExportTimelinePhase::Inactive;
     mExportCameraViewpoint.reset();
+    mResumeAfterFreezeSeek = false;
+    mPreviewPlayheadTick   = mCurrentTick;
     if (wasActive) {
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
         mObserverServerPositionDirty = false;
@@ -2682,7 +2730,20 @@ void ReplaySession::finishSeek() {
     refreshReplayEntityList();
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();
-    if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
+    bool const resumeAfterSeek = std::exchange(mResumeAfterFreezeSeek, false);
+    if (resumeAfterSeek && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+        mIsPaused               = false;
+        mObserverPreviewInRange = false;
+        mPausedPreviewPose.reset();
+        mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
+        mObserverServerPositionDirty = false;
+        mLastObserverServerSyncChunk.reset();
+        if (mReplayPlayer && mReplayWorldJoined) {
+            syncObserverServerPosition(mReplayPlayer->getPosition(), mReplayPlayer->getRotation());
+        }
+    } else if (mIsPaused) {
+        mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
+    }
     syncScreenPreviewAfterSeek();
 }
 
@@ -2864,7 +2925,8 @@ void ReplaySession::tick() {
             && (mScreenPreview || hasPoppableReplayScreenOpen() || mScreenCloseWaitTicks > 0)) {
             bool keepOpenForSameScreenFastForward = false;
             if (!mReaders.empty()) {
-                int const clampedSeek    = std::clamp(pendingRequestedSeek, 0, getTotalTicks());
+                int const clampedSeek    = mExportSeekRequested ? std::clamp(pendingRequestedSeek, 0, getTotalTicks())
+                                                                : previewWorldTargetTick(pendingRequestedSeek);
                 size_t    selectedReader = mReaders.size() - 1;
                 int       chunkStart     = 0;
                 size_t    chunkIndex     = 0;
@@ -2914,7 +2976,13 @@ void ReplaySession::tick() {
 
         int const requestedSeek = mRequestedSeekTick.exchange(-1, std::memory_order_acq_rel);
         if (requestedSeek >= 0) {
-            beginSeek(requestedSeek);
+            mResumeAfterFreezeSeek = false;
+            if (!mExportSeekRequested && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+                mPreviewPlayheadTick = std::clamp(requestedSeek, 0, getTotalTicks());
+                beginSeek(previewWorldTargetTick(mPreviewPlayheadTick));
+            } else {
+                beginSeek(requestedSeek);
+            }
             if (mPendingSnapshotApply || mPendingReplayDimension) return;
         }
         if (mPendingSnapshotApply || mPendingReplayDimension) return;
@@ -3030,6 +3098,15 @@ void ReplaySession::tick() {
         }
 
         bool const exportActive = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
+        if (!exportActive) {
+            int const desiredWorldTick = previewWorldTargetTick(mPreviewPlayheadTick);
+            if (mCurrentTick != desiredWorldTick && !mChunkInjectionPending && !mPendingSnapshotApply
+                && !mPendingReplayDimension && !hasPendingReplayReaderBoundary()) {
+                mResumeAfterFreezeSeek = !mIsPaused;
+                beginSeek(desiredWorldTick);
+                return;
+            }
+        }
         if (mIsPaused) {
             levelFreeze.freeze = !exportActive;
             holdItemUseBetweenTicks();
@@ -3039,18 +3116,70 @@ void ReplaySession::tick() {
         mPlaybackTickAccumulator  += speed;
         int const ticksToAdvance  = static_cast<int>(mPlaybackTickAccumulator);
         mPlaybackTickAccumulator -= static_cast<float>(ticksToAdvance);
-        if (ticksToAdvance == 0) holdItemUseBetweenTicks();
-        for (int tick = 0; tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply
-                           && !mPendingReplayDimension && !hasPendingReplayReaderBoundary();
-             ++tick) {
-            int const before = mCurrentTick;
-            syncPreviewObserverForTick(before + 1);
-            if (!advanceReplayTick(true)) break;
-            if (mCurrentTick != before) markReplayTickAdvanced();
+        auto const freezeTrack      = previewFreezeTrackCopy();
+        bool const hasFreeze        = !exportActive && keyframe::hasActiveFreezeTrack(freezeTrack);
+        if (!hasFreeze) {
+            if (ticksToAdvance == 0) holdItemUseBetweenTicks();
+            for (int tick = 0; tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply
+                               && !mPendingReplayDimension && !hasPendingReplayReaderBoundary();
+                 ++tick) {
+                int const before = mCurrentTick;
+                syncPreviewObserverForTick(before + 1);
+                if (!advanceReplayTick(true)) break;
+                if (mCurrentTick != before) {
+                    mPreviewPlayheadTick = mCurrentTick;
+                    markReplayTickAdvanced();
+                }
+            }
+            // The next client tick runs before its replay tick, so freeze it only when that replay tick will not
+            // advance.
+            bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
+            levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + speed < 1.0f;
+        } else {
+            bool      worldAdvanced = false;
+            int const totalTicks    = getTotalTicks();
+            for (int tick = 0; tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply
+                               && !mPendingReplayDimension && !hasPendingReplayReaderBoundary();
+                 ++tick) {
+                if (mPreviewPlayheadTick >= totalTicks
+                    && previewWorldTargetTick(mPreviewPlayheadTick) == mCurrentTick) {
+                    mIsPaused                = true;
+                    mPlaybackTickAccumulator = 0.0f;
+                    mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
+                    getLogger().debug("Replay finished and paused at tick {}", mPreviewPlayheadTick);
+                    break;
+                }
+                int const nextPlayhead  = mPreviewPlayheadTick + 1;
+                int const nextWorldTick = previewWorldTargetTick(nextPlayhead);
+                syncPreviewObserverForTick(nextPlayhead);
+                if (nextWorldTick == mCurrentTick) {
+                    mPreviewPlayheadTick = nextPlayhead;
+                    markReplayTickAdvanced();
+                    continue;
+                }
+                if (nextWorldTick == mCurrentTick + 1) {
+                    int const before = mCurrentTick;
+                    if (!advanceReplayTick(true)) break;
+                    if (mCurrentTick != before) {
+                        mPreviewPlayheadTick = nextPlayhead;
+                        markReplayTickAdvanced();
+                        worldAdvanced = true;
+                    }
+                    continue;
+                }
+                mPreviewPlayheadTick   = nextPlayhead;
+                mResumeAfterFreezeSeek = true;
+                beginSeek(nextWorldTick);
+                if (mPendingSnapshotApply || mPendingReplayDimension) return;
+                break;
+            }
+            if (!worldAdvanced) holdItemUseBetweenTicks();
+            auto const freezeNow =
+                keyframe::evaluateFreezeAt(freezeTrack, static_cast<long double>(mPreviewPlayheadTick));
+            bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
+            levelFreeze.freeze =
+                settled && (freezeNow.worldFrozen || (!worldAdvanced && mPlaybackTickAccumulator + speed < 1.0f));
         }
-        // The next client tick runs before its replay tick, so freeze it only when that replay tick will not advance.
-        bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
-        levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + speed < 1.0f;
     } catch (std::exception const& e) {
         getLogger().error("Replay session failed: {}", e.what());
         stop();
@@ -3174,6 +3303,8 @@ bool ReplaySession::init(std::filesystem::path filePath) {
 
     mReplayFilePath          = std::move(filePath);
     mCurrentTick             = 0;
+    mPreviewPlayheadTick       = 0;
+    mResumeAfterFreezeSeek     = false;
     mReaderIndex             = 0;
     mSeekTargetTick          = -1;
     mExportSeekRequested     = false;

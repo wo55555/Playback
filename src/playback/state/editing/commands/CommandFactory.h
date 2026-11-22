@@ -114,6 +114,17 @@ public:
     static std::unique_ptr<model::IEditCommand> createSetSpeedTrackEnabled(bool enabled);
     static std::unique_ptr<model::IEditCommand> createSetSpeedTrackLocked(bool locked);
     static std::unique_ptr<model::IEditCommand> createClearSpeedKeyframes();
+
+    static std::unique_ptr<model::IEditCommand> createAddFreezeTrack();
+    static std::unique_ptr<model::IEditCommand> createRemoveFreezeTrack();
+    static std::unique_ptr<model::IEditCommand>
+    createAddFreezeKeyframe(int tick, bool frozen = true, int frozenDelay = 0);
+    static std::unique_ptr<model::IEditCommand> createMoveFreezeKeyframe(int fromTick, int toTick);
+    static std::unique_ptr<model::IEditCommand> createDeleteFreezeKeyframe(int tick);
+    static std::unique_ptr<model::IEditCommand> createSetFreezeKeyframe(int tick, bool frozen, int frozenDelay);
+    static std::unique_ptr<model::IEditCommand> createSetFreezeTrackEnabled(bool enabled);
+    static std::unique_ptr<model::IEditCommand> createSetFreezeTrackLocked(bool locked);
+    static std::unique_ptr<model::IEditCommand> createClearFreezeKeyframes();
 };
 
 } // namespace playback::state::editing::command

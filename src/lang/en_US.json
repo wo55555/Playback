@@ -440,6 +440,7 @@
                 "addTrack": "Add track",
                 "addCameraTrack": "Camera Track",
                 "addSpeedTrack": "Speed Track",
+                "addFreezeTrack": "Freeze Track",
                 "maximize": "Maximize viewport (Ctrl+Shift+F)",
                 "restore": "Restore viewport (Esc)",
                 "play": "Play",
@@ -668,7 +669,16 @@
                 "setSpeedKeyframeBezierControls": "Set Speed Curve",
                 "setSpeedTrackEnabled": "Set Speed Track Enabled",
                 "setSpeedTrackLocked": "Set Speed Track Locked",
-                "clearSpeedKeyframes": "Clear Speed Keyframes"
+                "clearSpeedKeyframes": "Clear Speed Keyframes",
+                "addFreezeTrack": "Add Freeze Track",
+                "removeFreezeTrack": "Remove Freeze Track",
+                "addFreezeKeyframe": "Add Freeze Keyframe",
+                "moveFreezeKeyframe": "Move Freeze Keyframe",
+                "deleteFreezeKeyframe": "Delete Freeze Keyframe",
+                "setFreezeKeyframe": "Edit Freeze Keyframe",
+                "setFreezeTrackEnabled": "Set Freeze Track Enabled",
+                "setFreezeTrackLocked": "Set Freeze Track Locked",
+                "clearFreezeKeyframes": "Clear Freeze Keyframes"
             },
             "speed": {
                 "trackName": "Speed",
@@ -686,6 +696,24 @@
                 "toggleEnabled": "Enable Speed Track",
                 "toggleLocked": "Lock Speed Track",
                 "emptyHint": "No speed keyframes yet. Add a keyframe to create a continuous speed ramp."
+            },
+            "freeze": {
+                "trackName": "Freeze",
+                "addKeyframe": "Add Freeze Keyframe",
+                "addKeyframeAtPlayhead": "Add Freeze Keyframe at Playhead",
+                "deleteKeyframe": "Delete Freeze Keyframe",
+                "clearKeyframes": "Clear All Freeze Keyframes",
+                "removeTrack": "Remove Freeze Track",
+                "trackDetailsTitle": "Freeze Track",
+                "keyframeDetailsTitle": "Freeze Keyframe",
+                "frozen": "Freeze World",
+                "frozenState": "Frozen",
+                "unfrozenState": "Unfrozen",
+                "slowdownDelay": "Slowdown Delay (ticks)",
+                "slowdownDelayHint": "0 = instant freeze; 1–5 = 1-tick ease; 6–10 = 2-tick ease.",
+                "keyframeCount": "Keyframes",
+                "trackHint": "Freezes world simulation and entities while camera tracks keep moving.",
+                "emptyHint": "No freeze keyframes yet. Add a keyframe to freeze or unfreeze the world."
             }
         }
     }

@@ -366,6 +366,51 @@ SpeedTrack speedTrackFrom(json const& node) {
     return track;
 }
 
+json toJson(FreezeKeyframe const& key) {
+    return {
+        {"frozen",      key.frozen     },
+        {"frozenDelay", key.frozenDelay},
+    };
+}
+
+FreezeKeyframe freezeKeyframeFrom(json const& node) {
+    FreezeKeyframe key;
+    key.frozen      = boolOr(node, "frozen", key.frozen);
+    key.frozenDelay = clampFreezeDelayTicks(intOr(node, "frozenDelay", key.frozenDelay));
+    return key;
+}
+
+json toJson(FreezeTrack const& track) {
+    auto keys = json::array();
+    for (auto const& [tick, key] : track.keysByTick) {
+        auto entry    = toJson(key);
+        entry["tick"] = tick;
+        keys.push_back(std::move(entry));
+    }
+    return {
+        {"present", track.isVisible()},
+        {"enabled", track.enabled    },
+        {"locked",  track.locked     },
+        {"keys",    std::move(keys)  },
+    };
+}
+
+FreezeTrack freezeTrackFrom(json const& node) {
+    FreezeTrack track;
+    track.enabled = boolOr(node, "enabled", true);
+    track.locked  = boolOr(node, "locked", false);
+    if (auto const* keys = arrayAt(node, "keys")) {
+        for (auto const& entry : *keys) {
+            if (!entry.is_object()) continue;
+            int const tick = std::max(0, intOr(entry, "tick", 0));
+            track.keysByTick.insert_or_assign(tick, freezeKeyframeFrom(entry));
+        }
+    }
+    track.present = boolOr(node, "present", !track.keysByTick.empty());
+    if (!track.keysByTick.empty()) track.present = true;
+    return track;
+}
+
 json toJson(Scene const& scene) {
     auto cameras = json::array();
     for (auto const& camera : scene.cameras) cameras.push_back(toJson(camera));
@@ -383,6 +428,9 @@ json toJson(Scene const& scene) {
     };
     if (scene.speedTrack.isVisible()) {
         result["speedTrack"] = toJson(scene.speedTrack);
+    }
+    if (scene.freezeTrack.isVisible()) {
+        result["freezeTrack"] = toJson(scene.freezeTrack);
     }
     return result;
 }
@@ -432,6 +480,9 @@ Scene sceneFrom(json const& node) {
     if (auto const* speedTrack = objectAt(node, "speedTrack")) {
         scene.speedTrack = speedTrackFrom(*speedTrack);
     }
+    if (auto const* freezeTrack = objectAt(node, "freezeTrack")) {
+        scene.freezeTrack = freezeTrackFrom(*freezeTrack);
+    }
     return scene;
 }
 
@@ -477,6 +528,7 @@ std::string serializeProject(model::EditorStateExt const& project) {
                 synced.cameras       = project.cameras;
                 synced.markers       = project.markers;
                 synced.speedTrack    = project.speedTrack;
+                synced.freezeTrack   = project.freezeTrack;
                 synced.exportInTick  = project.exportInTick;
                 synced.exportOutTick = project.exportOutTick;
                 scenesJson.push_back(toJson(synced));
@@ -492,6 +544,7 @@ std::string serializeProject(model::EditorStateExt const& project) {
         fallback.cameras       = project.cameras;
         fallback.markers       = project.markers;
         fallback.speedTrack    = project.speedTrack;
+        fallback.freezeTrack   = project.freezeTrack;
         fallback.exportInTick  = project.exportInTick;
         fallback.exportOutTick = project.exportOutTick;
         scenesJson.push_back(toJson(fallback));
@@ -649,6 +702,7 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.cameras       = it->cameras;
         loaded.markers       = it->markers;
         loaded.speedTrack    = it->speedTrack;
+        loaded.freezeTrack   = it->freezeTrack;
         loaded.exportInTick  = it->exportInTick;
         loaded.exportOutTick = it->exportOutTick;
     }
