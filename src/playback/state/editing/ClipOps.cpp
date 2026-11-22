@@ -98,12 +98,13 @@ findCoveringClip(model::CameraEntity const& camera, int tick, int totalTicks, bo
 
 template <typename Dst, typename Src>
 void copySceneScopeFields(Dst& dst, Src const& src) {
-    dst.cameras       = src.cameras;
-    dst.markers       = src.markers;
-    dst.speedTrack    = src.speedTrack;
-    dst.freezeTrack   = src.freezeTrack;
-    dst.exportInTick  = src.exportInTick;
-    dst.exportOutTick = src.exportOutTick;
+    dst.cameras        = src.cameras;
+    dst.markers        = src.markers;
+    dst.speedTrack     = src.speedTrack;
+    dst.freezeTrack    = src.freezeTrack;
+    dst.timelapseTrack = src.timelapseTrack;
+    dst.exportInTick   = src.exportInTick;
+    dst.exportOutTick  = src.exportOutTick;
 }
 
 } // namespace

@@ -41,7 +41,7 @@ void TrackTreeModel::setSearch(std::string_view query) { mSearch = query; }
 
 void TrackTreeModel::rebuild(const EditorStateExt& state) {
     mRows.clear();
-    mRows.reserve(state.cameras.size() + 2);
+    mRows.reserve(state.cameras.size() + 3);
 
     float const rowHeight = metrics::cameraRow();
 
@@ -88,6 +88,22 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
                  rowHeight,
                  state.freezeTrack.locked,
                  state.freezeTrack.enabled}
+            );
+        }
+    }
+
+    if (state.timelapseTrack.isVisible()) {
+        std::string timelapseName = "playback.refactorEditor.timelapse.trackName"_tr();
+        if (containsInsensitive(timelapseName, mSearch)) {
+            mRows.push_back(
+                {TrackRowKind::Timelapse,
+                 "timelapse",
+                 std::move(timelapseName),
+                 "__timelapse__",
+                 -1,
+                 rowHeight,
+                 state.timelapseTrack.locked,
+                 state.timelapseTrack.enabled}
             );
         }
     }

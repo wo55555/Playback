@@ -16,6 +16,7 @@ struct Scene {
     std::vector<Marker>       markers;
     SpeedTrack                speedTrack;
     FreezeTrack               freezeTrack;
+    TimelapseTrack            timelapseTrack;
 
     int exportInTick{-1};
     int exportOutTick{-1};
@@ -38,6 +39,7 @@ struct EditorStateExt {
     std::vector<Marker>       markers;
     SpeedTrack                speedTrack;
     FreezeTrack               freezeTrack;
+    TimelapseTrack            timelapseTrack;
     int                       exportInTick{-1};
     int                       exportOutTick{-1};
 
