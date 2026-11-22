@@ -35,6 +35,31 @@ struct SpeedTrack {
     return std::clamp(speed, MinSpeedKeyframeValue, MaxSpeedKeyframeValue);
 }
 
+inline constexpr int MinFreezeDelayTicks = 0;
+inline constexpr int MaxFreezeDelayTicks = 10;
+
+struct FreezeKeyframe {
+    bool frozen{true};
+    int  frozenDelay{0};
+
+    bool operator==(FreezeKeyframe const&) const = default;
+};
+
+struct FreezeTrack {
+    bool                          present{false};
+    bool                          enabled{true};
+    bool                          locked{false};
+    std::map<int, FreezeKeyframe> keysByTick;
+
+    bool operator==(FreezeTrack const&) const = default;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+[[nodiscard]] inline int clampFreezeDelayTicks(int delayTicks) noexcept {
+    return std::clamp(delayTicks, MinFreezeDelayTicks, MaxFreezeDelayTicks);
+}
+
 struct Clip {
     std::string id;
     std::string replayFile;

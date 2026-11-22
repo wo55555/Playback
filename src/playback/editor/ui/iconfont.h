@@ -77,6 +77,11 @@ namespace Playback::ReplayEditor::Icons {
 #define ICON_TRACK_ACTIVE "\ue345" // circle-dot
 #define ICON_TRACK_OFF    "\ue076" // circle
 
+// Track types
+#define ICON_FREEZE    "\ue165" // snowflake
+#define ICON_TIMELAPSE "\ue1e0" // timer
+#define ICON_AUDIO     "\ue55b" // audio-waveform
+
 // Transitions
 #define ICON_TRANSITION "\ue417" // arrow-right-left
 
