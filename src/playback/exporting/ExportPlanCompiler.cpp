@@ -114,20 +114,19 @@ constexpr uint64_t MaxFramePixels       = MaxExportPixels;
 struct ExportSlice {
     int64_t inTick{};
     int64_t outTick{};
-    bool    muteAudio{false};
     bool    hardCutBefore{false};
 };
 
-void appendOrMergeSlice(std::vector<ExportSlice>& slices, int64_t inTick, int64_t outTick, bool muteAudio) {
+void appendOrMergeSlice(std::vector<ExportSlice>& slices, int64_t inTick, int64_t outTick) {
     if (!slices.empty()) {
         auto& prev = slices.back();
-        if (prev.outTick == inTick && prev.muteAudio == muteAudio) {
+        if (prev.outTick == inTick) {
             prev.outTick = outTick;
             return;
         }
     }
     bool const hardCutBefore = !slices.empty() && inTick != slices.back().outTick;
-    slices.push_back(ExportSlice{inTick, outTick, muteAudio, hardCutBefore});
+    slices.push_back(ExportSlice{inTick, outTick, hardCutBefore});
 }
 
 } // namespace
@@ -197,7 +196,7 @@ std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t frameIndex) co
     result.ticket.ptsNumerator   = ptsNumerator;
     result.ticket.ptsDenominator = settings.frameRate.numerator;
     result.hardCut               = (localIndex == 0 && seg.hardCutBefore);
-    result.muteAudio             = seg.muteAudio;
+    result.muteAudio             = false;
     result.worldFrozen           = false;
     return result;
 }
@@ -276,7 +275,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
             if (slice.inTick < 0 || slice.inTick >= slice.outTick || slice.outTick > project.totalTicks) {
                 return failure(ExportError::InvalidTimeline, "An enabled clip is out of timeline bounds");
             }
-            appendOrMergeSlice(slices, slice.inTick, slice.outTick, slice.muted);
+            appendOrMergeSlice(slices, slice.inTick, slice.outTick);
         }
         break;
     }
@@ -289,7 +288,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
         }
 
         if (project.cameras.empty()) {
-            slices.push_back(ExportSlice{settings.startTick, settings.endTick, false, false});
+            slices.push_back(ExportSlice{settings.startTick, settings.endTick, false});
             break;
         }
 
@@ -298,7 +297,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
             int64_t const cStart = std::max<int64_t>(slice.inTick, settings.startTick);
             int64_t const cEnd   = std::min<int64_t>(slice.outTick, settings.endTick);
             if (cStart >= cEnd) continue;
-            appendOrMergeSlice(slices, cStart, cEnd, slice.muted);
+            appendOrMergeSlice(slices, cStart, cEnd);
         }
         if (slices.empty()) {
             return failure(ExportError::InvalidTimeline, "No enabled clips lie within the selected export range");
@@ -317,7 +316,6 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
             ExportSlice{
                 clip->inTick,
                 clip->outTick,
-                clip->muted,
                 false,
             }
         );
@@ -414,7 +412,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
                 framePlan.ticket.ptsNumerator   = ptsNumerator;
                 framePlan.ticket.ptsDenominator = normalized.frameRate.numerator;
                 framePlan.hardCut               = (segFrameCount == 0 && slice.hardCutBefore);
-                framePlan.muteAudio             = slice.muteAudio || freezeEval.worldFrozen || tlEval.active;
+                framePlan.muteAudio             = freezeEval.worldFrozen || tlEval.active;
                 framePlan.worldFrozen           = freezeEval.worldFrozen;
                 precomputedFrames.push_back(framePlan);
 
@@ -449,7 +447,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
                     SpeedRampTickDenominator,
                     maxNum,
                     slice.hardCutBefore,
-                    slice.muteAudio,
+                    false,
                 }
             );
             maxOutTick = std::max(maxOutTick, slice.outTick);
@@ -526,7 +524,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
                     replayDen,
                     maxNum,
                     slice.hardCutBefore,
-                    slice.muteAudio,
+                    false,
                 }
             );
             totalFrames = nextTotalFrames;

@@ -50,6 +50,22 @@ std::optional<int> SelectionModel::selectedTimelapseKeyframe() const {
     return std::nullopt;
 }
 
+void SelectionModel::selectAudioTrack(std::string trackId) { select(SelectedAudioTrack{std::move(trackId)}); }
+
+void SelectionModel::selectAudioClip(std::string trackId, std::string clipId) {
+    select(SelectedAudioClip{std::move(trackId), std::move(clipId)});
+}
+
+std::optional<std::string> SelectionModel::selectedAudioTrackId() const {
+    if (auto const* track = getAs<SelectedAudioTrack>()) return track->trackId;
+    return std::nullopt;
+}
+
+std::optional<SelectedAudioClip> SelectionModel::selectedAudioClip() const {
+    if (auto const* clip = getAs<SelectedAudioClip>()) return *clip;
+    return std::nullopt;
+}
+
 void SelectionModel::setKeyframes(std::vector<SelectedKeyframe> keys) {
     if (keys.empty()) {
         clear();
@@ -117,6 +133,10 @@ std::vector<std::string> SelectionModel::selectedIds() const {
                 return {"timelapse_track"};
             } else if constexpr (std::is_same_v<T, SelectedTimelapseKeyframe>) {
                 return {"timelapse_track", std::to_string(sel.tick)};
+            } else if constexpr (std::is_same_v<T, SelectedAudioTrack>) {
+                return {sel.trackId};
+            } else if constexpr (std::is_same_v<T, SelectedAudioClip>) {
+                return {sel.trackId, sel.clipId};
             }
             return {};
         },
@@ -187,6 +207,14 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
                 return state.timelapseTrack.isVisible();
             } else if constexpr (std::is_same_v<T, SelectedTimelapseKeyframe>) {
                 return state.timelapseTrack.keysByTick.contains(sel.tick);
+            } else if constexpr (std::is_same_v<T, SelectedAudioTrack>) {
+                return std::ranges::any_of(state.audioTracks, [&](auto const& track) {
+                    return track.id == sel.trackId;
+                });
+            } else if constexpr (std::is_same_v<T, SelectedAudioClip>) {
+                auto const it = std::ranges::find(state.audioTracks, sel.trackId, &AudioTrack::id);
+                return it != state.audioTracks.end()
+                    && std::ranges::any_of(it->clips, [&](auto const& clip) { return clip.id == sel.clipId; });
             }
             return true;
         },

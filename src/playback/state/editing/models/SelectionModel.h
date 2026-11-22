@@ -49,6 +49,15 @@ struct SelectedTimelapseKeyframe {
     int tick{};
 };
 
+struct SelectedAudioTrack {
+    std::string trackId;
+};
+
+struct SelectedAudioClip {
+    std::string trackId;
+    std::string clipId;
+};
+
 using Selection = std::variant<
     SelectedKeyframe,
     SelectedClip,
@@ -60,7 +69,9 @@ using Selection = std::variant<
     SelectedFreezeTrack,
     SelectedFreezeKeyframe,
     SelectedTimelapseTrack,
-    SelectedTimelapseKeyframe>;
+    SelectedTimelapseKeyframe,
+    SelectedAudioTrack,
+    SelectedAudioClip>;
 
 struct EditorStateExt;
 
@@ -80,6 +91,10 @@ public:
     void                                   selectTimelapseKeyframe(int tick);
     [[nodiscard]] bool                     isTimelapseTrackSelected() const;
     [[nodiscard]] std::optional<int>       selectedTimelapseKeyframe() const;
+    void                                           selectAudioTrack(std::string trackId);
+    void                                           selectAudioClip(std::string trackId, std::string clipId);
+    [[nodiscard]] std::optional<std::string>       selectedAudioTrackId() const;
+    [[nodiscard]] std::optional<SelectedAudioClip> selectedAudioClip() const;
     [[nodiscard]] bool                     hasSelection() const;
     [[nodiscard]] const Selection*         getSelection() const;
     [[nodiscard]] std::vector<std::string> selectedIds() const;

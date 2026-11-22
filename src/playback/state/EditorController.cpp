@@ -1,6 +1,7 @@
 ﻿#include "EditorController.h"
 
 #include "playback/Playback.h"
+#include "playback/audio/ExternalAudioPreview.h"
 #include "playback/audio/PreviewAudio.h"
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/io/ReplayLibrary.h"
@@ -48,6 +49,11 @@ ReplayBrowserEntry makeBrowserEntry(io::ReplaySummary summary) {
 std::string replayPreferenceKey(std::filesystem::path const& path) {
     auto const utf8Path = path.lexically_normal().generic_u8string();
     return {reinterpret_cast<char const*>(utf8Path.data()), utf8Path.size()};
+}
+
+std::string pathToUtf8(std::filesystem::path const& path) {
+    auto const u8 = path.u8string();
+    return {reinterpret_cast<char const*>(u8.data()), u8.size()};
 }
 
 constexpr auto kAutosaveInterval = std::chrono::seconds(30);
@@ -150,6 +156,7 @@ void EditorController::reset() {
     mPreviewCameraId.reset();
     replay::ReplaySession::getInstance().setPreviewFreezeTrack({});
     audio::preview::setClipMuted(false);
+    audio::external::stopPreview();
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
     mCommandStack.clear();
     mCommandStack.markSaved();
@@ -691,9 +698,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::RenameClip:
         mCommandStack.push(CommandFactory::createRenameClip(action.id, action.name), mProject);
         break;
-    case EditorActionType::SetClipMuted:
-        mCommandStack.push(CommandFactory::createSetClipMuted(action.id, action.value), mProject);
-        break;
     case EditorActionType::SetClipLocked:
         mCommandStack.push(CommandFactory::createSetClipLocked(action.id, action.value), mProject);
         break;
@@ -833,6 +837,53 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::ClearTimelapseKeyframes:
         mCommandStack.push(CommandFactory::createClearTimelapseKeyframes(), mProject);
+        break;
+    case EditorActionType::AddAudioTrack:
+        mCommandStack.push(CommandFactory::createAddAudioTrack(action.name), mProject);
+        break;
+    case EditorActionType::RemoveAudioTrack:
+        mCommandStack.push(CommandFactory::createRemoveAudioTrack(action.id), mProject);
+        break;
+    case EditorActionType::RenameAudioTrack:
+        mCommandStack.push(CommandFactory::createRenameAudioTrack(action.id, action.name), mProject);
+        break;
+    case EditorActionType::SetAudioTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetAudioTrackEnabled(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetAudioTrackMuted:
+        mCommandStack.push(CommandFactory::createSetAudioTrackMuted(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetAudioTrackLocked:
+        mCommandStack.push(CommandFactory::createSetAudioTrackLocked(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetAudioTrackVolume:
+        mCommandStack.push(CommandFactory::createSetAudioTrackVolume(action.id, action.volume), mProject);
+        break;
+    case EditorActionType::AddAudioClip:
+        mCommandStack.push(
+            CommandFactory::createAddAudioClip(action.id, pathToUtf8(action.path), action.tick, action.name),
+            mProject
+        );
+        break;
+    case EditorActionType::RemoveAudioClip:
+        mCommandStack.push(CommandFactory::createRemoveAudioClip(action.id, action.secondaryId), mProject);
+        break;
+    case EditorActionType::MoveAudioClip:
+        mCommandStack.push(CommandFactory::createMoveAudioClip(action.id, action.secondaryId, action.tick), mProject);
+        break;
+    case EditorActionType::SetAudioClipProps:
+        mCommandStack.push(
+            CommandFactory::createSetAudioClipProps(
+                action.id,
+                action.secondaryId,
+                pathToUtf8(action.path),
+                action.trimStartSeconds,
+                action.durationSeconds,
+                action.volume,
+                action.muted
+            ),
+            mProject
+        );
         break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
@@ -1318,14 +1369,21 @@ void EditorController::tick(bool hudVisible) {
         session.setClipSpeedScale(static_cast<float>(keyframe::effectiveSpeedAt(mProject, replayTick)));
         auto const freezeEval    = keyframe::evaluateFreezeAt(mProject.freezeTrack, replayTick);
         auto const timelapseEval = keyframe::evaluateTimelapseAt(mProject.timelapseTrack, replayTick);
-        audio::preview::setClipMuted(
-            state::editing::ClipOps::isClipMutedAt(mProject, currentTick) || freezeEval.worldFrozen
-            || timelapseEval.active
+        audio::preview::setClipMuted(freezeEval.worldFrozen || timelapseEval.active);
+        audio::external::updatePreview(
+            mProject,
+            replayTick,
+            !session.isPaused(),
+            session.isSeekPending(),
+            mExportDriver && mExportDriver->isActive(),
+            audio::preview::volume(),
+            audio::preview::isMuted()
         );
     } else {
         session.setPreviewFreezeTrack({});
         session.setClipSpeedScale(1.0f);
         audio::preview::setClipMuted(false);
+        audio::external::stopPreview();
     }
 }
 
