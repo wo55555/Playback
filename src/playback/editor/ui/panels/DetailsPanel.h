@@ -50,6 +50,9 @@ private:
     int                         mBezierDragHandle{};
     state::editing::model::Vec2 mBezierDraftCtrl1{0.42f, 0.0f};
     state::editing::model::Vec2 mBezierDraftCtrl2{0.58f, 1.0f};
+    std::string                 mSpeedDragClipId;
+    bool                        mSpeedDragging{false};
+    float                       mSpeedDragValue{1.0f};
 };
 
 } // namespace playback::editor::ui

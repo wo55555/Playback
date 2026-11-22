@@ -147,10 +147,11 @@ void EditorController::reset() {
     audio::preview::setClipMuted(false);
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
     mCommandStack.clear();
+    mCommandStack.markSaved();
     mActiveReplayPath.clear();
     mProjectFile.clear();
     mProjectError.clear();
-    mSavedRevision                  = mCommandStack.revision();
+    mLastHistoryEvent               = {};
     mEditorReadyLatched             = false;
     mProjectTotalTicks              = -1;
     mExportTickedBeforeClientUpdate = false;
@@ -195,10 +196,11 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     state::editing::CameraBindingOps::addFreeCamera(mProject, {});
     state::editing::ClipOps::ensureDefaultScene(mProject);
     mCommandStack.clear();
+    mLastHistoryEvent = {};
     mPreviewCameraId.reset();
     mProjectTotalTicks = totalTicks;
     loadProjectForReplay(replayPath);
-    mSavedRevision = mCommandStack.revision();
+    mCommandStack.markSaved();
     mLastAutosave  = std::chrono::steady_clock::now();
     publishCameraTimeline();
 }
@@ -241,7 +243,7 @@ bool EditorController::saveProject(std::filesystem::path const& path) {
     }
     mProjectFile = path;
     mProjectError.clear();
-    mSavedRevision = mCommandStack.revision();
+    mCommandStack.markSaved();
     mLastAutosave  = std::chrono::steady_clock::now();
     logger().debug("Saved editor project {}", path);
     return true;
@@ -265,15 +267,46 @@ void EditorController::flushProjectOnClose() {
 void EditorController::applyEditorAction(EditorAction const& action) {
     using namespace state::editing::command;
 
+    std::string const previousSceneId = mProject.activeSceneId;
     state::editing::ClipOps::syncActiveSceneFromWorking(mProject);
 
     switch (action.type) {
-    case EditorActionType::UndoEditorEdit:
-        (void)mCommandStack.undo(mProject);
+    case EditorActionType::UndoEditorEdit: {
+        size_t const steps = std::max<size_t>(1, action.historySteps);
+        size_t       performed{};
+        std::string  lastLabel;
+        for (size_t i = 0; i < steps; ++i) {
+            std::string stepLabel;
+            if (!mCommandStack.undo(mProject, &stepLabel)) break;
+            ++performed;
+            lastLabel = std::move(stepLabel);
+        }
+        if (performed > 0) {
+            ++mLastHistoryEvent.seq;
+            mLastHistoryEvent.kind  = EditorHistoryEventKind::Undo;
+            mLastHistoryEvent.label = std::move(lastLabel);
+            mLastHistoryEvent.steps = performed;
+        }
         break;
-    case EditorActionType::RedoEditorEdit:
-        (void)mCommandStack.redo(mProject);
+    }
+    case EditorActionType::RedoEditorEdit: {
+        size_t const steps = std::max<size_t>(1, action.historySteps);
+        size_t       performed{};
+        std::string  lastLabel;
+        for (size_t i = 0; i < steps; ++i) {
+            std::string stepLabel;
+            if (!mCommandStack.redo(mProject, &stepLabel)) break;
+            ++performed;
+            lastLabel = std::move(stepLabel);
+        }
+        if (performed > 0) {
+            ++mLastHistoryEvent.seq;
+            mLastHistoryEvent.kind  = EditorHistoryEventKind::Redo;
+            mLastHistoryEvent.label = std::move(lastLabel);
+            mLastHistoryEvent.steps = performed;
+        }
         break;
+    }
     case EditorActionType::AddFreeCamera:
         mCommandStack.push(CommandFactory::createAddFreeCamera(action.name), mProject);
         break;
@@ -783,6 +816,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
 
     state::editing::ClipOps::syncActiveSceneFromWorking(mProject);
 
+    if (mProject.activeSceneId != previousSceneId) mPreviewCameraId.reset();
     if (mPreviewCameraId && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
             return camera.id == *mPreviewCameraId && state::editing::model::isCameraRenderable(camera);
         })) {
@@ -846,6 +880,13 @@ void EditorController::publishState(bool hudVisible) {
     }
     state.canUndo                    = mCommandStack.canUndo();
     state.canRedo                    = mCommandStack.canRedo();
+    state.undoCount                  = mCommandStack.undoCount();
+    state.redoCount                  = mCommandStack.redoCount();
+    state.undoLabel                  = mCommandStack.undoLabel();
+    state.redoLabel                  = mCommandStack.redoLabel();
+    state.undoHistory                = mCommandStack.recentUndoLabels(20);
+    state.redoHistory                = mCommandStack.recentRedoLabels(20);
+    state.historyEvent               = mLastHistoryEvent;
     state.persistence.dirty          = state.editorVisible && isProjectDirty();
     state.persistence.projectFile    = mProjectFile.empty() ? std::string{} : mProjectFile.filename().string();
     state.persistence.error          = mProjectError;
@@ -1158,7 +1199,8 @@ void EditorController::tick(bool hudVisible) {
             mProjectFile                 = target;
             mProjectError.clear();
             mCommandStack.clear();
-            mSavedRevision = mCommandStack.revision();
+            mCommandStack.markSaved();
+            mLastHistoryEvent = {};
             mPreviewCameraId.reset();
             publishCameraTimeline();
             break;
