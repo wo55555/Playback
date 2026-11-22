@@ -8,6 +8,7 @@
 #include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/ClientCameraCapture.h"
+#include "playback/keyframe/SpeedTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/CameraBindingOps.h"
 #include "playback/state/editing/ClipOps.h"
@@ -670,13 +671,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     }
     case EditorActionType::AddClip:
         mCommandStack.push(
-            CommandFactory::createAddClip(
-                action.id,
-                action.tick,
-                action.secondaryTick,
-                action.name,
-                action.speed > 0.0f ? action.speed : 1.0f
-            ),
+            CommandFactory::createAddClip(action.id, action.tick, action.secondaryTick, action.name),
             mProject
         );
         break;
@@ -688,9 +683,6 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             CommandFactory::createMoveAndTrimClip(action.id, action.tick, action.secondaryTick),
             mProject
         );
-        break;
-    case EditorActionType::SetClipSpeed:
-        mCommandStack.push(CommandFactory::createSetClipSpeed(action.id, action.speed), mProject);
         break;
     case EditorActionType::RenameClip:
         mCommandStack.push(CommandFactory::createRenameClip(action.id, action.name), mProject);
@@ -738,6 +730,48 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::SetSceneExportRange:
         mCommandStack.push(CommandFactory::createSetSceneExportRange(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::AddSpeedTrack:
+        mCommandStack.push(CommandFactory::createAddSpeedTrack(), mProject);
+        break;
+    case EditorActionType::RemoveSpeedTrack:
+        mCommandStack.push(CommandFactory::createRemoveSpeedTrack(), mProject);
+        break;
+    case EditorActionType::AddSpeedKeyframe:
+        mCommandStack.push(CommandFactory::createAddSpeedKeyframe(action.tick, action.speedValue), mProject);
+        break;
+    case EditorActionType::MoveSpeedKeyframe:
+        mCommandStack.push(CommandFactory::createMoveSpeedKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::DeleteSpeedKeyframe:
+        mCommandStack.push(CommandFactory::createDeleteSpeedKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::SetSpeedKeyframeValue:
+        mCommandStack.push(CommandFactory::createSetSpeedKeyframeValue(action.tick, action.speedValue), mProject);
+        break;
+    case EditorActionType::SetSpeedKeyframeInterpolation:
+        mCommandStack.push(
+            CommandFactory::createSetSpeedKeyframeInterpolation(
+                action.tick,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SetSpeedKeyframeBezierControls:
+        mCommandStack.push(
+            CommandFactory::createSetSpeedKeyframeBezierControls(action.tick, action.bezierCtrl1, action.bezierCtrl2),
+            mProject
+        );
+        break;
+    case EditorActionType::SetSpeedTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetSpeedTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetSpeedTrackLocked:
+        mCommandStack.push(CommandFactory::createSetSpeedTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::ClearSpeedKeyframes:
+        mCommandStack.push(CommandFactory::createClearSpeedKeyframes(), mProject);
         break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
@@ -1216,8 +1250,10 @@ void EditorController::tick(bool hudVisible) {
     autosaveIfDue();
     publishState(hudVisible);
     if (session.isActive() && (!mExportDriver || !mExportDriver->isActive())) {
-        int const currentTick = std::max(0, session.getCurrentTick());
-        session.setClipSpeedScale(state::editing::ClipOps::activeClipSpeedAt(mProject, currentTick));
+        int const         currentTick = std::max(0, session.getCurrentTick());
+        long double const replayTick =
+            static_cast<long double>(currentTick) + static_cast<long double>(session.previewPartialTick());
+        session.setClipSpeedScale(static_cast<float>(keyframe::effectiveSpeedAt(mProject, replayTick)));
         audio::preview::setClipMuted(state::editing::ClipOps::isClipMutedAt(mProject, currentTick));
     } else {
         session.setClipSpeedScale(1.0f);

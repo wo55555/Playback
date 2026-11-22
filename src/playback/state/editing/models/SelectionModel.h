@@ -31,7 +31,20 @@ struct SelectedCamera {
     std::string cameraId;
 };
 
-using Selection = std::variant<SelectedKeyframe, SelectedClip, SelectedMarker, SelectedTransition, SelectedCamera>;
+struct SelectedSpeedTrack {};
+
+struct SelectedSpeedKeyframe {
+    int tick{};
+};
+
+using Selection = std::variant<
+    SelectedKeyframe,
+    SelectedClip,
+    SelectedMarker,
+    SelectedTransition,
+    SelectedCamera,
+    SelectedSpeedTrack,
+    SelectedSpeedKeyframe>;
 
 struct EditorStateExt;
 
@@ -39,6 +52,10 @@ class SelectionModel {
 public:
     void                                   select(Selection sel);
     void                                   clear();
+    void                                   selectSpeedTrack();
+    void                                   selectSpeedKeyframe(int tick);
+    [[nodiscard]] bool                     isSpeedTrackSelected() const;
+    [[nodiscard]] std::optional<int>       selectedSpeedKeyframe() const;
     [[nodiscard]] bool                     hasSelection() const;
     [[nodiscard]] const Selection*         getSelection() const;
     [[nodiscard]] std::vector<std::string> selectedIds() const;

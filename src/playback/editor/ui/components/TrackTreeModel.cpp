@@ -3,6 +3,8 @@
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include <algorithm>
 #include <cctype>
 #include <ranges>
@@ -10,6 +12,7 @@
 namespace playback::editor::ui {
 
 using namespace playback::state::editing::model;
+using namespace ll::i18n_literals;
 
 namespace {
 
@@ -38,7 +41,7 @@ void TrackTreeModel::setSearch(std::string_view query) { mSearch = query; }
 
 void TrackTreeModel::rebuild(const EditorStateExt& state) {
     mRows.clear();
-    mRows.reserve(state.cameras.size());
+    mRows.reserve(state.cameras.size() + 1);
 
     float const rowHeight = metrics::cameraRow();
 
@@ -46,8 +49,31 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
         const auto& camera = state.cameras[index];
         if (!cameraMatchesSearch(camera, mSearch)) continue;
         mRows.push_back(
-            {"camera:" + camera.id, camera.name, camera.id, index, rowHeight, camera.locked, camera.enabled}
+            {TrackRowKind::Camera,
+             "camera:" + camera.id,
+             camera.name,
+             camera.id,
+             index,
+             rowHeight,
+             camera.locked,
+             camera.enabled}
         );
+    }
+
+    if (state.speedTrack.isVisible()) {
+        std::string speedName = "playback.refactorEditor.speed.trackName"_tr();
+        if (containsInsensitive(speedName, mSearch)) {
+            mRows.push_back(
+                {TrackRowKind::Speed,
+                 "speed",
+                 std::move(speedName),
+                 "__speed__",
+                 -1,
+                 rowHeight,
+                 state.speedTrack.locked,
+                 state.speedTrack.enabled}
+            );
+        }
     }
 }
 

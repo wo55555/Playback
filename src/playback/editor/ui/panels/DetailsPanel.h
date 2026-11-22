@@ -31,6 +31,8 @@ private:
     bool drawKeyframes(PanelContext const& ctx);
     bool drawKeyframe(PanelContext const& ctx);
     bool drawMarker(PanelContext const& ctx);
+    bool drawSpeedKeyframe(PanelContext const& ctx);
+    bool drawSpeedTrack(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
     void drawKeyframeInterpolationRows(
         PanelContext const&                          ctx,
@@ -50,9 +52,13 @@ private:
     int                         mBezierDragHandle{};
     state::editing::model::Vec2 mBezierDraftCtrl1{0.42f, 0.0f};
     state::editing::model::Vec2 mBezierDraftCtrl2{0.58f, 1.0f};
-    std::string                 mSpeedDragClipId;
-    bool                        mSpeedDragging{false};
-    float                       mSpeedDragValue{1.0f};
+    int                         mSpeedBezierDragTick{-1};
+    int                         mSpeedBezierDragHandle{};
+    state::editing::model::Vec2 mSpeedBezierDraftCtrl1{0.42f, 0.0f};
+    state::editing::model::Vec2 mSpeedBezierDraftCtrl2{0.58f, 1.0f};
+    int                         mSpeedKeyDragTick{-1};
+    bool                        mSpeedKeyDragging{false};
+    float                       mSpeedKeyDragValue{1.0f};
 };
 
 } // namespace playback::editor::ui

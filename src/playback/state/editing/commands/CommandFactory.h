@@ -76,12 +76,11 @@ public:
     static std::unique_ptr<model::IEditCommand> createRenameMarker(const std::string& id, const std::string& label);
 
     static std::unique_ptr<model::IEditCommand>
-    createAddClip(const std::string& cameraId, int inTick, int outTick, const std::string& name, float speed = 1.0f);
+    createAddClip(const std::string& cameraId, int inTick, int outTick, const std::string& name);
     static std::unique_ptr<model::IEditCommand>
     createSplitClip(const std::string& clipId, int splitTick, const std::string& newClipName = {});
     static std::unique_ptr<model::IEditCommand>
     createMoveAndTrimClip(const std::string& clipId, int newInTick, int newOutTick);
-    static std::unique_ptr<model::IEditCommand> createSetClipSpeed(const std::string& clipId, float speed);
     static std::unique_ptr<model::IEditCommand> createRenameClip(const std::string& clipId, const std::string& name);
     static std::unique_ptr<model::IEditCommand> createSetClipMuted(const std::string& clipId, bool muted);
     static std::unique_ptr<model::IEditCommand> createSetClipLocked(const std::string& clipId, bool locked);
@@ -101,6 +100,20 @@ public:
     static std::unique_ptr<model::IEditCommand> createDeleteScene(const std::string& sceneId);
     static std::unique_ptr<model::IEditCommand> createSwitchScene(const std::string& sceneId);
     static std::unique_ptr<model::IEditCommand> createSetSceneExportRange(int inTick, int outTick);
+
+    static std::unique_ptr<model::IEditCommand> createAddSpeedTrack();
+    static std::unique_ptr<model::IEditCommand> createRemoveSpeedTrack();
+    static std::unique_ptr<model::IEditCommand> createAddSpeedKeyframe(int tick, float speed = 1.0f);
+    static std::unique_ptr<model::IEditCommand> createMoveSpeedKeyframe(int fromTick, int toTick);
+    static std::unique_ptr<model::IEditCommand> createDeleteSpeedKeyframe(int tick);
+    static std::unique_ptr<model::IEditCommand> createSetSpeedKeyframeValue(int tick, float speed);
+    static std::unique_ptr<model::IEditCommand>
+    createSetSpeedKeyframeInterpolation(int tick, model::CameraInterpolationType interpolation);
+    static std::unique_ptr<model::IEditCommand>
+    createSetSpeedKeyframeBezierControls(int tick, model::Vec2 ctrl1, model::Vec2 ctrl2);
+    static std::unique_ptr<model::IEditCommand> createSetSpeedTrackEnabled(bool enabled);
+    static std::unique_ptr<model::IEditCommand> createSetSpeedTrackLocked(bool locked);
+    static std::unique_ptr<model::IEditCommand> createClearSpeedKeyframes();
 };
 
 } // namespace playback::state::editing::command
