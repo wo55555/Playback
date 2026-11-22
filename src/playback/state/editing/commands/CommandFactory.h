@@ -82,7 +82,6 @@ public:
     static std::unique_ptr<model::IEditCommand>
     createMoveAndTrimClip(const std::string& clipId, int newInTick, int newOutTick);
     static std::unique_ptr<model::IEditCommand> createRenameClip(const std::string& clipId, const std::string& name);
-    static std::unique_ptr<model::IEditCommand> createSetClipMuted(const std::string& clipId, bool muted);
     static std::unique_ptr<model::IEditCommand> createSetClipLocked(const std::string& clipId, bool locked);
     static std::unique_ptr<model::IEditCommand>
     createSetClipExportEnabled(const std::string& clipId, bool exportEnabled);
@@ -135,6 +134,34 @@ public:
     static std::unique_ptr<model::IEditCommand> createSetTimelapseTrackEnabled(bool enabled);
     static std::unique_ptr<model::IEditCommand> createSetTimelapseTrackLocked(bool locked);
     static std::unique_ptr<model::IEditCommand> createClearTimelapseKeyframes();
+
+    static std::unique_ptr<model::IEditCommand> createAddAudioTrack(const std::string& name = {});
+    static std::unique_ptr<model::IEditCommand> createRemoveAudioTrack(const std::string& trackId);
+    static std::unique_ptr<model::IEditCommand>
+    createRenameAudioTrack(const std::string& trackId, const std::string& name);
+    static std::unique_ptr<model::IEditCommand> createSetAudioTrackEnabled(const std::string& trackId, bool enabled);
+    static std::unique_ptr<model::IEditCommand> createSetAudioTrackMuted(const std::string& trackId, bool muted);
+    static std::unique_ptr<model::IEditCommand> createSetAudioTrackLocked(const std::string& trackId, bool locked);
+    static std::unique_ptr<model::IEditCommand> createSetAudioTrackVolume(const std::string& trackId, float volume);
+    static std::unique_ptr<model::IEditCommand> createAddAudioClip(
+        const std::string& trackId,
+        const std::string& filePath,
+        int                startTick,
+        const std::string& name = {}
+    );
+    static std::unique_ptr<model::IEditCommand>
+    createRemoveAudioClip(const std::string& trackId, const std::string& clipId);
+    static std::unique_ptr<model::IEditCommand>
+    createMoveAudioClip(const std::string& trackId, const std::string& clipId, int startTick);
+    static std::unique_ptr<model::IEditCommand> createSetAudioClipProps(
+        const std::string& trackId,
+        const std::string& clipId,
+        const std::string& filePath,
+        double             trimStartSeconds,
+        double             durationSeconds,
+        float              volume,
+        bool               muted
+    );
 };
 
 } // namespace playback::state::editing::command

@@ -14,7 +14,7 @@ struct EditorStateExt;
 
 namespace playback::editor::ui {
 
-enum class TrackRowKind : uint8_t { Camera, Speed, Freeze, Timelapse };
+enum class TrackRowKind : uint8_t { Camera, Speed, Freeze, Timelapse, Audio };
 
 struct TrackTreeRow {
     TrackRowKind kind{TrackRowKind::Camera};
@@ -25,6 +25,7 @@ struct TrackTreeRow {
     float        height{};
     bool         locked{};
     bool         enabled{true};
+    bool         muted{false};
 };
 
 class TrackTreeModel {

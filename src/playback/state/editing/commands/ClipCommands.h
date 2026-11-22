@@ -68,20 +68,6 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class SetClipMuted final : public model::IEditCommand {
-public:
-    SetClipMuted(std::string clipId, bool muted);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mClipId;
-    bool                                 mMuted;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
 class SetClipLocked final : public model::IEditCommand {
 public:
     SetClipLocked(std::string clipId, bool locked);

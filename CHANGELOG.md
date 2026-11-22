@@ -15,10 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an on-demand Speed track from the timeline `+` menu for continuous speed ramps (`0.01x` to `32x`) with a logarithmic curve and shaded acceleration/deceleration regions, supporting eight interpolation modes with draggable cubic Bezier handles, real-time speed-ramped preview, integrated export frame timing, and full undo/redo and project persistence.
 - Added an on-demand Freeze track that can be added and removed from the timeline `+` menu to freeze and unfreeze world time with a configurable 0–10 tick slowdown easing curve, keeping camera motion active while pausing world and entity animations in both live preview and offline export, automatically muting audio while frozen and seamlessly resuming after unfreezing, with full undo/redo and project persistence.
 - Added an on-demand Timelapse track that can be added and removed from the timeline `+` menu to map replay intervals to target output timestamps via keyframes, automatically computing segment output duration and effective speed while highlighting single-keyframe or non-increasing invalid segments, with multi-format duration input and quick presets, real-time high-speed preview with audio muted during active segments, explicit priority overriding the Speed track and fixed-interval export timelapse, and full undo/redo and project persistence.
+- Added on-demand multi-track Audio tracks from the timeline `+` menu to import WAV and FFmpeg-decoded external audio files via a native file picker, rendering mirrored peak waveforms mapped to output duration across speed and timelapse edits, supporting trim start offset, duration trimming, volume, mute, drag editing, real-time synchronized playback, and mixing with game audio or exporting independently into video files and sidecar WAVs (remaining available even during fixed-interval timelapse exports), with full undo/redo and project persistence.
 
 ### Changed
 
 - Unified playback speed control into the on-demand Speed track (replacing per-clip speed controls on camera clips and updating the camera keyframe option to Ignore Speed Track), and updated the export inspector to show the actual output duration and frame count after applying the speed curve.
+- Consolidated audio controls into the audio layer by removing the redundant mute toggle from camera clips, and separated game audio capture and external audio track mixing into independent export audio settings.
 
 ### Fixed
 

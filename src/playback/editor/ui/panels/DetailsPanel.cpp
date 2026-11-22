@@ -1,5 +1,6 @@
 ﻿#include "DetailsPanel.h"
 
+#include "playback/audio/ExternalAudioCache.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/PropertyControls.h"
@@ -20,6 +21,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <iterator>
 #include <span>
 
@@ -556,7 +558,99 @@ void drawBezierCurveRows(
     }
 }
 
+[[nodiscard]] std::filesystem::path utf8ToPath(std::string const& value) {
+    auto const* begin = reinterpret_cast<char8_t const*>(value.data());
+    return std::filesystem::path(std::u8string{begin, begin + value.size()});
+}
+
+[[nodiscard]] std::string pathToUtf8(std::filesystem::path const& path) {
+    auto const u8 = path.u8string();
+    return {reinterpret_cast<char const*>(u8.data()), u8.size()};
+}
+
+template <typename SubmitVolumeFn>
+void drawAudioVolumeControl(
+    char const*        idPrefix,
+    bool               editable,
+    float              committedVolume,
+    std::string const& targetId,
+    std::string&       dragId,
+    bool&              dragging,
+    float&             dragValue,
+    SubmitVolumeFn&&   onCommit
+) {
+    if (dragging && dragId != targetId) {
+        dragging = false;
+        dragId.clear();
+    }
+    float const committed = state::editing::model::clampAudioVolume(committedVolume);
+    float const displayed = (dragging && dragId == targetId) ? dragValue : committed;
+    float       volumePct = displayed * 100.0f;
+
+    ImGui::TextDisabled("%s", "playback.refactorEditor.audio.volume"_tr().c_str());
+    ImGui::SetNextItemWidth(-1.0f);
+    std::string const sliderId = std::string("##") + idPrefix + "-volume";
+    ImGui::SliderFloat(sliderId.c_str(), &volumePct, 0.0f, 200.0f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp);
+    if (editable) {
+        if (ImGui::IsItemActive()) {
+            dragging  = true;
+            dragId    = targetId;
+            dragValue = state::editing::model::clampAudioVolume(volumePct / 100.0f);
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            float const finalVolume = state::editing::model::clampAudioVolume(volumePct / 100.0f);
+            dragging                = false;
+            dragId.clear();
+            if (std::abs(finalVolume - committed) > 1e-4f) {
+                onCommit(finalVolume);
+            }
+        } else if (!ImGui::IsItemActive() && dragging && dragId == targetId) {
+            dragging = false;
+            dragId.clear();
+        }
+    } else if (dragging) {
+        dragging = false;
+        dragId.clear();
+    }
+
+    static constexpr float kVolumePresets[] = {0.5f, 1.0f, 1.5f};
+    ImGui::PushID(idPrefix);
+    drawPresetChips<float>(
+        kVolumePresets,
+        [](float preset) {
+            char buf[16]{};
+            std::snprintf(buf, sizeof(buf), "%.0f%%", static_cast<double>(preset * 100.0f));
+            return std::string(buf);
+        },
+        [displayed](float preset) { return std::abs(displayed - preset) < 0.005f; },
+        [](float) { return theme::kAccent; },
+        [&](float preset) {
+            dragging = false;
+            dragId.clear();
+            if (std::abs(preset - committed) > 1e-4f) {
+                onCommit(preset);
+            }
+        }
+    );
+    ImGui::PopID();
+}
+
 } // namespace
+
+void DetailsPanel::resetAudioDrafts() {
+    mAudioTrackNameId.clear();
+    mAudioTrackNameBuffer.fill('\0');
+    mAudioTrackNameEditing = false;
+    mAudioTrackVolumeDragId.clear();
+    mAudioTrackVolumeDragging  = false;
+    mAudioTrackVolumeDragValue = 1.0f;
+    mAudioClipPathId.clear();
+    mAudioClipPathBuffer.fill('\0');
+    mAudioClipPathEditing = false;
+    mAudioClipVolumeDragId.clear();
+    mAudioClipVolumeDragging  = false;
+    mAudioClipVolumeDragValue = 1.0f;
+}
 
 void DetailsPanel::draw(PanelContext const& ctx) {
     ImVec2 const origin = ImGui::GetCursorScreenPos();
@@ -590,6 +684,7 @@ void DetailsPanel::draw(PanelContext const& ctx) {
         mTimelapseTextTick.reset();
         mTimelapseTextBuffer.fill('\0');
         mTimelapseTextEditing = false;
+        resetAudioDrafts();
         widgets::noActiveProjectPlaceholder();
     } else {
         if (mPage != InspectorPage::Selection) {
@@ -602,6 +697,7 @@ void DetailsPanel::draw(PanelContext const& ctx) {
             mTimelapseTextTick.reset();
             mTimelapseTextBuffer.fill('\0');
             mTimelapseTextEditing = false;
+            resetAudioDrafts();
         }
         switch (mPage) {
         case InspectorPage::Selection:
@@ -695,6 +791,13 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
         subject = "playback.refactorEditor.timelapse.keyframeDetailsTitle"_tr();
     } else if (selection.isTimelapseTrackSelected()) {
         subject = "playback.refactorEditor.timelapse.trackDetailsTitle"_tr();
+    } else if (auto const selectedAudioClip = selection.selectedAudioClip()) {
+        auto const* track = state::editing::ClipOps::findAudioTrack(*project, selectedAudioClip->trackId);
+        auto const* clip  = track ? state::editing::ClipOps::findAudioClip(*track, selectedAudioClip->clipId) : nullptr;
+        subject = (clip && !clip->name.empty()) ? clip->name : "playback.refactorEditor.audio.clipDetailsTitle"_tr();
+    } else if (auto const selectedAudioTrackId = selection.selectedAudioTrackId()) {
+        auto const* track = state::editing::ClipOps::findAudioTrack(*project, *selectedAudioTrackId);
+        subject           = track ? track->name : "playback.refactorEditor.audio.trackDetailsTitle"_tr();
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
@@ -709,6 +812,8 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawFreezeTrack(ctx)) return;
     if (drawTimelapseKeyframe(ctx)) return;
     if (drawTimelapseTrack(ctx)) return;
+    if (drawAudioClip(ctx)) return;
+    if (drawAudioTrack(ctx)) return;
     drawOverview(ctx);
 }
 
@@ -829,57 +934,15 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
         ImGui::EndDisabled();
 
         ImGui::Dummy({0.0f, 1.0f * scale});
-        bool const pairFlags = ImGui::GetContentRegionAvail().x >= 168.0f * scale;
-        if (pairFlags) {
-            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {4.0f * scale, 1.0f * scale});
-            if (ImGui::BeginTable("##clip-flags", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX)) {
-                ImGui::TableNextColumn();
-                ImGui::BeginDisabled(!editable);
-                bool muted = clip->muted;
-                if (ImGui::Checkbox("playback.refactorEditor.details.muted"_tr().c_str(), &muted)) {
-                    EditorAction action{EditorActionType::SetClipMuted};
-                    action.id    = clip->id;
-                    action.value = muted;
-                    ctx.submitAction(std::move(action));
-                }
-                ImGui::EndDisabled();
-
-                ImGui::TableNextColumn();
-                ImGui::BeginDisabled(camera->locked);
-                bool locked = clip->locked;
-                if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
-                    EditorAction action{EditorActionType::SetClipLocked};
-                    action.id    = clip->id;
-                    action.value = locked;
-                    ctx.submitAction(std::move(action));
-                }
-                ImGui::EndDisabled();
-                ImGui::EndTable();
-            }
-            ImGui::PopStyleVar();
-        } else {
-            ImGui::BeginDisabled(!editable);
-            bool muted = clip->muted;
-            if (ImGui::Checkbox("playback.refactorEditor.details.muted"_tr().c_str(), &muted)) {
-                EditorAction action{EditorActionType::SetClipMuted};
-                action.id    = clip->id;
-                action.value = muted;
-                ctx.submitAction(std::move(action));
-            }
-            ImGui::EndDisabled();
-
-            ImGui::BeginDisabled(camera->locked);
-            bool locked = clip->locked;
-            if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
-                EditorAction action{EditorActionType::SetClipLocked};
-                action.id    = clip->id;
-                action.value = locked;
-                ctx.submitAction(std::move(action));
-            }
-            ImGui::EndDisabled();
+        ImGui::BeginDisabled(camera->locked);
+        bool locked = clip->locked;
+        if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+            EditorAction action{EditorActionType::SetClipLocked};
+            action.id    = clip->id;
+            action.value = locked;
+            ctx.submitAction(std::move(action));
         }
 
-        ImGui::BeginDisabled(camera->locked);
         bool exportEnabled = clip->exportEnabled;
         if (ImGui::Checkbox("playback.refactorEditor.details.exportEnabled"_tr().c_str(), &exportEnabled)) {
             EditorAction action{EditorActionType::SetClipExportEnabled};
@@ -2937,6 +3000,445 @@ bool DetailsPanel::drawTimelapseTrack(PanelContext const& ctx) {
             ImGui::PopTextWrapPos();
         }
         property::endSection();
+    }
+    return true;
+}
+
+bool DetailsPanel::drawAudioTrack(PanelContext const& ctx) {
+    auto const selectedTrackId = ctx.selection.selectedAudioTrackId();
+    if (!selectedTrackId) {
+        mAudioTrackNameId.clear();
+        mAudioTrackNameBuffer.fill('\0');
+        mAudioTrackNameEditing = false;
+        mAudioTrackVolumeDragId.clear();
+        mAudioTrackVolumeDragging  = false;
+        mAudioTrackVolumeDragValue = 1.0f;
+        return false;
+    }
+
+    auto const  project = ctx.state.project;
+    auto const* track   = state::editing::ClipOps::findAudioTrack(*project, *selectedTrackId);
+    if (!track) {
+        mAudioTrackNameId.clear();
+        mAudioTrackNameBuffer.fill('\0');
+        mAudioTrackNameEditing = false;
+        mAudioTrackVolumeDragId.clear();
+        mAudioTrackVolumeDragging  = false;
+        mAudioTrackVolumeDragValue = 1.0f;
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.noSelection"_tr().c_str());
+        return true;
+    }
+
+    bool const editable = !track->locked;
+    if (!editable) {
+        mAudioTrackNameEditing = false;
+        mAudioTrackVolumeDragId.clear();
+        mAudioTrackVolumeDragging = false;
+    }
+
+    if (property::beginSection("playback.refactorEditor.audio.trackDetailsTitle"_tr().c_str())) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.audio.trackHint"_tr().c_str());
+        ImGui::PopTextWrapPos();
+        property::separator();
+
+        if (mAudioTrackNameId != track->id || !mAudioTrackNameEditing) {
+            mAudioTrackNameId     = track->id;
+            mAudioTrackNameBuffer = {};
+            track->name.copy(mAudioTrackNameBuffer.data(), mAudioTrackNameBuffer.size() - 1);
+        }
+
+        float const scale      = metrics::scale();
+        float const labelWidth = measureLabelColumn({
+            "playback.refactorEditor.details.nameLabel"_tr(),
+            "playback.refactorEditor.audio.clipCount"_tr(),
+        });
+
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##audio-track-properties",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.nameLabel"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(!editable);
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputText("##audio-track-name", mAudioTrackNameBuffer.data(), mAudioTrackNameBuffer.size());
+            mAudioTrackNameEditing = ImGui::IsItemActive();
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                std::string name = mAudioTrackNameBuffer.data();
+                if (!name.empty() && name != track->name) {
+                    EditorAction action{EditorActionType::RenameAudioTrack};
+                    action.id   = track->id;
+                    action.name = std::move(name);
+                    ctx.submitAction(std::move(action));
+                } else {
+                    mAudioTrackNameBuffer = {};
+                    track->name.copy(mAudioTrackNameBuffer.data(), mAudioTrackNameBuffer.size() - 1);
+                }
+            }
+            ImGui::EndDisabled();
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.audio.clipCount"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(std::to_string(track->clips.size()).c_str());
+
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        if (track->clips.empty()) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", "playback.refactorEditor.audio.emptyHint"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+
+        property::separator();
+        ImGui::BeginDisabled(!editable);
+        drawAudioVolumeControl(
+            "audio-track",
+            editable,
+            track->volume,
+            track->id,
+            mAudioTrackVolumeDragId,
+            mAudioTrackVolumeDragging,
+            mAudioTrackVolumeDragValue,
+            [&](float nextVolume) {
+                EditorAction action{EditorActionType::SetAudioTrackVolume};
+                action.id     = track->id;
+                action.volume = nextVolume;
+                ctx.submitAction(std::move(action));
+            }
+        );
+
+        property::separator();
+        bool muted = track->muted;
+        if (ImGui::Checkbox("playback.refactorEditor.audio.muted"_tr().c_str(), &muted)) {
+            EditorAction action{EditorActionType::SetAudioTrackMuted};
+            action.id    = track->id;
+            action.value = muted;
+            ctx.submitAction(std::move(action));
+        }
+        bool enabled = track->enabled;
+        if (ImGui::Checkbox("playback.refactorEditor.details.enabled"_tr().c_str(), &enabled)) {
+            EditorAction action{EditorActionType::SetAudioTrackEnabled};
+            action.id    = track->id;
+            action.value = enabled;
+            ctx.submitAction(std::move(action));
+        }
+        ImGui::EndDisabled();
+
+        bool locked = track->locked;
+        if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+            EditorAction action{EditorActionType::SetAudioTrackLocked};
+            action.id    = track->id;
+            action.value = locked;
+            ctx.submitAction(std::move(action));
+        }
+
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.audio.addAudioFile"_tr().c_str(),
+                editable,
+                property::ButtonVariant::Primary,
+                ICON_AUDIO
+            )) {
+            if (auto const picked = utils::pickAudioFile()) {
+                EditorAction action{EditorActionType::AddAudioClip};
+                action.id   = track->id;
+                action.path = *picked;
+                action.tick = std::clamp(ctx.state.currentTick, 0, std::max(0, project->totalTicks));
+                ctx.submitAction(std::move(action));
+            }
+        }
+        if (property::actionButton(
+                "playback.refactorEditor.audio.removeTrack"_tr().c_str(),
+                editable,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            EditorAction action{EditorActionType::RemoveAudioTrack};
+            action.id = track->id;
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        if (track->locked) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    } else {
+        mAudioTrackNameEditing    = false;
+        mAudioTrackVolumeDragging = false;
+        mAudioTrackVolumeDragId.clear();
+    }
+    return true;
+}
+
+bool DetailsPanel::drawAudioClip(PanelContext const& ctx) {
+    auto const selected = ctx.selection.selectedAudioClip();
+    if (!selected) {
+        mAudioClipPathId.clear();
+        mAudioClipPathBuffer.fill('\0');
+        mAudioClipPathEditing = false;
+        mAudioClipVolumeDragId.clear();
+        mAudioClipVolumeDragging  = false;
+        mAudioClipVolumeDragValue = 1.0f;
+        return false;
+    }
+
+    auto const  project = ctx.state.project;
+    auto const* track   = state::editing::ClipOps::findAudioTrack(*project, selected->trackId);
+    auto const* clip    = track ? state::editing::ClipOps::findAudioClip(*track, selected->clipId) : nullptr;
+    if (!track || !clip) {
+        mAudioClipPathId.clear();
+        mAudioClipPathBuffer.fill('\0');
+        mAudioClipPathEditing = false;
+        mAudioClipVolumeDragId.clear();
+        mAudioClipVolumeDragging  = false;
+        mAudioClipVolumeDragValue = 1.0f;
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.clipMissing"_tr().c_str());
+        return true;
+    }
+
+    bool const editable = !track->locked;
+    if (!editable) {
+        mAudioClipPathEditing    = false;
+        mAudioClipVolumeDragging = false;
+        mAudioClipVolumeDragId.clear();
+    }
+
+    if (property::beginSection("playback.refactorEditor.audio.clipDetailsTitle"_tr().c_str())) {
+        if (mAudioClipPathId != clip->id || !mAudioClipPathEditing) {
+            mAudioClipPathId     = clip->id;
+            mAudioClipPathBuffer = {};
+            clip->filePath.copy(mAudioClipPathBuffer.data(), mAudioClipPathBuffer.size() - 1);
+        }
+
+        auto const submitProps = [&](std::string const& filePath,
+                                     double             trimStartSeconds,
+                                     double             durationSeconds,
+                                     float              volume,
+                                     bool               muted) {
+            EditorAction action{EditorActionType::SetAudioClipProps};
+            action.id               = track->id;
+            action.secondaryId      = clip->id;
+            action.path             = utf8ToPath(filePath);
+            action.trimStartSeconds = state::editing::model::clampAudioSeconds(trimStartSeconds);
+            action.durationSeconds  = state::editing::model::clampAudioSeconds(durationSeconds);
+            action.volume           = state::editing::model::clampAudioVolume(volume);
+            action.muted            = muted;
+            ctx.submitAction(std::move(action));
+        };
+
+        float const scale      = metrics::scale();
+        float const labelWidth = measureLabelColumn({
+            "playback.refactorEditor.audio.filePath"_tr(),
+            "playback.refactorEditor.audio.status"_tr(),
+            "playback.refactorEditor.audio.startTick"_tr(),
+            "playback.refactorEditor.audio.trimStart"_tr(),
+            "playback.refactorEditor.audio.duration"_tr(),
+        });
+
+        ImGui::BeginDisabled(!editable);
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##audio-clip-properties",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.audio.filePath"_tr().c_str());
+            ImGui::TableNextColumn();
+            {
+                std::string const browseLabel = "playback.refactorEditor.audio.browse"_tr();
+                float const       browseW =
+                    ImGui::CalcTextSize(browseLabel.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+                float const gap    = ImGui::GetStyle().ItemSpacing.x;
+                float const inputW = std::max(40.0f * scale, ImGui::GetContentRegionAvail().x - browseW - gap);
+                ImGui::SetNextItemWidth(inputW);
+                ImGui::InputText("##audio-clip-path", mAudioClipPathBuffer.data(), mAudioClipPathBuffer.size());
+                mAudioClipPathEditing = ImGui::IsItemActive();
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    std::string const nextPath = mAudioClipPathBuffer.data();
+                    if (!nextPath.empty() && nextPath != clip->filePath) {
+                        submitProps(nextPath, clip->trimStartSeconds, clip->durationSeconds, clip->volume, clip->muted);
+                    } else {
+                        mAudioClipPathBuffer = {};
+                        clip->filePath.copy(mAudioClipPathBuffer.data(), mAudioClipPathBuffer.size() - 1);
+                    }
+                }
+                ImGui::SameLine(0.0f, gap);
+                if (ImGui::Button((browseLabel + "##audio-clip-browse").c_str(), {browseW, 0.0f})) {
+                    if (auto const picked = utils::pickAudioFile(utf8ToPath(clip->filePath))) {
+                        std::string const pickedUtf8 = pathToUtf8(*picked);
+                        mAudioClipPathBuffer         = {};
+                        pickedUtf8.copy(mAudioClipPathBuffer.data(), mAudioClipPathBuffer.size() - 1);
+                        mAudioClipPathEditing = false;
+                        submitProps(
+                            pickedUtf8,
+                            clip->trimStartSeconds,
+                            clip->durationSeconds,
+                            clip->volume,
+                            clip->muted
+                        );
+                    }
+                }
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.audio.status"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            if (clip->filePath.empty()) {
+                ImGui::TextDisabled("%s", "playback.refactorEditor.audio.statusFailed"_tr().c_str());
+            } else {
+                auto const asset = audio::external::getOrRequestAudioAsset(clip->filePath);
+                if (!asset) {
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.audio.statusLoading"_tr().c_str());
+                } else if (asset->state == audio::external::AudioLoadState::Pending) {
+                    ImGui::TextDisabled("%s", "playback.refactorEditor.audio.statusLoading"_tr().c_str());
+                } else if (asset->state == audio::external::AudioLoadState::Ready) {
+                    ImGui::PushTextWrapPos(0.0f);
+                    ImGui::TextColored(
+                        ImGui::ColorConvertU32ToFloat4(theme::kSuccess),
+                        "%s",
+                        "playback.refactorEditor.audio.statusReady"_tr(asset->durationSeconds).c_str()
+                    );
+                    ImGui::PopTextWrapPos();
+                } else {
+                    std::string const failedText =
+                        asset->errorMessage.empty()
+                            ? "playback.refactorEditor.audio.statusFailed"_tr()
+                            : ("playback.refactorEditor.audio.statusFailed"_tr() + ": " + asset->errorMessage);
+                    ImGui::PushTextWrapPos(0.0f);
+                    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme::kError), "%s", failedText.c_str());
+                    ImGui::PopTextWrapPos();
+                }
+            }
+
+            int startTick = clip->startTick;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.audio.startTick"_tr().c_str());
+            ImGui::TableNextColumn();
+            drawInputWithHint(formatTick(clip->startTick), [&] {
+                ImGui::InputInt("##audio-clip-start-tick", &startTick, 0, 0);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    startTick = project->totalTicks > 0 ? std::clamp(startTick, 0, project->totalTicks)
+                                                        : std::max(0, startTick);
+                    if (startTick != clip->startTick) {
+                        EditorAction action{EditorActionType::MoveAudioClip};
+                        action.id          = track->id;
+                        action.secondaryId = clip->id;
+                        action.tick        = startTick;
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+            });
+
+            double trimStart = clip->trimStartSeconds;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.audio.trimStart"_tr().c_str());
+            widgets::itemTooltip("playback.refactorEditor.audio.trimStartHint"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputDouble("##audio-clip-trim-start", &trimStart, 0.0, 0.0, "%.2f");
+            widgets::itemTooltip("playback.refactorEditor.audio.trimStartHint"_tr().c_str());
+            if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(trimStart)) {
+                double const clamped = state::editing::model::clampAudioSeconds(trimStart);
+                if (std::abs(clamped - clip->trimStartSeconds) > 1e-9) {
+                    submitProps(clip->filePath, clamped, clip->durationSeconds, clip->volume, clip->muted);
+                }
+            }
+
+            double duration = clip->durationSeconds;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.audio.duration"_tr().c_str());
+            widgets::itemTooltip("playback.refactorEditor.audio.durationHint"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputDouble("##audio-clip-duration", &duration, 0.0, 0.0, "%.2f");
+            widgets::itemTooltip("playback.refactorEditor.audio.durationHint"_tr().c_str());
+            if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(duration)) {
+                double const clamped = state::editing::model::clampAudioSeconds(duration);
+                if (std::abs(clamped - clip->durationSeconds) > 1e-9) {
+                    submitProps(clip->filePath, clip->trimStartSeconds, clamped, clip->volume, clip->muted);
+                }
+            }
+
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        property::separator();
+        drawAudioVolumeControl(
+            "audio-clip",
+            editable,
+            clip->volume,
+            clip->id,
+            mAudioClipVolumeDragId,
+            mAudioClipVolumeDragging,
+            mAudioClipVolumeDragValue,
+            [&](float nextVolume) {
+                submitProps(clip->filePath, clip->trimStartSeconds, clip->durationSeconds, nextVolume, clip->muted);
+            }
+        );
+
+        property::separator();
+        bool muted = clip->muted;
+        if (ImGui::Checkbox("playback.refactorEditor.audio.muted"_tr().c_str(), &muted)) {
+            submitProps(clip->filePath, clip->trimStartSeconds, clip->durationSeconds, clip->volume, muted);
+        }
+
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.audio.deleteClip"_tr().c_str(),
+                editable,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            EditorAction action{EditorActionType::RemoveAudioClip};
+            action.id          = track->id;
+            action.secondaryId = clip->id;
+            ctx.submitAction(std::move(action));
+            ctx.selection.selectAudioTrack(track->id);
+        }
+        ImGui::EndDisabled();
+        if (!editable) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    } else {
+        mAudioClipPathEditing    = false;
+        mAudioClipVolumeDragging = false;
+        mAudioClipVolumeDragId.clear();
     }
     return true;
 }

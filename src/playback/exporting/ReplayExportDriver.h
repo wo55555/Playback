@@ -3,6 +3,8 @@
 #include "ExportCoordinator.h"
 #include "OfflineRenderBoundary.h"
 
+#include "playback/state/editing/models/Track.h"
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -10,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace playback::replay {
 class ReplaySession;
@@ -69,9 +72,10 @@ private:
 
     ExportCoordinator&                     mCoordinator;
     replay::ReplaySession&                 mReplay;
-    std::unique_ptr<OfflineRenderBoundary> mRenderBoundary;
-    std::optional<CompiledExportPlan>      mPlan;
-    std::deque<visuals::CapturedFrame>     mReadyFrames;
+    std::unique_ptr<OfflineRenderBoundary>         mRenderBoundary;
+    std::optional<CompiledExportPlan>              mPlan;
+    std::vector<state::editing::model::AudioTrack> mExportAudioTracks;
+    std::deque<visuals::CapturedFrame>             mReadyFrames;
     std::optional<bool>                    mPreviousPaused;
     uint64_t                               mNextFrameIndex{};
     static constexpr size_t                WaitReasonCount = static_cast<size_t>(OfflineRenderWaitReason::Count);

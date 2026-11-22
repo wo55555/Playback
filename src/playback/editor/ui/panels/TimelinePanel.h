@@ -94,11 +94,13 @@ private:
         std::string_view                                    skipClipId           = {},
         std::optional<int>                                  skipSpeedKeyTick     = std::nullopt,
         std::optional<int>                                  skipFreezeKeyTick    = std::nullopt,
-        std::optional<int>                                  skipTimelapseKeyTick = std::nullopt
+        std::optional<int>                                  skipTimelapseKeyTick = std::nullopt,
+        std::string_view                                    skipAudioClipId      = {}
     );
     bool addMarkerAt(PanelContext const& ctx, int tick);
     bool addFreezeKeyframeAt(PanelContext const& ctx, int tick);
     bool addTimelapseKeyframeAt(PanelContext const& ctx, int tick);
+    bool promptAndAddAudioClip(PanelContext const& ctx, std::string const& trackId, int tick);
     // Selections that point at objects an queued action has not created yet; applied once they exist.
     void                      clearPendingSelection();
     void queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys);
@@ -109,6 +111,8 @@ private:
     void                      queueFreezeKeyframeSelection(int tick);
     void                      queueTimelapseTrackSelection();
     void                      queueTimelapseKeyframeSelection(int tick);
+    void                      queueAudioTrackSelection(std::string trackId);
+    void                      queueAudioClipSelection(std::string trackId, std::string clipId);
     void applyPendingSelection(PanelContext const& ctx);
     [[nodiscard]] std::string markerAt(
         PanelContext const&  ctx,
@@ -228,6 +232,9 @@ private:
     std::optional<int>                                   mPendingFreezeKeyframeSelection;
     bool                                                 mPendingTimelapseTrackSelection{false};
     std::optional<int>                                   mPendingTimelapseKeyframeSelection;
+    std::string                                          mPendingAudioTrackSelection;
+    std::string                                          mPendingAudioClipTrackId;
+    std::string                                          mPendingAudioClipId;
     int                                                  mPendingSelectionFrames{};
 
     int   mDraggingSpeedKeyframeOriginTick{-1};
@@ -250,6 +257,17 @@ private:
     bool  mDraggingTimelapseKeyframeMoved{};
     int   mTimelapseKeyframeMenuTick{-1};
     int   mTimelapseLaneMenuTick{-1};
+
+    std::string mDraggingAudioTrackId;
+    std::string mDraggingAudioClipId;
+    float       mDraggingAudioStartMouseX{};
+    int         mDraggingAudioOriginTick{-1};
+    int         mDraggingAudioDraftTick{-1};
+    bool        mDraggingAudioMoved{};
+    std::string mAudioTrackMenuId;
+    int         mAudioLaneMenuTick{-1};
+    std::string mAudioClipMenuTrackId;
+    std::string mAudioClipMenuClipId;
 
     struct OutputDurationCache {
         bool                                  valid{};
