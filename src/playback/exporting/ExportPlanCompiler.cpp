@@ -1,5 +1,6 @@
 ﻿#include "ExportPlanCompiler.h"
 
+#include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/keyframe/SpeedTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/models/EditorStateExt.h"
@@ -189,11 +190,14 @@ std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t frameIndex) co
     ExportFramePlan result;
     result.replayTickNumerator   = replayTickNumerator;
     result.replayTickDenominator = seg.replayDenominator;
+    result.clientTickNumerator   = replayTickNumerator;
+    result.clientTickDenominator = seg.replayDenominator;
     result.ticket.frameIndex     = frameIndex;
     result.ticket.ptsNumerator   = ptsNumerator;
     result.ticket.ptsDenominator = settings.frameRate.numerator;
     result.hardCut               = (localIndex == 0 && seg.hardCutBefore);
     result.muteAudio             = seg.muteAudio;
+    result.worldFrozen           = false;
     return result;
 }
 
@@ -328,9 +332,13 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     uint64_t                     totalFrames = 0;
     int64_t                      maxOutTick  = 0;
 
-    if (keyframe::hasActiveSpeedCurve(project) && !normalized.timelapse) {
+    if ((keyframe::hasActiveSpeedCurve(project) || keyframe::hasActiveFreezeTrack(project)) && !normalized.timelapse) {
         constexpr int64_t SpeedRampTickDenominator = 1'000'000;
-        long double const baseFrameUnscaled        = (static_cast<long double>(ReplayTicksPerSecond)
+        int64_t           projectMaxNum            = 0;
+        if (!checkedSignedMultiply(project.totalTicks, SpeedRampTickDenominator, projectMaxNum)) {
+            return failure(ExportError::InvalidTimeline, "The export duration is too large");
+        }
+        long double const baseFrameUnscaled = (static_cast<long double>(ReplayTicksPerSecond)
                                                * static_cast<long double>(normalized.frameRate.denominator))
                                             / static_cast<long double>(normalized.frameRate.numerator);
 
@@ -349,6 +357,7 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
             long double       cursor        = static_cast<long double>(slice.inTick);
             long double const endTick       = static_cast<long double>(slice.outTick);
             int64_t           prevSliceNum  = startNum;
+            int64_t           prevClientNum = 0;
 
             do {
                 if (totalFrames >= MaxExportFrames) {
@@ -375,14 +384,33 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
                 }
                 prevSliceNum = qNum;
 
+                auto const freezeEval = keyframe::evaluateFreezeAt(
+                    project.freezeTrack,
+                    static_cast<long double>(qNum) / static_cast<long double>(SpeedRampTickDenominator)
+                );
+                int64_t cNum = qNum;
+                if (freezeEval.frozen) {
+                    cNum = static_cast<int64_t>(
+                        std::llround(freezeEval.clientTick * static_cast<long double>(SpeedRampTickDenominator))
+                    );
+                    cNum = std::clamp<int64_t>(cNum, 0, projectMaxNum);
+                }
+                if (segFrameCount > 0) {
+                    cNum = std::max(cNum, prevClientNum);
+                }
+                prevClientNum = cNum;
+
                 ExportFramePlan framePlan;
                 framePlan.replayTickNumerator   = qNum;
                 framePlan.replayTickDenominator = SpeedRampTickDenominator;
+                framePlan.clientTickNumerator   = cNum;
+                framePlan.clientTickDenominator = SpeedRampTickDenominator;
                 framePlan.ticket.frameIndex     = totalFrames;
                 framePlan.ticket.ptsNumerator   = ptsNumerator;
                 framePlan.ticket.ptsDenominator = normalized.frameRate.numerator;
                 framePlan.hardCut               = (segFrameCount == 0 && slice.hardCutBefore);
-                framePlan.muteAudio             = slice.muteAudio;
+                framePlan.muteAudio             = slice.muteAudio || freezeEval.worldFrozen;
+                framePlan.worldFrozen           = freezeEval.worldFrozen;
                 precomputedFrames.push_back(framePlan);
 
                 ++totalFrames;

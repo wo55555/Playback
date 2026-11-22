@@ -114,6 +114,15 @@ enum class EditorActionType {
     SetSpeedTrackEnabled,
     SetSpeedTrackLocked,
     ClearSpeedKeyframes,
+    AddFreezeTrack,
+    RemoveFreezeTrack,
+    AddFreezeKeyframe,
+    MoveFreezeKeyframe,
+    DeleteFreezeKeyframe,
+    SetFreezeKeyframe,
+    SetFreezeTrackEnabled,
+    SetFreezeTrackLocked,
+    ClearFreezeKeyframes,
 };
 
 struct QueuedExportJob {

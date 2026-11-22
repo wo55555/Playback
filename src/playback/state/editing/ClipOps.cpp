@@ -96,6 +96,16 @@ findCoveringClip(model::CameraEntity const& camera, int tick, int totalTicks, bo
     return nullptr;
 }
 
+template <typename Dst, typename Src>
+void copySceneScopeFields(Dst& dst, Src const& src) {
+    dst.cameras       = src.cameras;
+    dst.markers       = src.markers;
+    dst.speedTrack    = src.speedTrack;
+    dst.freezeTrack   = src.freezeTrack;
+    dst.exportInTick  = src.exportInTick;
+    dst.exportOutTick = src.exportOutTick;
+}
+
 } // namespace
 
 bool clipCoversTick(model::Clip const& clip, int tick, int totalTicks) noexcept {
@@ -166,22 +176,14 @@ void syncActiveSceneFromWorking(model::EditorStateExt& state) {
     auto* scene = activeScene(state);
     if (!scene) return;
     if (state.activeSceneId != scene->id) state.activeSceneId = scene->id;
-    scene->cameras       = state.cameras;
-    scene->markers       = state.markers;
-    scene->speedTrack    = state.speedTrack;
-    scene->exportInTick  = state.exportInTick;
-    scene->exportOutTick = state.exportOutTick;
+    copySceneScopeFields(*scene, state);
 }
 
 void loadWorkingFromActiveScene(model::EditorStateExt& state) {
     auto const* scene = activeScene(state);
     if (!scene) return;
     if (state.activeSceneId != scene->id) state.activeSceneId = scene->id;
-    state.cameras       = scene->cameras;
-    state.markers       = scene->markers;
-    state.speedTrack    = scene->speedTrack;
-    state.exportInTick  = scene->exportInTick;
-    state.exportOutTick = scene->exportOutTick;
+    copySceneScopeFields(state, *scene);
 }
 
 model::EditorStateExt buildProjectForScene(model::EditorStateExt const& state, model::Scene const& scene) {
@@ -201,17 +203,9 @@ model::EditorStateExt buildProjectForScene(model::EditorStateExt const& state, m
     bool const  isActive = active ? (&scene == active || (!scene.id.empty() && scene.id == active->id))
                                   : (!scene.id.empty() && scene.id == state.activeSceneId);
     if (isActive) {
-        result.cameras       = state.cameras;
-        result.markers       = state.markers;
-        result.speedTrack    = state.speedTrack;
-        result.exportInTick  = state.exportInTick;
-        result.exportOutTick = state.exportOutTick;
+        copySceneScopeFields(result, state);
     } else {
-        result.cameras       = scene.cameras;
-        result.markers       = scene.markers;
-        result.speedTrack    = scene.speedTrack;
-        result.exportInTick  = scene.exportInTick;
-        result.exportOutTick = scene.exportOutTick;
+        copySceneScopeFields(result, scene);
     }
     return result;
 }
@@ -224,11 +218,7 @@ void ensureDefaultScene(model::EditorStateExt& state, std::string defaultSceneNa
         scene.id            = "scene_1";
         scene.name          = defaultSceneName.empty() ? "playback.refactorEditor.defaults.scene"_tr(size_t{1})
                                                        : std::move(defaultSceneName);
-        scene.cameras       = state.cameras;
-        scene.markers       = state.markers;
-        scene.speedTrack    = state.speedTrack;
-        scene.exportInTick  = state.exportInTick;
-        scene.exportOutTick = state.exportOutTick;
+        copySceneScopeFields(scene, state);
 
         state.scenes.push_back(std::move(scene));
         state.activeSceneId = "scene_1";

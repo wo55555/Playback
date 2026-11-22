@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added undo and redo buttons with action tooltips to the timeline toolbar, a bottom viewport toast showing each undo or redo step, and key-repeat support when holding the undo or redo shortcuts.
 - Saving an editor project now keeps a `.pbproj.old` backup of the previous file and automatically recovers from it if the primary project file fails to load.
 - Added an on-demand Speed track from the timeline `+` menu for continuous speed ramps (`0.01x` to `32x`) with a logarithmic curve and shaded acceleration/deceleration regions, supporting eight interpolation modes with draggable cubic Bezier handles, real-time speed-ramped preview, integrated export frame timing, and full undo/redo and project persistence.
+- Added an on-demand Freeze track that can be added and removed from the timeline `+` menu to freeze and unfreeze world time with a configurable 0–10 tick slowdown easing curve, keeping camera motion active while pausing world and entity animations in both live preview and offline export, automatically muting audio while frozen and seamlessly resuming after unfreezing, with full undo/redo and project persistence.
 
 ### Changed
 
