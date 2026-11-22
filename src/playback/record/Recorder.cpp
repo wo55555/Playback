@@ -73,7 +73,6 @@
 #include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/player/Player.h"
-#include "mc/world/actor/player/Inventory.h"
 #include "mc/world/actor/player/PlayerInventory.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/state/PropertyComponent.h"
@@ -128,6 +127,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+PlayerInputTick::PlayerInputTick() { mValue = 0; }
 
 namespace playback::record {
 using namespace playback::action;
@@ -204,15 +205,13 @@ static_assert(HudCacheSize <= 48);
 static_assert(HudOffhandKey < 41);
 
 std::shared_ptr<Packet> makeHudSlotPacket(ContainerID container, int slot, ItemStack const& item) {
-    return std::make_shared<InventorySlotPacket>(container, static_cast<uint>(slot), item);
+    return std::make_shared<InventorySlotPacket>(InventorySlotPacketPayload(container, slot, item));
 }
 
 std::shared_ptr<Packet> makeHudSelectedSlotPacket(Player& player) {
-    auto packet               = std::make_shared<PlayerHotbarPacket>();
-    packet->mSelectedSlot     = static_cast<uint>(player.getSelectedItemSlot());
-    packet->mShouldSelectSlot = true;
-    packet->mContainerId      = ContainerID::Inventory;
-    return packet;
+    return std::make_shared<PlayerHotbarPacket>(
+        PlayerHotbarPacketPayload(static_cast<uint>(player.getSelectedItemSlot()), ContainerID::Inventory, true)
+    );
 }
 
 // Only what the HUD draws; exhaustion and the like change every tick and would bloat the recording.
@@ -230,12 +229,11 @@ std::shared_ptr<Packet> makeHudAttributePacket(Player& player, ActorRuntimeID ru
     handles.reserve(attributes.size());
     for (auto const* attribute : attributes) {
         auto const instance = player.getAttribute(*attribute);
-        if (!instance.mPtr) continue;
-        AttributeInstanceHandle handle;
-        handle.mAttributeID = attribute->mIDValue;
-        handles.push_back(handle);
+        if (instance.mPtr) handles.push_back(instance.mPtr->getHandle());
     }
-    return std::make_shared<UpdateAttributesPacket>(runtimeId, *player.getAttributes(), handles, PlayerInputTick{});
+    auto packet        = std::make_shared<UpdateAttributesPacket>(player, handles);
+    packet->mRuntimeId = runtimeId;
+    return packet;
 }
 
 std::shared_ptr<Packet> makeHudGameTypePacket(Player& player, ActorUniqueID target) {
@@ -1104,8 +1102,7 @@ void Recorder::endTick(bool close) {
     if (dimensionChanged || (close && !(mRotationJob && mRotationJob->initial))) discardRotationSnapshot();
 
     if (dimensionChanged) {
-        auto const currentDimension   = localPlayer->getDimensionId();
-        auto const currentDimensionId = currentDimension.id;
+        auto const currentDimensionId = localPlayer->getDimensionId();
         auto const previousDimension  = *mRecordingDimension;
 
         // Destination chunks can arrive on the same tick as ChangeDimension; hold them for the new dimension instead
@@ -1126,7 +1123,7 @@ void Recorder::endTick(bool close) {
                     auto                 packet = MinecraftPackets::createPacket(MinecraftPacketIds::ChangeDimension);
                     ReadOnlyBinaryStream input(pending.mPayload, false);
                     if (packet && packet->read(input) && input.ensureReadCompleted()
-                        && *static_cast<ChangeDimensionPacket const&>(*packet).mDimensionId == currentDimension) {
+                        && *static_cast<ChangeDimensionPacket const&>(*packet).mDimensionId == currentDimensionId) {
                         seenTargetChangeDimension = true;
                         belongsToNewDimension     = true;
                     }
@@ -1134,7 +1131,7 @@ void Recorder::endTick(bool close) {
                 if (pending.mPacketId == DeferredChunkPacketId) {
                     if (deferredIndex < mDeferredCompletedChunks.size()) {
                         auto& deferred        = mDeferredCompletedChunks[deferredIndex];
-                        belongsToNewDimension = belongsToNewDimension || deferred.dimensionId == currentDimension;
+                        belongsToNewDimension = belongsToNewDimension || deferred.dimensionId == currentDimensionId;
                         if (belongsToNewDimension) newDimensionDeferred.push_back(std::move(deferred));
                         else oldDimensionDeferred.push_back(std::move(deferred));
                     }
@@ -1145,7 +1142,7 @@ void Recorder::endTick(bool close) {
                     ReadOnlyBinaryStream input(pending.mPayload, false);
                     if (packet && packet->read(input)) {
                         belongsToNewDimension =
-                            *static_cast<LevelChunkPacket const&>(*packet).mDimensionId == currentDimension;
+                            *static_cast<LevelChunkPacket const&>(*packet).mDimensionId == currentDimensionId;
                     }
                 } else if (!belongsToNewDimension
                            && pending.mPacketId == static_cast<int32_t>(MinecraftPacketIds::SubChunkPacket)) {
@@ -1153,7 +1150,7 @@ void Recorder::endTick(bool close) {
                     ReadOnlyBinaryStream input(pending.mPayload, false);
                     if (packet && packet->read(input)) {
                         belongsToNewDimension =
-                            *static_cast<SubChunkPacket const&>(*packet).mDimensionType == currentDimension;
+                            *static_cast<SubChunkPacket const&>(*packet).mDimensionType == currentDimensionId;
                     }
                 }
                 if (belongsToNewDimension) newDimensionPackets.push_back(std::move(pending));
@@ -1179,7 +1176,7 @@ void Recorder::endTick(bool close) {
         }
         {
             std::scoped_lock lock(mPendingPortableChunksMutex);
-            mPendingPortableChunks.erase(previousDimension.id);
+            mPendingPortableChunks.erase(previousDimension);
         }
         if (close) return;
 
@@ -2020,7 +2017,7 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
             appendEntityPacket(*makeHudSlotPacket(
                 ContainerID::Inventory,
                 slot,
-                finalPlayer->getInventory().getItem(slot)
+                finalPlayer->getSupplies().getItem(slot, ContainerID::Inventory)
             ));
         }
         for (int slot = 0; slot < HudArmorSlots; ++slot) {
@@ -2340,7 +2337,7 @@ void Recorder::dropPendingSnapshotColumnPackets(SnapshotColumnsJob const& job) {
     mDeferredCompletedChunks = std::move(keptDeferred);
 
     std::scoped_lock portableLock(mPendingPortableChunksMutex);
-    if (auto const byDimension = mPendingPortableChunks.find(job.dimension.id);
+    if (auto const byDimension = mPendingPortableChunks.find(job.dimension);
         byDimension != mPendingPortableChunks.end()) {
         for (auto const& pos : columns) byDimension->second.erase(pos);
         if (byDimension->second.empty()) mPendingPortableChunks.erase(byDimension);
@@ -2396,7 +2393,7 @@ bool Recorder::writeSnapshot() {
     auto const finiteOrZero = [](float value) { return std::isfinite(value) ? value : 0.0f; };
 
     PlaybackSnapshotContext context;
-    context.dimensionId        = mSnapshotDimension->id.id;
+    context.dimensionId        = mSnapshotDimension->id.mValue;
     context.dimensionMinHeight = mSnapshotDimension->minHeight;
     context.dimensionMaxHeight = mSnapshotDimension->maxHeight;
     context.x                  = mSnapshotView->x;
@@ -2830,7 +2827,7 @@ bool Recorder::writeLocalPlayerState() {
             static_cast<size_t>(slot),
             ContainerID::Inventory,
             slot,
-            localPlayer->getInventory().getItem(slot)
+            localPlayer->getSupplies().getItem(slot, ContainerID::Inventory)
         );
     }
     for (int slot = 0; slot < HudArmorSlots; ++slot) {
@@ -3112,7 +3109,7 @@ void Recorder::recordConfigurationPacket(
 void Recorder::recordCompletedChunk(ChunkPos const& pos, Dimension const& dimension) {
     if (mState.load(std::memory_order_acquire) != State::Recording) return;
 
-    auto const dimensionId = dimension.getDimensionId().id;
+    auto const dimensionId = dimension.getDimensionId();
     {
         std::scoped_lock lock(mPendingPortableChunksMutex);
         auto const       byDimension = mPendingPortableChunks.find(dimensionId);
@@ -3329,11 +3326,11 @@ void Recorder::recordLevelChunkPacket(LevelChunkPacket const& packet, std::strin
     auto const state = mState.load(std::memory_order_acquire);
     if (state != State::Recording && state != State::Closing) return;
 
-    auto const& pos          = *packet.mPos;
-    auto const  dimensionId  = static_cast<DimensionType const&>(packet.mDimensionId).id;
+    auto const& pos         = *packet.mPos;
+    auto const  dimensionId = *packet.mDimensionId;
     markSnapshotColumnDirty(pos);
-    bool const  requestMode  = static_cast<bool>(packet.mClientNeedsToRequestSubchunks);
-    bool const  cacheEnabled = static_cast<bool>(packet.mCacheEnabled);
+    bool const requestMode  = static_cast<bool>(packet.mClientNeedsToRequestSubchunks);
+    bool const cacheEnabled = static_cast<bool>(packet.mCacheEnabled);
     if (requestMode && !cacheEnabled) {
         {
             std::scoped_lock lock(mPendingPortableChunksMutex);
@@ -3479,7 +3476,7 @@ void Recorder::recordGamePacket(Packet const& packet, std::string_view payload) 
 
         if (packetId == MinecraftPacketIds::ChangeDimension) {
             auto const& change = static_cast<ChangeDimensionPacket const&>(packet);
-            mDimensionTransitionTargetId.store(change.mDimensionId->id, std::memory_order_release);
+            mDimensionTransitionTargetId.store(change.mDimensionId->mValue, std::memory_order_release);
             mDimensionTransitionPending.store(true, std::memory_order_release);
         }
 

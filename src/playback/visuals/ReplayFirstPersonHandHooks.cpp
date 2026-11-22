@@ -7,7 +7,7 @@
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
-#include "mc/client/options/IOptions.h"
+#include "mc-external/IOptionRegistry.h"
 #include "mc/client/game/ClientInputCallbacks.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/controls/UIControl.h"
@@ -20,22 +20,25 @@
 #include "mc/client/renderer/screen/MinecraftUIRenderContext.h"
 #include "mc/deps/core/math/Color.h"
 #include "mc/deps/core/math/Matrix.h"
+#include "mc/deps/input/RectangleArea.h"
+#include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
+#include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/entity/components/AbilitiesComponent.h"
 #include "mc/entity/components/ActorGameTypeComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
-#include "mc/deps/input/RectangleArea.h"
-#include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
-#include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/Mob.h"
 #include "mc/world/actor/player/AbilitiesIndex.h"
 #include "mc/world/actor/player/Ability.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/item/ItemStack.h"
+
 
 #include <Windows.h>
 #include <algorithm>
@@ -261,8 +264,8 @@ public:
       mInvisible(subject.getStatusFlag(ActorFlags::Invisible)),
       mHiddenWhenInvisible(subject.getStatusFlag(ActorFlags::HiddenWhenInvisible)) {
         if (mOuter) {
-            mSubject.setStatusFlag(ActorFlags::Invisible, false);
-            mSubject.setStatusFlag(ActorFlags::HiddenWhenInvisible, false);
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::Invisible, false);
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::HiddenWhenInvisible, false);
 
             // The scope leaves the subject's movement in place; with bobbing off it must read as standing still.
             mStateVector = mSubject.mBuiltInComponents->mStateVectorComponent.get();
@@ -278,8 +281,12 @@ public:
         --gPassDepth;
         if (mOuter) {
             if (mStateVector) mStateVector->mPosDelta = mPosDelta;
-            mSubject.setStatusFlag(ActorFlags::HiddenWhenInvisible, mHiddenWhenInvisible);
-            mSubject.setStatusFlag(ActorFlags::Invisible, mInvisible);
+            SynchedActorDataAccess::setActorFlag(
+                mSubject.getEntityContext(),
+                ActorFlags::HiddenWhenInvisible,
+                mHiddenWhenInvisible
+            );
+            SynchedActorDataAccess::setActorFlag(mSubject.getEntityContext(), ActorFlags::Invisible, mInvisible);
         }
     }
 
@@ -312,7 +319,7 @@ LL_TYPE_INSTANCE_HOOK(HandGameTypeHook, ll::memory::HookPriority::High, Player, 
 class ScopedObserverGameType {
 public:
     ScopedObserverGameType(Player& observer, Player& subject)
-    : mComponent(observer.getEntityContext().tryGetComponent<ActorGameTypeComponent>().as_ptr()) {
+    : mComponent(observer.getEntityContext().tryGetComponent<ActorGameTypeComponent>()) {
         if (!mComponent) return;
         mSaved                = mComponent->mGameType;
         auto const type       = subject.getPlayerGameType();
@@ -412,10 +419,10 @@ LL_TYPE_INSTANCE_HOOK(
     ItemStack const savedOffhand = player.getOffhandSlot();
     player.setCarriedItem(subject->getCarriedItem());
     player.setOffhandSlot(subject->getOffhandSlot());
-    ScopedHandPass pass(*subject);
+    ScopedHandPass         pass(*subject);
     ScopedObserverGameType gameType(player, *subject);
-    ScopedHandAction action(player, *subject);
-    ScopedHandSway sway(*this, player, *subject);
+    ScopedHandAction       action(player, *subject);
+    ScopedHandSway         sway(*this, player, *subject);
     origin(screenContext, player);
     player.setCarriedItem(savedCarried);
     player.setOffhandSlot(savedOffhand);
@@ -549,10 +556,10 @@ public:
             mWalk = nullptr;
             return;
         }
-        mSavedWalk  = *mWalk;
-        mSavedBob   = *mBob;
-        mSavedOTilt = observer.mOTilt;
-        mSavedTilt  = observer.mTilt;
+        mSavedWalk      = *mWalk;
+        mSavedBob       = *mBob;
+        mSavedOTilt     = observer.mOTilt;
+        mSavedTilt      = observer.mTilt;
         *mWalk          = *walk;
         *mBob           = *bob;
         observer.mOTilt = subject.mOTilt;
@@ -606,7 +613,7 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 RUNTIME_FUNCTION const* functionEntry(uintptr_t address, uintptr_t& imageBase) {
-    DWORD64 base = 0;
+    DWORD64 base  = 0;
     auto*   entry = RtlLookupFunctionEntry(static_cast<DWORD64>(address), &base, nullptr);
     imageBase     = static_cast<uintptr_t>(base);
     return entry;
@@ -624,7 +631,7 @@ std::vector<uintptr_t> directCallees(uintptr_t function) {
     uintptr_t              base  = 0;
     auto*                  entry = function ? functionEntry(function, base) : nullptr;
     if (!entry || base + entry->BeginAddress != function) return callees;
-    auto const* code = reinterpret_cast<uint8_t const*>(function);
+    auto const*  code = reinterpret_cast<uint8_t const*>(function);
     size_t const size = entry->EndAddress - entry->BeginAddress;
     for (size_t i = 0; i + 5 <= size; ++i) {
         if (code[i] != 0xE8) continue;
@@ -640,16 +647,16 @@ std::vector<uintptr_t> directCallees(uintptr_t function) {
 
 // The screen-overlay renderers (in-block, scope); every other caller keeps the observer. 1.26.20.04 draws in-block
 // from an unexported helper called only by _renderLevelPrep, so its direct callees count too.
-// _renderTransparentFirstPerson3DObjects stays on the observer: 26.10 does not export the LocalPlayer portal-time
-// getters that guarded its portal overlay against a remote subject, and it hands its actor to _renderItemInHand,
-// which copies the subject's items onto the observer itself.
+// _renderTransparentFirstPerson3DObjects stays on the observer: its portal overlay reads LocalPlayer-only fields that
+// a remote subject lacks, and it hands its actor to _renderItemInHand, which copies the subject's items onto the
+// observer itself.
 bool isOverlayCaller(void* returnAddress) {
     static uintptr_t const levelPrep =
         reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_renderLevelPrep));
     static uintptr_t const firstPersonObjects =
         reinterpret_cast<uintptr_t>(ll::memory::resolveIdentifier(&InGamePlayScreen::$_shouldRenderFirstPersonObjects));
     static std::vector<uintptr_t> const levelPrepCallees = directCallees(levelPrep);
-    auto const start = functionStart(reinterpret_cast<uintptr_t>(returnAddress));
+    auto const                          start            = functionStart(reinterpret_cast<uintptr_t>(returnAddress));
     if (start == 0) return false;
     if (start == levelPrep || start == firstPersonObjects) return true;
     return std::binary_search(levelPrepCallees.begin(), levelPrepCallees.end(), start);
@@ -670,7 +677,6 @@ LL_TYPE_INSTANCE_HOOK(
     if (!subject || !isOverlayCaller(_ReturnAddress())) return actor;
     // The scope overlay reads LocalPlayer-only members, which a remote subject lacks; it follows the observer via
     // isScoping.
-    // 26.10 does not export Player::isUsingItem; it reported a non-empty mItemInUse item.
     bool const usingItem = !subject->mItemInUse->mItem->isNull();
     return !subject->isScoping() && !usingItem ? subject : actor;
 }
@@ -680,12 +686,12 @@ LL_TYPE_INSTANCE_HOOK(
 // 0 to 0.863 over 5 s and holds while the player sleeps; PlayerSleepFadeEffectSystem::Wakeup clears it instantly.
 // The observer never sleeps, so that component stays idle during a replay. The recorded sleep ticks drive the same
 // curve here, drawn as a full-screen fill from the HUD vignette pass (1.26.20.04).
-constexpr float SleepFadeSeconds   = 5.0f;
-constexpr float SleepFadeTargetA   = 0.863f;
-constexpr float SleepFadeTickRate  = 20.0f;
-constexpr float SleepFadeRed       = 16.0f / 255.0f;
-constexpr float SleepFadeGreen     = 16.0f / 255.0f;
-constexpr float SleepFadeBlue      = 32.0f / 255.0f;
+constexpr float SleepFadeSeconds  = 5.0f;
+constexpr float SleepFadeTargetA  = 0.863f;
+constexpr float SleepFadeTickRate = 20.0f;
+constexpr float SleepFadeRed      = 16.0f / 255.0f;
+constexpr float SleepFadeGreen    = 16.0f / 255.0f;
+constexpr float SleepFadeBlue     = 32.0f / 255.0f;
 
 LL_TYPE_INSTANCE_HOOK(
     SleepVignetteHook,
@@ -704,14 +710,16 @@ LL_TYPE_INSTANCE_HOOK(
     float const h                 = size.y;
     bool const  thirdPersonFollow = isReplaySubjectThirdPerson() && isReplaySubjectFollowed();
     if (isReplaySubjectViewDriven() && !thirdPersonFollow && replaySubjectViewWeight() > 0.0f) {
-        float const progress = std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
-        float const alpha    = SleepFadeTargetA * progress;
+        float const progress =
+            std::clamp(replaySubjectSleepTicks() / (SleepFadeSeconds * SleepFadeTickRate), 0.0f, 1.0f);
+        float const alpha = SleepFadeTargetA * progress;
         if (alpha > 0.0f) {
-            renderContext.fillRectangle(
-                RectangleArea(0.0f, 0.0f, w, h, false),
-                mce::Color(SleepFadeRed, SleepFadeGreen, SleepFadeBlue, 1.0f),
-                alpha
-            );
+            RectangleArea area{};
+            area._x0 = 0.0f;
+            area._x1 = w;
+            area._y0 = 0.0f;
+            area._y1 = h;
+            renderContext.fillRectangle(area, mce::Color(SleepFadeRed, SleepFadeGreen, SleepFadeBlue, 1.0f), alpha);
         }
     }
     origin(renderContext, client, owner, pass);
@@ -788,6 +796,7 @@ void resetWarp() {
 }
 
 // The distortion reads the observer's own effects, which have none; follow mode feeds it the subject's nausea.
+// A portal uses the same data at 20 per tick; nausea, when it is warping, stays at 7 and hides the purple screen.
 LL_TYPE_INSTANCE_HOOK(
     PortalDataHook,
     ll::memory::HookPriority::High,
@@ -814,7 +823,8 @@ LL_TYPE_INSTANCE_HOOK(
     return data;
 }
 
-// Lends the observer the subject's portal time and clears its NoClip for one overlay call; the overlay reads both.
+// Writes the subject's portal time onto the observer and clears NoClip for one vanilla overlay call, then restores
+// both.
 struct ScopedObserverOverlay {
     LocalPlayer*        player{};
     float               portal{};

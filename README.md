@@ -11,14 +11,6 @@
   </p>
 
   <p>
-    <img src="https://img.shields.io/badge/LeviLamina-26.10.*-7b68ee?style=flat-square" alt="LeviLamina 26.10">
-    <img src="https://img.shields.io/badge/LeviLamina-26.20.*-7b68ee?style=flat-square" alt="LeviLamina 26.20">
-    <img src="https://img.shields.io/badge/LeviLamina-26.40.*-7b68ee?style=flat-square" alt="LeviLamina 26.40">
-    <img src="https://img.shields.io/badge/LeviLamina-26.51.*-7b68ee?style=flat-square" alt="LeviLamina 26.51">
-    <img src="https://img.shields.io/badge/LeviLamina-26.60.*-7b68ee?style=flat-square" alt="LeviLamina 26.60">
-  </p>
-
-  <p>
     <a href="docs/getting-started.md">Get started</a>
     ·
     <a href="https://github.com/wo55555/Playback/releases">Releases</a>

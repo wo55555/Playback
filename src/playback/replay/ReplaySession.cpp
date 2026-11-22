@@ -1,4 +1,4 @@
-#include "ReplaySession.h"
+﻿#include "ReplaySession.h"
 
 #include "playback/Playback.h"
 #include "playback/action/Action.h"
@@ -18,18 +18,17 @@
 #include "ll/api/service/TargetedBedrock.h"
 #include "ll/api/thread/ServerThreadExecutor.h"
 
+#include "mc-external/IOptionRegistry.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/game/IMinecraftGame.h"
 #include "mc/client/gui/screens/interfaces/ISceneStack.h"
 #include "mc/client/gui/screens/models/MinecraftScreenModel.h"
 #include "mc/client/model/GeometryGroup.h"
 #include "mc/client/network/LegacyClientNetworkHandler.h"
-#include "mc/client/options/IOptions.h"
 #include "mc/client/particle/ParticleEngine.h"
 #include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/LevelRenderer.h"
-#include "mc/common/SharedConstants.h"
 #include "mc/deps/core/file/Path.h"
 #include "mc/deps/core/file/PathView.h"
 #include "mc/deps/core/resource/ResourceLocation.h"
@@ -101,7 +100,7 @@
 #include "mc/network/packet/UpdateTradePacket.h"
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/resources/MinEngineVersion.h"
-#include "mc/resources/ResourcePack.h"
+#include "mc/resources/PackInstance.h"
 #include "mc/resources/ResourcePackManager.h"
 #include "mc/server/NetworkChunkPublisher.h"
 #include "mc/util/VarIntDataInput.h"
@@ -116,12 +115,10 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/actor/player/SerializedSkinRef.h"
-#include "mc/world/actor/player/TrustedSkinFlag.h"
 #include "mc/world/attribute/Attribute.h"
 #include "mc/world/attribute/AttributeData.h"
 #include "mc/world/attribute/AttributeInstance.h"
 #include "mc/world/attribute/AttributeInstanceConstRef.h"
-#include "mc/entity/components/AttributesComponent.h"
 #include "mc/world/attribute/AttributeInstanceRef.h"
 #include "mc/world/attribute/AttributeModificationContext.h"
 #include "mc/world/attribute/AttributeModifier.h"
@@ -145,9 +142,6 @@
 #include "mc/world/level/block/components/BlockGeometryDescription.h"
 #include "mc/world/level/block/components/BlockMaterialInstance.h"
 #include "mc/world/level/block/components/BlockMaterialInstancesDescription.h"
-#include "mc/world/level/block/components/BlockRendererDescription.h"
-#include "mc/world/level/block/components/BlockRendererName.h"
-#include "mc/world/level/block/components/BlockTransformationComponent.h"
 #include "mc/world/level/block/components/BlockTypeComponentStorageFinalizer.h"
 #include "mc/world/level/block/definition/BlockComponentGroupDescription.h"
 #include "mc/world/level/block/definition/BlockDefinition.h"
@@ -179,7 +173,6 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -187,13 +180,11 @@
 #include <memory>
 #include <optional>
 #include <random>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
 // Complete before ReplaySession's destructor so the saved hotbar can be freed.
@@ -297,9 +288,7 @@ std::string entityTypeLabel(Actor const& actor) {
 
 // Feet to eyes. A mob's position is its feet, unlike a player's.
 float entityEyeHeight(Actor const& actor) {
-    // 26.10 does not export Actor::getEyePos; the eyes attach point is the same anchor.
-    float const eye =
-        actor.getAttachPos(SharedTypes::Legacy::ActorLocation::Eyes).y - actor.getPosition().y;
+    float const eye = actor.getEyePos().y - actor.getPosition().y;
     if (std::isfinite(eye) && eye > 0.05f && eye < 64.0f) return eye;
     auto const& box    = actor.getAABB();
     float const height = box.max.y - box.min.y;
@@ -385,19 +374,16 @@ bool isHudAttribute(HashedString const& name) {
 // are copied onto it. Only those: movement speed would carry the recorder's sprint into the free camera's FOV.
 // Health never drops below 1: a dead local player would open the death screen.
 void mirrorRecordedAttributes(Player& observer, UpdateAttributesPacket& packet) {
-    // 26.10 only exports the const getAttributes; the map it returns lives in AttributesComponent.
-    auto* component = observer.getEntityContext().tryGetComponent<AttributesComponent>().as_ptr();
-    if (!component) return;
-    auto& attributes = *component->mAttributes;
+    auto& attributes = *observer.getAttributes();
     for (auto& data : *packet.mAttributeData) {
         if (!isHudAttribute(*data.mName)) continue;
-        if (*data.mName == *SharedAttributes::HEALTH().mName && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
+        if (*data.mName == SharedAttributes::HEALTH().getName() && data.mCurrentValue < 1.0f) data.mCurrentValue = 1.0f;
         attributes.updateOrCreateAttribute(data);
     }
 }
 
 std::optional<FollowedHudMirror::SavedAttribute> readHudAttribute(Actor& actor, Attribute const& attribute) {
-    auto const  instance = actor.getAttribute(attribute);
+    auto const  instance = actor.getAttributes()->getInstance(attribute);
     auto const* value    = instance.mPtr;
     if (!value || value == &BaseAttributeMap::mInvalidInstance()) return std::nullopt;
     return FollowedHudMirror::SavedAttribute{
@@ -414,11 +400,8 @@ std::optional<FollowedHudMirror::SavedAttribute> readHudAttribute(Actor& actor, 
 void writeHudAttribute(Player& observer, FollowedHudMirror::SavedAttribute const& value) {
     auto const& attribute = Attribute::getByName(value.name);
     if (*attribute.mName != value.name) return;
-    // 26.10 only exports the const getAttributes, and getMutableInstance takes the attribute id.
-    auto* component = observer.getEntityContext().tryGetComponent<AttributesComponent>().as_ptr();
-    if (!component) return;
-    auto& attributes = *component->mAttributes;
-    auto  instance   = attributes.getMutableInstance(attribute.mIDValue);
+    auto& attributes = *observer.getAttributes();
+    auto  instance   = attributes.getMutableInstance(attribute);
     if (!instance.mPtr || instance.mPtr == &BaseAttributeMap::mInvalidInstance()) return;
     // Built from the live instance so the modifiers stay; only the values are replaced.
     AttributeData data{*instance.mPtr};
@@ -1633,7 +1616,7 @@ void ReplaySession::refreshReplayEntityList() {
 
         auto processEntity = [&](ActorUniqueID const& id, bool addToList) {
             Actor* actor = level.fetchEntity(id, false);
-            if (!actor || actor == mReplayPlayer || actor->mRemoved) return;
+            if (!actor || actor == mReplayPlayer || actor->isRemoved()) return;
             bool const player = actor->isPlayer();
             bool const isMob  = !player && actor->hasCategory(ActorCategory::Mob);
             if ((player || isMob) && !actor->isAlive()) return;
@@ -1650,8 +1633,7 @@ void ReplaySession::refreshReplayEntityList() {
                 if (isMob) {
                     eyeHeight = entityEyeHeight(*actor);
                 } else {
-                    float const eye =
-                        actor->getAttachPos(SharedTypes::Legacy::ActorLocation::Eyes).y - position.y;
+                    float const eye = actor->getEyePos().y - position.y;
                     if (std::isfinite(eye) && eye > 0.05f && eye < 64.0f) {
                         eyeHeight = eye;
                     } else if (boxHeight > 0.05f) {
@@ -1763,11 +1745,8 @@ std::string ReplaySession::replaySubjectLabel(std::string const& choice) const {
 void ReplaySession::applyObserverSkin(SerializedSkinRef const& skin) {
     if (!mReplayPlayer || !skin.mSkinImpl) return;
     if (!mObserverOriginalSkin) {
-        auto const& current = mReplayPlayer->mSkin;
-        if (current && current->mSkinImpl) {
-            mObserverOriginalSkin  = std::make_unique<SerializedSkinRef>();
-            *mObserverOriginalSkin = *current;
-        }
+        auto const& current = mReplayPlayer->getSkin();
+        if (current.mSkinImpl) mObserverOriginalSkin = std::make_unique<SerializedSkinRef>(current);
     }
     mReplayPlayer->updateSkin(skin, static_cast<int>(mReplayPlayer->getClientSubId()));
     mObserverSkinApplied = true;
@@ -2011,7 +1990,7 @@ void ReplaySession::rebindReplaySubject() {
     };
     Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
     if (!actor || actor == mReplayPlayer
-        || (entityRaw && (actor->mRemoved || (actor->hasCategory(ActorCategory::Mob) && !actor->isAlive())))) {
+        || (entityRaw && (actor->isRemoved() || (actor->hasCategory(ActorCategory::Mob) && !actor->isAlive())))) {
         if (entityRaw) loseEntity();
         else loseSubject(choice);
         return;
@@ -2059,9 +2038,9 @@ void ReplaySession::rebindReplaySubject() {
             applyObserverSkin(*entry->second.mSkin);
             getLogger().debug("replay observer skin applied name={} uuid={}", name, uuid);
             applied = true;
-        } else if (auto const& subjectSkin = subject.mSkin; subjectSkin && subjectSkin->mSkinImpl) {
+        } else if (subject.getSkin().mSkinImpl) {
             // The player list can lag the actor. The actor skin is what third person already draws.
-            applyObserverSkin(*subjectSkin);
+            applyObserverSkin(subject.getSkin());
             getLogger().debug("replay observer skin applied from actor name={} uuid={}", name, uuid);
             applied = true;
         }
@@ -3448,18 +3427,13 @@ void ReplaySession::applyRecordedBlockRegistry() {
         auto const preloadedGeometry = preloadRecordedBlockGeometry(properties);
         definitions->digestServerBlockProperties(properties);
 
-        auto findDefinition = [definitions](std::string const& name) -> BlockDefinition const* {
-            auto const entry = definitions->mBlockDefinitions->find(name);
-            return entry == definitions->mBlockDefinitions->end() ? nullptr : entry->second.get();
-        };
-
         size_t                              registered = 0;
         std::vector<BlockDefinition const*> newlyRegisteredDefinitions;
         for (auto const& [name, tag] : properties) {
             // Blocks the client already has are kept; only the recording's custom blocks are registered here.
             if (registry.lookupByName(HashedString{name}, false)) continue;
 
-            auto const* definition = findDefinition(name);
+            auto const* definition = definitions->tryGetBlockDefinition(name);
             if (!definition) continue;
 
             auto blockType = definitions->registerDataDrivenBlock(definition->mDescription);
@@ -3482,6 +3456,17 @@ void ReplaySession::applyRecordedBlockRegistry() {
         registry.setupDirectAccessBlocks();
         registry.finalizeBlockComponentStorage();
 
+        auto& palette = level->getBlockPalette();
+        palette.initFromBlockDefinitions();
+        palette.cacheBlockComponentData();
+        for (auto const& [name, tag] : properties) {
+            auto blockType = registry.lookupByName(HashedString{name}, false);
+            if (!blockType) continue;
+            for (auto const& permutation : *blockType->mBlockPermutations) {
+                if (permutation) permutation->cacheComponentData();
+            }
+        }
+
         getLogger().debug(
             "Registered {} recorded custom block types (geometry={}, visuals={})",
             registered,
@@ -3499,16 +3484,9 @@ size_t ReplaySession::preloadRecordedBlockGeometry(std::vector<std::pair<std::st
     auto client = ll::service::getClientInstance();
     if (!client) return 0;
 
-    auto       geometry         = client->getGeometryGroup();
-    auto&      resourceManager  = client->getResourcePackManager();
-    auto const minEngineVersion = MinEngineVersion::fromString(
-        std::format(
-            "{}.{}.{}",
-            SharedConstants::MajorVersion(),
-            SharedConstants::MinorVersion(),
-            SharedConstants::PatchVersion()
-        )
-    );
+    auto                            geometry        = client->getGeometryGroup();
+    auto&                           resourceManager = client->getResourcePackManager();
+    MinEngineVersion                minEngineVersion;
     std::unordered_set<std::string> geometryPaths;
 
     std::function<void(CompoundTagVariant const&)> collectGeometryNames;
@@ -3586,38 +3564,16 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(
                 }
             }
         };
-        client->getResourcePackRepository().forEachPack([&](ResourcePack const& pack) {
+        client->getResourcePackManager().iteratePacks([&](PackInstance const& pack) {
             std::string content;
-            if (pack.getResource(Core::Path{"blocks.json"}, content, 0)) collectLegacyTextures(content);
+            if (pack.getResource(Core::Path{"blocks.json"}, content)) collectLegacyTextures(content);
         });
     }
-
-    // Geometry-less blocks would fall back to BlockGraphics here, so legacy cubes get full_block geometry.
-    alignas(16) std::array<std::byte, 512> fullBlockGeometryStorage{};
-    auto& fullBlockGeometry = *reinterpret_cast<BlockGeometryDescription*>(fullBlockGeometryStorage.data());
-    HashedString const                               noCullingName;
-    std::variant<bool, std::set<HashedString>> const uvLock{false};
-    BlockRendererDescription const                   renderer{
-        BlockRendererName::Default,
-        Vec3{},
-        BlockTransformationComponent::RotationType{0, 0, 0, Vec3{0.5f}},
-        Vec3::ONE()
-    };
-    fullBlockGeometry.$ctor(
-        BlockGeometryDescription::FULL_BLOCK_GEO_NAME(),
-        noCullingName,
-        BlockGeometryDescription::CULLING_SHAPE_DEFAULT(),
-        BlockGeometryDescription::CULLING_LAYER_UNDEFINED(),
-        uvLock,
-        renderer,
-        false
-    );
 
     size_t modernInjected = 0;
     size_t legacyInjected = 0;
     for (auto const& [name, tag] : properties) {
-        auto const  entry      = definitions->mBlockDefinitions->find(name);
-        auto const* definition = entry == definitions->mBlockDefinitions->end() ? nullptr : entry->second.get();
+        auto const* definition = definitions->tryGetBlockDefinition(name);
         if (!definition) continue;
 
         auto const* materialDescription =
@@ -3630,13 +3586,13 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(
 
         // Init layer only: the engine's rendering pass skips blocks whose Rendering layer is already marked.
         auto inject = [&type](auto const& description) {
-            type.mComponents->mAllowComponentReplacement = true;
+            type.mComponents->allowComponentReplacement();
             description.$initializeComponent(*type.mComponents);
             BlockTypeComponentStorageFinalizer{}.finalizeComponentData(type);
 
             for (auto const& permutation : *type.mBlockPermutations) {
                 if (!permutation) continue;
-                permutation->mComponents->mAllowComponentReplacement = true;
+                permutation->mComponents->allowComponentReplacement();
                 description.$initializeComponent(*permutation->mComponents);
                 BlockComponentStorageFinalizer{}.finalizeComponentData(*permutation);
             }
@@ -3665,11 +3621,9 @@ size_t ReplaySession::injectRecordedBlockMaterialComponents(
             false,
             false
         };
-        inject(fullBlockGeometry);
         inject(material);
         ++legacyInjected;
     }
-    fullBlockGeometry.$dtor();
     getLogger().debug("Injected recorded block visuals: material={} legacy={}", modernInjected, legacyInjected);
     return modernInjected + legacyInjected;
 }
@@ -3893,8 +3847,8 @@ bool ReplaySession::ensureReplayDimension(
         if (*mPendingReplayDimension == target) return false;
         getLogger().info(
             "Superseding pending replay dimension transition to {} with new target {}",
-            mPendingReplayDimension->id,
-            target.id
+            mPendingReplayDimension->mValue,
+            target.mValue
         );
         mDimensionTransitionGeneration.fetch_add(1, std::memory_order_acq_rel);
         if (mDimensionTransitionRequest) {
@@ -3929,7 +3883,10 @@ bool ReplaySession::ensureReplayDimension(
     mObserverPreviewInRange = false;
 
     if (!clearRecordedEntities()) {
-        getLogger().error("Unable to clear recorded entities before leaving replay dimension {}", sourceDimension.id);
+        getLogger().error(
+            "Unable to clear recorded entities before leaving replay dimension {}",
+            sourceDimension.mValue
+        );
         mReplayFailed = true;
         return false;
     }
@@ -3948,12 +3905,12 @@ bool ReplaySession::ensureReplayDimension(
         "Replay dimension transition generation {} started at tick {} from dimension {} to {}",
         generation,
         mCurrentTick,
-        sourceDimension.id,
-        target.id
+        sourceDimension.mValue,
+        target.mValue
     );
     std::string targetName;
     if (auto const profile = mReplayDimensionProfile.load(std::memory_order_acquire)) {
-        if (auto const it = profile->names.find(target.id); it != profile->names.end()) targetName = it->second;
+        if (auto const it = profile->names.find(target.mValue); it != profile->names.end()) targetName = it->second;
     }
 
     ll::thread::ServerThreadExecutor::getDefault().execute([request,
@@ -4004,7 +3961,7 @@ bool ReplaySession::ensureReplayDimension(
             if (!targetDimension || !player) {
                 getLogger().error(
                     "Unable to change replay dimension to {}: target dimension or server player is unavailable",
-                    target.id
+                    target.mValue
                 );
                 fail();
                 return;
@@ -4033,10 +3990,10 @@ bool ReplaySession::ensureReplayDimension(
                 return;
             }
         } catch (std::exception const& e) {
-            getLogger().error("Unable to change replay dimension to {}: {}", target.id, e.what());
+            getLogger().error("Unable to change replay dimension to {}: {}", target.mValue, e.what());
             fail();
         } catch (...) {
-            getLogger().error("Unable to change replay dimension to {}", target.id);
+            getLogger().error("Unable to change replay dimension to {}", target.mValue);
             fail();
         }
     });
@@ -4076,11 +4033,11 @@ void ReplaySession::processPendingDimensionTransition() {
             "playerAvailable={}, currentDimension={}, dimensionMatches={}, waitingForAck={}, loadingScreen={}, "
             "readyToRender={}",
             mDimensionTransitionRequest->generation,
-            mPendingReplayDimension->id,
+            mPendingReplayDimension->mValue,
             std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(),
             static_cast<int>(status),
             playerAvailable,
-            playerAvailable ? mReplayPlayer->getDimensionId().id : 0,
+            playerAvailable ? mReplayPlayer->getDimensionId().mValue : 0,
             dimensionMatches,
             waitingForAcknowledgment,
             loadingScreenVisible,
@@ -4126,7 +4083,7 @@ void ReplaySession::processPendingDimensionTransition() {
             "Replay dimension transition generation {} reached dimension {} but its client acknowledgment remains "
             "pending; continuing after the fallback grace period",
             mDimensionTransitionRequest->generation,
-            mPendingReplayDimension->id
+            mPendingReplayDimension->mValue
         );
     }
 
@@ -4140,7 +4097,7 @@ void ReplaySession::processPendingDimensionTransition() {
             "Replay dimension transition generation {} reached dimension {} behind the loading screen "
             "(readyToRender={})",
             mDimensionTransitionRequest->generation,
-            mPendingReplayDimension->id,
+            mPendingReplayDimension->mValue,
             readyToRender
         );
     }
@@ -4160,7 +4117,7 @@ void ReplaySession::completeReplayDimensionTransition() {
         "Replay dimension transition generation {} completed at tick {} in dimension {} after {} ms",
         completedGeneration,
         mCurrentTick,
-        mReplayPlayer->getDimensionId().id,
+        mReplayPlayer->getDimensionId().mValue,
         elapsed.count()
     );
     mReplayDimension.store(&mReplayPlayer->getDimension(), std::memory_order_release);
@@ -4354,8 +4311,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             ++skippedDimensionPackets;
             noteSkippedReplayChunk(
                 true,
-                packetDimension.id,
-                replayDimension->getDimensionId().id,
+                packetDimension.mValue,
+                replayDimension->getDimensionId().mValue,
                 mCurrentTick
             );
             continue;
@@ -4429,8 +4386,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             ++skippedDimensionPackets;
             noteSkippedReplayChunk(
                 false,
-                packetDimension.id,
-                replayDimension->getDimensionId().id,
+                packetDimension.mValue,
+                replayDimension->getDimensionId().mValue,
                 mCurrentTick
             );
             continue;
@@ -4649,7 +4606,7 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         "{}|{}|{}|{}|{}|{}|{}",
         followCenter ? "follow" : "snapshot",
         followSubject,
-        replayDimension->getDimensionId().id,
+        replayDimension->getDimensionId().mValue,
         centerX,
         centerZ,
         snapshotChunkX,
@@ -4662,7 +4619,7 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
             "injected={} skipped={}",
             followCenter ? "follow" : "snapshot",
             followSubject.empty() ? "-" : followSubject,
-            replayDimension->getDimensionId().id,
+            replayDimension->getDimensionId().mValue,
             centerX,
             centerZ,
             snapshotChunkX,
@@ -6286,10 +6243,8 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                         "Replay player-list entry '{}' has no skin data; using the default skin",
                         *entry.mName
                     );
-                    *entry.mSkin = SerializedSkinRef{};
+                    *entry.mSkin = SerializedSkinRef::createTrustedDefaultSerializedSkin();
                     if (!entry.mSkin->mSkinImpl) continue;
-                    // 26.10 does not export createTrustedDefaultSerializedSkin: the default skin marked as trusted.
-                    entry.mSkin->mSkinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
                 }
                 entry.mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
             }
@@ -6519,7 +6474,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                         static_cast<int>(map.mScale)
                     );
                 }
-                if (saved->mPixels->empty()) map.applyToMap(*saved, false);
+                if (saved->getPixels().size() == 0) map.applyToMap(*saved, false);
             }
         }
     }
@@ -6837,8 +6792,8 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
         if (packetDimension != replayDimension->getDimensionId()) {
             noteSkippedReplayChunk(
                 true,
-                packetDimension.id,
-                replayDimension->getDimensionId().id,
+                packetDimension.mValue,
+                replayDimension->getDimensionId().mValue,
                 mCurrentTick
             );
             return true;
@@ -6872,8 +6827,8 @@ bool ReplaySession::injectChunkPacket(std::string_view payload, MinecraftPacketI
         if (packetDimension != replayDimension->getDimensionId()) {
             noteSkippedReplayChunk(
                 false,
-                packetDimension.id,
-                replayDimension->getDimensionId().id,
+                packetDimension.mValue,
+                replayDimension->getDimensionId().mValue,
                 mCurrentTick
             );
             return true;
@@ -6937,7 +6892,7 @@ void ReplaySession::configureReplayDimension(DimensionArguments& arguments) cons
     auto profile = mReplayDimensionProfile.load(std::memory_order_acquire);
     if (!profile || arguments.mDerived->mLevel.getLevelId() != profile->levelId) return;
 
-    auto const dimensionId = arguments.mDimId->id;
+    auto const dimensionId = arguments.mDimId->mValue;
     if (auto const name = profile->names.find(dimensionId); name != profile->names.end()) {
         arguments.mName = name->second;
     }

@@ -14,8 +14,6 @@
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/deps/core/utility/ReadOnlyBinaryStream.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
-#include "mc/network/MinecraftPacketIds.h"
-#include "mc/network/MinecraftPackets.h"
 #include "mc/network/NetEventCallback.h"
 #include "mc/network/NetworkIdentifier.h"
 #include "mc/network/Packet.h"
@@ -27,6 +25,7 @@
 #include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
 #include "mc/network/packet/LevelSoundEventPacket.h"
+#include "mc/network/packet/LevelSoundEventPacketPayload.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
 #include "mc/network/packet/PlayerHotbarPacket.h"
@@ -36,7 +35,6 @@
 #include "mc/network/packet/StartGamePacket.h"
 #include "mc/network/packet/SubChunkPacket.h"
 #include "mc/platform/brstd/function_ref.h"
-#include "mc/world/actor/ActorDefinitionIdentifier.h"
 #include "mc/world/actor/ActorSoundIdentifier.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSoundManager.h"
@@ -478,23 +476,15 @@ LL_TYPE_INSTANCE_HOOK(
     Player*                              targetPlayer,
     int                                  data,
     ActorSoundIdentifier const&          actor,
-    bool                                 isGlobal
+    bool                                 isGlobal,
+    std::optional<Vec3> const&           fireAtPosition
 ) {
-    origin(dimension, type, pos, targetPlayer, data, actor, isGlobal);
+    origin(dimension, type, pos, targetPlayer, data, actor, isGlobal, fireAtPosition);
     auto& recorder = Recorder::getInstance();
     if (!mIsClientSide || !recorder.isActive() || recorder.isPaused()) return;
-    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::LevelSoundEvent);
-    if (!packet) return;
-    auto&                            sound      = static_cast<LevelSoundEventPacket&>(*packet);
-    ActorDefinitionIdentifier const& definition = actor.mIdentifier;
-    sound.mActorIdentifier                      = definition.mCanonicalName->getString();
-    sound.mActor                                = actor.mActorId;
-    sound.mEventId                              = type;
-    sound.mPos                                  = pos;
-    sound.mData                                 = data;
-    sound.mIsGlobal                             = isGlobal;
-    sound.mIsBaby                               = actor.mIsBaby;
-    recorder.recordGamePacket(sound);
+    recorder.recordGamePacket(
+        LevelSoundEventPacket(LevelSoundEventPacketPayload(type, pos, data, actor, isGlobal, fireAtPosition))
+    );
 }
 
 using DimensionSoundFn = void (Level::*)(
@@ -529,18 +519,9 @@ LL_TYPE_INSTANCE_HOOK(
     origin(dimension, type, pos, data, actor, isGlobal);
     auto& recorder = Recorder::getInstance();
     if (!recorder.isActive() || recorder.isPaused()) return;
-    auto packet = MinecraftPackets::createPacket(MinecraftPacketIds::LevelSoundEvent);
-    if (!packet) return;
-    auto&                            sound      = static_cast<LevelSoundEventPacket&>(*packet);
-    ActorDefinitionIdentifier const& definition = actor.mIdentifier;
-    sound.mActorIdentifier                      = definition.mCanonicalName->getString();
-    sound.mActor                                = actor.mActorId;
-    sound.mEventId                              = type;
-    sound.mPos                                  = pos;
-    sound.mData                                 = data;
-    sound.mIsGlobal                             = isGlobal;
-    sound.mIsBaby                               = actor.mIsBaby;
-    recorder.recordGamePacket(sound);
+    recorder.recordGamePacket(
+        LevelSoundEventPacket(LevelSoundEventPacketPayload(type, pos, data, actor, isGlobal, std::nullopt))
+    );
 }
 
 namespace {

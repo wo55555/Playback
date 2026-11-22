@@ -21,24 +21,24 @@ namespace playback::audio::hooks {
 
 namespace {
 
-// FMOD 2.02.30 (fmod.dll in 1.26.10.04); the C handle and the C++ object are the same pointer.
+// FMOD 2.02.30 (fmod.dll in 1.26.20.04); the C handle and the C++ object are the same pointer.
 using InitFn = int (*)(void* system, int maxChannels, unsigned flags, void* extra);
 using PlaySoundFn = int (*)(void* system, void* sound, void* group, bool paused, void** channel);
 
-// SoundSystemFMOD on 1.26.10.04.
-constexpr uintptr_t SoundSystemFmodVtableRva = 0x922A918;
+// SoundSystemFMOD on 1.26.20.04.
+constexpr uintptr_t SoundSystemFmodVtableRva = 0xAEE7FE0;
 constexpr size_t    UpdateFloatVtableSlot    = 53;
-constexpr uintptr_t UpdateFloatRva           = 0x6E8A310;
+constexpr uintptr_t UpdateFloatRva           = 0x49AD650;
 // Calls that would fight the export for the FMOD output while it runs NOSOUND_NRT.
 constexpr size_t    SetOutputDeviceVtableSlot = 4; // setDriver(guid match) + setOutput(AUTODETECT)
-constexpr uintptr_t SetOutputDeviceRva        = 0x6E852E0;
+constexpr uintptr_t SetOutputDeviceRva        = 0x49A5DA0;
 constexpr size_t    EnableVtableSlot          = 6; // mixerSuspend / mixerResume
-constexpr uintptr_t EnableRva                 = 0x6E86040;
-// Ore UI stream pause: System::update once, then spins on Channel::getPosition. Not virtual; its only caller is the
-// direct call below (add rcx,18h; mov rdx,[rbx]; call rel32), which doubles as the build check.
-constexpr uintptr_t StreamPauseRva         = 0x6E8B410;
-constexpr uintptr_t StreamPauseCallSiteRva = 0x1057682;
-using StreamPauseFn                        = uint64_t (*)(void* soundSystem, uint64_t key);
+constexpr uintptr_t EnableRva                 = 0x49A6B10;
+// Ore UI stream pause: System::update once, then spins on Channel::getPosition. Not virtual; reached only through the
+// SoundEngine thunk below (add rcx,18h; jmp rel32), which doubles as the build check.
+constexpr uintptr_t StreamPauseRva      = 0x49AF080;
+constexpr uintptr_t StreamPauseThunkRva = 0x606600;
+using StreamPauseFn                     = uint64_t (*)(void* soundSystem, uint64_t key);
 
 struct Hook {
     void*               target{};
@@ -163,22 +163,22 @@ void* resolveSoundSystemSlot(size_t slotIndex, uintptr_t fnRva, char const* name
     return reinterpret_cast<void*>(slot);
 }
 
-// The stream pause call site is checked before hooking so an unexpected game build is rejected.
+// The stream pause thunk is checked before hooking so an unexpected game build is rejected.
 void* resolveStreamPause() {
     auto const base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     auto const size = gameImageSize(base);
-    if (StreamPauseCallSiteRva + 12 > size || StreamPauseRva >= size) return nullptr;
-    auto const*                      site = reinterpret_cast<uint8_t const*>(base + StreamPauseCallSiteRva);
-    constexpr std::array<uint8_t, 8> Expected{0x48, 0x83, 0xC1, 0x18, 0x48, 0x8B, 0x13, 0xE8};
-    if (std::memcmp(site, Expected.data(), Expected.size()) != 0) {
-        logger().warn("Export audio hooks: stream pause call site bytes differ; unsupported game build");
+    if (StreamPauseThunkRva + 9 > size || StreamPauseRva >= size) return nullptr;
+    auto const*                      thunk = reinterpret_cast<uint8_t const*>(base + StreamPauseThunkRva);
+    constexpr std::array<uint8_t, 5> Expected{0x48, 0x83, 0xC1, 0x18, 0xE9};
+    if (std::memcmp(thunk, Expected.data(), Expected.size()) != 0) {
+        logger().warn("Export audio hooks: stream pause thunk bytes differ; unsupported game build");
         return nullptr;
     }
     int32_t rel = 0;
-    std::memcpy(&rel, site + 8, sizeof(rel));
-    uintptr_t const target = base + StreamPauseCallSiteRva + 12 + intptr_t(rel);
+    std::memcpy(&rel, thunk + 5, sizeof(rel));
+    uintptr_t const target = base + StreamPauseThunkRva + 9 + intptr_t(rel);
     if (target != base + StreamPauseRva) {
-        logger().warn("Export audio hooks: stream pause call target mismatch (rva=0x{:X})", target - base);
+        logger().warn("Export audio hooks: stream pause thunk target mismatch (rva=0x{:X})", target - base);
         return nullptr;
     }
     return reinterpret_cast<void*>(target);
@@ -216,8 +216,7 @@ bool install() {
     gSetOutputDeviceHook.target =
         resolveSoundSystemSlot(SetOutputDeviceVtableSlot, SetOutputDeviceRva, "setOutputDevice");
     gStreamPauseHook.target = resolveStreamPause();
-
-    gPlaySoundHook.target = reinterpret_cast<void*>(GetProcAddress(
+    gPlaySoundHook.target   = reinterpret_cast<void*>(GetProcAddress(
         fmod,
         "?playSound@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEAVSound@2@PEAVChannelGroup@2@_NPEAPEAVChannel@2@@Z"
     ));

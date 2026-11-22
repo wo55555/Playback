@@ -7,9 +7,6 @@
 
 #include "ll/api/memory/Hook.h"
 
-// The 26.10 I18nObserver template needs this complete before MinecraftGame's headers.
-#include "mc/platform/threading/Mutex.h"
-
 #include "mc/client/game/IClientInstance.h"
 #include "mc/client/game/MinecraftGame.h"
 #include "mc/util/Timer.h"

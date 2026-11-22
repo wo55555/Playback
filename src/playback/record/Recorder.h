@@ -6,13 +6,12 @@
 #include "playback/utils/container/LinkedHashMap.h"
 #include "playback/visuals/ReplayThumbnail.h"
 
-
-#include "mc/deps/core/utility/AutomaticID.h"
 #include "mc/legacy/ActorRuntimeID.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/platform/UUID.h"
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/level/ChunkPos.h"
+#include "mc/world/level/dimension/DimensionType.h"
 
 #include "ll/api/thread/ThreadPoolExecutor.h"
 

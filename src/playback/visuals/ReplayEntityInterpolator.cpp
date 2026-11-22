@@ -6,7 +6,6 @@
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
-#include "mc/entity/components/InsideBlockComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
 #include "mc/entity/components/RenderPositionComponent.h"
@@ -17,9 +16,6 @@
 #include "mc/world/effect/EffectDuration.h"
 #include "mc/world/effect/MobEffect.h"
 #include "mc/world/effect/MobEffectInstance.h"
-#include "mc/world/level/block/Block.h"
-#include "mc/world/level/block/BlockType.h"
-#include "mc/world/level/block/VanillaBlockTypeIds.h"
 
 #include <algorithm>
 #include <atomic>
@@ -121,24 +117,15 @@ int64_t steadyNs() noexcept {
         .count();
 }
 
-// 26.10 does not export Actor::isInsidePortal, which tests the block the actor stands in the same way.
-bool isInsidePortal(Actor const& actor) {
-    auto const*  inside = actor.getEntityContext().tryGetComponent<InsideBlockComponent>().as_ptr();
-    Block const* block  = inside ? inside->mInsideBlock : nullptr;
-    if (!block) return false;
-    auto const& name = block->getBlockType().mNameInfo->mFullName.get();
-    return name == VanillaBlockTypeIds::Portal() || name == VanillaBlockTypeIds::EndPortal();
-}
-
 void publishSubjectNausea(Actor const& subject, long double tick) {
     auto*       confusion = MobEffect::CONFUSION();
     auto const* effect    = confusion ? subject.getEffect(*confusion) : nullptr;
-    int const   duration  = effect ? effect->mDuration->mValue : 0;
+    int const   duration  = effect ? effect->getDuration().mValue : 0;
     gNauseaPresent.store(effect != nullptr, std::memory_order_relaxed);
     gNauseaDuration.store(duration, std::memory_order_relaxed);
     gNauseaActive.store(effect && (duration == -1 || duration > 60), std::memory_order_relaxed);
     gNauseaTick.store(static_cast<double>(tick), std::memory_order_relaxed);
-    gNauseaInsidePortal.store(isInsidePortal(subject), std::memory_order_relaxed);
+    gNauseaInsidePortal.store(subject.isInsidePortal(), std::memory_order_relaxed);
     gNauseaStamp.store(steadyNs(), std::memory_order_release);
 }
 
