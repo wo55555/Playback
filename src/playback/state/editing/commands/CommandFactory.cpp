@@ -1,5 +1,6 @@
 ﻿#include "CommandFactory.h"
 
+#include "playback/state/editing/commands/AudioCommands.h"
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/ClipCommands.h"
 #include "playback/state/editing/commands/FreezeCommands.h"
@@ -181,9 +182,6 @@ std::unique_ptr<model::IEditCommand>
 CommandFactory::createRenameClip(const std::string& clipId, const std::string& name) {
     return std::make_unique<RenameClip>(clipId, name);
 }
-std::unique_ptr<model::IEditCommand> CommandFactory::createSetClipMuted(const std::string& clipId, bool muted) {
-    return std::make_unique<SetClipMuted>(clipId, muted);
-}
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetClipLocked(const std::string& clipId, bool locked) {
     return std::make_unique<SetClipLocked>(clipId, locked);
 }
@@ -311,6 +309,59 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetTimelapseTrackLock
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createClearTimelapseKeyframes() {
     return std::make_unique<ClearTimelapseKeyframes>();
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddAudioTrack(const std::string& name) {
+    return std::make_unique<AddAudioTrack>(name);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createRemoveAudioTrack(const std::string& trackId) {
+    return std::make_unique<RemoveAudioTrack>(trackId);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createRenameAudioTrack(const std::string& trackId, const std::string& name) {
+    return std::make_unique<RenameAudioTrack>(trackId, name);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetAudioTrackEnabled(const std::string& trackId, bool enabled) {
+    return std::make_unique<SetAudioTrackState>(trackId, SetAudioTrackState::Property::Enabled, enabled);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetAudioTrackMuted(const std::string& trackId, bool muted) {
+    return std::make_unique<SetAudioTrackState>(trackId, SetAudioTrackState::Property::Muted, muted);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetAudioTrackLocked(const std::string& trackId, bool locked) {
+    return std::make_unique<SetAudioTrackState>(trackId, SetAudioTrackState::Property::Locked, locked);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetAudioTrackVolume(const std::string& trackId, float volume) {
+    return std::make_unique<SetAudioTrackState>(trackId, volume);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddAudioClip(
+    const std::string& trackId,
+    const std::string& filePath,
+    int                startTick,
+    const std::string& name
+) {
+    return std::make_unique<AddAudioClip>(trackId, filePath, startTick, name);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createRemoveAudioClip(const std::string& trackId, const std::string& clipId) {
+    return std::make_unique<RemoveAudioClip>(trackId, clipId);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createMoveAudioClip(const std::string& trackId, const std::string& clipId, int startTick) {
+    return std::make_unique<MoveAudioClip>(trackId, clipId, startTick);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetAudioClipProps(
+    const std::string& trackId,
+    const std::string& clipId,
+    const std::string& filePath,
+    double             trimStartSeconds,
+    double             durationSeconds,
+    float              volume,
+    bool               muted
+) {
+    return std::make_unique<
+        SetAudioClipProps>(trackId, clipId, filePath, trimStartSeconds, durationSeconds, volume, muted);
 }
 
 } // namespace playback::state::editing::command

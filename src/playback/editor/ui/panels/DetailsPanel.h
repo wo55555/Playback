@@ -24,6 +24,7 @@ private:
     void drawPreviewPage(PanelContext const& ctx);
     void drawSettingsPage(PanelContext const& ctx);
     void drawOptiPistonSection();
+    void resetAudioDrafts();
 
     // Each returns true when it owns the current selection and has drawn it.
     bool drawClip(PanelContext const& ctx);
@@ -37,6 +38,8 @@ private:
     bool drawFreezeTrack(PanelContext const& ctx);
     bool drawTimelapseKeyframe(PanelContext const& ctx);
     bool drawTimelapseTrack(PanelContext const& ctx);
+    bool drawAudioTrack(PanelContext const& ctx);
+    bool drawAudioClip(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
     void drawKeyframeInterpolationRows(
         PanelContext const&                          ctx,
@@ -69,6 +72,18 @@ private:
     std::optional<int>          mTimelapseTextTick;
     std::array<char, 64>        mTimelapseTextBuffer{};
     bool                        mTimelapseTextEditing{false};
+    std::string                 mAudioTrackNameId;
+    std::array<char, 128>       mAudioTrackNameBuffer{};
+    bool                        mAudioTrackNameEditing{false};
+    std::string                 mAudioTrackVolumeDragId;
+    bool                        mAudioTrackVolumeDragging{false};
+    float                       mAudioTrackVolumeDragValue{1.0f};
+    std::string                 mAudioClipPathId;
+    std::array<char, 512>       mAudioClipPathBuffer{};
+    bool                        mAudioClipPathEditing{false};
+    std::string                 mAudioClipVolumeDragId;
+    bool                        mAudioClipVolumeDragging{false};
+    float                       mAudioClipVolumeDragValue{1.0f};
 };
 
 } // namespace playback::editor::ui
