@@ -50,6 +50,12 @@ constexpr Entry Entries[] = {
     {GameFunction::TryGetPortalData,                         0x6F2D140},
     {GameFunction::ActorIsOnFire,                            0xBC4EC0 },
     {GameFunction::ClientOnTick,                             0x65A0090},
+    {GameFunction::BgfxD3D12Flip,                            0xE8113B0},
+    {GameFunction::BgfxD3D11Flip,                            0xE800200},
+    {GameFunction::BgfxD3D11PreReset,                        0xE804600},
+    {GameFunction::BgfxD3D11PostReset,                       0xE803E30},
+    {GameFunction::BgfxContextInitFinalize,                  0xBC63080},
+    {GameFunction::BgfxContextShutdownBegin,                 0xBC654A0},
 };
 
 constexpr bool entriesInOrder() {

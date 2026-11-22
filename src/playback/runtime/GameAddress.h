@@ -33,6 +33,12 @@ enum class GameFunction : uint8_t {
     TryGetPortalData,
     ActorIsOnFire,
     ClientOnTick,
+    BgfxD3D12Flip,
+    BgfxD3D11Flip,
+    BgfxD3D11PreReset,
+    BgfxD3D11PostReset,
+    BgfxContextInitFinalize,
+    BgfxContextShutdownBegin,
     Count,
 };
 
