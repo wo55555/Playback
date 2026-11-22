@@ -153,7 +153,7 @@ void AddClip::execute(model::EditorStateExt& state) {
 }
 
 void        AddClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string AddClip::label() const { return "Add Clip"; }
+std::string AddClip::label() const { return "playback.refactorEditor.history.addClip"; }
 
 SplitClip::SplitClip(std::string clipId, int splitTick, std::string newClipName)
 : mClipId(std::move(clipId)),
@@ -211,7 +211,7 @@ void SplitClip::execute(model::EditorStateExt& state) {
 }
 
 void        SplitClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SplitClip::label() const { return "Split Clip"; }
+std::string SplitClip::label() const { return "playback.refactorEditor.history.splitClip"; }
 
 MoveAndTrimClip::MoveAndTrimClip(std::string clipId, int newInTick, int newOutTick)
 : mClipId(std::move(clipId)),
@@ -273,7 +273,7 @@ void MoveAndTrimClip::execute(model::EditorStateExt& state) {
 }
 
 void        MoveAndTrimClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string MoveAndTrimClip::label() const { return "Move or Trim Clip"; }
+std::string MoveAndTrimClip::label() const { return "playback.refactorEditor.history.moveOrTrimClip"; }
 
 SetClipSpeed::SetClipSpeed(std::string clipId, float speed) : mClipId(std::move(clipId)), mSpeed(speed) {}
 
@@ -295,7 +295,7 @@ void SetClipSpeed::execute(model::EditorStateExt& state) {
 }
 
 void        SetClipSpeed::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipSpeed::label() const { return "Set Clip Speed"; }
+std::string SetClipSpeed::label() const { return "playback.refactorEditor.history.setClipSpeed"; }
 
 RenameClip::RenameClip(std::string clipId, std::string name) : mClipId(std::move(clipId)), mName(std::move(name)) {}
 
@@ -314,7 +314,7 @@ void RenameClip::execute(model::EditorStateExt& state) {
 }
 
 void        RenameClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string RenameClip::label() const { return "Rename Clip"; }
+std::string RenameClip::label() const { return "playback.refactorEditor.history.renameClip"; }
 
 SetClipMuted::SetClipMuted(std::string clipId, bool muted) : mClipId(std::move(clipId)), mMuted(muted) {}
 
@@ -333,7 +333,7 @@ void SetClipMuted::execute(model::EditorStateExt& state) {
 }
 
 void        SetClipMuted::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipMuted::label() const { return "Set Clip Muted"; }
+std::string SetClipMuted::label() const { return "playback.refactorEditor.history.setClipMuted"; }
 
 SetClipLocked::SetClipLocked(std::string clipId, bool locked) : mClipId(std::move(clipId)), mLocked(locked) {}
 
@@ -352,7 +352,7 @@ void SetClipLocked::execute(model::EditorStateExt& state) {
 }
 
 void        SetClipLocked::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipLocked::label() const { return "Set Clip Locked"; }
+std::string SetClipLocked::label() const { return "playback.refactorEditor.history.setClipLocked"; }
 
 SetClipExportEnabled::SetClipExportEnabled(std::string clipId, bool exportEnabled)
 : mClipId(std::move(clipId)),
@@ -373,7 +373,7 @@ void SetClipExportEnabled::execute(model::EditorStateExt& state) {
 }
 
 void        SetClipExportEnabled::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipExportEnabled::label() const { return "Set Clip Export Enabled"; }
+std::string SetClipExportEnabled::label() const { return "playback.refactorEditor.history.setClipExportEnabled"; }
 
 SetAllClipsExportEnabled::SetAllClipsExportEnabled(bool exportEnabled, std::string cameraId)
 : mExportEnabled(exportEnabled),
@@ -417,7 +417,9 @@ void SetAllClipsExportEnabled::execute(model::EditorStateExt& state) {
 }
 
 void        SetAllClipsExportEnabled::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetAllClipsExportEnabled::label() const { return "Set All Clips Export Enabled"; }
+std::string SetAllClipsExportEnabled::label() const {
+    return "playback.refactorEditor.history.setAllClipsExportEnabled";
+}
 
 ResetClipsToFullRange::ResetClipsToFullRange(std::string cameraId, std::string defaultClipName)
 : mCameraId(std::move(cameraId)),
@@ -482,7 +484,7 @@ void ResetClipsToFullRange::execute(model::EditorStateExt& state) {
 }
 
 void        ResetClipsToFullRange::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string ResetClipsToFullRange::label() const { return "Reset Clips to Full Range"; }
+std::string ResetClipsToFullRange::label() const { return "playback.refactorEditor.history.resetClipsToFullRange"; }
 
 DeleteClip::DeleteClip(std::string clipId) : mClipId(std::move(clipId)) {}
 
@@ -501,7 +503,7 @@ void DeleteClip::execute(model::EditorStateExt& state) {
 }
 
 void        DeleteClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string DeleteClip::label() const { return "Delete Clip"; }
+std::string DeleteClip::label() const { return "playback.refactorEditor.history.deleteClip"; }
 
 AddScene::AddScene(std::string name) : mName(std::move(name)) {}
 
@@ -536,7 +538,7 @@ void AddScene::execute(model::EditorStateExt& state) {
 }
 
 void        AddScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string AddScene::label() const { return "Add Scene"; }
+std::string AddScene::label() const { return "playback.refactorEditor.history.addScene"; }
 
 DuplicateScene::DuplicateScene(std::string sceneId, std::string copyName)
 : mSceneId(std::move(sceneId)),
@@ -570,7 +572,7 @@ void DuplicateScene::execute(model::EditorStateExt& state) {
 }
 
 void        DuplicateScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string DuplicateScene::label() const { return "Duplicate Scene"; }
+std::string DuplicateScene::label() const { return "playback.refactorEditor.history.duplicateScene"; }
 
 RenameScene::RenameScene(std::string sceneId, std::string name)
 : mSceneId(std::move(sceneId)),
@@ -589,7 +591,7 @@ void RenameScene::execute(model::EditorStateExt& state) {
 }
 
 void        RenameScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string RenameScene::label() const { return "Rename Scene"; }
+std::string RenameScene::label() const { return "playback.refactorEditor.history.renameScene"; }
 
 MoveScene::MoveScene(std::string sceneId, int targetIndex) : mSceneId(std::move(sceneId)), mTargetIndex(targetIndex) {}
 
@@ -623,7 +625,7 @@ void MoveScene::execute(model::EditorStateExt& state) {
 }
 
 void        MoveScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string MoveScene::label() const { return "Move Scene"; }
+std::string MoveScene::label() const { return "playback.refactorEditor.history.moveScene"; }
 
 DeleteScene::DeleteScene(std::string sceneId) : mSceneId(std::move(sceneId)) {}
 
@@ -646,7 +648,7 @@ void DeleteScene::execute(model::EditorStateExt& state) {
 }
 
 void        DeleteScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string DeleteScene::label() const { return "Delete Scene"; }
+std::string DeleteScene::label() const { return "playback.refactorEditor.history.deleteScene"; }
 
 SwitchScene::SwitchScene(std::string sceneId) : mSceneId(std::move(sceneId)) {}
 
@@ -663,7 +665,7 @@ void SwitchScene::execute(model::EditorStateExt& state) {
 }
 
 void        SwitchScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SwitchScene::label() const { return "Switch Scene"; }
+std::string SwitchScene::label() const { return "playback.refactorEditor.history.switchScene"; }
 
 SetSceneExportRange::SetSceneExportRange(int inTick, int outTick) : mInTick(inTick), mOutTick(outTick) {}
 
@@ -693,6 +695,6 @@ void SetSceneExportRange::execute(model::EditorStateExt& state) {
 }
 
 void        SetSceneExportRange::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetSceneExportRange::label() const { return "Set Scene Export Range"; }
+std::string SetSceneExportRange::label() const { return "playback.refactorEditor.history.setSceneExportRange"; }
 
 } // namespace playback::state::editing::command

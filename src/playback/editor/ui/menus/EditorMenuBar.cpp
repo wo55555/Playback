@@ -2,6 +2,7 @@
 
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/HistoryLabel.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
@@ -500,21 +501,63 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
         }
 
         if (widgets::beginMenu("playback.refactorEditor.menu.edit"_tr().c_str())) {
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.menu.undo"_tr().c_str(),
-                    undoShortcut.c_str(),
-                    false,
-                    state.canUndo
-                )) {
-                ctx.submitAction({EditorActionType::UndoEditorEdit});
+            std::string const undoText =
+                (state.canUndo && !state.undoLabel.empty())
+                    ? ("playback.refactorEditor.menu.undoAction"_tr(translateHistoryLabel(state.undoLabel))
+                       + "###menu-undo")
+                    : ("playback.refactorEditor.menu.undo"_tr() + "###menu-undo");
+            if (ImGui::MenuItem(undoText.c_str(), undoShortcut.c_str(), false, state.canUndo && !exportActive)) {
+                ctx.commands.undo();
             }
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.menu.redo"_tr().c_str(),
-                    redoShortcut.c_str(),
-                    false,
-                    state.canRedo
-                )) {
-                ctx.submitAction({EditorActionType::RedoEditorEdit});
+            std::string const redoText =
+                (state.canRedo && !state.redoLabel.empty())
+                    ? ("playback.refactorEditor.menu.redoAction"_tr(translateHistoryLabel(state.redoLabel))
+                       + "###menu-redo")
+                    : ("playback.refactorEditor.menu.redo"_tr() + "###menu-redo");
+            if (ImGui::MenuItem(redoText.c_str(), redoShortcut.c_str(), false, state.canRedo && !exportActive)) {
+                ctx.commands.redo();
+            }
+            if (widgets::beginMenu("playback.refactorEditor.menu.history"_tr().c_str())) {
+                if ((!state.canUndo && !state.canRedo) || (state.undoHistory.empty() && state.redoHistory.empty())) {
+                    ImGui::MenuItem("playback.refactorEditor.menu.historyEmpty"_tr().c_str(), nullptr, false, false);
+                } else {
+                    if (!state.undoHistory.empty()) {
+                        ImGui::MenuItem(
+                            "playback.refactorEditor.menu.historyUndoSection"_tr(state.undoCount).c_str(),
+                            nullptr,
+                            false,
+                            false
+                        );
+                        for (std::size_t i = 0; i < state.undoHistory.size(); ++i) {
+                            std::string const itemLabel = std::to_string(i + 1) + ". "
+                                                        + translateHistoryLabel(state.undoHistory[i])
+                                                        + "##history-undo-" + std::to_string(i);
+                            if (ImGui::MenuItem(itemLabel.c_str(), nullptr, false, !exportActive)) {
+                                ctx.commands.undo(i + 1);
+                            }
+                        }
+                    }
+                    if (!state.undoHistory.empty() && !state.redoHistory.empty()) {
+                        ImGui::Separator();
+                    }
+                    if (!state.redoHistory.empty()) {
+                        ImGui::MenuItem(
+                            "playback.refactorEditor.menu.historyRedoSection"_tr(state.redoCount).c_str(),
+                            nullptr,
+                            false,
+                            false
+                        );
+                        for (std::size_t i = 0; i < state.redoHistory.size(); ++i) {
+                            std::string const itemLabel = std::to_string(i + 1) + ". "
+                                                        + translateHistoryLabel(state.redoHistory[i])
+                                                        + "##history-redo-" + std::to_string(i);
+                            if (ImGui::MenuItem(itemLabel.c_str(), nullptr, false, !exportActive)) {
+                                ctx.commands.redo(i + 1);
+                            }
+                        }
+                    }
+                }
+                widgets::endMenu();
             }
             ImGui::Separator();
             if (ImGui::MenuItem(
