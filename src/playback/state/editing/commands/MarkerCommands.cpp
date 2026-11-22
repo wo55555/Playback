@@ -52,7 +52,7 @@ void AddMarker::execute(model::EditorStateExt& state) {
 }
 
 void        AddMarker::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string AddMarker::label() const { return "Add Marker"; }
+std::string AddMarker::label() const { return "playback.refactorEditor.history.addMarker"; }
 
 DeleteMarker::DeleteMarker(std::string id) : mId(std::move(id)) {}
 
@@ -64,7 +64,7 @@ void DeleteMarker::execute(model::EditorStateExt& state) {
 }
 
 void        DeleteMarker::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string DeleteMarker::label() const { return "Delete Marker"; }
+std::string DeleteMarker::label() const { return "playback.refactorEditor.history.deleteMarker"; }
 
 MoveMarker::MoveMarker(std::string id, int tick) : mId(std::move(id)), mTick(tick) {}
 
@@ -80,7 +80,7 @@ void MoveMarker::execute(model::EditorStateExt& state) {
 }
 
 void        MoveMarker::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string MoveMarker::label() const { return "Move Marker"; }
+std::string MoveMarker::label() const { return "playback.refactorEditor.history.moveMarker"; }
 
 RenameMarker::RenameMarker(std::string id, std::string label) : mId(std::move(id)), mLabel(std::move(label)) {}
 
@@ -94,6 +94,6 @@ void RenameMarker::execute(model::EditorStateExt& state) {
 }
 
 void        RenameMarker::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string RenameMarker::label() const { return "Rename Marker"; }
+std::string RenameMarker::label() const { return "playback.refactorEditor.history.renameMarker"; }
 
 } // namespace playback::state::editing::command

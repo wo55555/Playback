@@ -63,6 +63,7 @@ public:
 private:
     std::optional<Selection>      mSelection;
     std::vector<SelectedKeyframe> mKeyframes;
+    std::string                   mLastSceneId;
 };
 
 } // namespace playback::state::editing::model

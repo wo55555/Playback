@@ -6,6 +6,7 @@
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/ErrorDialog.h"
+#include "playback/editor/ui/components/HistoryLabel.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/state/editing/ClipOps.h"
 
@@ -80,7 +81,9 @@ void ReplayEditor::shutdown() {
     mSubmit     = nullptr;
     mSelection.clear();
     mLastExportState = exporting::ExportState::Idle;
-    mExitHoldSeconds = 0.0f;
+    mToast.clear();
+    mLastHistoryEventSeq = 0;
+    mExitHoldSeconds     = 0.0f;
     mExitHoldBlocked = false;
 }
 
@@ -391,6 +394,18 @@ void ReplayEditor::seekTo(int tick) { mTimelinePanel.seekTo(frameContext(), tick
 
 void ReplayEditor::seekRelative(int tickDelta) { mTimelinePanel.seekRelative(frameContext(), tickDelta); }
 
+void ReplayEditor::undo(std::size_t steps) {
+    playback::state::EditorAction action{playback::state::EditorActionType::UndoEditorEdit};
+    action.historySteps = std::max<std::size_t>(1, steps);
+    submitAction(std::move(action));
+}
+
+void ReplayEditor::redo(std::size_t steps) {
+    playback::state::EditorAction action{playback::state::EditorActionType::RedoEditorEdit};
+    action.historySteps = std::max<std::size_t>(1, steps);
+    submitAction(std::move(action));
+}
+
 bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(frameContext()); }
 
 bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(frameContext()); }
@@ -488,6 +503,7 @@ bool ReplayEditor::selectCameraByIndex(std::size_t index) {
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
     if (!state.editorVisible && !exportActive) {
+        mToast.clear();
         if (!mActiveReplayPath.empty()) {
             mTimelineViewPreferences.insert_or_assign(
                 mActiveReplayPath,
@@ -523,9 +539,45 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
                                  && (mViewportMaximized || ImGui::GetIO().WantTextInput
                                      || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId));
 
+    if (state.historyEvent.seq != mLastHistoryEventSeq) {
+        mLastHistoryEventSeq = state.historyEvent.seq;
+        if (state.historyEvent.kind != playback::state::EditorHistoryEventKind::None && !exportActive
+            && state.editorVisible) {
+            auto const  labelText = translateHistoryLabel(state.historyEvent.label);
+            std::string message;
+            if (state.historyEvent.kind == playback::state::EditorHistoryEventKind::Undo) {
+                message = state.historyEvent.steps > 1
+                            ? "playback.refactorEditor.toast.undoSteps"_tr(state.historyEvent.steps, labelText)
+                            : "playback.refactorEditor.toast.undo"_tr(labelText);
+            } else if (state.historyEvent.kind == playback::state::EditorHistoryEventKind::Redo) {
+                message = state.historyEvent.steps > 1
+                            ? "playback.refactorEditor.toast.redoSteps"_tr(state.historyEvent.steps, labelText)
+                            : "playback.refactorEditor.toast.redo"_tr(labelText);
+            }
+            if (!message.empty()) mToast.show(std::move(message));
+        }
+    }
+
     auto const ctx = frameContext();
     if (mModeManager.current() == EditorMode::Render) mRenderMode.draw(ctx);
     else mEditMode.draw(ctx);
+
+    if (exportActive || !state.editorVisible) {
+        mToast.clear();
+    } else {
+        ImVec2     toastPos{};
+        ImVec2     toastSize{};
+        Rect const vpRect = mViewportPanel.videoRect();
+        if (vpRect.GetWidth() > 0.0f && vpRect.GetHeight() > 0.0f) {
+            toastPos           = vpRect.min;
+            toastSize          = {vpRect.GetWidth(), vpRect.GetHeight()};
+            Rect const overlay = mViewportPanel.overlayRect();
+            if (mViewportMaximized && overlay.GetHeight() > 0.0f && overlay.min.y > toastPos.y) {
+                toastSize.y = std::min(toastSize.y, overlay.min.y - toastPos.y);
+            }
+        }
+        mToast.draw(toastPos, toastSize, ImGui::GetIO().DeltaTime);
+    }
 
     ErrorDialog::getInstance().draw();
     updateExitHold(escapeConsumedByUi);
@@ -699,12 +751,12 @@ void ReplayEditor::handleKeyboardShortcuts() {
         submitAction({playback::state::EditorActionType::SaveProject});
         return;
     }
-    if (input::KeyMap::pressed(EditorKeybind::Undo)) {
-        submitAction({playback::state::EditorActionType::UndoEditorEdit});
+    if (input::KeyMap::pressed(EditorKeybind::Undo, true)) {
+        undo();
         return;
     }
-    if (input::KeyMap::pressed(EditorKeybind::Redo)) {
-        submitAction({playback::state::EditorActionType::RedoEditorEdit});
+    if (input::KeyMap::pressed(EditorKeybind::Redo, true)) {
+        redo();
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::ToggleViewportMaximized)) {

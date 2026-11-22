@@ -13,6 +13,8 @@ public:
     // Default project file for a replay, used for autosave and implicit load.
     [[nodiscard]] static std::filesystem::path defaultProjectPath(std::string_view replayPath);
 
+    [[nodiscard]] static std::filesystem::path backupPathFor(std::filesystem::path const& path);
+
     [[nodiscard]] static bool
     save(model::EditorStateExt const& project, std::filesystem::path const& path, std::string& error);
 

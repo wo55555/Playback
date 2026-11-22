@@ -2,6 +2,7 @@
 
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/HistoryLabel.h"
 #include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/TimelineScale.h"
 #include "playback/editor/ui/components/Widgets.h"
@@ -996,16 +997,20 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
     ImGui::SetCursorScreenPos(layout.fullMin);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::BeginChild("##TimelineTitle", {width, height}, false, ImGuiWindowFlags_NoScrollbar);
-    float const timeRight  = drawTimecodeReadout(ctx, height, displayTick);
-    float const unit       = metrics::iconButton();
-    float const rowY       = std::max(0.0f, (height - unit) * 0.5f);
-    float const divGap     = metrics::gutter();
-    float const zoomResetX = std::max(0.0f, width - unit - metrics::gutter());
-    float const rightDivX  = zoomResetX - divGap - 1.0f;
-    float const clusterGap = 2.0f;
-    float const clusterW   = unit * 4.0f + clusterGap * 3.0f;
-    float const clusterX   = rightDivX - divGap - clusterW;
-    float const leftDivX   = clusterX - divGap - 1.0f;
+    bool const  exportActive = exporting::isExportActive(ctx.state.exportStatus.state);
+    float const timeRight    = drawTimecodeReadout(ctx, height, displayTick);
+    float const unit         = metrics::iconButton();
+    float const rowY         = std::max(0.0f, (height - unit) * 0.5f);
+    float const divGap       = metrics::gutter();
+    float const zoomResetX   = std::max(0.0f, width - unit - metrics::gutter());
+    float const rightDivX    = zoomResetX - divGap - 1.0f;
+    float const clusterGap   = 2.0f;
+    float const clusterW     = unit * 4.0f + clusterGap * 3.0f;
+    float const clusterX     = rightDivX - divGap - clusterW;
+    float const midDivX      = clusterX - divGap - 1.0f;
+    float const historyW     = unit * 2.0f + clusterGap;
+    float const historyX     = midDivX - divGap - historyW;
+    float const leftDivX     = historyX - divGap - 1.0f;
 
     drawTransportGroup(ctx, height, width, timeRight + metrics::gutter() * 2.0f, leftDivX - metrics::gutter());
     float const transportRight = ImGui::GetItemRectMax().x - layout.fullMin.x;
@@ -1019,6 +1024,34 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
             theme::kLine,
             1.0f
         );
+
+        std::string const undoTooltip =
+            ((ctx.state.canUndo && !ctx.state.undoLabel.empty())
+                 ? "playback.refactorEditor.menu.undoAction"_tr(translateHistoryLabel(ctx.state.undoLabel))
+                 : "playback.refactorEditor.menu.undo"_tr())
+            + " (" + input::KeyMap::displayString(input::EditorKeybind::Undo) + ")";
+        std::string const redoTooltip =
+            ((ctx.state.canRedo && !ctx.state.redoLabel.empty())
+                 ? "playback.refactorEditor.menu.redoAction"_tr(translateHistoryLabel(ctx.state.redoLabel))
+                 : "playback.refactorEditor.menu.redo"_tr())
+            + " (" + input::KeyMap::displayString(input::EditorKeybind::Redo) + ")";
+
+        ImGui::SetCursorPos({historyX, rowY});
+        if (iconButton("timeline-undo", ICON_UNDO, undoTooltip.c_str(), ctx.state.canUndo && !exportActive)) {
+            ctx.commands.undo();
+        }
+        ImGui::SameLine(0.0f, clusterGap);
+        if (iconButton("timeline-redo", ICON_REDO, redoTooltip.c_str(), ctx.state.canRedo && !exportActive)) {
+            ctx.commands.redo();
+        }
+
+        childDrawList->AddLine(
+            {layout.fullMin.x + midDivX, layout.fullMin.y + divPad},
+            {layout.fullMin.x + midDivX, layout.titleBottom - divPad},
+            theme::kLine,
+            1.0f
+        );
+
         ImGui::SetCursorPos({clusterX, rowY});
         if (iconButton(
                 "timeline-split-clip",
