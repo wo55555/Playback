@@ -80,6 +80,13 @@ std::vector<std::string> SelectionModel::selectedIds() const {
 }
 
 void SelectionModel::pruneInvalid(EditorStateExt const& state) {
+    if (!mLastSceneId.empty() && mLastSceneId != state.activeSceneId) {
+        clear();
+        mLastSceneId = state.activeSceneId;
+        return;
+    }
+    if (mLastSceneId.empty()) mLastSceneId = state.activeSceneId;
+
     if (!mSelection.has_value()) return;
 
     auto const camera = [&state](std::string const& id) {
@@ -118,6 +125,10 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
             } else if constexpr (std::is_same_v<T, SelectedClip>) {
                 return std::ranges::any_of(state.cameras, [&](auto const& cam) {
                     return std::ranges::any_of(cam.clips, [&](auto const& clip) { return clip.id == sel.clipId; });
+                });
+            } else if constexpr (std::is_same_v<T, SelectedTransition>) {
+                return std::ranges::any_of(state.transitions, [&](auto const& transition) {
+                    return transition.id == sel.transitionId;
                 });
             }
             return true;

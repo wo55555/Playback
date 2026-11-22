@@ -5,6 +5,7 @@
 #include "playback/state/editing/models/CameraKeyframe.h"
 #include "playback/state/editing/models/MathTypes.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -134,6 +135,7 @@ struct EditorAction {
     std::optional<editing::model::CameraShake>    shake;
     // Batch keyframe edits (multi-select move / delete / interpolation / paste).
     std::vector<editing::model::KeyframeRef> keyframeRefs;
+    size_t                                   historySteps{1};
 };
 
 } // namespace playback::state

@@ -218,8 +218,14 @@ void DetailsPanel::draw(PanelContext const& ctx) {
         ImGuiChildFlags_AlwaysUseWindowPadding
     );
     if (!ctx.state.project) {
+        mSpeedDragging = false;
+        mSpeedDragClipId.clear();
         widgets::noActiveProjectPlaceholder();
     } else {
+        if (mPage != InspectorPage::Selection) {
+            mSpeedDragging = false;
+            mSpeedDragClipId.clear();
+        }
         switch (mPage) {
         case InspectorPage::Selection:
             drawSelectionPage(ctx);
@@ -313,11 +319,17 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
 
 bool DetailsPanel::drawClip(PanelContext const& ctx) {
     auto const* selected = ctx.selection.getAs<state::editing::model::SelectedClip>();
-    if (!selected) return false;
+    if (!selected) {
+        mSpeedDragging = false;
+        mSpeedDragClipId.clear();
+        return false;
+    }
 
     auto const project = ctx.state.project;
     auto const hit     = state::editing::ClipOps::findClipWithCamera(*project, selected->clipId);
     if (!hit) {
+        mSpeedDragging = false;
+        mSpeedDragClipId.clear();
         ImGui::TextDisabled("%s", "playback.refactorEditor.details.clipMissing"_tr().c_str());
         return true;
     }
@@ -329,6 +341,10 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
         property::separator();
         bool const  editable = !camera->locked && !clip->locked;
         float const scale    = metrics::scale();
+        if (mSpeedDragging && (!editable || mSpeedDragClipId != clip->id)) {
+            mSpeedDragging = false;
+            mSpeedDragClipId.clear();
+        }
 
         int minIn  = 0;
         int maxOut = std::max(1, project->totalTicks);
@@ -340,9 +356,10 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
         minIn  = std::clamp(minIn, 0, project->totalTicks);
         maxOut = std::clamp(maxOut, minIn, project->totalTicks);
 
+        float const displayedSpeed = (mSpeedDragging && mSpeedDragClipId == clip->id) ? mSpeedDragValue : clip->speed;
         int const   sourceTicks       = std::max(0, clip->outTick - clip->inTick);
         float const sourceSec         = static_cast<float>(sourceTicks) / static_cast<float>(widgets::kTicksPerSecond);
-        float       outputDurationSec = sourceSec / std::max(state::editing::model::MinClipSpeed, clip->speed);
+        float       outputDurationSec = sourceSec / std::max(state::editing::model::MinClipSpeed, displayedSpeed);
         auto const  submitSpeed       = [&](float nextSpeed) {
             float const clamped =
                 std::clamp(nextSpeed, state::editing::model::MinClipSpeed, state::editing::model::MaxClipSpeed);
@@ -437,9 +454,9 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(formatTick(sourceTicks).c_str());
 
-            float speed = clip->speed;
+            float speed = displayedSpeed;
             char  pctBuf[24]{};
-            std::snprintf(pctBuf, sizeof(pctBuf), "%.0f%%", static_cast<double>(clip->speed * 100.0f));
+            std::snprintf(pctBuf, sizeof(pctBuf), "%.0f%%", static_cast<double>(displayedSpeed * 100.0f));
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
@@ -500,6 +517,8 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
                 if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     ignoreDrag = true;
                     storage->SetBool(sliderId, true);
+                    mSpeedDragging = false;
+                    mSpeedDragClipId.clear();
                     submitSpeed(1.0f);
                 } else if (active && !ignoreDrag && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                     float const rawT     = std::clamp((ImGui::GetMousePos().x - trackMinX) / trackW, 0.0f, 1.0f);
@@ -517,16 +536,30 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
                         }
                         newSpeed = bestPreset;
                     }
-                    submitSpeed(newSpeed);
+                    mSpeedDragging   = true;
+                    mSpeedDragClipId = clip->id;
+                    mSpeedDragValue =
+                        std::clamp(newSpeed, state::editing::model::MinClipSpeed, state::editing::model::MaxClipSpeed);
+                } else if (mSpeedDragging && mSpeedDragClipId == clip->id
+                           && (!active || !ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
+                    float const finalSpeed = mSpeedDragValue;
+                    mSpeedDragging         = false;
+                    mSpeedDragClipId.clear();
+                    submitSpeed(finalSpeed);
                 }
+            } else if (mSpeedDragging) {
+                mSpeedDragging = false;
+                mSpeedDragClipId.clear();
             }
 
-            float const t          = speedToSliderT(clip->speed);
-            float const thumbX     = trackMinX + t * trackW;
-            float const railTop    = centerY - railH * 0.5f;
-            float const railBottom = centerY + railH * 0.5f;
-            float const railRound  = railH * 0.5f;
-            auto* const dl         = ImGui::GetWindowDrawList();
+            float const sliderSpeed = (mSpeedDragging && mSpeedDragClipId == clip->id) ? mSpeedDragValue : clip->speed;
+            float const sliderOutputSec = sourceSec / std::max(state::editing::model::MinClipSpeed, sliderSpeed);
+            float const t               = speedToSliderT(sliderSpeed);
+            float const thumbX          = trackMinX + t * trackW;
+            float const railTop         = centerY - railH * 0.5f;
+            float const railBottom      = centerY + railH * 0.5f;
+            float const railRound       = railH * 0.5f;
+            auto* const dl              = ImGui::GetWindowDrawList();
 
             dl->AddRectFilled(
                 {trackMinX, railTop},
@@ -551,8 +584,8 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
                 std::max(1.0f, 1.25f * scale)
             );
 
-            ImU32 const accent = speedAccentColor(clip->speed);
-            if (clip->speed > 1.001f || clip->speed < 0.999f) {
+            ImU32 const accent = speedAccentColor(sliderSpeed);
+            if (sliderSpeed > 1.001f || sliderSpeed < 0.999f) {
                 float const fillLeft  = std::min(centerX, thumbX);
                 float const fillRight = std::max(centerX, thumbX);
                 if (fillRight - fillLeft > 0.5f) {
@@ -575,9 +608,9 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
                 tip,
                 sizeof(tip),
                 "%.2fx (%.0f%%) | %.2f s",
-                static_cast<double>(clip->speed),
-                static_cast<double>(clip->speed * 100.0f),
-                static_cast<double>(outputDurationSec)
+                static_cast<double>(sliderSpeed),
+                static_cast<double>(sliderSpeed * 100.0f),
+                static_cast<double>(sliderOutputSec)
             );
             widgets::itemTooltip(tip);
         }
@@ -610,10 +643,11 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme::kButtonRounding * scale);
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.0f, 0.0f});
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+            float const chipSpeed = (mSpeedDragging && mSpeedDragClipId == clip->id) ? mSpeedDragValue : clip->speed;
             for (int i = 0; i < kPresetCount; ++i) {
                 if (i > 0) ImGui::SameLine();
                 float const preset       = kSpeedPresets[i];
-                bool const  active       = std::abs(clip->speed - preset) < 0.001f;
+                bool const  active       = std::abs(chipSpeed - preset) < 0.001f;
                 ImU32 const presetAccent = speedAccentColor(preset);
                 float const targetW      = textWidths[static_cast<size_t>(i)] * shrink + extra;
                 float const w =
@@ -768,6 +802,9 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
             ImGui::PopTextWrapPos();
         }
         property::endSection();
+    } else {
+        mSpeedDragging = false;
+        mSpeedDragClipId.clear();
     }
     return true;
 }

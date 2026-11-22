@@ -7,6 +7,7 @@
 #include "playback/state/editing/models/SelectionModel.h"
 #include "playback/visuals/ReplayHudVisibility.h"
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <utility>
@@ -24,6 +25,8 @@ public:
 
     virtual void               seekTo(int tick)            = 0;
     virtual void               seekRelative(int tickDelta) = 0;
+    virtual void                       undo(std::size_t steps = 1)        = 0;
+    virtual void                       redo(std::size_t steps = 1)        = 0;
     virtual void               toggleViewportMaximized()   = 0;
     [[nodiscard]] virtual bool isViewportMaximized() const = 0;
     virtual void               toggleCameraPath()          = 0;
