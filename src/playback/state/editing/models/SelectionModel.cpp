@@ -39,6 +39,17 @@ std::optional<int> SelectionModel::selectedFreezeKeyframe() const {
     return std::nullopt;
 }
 
+void SelectionModel::selectTimelapseTrack() { select(SelectedTimelapseTrack{}); }
+
+void SelectionModel::selectTimelapseKeyframe(int tick) { select(SelectedTimelapseKeyframe{tick}); }
+
+bool SelectionModel::isTimelapseTrackSelected() const { return getAs<SelectedTimelapseTrack>() != nullptr; }
+
+std::optional<int> SelectionModel::selectedTimelapseKeyframe() const {
+    if (auto const* key = getAs<SelectedTimelapseKeyframe>()) return key->tick;
+    return std::nullopt;
+}
+
 void SelectionModel::setKeyframes(std::vector<SelectedKeyframe> keys) {
     if (keys.empty()) {
         clear();
@@ -102,6 +113,10 @@ std::vector<std::string> SelectionModel::selectedIds() const {
                 return {"freeze_track"};
             } else if constexpr (std::is_same_v<T, SelectedFreezeKeyframe>) {
                 return {"freeze_track", std::to_string(sel.tick)};
+            } else if constexpr (std::is_same_v<T, SelectedTimelapseTrack>) {
+                return {"timelapse_track"};
+            } else if constexpr (std::is_same_v<T, SelectedTimelapseKeyframe>) {
+                return {"timelapse_track", std::to_string(sel.tick)};
             }
             return {};
         },
@@ -168,6 +183,10 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
                 return state.freezeTrack.isVisible();
             } else if constexpr (std::is_same_v<T, SelectedFreezeKeyframe>) {
                 return state.freezeTrack.keysByTick.contains(sel.tick);
+            } else if constexpr (std::is_same_v<T, SelectedTimelapseTrack>) {
+                return state.timelapseTrack.isVisible();
+            } else if constexpr (std::is_same_v<T, SelectedTimelapseKeyframe>) {
+                return state.timelapseTrack.keysByTick.contains(sel.tick);
             }
             return true;
         },

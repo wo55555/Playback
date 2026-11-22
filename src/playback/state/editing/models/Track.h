@@ -60,6 +60,32 @@ struct FreezeTrack {
     return std::clamp(delayTicks, MinFreezeDelayTicks, MaxFreezeDelayTicks);
 }
 
+inline constexpr int    MinTimelapseOutputTicks = 0;
+inline constexpr int    MaxTimelapseOutputTicks = 20 * 60 * 60 * 24;
+inline constexpr double MinTimelapseSpeed       = 0.001;
+inline constexpr double MaxTimelapseSpeed       = 10000.0;
+
+struct TimelapseKeyframe {
+    int outputTicks{0};
+
+    bool operator==(TimelapseKeyframe const&) const = default;
+};
+
+struct TimelapseTrack {
+    bool                             present{false};
+    bool                             enabled{true};
+    bool                             locked{false};
+    std::map<int, TimelapseKeyframe> keysByTick;
+
+    bool operator==(TimelapseTrack const&) const = default;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+[[nodiscard]] inline int clampTimelapseOutputTicks(int ticks) noexcept {
+    return std::clamp(ticks, MinTimelapseOutputTicks, MaxTimelapseOutputTicks);
+}
+
 struct Clip {
     std::string id;
     std::string replayFile;

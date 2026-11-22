@@ -370,6 +370,7 @@
                 "timelapseHint": "Sample the replay at fixed real-time intervals (disables audio export).",
                 "timelapseInterval": "Interval (ms)",
                 "timelapseIntervalHint": "Real-time interval between exported frames, in milliseconds (50–3600000).",
+                "timelapseTrackOverrideHint": "Controlled by the active Timelapse track; fixed interval is overridden.",
                 "export": "Start Export",
                 "cancel": "Cancel",
                 "mp4": "MP4 video",
@@ -441,6 +442,7 @@
                 "addCameraTrack": "Camera Track",
                 "addSpeedTrack": "Speed Track",
                 "addFreezeTrack": "Freeze Track",
+                "addTimelapseTrack": "Timelapse Track",
                 "maximize": "Maximize viewport (Ctrl+Shift+F)",
                 "restore": "Restore viewport (Esc)",
                 "play": "Play",
@@ -678,7 +680,16 @@
                 "setFreezeKeyframe": "Edit Freeze Keyframe",
                 "setFreezeTrackEnabled": "Set Freeze Track Enabled",
                 "setFreezeTrackLocked": "Set Freeze Track Locked",
-                "clearFreezeKeyframes": "Clear Freeze Keyframes"
+                "clearFreezeKeyframes": "Clear Freeze Keyframes",
+                "addTimelapseTrack": "Add Timelapse Track",
+                "removeTimelapseTrack": "Remove Timelapse Track",
+                "addTimelapseKeyframe": "Add Timelapse Keyframe",
+                "moveTimelapseKeyframe": "Move Timelapse Keyframe",
+                "deleteTimelapseKeyframe": "Delete Timelapse Keyframe",
+                "setTimelapseKeyframe": "Edit Timelapse Keyframe",
+                "setTimelapseTrackEnabled": "Set Timelapse Track Enabled",
+                "setTimelapseTrackLocked": "Set Timelapse Track Locked",
+                "clearTimelapseKeyframes": "Clear Timelapse Keyframes"
             },
             "speed": {
                 "trackName": "Speed",
@@ -714,6 +725,29 @@
                 "keyframeCount": "Keyframes",
                 "trackHint": "Freezes world simulation and entities while camera tracks keep moving.",
                 "emptyHint": "No freeze keyframes yet. Add a keyframe to freeze or unfreeze the world."
+            },
+            "timelapse": {
+                "trackName": "Timelapse",
+                "addKeyframe": "Add Timelapse Keyframe",
+                "addKeyframeAtPlayhead": "Add Timelapse Keyframe at Playhead",
+                "deleteKeyframe": "Delete Timelapse Keyframe",
+                "clearKeyframes": "Clear All Timelapse Keyframes",
+                "removeTrack": "Remove Timelapse Track",
+                "trackDetailsTitle": "Timelapse Track",
+                "keyframeDetailsTitle": "Timelapse Keyframe",
+                "outputTime": "Output Time",
+                "outputTimeHint": "Target position in the exported video (e.g. 00:05.00, 15s, 1m30s, or 100t).",
+                "outputTicks": "Output Ticks",
+                "segmentDuration": "Segment Output",
+                "effectiveSpeed": "Effective Speed",
+                "invalidSegment": "INVALID",
+                "requiresTwoKeyframes": "Timelapse requires at least 2 keyframes to take effect.",
+                "invalidOrderHint": "Output time must be strictly greater than the previous keyframe.",
+                "overrideNotice": "Active timelapse segments override the Speed Curve and fixed-interval export timelapse.",
+                "keyframeCount": "Keyframes",
+                "validSegments": "Active Segments",
+                "trackHint": "Maps replay ticks to exact output video timestamps to build variable-rate timelapses.",
+                "emptyHint": "No timelapse keyframes yet. Add at least two keyframes with increasing output times."
             }
         }
     }
