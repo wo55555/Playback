@@ -15,6 +15,7 @@ struct Scene {
     std::vector<CameraEntity> cameras;
     std::vector<Marker>       markers;
     SpeedTrack                speedTrack;
+    FreezeTrack               freezeTrack;
 
     int exportInTick{-1};
     int exportOutTick{-1};
@@ -36,6 +37,7 @@ struct EditorStateExt {
     std::vector<CameraEntity> cameras;
     std::vector<Marker>       markers;
     SpeedTrack                speedTrack;
+    FreezeTrack               freezeTrack;
     int                       exportInTick{-1};
     int                       exportOutTick{-1};
 

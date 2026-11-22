@@ -2,6 +2,7 @@
 
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/ClipCommands.h"
+#include "playback/state/editing/commands/FreezeCommands.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
 #include "playback/state/editing/commands/SpeedCommands.h"
 
@@ -255,6 +256,33 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSetSpeedTrackLocked(b
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createClearSpeedKeyframes() {
     return std::make_unique<ClearSpeedKeyframes>();
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddFreezeTrack() {
+    return std::make_unique<AddFreezeTrack>();
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createRemoveFreezeTrack() {
+    return std::make_unique<RemoveFreezeTrack>();
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddFreezeKeyframe(int tick, bool frozen, int frozenDelay) {
+    return std::make_unique<AddFreezeKeyframe>(tick, frozen, frozenDelay);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createMoveFreezeKeyframe(int fromTick, int toTick) {
+    return std::make_unique<MoveFreezeKeyframe>(fromTick, toTick);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteFreezeKeyframe(int tick) {
+    return std::make_unique<DeleteFreezeKeyframe>(tick);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetFreezeKeyframe(int tick, bool frozen, int frozenDelay) {
+    return std::make_unique<SetFreezeKeyframe>(tick, frozen, frozenDelay);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetFreezeTrackEnabled(bool enabled) {
+    return std::make_unique<SetFreezeTrackState>(SetFreezeTrackState::Property::Enabled, enabled);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetFreezeTrackLocked(bool locked) {
+    return std::make_unique<SetFreezeTrackState>(SetFreezeTrackState::Property::Locked, locked);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createClearFreezeKeyframes() {
+    return std::make_unique<ClearFreezeKeyframes>();
 }
 
 } // namespace playback::state::editing::command
