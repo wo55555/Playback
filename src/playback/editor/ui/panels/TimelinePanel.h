@@ -91,12 +91,14 @@ private:
         bool                                                includeExportRange,
         std::function<bool(std::string const&, int)> const& skipKey,
         std::string_view                                    skipMarkerId,
-        std::string_view                                    skipClipId        = {},
-        std::optional<int>                                  skipSpeedKeyTick  = std::nullopt,
-        std::optional<int>                                  skipFreezeKeyTick = std::nullopt
+        std::string_view                                    skipClipId           = {},
+        std::optional<int>                                  skipSpeedKeyTick     = std::nullopt,
+        std::optional<int>                                  skipFreezeKeyTick    = std::nullopt,
+        std::optional<int>                                  skipTimelapseKeyTick = std::nullopt
     );
     bool addMarkerAt(PanelContext const& ctx, int tick);
     bool addFreezeKeyframeAt(PanelContext const& ctx, int tick);
+    bool addTimelapseKeyframeAt(PanelContext const& ctx, int tick);
     // Selections that point at objects an queued action has not created yet; applied once they exist.
     void                      clearPendingSelection();
     void queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys);
@@ -105,6 +107,8 @@ private:
     void                      queueSpeedKeyframeSelection(int tick);
     void                      queueFreezeTrackSelection();
     void                      queueFreezeKeyframeSelection(int tick);
+    void                      queueTimelapseTrackSelection();
+    void                      queueTimelapseKeyframeSelection(int tick);
     void applyPendingSelection(PanelContext const& ctx);
     [[nodiscard]] std::string markerAt(
         PanelContext const&  ctx,
@@ -222,6 +226,8 @@ private:
     std::optional<int>                                   mPendingSpeedKeyframeSelection;
     bool                                                 mPendingFreezeTrackSelection{false};
     std::optional<int>                                   mPendingFreezeKeyframeSelection;
+    bool                                                 mPendingTimelapseTrackSelection{false};
+    std::optional<int>                                   mPendingTimelapseKeyframeSelection;
     int                                                  mPendingSelectionFrames{};
 
     int   mDraggingSpeedKeyframeOriginTick{-1};
@@ -238,13 +244,21 @@ private:
     int   mFreezeKeyframeMenuTick{-1};
     int   mFreezeLaneMenuTick{-1};
 
+    int   mDraggingTimelapseKeyframeOriginTick{-1};
+    float mDraggingTimelapseKeyframeStartMouseX{};
+    int   mDraggingTimelapseKeyframeTick{-1};
+    bool  mDraggingTimelapseKeyframeMoved{};
+    int   mTimelapseKeyframeMenuTick{-1};
+    int   mTimelapseLaneMenuTick{-1};
+
     struct OutputDurationCache {
-        bool                              valid{};
-        int                               totalTicks{};
-        bool                              camerasEmpty{};
-        state::editing::model::SpeedTrack speedTrack;
-        std::vector<std::pair<int, int>>  slices;
-        double                            outputSeconds{};
+        bool                                  valid{};
+        int                                   totalTicks{};
+        bool                                  camerasEmpty{};
+        state::editing::model::SpeedTrack     speedTrack;
+        state::editing::model::TimelapseTrack timelapseTrack;
+        std::vector<std::pair<int, int>>      slices;
+        double                                outputSeconds{};
     } mOutputDurationCache;
 };
 

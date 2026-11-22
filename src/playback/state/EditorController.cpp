@@ -10,6 +10,7 @@
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/keyframe/SpeedTimelineEvaluator.h"
+#include "playback/keyframe/TimelapseTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/CameraBindingOps.h"
 #include "playback/state/editing/ClipOps.h"
@@ -803,6 +804,36 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::ClearFreezeKeyframes:
         mCommandStack.push(CommandFactory::createClearFreezeKeyframes(), mProject);
         break;
+    case EditorActionType::AddTimelapseTrack:
+        mCommandStack.push(CommandFactory::createAddTimelapseTrack(), mProject);
+        break;
+    case EditorActionType::RemoveTimelapseTrack:
+        mCommandStack.push(CommandFactory::createRemoveTimelapseTrack(), mProject);
+        break;
+    case EditorActionType::AddTimelapseKeyframe:
+        mCommandStack.push(CommandFactory::createAddTimelapseKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::MoveTimelapseKeyframe:
+        mCommandStack.push(CommandFactory::createMoveTimelapseKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::DeleteTimelapseKeyframe:
+        mCommandStack.push(CommandFactory::createDeleteTimelapseKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::SetTimelapseKeyframeOutputTicks:
+        mCommandStack.push(
+            CommandFactory::createSetTimelapseKeyframeOutputTicks(action.tick, action.secondaryTick),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimelapseTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetTimelapseTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetTimelapseTrackLocked:
+        mCommandStack.push(CommandFactory::createSetTimelapseTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::ClearTimelapseKeyframes:
+        mCommandStack.push(CommandFactory::createClearTimelapseKeyframes(), mProject);
+        break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
@@ -1285,9 +1316,11 @@ void EditorController::tick(bool hudVisible) {
             static_cast<long double>(currentTick) + static_cast<long double>(session.previewPartialTick());
         session.setPreviewFreezeTrack(mProject.freezeTrack);
         session.setClipSpeedScale(static_cast<float>(keyframe::effectiveSpeedAt(mProject, replayTick)));
-        auto const freezeEval = keyframe::evaluateFreezeAt(mProject.freezeTrack, replayTick);
+        auto const freezeEval    = keyframe::evaluateFreezeAt(mProject.freezeTrack, replayTick);
+        auto const timelapseEval = keyframe::evaluateTimelapseAt(mProject.timelapseTrack, replayTick);
         audio::preview::setClipMuted(
             state::editing::ClipOps::isClipMutedAt(mProject, currentTick) || freezeEval.worldFrozen
+            || timelapseEval.active
         );
     } else {
         session.setPreviewFreezeTrack({});

@@ -35,6 +35,8 @@ private:
     bool drawSpeedTrack(PanelContext const& ctx);
     bool drawFreezeKeyframe(PanelContext const& ctx);
     bool drawFreezeTrack(PanelContext const& ctx);
+    bool drawTimelapseKeyframe(PanelContext const& ctx);
+    bool drawTimelapseTrack(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
     void drawKeyframeInterpolationRows(
         PanelContext const&                          ctx,
@@ -64,6 +66,9 @@ private:
     int                         mFreezeDelayDragTick{-1};
     bool                        mFreezeDelayDragging{false};
     int                         mFreezeDelayDragValue{0};
+    std::optional<int>          mTimelapseTextTick;
+    std::array<char, 64>        mTimelapseTextBuffer{};
+    bool                        mTimelapseTextEditing{false};
 };
 
 } // namespace playback::editor::ui

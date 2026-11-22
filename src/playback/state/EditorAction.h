@@ -123,6 +123,17 @@ enum class EditorActionType {
     SetFreezeTrackEnabled,
     SetFreezeTrackLocked,
     ClearFreezeKeyframes,
+    AddTimelapseTrack,
+    RemoveTimelapseTrack,
+    // tick + secondaryTick (outputTicks).
+    AddTimelapseKeyframe,
+    MoveTimelapseKeyframe,
+    DeleteTimelapseKeyframe,
+    // tick + secondaryTick (outputTicks).
+    SetTimelapseKeyframeOutputTicks,
+    SetTimelapseTrackEnabled,
+    SetTimelapseTrackLocked,
+    ClearTimelapseKeyframes,
 };
 
 struct QueuedExportJob {

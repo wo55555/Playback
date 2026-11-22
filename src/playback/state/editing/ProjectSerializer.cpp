@@ -411,6 +411,49 @@ FreezeTrack freezeTrackFrom(json const& node) {
     return track;
 }
 
+json toJson(TimelapseKeyframe const& key) {
+    return {
+        {"outputTicks", key.outputTicks},
+    };
+}
+
+TimelapseKeyframe timelapseKeyframeFrom(json const& node) {
+    TimelapseKeyframe key;
+    key.outputTicks = clampTimelapseOutputTicks(intOr(node, "outputTicks", key.outputTicks));
+    return key;
+}
+
+json toJson(TimelapseTrack const& track) {
+    auto keys = json::array();
+    for (auto const& [tick, key] : track.keysByTick) {
+        auto entry    = toJson(key);
+        entry["tick"] = tick;
+        keys.push_back(std::move(entry));
+    }
+    return {
+        {"present", track.isVisible()},
+        {"enabled", track.enabled    },
+        {"locked",  track.locked     },
+        {"keys",    std::move(keys)  },
+    };
+}
+
+TimelapseTrack timelapseTrackFrom(json const& node) {
+    TimelapseTrack track;
+    track.enabled = boolOr(node, "enabled", true);
+    track.locked  = boolOr(node, "locked", false);
+    if (auto const* keys = arrayAt(node, "keys")) {
+        for (auto const& entry : *keys) {
+            if (!entry.is_object()) continue;
+            int const tick = std::max(0, intOr(entry, "tick", 0));
+            track.keysByTick.insert_or_assign(tick, timelapseKeyframeFrom(entry));
+        }
+    }
+    track.present = boolOr(node, "present", !track.keysByTick.empty());
+    if (!track.keysByTick.empty()) track.present = true;
+    return track;
+}
+
 json toJson(Scene const& scene) {
     auto cameras = json::array();
     for (auto const& camera : scene.cameras) cameras.push_back(toJson(camera));
@@ -431,6 +474,9 @@ json toJson(Scene const& scene) {
     }
     if (scene.freezeTrack.isVisible()) {
         result["freezeTrack"] = toJson(scene.freezeTrack);
+    }
+    if (scene.timelapseTrack.isVisible()) {
+        result["timelapseTrack"] = toJson(scene.timelapseTrack);
     }
     return result;
 }
@@ -483,6 +529,9 @@ Scene sceneFrom(json const& node) {
     if (auto const* freezeTrack = objectAt(node, "freezeTrack")) {
         scene.freezeTrack = freezeTrackFrom(*freezeTrack);
     }
+    if (auto const* timelapseTrack = objectAt(node, "timelapseTrack")) {
+        scene.timelapseTrack = timelapseTrackFrom(*timelapseTrack);
+    }
     return scene;
 }
 
@@ -527,10 +576,11 @@ std::string serializeProject(model::EditorStateExt const& project) {
                 synced.name          = scene.name;
                 synced.cameras       = project.cameras;
                 synced.markers       = project.markers;
-                synced.speedTrack    = project.speedTrack;
-                synced.freezeTrack   = project.freezeTrack;
-                synced.exportInTick  = project.exportInTick;
-                synced.exportOutTick = project.exportOutTick;
+                synced.speedTrack     = project.speedTrack;
+                synced.freezeTrack    = project.freezeTrack;
+                synced.timelapseTrack = project.timelapseTrack;
+                synced.exportInTick   = project.exportInTick;
+                synced.exportOutTick  = project.exportOutTick;
                 scenesJson.push_back(toJson(synced));
             } else {
                 scenesJson.push_back(toJson(scene));
@@ -539,13 +589,14 @@ std::string serializeProject(model::EditorStateExt const& project) {
     } else {
         activeSceneId = "scene_1";
         Scene fallback;
-        fallback.id            = activeSceneId;
-        fallback.name          = "Scene 1";
-        fallback.cameras       = project.cameras;
-        fallback.markers       = project.markers;
-        fallback.speedTrack    = project.speedTrack;
-        fallback.freezeTrack   = project.freezeTrack;
-        fallback.exportInTick  = project.exportInTick;
+        fallback.id             = activeSceneId;
+        fallback.name           = "Scene 1";
+        fallback.cameras        = project.cameras;
+        fallback.markers        = project.markers;
+        fallback.speedTrack     = project.speedTrack;
+        fallback.freezeTrack    = project.freezeTrack;
+        fallback.timelapseTrack = project.timelapseTrack;
+        fallback.exportInTick   = project.exportInTick;
         fallback.exportOutTick = project.exportOutTick;
         scenesJson.push_back(toJson(fallback));
     }
@@ -701,9 +752,10 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.activeSceneId = it->id;
         loaded.cameras       = it->cameras;
         loaded.markers       = it->markers;
-        loaded.speedTrack    = it->speedTrack;
-        loaded.freezeTrack   = it->freezeTrack;
-        loaded.exportInTick  = it->exportInTick;
+        loaded.speedTrack     = it->speedTrack;
+        loaded.freezeTrack    = it->freezeTrack;
+        loaded.timelapseTrack = it->timelapseTrack;
+        loaded.exportInTick   = it->exportInTick;
         loaded.exportOutTick = it->exportOutTick;
     }
 

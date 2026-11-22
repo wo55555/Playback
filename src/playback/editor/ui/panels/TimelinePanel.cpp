@@ -9,6 +9,7 @@
 #include "playback/editor/ui/iconfont.h"
 #include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/keyframe/SpeedTimelineEvaluator.h"
+#include "playback/keyframe/TimelapseTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
@@ -45,6 +46,12 @@ constexpr ImU32 kFreezeDelayTint        = IM_COL32(150, 232, 255, 255);
 constexpr ImU32 kFreezeKeyFill          = IM_COL32(82, 205, 255, 255);
 constexpr ImU32 kFreezeUnfreezeFill     = IM_COL32(118, 214, 152, 255);
 constexpr ImU32 kFreezeUnfreezeOutline  = IM_COL32(236, 242, 248, 255);
+constexpr ImU32 kTimelapseAccent         = IM_COL32(180, 122, 255, 255);
+constexpr ImU32 kTimelapseKeyFill        = IM_COL32(190, 136, 255, 255);
+constexpr ImU32 kTimelapseInvalidFill    = IM_COL32(220, 68, 68, 72);
+constexpr ImU32 kTimelapseInvalidEdge    = IM_COL32(235, 92, 82, 210);
+constexpr ImU32 kTimelapseInvalidText    = IM_COL32(255, 118, 104, 255);
+constexpr ImU32 kTimelapseInvalidKeyFill = IM_COL32(255, 95, 72, 255);
 
 using widgets::formatTick;
 using widgets::formatTickCompact;
@@ -523,6 +530,9 @@ void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScal
     mDraggingFreezeKeyframeOriginTick = -1;
     mDraggingFreezeKeyframeTick       = -1;
     mDraggingFreezeKeyframeMoved      = false;
+    mDraggingTimelapseKeyframeOriginTick = -1;
+    mDraggingTimelapseKeyframeTick       = -1;
+    mDraggingTimelapseKeyframeMoved      = false;
     mTrackDragCameraId.clear();
     mTrackDragCancelled        = false;
     mClipDragMode              = 0;
@@ -577,6 +587,7 @@ void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward)
     for (auto const& marker : project->markers) consider(marker.tick);
     for (auto const& [tick, _] : project->speedTrack.keysByTick) consider(tick);
     for (auto const& [tick, _] : project->freezeTrack.keysByTick) consider(tick);
+    for (auto const& [tick, _] : project->timelapseTrack.keysByTick) consider(tick);
     submitSeek(ctx, target);
 }
 
@@ -606,6 +617,15 @@ bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
             std::max(0, ctx.state.totalTicks)
         );
         return addFreezeKeyframeAt(ctx, tick);
+    }
+    if (project
+        && (ctx.selection.isTimelapseTrackSelected() || ctx.selection.selectedTimelapseKeyframe().has_value())) {
+        int const tick = std::clamp(
+            mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick,
+            0,
+            std::max(0, ctx.state.totalTicks)
+        );
+        return addTimelapseKeyframeAt(ctx, tick);
     }
 
     std::string cameraId = resolveKeyframeTargetCamera(ctx);
@@ -696,6 +716,13 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
         if (project->freezeTrack.locked) return false;
         action.type = EditorActionType::DeleteFreezeKeyframe;
         action.tick = *freezeTick;
+    } else if (ctx.selection.isTimelapseTrackSelected()) {
+        if (!project->timelapseTrack.isVisible() || project->timelapseTrack.locked) return false;
+        action.type = EditorActionType::RemoveTimelapseTrack;
+    } else if (auto const timelapseTick = ctx.selection.selectedTimelapseKeyframe()) {
+        if (project->timelapseTrack.locked) return false;
+        action.type = EditorActionType::DeleteTimelapseKeyframe;
+        action.tick = *timelapseTick;
     } else {
         return false;
     }
@@ -809,6 +836,20 @@ bool TimelinePanel::addFreezeKeyframeAt(PanelContext const& ctx, int tick) {
     return true;
 }
 
+bool TimelinePanel::addTimelapseKeyframeAt(PanelContext const& ctx, int tick) {
+    auto const project = ctx.state.project;
+    if (!project || project->timelapseTrack.locked) return false;
+    tick = std::clamp(tick, 0, std::max(0, ctx.state.totalTicks));
+    if (project->timelapseTrack.keysByTick.contains(tick)) return false;
+    int const    suggested = keyframe::suggestTimelapseOutputTicks(project->timelapseTrack, tick);
+    EditorAction action{EditorActionType::AddTimelapseKeyframe};
+    action.tick          = tick;
+    action.secondaryTick = suggested;
+    ctx.submitAction(std::move(action));
+    queueTimelapseKeyframeSelection(tick);
+    return true;
+}
+
 bool TimelinePanel::canSplitClipAtPlayhead(PanelContext const& ctx) const {
     auto const project = ctx.state.project;
     if (!project) return false;
@@ -874,7 +915,8 @@ int TimelinePanel::snapToEditPoints(
     std::string_view                                    skipMarkerId,
     std::string_view                                    skipClipId,
     std::optional<int>                                  skipSpeedKeyTick,
-    std::optional<int>                                  skipFreezeKeyTick
+    std::optional<int>                                  skipFreezeKeyTick,
+    std::optional<int>                                  skipTimelapseKeyTick
 ) {
     auto const project = ctx.state.project;
     if (!project || pixelsPerTick <= 0.0f) return tick;
@@ -909,6 +951,10 @@ int TimelinePanel::snapToEditPoints(
         if (skipFreezeKeyTick && *skipFreezeKeyTick == freezeTick) continue;
         consider(freezeTick);
     }
+    for (auto const& [timelapseTick, _] : project->timelapseTrack.keysByTick) {
+        if (skipTimelapseKeyTick && *skipTimelapseKeyTick == timelapseTick) continue;
+        consider(timelapseTick);
+    }
     for (auto const& marker : project->markers) {
         if (marker.id != skipMarkerId) consider(marker.tick);
     }
@@ -929,6 +975,8 @@ void TimelinePanel::clearPendingSelection() {
     mPendingSpeedKeyframeSelection.reset();
     mPendingFreezeTrackSelection = false;
     mPendingFreezeKeyframeSelection.reset();
+    mPendingTimelapseTrackSelection = false;
+    mPendingTimelapseKeyframeSelection.reset();
     mPendingSelectionFrames = 0;
 }
 
@@ -968,6 +1016,18 @@ void TimelinePanel::queueFreezeKeyframeSelection(int tick) {
     mPendingSelectionFrames         = kPendingSelectionFrames;
 }
 
+void TimelinePanel::queueTimelapseTrackSelection() {
+    clearPendingSelection();
+    mPendingTimelapseTrackSelection = true;
+    mPendingSelectionFrames         = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueTimelapseKeyframeSelection(int tick) {
+    clearPendingSelection();
+    mPendingTimelapseKeyframeSelection = tick;
+    mPendingSelectionFrames            = kPendingSelectionFrames;
+}
+
 void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     if (mPendingSelectionFrames <= 0) return;
     auto const project = ctx.state.project;
@@ -998,6 +1058,16 @@ void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     } else if (mPendingFreezeKeyframeSelection.has_value()) {
         if (project->freezeTrack.keysByTick.contains(*mPendingFreezeKeyframeSelection)) {
             ctx.selection.selectFreezeKeyframe(*mPendingFreezeKeyframeSelection);
+            done = true;
+        }
+    } else if (mPendingTimelapseTrackSelection) {
+        if (project->timelapseTrack.isVisible()) {
+            ctx.selection.selectTimelapseTrack();
+            done = true;
+        }
+    } else if (mPendingTimelapseKeyframeSelection.has_value()) {
+        if (project->timelapseTrack.keysByTick.contains(*mPendingTimelapseKeyframeSelection)) {
+            ctx.selection.selectTimelapseKeyframe(*mPendingTimelapseKeyframeSelection);
             done = true;
         }
     } else {
@@ -1490,17 +1560,20 @@ void TimelinePanel::drawSceneTabs(PanelContext const& ctx, Layout const& layout,
         bool const cacheHit = mOutputDurationCache.valid && mOutputDurationCache.totalTicks == project->totalTicks
                            && mOutputDurationCache.camerasEmpty == project->cameras.empty()
                            && mOutputDurationCache.slices == sliceKeys
-                           && speedTrackEquals(mOutputDurationCache.speedTrack, project->speedTrack);
+                           && speedTrackEquals(mOutputDurationCache.speedTrack, project->speedTrack)
+                           && mOutputDurationCache.timelapseTrack.enabled == project->timelapseTrack.enabled
+                           && mOutputDurationCache.timelapseTrack.keysByTick == project->timelapseTrack.keysByTick;
         double outputSeconds = mOutputDurationCache.outputSeconds;
         if (!cacheHit) {
             keyframe::SpeedTimeMapping const mapping(*project, project->cameras.empty() ? project->totalTicks : 0);
-            outputSeconds                      = mapping.totalOutputSecondsForEnabledSlices(*project);
-            mOutputDurationCache.valid         = true;
-            mOutputDurationCache.totalTicks    = project->totalTicks;
-            mOutputDurationCache.camerasEmpty  = project->cameras.empty();
-            mOutputDurationCache.speedTrack    = project->speedTrack;
-            mOutputDurationCache.slices        = std::move(sliceKeys);
-            mOutputDurationCache.outputSeconds = outputSeconds;
+            outputSeconds                       = mapping.totalOutputSecondsForEnabledSlices(*project);
+            mOutputDurationCache.valid          = true;
+            mOutputDurationCache.totalTicks     = project->totalTicks;
+            mOutputDurationCache.camerasEmpty   = project->cameras.empty();
+            mOutputDurationCache.speedTrack     = project->speedTrack;
+            mOutputDurationCache.timelapseTrack = project->timelapseTrack;
+            mOutputDurationCache.slices         = std::move(sliceKeys);
+            mOutputDurationCache.outputSeconds  = outputSeconds;
         }
         char durBuf[32]{};
         if (outputSeconds >= 60.0) {
@@ -1824,6 +1897,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     bool   openFreezeMenu = false;
     ImVec2 freezeMenuMin{};
     ImVec2 freezeMenuMax{};
+    bool   openTimelapseMenu = false;
+    ImVec2 timelapseMenuMin{};
+    ImVec2 timelapseMenuMax{};
     float  rowY = layout.camerasTop - mScrollY;
     for (auto const& row : mTrackTree.rows()) {
         float const rowBottom = rowY + row.height;
@@ -1831,13 +1907,16 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             rowY = rowBottom;
             continue;
         }
-        bool const isSpeedRow   = row.kind == TrackRowKind::Speed;
-        bool const isFreezeRow  = row.kind == TrackRowKind::Freeze;
-        bool const isSpecialRow = isSpeedRow || isFreezeRow;
+        bool const isSpeedRow     = row.kind == TrackRowKind::Speed;
+        bool const isFreezeRow    = row.kind == TrackRowKind::Freeze;
+        bool const isTimelapseRow = row.kind == TrackRowKind::Timelapse;
+        bool const isSpecialRow   = isSpeedRow || isFreezeRow || isTimelapseRow;
         bool const selected =
             isSpeedRow ? (ctx.selection.isSpeedTrackSelected() || ctx.selection.selectedSpeedKeyframe().has_value())
             : isFreezeRow
                 ? (ctx.selection.isFreezeTrackSelected() || ctx.selection.selectedFreezeKeyframe().has_value())
+            : isTimelapseRow
+                ? (ctx.selection.isTimelapseTrackSelected() || ctx.selection.selectedTimelapseKeyframe().has_value())
                 : (!row.cameraId.empty()
                    && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
                        || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId)
@@ -1862,8 +1941,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         }
         drawList->AddLine({listLeft, rowBottom}, {listLeft + listW, rowBottom}, IM_COL32(0x25, 0x25, 0x28, 0xff));
 
-        ImU32 const baseSwatch =
-            isSpeedRow ? theme::kSpeedFast : (isFreezeRow ? kFreezeAccent : theme::trackColor(row.cameraIndex));
+        ImU32 const baseSwatch = isSpeedRow     ? theme::kSpeedFast
+                               : isFreezeRow    ? kFreezeAccent
+                               : isTimelapseRow ? kTimelapseAccent
+                                                : theme::trackColor(row.cameraIndex);
         ImU32 const swatch     = row.enabled ? baseSwatch : theme::kTrackDisabled;
         float const swatchPadX = 2.0f * scale;
         float const swatchPadY = 4.0f * scale;
@@ -1878,9 +1959,11 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         float       labelX = listLeft + indent;
 
         ImU32 const        textColor = row.enabled ? theme::kText : theme::kTextDim;
-        ImU32 const        iconColor = isSpeedRow
-                                         ? (row.enabled ? theme::kSpeedFast : theme::kTextDim)
-                                         : (isFreezeRow ? (row.enabled ? kFreezeAccent : theme::kTextDim) : textColor);
+        ImU32 const        iconColor =
+            isSpeedRow
+                       ? (row.enabled ? theme::kSpeedFast : theme::kTextDim)
+                       : (isFreezeRow ? (row.enabled ? kFreezeAccent : theme::kTextDim)
+                                      : (isTimelapseRow ? (row.enabled ? kTimelapseAccent : theme::kTextDim) : textColor));
         std::string const& label     = row.name;
         // Text centres on the fractional row, then the icon centres on the text's optical middle.
         float const rowCentre = (rowY + rowBottom) * 0.5f;
@@ -1888,7 +1971,8 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         float const iconBox   = metrics::iconGlyph();
         widgets::drawIconAtCentre(
             drawList,
-            isSpeedRow ? ICON_CHEVRONS_RIGHT : (isFreezeRow ? ICON_FREEZE : ICON_CAMERA),
+            isSpeedRow ? ICON_CHEVRONS_RIGHT
+                       : (isFreezeRow ? ICON_FREEZE : (isTimelapseRow ? ICON_TIMELAPSE : ICON_CAMERA)),
             {labelX + iconBox * 0.5f, widgets::textInkCentre(textY, label.c_str())},
             iconColor
         );
@@ -1914,15 +1998,18 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             isSpeedRow && project && !row.locked && !project->speedTrack.keysByTick.contains(playheadTick);
         bool const canAddFreezeKey =
             isFreezeRow && project && !row.locked && !project->freezeTrack.keysByTick.contains(playheadTick);
-        bool const canAddSpecialKey = canAddSpeedKey || canAddFreezeKey;
+        bool const canAddTimelapseKey =
+            isTimelapseRow && project && !row.locked && !project->timelapseTrack.keysByTick.contains(playheadTick);
+        bool const canAddSpecialKey = canAddSpeedKey || canAddFreezeKey || canAddTimelapseKey;
         bool const addHovered =
             isSpecialRow && allowInput && contains({addX, rowY}, {addX + controlWidth, rowBottom}, mouse);
         bool const eyeHovered = allowInput && contains({eyeX, rowY}, {eyeX + controlWidth, rowBottom}, mouse);
         bool const lockHovered =
             allowInput && showLock && contains({lockX, rowY}, {lockX + controlWidth, rowBottom}, mouse);
         if (addHovered) {
-            widgets::hoverTooltip((isFreezeRow ? "playback.refactorEditor.freeze.addKeyframeAtPlayhead"_tr()
-                                               : "playback.refactorEditor.speed.addKeyframeAtPlayhead"_tr())
+            widgets::hoverTooltip((isFreezeRow      ? "playback.refactorEditor.freeze.addKeyframeAtPlayhead"_tr()
+                                   : isTimelapseRow ? "playback.refactorEditor.timelapse.addKeyframeAtPlayhead"_tr()
+                                                    : "playback.refactorEditor.speed.addKeyframeAtPlayhead"_tr())
                                       .c_str());
         } else if (eyeHovered) {
             widgets::hoverTooltip((row.enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
@@ -1943,8 +2030,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 action.speedValue = sampled;
                 ctx.submitAction(std::move(action));
                 queueSpeedKeyframeSelection(playheadTick);
-            } else {
+            } else if (isFreezeRow) {
                 addFreezeKeyframeAt(ctx, playheadTick);
+            } else {
+                addTimelapseKeyframeAt(ctx, playheadTick);
             }
         } else if (allowInput && eyeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             if (isSpeedRow) {
@@ -1953,6 +2042,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 ctx.submitAction(std::move(action));
             } else if (isFreezeRow) {
                 EditorAction action{EditorActionType::SetFreezeTrackEnabled};
+                action.value = !row.enabled;
+                ctx.submitAction(std::move(action));
+            } else if (isTimelapseRow) {
+                EditorAction action{EditorActionType::SetTimelapseTrackEnabled};
                 action.value = !row.enabled;
                 ctx.submitAction(std::move(action));
             } else {
@@ -1968,6 +2061,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 ctx.submitAction(std::move(action));
             } else if (isFreezeRow) {
                 EditorAction action{EditorActionType::SetFreezeTrackLocked};
+                action.value = !row.locked;
+                ctx.submitAction(std::move(action));
+            } else if (isTimelapseRow) {
+                EditorAction action{EditorActionType::SetTimelapseTrackLocked};
                 action.value = !row.locked;
                 ctx.submitAction(std::move(action));
             } else {
@@ -2029,6 +2126,16 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 freezeMenuMin       = ImGui::GetItemRectMin();
                 freezeMenuMax       = ImGui::GetItemRectMax();
                 openFreezeMenu      = true;
+            }
+        } else if (isTimelapseRow) {
+            if (clicked && mouse.x < controlsLeft) {
+                ctx.selection.selectTimelapseTrack();
+            } else if (rowRightClicked && mouse.x < controlsLeft && mTrackDragCameraId.empty()) {
+                ctx.selection.selectTimelapseTrack();
+                mTimelapseLaneMenuTick = -1;
+                timelapseMenuMin       = ImGui::GetItemRectMin();
+                timelapseMenuMax       = ImGui::GetItemRectMax();
+                openTimelapseMenu      = true;
             }
         } else {
             // Reordering changes which camera wins a tick, so it is only offered on the unfiltered list.
@@ -2132,6 +2239,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     }
     if (openFreezeMenu) {
         widgets::openAnchoredPopup("##timeline-freeze-menu", freezeMenuMin, freezeMenuMax);
+    }
+    if (openTimelapseMenu) {
+        widgets::openAnchoredPopup("##timeline-timelapse-menu", timelapseMenuMin, timelapseMenuMax);
     }
 
     drawList->AddLine({listLeft + listW, layout.rulerTop}, {listLeft + listW, layout.bodyBottom}, theme::kLine);
@@ -3201,6 +3311,13 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             ctx.submitAction({EditorActionType::AddFreezeTrack});
             queueFreezeTrackSelection();
         }
+        bool const        hasTimelapseTrack = project && project->timelapseTrack.isVisible();
+        std::string const timelapseItem =
+            std::string(ICON_TIMELAPSE) + "  " + "playback.refactorEditor.timeline.addTimelapseTrack"_tr();
+        if (ImGui::MenuItem(timelapseItem.c_str(), nullptr, hasTimelapseTrack, !hasTimelapseTrack)) {
+            ctx.submitAction({EditorActionType::AddTimelapseTrack});
+            queueTimelapseTrackSelection();
+        }
         widgets::endAnchoredPopup();
     }
 
@@ -3378,6 +3495,101 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             if (ImGui::MenuItem("playback.refactorEditor.freeze.removeTrack"_tr().c_str(), nullptr, false, editable)) {
                 ctx.submitAction({EditorActionType::RemoveFreezeTrack});
                 if (ctx.selection.isFreezeTrackSelected() || ctx.selection.selectedFreezeKeyframe().has_value()) {
+                    ctx.selection.clear();
+                }
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-timelapse-keyframe-menu")) {
+        auto const keyIt = project ? project->timelapseTrack.keysByTick.find(mTimelapseKeyframeMenuTick)
+                                   : std::map<int, state::editing::model::TimelapseKeyframe>::const_iterator{};
+        if (!project || keyIt == project->timelapseTrack.keysByTick.end()) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            bool const editable = !project->timelapseTrack.locked;
+            if (ImGui::MenuItem("playback.refactorEditor.timeline.seekHere"_tr().c_str())) {
+                seekTo(ctx, mTimelapseKeyframeMenuTick);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timelapse.deleteKeyframe"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::DeleteSelection).c_str(),
+                    false,
+                    editable
+                )) {
+                EditorAction action{EditorActionType::DeleteTimelapseKeyframe};
+                action.tick = mTimelapseKeyframeMenuTick;
+                ctx.submitAction(std::move(action));
+                ctx.selection.clear();
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-timelapse-menu")) {
+        if (!project || !project->timelapseTrack.isVisible()) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            int const  playheadTick     = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+            bool const editable         = !project->timelapseTrack.locked;
+            bool const hasKeyAtPlayhead = project->timelapseTrack.keysByTick.contains(playheadTick);
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timelapse.addKeyframeAtPlayhead"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable && !hasKeyAtPlayhead
+                )) {
+                addTimelapseKeyframeAt(ctx, playheadTick);
+            }
+            if (mTimelapseLaneMenuTick >= 0 && mTimelapseLaneMenuTick != playheadTick) {
+                bool const hasKeyAtMenu = project->timelapseTrack.keysByTick.contains(mTimelapseLaneMenuTick);
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timelapse.addKeyframe"_tr().c_str(),
+                        nullptr,
+                        false,
+                        editable && !hasKeyAtMenu
+                    )) {
+                    addTimelapseKeyframeAt(ctx, mTimelapseLaneMenuTick);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem((project->timelapseTrack.enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
+                                                                 : "playback.refactorEditor.timeline.enableTrack"_tr())
+                                    .c_str())) {
+                EditorAction action{EditorActionType::SetTimelapseTrackEnabled};
+                action.value = !project->timelapseTrack.enabled;
+                ctx.submitAction(std::move(action));
+            }
+            if (ImGui::MenuItem((project->timelapseTrack.locked ? "playback.refactorEditor.timeline.unlockTrack"_tr()
+                                                                : "playback.refactorEditor.timeline.lockTrack"_tr())
+                                    .c_str())) {
+                EditorAction action{EditorActionType::SetTimelapseTrackLocked};
+                action.value = !project->timelapseTrack.locked;
+                ctx.submitAction(std::move(action));
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timelapse.clearKeyframes"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable && !project->timelapseTrack.keysByTick.empty()
+                )) {
+                ctx.submitAction({EditorActionType::ClearTimelapseKeyframes});
+                if (ctx.selection.selectedTimelapseKeyframe().has_value()) {
+                    ctx.selection.selectTimelapseTrack();
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timelapse.removeTrack"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable
+                )) {
+                ctx.submitAction({EditorActionType::RemoveTimelapseTrack});
+                if (ctx.selection.isTimelapseTrackSelected() || ctx.selection.selectedTimelapseKeyframe().has_value()) {
                     ctx.selection.clear();
                 }
             }
@@ -3594,6 +3806,9 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mDraggingFreezeKeyframeOriginTick = -1;
         mDraggingFreezeKeyframeTick       = -1;
         mDraggingFreezeKeyframeMoved      = false;
+        mDraggingTimelapseKeyframeOriginTick = -1;
+        mDraggingTimelapseKeyframeTick       = -1;
+        mDraggingTimelapseKeyframeMoved      = false;
         mRangeDragMode                   = 0;
         mExportMarkerDrag          = 0;
         mExportDragInTick          = -1;
@@ -3623,6 +3838,9 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mDraggingFreezeKeyframeOriginTick = -1;
         mDraggingFreezeKeyframeTick       = -1;
         mDraggingFreezeKeyframeMoved      = false;
+        mDraggingTimelapseKeyframeOriginTick = -1;
+        mDraggingTimelapseKeyframeTick       = -1;
+        mDraggingTimelapseKeyframeMoved      = false;
         mGroupDrag                       = false;
         mGroupDragDelta            = 0;
         mBoxPending                = false;
@@ -4427,6 +4645,278 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     !trackEnabled ? theme::kKeyframeDisabled : (key.frozen ? kFreezeKeyFill : kFreezeUnfreezeFill);
                 ImU32 const outline =
                     lit ? theme::kKeyframeSelected : (key.frozen ? theme::kKeyframeOutline : kFreezeUnfreezeOutline);
+                drawKeyframeDiamond(drawList, kx, bandCenterY, radius, fill, outline);
+            }
+        } else if (row.kind == TrackRowKind::Timelapse) {
+            auto const& timelapseTrack = project->timelapseTrack;
+            bool const  trackEnabled   = timelapseTrack.enabled;
+            bool const  trackLocked    = timelapseTrack.locked;
+            float const bandTop        = blockTop + 3.0f * uiScale;
+            float const bandBot        = blockBot - 3.0f * uiScale;
+            float const bandCenterY    = (bandTop + bandBot) * 0.5f;
+            float const bandRounding   = 3.0f * uiScale;
+            bool const  mouseInRow =
+                allowInput && contains({layout.canvasLeft, y}, {layout.fullMax.x, rowBottom}, mouse);
+
+            state::editing::model::TimelapseTrack const* activeTrack = &timelapseTrack;
+            state::editing::model::TimelapseTrack        dragPreviewTrack;
+            if (mDraggingTimelapseKeyframeOriginTick >= 0 && mDraggingTimelapseKeyframeTick >= 0
+                && mDraggingTimelapseKeyframeTick != mDraggingTimelapseKeyframeOriginTick) {
+                if (auto const it = timelapseTrack.keysByTick.find(mDraggingTimelapseKeyframeOriginTick);
+                    it != timelapseTrack.keysByTick.end()) {
+                    dragPreviewTrack = timelapseTrack;
+                    auto movedKey    = it->second;
+                    dragPreviewTrack.keysByTick.erase(mDraggingTimelapseKeyframeOriginTick);
+                    dragPreviewTrack.keysByTick.emplace(mDraggingTimelapseKeyframeTick, std::move(movedKey));
+                    activeTrack = &dragPreviewTrack;
+                }
+            }
+
+            // 1) Guide line and mapped timelapse segments with output duration/speed labels.
+            drawDashedHorizontalLine(
+                drawList,
+                layout.canvasLeft,
+                layout.fullMax.x,
+                bandCenterY,
+                theme::withAlpha(theme::kTextDim, trackEnabled ? 0x48 : 0x28),
+                5.0f * uiScale,
+                4.0f * uiScale,
+                1.0f
+            );
+
+            auto const    segments = keyframe::collectTimelapseSegments(*activeTrack);
+            ImU32 const   segBase  = trackEnabled ? kTimelapseAccent : theme::kTrackDisabled;
+            ImU32 const   segFill  = theme::withAlpha(segBase, trackEnabled ? 0x44 : 0x26);
+            ImU32 const   segEdge  = theme::withAlpha(segBase, trackEnabled ? 0xc0 : 0x6c);
+            ImU32 const   invFill  = trackEnabled ? kTimelapseInvalidFill : theme::withAlpha(kTimelapseInvalidFill, 36);
+            ImU32 const   invEdge  = trackEnabled ? kTimelapseInvalidEdge : theme::withAlpha(kTimelapseInvalidEdge, 96);
+            float const   labelFontSize = std::max(8.5f, std::round(metrics::font() * 0.58f));
+            ImFont* const labelFont     = ImGui::GetFont();
+
+            for (auto const& seg : segments) {
+                float const rawX0 = scale.xAt(static_cast<float>(seg.startTick));
+                float const rawX1 = scale.xAt(static_cast<float>(seg.endTick));
+                float const x0    = std::max(layout.canvasLeft, rawX0);
+                float const x1    = std::min(layout.fullMax.x, rawX1);
+                if (x1 <= x0) continue;
+
+                float const availW = (x1 - x0) - 8.0f * uiScale;
+                if (seg.valid) {
+                    drawList->AddRectFilled({x0, bandTop}, {x1, bandBot}, segFill, bandRounding);
+                    drawList->AddRect({x0, bandTop}, {x1, bandBot}, segEdge, bandRounding, 0, 1.0f);
+                    if (availW > 8.0f * uiScale) {
+                        std::string const durStr = formatTick(std::max(0, seg.endOutputTicks - seg.startOutputTicks));
+                        char              speedBuf[32]{};
+                        std::snprintf(speedBuf, sizeof(speedBuf), "%.1fx", seg.speed);
+                        std::string const fullLabel = durStr + " (" + speedBuf + ")";
+                        std::string       text;
+                        ImVec2 const      fullSize =
+                            labelFont->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, fullLabel.c_str());
+                        if (fullSize.x <= availW) {
+                            text = fullLabel;
+                        } else {
+                            ImVec2 const durSize =
+                                labelFont->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, durStr.c_str());
+                            if (durSize.x <= availW) {
+                                text = durStr;
+                            }
+                        }
+                        if (!text.empty()) {
+                            ImVec2 const textSize =
+                                labelFont->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, text.c_str());
+                            float const  tx = x0 + ((x1 - x0) - textSize.x) * 0.5f;
+                            float const  ty = std::floor(bandCenterY - textSize.y * 0.5f + 0.5f);
+                            ImVec4 const textClip{x0 + 2.0f, bandTop, x1 - 2.0f, bandBot};
+                            drawList->AddText(
+                                labelFont,
+                                labelFontSize,
+                                {tx, ty},
+                                trackEnabled ? theme::kText : theme::kTextDim,
+                                text.c_str(),
+                                nullptr,
+                                0.0f,
+                                &textClip
+                            );
+                        }
+                    }
+                } else {
+                    drawList->AddRectFilled({x0, bandTop}, {x1, bandBot}, invFill, bandRounding);
+                    drawList->AddRect({x0, bandTop}, {x1, bandBot}, invEdge, bandRounding, 0, 1.0f);
+                    if (availW > 8.0f * uiScale) {
+                        std::string const invalidLabel = "playback.refactorEditor.timelapse.invalidSegment"_tr();
+                        ImVec2 const      textSize =
+                            labelFont->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, invalidLabel.c_str());
+                        if (textSize.x <= availW) {
+                            float const  tx = x0 + ((x1 - x0) - textSize.x) * 0.5f;
+                            float const  ty = std::floor(bandCenterY - textSize.y * 0.5f + 0.5f);
+                            ImVec4 const textClip{x0 + 2.0f, bandTop, x1 - 2.0f, bandBot};
+                            drawList->AddText(
+                                labelFont,
+                                labelFontSize,
+                                {tx, ty},
+                                trackEnabled ? kTimelapseInvalidText : theme::kTextDim,
+                                invalidLabel.c_str(),
+                                nullptr,
+                                0.0f,
+                                &textClip
+                            );
+                        }
+                    }
+                }
+            }
+
+            // 2) Hit-test timelapse keyframes on this lane.
+            auto const         selectedTimelapseTick = ctx.selection.selectedTimelapseKeyframe();
+            std::optional<int> hoveredTimelapseKeyTick;
+            float              hoveredTimelapseKeyX      = 0.0f;
+            float              hoveredTimelapseKeyRadius = keyRadius;
+            if (mouseInRow && mTool != TimelineTool::Razor) {
+                float bestDist = std::numeric_limits<float>::max();
+                for (auto const& [keyTick, _] : timelapseTrack.keysByTick) {
+                    bool const  dragging  = mDraggingTimelapseKeyframeOriginTick == keyTick;
+                    int const   drawnTick = dragging ? mDraggingTimelapseKeyframeTick : keyTick;
+                    float const kx        = scale.xAt(static_cast<float>(drawnTick));
+                    if (kx < layout.canvasLeft - keyRadius || kx > layout.fullMax.x + keyRadius) continue;
+                    bool const  sel    = selectedTimelapseTick && *selectedTimelapseTick == keyTick;
+                    float const radius = sel ? keyRadius + 1.0f : keyRadius;
+                    float const dx     = std::abs(mouse.x - kx);
+                    float const dy     = std::abs(mouse.y - bandCenterY);
+                    if (dx <= radius + 4.0f && dy <= radius + 5.0f) {
+                        float const dist = std::hypot(dx, dy);
+                        if (dist < bestDist) {
+                            bestDist                  = dist;
+                            hoveredTimelapseKeyTick   = keyTick;
+                            hoveredTimelapseKeyX      = kx;
+                            hoveredTimelapseKeyRadius = radius;
+                        }
+                    }
+                }
+            }
+
+            // 3) Timelapse keyframe hover tooltip and mouse interaction.
+            bool const overTimelapseKey = hoveredTimelapseKeyTick.has_value();
+            if (overTimelapseKey) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mDraggingTimelapseKeyframeOriginTick < 0) {
+                    if (auto const keyIt = timelapseTrack.keysByTick.find(*hoveredTimelapseKeyTick);
+                        keyIt != timelapseTrack.keysByTick.end()) {
+                        std::string tip = formatTick(*hoveredTimelapseKeyTick) + " ("
+                                        + std::to_string(*hoveredTimelapseKeyTick) + "t) -> "
+                                        + "playback.refactorEditor.timelapse.outputTime"_tr() + " "
+                                        + formatTick(keyIt->second.outputTicks) + " ("
+                                        + std::to_string(keyIt->second.outputTicks) + "t)";
+                        if (timelapseTrack.keysByTick.size() == 1) {
+                            tip += "\n" + "playback.refactorEditor.timelapse.requiresTwoKeyframes"_tr();
+                        }
+                        if (keyIt != timelapseTrack.keysByTick.begin()
+                            && std::prev(keyIt)->second.outputTicks >= keyIt->second.outputTicks) {
+                            tip += "\n" + "playback.refactorEditor.timelapse.invalidOrderHint"_tr();
+                        }
+                        widgets::hoverTooltip(tip.c_str());
+                    }
+                }
+                if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    clickConsumed              = true;
+                    mTimelapseKeyframeMenuTick = *hoveredTimelapseKeyTick;
+                    ctx.selection.selectTimelapseKeyframe(*hoveredTimelapseKeyTick);
+                    widgets::openAnchoredPopup(
+                        "##timeline-timelapse-keyframe-menu",
+                        {hoveredTimelapseKeyX - hoveredTimelapseKeyRadius, bandCenterY - hoveredTimelapseKeyRadius},
+                        {hoveredTimelapseKeyX + hoveredTimelapseKeyRadius, bandCenterY + hoveredTimelapseKeyRadius}
+                    );
+                } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed     = true;
+                    int const keyTick = *hoveredTimelapseKeyTick;
+                    ctx.selection.selectTimelapseKeyframe(keyTick);
+                    if (trackLocked) {
+                        submitSeek(ctx, keyTick);
+                    } else {
+                        mDraggingTimelapseKeyframeOriginTick  = keyTick;
+                        mDraggingTimelapseKeyframeStartMouseX = mouse.x;
+                        mDraggingTimelapseKeyframeTick        = keyTick;
+                        mDraggingTimelapseKeyframeMoved       = false;
+                    }
+                }
+            }
+
+            // 4) Pen preview / Ctrl+Click / double-click / context menu / seek on empty timelapse lane.
+            bool const penMode = mTool == TimelineTool::Pen;
+            bool const ctrlSelectPen =
+                mTool == TimelineTool::Select && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+            std::optional<int> penPreviewTick;
+            if (mouseInRow && !overTimelapseKey && !trackLocked && (penMode || ctrlSelectPen)) {
+                int penTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                if (shiftSnap) {
+                    penTick = snapToEditPoints(ctx, penTick, scale.pixelsPerTick, true, true, {}, {});
+                } else if (mSnapEnabled) {
+                    penTick = snapTick(penTick);
+                }
+                penTick = std::clamp(penTick, 0, state.totalTicks);
+                if (!timelapseTrack.keysByTick.contains(penTick)) penPreviewTick = penTick;
+            }
+            if (penPreviewTick.has_value()) {
+                float const penX = scale.xAt(static_cast<float>(*penPreviewTick));
+                drawKeyframeDiamond(
+                    drawList,
+                    penX,
+                    bandCenterY,
+                    keyRadius,
+                    theme::withAlpha(kTimelapseKeyFill, 0x88),
+                    theme::withAlpha(theme::kKeyframeOutline, 0xa0)
+                );
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed = true;
+                    addTimelapseKeyframeAt(ctx, *penPreviewTick);
+                }
+            } else if (mouseInRow && !overTimelapseKey && !clickConsumed) {
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    clickConsumed = true;
+                    int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                    if (mSnapEnabled) tick = snapTick(tick);
+                    mTimelapseLaneMenuTick = tick;
+                    float const anchorX    = scale.xAt(static_cast<float>(tick));
+                    ctx.selection.selectTimelapseTrack();
+                    widgets::openAnchoredPopup("##timeline-timelapse-menu", {anchorX, blockTop}, {anchorX, blockBot});
+                } else if (!trackLocked && mTool == TimelineTool::Select
+                           && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    int addTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                    if (shiftSnap) {
+                        addTick = snapToEditPoints(ctx, addTick, scale.pixelsPerTick, true, true, {}, {});
+                    } else if (mSnapEnabled) {
+                        addTick = snapTick(addTick);
+                    }
+                    addTick = std::clamp(addTick, 0, state.totalTicks);
+                    if (!timelapseTrack.keysByTick.contains(addTick)) {
+                        clickConsumed = true;
+                        addTimelapseKeyframeAt(ctx, addTick);
+                    }
+                } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed = true;
+                    ctx.selection.selectTimelapseTrack();
+                    submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
+                }
+            }
+
+            // 5) Draw timelapse keyframe diamond nodes.
+            bool const singleKey = activeTrack->keysByTick.size() == 1;
+            for (auto const& [keyTick, _] : timelapseTrack.keysByTick) {
+                bool const  dragging  = mDraggingTimelapseKeyframeOriginTick == keyTick;
+                int const   drawnTick = dragging ? mDraggingTimelapseKeyframeTick : keyTick;
+                float const kx        = scale.xAt(static_cast<float>(drawnTick));
+                if (kx < layout.canvasLeft - keyRadius || kx > layout.fullMax.x + keyRadius) continue;
+                bool const  selected = selectedTimelapseTick && *selectedTimelapseTick == keyTick;
+                bool const  hovered  = hoveredTimelapseKeyTick && *hoveredTimelapseKeyTick == keyTick;
+                bool const  lit      = selected || dragging;
+                float const radius   = lit ? keyRadius + 1.0f : (hovered ? keyRadius + 0.5f : keyRadius);
+                auto const  activeIt = activeTrack->keysByTick.find(drawnTick);
+                bool const  conflict = activeIt != activeTrack->keysByTick.end()
+                                   && activeIt != activeTrack->keysByTick.begin()
+                                   && std::prev(activeIt)->second.outputTicks >= activeIt->second.outputTicks;
+                bool const  isWarning = singleKey || conflict;
+                ImU32 const fill      = !trackEnabled ? theme::kKeyframeDisabled
+                                                      : (isWarning ? kTimelapseInvalidKeyFill : kTimelapseKeyFill);
+                ImU32 const outline   = lit ? theme::kKeyframeSelected : theme::kKeyframeOutline;
                 drawKeyframeDiamond(drawList, kx, bandCenterY, radius, fill, outline);
             }
         } else if (row.kind == TrackRowKind::Camera && row.cameraIndex >= 0
@@ -5419,6 +5909,70 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 mDraggingFreezeKeyframeOriginTick = -1;
                 mDraggingFreezeKeyframeTick       = -1;
                 mDraggingFreezeKeyframeMoved      = false;
+            }
+        }
+    } else if (allowInput && mDraggingTimelapseKeyframeOriginTick >= 0) {
+        auto const& keys  = project->timelapseTrack.keysByTick;
+        auto const  keyIt = keys.find(mDraggingTimelapseKeyframeOriginTick);
+        if (keyIt == keys.end() || project->timelapseTrack.locked || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            mDraggingTimelapseKeyframeOriginTick = -1;
+            mDraggingTimelapseKeyframeTick       = -1;
+            mDraggingTimelapseKeyframeMoved      = false;
+        } else {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (std::abs(ImGui::GetMousePos().x - mDraggingTimelapseKeyframeStartMouseX) >= 2.0f * metrics::scale()) {
+                mDraggingTimelapseKeyframeMoved = true;
+            }
+            int minimum = 0;
+            int maximum = state.totalTicks;
+            if (keyIt != keys.begin()) minimum = std::min(state.totalTicks, std::prev(keyIt)->first + 1);
+            auto const next = std::next(keyIt);
+            if (next != keys.end()) maximum = std::max(0, next->first - 1);
+
+            int candidateTick = mDraggingTimelapseKeyframeOriginTick;
+            if (mDraggingTimelapseKeyframeMoved) {
+                int const raw    = tickFromMouse();
+                int const target = shiftSnap ? snapToEditPoints(
+                                                   ctx,
+                                                   raw,
+                                                   scale.pixelsPerTick,
+                                                   true,
+                                                   true,
+                                                   {},
+                                                   {},
+                                                   {},
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   mDraggingTimelapseKeyframeOriginTick
+                                               )
+                                             : snapTick(raw);
+                if (minimum <= maximum) {
+                    candidateTick = std::clamp(target, minimum, maximum);
+                }
+            }
+            mDraggingTimelapseKeyframeTick = candidateTick;
+            float const markerX            = scale.xAt(static_cast<float>(candidateTick));
+            drawList->AddLine(
+                {markerX, layout.bodyTop},
+                {markerX, layout.bodyBottom},
+                theme::withAlpha(theme::kKeyframeSelected, 180),
+                1.0f
+            );
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (mDraggingTimelapseKeyframeMoved) {
+                    if (candidateTick != mDraggingTimelapseKeyframeOriginTick) {
+                        EditorAction action{EditorActionType::MoveTimelapseKeyframe};
+                        action.tick          = mDraggingTimelapseKeyframeOriginTick;
+                        action.secondaryTick = candidateTick;
+                        ctx.submitAction(std::move(action));
+                        queueTimelapseKeyframeSelection(candidateTick);
+                    }
+                } else {
+                    submitSeek(ctx, mDraggingTimelapseKeyframeOriginTick);
+                }
+                mDraggingTimelapseKeyframeOriginTick = -1;
+                mDraggingTimelapseKeyframeTick       = -1;
+                mDraggingTimelapseKeyframeMoved      = false;
             }
         }
     } else if (allowInput && mClipDragMode != 0) {
