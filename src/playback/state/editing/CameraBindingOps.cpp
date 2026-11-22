@@ -48,7 +48,6 @@ std::string addFreeCamera(model::EditorStateExt& state, std::string const& name)
         clip.name          = ClipOps::defaultClipName(state);
         clip.inTick        = 0;
         clip.outTick       = state.totalTicks;
-        clip.speed         = 1.0f;
         clip.exportEnabled = true;
         camera.clips.push_back(std::move(clip));
     }

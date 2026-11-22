@@ -7,6 +7,7 @@
 #include "playback/editor/ui/components/TimelineScale.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
+#include "playback/keyframe/SpeedTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
@@ -416,6 +417,81 @@ void drawDiagonalHatch(
     drawList->PopClipRect();
 }
 
+// Symmetric log2 mapping centered at 1.0x: MinSpeedKeyframeValue at bottom, 1.0x at center, MaxSpeedKeyframeValue at
+// top.
+float speedToCurveY(double speed, float plotTop, float plotBottom) {
+    double const minSpd = static_cast<double>(state::editing::model::MinSpeedKeyframeValue);
+    double const maxSpd = static_cast<double>(state::editing::model::MaxSpeedKeyframeValue);
+    double const safe   = std::clamp(std::isfinite(speed) ? speed : 1.0, minSpd, maxSpd);
+    double       t      = 0.5;
+    if (safe <= 1.0) {
+        double const span = -std::log2(minSpd);
+        t                 = span > 0.0 ? 0.5 * (1.0 + std::clamp(std::log2(safe) / span, -1.0, 0.0)) : 0.5;
+    } else {
+        double const span = std::log2(maxSpd);
+        t                 = span > 0.0 ? 0.5 + 0.5 * std::clamp(std::log2(safe) / span, 0.0, 1.0) : 0.5;
+    }
+    return static_cast<float>(static_cast<double>(plotBottom) - t * static_cast<double>(plotBottom - plotTop));
+}
+
+std::string interpolationTypeLabel(state::editing::model::CameraInterpolationType type) {
+    using Type = state::editing::model::CameraInterpolationType;
+    switch (type) {
+    case Type::Smooth:
+        return "playback.refactorEditor.details.interpolationType.smooth"_tr();
+    case Type::Linear:
+        return "playback.refactorEditor.details.interpolationType.linear"_tr();
+    case Type::EaseIn:
+        return "playback.refactorEditor.details.interpolationType.easeIn"_tr();
+    case Type::EaseOut:
+        return "playback.refactorEditor.details.interpolationType.easeOut"_tr();
+    case Type::EaseInOut:
+        return "playback.refactorEditor.details.interpolationType.easeInOut"_tr();
+    case Type::Hold:
+        return "playback.refactorEditor.details.interpolationType.hold"_tr();
+    case Type::Hermite:
+        return "playback.refactorEditor.details.interpolationType.hermite"_tr();
+    case Type::CubicBezier:
+        return "playback.refactorEditor.details.interpolationType.cubicBezier"_tr();
+    }
+    return "playback.refactorEditor.details.interpolationType.smooth"_tr();
+}
+
+bool speedTrackEquals(state::editing::model::SpeedTrack const& a, state::editing::model::SpeedTrack const& b) {
+    if (a.enabled != b.enabled || a.keysByTick.size() != b.keysByTick.size()) return false;
+    auto itA = a.keysByTick.begin();
+    auto itB = b.keysByTick.begin();
+    for (; itA != a.keysByTick.end(); ++itA, ++itB) {
+        if (itA->first != itB->first) return false;
+        auto const& ka = itA->second;
+        auto const& kb = itB->second;
+        if (ka.speed != kb.speed || ka.interpolationType != kb.interpolationType || ka.bezierCtrl1.x != kb.bezierCtrl1.x
+            || ka.bezierCtrl1.y != kb.bezierCtrl1.y || ka.bezierCtrl2.x != kb.bezierCtrl2.x
+            || ka.bezierCtrl2.y != kb.bezierCtrl2.y) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void drawDashedHorizontalLine(
+    ImDrawList* drawList,
+    float       x0,
+    float       x1,
+    float       y,
+    ImU32       color,
+    float       dashLen,
+    float       gapLen,
+    float       thickness = 1.0f
+) {
+    if (x1 <= x0 || dashLen <= 0.0f) return;
+    float const step = dashLen + std::max(0.0f, gapLen);
+    for (float x = x0; x < x1; x += step) {
+        float const segEnd = std::min(x1, x + dashLen);
+        drawList->AddLine({x, y}, {segEnd, y}, color, thickness);
+    }
+}
+
 } // namespace
 
 void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScale, float horizontalScroll) {
@@ -429,6 +505,9 @@ void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScal
     mDraggingKeyframeCameraId.clear();
     mDraggingKeyframeStartTick = -1;
     mDraggingKeyframeMoved     = false;
+    mDraggingSpeedKeyframeOriginTick = -1;
+    mDraggingSpeedKeyframeTick       = -1;
+    mDraggingSpeedKeyframeMoved      = false;
     mTrackDragCameraId.clear();
     mTrackDragCancelled        = false;
     mClipDragMode              = 0;
@@ -481,10 +560,30 @@ void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward)
         }
     }
     for (auto const& marker : project->markers) consider(marker.tick);
+    for (auto const& [tick, _] : project->speedTrack.keysByTick) consider(tick);
     submitSeek(ctx, target);
 }
 
 bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
+    auto const project = ctx.state.project;
+    if (project && (ctx.selection.isSpeedTrackSelected() || ctx.selection.selectedSpeedKeyframe().has_value())) {
+        if (project->speedTrack.locked) return false;
+        int const tick = std::clamp(
+            mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick,
+            0,
+            std::max(0, ctx.state.totalTicks)
+        );
+        if (project->speedTrack.keysByTick.contains(tick)) return false;
+        float const sampled =
+            static_cast<float>(keyframe::sampleSpeedTrackAt(project->speedTrack, static_cast<long double>(tick)));
+        EditorAction action{EditorActionType::AddSpeedKeyframe};
+        action.tick       = tick;
+        action.speedValue = sampled;
+        ctx.submitAction(std::move(action));
+        queueSpeedKeyframeSelection(tick);
+        return true;
+    }
+
     std::string cameraId = resolveKeyframeTargetCamera(ctx);
     if (cameraId.empty()) return false;
 
@@ -559,6 +658,13 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
         action.type = EditorActionType::DeleteCameraKeyframe;
         action.id   = selectedKeyframe->trackId;
         action.tick = selectedKeyframe->tick;
+    } else if (ctx.selection.isSpeedTrackSelected()) {
+        if (!project->speedTrack.isVisible() || project->speedTrack.locked) return false;
+        action.type = EditorActionType::RemoveSpeedTrack;
+    } else if (auto const speedTick = ctx.selection.selectedSpeedKeyframe()) {
+        if (project->speedTrack.locked) return false;
+        action.type = EditorActionType::DeleteSpeedKeyframe;
+        action.tick = *speedTick;
     } else {
         return false;
     }
@@ -721,7 +827,8 @@ int TimelinePanel::snapToEditPoints(
     bool                                                includeExportRange,
     std::function<bool(std::string const&, int)> const& skipKey,
     std::string_view                                    skipMarkerId,
-    std::string_view                                    skipClipId
+    std::string_view                                    skipClipId,
+    std::optional<int>                                  skipSpeedKeyTick
 ) {
     auto const project = ctx.state.project;
     if (!project || pixelsPerTick <= 0.0f) return tick;
@@ -748,6 +855,10 @@ int TimelinePanel::snapToEditPoints(
             consider(clip.outTick);
         }
     }
+    for (auto const& [speedTick, _] : project->speedTrack.keysByTick) {
+        if (skipSpeedKeyTick && *skipSpeedKeyTick == speedTick) continue;
+        consider(speedTick);
+    }
     for (auto const& marker : project->markers) {
         if (marker.id != skipMarkerId) consider(marker.tick);
     }
@@ -764,13 +875,33 @@ int TimelinePanel::snapToEditPoints(
 void TimelinePanel::queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys) {
     mPendingKeySelection = std::move(keys);
     mPendingMarkerSelection.clear();
+    mPendingSpeedTrackSelection = false;
+    mPendingSpeedKeyframeSelection.reset();
     mPendingSelectionFrames = kPendingSelectionFrames;
 }
 
 void TimelinePanel::queueMarkerSelection(std::string markerId) {
     mPendingKeySelection.clear();
-    mPendingMarkerSelection = std::move(markerId);
+    mPendingMarkerSelection     = std::move(markerId);
+    mPendingSpeedTrackSelection = false;
+    mPendingSpeedKeyframeSelection.reset();
     mPendingSelectionFrames = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueSpeedTrackSelection() {
+    mPendingKeySelection.clear();
+    mPendingMarkerSelection.clear();
+    mPendingSpeedTrackSelection = true;
+    mPendingSpeedKeyframeSelection.reset();
+    mPendingSelectionFrames = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueSpeedKeyframeSelection(int tick) {
+    mPendingKeySelection.clear();
+    mPendingMarkerSelection.clear();
+    mPendingSpeedTrackSelection    = false;
+    mPendingSpeedKeyframeSelection = tick;
+    mPendingSelectionFrames        = kPendingSelectionFrames;
 }
 
 void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
@@ -783,6 +914,16 @@ void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     if (!mPendingMarkerSelection.empty()) {
         if (std::ranges::any_of(project->markers, [&](auto const& marker) { return marker.id == mPendingMarkerSelection; })) {
             ctx.selection.select(state::editing::model::SelectedMarker{mPendingMarkerSelection});
+            done = true;
+        }
+    } else if (mPendingSpeedTrackSelection) {
+        if (project->speedTrack.isVisible()) {
+            ctx.selection.selectSpeedTrack();
+            done = true;
+        }
+    } else if (mPendingSpeedKeyframeSelection.has_value()) {
+        if (project->speedTrack.keysByTick.contains(*mPendingSpeedKeyframeSelection)) {
+            ctx.selection.selectSpeedKeyframe(*mPendingSpeedKeyframeSelection);
             done = true;
         }
     } else {
@@ -800,6 +941,8 @@ void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     if (done || lastChance) {
         mPendingKeySelection.clear();
         mPendingMarkerSelection.clear();
+        mPendingSpeedTrackSelection = false;
+        mPendingSpeedKeyframeSelection.reset();
         mPendingSelectionFrames = 0;
     }
 }
@@ -1269,14 +1412,25 @@ void TimelinePanel::drawSceneTabs(PanelContext const& ctx, Layout const& layout,
             ctx.state.cameraTimeline ? ctx.state.cameraTimeline->dimensionTransitionTicks() : emptyTransitions;
         auto const enabledSlices = state::editing::ClipOps::collectCompositedSlices(*project, true, transitions);
         auto const allSlices     = state::editing::ClipOps::collectCompositedSlices(*project, false, transitions);
-        double     outputSeconds = 0.0;
+        std::vector<std::pair<int, int>> sliceKeys;
+        sliceKeys.reserve(enabledSlices.size());
         for (auto const& slice : enabledSlices) {
-            if (slice.inTick < slice.outTick) {
-                double const srcSec =
-                    static_cast<double>(slice.outTick - slice.inTick) / static_cast<double>(kTicksPerSecond);
-                outputSeconds +=
-                    srcSec / static_cast<double>(std::max(state::editing::model::MinClipSpeed, slice.speed));
-            }
+            sliceKeys.emplace_back(slice.inTick, slice.outTick);
+        }
+        bool const cacheHit = mOutputDurationCache.valid && mOutputDurationCache.totalTicks == project->totalTicks
+                           && mOutputDurationCache.camerasEmpty == project->cameras.empty()
+                           && mOutputDurationCache.slices == sliceKeys
+                           && speedTrackEquals(mOutputDurationCache.speedTrack, project->speedTrack);
+        double outputSeconds = mOutputDurationCache.outputSeconds;
+        if (!cacheHit) {
+            keyframe::SpeedTimeMapping const mapping(*project, project->cameras.empty() ? project->totalTicks : 0);
+            outputSeconds                      = mapping.totalOutputSecondsForEnabledSlices(*project);
+            mOutputDurationCache.valid         = true;
+            mOutputDurationCache.totalTicks    = project->totalTicks;
+            mOutputDurationCache.camerasEmpty  = project->cameras.empty();
+            mOutputDurationCache.speedTrack    = project->speedTrack;
+            mOutputDurationCache.slices        = std::move(sliceKeys);
+            mOutputDurationCache.outputSeconds = outputSeconds;
         }
         char durBuf[32]{};
         if (outputSeconds >= 60.0) {
@@ -1472,13 +1626,18 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         ImGuiWindowFlags_NoScrollbar
     );
     auto*       ctrlDrawList = ImGui::GetWindowDrawList();
-    float const btnSize      = std::min(layout.headerHeight - 5.0f * scale, std::round(20.0f * scale));
-    float const btnY         = std::max(0.0f, (layout.headerHeight - btnSize) * 0.5f);
+    float const btnSize          = std::min(layout.headerHeight - 5.0f * scale, std::round(20.0f * scale));
+    float const btnY             = std::max(0.0f, (layout.headerHeight - btnSize) * 0.5f);
+    bool        openAddTrackMenu = false;
+    ImVec2      addMenuMin{};
+    ImVec2      addMenuMax{};
     ImGui::SetCursorPos({metrics::gutter() * 0.5f, btnY});
     {
         ImVec2 const addOrigin = ImGui::GetCursorScreenPos();
         if (ImGui::InvisibleButton("timeline-add", {btnSize, btnSize}) && allowInput) {
-            ctx.submitAction({EditorActionType::AddFreeCamera});
+            openAddTrackMenu = true;
+            addMenuMin       = ImGui::GetItemRectMin();
+            addMenuMax       = ImGui::GetItemRectMax();
         }
         bool const hovered = allowInput && ImGui::IsItemHovered();
         bool const held    = allowInput && ImGui::IsItemActive();
@@ -1560,6 +1719,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     ImGui::PopStyleVar(2);
     ImGui::EndChild();
     ImGui::PopStyleVar();
+    if (openAddTrackMenu) {
+        widgets::openAnchoredPopup("##timeline-add-track-menu", addMenuMin, addMenuMax);
+    }
     drawList->AddLine({listLeft, layout.bodyTop}, {listLeft + listW, layout.bodyTop}, theme::kLine);
 
     ImGui::SetCursorScreenPos({listLeft, layout.camerasTop});
@@ -1586,6 +1748,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     bool   openTrackMenu = false;
     ImVec2 trackMenuMin{};
     ImVec2 trackMenuMax{};
+    bool   openSpeedMenu = false;
+    ImVec2 speedMenuMin{};
+    ImVec2 speedMenuMax{};
     float  rowY = layout.camerasTop - mScrollY;
     for (auto const& row : mTrackTree.rows()) {
         float const rowBottom = rowY + row.height;
@@ -1593,10 +1758,13 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             rowY = rowBottom;
             continue;
         }
-        bool const selected = !row.cameraId.empty()
-                           && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
-                               || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId)
-                               || (!selectedClipCameraId.empty() && selectedClipCameraId == row.cameraId));
+        bool const isSpeedRow = row.kind == TrackRowKind::Speed;
+        bool const selected =
+            isSpeedRow ? (ctx.selection.isSpeedTrackSelected() || ctx.selection.selectedSpeedKeyframe().has_value())
+                       : (!row.cameraId.empty()
+                          && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
+                              || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId)
+                              || (!selectedClipCameraId.empty() && selectedClipCameraId == row.cameraId)));
 
         ImGui::SetCursorScreenPos({listLeft, rowY});
         ImGui::InvisibleButton(("##track-row-" + row.id).c_str(), {listW, row.height});
@@ -1617,7 +1785,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         }
         drawList->AddLine({listLeft, rowBottom}, {listLeft + listW, rowBottom}, IM_COL32(0x25, 0x25, 0x28, 0xff));
 
-        ImU32 const baseSwatch = theme::trackColor(row.cameraIndex);
+        ImU32 const baseSwatch = isSpeedRow ? theme::kSpeedFast : theme::trackColor(row.cameraIndex);
         ImU32 const swatch     = row.enabled ? baseSwatch : theme::kTrackDisabled;
         float const swatchPadX = 2.0f * scale;
         float const swatchPadY = 4.0f * scale;
@@ -1632,6 +1800,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         float       labelX = listLeft + indent;
 
         ImU32 const        textColor = row.enabled ? theme::kText : theme::kTextDim;
+        ImU32 const        iconColor = isSpeedRow ? (row.enabled ? theme::kSpeedFast : theme::kTextDim) : textColor;
         std::string const& label     = row.name;
         // Text centres on the fractional row, then the icon centres on the text's optical middle.
         float const rowCentre = (rowY + rowBottom) * 0.5f;
@@ -1639,18 +1808,19 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         float const iconBox   = metrics::iconGlyph();
         widgets::drawIconAtCentre(
             drawList,
-            ICON_CAMERA,
+            isSpeedRow ? ICON_CHEVRONS_RIGHT : ICON_CAMERA,
             {labelX + iconBox * 0.5f, widgets::textInkCentre(textY, label.c_str())},
-            textColor
+            iconColor
         );
         labelX += iconBox + metrics::gutter() * 0.5f;
 
-        float const  controlWidth = std::round(metrics::font() * 1.15f);
-        float const  eyeX         = listLeft + listW - controlWidth - metrics::gutter();
-        float const  lockX        = eyeX - controlWidth - 2.0f * scale;
-        bool const   showLock     = row.locked || hovered;
-        float const  controlsLeft = showLock ? lockX : eyeX;
-        float const  rightLimit   = controlsLeft - 4.0f * scale;
+        float const controlWidth = std::round(metrics::font() * 1.15f);
+        float const eyeX         = listLeft + listW - controlWidth - metrics::gutter();
+        float const lockX        = eyeX - controlWidth - 2.0f * scale;
+        float const addX         = lockX - controlWidth - 2.0f * scale;
+        bool const  showLock     = row.locked || hovered;
+        float const controlsLeft = isSpeedRow ? addX : (showLock ? lockX : eyeX);
+        float const rightLimit   = controlsLeft - 4.0f * scale;
         if (rightLimit > labelX) {
             std::string const elided =
                 elideTextToWidth(ImGui::GetFont(), ImGui::GetFontSize(), label, rightLimit - labelX);
@@ -1658,11 +1828,18 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             drawList->AddText(nullptr, 0.0f, {labelX, textY}, textColor, elided.c_str(), nullptr, 0.0f, &nameClip);
         }
 
-        ImVec2 const mouse      = ImGui::GetMousePos();
-        bool const   eyeHovered = allowInput && contains({eyeX, rowY}, {eyeX + controlWidth, rowBottom}, mouse);
-        bool const   lockHovered =
+        ImVec2 const mouse        = ImGui::GetMousePos();
+        int const    playheadTick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+        bool const   canAddSpeedKey =
+            isSpeedRow && project && !row.locked && !project->speedTrack.keysByTick.contains(playheadTick);
+        bool const addHovered =
+            isSpeedRow && allowInput && contains({addX, rowY}, {addX + controlWidth, rowBottom}, mouse);
+        bool const eyeHovered = allowInput && contains({eyeX, rowY}, {eyeX + controlWidth, rowBottom}, mouse);
+        bool const lockHovered =
             allowInput && showLock && contains({lockX, rowY}, {lockX + controlWidth, rowBottom}, mouse);
-        if (eyeHovered) {
+        if (addHovered) {
+            widgets::hoverTooltip("playback.refactorEditor.speed.addKeyframeAtPlayhead"_tr().c_str());
+        } else if (eyeHovered) {
             widgets::hoverTooltip((row.enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
                                                : "playback.refactorEditor.timeline.enableTrack"_tr())
                                       .c_str());
@@ -1671,20 +1848,52 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                                               : "playback.refactorEditor.timeline.lockTrack"_tr())
                                       .c_str());
         }
-        if (allowInput && eyeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            EditorAction action{EditorActionType::SetCameraEnabled};
-            action.id    = row.cameraId;
-            action.value = !row.enabled;
+        if (allowInput && addHovered && canAddSpeedKey && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            float const sampled = static_cast<float>(
+                keyframe::sampleSpeedTrackAt(project->speedTrack, static_cast<long double>(playheadTick))
+            );
+            EditorAction action{EditorActionType::AddSpeedKeyframe};
+            action.tick       = playheadTick;
+            action.speedValue = sampled;
             ctx.submitAction(std::move(action));
+            queueSpeedKeyframeSelection(playheadTick);
+        } else if (allowInput && eyeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (isSpeedRow) {
+                EditorAction action{EditorActionType::SetSpeedTrackEnabled};
+                action.value = !row.enabled;
+                ctx.submitAction(std::move(action));
+            } else {
+                EditorAction action{EditorActionType::SetCameraEnabled};
+                action.id    = row.cameraId;
+                action.value = !row.enabled;
+                ctx.submitAction(std::move(action));
+            }
         } else if (allowInput && lockHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            EditorAction action{EditorActionType::SetCameraLocked};
-            action.id    = row.cameraId;
-            action.value = !row.locked;
-            ctx.submitAction(std::move(action));
+            if (isSpeedRow) {
+                EditorAction action{EditorActionType::SetSpeedTrackLocked};
+                action.value = !row.locked;
+                ctx.submitAction(std::move(action));
+            } else {
+                EditorAction action{EditorActionType::SetCameraLocked};
+                action.id    = row.cameraId;
+                action.value = !row.locked;
+                ctx.submitAction(std::move(action));
+            }
         }
 
         float const controlGlyphSize = std::round(metrics::font() * 1.05f);
-        char const* eyeIcon          = row.enabled ? ICON_EYE : ICON_HIDE;
+        if (isSpeedRow) {
+            ImU32 const addCol = canAddSpeedKey ? (addHovered ? theme::kIconHighlight : theme::kIconInactive)
+                                                : theme::withAlpha(theme::kTextDim, 0x70);
+            drawCompactIconAtCentre(
+                drawList,
+                ICON_ADD,
+                {addX + controlWidth * 0.5f, rowCentre},
+                controlGlyphSize,
+                addCol
+            );
+        }
+        char const* eyeIcon = row.enabled ? ICON_EYE : ICON_HIDE;
         drawCompactIconAtCentre(
             drawList,
             eyeIcon,
@@ -1704,29 +1913,41 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 lockCol
             );
         }
-        // Reordering changes which camera wins a tick, so it is only offered on the unfiltered list.
-        if (allowInput && !mTrackDragCancelled && rowActive && mTrackDragCameraId.empty() && mTrackSearch.empty()
-            && project && project->cameras.size() > 1 && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f * scale)
-            && ImGui::GetIO().MouseClickedPos[ImGuiMouseButton_Left].x < controlsLeft) {
-            mTrackDragCameraId = row.cameraId;
-        }
-        if (rowStationary && !eyeHovered && !lockHovered && mTrackDragCameraId.empty() && project
-            && project->cameras.size() > 1) {
-            widgets::hoverTooltip("playback.refactorEditor.timeline.priorityHint"_tr().c_str());
-        }
-        if (clicked && mouse.x < controlsLeft) {
-            ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
-            if (ctx.commands.isAutoPreviewEnabled()) {
-                EditorAction action{EditorActionType::SetPreviewCamera};
-                action.id = row.cameraId;
-                ctx.submitAction(std::move(action));
+        if (isSpeedRow) {
+            if (clicked && mouse.x < controlsLeft) {
+                ctx.selection.selectSpeedTrack();
+            } else if (rowRightClicked && mouse.x < controlsLeft && mTrackDragCameraId.empty()) {
+                ctx.selection.selectSpeedTrack();
+                mSpeedLaneMenuTick = -1;
+                speedMenuMin       = ImGui::GetItemRectMin();
+                speedMenuMax       = ImGui::GetItemRectMax();
+                openSpeedMenu      = true;
             }
-        } else if (rowRightClicked && mouse.x < controlsLeft && mTrackDragCameraId.empty()) {
-            ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
-            mTrackMenuCameraId = row.cameraId;
-            trackMenuMin       = ImGui::GetItemRectMin();
-            trackMenuMax       = ImGui::GetItemRectMax();
-            openTrackMenu      = true;
+        } else {
+            // Reordering changes which camera wins a tick, so it is only offered on the unfiltered list.
+            if (allowInput && !mTrackDragCancelled && rowActive && mTrackDragCameraId.empty() && mTrackSearch.empty()
+                && project && project->cameras.size() > 1 && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 4.0f * scale)
+                && ImGui::GetIO().MouseClickedPos[ImGuiMouseButton_Left].x < controlsLeft) {
+                mTrackDragCameraId = row.cameraId;
+            }
+            if (rowStationary && !eyeHovered && !lockHovered && mTrackDragCameraId.empty() && project
+                && project->cameras.size() > 1) {
+                widgets::hoverTooltip("playback.refactorEditor.timeline.priorityHint"_tr().c_str());
+            }
+            if (clicked && mouse.x < controlsLeft) {
+                ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
+                if (ctx.commands.isAutoPreviewEnabled()) {
+                    EditorAction action{EditorActionType::SetPreviewCamera};
+                    action.id = row.cameraId;
+                    ctx.submitAction(std::move(action));
+                }
+            } else if (rowRightClicked && mouse.x < controlsLeft && mTrackDragCameraId.empty()) {
+                ctx.selection.select(state::editing::model::SelectedCamera{row.cameraId});
+                mTrackMenuCameraId = row.cameraId;
+                trackMenuMin       = ImGui::GetItemRectMin();
+                trackMenuMax       = ImGui::GetItemRectMax();
+                openTrackMenu      = true;
+            }
         }
         rowY = rowBottom;
     }
@@ -1740,6 +1961,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         int         cameraCounter = 0;
         bool        initialized   = false;
         for (auto const& row : rows) {
+            if (row.kind != TrackRowKind::Camera) {
+                boundary += row.height;
+                continue;
+            }
             if (!initialized) {
                 lineY       = boundary;
                 initialized = true;
@@ -1753,7 +1978,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         }
         float rowTop = layout.camerasTop - mScrollY;
         for (auto const& row : rows) {
-            if (row.cameraId == mTrackDragCameraId) {
+            if (row.kind == TrackRowKind::Camera && row.cameraId == mTrackDragCameraId) {
                 drawList->AddRectFilled(
                     {listLeft, rowTop},
                     {listLeft + listW, rowTop + row.height},
@@ -1794,6 +2019,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     ImGui::PopStyleVar();
     if (openTrackMenu) {
         widgets::openAnchoredPopup("##timeline-track-menu", trackMenuMin, trackMenuMax);
+    }
+    if (openSpeedMenu) {
+        widgets::openAnchoredPopup("##timeline-speed-menu", speedMenuMin, speedMenuMax);
     }
 
     drawList->AddLine({listLeft + listW, layout.rulerTop}, {listLeft + listW, layout.bodyBottom}, theme::kLine);
@@ -2616,20 +2844,6 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                 action.secondaryTick = playheadTick;
                 ctx.submitAction(std::move(action));
             }
-            if (ImGui::BeginMenu("playback.refactorEditor.timeline.clipSpeed"_tr().c_str(), editable)) {
-                constexpr float kSpeedPresets[] = {0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 4.0f, 8.0f};
-                for (float const preset : kSpeedPresets) {
-                    char label[16]{};
-                    std::snprintf(label, sizeof(label), "%.2gx", static_cast<double>(preset));
-                    if (ImGui::MenuItem(label, nullptr, std::abs(clip->speed - preset) < 0.001f)) {
-                        EditorAction action{EditorActionType::SetClipSpeed};
-                        action.id    = clip->id;
-                        action.speed = preset;
-                        ctx.submitAction(std::move(action));
-                    }
-                }
-                ImGui::EndMenu();
-            }
             if (ImGui::MenuItem(
                     "playback.refactorEditor.timeline.toggleClipExport"_tr().c_str(),
                     input::KeyMap::displayString(input::EditorKeybind::ToggleClipExport).c_str(),
@@ -2783,6 +2997,170 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                 action.id = marker->id;
                 ctx.submitAction(std::move(action));
                 ctx.selection.clear();
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-speed-keyframe-menu")) {
+        auto const keyIt = project ? project->speedTrack.keysByTick.find(mSpeedKeyframeMenuTick)
+                                   : std::map<int, state::editing::model::SpeedKeyframe>::const_iterator{};
+        if (!project || keyIt == project->speedTrack.keysByTick.end()) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            bool const editable              = !project->speedTrack.locked;
+            auto const setSpeedInterpolation = [&](char const* label, CameraInterpolationType type) {
+                if (ImGui::MenuItem(label, nullptr, keyIt->second.interpolationType == type, editable)) {
+                    EditorAction action{EditorActionType::SetSpeedKeyframeInterpolation};
+                    action.tick = mSpeedKeyframeMenuTick;
+                    action.kind = static_cast<int>(type);
+                    ctx.submitAction(std::move(action));
+                }
+            };
+            if (ImGui::BeginMenu("playback.refactorEditor.details.interpolation"_tr().c_str(), editable)) {
+                setSpeedInterpolation(
+                    "playback.refactorEditor.details.interpolationType.smooth"_tr().c_str(),
+                    CameraInterpolationType::Smooth
+                );
+                setSpeedInterpolation(
+                    "playback.refactorEditor.details.interpolationType.linear"_tr().c_str(),
+                    CameraInterpolationType::Linear
+                );
+                setSpeedInterpolation(
+                    "playback.refactorEditor.details.interpolationType.hold"_tr().c_str(),
+                    CameraInterpolationType::Hold
+                );
+                setSpeedInterpolation(
+                    "playback.refactorEditor.details.interpolationType.easeIn"_tr().c_str(),
+                    CameraInterpolationType::EaseIn
+                );
+                setSpeedInterpolation(
+                    "playback.refactorEditor.details.interpolationType.easeOut"_tr().c_str(),
+                    CameraInterpolationType::EaseOut
+                );
+                setSpeedInterpolation(
+                    "playback.refactorEditor.details.interpolationType.easeInOut"_tr().c_str(),
+                    CameraInterpolationType::EaseInOut
+                );
+                setSpeedInterpolation(
+                    "playback.refactorEditor.details.interpolationType.hermite"_tr().c_str(),
+                    CameraInterpolationType::Hermite
+                );
+                setSpeedInterpolation(
+                    "playback.refactorEditor.details.interpolationType.cubicBezier"_tr().c_str(),
+                    CameraInterpolationType::CubicBezier
+                );
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("playback.refactorEditor.timeline.seekHere"_tr().c_str())) {
+                seekTo(ctx, mSpeedKeyframeMenuTick);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.speed.deleteKeyframe"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::DeleteSelection).c_str(),
+                    false,
+                    editable
+                )) {
+                EditorAction action{EditorActionType::DeleteSpeedKeyframe};
+                action.tick = mSpeedKeyframeMenuTick;
+                ctx.submitAction(std::move(action));
+                ctx.selection.clear();
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-add-track-menu")) {
+        std::string const cameraItem =
+            std::string(ICON_CAMERA) + "  " + "playback.refactorEditor.timeline.addCameraTrack"_tr();
+        if (ImGui::MenuItem(cameraItem.c_str())) {
+            ctx.submitAction({EditorActionType::AddFreeCamera});
+        }
+        bool const        hasSpeedTrack = project && project->speedTrack.isVisible();
+        std::string const speedItem =
+            std::string(ICON_CHEVRONS_RIGHT) + "  " + "playback.refactorEditor.timeline.addSpeedTrack"_tr();
+        if (ImGui::MenuItem(speedItem.c_str(), nullptr, hasSpeedTrack, !hasSpeedTrack)) {
+            ctx.submitAction({EditorActionType::AddSpeedTrack});
+            queueSpeedTrackSelection();
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-speed-menu")) {
+        if (!project || !project->speedTrack.isVisible()) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            int const  playheadTick     = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+            bool const editable         = !project->speedTrack.locked;
+            bool const hasKeyAtPlayhead = project->speedTrack.keysByTick.contains(playheadTick);
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.speed.addKeyframeAtPlayhead"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable && !hasKeyAtPlayhead
+                )) {
+                float const sampled = static_cast<float>(
+                    keyframe::sampleSpeedTrackAt(project->speedTrack, static_cast<long double>(playheadTick))
+                );
+                EditorAction action{EditorActionType::AddSpeedKeyframe};
+                action.tick       = playheadTick;
+                action.speedValue = sampled;
+                ctx.submitAction(std::move(action));
+                queueSpeedKeyframeSelection(playheadTick);
+            }
+            if (mSpeedLaneMenuTick >= 0 && mSpeedLaneMenuTick != playheadTick) {
+                bool const hasKeyAtMenu = project->speedTrack.keysByTick.contains(mSpeedLaneMenuTick);
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.speed.addKeyframe"_tr().c_str(),
+                        nullptr,
+                        false,
+                        editable && !hasKeyAtMenu
+                    )) {
+                    float const sampled = static_cast<float>(
+                        keyframe::sampleSpeedTrackAt(project->speedTrack, static_cast<long double>(mSpeedLaneMenuTick))
+                    );
+                    EditorAction action{EditorActionType::AddSpeedKeyframe};
+                    action.tick       = mSpeedLaneMenuTick;
+                    action.speedValue = sampled;
+                    ctx.submitAction(std::move(action));
+                    queueSpeedKeyframeSelection(mSpeedLaneMenuTick);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem((project->speedTrack.enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
+                                                             : "playback.refactorEditor.timeline.enableTrack"_tr())
+                                    .c_str())) {
+                EditorAction action{EditorActionType::SetSpeedTrackEnabled};
+                action.value = !project->speedTrack.enabled;
+                ctx.submitAction(std::move(action));
+            }
+            if (ImGui::MenuItem((project->speedTrack.locked ? "playback.refactorEditor.timeline.unlockTrack"_tr()
+                                                            : "playback.refactorEditor.timeline.lockTrack"_tr())
+                                    .c_str())) {
+                EditorAction action{EditorActionType::SetSpeedTrackLocked};
+                action.value = !project->speedTrack.locked;
+                ctx.submitAction(std::move(action));
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.speed.clearKeyframes"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable && !project->speedTrack.keysByTick.empty()
+                )) {
+                EditorAction action{EditorActionType::ClearSpeedKeyframes};
+                ctx.submitAction(std::move(action));
+                if (ctx.selection.selectedSpeedKeyframe().has_value()) {
+                    ctx.selection.selectSpeedTrack();
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("playback.refactorEditor.speed.removeTrack"_tr().c_str(), nullptr, false, editable)) {
+                ctx.submitAction({EditorActionType::RemoveSpeedTrack});
+                if (ctx.selection.isSpeedTrackSelected() || ctx.selection.selectedSpeedKeyframe().has_value()) {
+                    ctx.selection.clear();
+                }
             }
         }
         widgets::endAnchoredPopup();
@@ -2989,9 +3367,12 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mRulerDragTick    = -1;
         mDraggingPlayhead = false;
         mDraggingKeyframeCameraId.clear();
-        mDraggingKeyframeStartTick = -1;
-        mDraggingKeyframeMoved     = false;
-        mRangeDragMode             = 0;
+        mDraggingKeyframeStartTick       = -1;
+        mDraggingKeyframeMoved           = false;
+        mDraggingSpeedKeyframeOriginTick = -1;
+        mDraggingSpeedKeyframeTick       = -1;
+        mDraggingSpeedKeyframeMoved      = false;
+        mRangeDragMode                   = 0;
         mExportMarkerDrag          = 0;
         mExportDragInTick          = -1;
         mExportDragOutTick         = -1;
@@ -3012,9 +3393,12 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mLastActiveSceneId = project->activeSceneId;
         mScrollY           = 0.0f;
         mDraggingKeyframeCameraId.clear();
-        mDraggingKeyframeStartTick = -1;
-        mDraggingKeyframeMoved     = false;
-        mGroupDrag                 = false;
+        mDraggingKeyframeStartTick       = -1;
+        mDraggingKeyframeMoved           = false;
+        mDraggingSpeedKeyframeOriginTick = -1;
+        mDraggingSpeedKeyframeTick       = -1;
+        mDraggingSpeedKeyframeMoved      = false;
+        mGroupDrag                       = false;
         mGroupDragDelta            = 0;
         mBoxPending                = false;
         mBoxSelecting              = false;
@@ -3302,7 +3686,291 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             ->AddLine({layout.canvasLeft, rowBottom}, {layout.fullMax.x, rowBottom}, IM_COL32(0x22, 0x22, 0x26, 0xff));
         ++bandIndex;
 
-        if (row.cameraIndex >= 0 && row.cameraIndex < static_cast<int>(project->cameras.size())) {
+        if (row.kind == TrackRowKind::Speed) {
+            auto const& speedTrack   = project->speedTrack;
+            bool const  trackEnabled = speedTrack.enabled;
+            bool const  trackLocked  = speedTrack.locked;
+            float const plotTop      = blockTop + 1.0f * uiScale;
+            float const plotBottom   = blockBot - 1.0f * uiScale;
+            float const centerY      = speedToCurveY(1.0, plotTop, plotBottom);
+            bool const  mouseInRow =
+                allowInput && contains({layout.canvasLeft, y}, {layout.fullMax.x, rowBottom}, mouse);
+
+            state::editing::model::SpeedTrack const* activeTrack = &speedTrack;
+            state::editing::model::SpeedTrack        dragPreviewTrack;
+            if (mDraggingSpeedKeyframeOriginTick >= 0 && mDraggingSpeedKeyframeTick >= 0
+                && mDraggingSpeedKeyframeTick != mDraggingSpeedKeyframeOriginTick) {
+                if (auto const it = speedTrack.keysByTick.find(mDraggingSpeedKeyframeOriginTick);
+                    it != speedTrack.keysByTick.end()) {
+                    dragPreviewTrack = speedTrack;
+                    auto movedKey    = it->second;
+                    dragPreviewTrack.keysByTick.erase(mDraggingSpeedKeyframeOriginTick);
+                    dragPreviewTrack.keysByTick.emplace(mDraggingSpeedKeyframeTick, std::move(movedKey));
+                    activeTrack = &dragPreviewTrack;
+                }
+            }
+
+            // 1) Horizontal 1.0x dashed baseline and right-hand 1x label.
+            ImU32 const baselineCol = theme::withAlpha(theme::kTextDim, trackEnabled ? 0x60 : 0x38);
+            drawDashedHorizontalLine(
+                drawList,
+                layout.canvasLeft,
+                layout.fullMax.x,
+                centerY,
+                baselineCol,
+                4.0f * uiScale,
+                4.0f * uiScale,
+                1.0f
+            );
+            {
+                float const   labelFontSize = std::max(8.5f, std::round(metrics::font() * 0.58f));
+                ImFont* const labelFont     = ImGui::GetFont();
+                char const*   oneX          = "1x";
+                ImVec2 const  oneXSize      = labelFont->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, oneX);
+                float const   oneXX         = layout.fullMax.x - oneXSize.x - 5.0f * uiScale;
+                float const oneXY = std::clamp(centerY - oneXSize.y - 1.0f * uiScale, plotTop, plotBottom - oneXSize.y);
+                drawList->AddText(
+                    labelFont,
+                    labelFontSize,
+                    {oneXX, oneXY},
+                    theme::withAlpha(theme::kTextDim, trackEnabled ? 0xb0 : 0x60),
+                    oneX
+                );
+            }
+
+            // 2) Continuous speed curve and translucent fast/slow area fill when keyframes exist.
+            if (!activeTrack->keysByTick.empty() && state.totalTicks > 0) {
+                float const visX0 = std::max(layout.canvasLeft, scale.xAt(0.0f));
+                float const visX1 = std::min(layout.fullMax.x, scale.xAt(static_cast<float>(state.totalTicks)));
+                if (visX1 > visX0) {
+                    float const stepPx = std::max(2.0f, 3.0f * uiScale);
+                    struct CurveSample {
+                        float  x;
+                        float  y;
+                        double speed;
+                    };
+                    std::vector<CurveSample> samples;
+                    samples.reserve(static_cast<size_t>((visX1 - visX0) / stepPx) + 2);
+                    auto const appendSample = [&](float sx) {
+                        long double const tick = std::clamp(
+                            static_cast<long double>(scale.tickAtExact(sx)),
+                            0.0L,
+                            static_cast<long double>(state.totalTicks)
+                        );
+                        double const spd = keyframe::sampleSpeedTrackAt(*activeTrack, tick);
+                        samples.push_back({sx, speedToCurveY(spd, plotTop, plotBottom), spd});
+                    };
+                    for (float sx = visX0; sx < visX1; sx += stepPx) {
+                        appendSample(sx);
+                    }
+                    appendSample(visX1);
+
+                    ImU32 const fastBase    = trackEnabled ? theme::kSpeedFast : theme::kTrackDisabled;
+                    ImU32 const slowBase    = trackEnabled ? theme::kSpeedSlow : theme::kTrackDisabled;
+                    ImU32 const neutralBase = trackEnabled ? theme::kAccent : theme::kTrackDisabled;
+                    int const   fillAlpha   = trackEnabled ? 0x36 : 0x18;
+                    ImU32 const fastFill    = theme::withAlpha(fastBase, fillAlpha);
+                    ImU32 const slowFill    = theme::withAlpha(slowBase, fillAlpha);
+                    float const strokeWidth = trackEnabled ? 1.8f : 1.25f;
+
+                    for (size_t i = 1; i < samples.size(); ++i) {
+                        auto const& p0 = samples[i - 1];
+                        auto const& p1 = samples[i];
+
+                        if ((p0.y - centerY) * (p1.y - centerY) < 0.0f) {
+                            float const t  = (centerY - p0.y) / (p1.y - p0.y);
+                            float const xc = p0.x + (p1.x - p0.x) * t;
+                            drawList->AddTriangleFilled(
+                                {p0.x, centerY},
+                                {p0.x, p0.y},
+                                {xc, centerY},
+                                p0.y < centerY ? fastFill : slowFill
+                            );
+                            drawList->AddTriangleFilled(
+                                {xc, centerY},
+                                {p1.x, p1.y},
+                                {p1.x, centerY},
+                                p1.y < centerY ? fastFill : slowFill
+                            );
+                        } else if (p0.y < centerY - 0.5f || p1.y < centerY - 0.5f) {
+                            drawList
+                                ->AddQuadFilled({p0.x, centerY}, {p0.x, p0.y}, {p1.x, p1.y}, {p1.x, centerY}, fastFill);
+                        } else if (p0.y > centerY + 0.5f || p1.y > centerY + 0.5f) {
+                            drawList
+                                ->AddQuadFilled({p0.x, centerY}, {p0.x, p0.y}, {p1.x, p1.y}, {p1.x, centerY}, slowFill);
+                        }
+
+                        double const midSpd = (p0.speed + p1.speed) * 0.5;
+                        ImU32 const  segCol = midSpd > 1.005 ? fastBase : (midSpd < 0.995 ? slowBase : neutralBase);
+                        drawList->AddLine({p0.x, p0.y}, {p1.x, p1.y}, segCol, strokeWidth);
+                    }
+                }
+            }
+
+            // 3) Hit-test speed keyframes on this lane.
+            auto const         selectedSpeedTick = ctx.selection.selectedSpeedKeyframe();
+            std::optional<int> hoveredSpeedKeyTick;
+            float              hoveredSpeedKeyX      = 0.0f;
+            float              hoveredSpeedKeyY      = centerY;
+            float              hoveredSpeedKeyRadius = keyRadius;
+            if (mouseInRow && mTool != TimelineTool::Razor) {
+                float bestDist = std::numeric_limits<float>::max();
+                for (auto const& [keyTick, key] : speedTrack.keysByTick) {
+                    bool const  dragging  = mDraggingSpeedKeyframeOriginTick == keyTick;
+                    int const   drawnTick = dragging ? mDraggingSpeedKeyframeTick : keyTick;
+                    float const kx        = scale.xAt(static_cast<float>(drawnTick));
+                    if (kx < layout.canvasLeft - keyRadius || kx > layout.fullMax.x + keyRadius) continue;
+                    float const ky     = speedToCurveY(key.speed, plotTop, plotBottom);
+                    bool const  sel    = selectedSpeedTick && *selectedSpeedTick == keyTick;
+                    float const radius = sel ? keyRadius + 1.0f : keyRadius;
+                    float const dx     = std::abs(mouse.x - kx);
+                    float const dy     = std::abs(mouse.y - ky);
+                    if (dx <= radius + 4.0f && dy <= radius + 5.0f) {
+                        float const dist = std::hypot(dx, dy);
+                        if (dist < bestDist) {
+                            bestDist              = dist;
+                            hoveredSpeedKeyTick   = keyTick;
+                            hoveredSpeedKeyX      = kx;
+                            hoveredSpeedKeyY      = ky;
+                            hoveredSpeedKeyRadius = radius;
+                        }
+                    }
+                }
+            }
+
+            // 4) Speed keyframe hover tooltip and mouse interaction.
+            bool const overSpeedKey = hoveredSpeedKeyTick.has_value();
+            if (overSpeedKey) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mDraggingSpeedKeyframeOriginTick < 0) {
+                    if (auto const keyIt = speedTrack.keysByTick.find(*hoveredSpeedKeyTick);
+                        keyIt != speedTrack.keysByTick.end()) {
+                        char speedBuf[32]{};
+                        std::snprintf(speedBuf, sizeof(speedBuf), "%.2fx", keyIt->second.speed);
+                        std::string const tip = formatTick(*hoveredSpeedKeyTick) + " ("
+                                              + std::to_string(*hoveredSpeedKeyTick) + "t) · " + speedBuf + " · "
+                                              + interpolationTypeLabel(keyIt->second.interpolationType);
+                        widgets::hoverTooltip(tip.c_str());
+                    }
+                }
+                if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    clickConsumed          = true;
+                    mSpeedKeyframeMenuTick = *hoveredSpeedKeyTick;
+                    ctx.selection.selectSpeedKeyframe(*hoveredSpeedKeyTick);
+                    widgets::openAnchoredPopup(
+                        "##timeline-speed-keyframe-menu",
+                        {hoveredSpeedKeyX - hoveredSpeedKeyRadius, hoveredSpeedKeyY - hoveredSpeedKeyRadius},
+                        {hoveredSpeedKeyX + hoveredSpeedKeyRadius, hoveredSpeedKeyY + hoveredSpeedKeyRadius}
+                    );
+                } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed     = true;
+                    int const keyTick = *hoveredSpeedKeyTick;
+                    ctx.selection.selectSpeedKeyframe(keyTick);
+                    if (trackLocked) {
+                        submitSeek(ctx, keyTick);
+                    } else {
+                        mDraggingSpeedKeyframeOriginTick  = keyTick;
+                        mDraggingSpeedKeyframeStartMouseX = mouse.x;
+                        mDraggingSpeedKeyframeTick        = keyTick;
+                        mDraggingSpeedKeyframeMoved       = false;
+                    }
+                }
+            }
+
+            // 5) Pen preview / Ctrl+Click / double-click / context menu / seek on empty speed lane.
+            bool const penMode = mTool == TimelineTool::Pen;
+            bool const ctrlSelectPen =
+                mTool == TimelineTool::Select && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+            std::optional<int> penPreviewTick;
+            if (mouseInRow && !overSpeedKey && !trackLocked && (penMode || ctrlSelectPen)) {
+                int penTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                if (shiftSnap) {
+                    penTick = snapToEditPoints(ctx, penTick, scale.pixelsPerTick, true, true, {}, {});
+                } else if (mSnapEnabled) {
+                    penTick = snapTick(penTick);
+                }
+                penTick = std::clamp(penTick, 0, state.totalTicks);
+                if (!speedTrack.keysByTick.contains(penTick)) penPreviewTick = penTick;
+            }
+            if (penPreviewTick.has_value()) {
+                double const previewSpeed =
+                    keyframe::sampleSpeedTrackAt(*activeTrack, static_cast<long double>(*penPreviewTick));
+                float const penX = scale.xAt(static_cast<float>(*penPreviewTick));
+                float const penY = speedToCurveY(previewSpeed, plotTop, plotBottom);
+                drawKeyframeDiamond(
+                    drawList,
+                    penX,
+                    penY,
+                    keyRadius,
+                    theme::withAlpha(theme::kSpeedFast, 0x88),
+                    theme::withAlpha(theme::kKeyframeOutline, 0xa0)
+                );
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed = true;
+                    EditorAction action{EditorActionType::AddSpeedKeyframe};
+                    action.tick       = *penPreviewTick;
+                    action.speedValue = static_cast<float>(previewSpeed);
+                    ctx.submitAction(std::move(action));
+                    queueSpeedKeyframeSelection(*penPreviewTick);
+                }
+            } else if (mouseInRow && !overSpeedKey && !clickConsumed) {
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    clickConsumed = true;
+                    int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                    if (mSnapEnabled) tick = snapTick(tick);
+                    mSpeedLaneMenuTick  = tick;
+                    float const anchorX = scale.xAt(static_cast<float>(tick));
+                    ctx.selection.selectSpeedTrack();
+                    widgets::openAnchoredPopup("##timeline-speed-menu", {anchorX, blockTop}, {anchorX, blockBot});
+                } else if (!trackLocked && mTool == TimelineTool::Select
+                           && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    int addTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                    if (shiftSnap) {
+                        addTick = snapToEditPoints(ctx, addTick, scale.pixelsPerTick, true, true, {}, {});
+                    } else if (mSnapEnabled) {
+                        addTick = snapTick(addTick);
+                    }
+                    addTick = std::clamp(addTick, 0, state.totalTicks);
+                    if (!speedTrack.keysByTick.contains(addTick)) {
+                        clickConsumed       = true;
+                        float const sampled = static_cast<float>(
+                            keyframe::sampleSpeedTrackAt(speedTrack, static_cast<long double>(addTick))
+                        );
+                        EditorAction action{EditorActionType::AddSpeedKeyframe};
+                        action.tick       = addTick;
+                        action.speedValue = sampled;
+                        ctx.submitAction(std::move(action));
+                        queueSpeedKeyframeSelection(addTick);
+                    }
+                } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed = true;
+                    ctx.selection.selectSpeedTrack();
+                    submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
+                }
+            }
+
+            // 6) Draw speed keyframe diamond nodes on top of the curve.
+            for (auto const& [keyTick, key] : speedTrack.keysByTick) {
+                bool const  dragging  = mDraggingSpeedKeyframeOriginTick == keyTick;
+                int const   drawnTick = dragging ? mDraggingSpeedKeyframeTick : keyTick;
+                float const kx        = scale.xAt(static_cast<float>(drawnTick));
+                if (kx < layout.canvasLeft - keyRadius || kx > layout.fullMax.x + keyRadius) continue;
+                float const ky       = speedToCurveY(key.speed, plotTop, plotBottom);
+                bool const  selected = selectedSpeedTick && *selectedSpeedTick == keyTick;
+                bool const  hovered  = hoveredSpeedKeyTick && *hoveredSpeedKeyTick == keyTick;
+                bool const  lit      = selected || dragging;
+                float const radius   = lit ? keyRadius + 1.0f : (hovered ? keyRadius + 0.5f : keyRadius);
+                ImU32 const nodeBase =
+                    !trackEnabled ? theme::kKeyframeDisabled
+                                  : (key.speed > 1.005f ? theme::kSpeedFast
+                                                        : (key.speed < 0.995f ? theme::kSpeedSlow : theme::kAccent));
+                ImU32 const fill    = lit ? theme::kKeyframeSelected : nodeBase;
+                ImU32 const outline = lit ? theme::kIconHighlight : theme::kKeyframeOutline;
+                drawKeyframeDiamond(drawList, kx, ky, radius, fill, outline);
+            }
+        } else if (row.kind == TrackRowKind::Camera && row.cameraIndex >= 0
+                   && row.cameraIndex < static_cast<int>(project->cameras.size())) {
             auto const& camera     = project->cameras[row.cameraIndex];
             ImU32 const trackColor = theme::trackColor(row.cameraIndex);
             bool const  mouseInRow =
@@ -3494,11 +4162,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         hoveredClipRightEdge = overRightEdge;
                     }
 
-                    bool const  activeClip     = camera.enabled && clip.exportEnabled && !clip.muted;
-                    bool const  hasCustomSpeed = std::abs(clip.speed - 1.0f) > 0.001f;
-                    bool const  isFast         = clip.speed > 1.0f;
-                    ImU32 const speedCol       = isFast ? theme::kSpeedFast : theme::kSpeedSlow;
-                    ImU32 const swatch         = activeClip ? trackColor : theme::kTrackDisabled;
+                    bool const  activeClip = camera.enabled && clip.exportEnabled && !clip.muted;
+                    ImU32 const swatch     = activeClip ? trackColor : theme::kTrackDisabled;
                     int const   fillAlpha  = activeClip ? (clipSelected ? 0x82 : 0x64) : (clipSelected ? 0x64 : 0x46);
                     drawList
                         ->AddRectFilled({x0, blockTop}, {x1, blockBot}, theme::withAlpha(swatch, fillAlpha), rounding);
@@ -3511,7 +4176,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                             7.0f * uiScale
                         );
                     }
-                    if (activeClip && !(hasCustomSpeed && isFast) && x1 - x0 > rounding + 4.0f) {
+                    if (activeClip && x1 - x0 > rounding + 4.0f) {
                         drawList->AddLine(
                             {x0 + rounding * 0.5f, blockTop + 1.0f},
                             {x1 - rounding * 0.5f, blockTop + 1.0f},
@@ -3602,35 +4267,17 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
 
                     float const borderInset      = clipSelected ? 1.5f : 0.75f;
                     bool const  shiftForLeftGrip = showTrimGrips && rawX0 >= layout.canvasLeft - 1.0f;
-                    float const tabLeft          = shiftForLeftGrip ? (x0 + 6.5f * uiScale) : (x0 + borderInset);
-                    float const tabTop           = blockTop + borderInset;
-                    float const tabBot           = blockTop + speedTabH;
-                    float const chamfer          = std::max(4.5f, std::round((tabBot - tabTop) * 0.50f));
-
-                    char        speedBuf[24]{};
-                    float const speedFontSize = cornerFontSize;
-                    float const chevronW      = 6.8f * uiScale;
-                    float       fullTabW      = 0.0f;
-                    float       compactTabW   = 0.0f;
-                    ImVec2      speedTextSize{};
-                    if (hasCustomSpeed) {
-                        std::snprintf(speedBuf, sizeof(speedBuf), "%.2gx", static_cast<double>(clip.speed));
-                        speedTextSize = font->CalcTextSizeA(speedFontSize, FLT_MAX, 0.0f, speedBuf);
-                        fullTabW =
-                            4.0f * uiScale + chevronW + 2.0f * uiScale + speedTextSize.x + chamfer + 3.0f * uiScale;
-                        compactTabW = 4.0f * uiScale + speedTextSize.x + chamfer + 2.5f * uiScale;
-                    }
+                    float const contentLeft      = shiftForLeftGrip ? (x0 + 6.5f * uiScale) : (x0 + borderInset);
 
                     if (exportOff && (x1 - x0) >= 84.0f * uiScale) {
                         std::string const skippedLabel = "playback.refactorEditor.timeline.clipExportSkipped"_tr();
                         float const       tagFontSize  = std::max(9.5f, std::round(cornerFontSize * 0.90f));
                         ImVec2 const      tagTextSize =
                             font->CalcTextSizeA(tagFontSize, FLT_MAX, 0.0f, skippedLabel.c_str());
-                        float const tagPadX        = 4.0f * uiScale;
-                        float const tagW           = tagTextSize.x + tagPadX * 2.0f;
-                        float const tagH           = cornerFontSize + 1.0f * uiScale;
-                        float const minSpeedMargin = hasCustomSpeed ? (compactTabW + 7.0f * uiScale) : 6.0f * uiScale;
-                        if (rightEdge - tabLeft >= tagW + minSpeedMargin) {
+                        float const tagPadX = 4.0f * uiScale;
+                        float const tagW    = tagTextSize.x + tagPadX * 2.0f;
+                        float const tagH    = cornerFontSize + 1.0f * uiScale;
+                        if (rightEdge - contentLeft >= tagW + 6.0f * uiScale) {
                             float const tagX0  = rightEdge - tagW;
                             float const tagTop = cornerCenterY - tagH * 0.5f;
                             drawList->AddRectFilled(
@@ -3654,144 +4301,6 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                                 theme::kTextDim,
                                 skippedLabel.c_str()
                             );
-                            rightEdge = tagX0 - 4.0f * uiScale;
-                        }
-                    }
-
-                    if (hasCustomSpeed) {
-                        float const availTabW    = rightEdge - tabLeft - 3.0f * uiScale;
-                        bool const  showChevrons = fullTabW <= availTabW;
-                        float const tabW         = showChevrons ? fullTabW : compactTabW;
-                        bool const  drewTab      = tabW <= availTabW && (x1 - x0) >= 24.0f * uiScale;
-                        if (drewTab) {
-                            float const rTL = std::min(rounding - borderInset, 3.5f * uiScale);
-                            ImVec2      poly[5]{};
-                            int         polyCount = 0;
-                            if (!shiftForLeftGrip && rTL > 0.5f) {
-                                poly[0]   = {tabLeft + rTL, tabTop};
-                                poly[1]   = {tabLeft + tabW, tabTop};
-                                poly[2]   = {tabLeft + tabW - chamfer, tabBot};
-                                poly[3]   = {tabLeft, tabBot};
-                                poly[4]   = {tabLeft, tabTop + rTL};
-                                polyCount = 5;
-                            } else {
-                                poly[0]   = {tabLeft, tabTop};
-                                poly[1]   = {tabLeft + tabW, tabTop};
-                                poly[2]   = {tabLeft + tabW - chamfer, tabBot};
-                                poly[3]   = {tabLeft, tabBot};
-                                polyCount = 4;
-                            }
-                            drawList->AddConvexPolyFilled(poly, polyCount, IM_COL32(0x14, 0x16, 0x1c, 0xd8));
-                            drawList->AddConvexPolyFilled(
-                                poly,
-                                polyCount,
-                                theme::withAlpha(speedCol, exportOff ? 0x16 : 0x36)
-                            );
-                            ImVec2 const edgePts[3] = {
-                                {tabLeft,                  tabBot},
-                                {tabLeft + tabW - chamfer, tabBot},
-                                {tabLeft + tabW,           tabTop},
-                            };
-                            drawList->AddPolyline(
-                                edgePts,
-                                3,
-                                theme::withAlpha(speedCol, exportOff ? 0x55 : 0xc6),
-                                ImDrawFlags_None,
-                                1.0f
-                            );
-                            if (shiftForLeftGrip) {
-                                drawList->AddLine(
-                                    {tabLeft, tabTop},
-                                    {tabLeft, tabBot},
-                                    theme::withAlpha(speedCol, exportOff ? 0x55 : 0x90),
-                                    1.0f
-                                );
-                            }
-
-                            float const tabCenterY = (tabTop + tabBot) * 0.5f;
-                            ImU32 const fgCol      = exportOff ? theme::kTextDim : speedCol;
-                            float       textX      = tabLeft + 4.0f * uiScale;
-                            if (showChevrons) {
-                                float const chevX0   = tabLeft + 4.0f * uiScale;
-                                float const armW     = 2.3f * uiScale;
-                                float const armH     = std::max(2.0f, speedFontSize * 0.23f);
-                                float const stroke   = std::max(1.05f, 1.15f * uiScale);
-                                float const chevStep = 2.9f * uiScale;
-                                for (int i = 0; i < 2; ++i) {
-                                    if (isFast) {
-                                        float const tipX = chevX0 + 3.0f * uiScale + static_cast<float>(i) * chevStep;
-                                        drawList->AddLine(
-                                            {tipX - armW, tabCenterY - armH},
-                                            {tipX, tabCenterY},
-                                            fgCol,
-                                            stroke
-                                        );
-                                        drawList->AddLine(
-                                            {tipX - armW, tabCenterY + armH},
-                                            {tipX, tabCenterY},
-                                            fgCol,
-                                            stroke
-                                        );
-                                    } else {
-                                        float const tipX = chevX0 + 0.7f * uiScale + static_cast<float>(i) * chevStep;
-                                        drawList->AddLine(
-                                            {tipX + armW, tabCenterY - armH},
-                                            {tipX, tabCenterY},
-                                            fgCol,
-                                            stroke
-                                        );
-                                        drawList->AddLine(
-                                            {tipX + armW, tabCenterY + armH},
-                                            {tipX, tabCenterY},
-                                            fgCol,
-                                            stroke
-                                        );
-                                    }
-                                }
-                                textX = chevX0 + chevronW + 2.0f * uiScale;
-                            }
-
-                            drawList->AddText(
-                                font,
-                                speedFontSize,
-                                {textX, std::floor(tabCenterY - speedTextSize.y * 0.5f + 0.5f)},
-                                fgCol,
-                                speedBuf
-                            );
-                        }
-
-                        if (isFast) {
-                            float const glowX0 = drewTab ? (tabLeft + tabW) : (x0 + rounding * 0.6f);
-                            float const glowX1 = std::min(x1 - rounding, glowX0 + (x1 - x0) * 0.45f);
-                            if (glowX1 > glowX0 + 2.0f) {
-                                ImU32 const glowStart = theme::withAlpha(speedCol, exportOff ? 0x38 : 0xb8);
-                                ImU32 const glowEnd   = theme::withAlpha(speedCol, 0x00);
-                                drawList->AddRectFilledMultiColor(
-                                    {glowX0, tabTop},
-                                    {glowX1, tabTop + 1.5f * uiScale},
-                                    glowStart,
-                                    glowEnd,
-                                    glowEnd,
-                                    glowStart
-                                );
-                            }
-                        } else {
-                            float const glowX0 = x0 + rounding * 0.6f;
-                            float const glowX1 = std::min(x1 - rounding, glowX0 + (x1 - x0) * 0.55f);
-                            if (glowX1 > glowX0 + 2.0f) {
-                                float const glowBot   = blockBot - borderInset;
-                                float const glowTop   = glowBot - 1.5f * uiScale;
-                                ImU32 const glowStart = theme::withAlpha(speedCol, exportOff ? 0x38 : 0xb0);
-                                ImU32 const glowEnd   = theme::withAlpha(speedCol, 0x00);
-                                drawList->AddRectFilledMultiColor(
-                                    {glowX0, glowTop},
-                                    {glowX1, glowBot},
-                                    glowStart,
-                                    glowEnd,
-                                    glowEnd,
-                                    glowStart
-                                );
-                            }
                         }
                     }
                 }
@@ -4326,6 +4835,68 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             mDraggingKeyframeCameraId.clear();
             mDraggingKeyframeStartTick = -1;
             mDraggingKeyframeMoved     = false;
+        }
+    } else if (allowInput && mDraggingSpeedKeyframeOriginTick >= 0) {
+        auto const& keys  = project->speedTrack.keysByTick;
+        auto const  keyIt = keys.find(mDraggingSpeedKeyframeOriginTick);
+        if (keyIt == keys.end() || project->speedTrack.locked || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            mDraggingSpeedKeyframeOriginTick = -1;
+            mDraggingSpeedKeyframeTick       = -1;
+            mDraggingSpeedKeyframeMoved      = false;
+        } else {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (std::abs(ImGui::GetMousePos().x - mDraggingSpeedKeyframeStartMouseX) >= 2.0f * metrics::scale()) {
+                mDraggingSpeedKeyframeMoved = true;
+            }
+            int minimum = 0;
+            int maximum = state.totalTicks;
+            if (keyIt != keys.begin()) minimum = std::min(state.totalTicks, std::prev(keyIt)->first + 1);
+            auto const next = std::next(keyIt);
+            if (next != keys.end()) maximum = std::max(0, next->first - 1);
+
+            int candidateTick = mDraggingSpeedKeyframeOriginTick;
+            if (mDraggingSpeedKeyframeMoved) {
+                int const raw    = tickFromMouse();
+                int const target = shiftSnap ? snapToEditPoints(
+                                                   ctx,
+                                                   raw,
+                                                   scale.pixelsPerTick,
+                                                   true,
+                                                   true,
+                                                   {},
+                                                   {},
+                                                   {},
+                                                   mDraggingSpeedKeyframeOriginTick
+                                               )
+                                             : snapTick(raw);
+                if (minimum <= maximum) {
+                    candidateTick = std::clamp(target, minimum, maximum);
+                }
+            }
+            mDraggingSpeedKeyframeTick = candidateTick;
+            float const markerX        = scale.xAt(static_cast<float>(candidateTick));
+            drawList->AddLine(
+                {markerX, layout.bodyTop},
+                {markerX, layout.bodyBottom},
+                theme::withAlpha(theme::kKeyframeSelected, 180),
+                1.0f
+            );
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (mDraggingSpeedKeyframeMoved) {
+                    if (candidateTick != mDraggingSpeedKeyframeOriginTick) {
+                        EditorAction action{EditorActionType::MoveSpeedKeyframe};
+                        action.tick          = mDraggingSpeedKeyframeOriginTick;
+                        action.secondaryTick = candidateTick;
+                        ctx.submitAction(std::move(action));
+                        queueSpeedKeyframeSelection(candidateTick);
+                    }
+                } else {
+                    submitSeek(ctx, mDraggingSpeedKeyframeOriginTick);
+                }
+                mDraggingSpeedKeyframeOriginTick = -1;
+                mDraggingSpeedKeyframeTick       = -1;
+                mDraggingSpeedKeyframeMoved      = false;
+            }
         }
     } else if (allowInput && mClipDragMode != 0) {
         auto const hit = state::editing::ClipOps::findClipWithCamera(*project, mClipDragId);

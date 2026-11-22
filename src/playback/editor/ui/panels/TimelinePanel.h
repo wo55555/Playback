@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace playback::editor::ui {
@@ -90,12 +91,15 @@ private:
         bool                                                includeExportRange,
         std::function<bool(std::string const&, int)> const& skipKey,
         std::string_view                                    skipMarkerId,
-        std::string_view                                    skipClipId = {}
+        std::string_view                                    skipClipId       = {},
+        std::optional<int>                                  skipSpeedKeyTick = std::nullopt
     );
     bool addMarkerAt(PanelContext const& ctx, int tick);
     // Selections that point at objects an queued action has not created yet; applied once they exist.
     void queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys);
     void queueMarkerSelection(std::string markerId);
+    void                      queueSpeedTrackSelection();
+    void                      queueSpeedKeyframeSelection(int tick);
     void applyPendingSelection(PanelContext const& ctx);
     [[nodiscard]] std::string markerAt(
         PanelContext const&  ctx,
@@ -209,7 +213,25 @@ private:
 
     std::vector<state::editing::model::SelectedKeyframe> mPendingKeySelection;
     std::string                                          mPendingMarkerSelection;
+    bool                                                 mPendingSpeedTrackSelection{false};
+    std::optional<int>                                   mPendingSpeedKeyframeSelection;
     int                                                  mPendingSelectionFrames{};
+
+    int   mDraggingSpeedKeyframeOriginTick{-1};
+    float mDraggingSpeedKeyframeStartMouseX{};
+    int   mDraggingSpeedKeyframeTick{-1};
+    bool  mDraggingSpeedKeyframeMoved{};
+    int   mSpeedKeyframeMenuTick{-1};
+    int   mSpeedLaneMenuTick{-1};
+
+    struct OutputDurationCache {
+        bool                              valid{};
+        int                               totalTicks{};
+        bool                              camerasEmpty{};
+        state::editing::model::SpeedTrack speedTrack;
+        std::vector<std::pair<int, int>>  slices;
+        double                            outputSeconds{};
+    } mOutputDurationCache;
 };
 
 } // namespace playback::editor::ui

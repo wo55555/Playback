@@ -60,7 +60,7 @@ void sortClips(std::vector<model::Clip>& clips) { std::ranges::stable_sort(clips
 
 bool isFullRangeDefault(model::CameraEntity const& camera, int totalTicks) noexcept {
     return camera.clips.size() == 1 && camera.clips[0].inTick == 0 && camera.clips[0].outTick == totalTicks
-        && std::abs(camera.clips[0].speed - 1.0f) < 1e-6f && !camera.clips[0].muted && camera.clips[0].exportEnabled;
+        && !camera.clips[0].muted && camera.clips[0].exportEnabled;
 }
 
 std::string defaultSceneName(model::EditorStateExt const& state) {
@@ -92,12 +92,11 @@ std::vector<TickGap> collectFreeGaps(std::vector<model::Clip> const& clips, int 
 
 } // namespace
 
-AddClip::AddClip(std::string cameraId, int inTick, int outTick, std::string name, float speed)
+AddClip::AddClip(std::string cameraId, int inTick, int outTick, std::string name)
 : mCameraId(std::move(cameraId)),
   mInTick(inTick),
   mOutTick(outTick),
-  mName(std::move(name)),
-  mSpeed(speed) {}
+  mName(std::move(name)) {}
 
 void AddClip::execute(model::EditorStateExt& state) {
     mBefore.reset();
@@ -142,7 +141,6 @@ void AddClip::execute(model::EditorStateExt& state) {
     clip.id            = newId;
     clip.inTick        = finalIn;
     clip.outTick       = finalOut;
-    clip.speed         = model::clampClipSpeed(mSpeed);
     clip.name          = newName;
     clip.exportEnabled = true;
 
@@ -198,7 +196,6 @@ void SplitClip::execute(model::EditorStateExt& state) {
     right.inTick        = mSplitTick;
     right.outTick       = leftRef.outTick;
     right.trackTick     = mSplitTick;
-    right.speed         = leftRef.speed;
     right.name          = newName;
     right.color         = leftRef.color;
     right.muted         = leftRef.muted;
@@ -274,28 +271,6 @@ void MoveAndTrimClip::execute(model::EditorStateExt& state) {
 
 void        MoveAndTrimClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string MoveAndTrimClip::label() const { return "playback.refactorEditor.history.moveOrTrimClip"; }
-
-SetClipSpeed::SetClipSpeed(std::string clipId, float speed) : mClipId(std::move(clipId)), mSpeed(speed) {}
-
-void SetClipSpeed::execute(model::EditorStateExt& state) {
-    mBefore.reset();
-    auto const loc = findClipLocation(state, mClipId);
-    if (!loc) return;
-    auto const& cam  = state.cameras[loc->cameraIdx];
-    auto const& clip = cam.clips[loc->clipIdx];
-    if (cam.locked || clip.locked) return;
-
-    float const clamped = model::clampClipSpeed(mSpeed);
-    if (std::abs(clip.speed - clamped) < 1e-6f) return;
-
-    ClipOps::syncActiveSceneFromWorking(state);
-    mBefore                                                 = state;
-    state.cameras[loc->cameraIdx].clips[loc->clipIdx].speed = clamped;
-    ClipOps::syncActiveSceneFromWorking(state);
-}
-
-void        SetClipSpeed::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipSpeed::label() const { return "playback.refactorEditor.history.setClipSpeed"; }
 
 RenameClip::RenameClip(std::string clipId, std::string name) : mClipId(std::move(clipId)), mName(std::move(name)) {}
 
@@ -446,7 +421,6 @@ void ResetClipsToFullRange::execute(model::EditorStateExt& state) {
         clip.name          = mDefaultClipName.empty() ? ClipOps::defaultClipName(state) : mDefaultClipName;
         clip.inTick        = 0;
         clip.outTick       = state.totalTicks;
-        clip.speed         = 1.0f;
         clip.exportEnabled = true;
         state.cameras[*camIdx].clips.push_back(std::move(clip));
         ClipOps::syncActiveSceneFromWorking(state);
@@ -476,7 +450,6 @@ void ResetClipsToFullRange::execute(model::EditorStateExt& state) {
         clip.name          = (i == 0 && !mDefaultClipName.empty()) ? mDefaultClipName : ClipOps::defaultClipName(state);
         clip.inTick        = 0;
         clip.outTick       = state.totalTicks;
-        clip.speed         = 1.0f;
         clip.exportEnabled = true;
         state.cameras[i].clips.push_back(std::move(clip));
         ClipOps::syncActiveSceneFromWorking(state);
@@ -528,7 +501,6 @@ void AddScene::execute(model::EditorStateExt& state) {
         clip.name          = ClipOps::defaultClipName(state);
         clip.inTick        = 0;
         clip.outTick       = state.totalTicks;
-        clip.speed         = 1.0f;
         clip.exportEnabled = true;
         state.scenes.back().cameras.front().clips.push_back(std::move(clip));
     }
