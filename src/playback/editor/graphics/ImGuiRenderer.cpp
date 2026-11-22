@@ -120,11 +120,37 @@ HWND getSwapChainWindow(IDXGISwapChain* swapChain) {
     return swapChain && SUCCEEDED(swapChain->GetDesc(&desc)) ? desc.OutputWindow : nullptr;
 }
 
-uint64_t getSwapChainArea(IDXGISwapChain* swapChain) {
-    ComPtr<ID3D12Resource> backBuffer;
-    if (!swapChain || FAILED(swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer)))) return 0;
-    auto desc = backBuffer->GetDesc();
-    return desc.Width * static_cast<uint64_t>(desc.Height);
+struct SwapChainGeometry {
+    UINT        width{};
+    UINT        height{};
+    UINT        bufferCount{};
+    DXGI_FORMAT format{};
+
+    [[nodiscard]] uint64_t area() const noexcept { return static_cast<uint64_t>(width) * height; }
+
+    bool operator==(SwapChainGeometry const&) const = default;
+};
+
+// Query the swap-chain descriptor directly so checking for resizes never holds an extra back-buffer reference.
+std::optional<SwapChainGeometry> querySwapChainGeometry(IDXGISwapChain* swapChain) {
+    if (!swapChain) return std::nullopt;
+    ComPtr<IDXGISwapChain1> swapChain1;
+    if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&swapChain1)))) {
+        DXGI_SWAP_CHAIN_DESC1 desc1{};
+        if (SUCCEEDED(swapChain1->GetDesc1(&desc1))) {
+            return SwapChainGeometry{desc1.Width, desc1.Height, desc1.BufferCount, desc1.Format};
+        }
+    }
+    DXGI_SWAP_CHAIN_DESC desc{};
+    if (SUCCEEDED(swapChain->GetDesc(&desc))) {
+        return SwapChainGeometry{
+            desc.BufferDesc.Width,
+            desc.BufferDesc.Height,
+            desc.BufferCount,
+            desc.BufferDesc.Format,
+        };
+    }
+    return std::nullopt;
 }
 
 auto& getLogger() { return Playback::getInstance().getSelf().getLogger(); }
@@ -265,7 +291,7 @@ struct ImGuiRenderer::Impl {
     UINT                                    srvDescSize{};
     UINT64                                  lastFenceValue{};
     size_t                                  frameCursor{};
-    uint64_t                                surfaceArea{};
+    SwapChainGeometry                       d3d12Geometry{};
     std::optional<UINT>                     lastGameTextureIndex;
     // Export resizes the game swap chain, so its UI goes to a window-sized composition layer above it.
     struct ExportSurface {
@@ -292,8 +318,8 @@ struct ImGuiRenderer::Impl {
     bool                                  renderingDisabled{};
     bool                                  initFailed{};
     bool                                  missingQueue{};
-    bool                                  nativeD3D12Resetting{};
-    bool                                  nativeD3D12ResetReady{true};
+    bool                                  nativeRendererResetting{};
+    bool                                  nativeRendererResetReady{true};
     std::chrono::steady_clock::time_point lastInitAttempt{};
     std::chrono::steady_clock::time_point lastFrameTime{};
     std::chrono::steady_clock::time_point lastPresent{};
@@ -305,6 +331,7 @@ struct ImGuiRenderer::Impl {
     ComPtr<ID3D11Texture2D>          d3d11GameTexture;
     ComPtr<ID3D11ShaderResourceView> d3d11GameSrv;
     IDXGISwapChain*                  d3d11SwapChain{};
+    SwapChainGeometry                d3d11Geometry{};
     ImGuiContext*                    d3d11ImguiCtx{};
     bool                             d3d11BackendInit{};
     bool                             d3d11Initialized{};
@@ -471,6 +498,8 @@ struct ImGuiRenderer::Impl {
     }
 
     bool initD3D11(IDXGISwapChain* sc) {
+        auto const geometry = querySwapChainGeometry(sc);
+        if (!geometry || geometry->width == 0 || geometry->height == 0) return false;
         ComPtr<ID3D11Device> dev;
         if (FAILED(sc->GetDevice(IID_PPV_ARGS(&dev)))) return false;
         ComPtr<ID3D11Texture2D> backBuffer;
@@ -518,12 +547,14 @@ struct ImGuiRenderer::Impl {
         d3d11Context          = std::move(context);
         d3d11BackBuffer       = std::move(backBuffer);
         d3d11SwapChain        = sc;
+        d3d11Geometry         = *geometry;
         d3d11BackendInit      = true;
         d3d11Initialized      = true;
         d3d11FirstFrameLogged = false;
         lastFrameTime         = std::chrono::steady_clock::now();
         lastPresent           = lastFrameTime;
         initFailed            = false;
+        reopenExportCaptureAfterRebuild();
         return true;
     }
 
@@ -551,6 +582,7 @@ struct ImGuiRenderer::Impl {
         d3d11Context.Reset();
         d3d11Device.Reset();
         d3d11SwapChain        = nullptr;
+        d3d11Geometry         = {};
         d3d11Initialized      = false;
         d3d11FirstFrameLogged = false;
     }
@@ -730,7 +762,19 @@ struct ImGuiRenderer::Impl {
         bool                         exportFrame     = false,
         std::optional<std::uint32_t> backBufferIndex = std::nullopt
     ) {
-        if (d3d11Initialized && sc != d3d11SwapChain) shutdownD3D11();
+        auto const geometry = querySwapChainGeometry(sc);
+        if (!geometry || geometry->width == 0 || geometry->height == 0) return false;
+        if (d3d11Initialized && (sc != d3d11SwapChain || *geometry != d3d11Geometry)) {
+            bool const preserveIdentity =
+                exporting::isOfflineRenderActivityActive() || exporting::isExportActivityActive();
+            shutdownD3D11(visuals::FrameTapError::Resize, "Swap chain resized during frame capture");
+            initFailed      = false;
+            lastInitAttempt = {};
+            if (!initD3D11(sc)) {
+                if (preserveIdentity) d3d11SwapChain = sc;
+                return false;
+            }
+        }
         if (!d3d11Initialized && !initD3D11(sc)) return false;
 
         D3D11_TEXTURE2D_DESC desc{};
@@ -858,6 +902,8 @@ struct ImGuiRenderer::Impl {
 
         DXGI_SWAP_CHAIN_DESC1 scDesc{};
         if (FAILED(sc3->GetDesc1(&scDesc)) || scDesc.BufferCount == 0) return false;
+        auto const geometry = querySwapChainGeometry(sc);
+        if (!geometry || geometry->width == 0 || geometry->height == 0) return false;
         ComPtr<ID3D12Resource> firstBuf;
         if (FAILED(sc3->GetBuffer(0, IID_PPV_ARGS(&firstBuf)))) return false;
         auto bufDesc = firstBuf->GetDesc();
@@ -868,12 +914,12 @@ struct ImGuiRenderer::Impl {
             || (fs.Support1 & D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE) == 0)
             return false;
 
-        device       = std::move(dev);
-        commandQueue = cq;
-        swapChain3   = std::move(sc3);
-        swapChain    = sc;
-        rtvFormat    = bufDesc.Format;
-        surfaceArea  = bufDesc.Width * static_cast<uint64_t>(bufDesc.Height);
+        device        = std::move(dev);
+        commandQueue  = cq;
+        swapChain3    = std::move(sc3);
+        swapChain     = sc;
+        rtvFormat     = bufDesc.Format;
+        d3d12Geometry = *geometry;
 
         D3D12_DESCRIPTOR_HEAP_DESC rh{};
         rh.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -1121,7 +1167,7 @@ struct ImGuiRenderer::Impl {
         srvDescSize    = 0;
         lastFenceValue = 0;
         frameCursor    = 0;
-        surfaceArea    = 0;
+        d3d12Geometry  = {};
         lastGameTextureIndex.reset();
         unfenced          = false;
         initialized       = false;
@@ -1523,6 +1569,8 @@ bool ImGuiRenderer::renderInternal(
         if (!captureActive && !forceExportOverlay) return false;
     }
 
+    if (p.nativeRendererResetting) return false;
+
     ComPtr<ID3D11Device> d3d11Device;
     if (SUCCEEDED(swapChain->GetDevice(IID_PPV_ARGS(&d3d11Device)))) {
         if (p.initialized && !p.shutdown()) return false;
@@ -1540,17 +1588,28 @@ bool ImGuiRenderer::renderInternal(
 
     ComPtr<ID3D12Device> d3d12Device;
     if (FAILED(swapChain->GetDevice(IID_PPV_ARGS(&d3d12Device)))) return false;
-    if (p.nativeD3D12Resetting) return false;
     if (p.d3d11Initialized) p.shutdownD3D11();
 
     ComPtr<ID3D12CommandQueue> q;
+    auto const                 geometry = querySwapChainGeometry(swapChain);
+    if (!geometry || geometry->width == 0 || geometry->height == 0) return false;
+    if (p.initialized && swapChain == p.swapChain && *geometry != p.d3d12Geometry) {
+        bool const preserveIdentity = exporting::isOfflineRenderActivityActive() || exporting::isExportActivityActive();
+        if (!p.shutdown(visuals::FrameTapError::Resize, "Swap chain resized during frame capture")) return false;
+        if (preserveIdentity) p.swapChain = swapChain;
+        p.initFailed      = false;
+        p.lastInitAttempt = {};
+        if (!allowUi) return false;
+    }
     if (p.initialized && swapChain != p.swapChain) {
         q                                  = getSwapChainQueue(swapChain);
-        auto       area                    = getSwapChainArea(swapChain);
+        auto const area                    = geometry->area();
         bool const replacementDelayElapsed = now - p.lastPresent >= SwapChainReplacementDelay;
         if (!q || area == 0
-            || (!exporting::isOfflineRenderActivityActive() && !replacementDelayElapsed && area <= p.surfaceArea))
+            || (!exporting::isOfflineRenderActivityActive() && !exporting::isExportActivityActive()
+                && !replacementDelayElapsed && area <= p.d3d12Geometry.area())) {
             return false;
+        }
         if (!p.shutdown()) return false;
     }
 
@@ -1799,45 +1858,16 @@ bool ImGuiRenderer::renderInternal(
     return true;
 }
 
-bool ImGuiRenderer::ownsSwapChain(IDXGISwapChain* swapChain) const {
-    if (isExportSurfaceSwapChain(swapChain)) return false;
-    std::scoped_lock lock(mImpl->mutex);
-    return swapChain && (swapChain == mImpl->swapChain || swapChain == mImpl->d3d11SwapChain);
-}
-
 bool ImGuiRenderer::beforeRendererReset(bool shuttingDown) {
     std::scoped_lock lock(mImpl->mutex);
-    auto* const      swapChain  = mImpl->swapChain;
-    mImpl->nativeD3D12Resetting = true;
-    // Release our back-buffer references before BGFX tears down its render targets, not just at ResizeBuffers.
-    mImpl->nativeD3D12ResetReady =
-        mImpl->shutdown(visuals::FrameTapError::Resize, "Native D3D12 renderer reset during frame capture");
-    if (mImpl->nativeD3D12ResetReady) {
-        // Offline export uses this identity to admit the first Present that rebuilds its capture backend.
-        if (!shuttingDown) mImpl->swapChain = swapChain;
-        mImpl->initFailed      = false;
-        mImpl->lastInitAttempt = {};
-    }
-    return mImpl->nativeD3D12ResetReady;
-}
-
-void ImGuiRenderer::afterRendererReset() {
-    std::scoped_lock lock(mImpl->mutex);
-    // A failed fence wait must not revive resources from the previous renderer generation.
-    mImpl->nativeD3D12Resetting = !mImpl->nativeD3D12ResetReady;
-}
-
-bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
-    if (isExportSurfaceSwapChain(sc)) return true;
-    std::scoped_lock lk(mImpl->mutex);
-    if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
-        bool const wasD3D12SwapChain = sc == mImpl->swapChain;
-        bool const wasD3D11SwapChain = sc == mImpl->d3d11SwapChain;
-        if (exporting::isOfflineRenderActivityActive()) {
+    auto* const      swapChain      = mImpl->swapChain;
+    auto* const      d3d11SwapChain = mImpl->d3d11SwapChain;
+    if (!shuttingDown && exporting::isOfflineRenderActivityActive()) {
+        if (auto* const trackedSwapChain = swapChain ? swapChain : d3d11SwapChain) {
             DXGI_SWAP_CHAIN_DESC description{};
-            if (SUCCEEDED(sc->GetDesc(&description))) {
+            if (SUCCEEDED(trackedSwapChain->GetDesc(&description))) {
                 getLogger().warn(
-                    "Swap-chain resize during offline export (bufferCount={}, size={}x{}, format={}, flags=0x{:X}, "
+                    "Swap-chain reset during offline export (bufferCount={}, size={}x{}, format={}, flags=0x{:X}, "
                     "captureArmed={})",
                     description.BufferCount,
                     description.BufferDesc.Width,
@@ -1848,31 +1878,49 @@ bool ImGuiRenderer::beforeResize(IDXGISwapChain* sc) {
                 );
             } else {
                 getLogger().warn(
-                    "Swap-chain resize during offline export (descriptor unavailable, captureArmed={})",
+                    "Swap-chain reset during offline export (descriptor unavailable, captureArmed={})",
                     mImpl->frameTap.hasArmedCapture()
                 );
             }
         }
-        if (!mImpl->shutdown(visuals::FrameTapError::Resize, "Swap chain resized during frame capture")) return false;
-        if (wasD3D12SwapChain) mImpl->swapChain = sc;
-        if (wasD3D11SwapChain) mImpl->d3d11SwapChain = sc;
+    }
+    mImpl->nativeRendererResetting = true;
+    // Release our back-buffer references before BGFX tears down its render targets, not just at ResizeBuffers.
+    mImpl->nativeRendererResetReady =
+        mImpl->shutdown(visuals::FrameTapError::Resize, "Native renderer reset during frame capture");
+    if (mImpl->nativeRendererResetReady) {
+        // Offline export uses this identity to admit the first Present that rebuilds its capture backend.
+        if (!shuttingDown) {
+            mImpl->swapChain      = swapChain;
+            mImpl->d3d11SwapChain = d3d11SwapChain;
+        }
         mImpl->initFailed      = false;
         mImpl->lastInitAttempt = {};
     }
-    return true;
+    return mImpl->nativeRendererResetReady;
 }
 
-void ImGuiRenderer::afterPresent(IDXGISwapChain* sc, long result) {
-    if (result != DXGI_ERROR_DEVICE_REMOVED && result != DXGI_ERROR_DEVICE_RESET) return;
-    if (isExportSurfaceSwapChain(sc)) return;
+void ImGuiRenderer::afterRendererReset() {
+    std::scoped_lock lock(mImpl->mutex);
+    // A failed fence wait must not revive resources from the previous renderer generation.
+    mImpl->nativeRendererResetting = !mImpl->nativeRendererResetReady;
+}
+
+void ImGuiRenderer::onDeviceLost(IDXGISwapChain* sc, long result) {
+    if (!sc || isExportSurfaceSwapChain(sc)) return;
     std::scoped_lock lk(mImpl->mutex);
     if (sc == mImpl->swapChain || sc == mImpl->d3d11SwapChain) {
-        ComPtr<ID3D12Device> device;
-        auto const           deviceResult = sc->GetDevice(IID_PPV_ARGS(&device));
+        HRESULT deviceReason = E_POINTER;
+        HRESULT deviceResult = E_FAIL;
+        if (ComPtr<ID3D12Device> device12; SUCCEEDED(deviceResult = sc->GetDevice(IID_PPV_ARGS(&device12)))) {
+            deviceReason = device12->GetDeviceRemovedReason();
+        } else if (ComPtr<ID3D11Device> device11; SUCCEEDED(deviceResult = sc->GetDevice(IID_PPV_ARGS(&device11)))) {
+            deviceReason = device11->GetDeviceRemovedReason();
+        }
         getLogger().error(
-            "Graphics device lost during frame capture (present=0x{:08X}, device=0x{:08X}, query=0x{:08X})",
+            "Graphics device lost during frame capture (flip=0x{:08X}, device=0x{:08X}, query=0x{:08X})",
             static_cast<uint32_t>(result),
-            static_cast<uint32_t>(device ? device->GetDeviceRemovedReason() : E_POINTER),
+            static_cast<uint32_t>(deviceReason),
             static_cast<uint32_t>(deviceResult)
         );
         mImpl->shutdown(visuals::FrameTapError::DeviceLost, "Graphics device was lost during frame capture");
