@@ -49,11 +49,9 @@ public:
     [[nodiscard]] bool canCaptureSubmittedScene() const;
     void               pollFrameCapture();
     [[nodiscard]] bool isD3D12RendererActive() const;
-    [[nodiscard]] bool ownsSwapChain(IDXGISwapChain* swapChain) const;
     [[nodiscard]] bool beforeRendererReset(bool shuttingDown = false);
     void               afterRendererReset();
-    bool               beforeResize(IDXGISwapChain* swapChain);
-    void               afterPresent(IDXGISwapChain* swapChain, long result);
+    void               onDeviceLost(IDXGISwapChain* swapChain, long result);
     bool               shutdown();
 
 private:
