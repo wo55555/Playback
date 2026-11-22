@@ -17,6 +17,17 @@ void SelectionModel::clear() {
     mKeyframes.clear();
 }
 
+void SelectionModel::selectSpeedTrack() { select(SelectedSpeedTrack{}); }
+
+void SelectionModel::selectSpeedKeyframe(int tick) { select(SelectedSpeedKeyframe{tick}); }
+
+bool SelectionModel::isSpeedTrackSelected() const { return getAs<SelectedSpeedTrack>() != nullptr; }
+
+std::optional<int> SelectionModel::selectedSpeedKeyframe() const {
+    if (auto const* key = getAs<SelectedSpeedKeyframe>()) return key->tick;
+    return std::nullopt;
+}
+
 void SelectionModel::setKeyframes(std::vector<SelectedKeyframe> keys) {
     if (keys.empty()) {
         clear();
@@ -72,6 +83,10 @@ std::vector<std::string> SelectionModel::selectedIds() const {
                 return {sel.transitionId};
             } else if constexpr (std::is_same_v<T, SelectedCamera>) {
                 return {sel.cameraId};
+            } else if constexpr (std::is_same_v<T, SelectedSpeedTrack>) {
+                return {"speed_track"};
+            } else if constexpr (std::is_same_v<T, SelectedSpeedKeyframe>) {
+                return {"speed_track", std::to_string(sel.tick)};
             }
             return {};
         },
@@ -130,6 +145,10 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
                 return std::ranges::any_of(state.transitions, [&](auto const& transition) {
                     return transition.id == sel.transitionId;
                 });
+            } else if constexpr (std::is_same_v<T, SelectedSpeedTrack>) {
+                return state.speedTrack.isVisible();
+            } else if constexpr (std::is_same_v<T, SelectedSpeedKeyframe>) {
+                return state.speedTrack.keysByTick.contains(sel.tick);
             }
             return true;
         },

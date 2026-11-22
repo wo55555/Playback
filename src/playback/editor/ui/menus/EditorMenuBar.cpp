@@ -1189,14 +1189,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 }
 
                 auto const formatClipOption = [](state::editing::model::Clip const& clip) {
-                    std::string text = clip.name + " (" + widgets::formatTick(clip.inTick) + " - "
-                                     + widgets::formatTick(clip.outTick) + ")";
-                    if (std::abs(clip.speed - 1.0f) > 0.001f) {
-                        char buf[16]{};
-                        std::snprintf(buf, sizeof(buf), " %.2gx", static_cast<double>(clip.speed));
-                        text += buf;
-                    }
-                    return text;
+                    return clip.name + " (" + widgets::formatTick(clip.inTick) + " - "
+                         + widgets::formatTick(clip.outTick) + ")";
                 };
                 auto const formatClipWithCameraOption = [&](state::editing::ClipOps::ClipWithCamera const& item) {
                     std::string text = item.camera ? (item.camera->name + " · ") : std::string{};

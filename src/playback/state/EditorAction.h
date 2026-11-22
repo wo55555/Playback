@@ -89,7 +89,6 @@ enum class EditorActionType {
     AddClip,
     SplitClip,
     MoveAndTrimClip,
-    SetClipSpeed,
     RenameClip,
     SetClipMuted,
     SetClipLocked,
@@ -104,6 +103,17 @@ enum class EditorActionType {
     DeleteScene,
     SwitchScene,
     SetSceneExportRange,
+    AddSpeedTrack,
+    RemoveSpeedTrack,
+    AddSpeedKeyframe,
+    MoveSpeedKeyframe,
+    DeleteSpeedKeyframe,
+    SetSpeedKeyframeValue,
+    SetSpeedKeyframeInterpolation,
+    SetSpeedKeyframeBezierControls,
+    SetSpeedTrackEnabled,
+    SetSpeedTrackLocked,
+    ClearSpeedKeyframes,
 };
 
 struct QueuedExportJob {
@@ -122,6 +132,7 @@ struct EditorAction {
     std::string                              id;
     std::string                              secondaryId;
     float                                    speed{};
+    float                                    speedValue{1.0f};
     int                                      kind{};
     bool                                     value{};
     state::editing::model::Vec3              position{};

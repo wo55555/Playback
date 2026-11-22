@@ -1,16 +1,39 @@
 ﻿#pragma once
 
+#include "CameraKeyframe.h"
 #include "MathTypes.h"
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <string>
 #include <vector>
 
 namespace playback::state::editing::model {
 
-constexpr float MinClipSpeed = 0.05f;
-constexpr float MaxClipSpeed = 32.0f;
+inline constexpr float MinSpeedKeyframeValue = 0.01f;
+inline constexpr float MaxSpeedKeyframeValue = 32.0f;
+
+struct SpeedKeyframe {
+    float                   speed{1.0f};
+    CameraInterpolationType interpolationType{CameraInterpolationType::Smooth};
+    Vec2                    bezierCtrl1{0.42f, 0.0f};
+    Vec2                    bezierCtrl2{0.58f, 1.0f};
+};
+
+struct SpeedTrack {
+    bool                         present{false};
+    bool                         enabled{true};
+    bool                         locked{false};
+    std::map<int, SpeedKeyframe> keysByTick;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+[[nodiscard]] inline float clampSpeedKeyframeValue(float speed) noexcept {
+    if (!std::isfinite(speed)) return 1.0f;
+    return std::clamp(speed, MinSpeedKeyframeValue, MaxSpeedKeyframeValue);
+}
 
 struct Clip {
     std::string id;
@@ -18,7 +41,6 @@ struct Clip {
     int         inTick{};
     int         outTick{};
     int         trackTick{};
-    float       speed{1.0f};
     std::string name;
     Color4      color{0, 0, 1, 1};
     bool        muted{false};
@@ -54,18 +76,8 @@ inline float Transition::blendAlpha(int tickInTransition) const {
     return t;
 }
 
-[[nodiscard]] inline float clampClipSpeed(float speed) noexcept {
-    if (!std::isfinite(speed)) return 1.0f;
-    return std::clamp(speed, MinClipSpeed, MaxClipSpeed);
-}
-
 [[nodiscard]] inline int clipSourceDurationTicks(Clip const& clip) noexcept {
     return std::max(0, clip.outTick - clip.inTick);
-}
-
-[[nodiscard]] inline double clipOutputDurationSeconds(Clip const& clip) noexcept {
-    return static_cast<double>(clipSourceDurationTicks(clip))
-         / (20.0 * static_cast<double>(clampClipSpeed(clip.speed)));
 }
 
 } // namespace playback::state::editing::model

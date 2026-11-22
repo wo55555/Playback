@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expanded the replay editor's undo and redo history to 256 steps, with the Edit menu displaying the next action name and a History submenu to jump across up to 20 recent undo or redo steps at once.
 - Added undo and redo buttons with action tooltips to the timeline toolbar, a bottom viewport toast showing each undo or redo step, and key-repeat support when holding the undo or redo shortcuts.
 - Saving an editor project now keeps a `.pbproj.old` backup of the previous file and automatically recovers from it if the primary project file fails to load.
+- Added an on-demand Speed track from the timeline `+` menu for continuous speed ramps (`0.01x` to `32x`) with a logarithmic curve and shaded acceleration/deceleration regions, supporting eight interpolation modes with draggable cubic Bezier handles, real-time speed-ramped preview, integrated export frame timing, and full undo/redo and project persistence.
+
+### Changed
+
+- Unified playback speed control into the on-demand Speed track (replacing per-clip speed controls on camera clips and updating the camera keyframe option to Ignore Speed Track), and updated the export inspector to show the actual output duration and frame count after applying the speed curve.
 
 ### Fixed
 
