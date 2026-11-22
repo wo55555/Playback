@@ -28,7 +28,6 @@ struct CompositedClipSlice {
     int                        outTick{};
     model::CameraEntity const* camera{};
     model::Clip const*         clip{};
-    float                      speed{1.0f};
     bool                       muted{false};
     bool                       exportEnabled{true};
 };
@@ -70,7 +69,6 @@ void syncTotalTicks(model::EditorStateExt& state, int previousTotalTicks, std::s
     std::span<int const>         dimensionTransitions = {}
 ) noexcept;
 
-[[nodiscard]] float activeClipSpeedAt(model::EditorStateExt const& state, int tick) noexcept;
 [[nodiscard]] bool  isClipMutedAt(model::EditorStateExt const& state, int tick) noexcept;
 
 [[nodiscard]] std::vector<CompositedClipSlice> collectCompositedSlices(

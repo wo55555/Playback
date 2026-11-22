@@ -2595,11 +2595,11 @@ int ReplaySession::getTotalTicks() const { return std::max(0, mMeta.totalTicks);
 
 float ReplaySession::effectivePlaybackSpeed() const noexcept {
     float const base = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
-    return std::clamp(base * mClipSpeedScale, 0.05f, 32.0f);
+    return std::clamp(base * mClipSpeedScale, 0.01f, 32.0f);
 }
 
 void ReplaySession::setClipSpeedScale(float scale) noexcept {
-    mClipSpeedScale = std::isfinite(scale) ? std::clamp(scale, 0.05f, 32.0f) : 1.0f;
+    mClipSpeedScale = std::isfinite(scale) ? std::clamp(scale, 0.01f, 32.0f) : 1.0f;
 }
 
 void ReplaySession::adjustPlaybackSpeed(int direction) {

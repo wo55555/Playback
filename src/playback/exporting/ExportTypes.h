@@ -191,6 +191,7 @@ struct CompiledExportPlan {
     int64_t                            replayTickStepNumerator{};
     int64_t                            replayTickDenominator{1};
     std::vector<CompiledExportSegment> segments;
+    std::vector<ExportFramePlan>       precomputedFrames;
 
     [[nodiscard]] std::optional<ExportFramePlan> frame(uint64_t frameIndex) const;
 };

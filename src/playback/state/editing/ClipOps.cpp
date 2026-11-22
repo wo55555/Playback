@@ -67,7 +67,6 @@ void syncCamerasForTotalTicks(
                 }
                 clip.inTick        = 0;
                 clip.outTick       = totalTicks;
-                clip.speed         = 1.0f;
                 clip.exportEnabled = true;
                 camera.clips.push_back(std::move(clip));
             } else if (camera.clips.size() == 1 && camera.clips[0].inTick == 0 && camera.clips[0].outTick <= 1) {
@@ -169,6 +168,7 @@ void syncActiveSceneFromWorking(model::EditorStateExt& state) {
     if (state.activeSceneId != scene->id) state.activeSceneId = scene->id;
     scene->cameras       = state.cameras;
     scene->markers       = state.markers;
+    scene->speedTrack    = state.speedTrack;
     scene->exportInTick  = state.exportInTick;
     scene->exportOutTick = state.exportOutTick;
 }
@@ -179,6 +179,7 @@ void loadWorkingFromActiveScene(model::EditorStateExt& state) {
     if (state.activeSceneId != scene->id) state.activeSceneId = scene->id;
     state.cameras       = scene->cameras;
     state.markers       = scene->markers;
+    state.speedTrack    = scene->speedTrack;
     state.exportInTick  = scene->exportInTick;
     state.exportOutTick = scene->exportOutTick;
 }
@@ -202,11 +203,13 @@ model::EditorStateExt buildProjectForScene(model::EditorStateExt const& state, m
     if (isActive) {
         result.cameras       = state.cameras;
         result.markers       = state.markers;
+        result.speedTrack    = state.speedTrack;
         result.exportInTick  = state.exportInTick;
         result.exportOutTick = state.exportOutTick;
     } else {
         result.cameras       = scene.cameras;
         result.markers       = scene.markers;
+        result.speedTrack    = scene.speedTrack;
         result.exportInTick  = scene.exportInTick;
         result.exportOutTick = scene.exportOutTick;
     }
@@ -223,6 +226,7 @@ void ensureDefaultScene(model::EditorStateExt& state, std::string defaultSceneNa
                                                        : std::move(defaultSceneName);
         scene.cameras       = state.cameras;
         scene.markers       = state.markers;
+        scene.speedTrack    = state.speedTrack;
         scene.exportInTick  = state.exportInTick;
         scene.exportOutTick = state.exportOutTick;
 
@@ -243,7 +247,6 @@ void ensureDefaultScene(model::EditorStateExt& state, std::string defaultSceneNa
                 }
                 clip.inTick        = 0;
                 clip.outTick       = state.totalTicks;
-                clip.speed         = 1.0f;
                 clip.exportEnabled = true;
                 cam.clips.push_back(std::move(clip));
             }
@@ -265,7 +268,6 @@ void ensureDefaultScene(model::EditorStateExt& state, std::string defaultSceneNa
                 clip.name          = defaultClipName(state);
                 clip.inTick        = 0;
                 clip.outTick       = state.totalTicks;
-                clip.speed         = 1.0f;
                 clip.exportEnabled = true;
                 scene.cameras.front().clips.push_back(std::move(clip));
             }
@@ -345,13 +347,6 @@ ClipWithCamera activeClipAt(
     return {};
 }
 
-float activeClipSpeedAt(model::EditorStateExt const& state, int tick) noexcept {
-    if (auto const hit = activeClipAt(state, tick, false)) {
-        return model::clampClipSpeed(hit.clip->speed);
-    }
-    return 1.0f;
-}
-
 bool isClipMutedAt(model::EditorStateExt const& state, int tick) noexcept {
     if (auto const hit = activeClipAt(state, tick, false)) {
         return hit.clip->muted;
@@ -398,15 +393,7 @@ std::vector<CompositedClipSlice> collectCompositedSlices(
             slices.back().outTick = b1;
         } else {
             slices.push_back(
-                CompositedClipSlice{
-                    b0,
-                    b1,
-                    hit.camera,
-                    hit.clip,
-                    model::clampClipSpeed(hit.clip->speed),
-                    hit.clip->muted,
-                    hit.clip->exportEnabled
-                }
+                CompositedClipSlice{b0, b1, hit.camera, hit.clip, hit.clip->muted, hit.clip->exportEnabled}
             );
         }
     }

@@ -4,6 +4,7 @@
 #include "CameraKeyframeHandler.h"
 #include "InterpolationHelpers.h"
 #include "KeyframeTrack.h"
+#include "SpeedTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
@@ -209,51 +210,31 @@ void CameraTimelineEvaluator::buildSpeedSpans() {
     mSpeedSpans.clear();
     mSpeedSpanEndU = 0.0L;
 
-    auto const slices = state::editing::ClipOps::collectCompositedSlices(mProject, false, mDimensionTransitionTicks);
+    if (!hasActiveSpeedCurve(mProject)) return;
 
     int horizonTick = std::max(0, mProject.totalTicks);
     for (auto const& camera : mProject.cameras) {
         if (!camera.keysByTick.empty()) {
             horizonTick = std::max(horizonTick, camera.keysByTick.rbegin()->first);
         }
-    }
-    for (auto const& slice : slices) {
-        if (slice.inTick < slice.outTick) horizonTick = std::max(horizonTick, slice.outTick);
+        for (auto const& clip : camera.clips) {
+            if (clip.inTick < clip.outTick) horizonTick = std::max(horizonTick, clip.outTick);
+        }
     }
     if (horizonTick <= 0) return;
 
-    std::vector<int> boundaries{0, horizonTick};
-    for (auto const& slice : slices) {
-        int const start = std::clamp(slice.inTick, 0, horizonTick);
-        int const end   = std::clamp(slice.outTick, 0, horizonTick);
-        if (start < end) {
-            boundaries.push_back(start);
-            boundaries.push_back(end);
-        }
-    }
-    std::sort(boundaries.begin(), boundaries.end());
-    boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
-
     long double cumU = 0.0L;
-    for (size_t i = 0; i + 1 < boundaries.size(); ++i) {
-        int const bStart = boundaries[i];
-        int const bEnd   = boundaries[i + 1];
-        if (bStart >= bEnd) continue;
-
-        long double speed = 1.0L;
-        for (auto const& slice : slices) {
-            if (slice.inTick < slice.outTick && slice.inTick <= bStart && bEnd <= slice.outTick) {
-                speed = static_cast<long double>(state::editing::model::clampClipSpeed(slice.speed));
-                break;
-            }
-        }
+    for (int bStart = 0; bStart < horizonTick; ++bStart) {
+        int const         bEnd  = bStart + 1;
+        long double const mid   = static_cast<long double>(bStart) + 0.5L;
+        long double const speed = static_cast<long double>(sampleSpeedTrackAt(mProject.speedTrack, mid));
 
         if (!mSpeedSpans.empty() && mSpeedSpans.back().endTick == bStart && mSpeedSpans.back().speed == speed) {
             mSpeedSpans.back().endTick = bEnd;
         } else {
             mSpeedSpans.push_back(SpeedSpan{bStart, bEnd, speed, cumU});
         }
-        cumU += static_cast<long double>(bEnd - bStart) / speed;
+        cumU += 1.0L / speed;
     }
     mSpeedSpanEndU = cumU;
 }
