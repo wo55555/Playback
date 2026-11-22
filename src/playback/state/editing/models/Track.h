@@ -94,10 +94,44 @@ struct Clip {
     int         trackTick{};
     std::string name;
     Color4      color{0, 0, 1, 1};
-    bool        muted{false};
     bool        locked{false};
     bool        exportEnabled{true};
 };
+
+inline constexpr float  MinAudioVolume   = 0.0f;
+inline constexpr float  MaxAudioVolume   = 2.0f;
+inline constexpr double MinAudioTrimSecs = 0.0;
+
+struct AudioClip {
+    std::string id;
+    std::string name;
+    std::string filePath;
+    int         startTick{0};
+    double      trimStartSeconds{0.0};
+    double      durationSeconds{0.0}; // 0 means full remaining duration of the audio file
+    float       volume{1.0f};
+    bool        muted{false};
+};
+
+struct AudioTrack {
+    std::string            id;
+    std::string            name;
+    bool                   enabled{true};
+    bool                   muted{false};
+    bool                   locked{false};
+    float                  volume{1.0f};
+    std::vector<AudioClip> clips;
+};
+
+[[nodiscard]] inline float clampAudioVolume(float volume) noexcept {
+    if (!std::isfinite(volume)) return 1.0f;
+    return std::clamp(volume, MinAudioVolume, MaxAudioVolume);
+}
+
+[[nodiscard]] inline double clampAudioSeconds(double seconds) noexcept {
+    if (!std::isfinite(seconds)) return 0.0;
+    return std::max(MinAudioTrimSecs, seconds);
+}
 
 enum class TransitionKind : uint8_t { Cut = 0, Fade, CrossDissolve };
 
