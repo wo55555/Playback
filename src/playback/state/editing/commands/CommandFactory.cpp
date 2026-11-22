@@ -3,6 +3,7 @@
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/ClipCommands.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
+#include "playback/state/editing/commands/SpeedCommands.h"
 
 namespace playback::state::editing::command {
 
@@ -162,14 +163,9 @@ std::unique_ptr<model::IEditCommand>
 CommandFactory::createRenameMarker(const std::string& id, const std::string& label) {
     return std::make_unique<RenameMarker>(id, label);
 }
-std::unique_ptr<model::IEditCommand> CommandFactory::createAddClip(
-    const std::string& cameraId,
-    int                inTick,
-    int                outTick,
-    const std::string& name,
-    float              speed
-) {
-    return std::make_unique<AddClip>(cameraId, inTick, outTick, name, speed);
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createAddClip(const std::string& cameraId, int inTick, int outTick, const std::string& name) {
+    return std::make_unique<AddClip>(cameraId, inTick, outTick, name);
 }
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createSplitClip(const std::string& clipId, int splitTick, const std::string& newClipName) {
@@ -178,9 +174,6 @@ CommandFactory::createSplitClip(const std::string& clipId, int splitTick, const 
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createMoveAndTrimClip(const std::string& clipId, int newInTick, int newOutTick) {
     return std::make_unique<MoveAndTrimClip>(clipId, newInTick, newOutTick);
-}
-std::unique_ptr<model::IEditCommand> CommandFactory::createSetClipSpeed(const std::string& clipId, float speed) {
-    return std::make_unique<SetClipSpeed>(clipId, speed);
 }
 std::unique_ptr<model::IEditCommand>
 CommandFactory::createRenameClip(const std::string& clipId, const std::string& name) {
@@ -229,6 +222,39 @@ std::unique_ptr<model::IEditCommand> CommandFactory::createSwitchScene(const std
 }
 std::unique_ptr<model::IEditCommand> CommandFactory::createSetSceneExportRange(int inTick, int outTick) {
     return std::make_unique<SetSceneExportRange>(inTick, outTick);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddSpeedTrack() { return std::make_unique<AddSpeedTrack>(); }
+std::unique_ptr<model::IEditCommand> CommandFactory::createRemoveSpeedTrack() {
+    return std::make_unique<RemoveSpeedTrack>();
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createAddSpeedKeyframe(int tick, float speed) {
+    return std::make_unique<AddSpeedKeyframe>(tick, speed);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createMoveSpeedKeyframe(int fromTick, int toTick) {
+    return std::make_unique<MoveSpeedKeyframe>(fromTick, toTick);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteSpeedKeyframe(int tick) {
+    return std::make_unique<DeleteSpeedKeyframe>(tick);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetSpeedKeyframeValue(int tick, float speed) {
+    return std::make_unique<SetSpeedKeyframeValue>(tick, speed);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetSpeedKeyframeInterpolation(int tick, model::CameraInterpolationType interpolation) {
+    return std::make_unique<SetSpeedKeyframeInterpolation>(tick, interpolation);
+}
+std::unique_ptr<model::IEditCommand>
+CommandFactory::createSetSpeedKeyframeBezierControls(int tick, model::Vec2 ctrl1, model::Vec2 ctrl2) {
+    return std::make_unique<SetSpeedKeyframeBezierControls>(tick, ctrl1, ctrl2);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetSpeedTrackEnabled(bool enabled) {
+    return std::make_unique<SetSpeedTrackState>(SetSpeedTrackState::Property::Enabled, enabled);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createSetSpeedTrackLocked(bool locked) {
+    return std::make_unique<SetSpeedTrackState>(SetSpeedTrackState::Property::Locked, locked);
+}
+std::unique_ptr<model::IEditCommand> CommandFactory::createClearSpeedKeyframes() {
+    return std::make_unique<ClearSpeedKeyframes>();
 }
 
 } // namespace playback::state::editing::command

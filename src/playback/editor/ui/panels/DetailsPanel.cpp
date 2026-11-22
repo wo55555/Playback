@@ -7,6 +7,7 @@
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/integration/OptiPistonBridge.h"
+#include "playback/keyframe/SpeedTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/utils/ShellUtils.h"
 
@@ -18,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <span>
 
 namespace playback::editor::ui {
 using namespace playback::state;
@@ -161,16 +163,24 @@ bool vectorInput2(char const* id, float (&values)[2], std::array<char const*, 2>
     return edited;
 }
 
-[[nodiscard]] float speedToSliderT(float speed) {
-    float const safe = std::max(speed, 0.01f);
-    if (safe <= 1.0f) return 0.5f * (1.0f + std::clamp(std::log2(safe) / 2.0f, -1.0f, 0.0f));
-    return 0.5f + 0.5f * std::clamp(std::log2(safe) / 3.0f, 0.0f, 1.0f);
+[[nodiscard]] float speedToSliderT(float speed, float minSpeed = 0.25f, float maxSpeed = 8.0f) {
+    float const safe = std::max(speed, minSpeed);
+    if (safe <= 1.0f) {
+        float const negSpan = std::max(0.001f, -std::log2(minSpeed));
+        return 0.5f * (1.0f + std::clamp(std::log2(safe) / negSpan, -1.0f, 0.0f));
+    }
+    float const posSpan = std::max(0.001f, std::log2(maxSpeed));
+    return 0.5f + 0.5f * std::clamp(std::log2(safe) / posSpan, 0.0f, 1.0f);
 }
 
-[[nodiscard]] float sliderTToSpeed(float t) {
+[[nodiscard]] float sliderTToSpeed(float t, float minSpeed = 0.25f, float maxSpeed = 8.0f) {
     float const clamped = std::clamp(t, 0.0f, 1.0f);
-    if (clamped <= 0.5f) return std::exp2(4.0f * clamped - 2.0f);
-    return std::exp2(6.0f * clamped - 3.0f);
+    if (clamped <= 0.5f) {
+        float const negSpan = std::max(0.001f, -std::log2(minSpeed));
+        return std::exp2((2.0f * clamped - 1.0f) * negSpan);
+    }
+    float const posSpan = std::max(0.001f, std::log2(maxSpeed));
+    return std::exp2((2.0f * clamped - 1.0f) * posSpan);
 }
 
 [[nodiscard]] ImU32 speedAccentColor(float speed) {
@@ -191,6 +201,336 @@ bool vectorInput2(char const* id, float (&values)[2], std::array<char const*, 2>
     int const alpha =
         static_cast<int>(std::lround(static_cast<float>((color >> IM_COL32_A_SHIFT) & 0xff) * alphaScale));
     return theme::withAlpha(color, std::clamp(alpha, 0, 255));
+}
+
+template <typename DrawInputFn>
+void drawInputWithHint(std::string const& hintText, DrawInputFn&& drawInput) {
+    float const scale  = metrics::scale();
+    float const availW = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    float const gap    = 6.0f * scale;
+    float const hintW  = ImGui::CalcTextSize(hintText.c_str()).x;
+    float const inputW = availW - hintW - gap;
+    if (inputW >= 58.0f * scale) {
+        ImGui::SetNextItemWidth(inputW);
+        drawInput();
+        ImGui::SameLine(0.0f, gap);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", hintText.c_str());
+    } else {
+        ImGui::SetNextItemWidth(-1.0f);
+        drawInput();
+        ImGui::TextDisabled("%s", hintText.c_str());
+    }
+}
+
+template <typename SubmitSpeedFn, typename FormatTooltipFn>
+void drawLogSpeedSlider(
+    char const*            id,
+    bool                   editable,
+    float                  committedSpeed,
+    float                  minSliderSpeed,
+    float                  maxSliderSpeed,
+    float                  minClampSpeed,
+    float                  maxClampSpeed,
+    std::span<float const> snapPresets,
+    bool&                  dragging,
+    float&                 dragValue,
+    SubmitSpeedFn&&        onCommit,
+    FormatTooltipFn&&      formatTooltip
+) {
+    float const  scale      = metrics::scale();
+    float const  availW     = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    float const  sliderH    = std::round(18.0f * scale);
+    float const  thumbR     = 5.5f * scale;
+    float const  railH      = 4.0f * scale;
+    float const  alphaScale = editable ? 1.0f : ImGui::GetStyle().Alpha;
+    ImVec2 const min        = ImGui::GetCursorScreenPos();
+    ImVec2 const max        = {min.x + availW, min.y + sliderH};
+
+    ImGui::InvisibleButton(id, {availW, sliderH});
+    bool const    hovered    = ImGui::IsItemHovered();
+    bool const    active     = ImGui::IsItemActive();
+    ImGuiID const sliderId   = ImGui::GetItemID();
+    ImGuiStorage* storage    = ImGui::GetStateStorage();
+    bool          ignoreDrag = storage->GetBool(sliderId, false);
+    if (!active) {
+        ignoreDrag = false;
+        storage->SetBool(sliderId, false);
+    }
+
+    float const trackMinX = min.x + thumbR;
+    float const trackMaxX = std::max(trackMinX + 1.0f, max.x - thumbR);
+    float const trackW    = trackMaxX - trackMinX;
+    float const centerX   = min.x + availW * 0.5f;
+    float const centerY   = (min.y + max.y) * 0.5f;
+
+    if (editable) {
+        if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            ignoreDrag = true;
+            storage->SetBool(sliderId, true);
+            dragging = false;
+            onCommit(1.0f);
+        } else if (active && !ignoreDrag && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            float const rawT     = std::clamp((ImGui::GetMousePos().x - trackMinX) / trackW, 0.0f, 1.0f);
+            float       newSpeed = sliderTToSpeed(rawT, minSliderSpeed, maxSliderSpeed);
+            if (ImGui::GetIO().KeyShift && !snapPresets.empty()) {
+                float bestDist   = std::abs(rawT - speedToSliderT(snapPresets[0], minSliderSpeed, maxSliderSpeed));
+                float bestPreset = snapPresets[0];
+                for (size_t i = 1; i < snapPresets.size(); ++i) {
+                    float const dist = std::abs(rawT - speedToSliderT(snapPresets[i], minSliderSpeed, maxSliderSpeed));
+                    if (dist < bestDist) {
+                        bestDist   = dist;
+                        bestPreset = snapPresets[i];
+                    }
+                }
+                newSpeed = bestPreset;
+            }
+            dragging  = true;
+            dragValue = std::clamp(newSpeed, minClampSpeed, maxClampSpeed);
+        } else if (dragging && (!active || !ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
+            float const finalSpeed = dragValue;
+            dragging               = false;
+            onCommit(finalSpeed);
+        }
+    } else if (dragging) {
+        dragging = false;
+    }
+
+    float const sliderSpeed = dragging ? dragValue : committedSpeed;
+    float const t           = speedToSliderT(sliderSpeed, minSliderSpeed, maxSliderSpeed);
+    float const thumbX      = trackMinX + t * trackW;
+    float const railTop     = centerY - railH * 0.5f;
+    float const railBottom  = centerY + railH * 0.5f;
+    float const railRound   = railH * 0.5f;
+    auto* const dl          = ImGui::GetWindowDrawList();
+
+    dl->AddRectFilled(
+        {trackMinX, railTop},
+        {trackMaxX, railBottom},
+        scaleAlpha(theme::kInputBg, alphaScale),
+        railRound
+    );
+    dl->AddRect(
+        {trackMinX, railTop},
+        {trackMaxX, railBottom},
+        scaleAlpha(theme::kBorder, alphaScale),
+        railRound,
+        0,
+        1.0f
+    );
+
+    // Center 1.0x reference tick.
+    dl->AddLine(
+        {centerX, railTop - 3.0f * scale},
+        {centerX, railBottom + 3.0f * scale},
+        scaleAlpha(theme::kLine, alphaScale),
+        std::max(1.0f, 1.25f * scale)
+    );
+
+    ImU32 const accent = speedAccentColor(sliderSpeed);
+    if (sliderSpeed > 1.001f || sliderSpeed < 0.999f) {
+        float const fillLeft  = std::min(centerX, thumbX);
+        float const fillRight = std::max(centerX, thumbX);
+        if (fillRight - fillLeft > 0.5f) {
+            dl->AddRectFilled({fillLeft, railTop}, {fillRight, railBottom}, scaleAlpha(accent, alphaScale), railRound);
+        }
+    }
+
+    ImU32 const thumbCol = (editable && (hovered || active)) ? brightenColor(accent, active ? 0.30f : 0.18f) : accent;
+    dl->AddCircleFilled({thumbX, centerY}, thumbR, scaleAlpha(thumbCol, alphaScale));
+    dl->AddCircle({thumbX, centerY}, thumbR, scaleAlpha(theme::kKeyframeOutline, alphaScale), 0, 1.0f * scale);
+
+    std::string const tip = formatTooltip(sliderSpeed);
+    widgets::itemTooltip(tip.c_str());
+}
+
+template <typename SubmitSpeedFn>
+void drawSpeedPresetChips(float displayedSpeed, std::span<float const> presets, SubmitSpeedFn&& onSelect) {
+    if (presets.empty()) return;
+    float const  scale    = metrics::scale();
+    size_t const count    = presets.size();
+    float const  spacing  = 3.0f * scale;
+    float const  availW   = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    float const  totalGap = spacing * static_cast<float>(count - 1);
+    float const  chipH    = std::round(ImGui::GetFontSize() + 8.0f * scale);
+
+    std::vector<std::string> labels(count);
+    std::vector<float>       textWidths(count);
+    float                    sumTextW = 0.0f;
+    for (size_t i = 0; i < count; ++i) {
+        char buf[16]{};
+        std::snprintf(buf, sizeof(buf), "%.2gx", static_cast<double>(presets[i]));
+        labels[i]       = buf;
+        float const tw  = ImGui::CalcTextSize(buf).x;
+        textWidths[i]   = tw;
+        sumTextW       += tw;
+    }
+    float const usableW = std::max(1.0f, availW - totalGap);
+    float const extra   = std::max(0.0f, usableW - sumTextW) / static_cast<float>(count);
+    float const shrink  = (sumTextW > usableW && sumTextW > 1.0f) ? (usableW / sumTextW) : 1.0f;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {spacing, spacing});
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme::kButtonRounding * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.0f, 0.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+    for (size_t i = 0; i < count; ++i) {
+        if (i > 0) ImGui::SameLine();
+        float const preset       = presets[i];
+        bool const  active       = std::abs(displayedSpeed - preset) < 0.001f;
+        ImU32 const presetAccent = speedAccentColor(preset);
+        float const targetW      = textWidths[i] * shrink + extra;
+        float const w = (i == count - 1) ? std::max(1.0f, ImGui::GetContentRegionAvail().x) : std::round(targetW);
+        if (active) {
+            ImGui::PushStyleColor(ImGuiCol_Button, theme::withAlpha(presetAccent, 0x44));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::withAlpha(presetAccent, 0x5c));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::withAlpha(presetAccent, 0x70));
+            ImGui::PushStyleColor(ImGuiCol_Border, presetAccent);
+            ImGui::PushStyleColor(ImGuiCol_Text, presetAccent);
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, theme::kButtonSubtle);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kButtonHover);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kButtonActive);
+            ImGui::PushStyleColor(ImGuiCol_Border, theme::kButtonSubtleBorder);
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kText);
+        }
+        if (ImGui::Button(labels[i].c_str(), {w, chipH})) {
+            onSelect(preset);
+        }
+        ImGui::PopStyleColor(5);
+    }
+    ImGui::PopStyleVar(4);
+}
+
+template <typename CommitBezierFn>
+void drawBezierCurveRows(
+    char const*                  idPrefix,
+    bool                         locked,
+    state::editing::model::Vec2  keyCtrl1,
+    state::editing::model::Vec2  keyCtrl2,
+    int&                         dragHandle,
+    state::editing::model::Vec2& draftCtrl1,
+    state::editing::model::Vec2& draftCtrl2,
+    CommitBezierFn&&             onCommit
+) {
+    auto ctrl1 = dragHandle != 0 ? draftCtrl1 : keyCtrl1;
+    auto ctrl2 = dragHandle != 0 ? draftCtrl2 : keyCtrl2;
+    ctrl1.x    = std::clamp(ctrl1.x, 0.0f, 1.0f);
+    ctrl1.y    = std::clamp(ctrl1.y, 0.0f, 1.0f);
+    ctrl2.x    = std::clamp(ctrl2.x, 0.0f, 1.0f);
+    ctrl2.y    = std::clamp(ctrl2.y, 0.0f, 1.0f);
+
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierCurve"_tr().c_str());
+    ImGui::TableNextColumn();
+    {
+        float const  uiScale  = metrics::scale();
+        float const  availW   = std::max(64.0f, ImGui::GetContentRegionAvail().x);
+        float const  boxH     = std::clamp(availW, 96.0f * uiScale, 140.0f * uiScale);
+        float const  pad      = 8.0f * uiScale;
+        ImVec2 const boxMin   = ImGui::GetCursorScreenPos();
+        ImVec2 const boxMax   = {boxMin.x + availW, boxMin.y + boxH};
+        ImVec2 const innerMin = {boxMin.x + pad, boxMin.y + pad};
+        ImVec2 const innerMax = {boxMax.x - pad, boxMax.y - pad};
+        float const  innerW   = std::max(1.0f, innerMax.x - innerMin.x);
+        float const  innerH   = std::max(1.0f, innerMax.y - innerMin.y);
+
+        auto const toScreen = [&](state::editing::model::Vec2 p) -> ImVec2 {
+            return {innerMin.x + p.x * innerW, innerMax.y - p.y * innerH};
+        };
+        auto const fromScreen = [&](ImVec2 s) -> state::editing::model::Vec2 {
+            return {
+                std::clamp((s.x - innerMin.x) / innerW, 0.0f, 1.0f),
+                std::clamp((innerMax.y - s.y) / innerH, 0.0f, 1.0f),
+            };
+        };
+
+        std::string const canvasId = std::string("##") + idPrefix + "-canvas";
+        ImGui::InvisibleButton(canvasId.c_str(), {availW, boxH});
+        bool const   hovered = ImGui::IsItemHovered();
+        ImVec2 const mouse   = ImGui::GetMousePos();
+        ImVec2 const p0      = toScreen({0.0f, 0.0f});
+        ImVec2       p1      = toScreen(ctrl1);
+        ImVec2       p2      = toScreen(ctrl2);
+        ImVec2 const p3      = toScreen({1.0f, 1.0f});
+
+        auto const distSq = [](ImVec2 a, ImVec2 b) {
+            float const dx = a.x - b.x;
+            float const dy = a.y - b.y;
+            return dx * dx + dy * dy;
+        };
+        float const hitR2    = (9.0f * uiScale) * (9.0f * uiScale);
+        float const d1       = distSq(mouse, p1);
+        float const d2       = distSq(mouse, p2);
+        int         hoveredH = 0;
+        if (hovered && !locked) {
+            if (d1 <= hitR2 && (d1 <= d2 || d2 > hitR2)) hoveredH = 1;
+            else if (d2 <= hitR2) hoveredH = 2;
+        }
+        if (hoveredH != 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            dragHandle = hoveredH;
+            draftCtrl1 = ctrl1;
+            draftCtrl2 = ctrl2;
+        }
+        if (dragHandle != 0) {
+            if (!locked && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (dragHandle == 1) draftCtrl1 = fromScreen(mouse);
+                else draftCtrl2 = fromScreen(mouse);
+                ctrl1 = draftCtrl1;
+                ctrl2 = draftCtrl2;
+                p1    = toScreen(ctrl1);
+                p2    = toScreen(ctrl2);
+            } else {
+                dragHandle = 0;
+                if (!locked) onCommit(draftCtrl1, draftCtrl2);
+            }
+        }
+        if (hoveredH != 0 || dragHandle != 0) {
+            ImGui::SetMouseCursor(dragHandle != 0 ? theme::kCursorGrabbing : theme::kCursorGrab);
+        }
+
+        auto* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(boxMin, boxMax, theme::kInputBg, 4.0f * uiScale);
+        dl->AddRect(boxMin, boxMax, theme::kBorder, 4.0f * uiScale);
+        dl->AddLine(p0, p3, theme::kFineDivider, 1.0f);
+        dl->AddLine(p0, p1, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
+        dl->AddLine(p3, p2, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
+        dl->AddBezierCubic(p0, p1, p2, p3, theme::kAccent, 2.0f * uiScale, 32);
+        dl->AddCircleFilled(p0, 2.5f * uiScale, theme::kTextDim);
+        dl->AddCircleFilled(p3, 2.5f * uiScale, theme::kTextDim);
+
+        float const handleR = 4.5f * uiScale;
+        ImU32 const c1Color = (dragHandle == 1 || hoveredH == 1) ? theme::kSelected : theme::kKeyframe;
+        ImU32 const c2Color = (dragHandle == 2 || hoveredH == 2) ? theme::kSelected : theme::kKeyframe;
+        dl->AddCircleFilled(p1, handleR, c1Color);
+        dl->AddCircle(p1, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
+        dl->AddCircleFilled(p2, handleR, c2Color);
+        dl->AddCircle(p2, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
+    }
+
+    static constexpr std::array xyLabels{"X", "Y"};
+    std::string const           c1Id  = std::string(idPrefix) + "-c1";
+    float                       c1[2] = {ctrl1.x, ctrl1.y};
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl1"_tr().c_str());
+    ImGui::TableNextColumn();
+    if (vectorInput2(c1Id.c_str(), c1, xyLabels, "%.2f") && std::isfinite(c1[0]) && std::isfinite(c1[1])) {
+        onCommit({std::clamp(c1[0], 0.0f, 1.0f), std::clamp(c1[1], 0.0f, 1.0f)}, ctrl2);
+    }
+
+    std::string const c2Id  = std::string(idPrefix) + "-c2";
+    float             c2[2] = {ctrl2.x, ctrl2.y};
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl2"_tr().c_str());
+    ImGui::TableNextColumn();
+    if (vectorInput2(c2Id.c_str(), c2, xyLabels, "%.2f") && std::isfinite(c2[0]) && std::isfinite(c2[1])) {
+        onCommit(ctrl1, {std::clamp(c2[0], 0.0f, 1.0f), std::clamp(c2[1], 0.0f, 1.0f)});
+    }
 }
 
 } // namespace
@@ -218,13 +558,17 @@ void DetailsPanel::draw(PanelContext const& ctx) {
         ImGuiChildFlags_AlwaysUseWindowPadding
     );
     if (!ctx.state.project) {
-        mSpeedDragging = false;
-        mSpeedDragClipId.clear();
+        mSpeedKeyDragging      = false;
+        mSpeedKeyDragTick      = -1;
+        mSpeedBezierDragHandle = 0;
+        mSpeedBezierDragTick   = -1;
         widgets::noActiveProjectPlaceholder();
     } else {
         if (mPage != InspectorPage::Selection) {
-            mSpeedDragging = false;
-            mSpeedDragClipId.clear();
+            mSpeedKeyDragging      = false;
+            mSpeedKeyDragTick      = -1;
+            mSpeedBezierDragHandle = 0;
+            mSpeedBezierDragTick   = -1;
         }
         switch (mPage) {
         case InspectorPage::Selection:
@@ -306,6 +650,10 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
         subject = "playback.refactorEditor.details.cameraKeyframe"_tr();
     } else if (selection.getAs<state::editing::model::SelectedMarker>()) {
         subject = "playback.refactorEditor.details.marker"_tr();
+    } else if (selection.selectedSpeedKeyframe()) {
+        subject = "playback.refactorEditor.speed.keyframeDetailsTitle"_tr();
+    } else if (selection.isSpeedTrackSelected()) {
+        subject = "playback.refactorEditor.speed.trackDetailsTitle"_tr();
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
@@ -314,22 +662,18 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawKeyframes(ctx)) return;
     if (drawKeyframe(ctx)) return;
     if (drawMarker(ctx)) return;
+    if (drawSpeedKeyframe(ctx)) return;
+    if (drawSpeedTrack(ctx)) return;
     drawOverview(ctx);
 }
 
 bool DetailsPanel::drawClip(PanelContext const& ctx) {
     auto const* selected = ctx.selection.getAs<state::editing::model::SelectedClip>();
-    if (!selected) {
-        mSpeedDragging = false;
-        mSpeedDragClipId.clear();
-        return false;
-    }
+    if (!selected) return false;
 
     auto const project = ctx.state.project;
     auto const hit     = state::editing::ClipOps::findClipWithCamera(*project, selected->clipId);
     if (!hit) {
-        mSpeedDragging = false;
-        mSpeedDragClipId.clear();
         ImGui::TextDisabled("%s", "playback.refactorEditor.details.clipMissing"_tr().c_str());
         return true;
     }
@@ -341,10 +685,6 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
         property::separator();
         bool const  editable = !camera->locked && !clip->locked;
         float const scale    = metrics::scale();
-        if (mSpeedDragging && (!editable || mSpeedDragClipId != clip->id)) {
-            mSpeedDragging = false;
-            mSpeedDragClipId.clear();
-        }
 
         int minIn  = 0;
         int maxOut = std::max(1, project->totalTicks);
@@ -356,48 +696,22 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
         minIn  = std::clamp(minIn, 0, project->totalTicks);
         maxOut = std::clamp(maxOut, minIn, project->totalTicks);
 
-        float const displayedSpeed = (mSpeedDragging && mSpeedDragClipId == clip->id) ? mSpeedDragValue : clip->speed;
-        int const   sourceTicks       = std::max(0, clip->outTick - clip->inTick);
-        float const sourceSec         = static_cast<float>(sourceTicks) / static_cast<float>(widgets::kTicksPerSecond);
-        float       outputDurationSec = sourceSec / std::max(state::editing::model::MinClipSpeed, displayedSpeed);
-        auto const  submitSpeed       = [&](float nextSpeed) {
-            float const clamped =
-                std::clamp(nextSpeed, state::editing::model::MinClipSpeed, state::editing::model::MaxClipSpeed);
-            if (std::abs(clamped - clip->speed) > 1e-4f) {
-                EditorAction action{EditorActionType::SetClipSpeed};
-                action.id    = clip->id;
-                action.speed = clamped;
-                ctx.submitAction(std::move(action));
-            }
-        };
+        int const sourceTicks       = std::max(0, clip->outTick - clip->inTick);
+        double    outputDurationSec = static_cast<double>(sourceTicks) / static_cast<double>(widgets::kTicksPerSecond);
+        if (sourceTicks > 0 && keyframe::hasActiveSpeedCurve(*project)) {
+            keyframe::SpeedTimeMapping const mapping(*project, clip->outTick);
+            outputDurationSec = mapping.outputSecondsBetween(clip->inTick, clip->outTick);
+        }
 
         float const clipLabelW = measureLabelColumn({
             "playback.refactorEditor.details.start"_tr(),
             "playback.refactorEditor.details.end"_tr(),
             "playback.refactorEditor.details.duration"_tr(),
-            "playback.refactorEditor.details.speed"_tr(),
             "playback.refactorEditor.details.outputDuration"_tr(),
         });
 
         ImGui::BeginDisabled(!editable);
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 3.0f * scale});
-        auto const drawInputWithHint = [&](std::string const& hintText, auto&& drawInput) {
-            float const availW = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-            float const gap    = 6.0f * scale;
-            float const hintW  = ImGui::CalcTextSize(hintText.c_str()).x;
-            float const inputW = availW - hintW - gap;
-            if (inputW >= 58.0f * scale) {
-                ImGui::SetNextItemWidth(inputW);
-                drawInput();
-                ImGui::SameLine(0.0f, gap);
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("%s", hintText.c_str());
-            } else {
-                ImGui::SetNextItemWidth(-1.0f);
-                drawInput();
-                ImGui::TextDisabled("%s", hintText.c_str());
-            }
-        };
         if (ImGui::BeginTable(
                 "##clip-properties",
                 2,
@@ -454,224 +768,19 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(formatTick(sourceTicks).c_str());
 
-            float speed = displayedSpeed;
-            char  pctBuf[24]{};
-            std::snprintf(pctBuf, sizeof(pctBuf), "%.0f%%", static_cast<double>(displayedSpeed * 100.0f));
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextDisabled("%s", "playback.refactorEditor.details.speed"_tr().c_str());
-            ImGui::TableNextColumn();
-            drawInputWithHint(pctBuf, [&] {
-                ImGui::InputFloat("##clip-speed", &speed, 0.0f, 0.0f, "%.2fx");
-                if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(speed)) {
-                    submitSpeed(speed);
-                }
-            });
-
-            float editedDurationSec = outputDurationSec;
+            char outDurBuf[32]{};
+            std::snprintf(outDurBuf, sizeof(outDurBuf), "%.2f s", outputDurationSec);
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.outputDuration"_tr().c_str());
             ImGui::TableNextColumn();
-            ImGui::SetNextItemWidth(-1.0f);
-            ImGui::InputFloat("##clip-out-duration", &editedDurationSec, 0.0f, 0.0f, "%.2f s");
-            if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(editedDurationSec) && editedDurationSec > 0.001f
-                && sourceSec > 0.0f) {
-                submitSpeed(sourceSec / editedDurationSec);
-            }
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(outDurBuf);
 
             ImGui::EndTable();
         }
         ImGui::PopStyleVar();
-
-        // Piecewise log2 speed slider centered at 1.0x.
-        {
-            float const  availW     = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-            float const  sliderH    = std::round(18.0f * scale);
-            float const  thumbR     = 5.5f * scale;
-            float const  railH      = 4.0f * scale;
-            float const  alphaScale = editable ? 1.0f : ImGui::GetStyle().Alpha;
-            ImVec2 const min        = ImGui::GetCursorScreenPos();
-            ImVec2 const max        = {min.x + availW, min.y + sliderH};
-
-            ImGui::InvisibleButton("##clip-speed-slider", {availW, sliderH});
-            bool const    hovered    = ImGui::IsItemHovered();
-            bool const    active     = ImGui::IsItemActive();
-            ImGuiID const sliderId   = ImGui::GetItemID();
-            ImGuiStorage* storage    = ImGui::GetStateStorage();
-            bool          ignoreDrag = storage->GetBool(sliderId, false);
-            if (!active) {
-                ignoreDrag = false;
-                storage->SetBool(sliderId, false);
-            }
-
-            float const trackMinX = min.x + thumbR;
-            float const trackMaxX = std::max(trackMinX + 1.0f, max.x - thumbR);
-            float const trackW    = trackMaxX - trackMinX;
-            float const centerX   = min.x + availW * 0.5f;
-            float const centerY   = (min.y + max.y) * 0.5f;
-
-            if (editable) {
-                if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                    ignoreDrag = true;
-                    storage->SetBool(sliderId, true);
-                    mSpeedDragging = false;
-                    mSpeedDragClipId.clear();
-                    submitSpeed(1.0f);
-                } else if (active && !ignoreDrag && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                    float const rawT     = std::clamp((ImGui::GetMousePos().x - trackMinX) / trackW, 0.0f, 1.0f);
-                    float       newSpeed = sliderTToSpeed(rawT);
-                    if (ImGui::GetIO().KeyShift) {
-                        constexpr float kSnapPresets[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f, 8.0f};
-                        float           bestDist       = std::abs(rawT - speedToSliderT(kSnapPresets[0]));
-                        float           bestPreset     = kSnapPresets[0];
-                        for (int i = 1; i < IM_ARRAYSIZE(kSnapPresets); ++i) {
-                            float const dist = std::abs(rawT - speedToSliderT(kSnapPresets[i]));
-                            if (dist < bestDist) {
-                                bestDist   = dist;
-                                bestPreset = kSnapPresets[i];
-                            }
-                        }
-                        newSpeed = bestPreset;
-                    }
-                    mSpeedDragging   = true;
-                    mSpeedDragClipId = clip->id;
-                    mSpeedDragValue =
-                        std::clamp(newSpeed, state::editing::model::MinClipSpeed, state::editing::model::MaxClipSpeed);
-                } else if (mSpeedDragging && mSpeedDragClipId == clip->id
-                           && (!active || !ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
-                    float const finalSpeed = mSpeedDragValue;
-                    mSpeedDragging         = false;
-                    mSpeedDragClipId.clear();
-                    submitSpeed(finalSpeed);
-                }
-            } else if (mSpeedDragging) {
-                mSpeedDragging = false;
-                mSpeedDragClipId.clear();
-            }
-
-            float const sliderSpeed = (mSpeedDragging && mSpeedDragClipId == clip->id) ? mSpeedDragValue : clip->speed;
-            float const sliderOutputSec = sourceSec / std::max(state::editing::model::MinClipSpeed, sliderSpeed);
-            float const t               = speedToSliderT(sliderSpeed);
-            float const thumbX          = trackMinX + t * trackW;
-            float const railTop         = centerY - railH * 0.5f;
-            float const railBottom      = centerY + railH * 0.5f;
-            float const railRound       = railH * 0.5f;
-            auto* const dl              = ImGui::GetWindowDrawList();
-
-            dl->AddRectFilled(
-                {trackMinX, railTop},
-                {trackMaxX, railBottom},
-                scaleAlpha(theme::kInputBg, alphaScale),
-                railRound
-            );
-            dl->AddRect(
-                {trackMinX, railTop},
-                {trackMaxX, railBottom},
-                scaleAlpha(theme::kBorder, alphaScale),
-                railRound,
-                0,
-                1.0f
-            );
-
-            // Center 1.0x reference tick.
-            dl->AddLine(
-                {centerX, railTop - 3.0f * scale},
-                {centerX, railBottom + 3.0f * scale},
-                scaleAlpha(theme::kLine, alphaScale),
-                std::max(1.0f, 1.25f * scale)
-            );
-
-            ImU32 const accent = speedAccentColor(sliderSpeed);
-            if (sliderSpeed > 1.001f || sliderSpeed < 0.999f) {
-                float const fillLeft  = std::min(centerX, thumbX);
-                float const fillRight = std::max(centerX, thumbX);
-                if (fillRight - fillLeft > 0.5f) {
-                    dl->AddRectFilled(
-                        {fillLeft, railTop},
-                        {fillRight, railBottom},
-                        scaleAlpha(accent, alphaScale),
-                        railRound
-                    );
-                }
-            }
-
-            ImU32 const thumbCol =
-                (editable && (hovered || active)) ? brightenColor(accent, active ? 0.30f : 0.18f) : accent;
-            dl->AddCircleFilled({thumbX, centerY}, thumbR, scaleAlpha(thumbCol, alphaScale));
-            dl->AddCircle({thumbX, centerY}, thumbR, scaleAlpha(theme::kKeyframeOutline, alphaScale), 0, 1.0f * scale);
-
-            char tip[64]{};
-            std::snprintf(
-                tip,
-                sizeof(tip),
-                "%.2fx (%.0f%%) | %.2f s",
-                static_cast<double>(sliderSpeed),
-                static_cast<double>(sliderSpeed * 100.0f),
-                static_cast<double>(sliderOutputSec)
-            );
-            widgets::itemTooltip(tip);
-        }
-
-        // Proportional speed preset chips (prevents "0.25x" clipping in narrow panels).
-        {
-            constexpr float kSpeedPresets[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
-            constexpr int   kPresetCount    = IM_ARRAYSIZE(kSpeedPresets);
-            float const     spacing         = 3.0f * scale;
-            float const     availW          = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-            float const     totalGap        = spacing * static_cast<float>(kPresetCount - 1);
-            float const     chipH           = std::round(ImGui::GetFontSize() + 8.0f * scale);
-
-            std::array<std::string, kPresetCount> labels{};
-            std::array<float, kPresetCount>       textWidths{};
-            float                                 sumTextW = 0.0f;
-            for (int i = 0; i < kPresetCount; ++i) {
-                char buf[16]{};
-                std::snprintf(buf, sizeof(buf), "%.2gx", static_cast<double>(kSpeedPresets[i]));
-                labels[static_cast<size_t>(i)]     = buf;
-                float const tw                     = ImGui::CalcTextSize(buf).x;
-                textWidths[static_cast<size_t>(i)] = tw;
-                sumTextW += tw;
-            }
-            float const usableW = std::max(1.0f, availW - totalGap);
-            float const extra   = std::max(0.0f, usableW - sumTextW) / static_cast<float>(kPresetCount);
-            float const shrink  = (sumTextW > usableW && sumTextW > 1.0f) ? (usableW / sumTextW) : 1.0f;
-
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {spacing, spacing});
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme::kButtonRounding * scale);
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.0f, 0.0f});
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-            float const chipSpeed = (mSpeedDragging && mSpeedDragClipId == clip->id) ? mSpeedDragValue : clip->speed;
-            for (int i = 0; i < kPresetCount; ++i) {
-                if (i > 0) ImGui::SameLine();
-                float const preset       = kSpeedPresets[i];
-                bool const  active       = std::abs(chipSpeed - preset) < 0.001f;
-                ImU32 const presetAccent = speedAccentColor(preset);
-                float const targetW      = textWidths[static_cast<size_t>(i)] * shrink + extra;
-                float const w =
-                    (i == kPresetCount - 1) ? std::max(1.0f, ImGui::GetContentRegionAvail().x) : std::round(targetW);
-                if (active) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, theme::withAlpha(presetAccent, 0x44));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::withAlpha(presetAccent, 0x5c));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::withAlpha(presetAccent, 0x70));
-                    ImGui::PushStyleColor(ImGuiCol_Border, presetAccent);
-                    ImGui::PushStyleColor(ImGuiCol_Text, presetAccent);
-                } else {
-                    ImGui::PushStyleColor(ImGuiCol_Button, theme::kButtonSubtle);
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kButtonHover);
-                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kButtonActive);
-                    ImGui::PushStyleColor(ImGuiCol_Border, theme::kButtonSubtleBorder);
-                    ImGui::PushStyleColor(ImGuiCol_Text, theme::kText);
-                }
-                if (ImGui::Button(labels[static_cast<size_t>(i)].c_str(), {w, chipH})) {
-                    submitSpeed(preset);
-                }
-                ImGui::PopStyleColor(5);
-            }
-            ImGui::PopStyleVar(4);
-        }
         ImGui::EndDisabled();
 
         ImGui::Dummy({0.0f, 1.0f * scale});
@@ -802,9 +911,6 @@ bool DetailsPanel::drawClip(PanelContext const& ctx) {
             ImGui::PopTextWrapPos();
         }
         property::endSection();
-    } else {
-        mSpeedDragging = false;
-        mSpeedDragClipId.clear();
     }
     return true;
 }
@@ -1344,138 +1450,27 @@ void DetailsPanel::drawKeyframeInterpolationRows(
         if (mBezierDragHandle != 0 && (mBezierDragCameraId != camera.id || mBezierDragTick != originalTick)) {
             mBezierDragHandle = 0;
         }
-        auto ctrl1 = mBezierDragHandle != 0 ? mBezierDraftCtrl1 : keyframe.bezierCtrl1;
-        auto ctrl2 = mBezierDragHandle != 0 ? mBezierDraftCtrl2 : keyframe.bezierCtrl2;
-        ctrl1.x    = std::clamp(ctrl1.x, 0.0f, 1.0f);
-        ctrl1.y    = std::clamp(ctrl1.y, 0.0f, 1.0f);
-        ctrl2.x    = std::clamp(ctrl2.x, 0.0f, 1.0f);
-        ctrl2.y    = std::clamp(ctrl2.y, 0.0f, 1.0f);
-
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierCurve"_tr().c_str());
-        ImGui::TableNextColumn();
-        {
-            float const  uiScale  = metrics::scale();
-            float const  availW   = std::max(64.0f, ImGui::GetContentRegionAvail().x);
-            float const  boxH     = std::clamp(availW, 96.0f * uiScale, 140.0f * uiScale);
-            float const  pad      = 8.0f * uiScale;
-            ImVec2 const boxMin   = ImGui::GetCursorScreenPos();
-            ImVec2 const boxMax   = {boxMin.x + availW, boxMin.y + boxH};
-            ImVec2 const innerMin = {boxMin.x + pad, boxMin.y + pad};
-            ImVec2 const innerMax = {boxMax.x - pad, boxMax.y - pad};
-            float const  innerW   = std::max(1.0f, innerMax.x - innerMin.x);
-            float const  innerH   = std::max(1.0f, innerMax.y - innerMin.y);
-
-            auto const toScreen = [&](state::editing::model::Vec2 p) -> ImVec2 {
-                return {innerMin.x + p.x * innerW, innerMax.y - p.y * innerH};
-            };
-            auto const fromScreen = [&](ImVec2 s) -> state::editing::model::Vec2 {
-                return {
-                    std::clamp((s.x - innerMin.x) / innerW, 0.0f, 1.0f),
-                    std::clamp((innerMax.y - s.y) / innerH, 0.0f, 1.0f),
-                };
-            };
-
-            ImGui::InvisibleButton("##bezier-canvas", {availW, boxH});
-            bool const   hovered = ImGui::IsItemHovered();
-            ImVec2 const mouse   = ImGui::GetMousePos();
-            ImVec2 const p0      = toScreen({0.0f, 0.0f});
-            ImVec2       p1      = toScreen(ctrl1);
-            ImVec2       p2      = toScreen(ctrl2);
-            ImVec2 const p3      = toScreen({1.0f, 1.0f});
-
-            auto const distSq = [](ImVec2 a, ImVec2 b) {
-                float const dx = a.x - b.x;
-                float const dy = a.y - b.y;
-                return dx * dx + dy * dy;
-            };
-            float const hitR2    = (9.0f * uiScale) * (9.0f * uiScale);
-            float const d1       = distSq(mouse, p1);
-            float const d2       = distSq(mouse, p2);
-            int         hoveredH = 0;
-            if (hovered && !camera.locked) {
-                if (d1 <= hitR2 && (d1 <= d2 || d2 > hitR2)) hoveredH = 1;
-                else if (d2 <= hitR2) hoveredH = 2;
+        int const prevHandle = mBezierDragHandle;
+        drawBezierCurveRows(
+            "bezier",
+            camera.locked,
+            keyframe.bezierCtrl1,
+            keyframe.bezierCtrl2,
+            mBezierDragHandle,
+            mBezierDraftCtrl1,
+            mBezierDraftCtrl2,
+            [&](state::editing::model::Vec2 c1, state::editing::model::Vec2 c2) {
+                EditorAction action{EditorActionType::SetKeyframeBezierControls};
+                action.id          = camera.id;
+                action.tick        = originalTick;
+                action.bezierCtrl1 = c1;
+                action.bezierCtrl2 = c2;
+                submit(std::move(action));
             }
-            if (hoveredH != 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                mBezierDragCameraId = camera.id;
-                mBezierDragTick     = originalTick;
-                mBezierDragHandle   = hoveredH;
-                mBezierDraftCtrl1   = ctrl1;
-                mBezierDraftCtrl2   = ctrl2;
-            }
-            if (mBezierDragHandle != 0) {
-                if (!camera.locked && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                    if (mBezierDragHandle == 1) mBezierDraftCtrl1 = fromScreen(mouse);
-                    else mBezierDraftCtrl2 = fromScreen(mouse);
-                    ctrl1 = mBezierDraftCtrl1;
-                    ctrl2 = mBezierDraftCtrl2;
-                    p1    = toScreen(ctrl1);
-                    p2    = toScreen(ctrl2);
-                } else {
-                    EditorAction action{EditorActionType::SetKeyframeBezierControls};
-                    action.id          = camera.id;
-                    action.tick        = originalTick;
-                    action.bezierCtrl1 = mBezierDraftCtrl1;
-                    action.bezierCtrl2 = mBezierDraftCtrl2;
-                    mBezierDragHandle  = 0;
-                    submit(std::move(action));
-                }
-            }
-            if (hoveredH != 0 || mBezierDragHandle != 0) {
-                ImGui::SetMouseCursor(mBezierDragHandle != 0 ? theme::kCursorGrabbing : theme::kCursorGrab);
-            }
-
-            auto* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(boxMin, boxMax, theme::kInputBg, 4.0f * uiScale);
-            dl->AddRect(boxMin, boxMax, theme::kBorder, 4.0f * uiScale);
-            dl->AddLine(p0, p3, theme::kFineDivider, 1.0f);
-            dl->AddLine(p0, p1, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
-            dl->AddLine(p3, p2, theme::withAlpha(theme::kTextDim, 0xb0), 1.2f * uiScale);
-            dl->AddBezierCubic(p0, p1, p2, p3, theme::kAccent, 2.0f * uiScale, 32);
-            dl->AddCircleFilled(p0, 2.5f * uiScale, theme::kTextDim);
-            dl->AddCircleFilled(p3, 2.5f * uiScale, theme::kTextDim);
-
-            float const handleR = 4.5f * uiScale;
-            ImU32 const c1Color = (mBezierDragHandle == 1 || hoveredH == 1) ? theme::kSelected : theme::kKeyframe;
-            ImU32 const c2Color = (mBezierDragHandle == 2 || hoveredH == 2) ? theme::kSelected : theme::kKeyframe;
-            dl->AddCircleFilled(p1, handleR, c1Color);
-            dl->AddCircle(p1, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
-            dl->AddCircleFilled(p2, handleR, c2Color);
-            dl->AddCircle(p2, handleR, theme::kKeyframeOutline, 0, 1.2f * uiScale);
-        }
-
-        static constexpr std::array xyLabels{"X", "Y"};
-        float                       c1[2] = {ctrl1.x, ctrl1.y};
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl1"_tr().c_str());
-        ImGui::TableNextColumn();
-        if (vectorInput2("bezier-c1", c1, xyLabels, "%.2f") && std::isfinite(c1[0]) && std::isfinite(c1[1])) {
-            EditorAction action{EditorActionType::SetKeyframeBezierControls};
-            action.id          = camera.id;
-            action.tick        = originalTick;
-            action.bezierCtrl1 = {std::clamp(c1[0], 0.0f, 1.0f), std::clamp(c1[1], 0.0f, 1.0f)};
-            action.bezierCtrl2 = ctrl2;
-            submit(std::move(action));
-        }
-
-        float c2[2] = {ctrl2.x, ctrl2.y};
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("%s", "playback.refactorEditor.details.bezierControl2"_tr().c_str());
-        ImGui::TableNextColumn();
-        if (vectorInput2("bezier-c2", c2, xyLabels, "%.2f") && std::isfinite(c2[0]) && std::isfinite(c2[1])) {
-            EditorAction action{EditorActionType::SetKeyframeBezierControls};
-            action.id          = camera.id;
-            action.tick        = originalTick;
-            action.bezierCtrl1 = ctrl1;
-            action.bezierCtrl2 = {std::clamp(c2[0], 0.0f, 1.0f), std::clamp(c2[1], 0.0f, 1.0f)};
-            submit(std::move(action));
+        );
+        if (prevHandle == 0 && mBezierDragHandle != 0) {
+            mBezierDragCameraId = camera.id;
+            mBezierDragTick     = originalTick;
         }
     }
 }
@@ -2015,6 +2010,332 @@ bool DetailsPanel::drawMarker(PanelContext const& ctx) {
     return false;
 }
 
+bool DetailsPanel::drawSpeedKeyframe(PanelContext const& ctx) {
+    auto const selectedTick = ctx.selection.selectedSpeedKeyframe();
+    if (!selectedTick) {
+        mSpeedKeyDragging      = false;
+        mSpeedKeyDragTick      = -1;
+        mSpeedBezierDragHandle = 0;
+        mSpeedBezierDragTick   = -1;
+        return false;
+    }
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->speedTrack;
+    auto const  key     = track.keysByTick.find(*selectedTick);
+    if (key == track.keysByTick.end()) {
+        mSpeedKeyDragging      = false;
+        mSpeedKeyDragTick      = -1;
+        mSpeedBezierDragHandle = 0;
+        mSpeedBezierDragTick   = -1;
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
+        return true;
+    }
+
+    int const  originalTick = key->first;
+    bool const editable     = !track.locked;
+    if (mSpeedKeyDragging && (!editable || mSpeedKeyDragTick != originalTick)) {
+        mSpeedKeyDragging = false;
+        mSpeedKeyDragTick = -1;
+    }
+    if (mSpeedBezierDragHandle != 0 && (!editable || mSpeedBezierDragTick != originalTick)) {
+        mSpeedBezierDragHandle = 0;
+    }
+
+    if (property::beginSection("playback.refactorEditor.speed.keyframeDetailsTitle"_tr().c_str())) {
+        float const scale      = metrics::scale();
+        float const labelWidth = measureLabelColumn({
+            "playback.refactorEditor.details.tick"_tr(),
+            "playback.refactorEditor.speed.speedValue"_tr(),
+            "playback.refactorEditor.details.interpolation"_tr(),
+            "playback.refactorEditor.details.bezierCurve"_tr(),
+            "playback.refactorEditor.details.bezierControl1"_tr(),
+            "playback.refactorEditor.details.bezierControl2"_tr(),
+        });
+
+        float const displayedSpeed =
+            (mSpeedKeyDragging && mSpeedKeyDragTick == originalTick) ? mSpeedKeyDragValue : key->second.speed;
+        auto const submitSpeed = [&](float nextSpeed) {
+            float const clamped = state::editing::model::clampSpeedKeyframeValue(nextSpeed);
+            if (std::abs(clamped - key->second.speed) > 1e-5f) {
+                EditorAction action{EditorActionType::SetSpeedKeyframeValue};
+                action.tick       = originalTick;
+                action.speedValue = clamped;
+                ctx.submitAction(std::move(action));
+            }
+        };
+
+        ImGui::BeginDisabled(!editable);
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##speed-keyframe-properties",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            int tick = originalTick;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
+            ImGui::TableNextColumn();
+            drawInputWithHint(formatTick(originalTick), [&] {
+                ImGui::InputInt("##speed-key-tick", &tick, 0, 0);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    tick = std::clamp(tick, 0, std::max(0, project->totalTicks));
+                    if (tick != originalTick && !track.keysByTick.contains(tick)) {
+                        EditorAction action{EditorActionType::MoveSpeedKeyframe};
+                        action.tick          = originalTick;
+                        action.secondaryTick = tick;
+                        ctx.submitAction(std::move(action));
+                        ctx.selection.selectSpeedKeyframe(tick);
+                    }
+                }
+            });
+
+            float speedInput = displayedSpeed;
+            char  pctBuf[24]{};
+            std::snprintf(pctBuf, sizeof(pctBuf), "%.0f%%", static_cast<double>(displayedSpeed * 100.0f));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.speed.speedValue"_tr().c_str());
+            ImGui::TableNextColumn();
+            drawInputWithHint(pctBuf, [&] {
+                ImGui::InputFloat("##speed-key-value", &speedInput, 0.0f, 0.0f, "%.2fx");
+                if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(speedInput)) {
+                    submitSpeed(speedInput);
+                }
+            });
+
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        // Piecewise log2 speed slider centered at 1.0x covering [0.01x, 32x].
+        {
+            static constexpr float kSpeedKeySnapPresets[] =
+                {0.05f, 0.1f, 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f};
+            drawLogSpeedSlider(
+                "##speed-key-slider",
+                editable,
+                key->second.speed,
+                state::editing::model::MinSpeedKeyframeValue,
+                state::editing::model::MaxSpeedKeyframeValue,
+                state::editing::model::MinSpeedKeyframeValue,
+                state::editing::model::MaxSpeedKeyframeValue,
+                kSpeedKeySnapPresets,
+                mSpeedKeyDragging,
+                mSpeedKeyDragValue,
+                submitSpeed,
+                [](float sliderSpeed) {
+                    char tip[48]{};
+                    std::snprintf(
+                        tip,
+                        sizeof(tip),
+                        "%.2fx (%.0f%%)",
+                        static_cast<double>(sliderSpeed),
+                        static_cast<double>(sliderSpeed * 100.0f)
+                    );
+                    return std::string(tip);
+                }
+            );
+            if (mSpeedKeyDragging) mSpeedKeyDragTick = originalTick;
+            else mSpeedKeyDragTick = -1;
+        }
+
+        // Quick speed preset chips.
+        {
+            static constexpr float kSpeedKeyPresets[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
+            drawSpeedPresetChips(displayedSpeed, kSpeedKeyPresets, submitSpeed);
+        }
+
+        property::separator();
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##speed-keyframe-curve",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            int const currentInterpolation = static_cast<int>(key->second.interpolationType);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            if (widgets::beginCombo(
+                    "##speed-key-interpolation",
+                    interpolationName(key->second.interpolationType).c_str()
+                )) {
+                for (int index = 0; index < 8; ++index) {
+                    auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+                    if (ImGui::Selectable(interpolationName(value).c_str(), index == currentInterpolation)) {
+                        EditorAction action{EditorActionType::SetSpeedKeyframeInterpolation};
+                        action.tick = originalTick;
+                        action.kind = index;
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+                widgets::endCombo();
+            }
+
+            if (key->second.interpolationType == state::editing::model::CameraInterpolationType::CubicBezier) {
+                int const prevHandle = mSpeedBezierDragHandle;
+                drawBezierCurveRows(
+                    "speed-bezier",
+                    !editable,
+                    key->second.bezierCtrl1,
+                    key->second.bezierCtrl2,
+                    mSpeedBezierDragHandle,
+                    mSpeedBezierDraftCtrl1,
+                    mSpeedBezierDraftCtrl2,
+                    [&](state::editing::model::Vec2 c1, state::editing::model::Vec2 c2) {
+                        EditorAction action{EditorActionType::SetSpeedKeyframeBezierControls};
+                        action.tick        = originalTick;
+                        action.bezierCtrl1 = c1;
+                        action.bezierCtrl2 = c2;
+                        ctx.submitAction(std::move(action));
+                    }
+                );
+                if (prevHandle == 0 && mSpeedBezierDragHandle != 0) {
+                    mSpeedBezierDragTick = originalTick;
+                }
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.speed.deleteKeyframe"_tr().c_str(),
+                true,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            EditorAction action{EditorActionType::DeleteSpeedKeyframe};
+            action.tick = originalTick;
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        ImGui::EndDisabled();
+        if (!editable) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    } else {
+        mSpeedKeyDragging      = false;
+        mSpeedKeyDragTick      = -1;
+        mSpeedBezierDragHandle = 0;
+        mSpeedBezierDragTick   = -1;
+    }
+    return true;
+}
+
+bool DetailsPanel::drawSpeedTrack(PanelContext const& ctx) {
+    if (!ctx.selection.isSpeedTrackSelected()) return false;
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->speedTrack;
+    if (!track.isVisible()) return false;
+    if (property::beginSection("playback.refactorEditor.speed.trackDetailsTitle"_tr().c_str())) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.speed.curveHint"_tr().c_str());
+        ImGui::PopTextWrapPos();
+        property::separator();
+
+        property::textRow(
+            "playback.refactorEditor.speed.keyframeCount"_tr().c_str(),
+            std::to_string(track.keysByTick.size()).c_str()
+        );
+        if (track.keysByTick.empty()) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", "playback.refactorEditor.speed.emptyHint"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        } else {
+            float minSpeed = track.keysByTick.begin()->second.speed;
+            float maxSpeed = minSpeed;
+            for (auto const& [tick, kf] : track.keysByTick) {
+                minSpeed = std::min(minSpeed, kf.speed);
+                maxSpeed = std::max(maxSpeed, kf.speed);
+            }
+            char rangeBuf[48]{};
+            std::snprintf(
+                rangeBuf,
+                sizeof(rangeBuf),
+                "%.2fx - %.2fx",
+                static_cast<double>(minSpeed),
+                static_cast<double>(maxSpeed)
+            );
+            property::textRow("playback.refactorEditor.speed.speedRange"_tr().c_str(), rangeBuf);
+        }
+
+        property::separator();
+        bool enabled = track.enabled;
+        if (ImGui::Checkbox("playback.refactorEditor.speed.toggleEnabled"_tr().c_str(), &enabled)) {
+            EditorAction action{EditorActionType::SetSpeedTrackEnabled};
+            action.value = enabled;
+            ctx.submitAction(std::move(action));
+        }
+        bool locked = track.locked;
+        if (ImGui::Checkbox("playback.refactorEditor.speed.toggleLocked"_tr().c_str(), &locked)) {
+            EditorAction action{EditorActionType::SetSpeedTrackLocked};
+            action.value = locked;
+            ctx.submitAction(std::move(action));
+        }
+
+        property::separator();
+        int const  playheadTick = std::clamp(ctx.state.currentTick, 0, std::max(0, project->totalTicks));
+        bool const canAdd       = !track.locked && !track.keysByTick.contains(playheadTick);
+        if (property::actionButton(
+                "playback.refactorEditor.speed.addKeyframeAtPlayhead"_tr().c_str(),
+                canAdd,
+                property::ButtonVariant::Primary,
+                ICON_ADD_KEYFRAME
+            )) {
+            float const sampled =
+                static_cast<float>(keyframe::sampleSpeedTrackAt(track, static_cast<long double>(playheadTick)));
+            EditorAction action{EditorActionType::AddSpeedKeyframe};
+            action.tick       = playheadTick;
+            action.speedValue = state::editing::model::clampSpeedKeyframeValue(sampled);
+            ctx.submitAction(std::move(action));
+        }
+        bool const canClear = !track.locked && !track.keysByTick.empty();
+        if (property::actionButton(
+                "playback.refactorEditor.speed.clearKeyframes"_tr().c_str(),
+                canClear,
+                property::ButtonVariant::Subtle,
+                ICON_RESET
+            )) {
+            ctx.submitAction(EditorAction{EditorActionType::ClearSpeedKeyframes});
+        }
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.speed.removeTrack"_tr().c_str(),
+                !track.locked,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            ctx.submitAction(EditorAction{EditorActionType::RemoveSpeedTrack});
+            ctx.selection.clear();
+        }
+        if (track.locked) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    }
+    return true;
+}
+
 void DetailsPanel::drawOverview(PanelContext const& ctx) {
     auto const project = ctx.state.project;
     auto const submit  = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
@@ -2079,19 +2400,43 @@ void DetailsPanel::drawExportPage(PanelContext const& ctx) {
     );
 
     if (property::beginSection("playback.refactorEditor.export.output"_tr().c_str())) {
-        // Mirrors what the export dialog will start with: its frame rate and the I/O range (-1 means unset).
-        int const rangeStart = std::clamp(ctx.commands.exportStartTick(), 0, state.totalTicks);
-        int const rangeEnd   = ctx.commands.exportEndTick() < 0
-                                 ? state.totalTicks
-                                 : std::clamp(ctx.commands.exportEndTick(), 0, state.totalTicks);
+        // Mirrors what the export dialog will start with: its frame rate, I/O range (-1 means unset), and compiled
+        // duration.
+        int const totalTicks = std::max(0, state.totalTicks);
+        int const exportIn   = ctx.commands.exportStartTick();
+        int const exportOut  = ctx.commands.exportEndTick();
+        int const rangeStart = std::clamp(exportIn, 0, totalTicks);
+        int const rangeEnd   = exportOut < 0 ? totalTicks : std::clamp(exportOut, 0, totalTicks);
+        int const fps        = std::max(1, ctx.commands.exportFps());
         property::textRow(
             "playback.refactorEditor.export.frameRate"_tr().c_str(),
-            (std::to_string(ctx.commands.exportFps()) + " FPS").c_str()
+            (std::to_string(fps) + " FPS").c_str()
         );
         property::textRow(
             "playback.refactorEditor.export.timeline"_tr().c_str(),
             (formatTick(rangeStart) + " - " + formatTick(std::max(rangeStart, rangeEnd))).c_str()
         );
+
+        exporting::ExportSettings previewSettings;
+        previewSettings.outputDirectory = ".";
+        previewSettings.outputName      = "preview";
+        bool const hasCustomRange       = exportIn >= 0 && exportOut > exportIn && exportOut <= totalTicks;
+        previewSettings.startTick       = hasCustomRange ? exportIn : 0;
+        previewSettings.endTick         = hasCustomRange ? exportOut : totalTicks;
+        previewSettings.frameRate       = {fps, 1};
+        previewSettings.resolutionX     = 1920;
+        previewSettings.resolutionY     = 1080;
+        previewSettings.ssaa            = 1;
+        bool const hasSceneRange = exportIn >= 0 && exportOut > exportIn && (exportIn > 0 || exportOut < totalTicks);
+        previewSettings.rangeMode =
+            hasSceneRange ? exporting::ExportRangeMode::SequenceInOut : exporting::ExportRangeMode::EnabledClips;
+        std::string durationText = "-";
+        if (auto const compiled = exporting::ExportPlanCompiler::compile(previewSettings, *state.project)) {
+            uint64_t const frameCount      = compiled.plan->frameCount;
+            double const   durationSeconds = static_cast<double>(frameCount) / static_cast<double>(fps);
+            durationText = "playback.refactorEditor.export.durationValue"_tr(durationSeconds, frameCount);
+        }
+        property::textRow("playback.refactorEditor.details.outputDuration"_tr().c_str(), durationText.c_str());
         if (!state.capabilities.ffmpegVideoExport) {
             ImGui::PushTextWrapPos(0.0f);
             ImGui::TextDisabled("%s  %s", ICON_INFO, "playback.refactorEditor.export.ffmpegUnavailable"_tr().c_str());

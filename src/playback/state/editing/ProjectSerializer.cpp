@@ -264,7 +264,6 @@ json toJson(Clip const& clip) {
         {"inTick",        clip.inTick       },
         {"outTick",       clip.outTick      },
         {"trackTick",     clip.trackTick    },
-        {"speed",         clip.speed        },
         {"name",          clip.name         },
         {"color",         toJson(clip.color)},
         {"muted",         clip.muted        },
@@ -280,7 +279,6 @@ Clip clipFrom(json const& node) {
     clip.inTick        = std::max(0, intOr(node, "inTick", 0));
     clip.outTick       = std::max(clip.inTick, intOr(node, "outTick", 0));
     clip.trackTick     = intOr(node, "trackTick", 0);
-    clip.speed         = clampClipSpeed(finiteOr(node, "speed", 1.0f));
     clip.name          = stringOr(node, "name");
     clip.color         = colorFrom(node, "color", clip.color);
     clip.muted         = boolOr(node, "muted", false);
@@ -314,6 +312,60 @@ LegacyTrack legacyTrackFrom(json const& node) {
     return track;
 }
 
+json toJson(SpeedKeyframe const& key) {
+    return {
+        {"speed",             key.speed                              },
+        {"interpolationType", static_cast<int>(key.interpolationType)},
+        {"bezierCtrl1",       toJson(key.bezierCtrl1)                },
+        {"bezierCtrl2",       toJson(key.bezierCtrl2)                },
+    };
+}
+
+SpeedKeyframe speedKeyframeFrom(json const& node) {
+    SpeedKeyframe key;
+    key.speed             = clampSpeedKeyframeValue(finiteOr(node, "speed", key.speed));
+    key.interpolationType = enumOr(
+        node,
+        "interpolationType",
+        key.interpolationType,
+        static_cast<int>(CameraInterpolationType::CubicBezier)
+    );
+    key.bezierCtrl1 = vec2From(node, "bezierCtrl1", key.bezierCtrl1);
+    key.bezierCtrl2 = vec2From(node, "bezierCtrl2", key.bezierCtrl2);
+    return key;
+}
+
+json toJson(SpeedTrack const& track) {
+    auto keys = json::array();
+    for (auto const& [tick, key] : track.keysByTick) {
+        auto entry    = toJson(key);
+        entry["tick"] = tick;
+        keys.push_back(std::move(entry));
+    }
+    return {
+        {"present", track.isVisible()},
+        {"enabled", track.enabled    },
+        {"locked",  track.locked     },
+        {"keys",    std::move(keys)  },
+    };
+}
+
+SpeedTrack speedTrackFrom(json const& node) {
+    SpeedTrack track;
+    track.enabled = boolOr(node, "enabled", true);
+    track.locked  = boolOr(node, "locked", false);
+    if (auto const* keys = arrayAt(node, "keys")) {
+        for (auto const& entry : *keys) {
+            if (!entry.is_object()) continue;
+            int const tick = std::max(0, intOr(entry, "tick", 0));
+            track.keysByTick.insert_or_assign(tick, speedKeyframeFrom(entry));
+        }
+    }
+    track.present = boolOr(node, "present", !track.keysByTick.empty());
+    if (!track.keysByTick.empty()) track.present = true;
+    return track;
+}
+
 json toJson(Scene const& scene) {
     auto cameras = json::array();
     for (auto const& camera : scene.cameras) cameras.push_back(toJson(camera));
@@ -321,14 +373,18 @@ json toJson(Scene const& scene) {
     auto markers = json::array();
     for (auto const& marker : scene.markers) markers.push_back(toJson(marker));
 
-    return {
+    json result{
         {"id",            scene.id           },
         {"name",          scene.name         },
         {"exportInTick",  scene.exportInTick },
         {"exportOutTick", scene.exportOutTick},
         {"cameras",       std::move(cameras) },
-        {"markers",       std::move(markers) }
+        {"markers",       std::move(markers) },
     };
+    if (scene.speedTrack.isVisible()) {
+        result["speedTrack"] = toJson(scene.speedTrack);
+    }
+    return result;
 }
 
 Scene sceneFrom(json const& node) {
@@ -372,6 +428,9 @@ Scene sceneFrom(json const& node) {
             if (!entry.is_object()) continue;
             scene.markers.push_back({stringOr(entry, "id"), stringOr(entry, "label"), intOr(entry, "tick", 0)});
         }
+    }
+    if (auto const* speedTrack = objectAt(node, "speedTrack")) {
+        scene.speedTrack = speedTrackFrom(*speedTrack);
     }
     return scene;
 }
@@ -417,6 +476,7 @@ std::string serializeProject(model::EditorStateExt const& project) {
                 synced.name          = scene.name;
                 synced.cameras       = project.cameras;
                 synced.markers       = project.markers;
+                synced.speedTrack    = project.speedTrack;
                 synced.exportInTick  = project.exportInTick;
                 synced.exportOutTick = project.exportOutTick;
                 scenesJson.push_back(toJson(synced));
@@ -431,6 +491,7 @@ std::string serializeProject(model::EditorStateExt const& project) {
         fallback.name          = "Scene 1";
         fallback.cameras       = project.cameras;
         fallback.markers       = project.markers;
+        fallback.speedTrack    = project.speedTrack;
         fallback.exportInTick  = project.exportInTick;
         fallback.exportOutTick = project.exportOutTick;
         scenesJson.push_back(toJson(fallback));
@@ -587,6 +648,7 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.activeSceneId = it->id;
         loaded.cameras       = it->cameras;
         loaded.markers       = it->markers;
+        loaded.speedTrack    = it->speedTrack;
         loaded.exportInTick  = it->exportInTick;
         loaded.exportOutTick = it->exportOutTick;
     }
