@@ -60,7 +60,7 @@ void sortClips(std::vector<model::Clip>& clips) { std::ranges::stable_sort(clips
 
 bool isFullRangeDefault(model::CameraEntity const& camera, int totalTicks) noexcept {
     return camera.clips.size() == 1 && camera.clips[0].inTick == 0 && camera.clips[0].outTick == totalTicks
-        && !camera.clips[0].muted && camera.clips[0].exportEnabled;
+        && camera.clips[0].exportEnabled;
 }
 
 std::string defaultSceneName(model::EditorStateExt const& state) {
@@ -198,7 +198,6 @@ void SplitClip::execute(model::EditorStateExt& state) {
     right.trackTick     = mSplitTick;
     right.name          = newName;
     right.color         = leftRef.color;
-    right.muted         = leftRef.muted;
     right.locked        = false;
     right.exportEnabled = leftRef.exportEnabled;
 
@@ -290,25 +289,6 @@ void RenameClip::execute(model::EditorStateExt& state) {
 
 void        RenameClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string RenameClip::label() const { return "playback.refactorEditor.history.renameClip"; }
-
-SetClipMuted::SetClipMuted(std::string clipId, bool muted) : mClipId(std::move(clipId)), mMuted(muted) {}
-
-void SetClipMuted::execute(model::EditorStateExt& state) {
-    mBefore.reset();
-    auto const loc = findClipLocation(state, mClipId);
-    if (!loc) return;
-    auto const& cam  = state.cameras[loc->cameraIdx];
-    auto const& clip = cam.clips[loc->clipIdx];
-    if (cam.locked || clip.locked || clip.muted == mMuted) return;
-
-    ClipOps::syncActiveSceneFromWorking(state);
-    mBefore                                                 = state;
-    state.cameras[loc->cameraIdx].clips[loc->clipIdx].muted = mMuted;
-    ClipOps::syncActiveSceneFromWorking(state);
-}
-
-void        SetClipMuted::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipMuted::label() const { return "playback.refactorEditor.history.setClipMuted"; }
 
 SetClipLocked::SetClipLocked(std::string clipId, bool locked) : mClipId(std::move(clipId)), mLocked(locked) {}
 
@@ -536,6 +516,12 @@ void DuplicateScene::execute(model::EditorStateExt& state) {
     for (auto& cam : inserted->cameras) {
         for (auto& clip : cam.clips) {
             clip.id = ClipOps::nextClipId(state);
+        }
+    }
+    for (auto& track : inserted->audioTracks) {
+        track.id = ClipOps::nextAudioTrackId(state);
+        for (auto& aclip : track.clips) {
+            aclip.id = ClipOps::nextAudioClipId(state);
         }
     }
     state.activeSceneId = inserted->id;

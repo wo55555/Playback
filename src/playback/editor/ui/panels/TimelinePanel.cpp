@@ -1,5 +1,7 @@
 ﻿#include "TimelinePanel.h"
 
+#include "playback/audio/ExternalAudioCache.h"
+#include "playback/audio/ExternalAudioMixer.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/HistoryLabel.h"
@@ -13,6 +15,7 @@
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
+#include "playback/utils/ShellUtils.h"
 
 #include "ll/api/i18n/I18n.h"
 
@@ -21,6 +24,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
 #include <ranges>
 
@@ -52,6 +56,9 @@ constexpr ImU32 kTimelapseInvalidFill    = IM_COL32(220, 68, 68, 72);
 constexpr ImU32 kTimelapseInvalidEdge    = IM_COL32(235, 92, 82, 210);
 constexpr ImU32 kTimelapseInvalidText    = IM_COL32(255, 118, 104, 255);
 constexpr ImU32 kTimelapseInvalidKeyFill = IM_COL32(255, 95, 72, 255);
+constexpr ImU32 kAudioAccent             = IM_COL32(52, 211, 153, 255);
+constexpr ImU32 kAudioErrorEdge          = IM_COL32(235, 110, 82, 220);
+constexpr ImU32 kAudioErrorText          = IM_COL32(255, 140, 118, 255);
 
 using widgets::formatTick;
 using widgets::formatTickCompact;
@@ -533,6 +540,11 @@ void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScal
     mDraggingTimelapseKeyframeOriginTick = -1;
     mDraggingTimelapseKeyframeTick       = -1;
     mDraggingTimelapseKeyframeMoved      = false;
+    mDraggingAudioTrackId.clear();
+    mDraggingAudioClipId.clear();
+    mDraggingAudioOriginTick = -1;
+    mDraggingAudioDraftTick  = -1;
+    mDraggingAudioMoved      = false;
     mTrackDragCameraId.clear();
     mTrackDragCancelled        = false;
     mClipDragMode              = 0;
@@ -588,6 +600,9 @@ void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward)
     for (auto const& [tick, _] : project->speedTrack.keysByTick) consider(tick);
     for (auto const& [tick, _] : project->freezeTrack.keysByTick) consider(tick);
     for (auto const& [tick, _] : project->timelapseTrack.keysByTick) consider(tick);
+    for (auto const& audioTrack : project->audioTracks) {
+        for (auto const& audioClip : audioTrack.clips) consider(audioClip.startTick);
+    }
     submitSeek(ctx, target);
 }
 
@@ -723,6 +738,19 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
         if (project->timelapseTrack.locked) return false;
         action.type = EditorActionType::DeleteTimelapseKeyframe;
         action.tick = *timelapseTick;
+    } else if (auto const audioClip = ctx.selection.selectedAudioClip()) {
+        auto const* track = state::editing::ClipOps::findAudioTrack(*project, audioClip->trackId);
+        if (!track || track->locked || !state::editing::ClipOps::findAudioClip(*track, audioClip->clipId)) {
+            return false;
+        }
+        action.type        = EditorActionType::RemoveAudioClip;
+        action.id          = audioClip->trackId;
+        action.secondaryId = audioClip->clipId;
+    } else if (auto const audioTrackId = ctx.selection.selectedAudioTrackId()) {
+        auto const* track = state::editing::ClipOps::findAudioTrack(*project, *audioTrackId);
+        if (!track || track->locked) return false;
+        action.type = EditorActionType::RemoveAudioTrack;
+        action.id   = *audioTrackId;
     } else {
         return false;
     }
@@ -850,6 +878,23 @@ bool TimelinePanel::addTimelapseKeyframeAt(PanelContext const& ctx, int tick) {
     return true;
 }
 
+bool TimelinePanel::promptAndAddAudioClip(PanelContext const& ctx, std::string const& trackId, int tick) {
+    auto const project = ctx.state.project;
+    if (!project) return false;
+    auto const* track = state::editing::ClipOps::findAudioTrack(*project, trackId);
+    if (!track || track->locked) return false;
+    auto const picked = playback::utils::pickAudioFile();
+    if (!picked) return false;
+    std::string const clipId = state::editing::ClipOps::nextAudioClipId(*project);
+    EditorAction      action{EditorActionType::AddAudioClip};
+    action.id   = trackId;
+    action.path = *picked;
+    action.tick = std::clamp(tick, 0, std::max(0, ctx.state.totalTicks));
+    ctx.submitAction(std::move(action));
+    queueAudioClipSelection(trackId, clipId);
+    return true;
+}
+
 bool TimelinePanel::canSplitClipAtPlayhead(PanelContext const& ctx) const {
     auto const project = ctx.state.project;
     if (!project) return false;
@@ -916,7 +961,8 @@ int TimelinePanel::snapToEditPoints(
     std::string_view                                    skipClipId,
     std::optional<int>                                  skipSpeedKeyTick,
     std::optional<int>                                  skipFreezeKeyTick,
-    std::optional<int>                                  skipTimelapseKeyTick
+    std::optional<int>                                  skipTimelapseKeyTick,
+    std::string_view                                    skipAudioClipId
 ) {
     auto const project = ctx.state.project;
     if (!project || pixelsPerTick <= 0.0f) return tick;
@@ -955,6 +1001,12 @@ int TimelinePanel::snapToEditPoints(
         if (skipTimelapseKeyTick && *skipTimelapseKeyTick == timelapseTick) continue;
         consider(timelapseTick);
     }
+    for (auto const& audioTrack : project->audioTracks) {
+        for (auto const& audioClip : audioTrack.clips) {
+            if (!skipAudioClipId.empty() && audioClip.id == skipAudioClipId) continue;
+            consider(audioClip.startTick);
+        }
+    }
     for (auto const& marker : project->markers) {
         if (marker.id != skipMarkerId) consider(marker.tick);
     }
@@ -977,6 +1029,9 @@ void TimelinePanel::clearPendingSelection() {
     mPendingFreezeKeyframeSelection.reset();
     mPendingTimelapseTrackSelection = false;
     mPendingTimelapseKeyframeSelection.reset();
+    mPendingAudioTrackSelection.clear();
+    mPendingAudioClipTrackId.clear();
+    mPendingAudioClipId.clear();
     mPendingSelectionFrames = 0;
 }
 
@@ -1028,6 +1083,19 @@ void TimelinePanel::queueTimelapseKeyframeSelection(int tick) {
     mPendingSelectionFrames            = kPendingSelectionFrames;
 }
 
+void TimelinePanel::queueAudioTrackSelection(std::string trackId) {
+    clearPendingSelection();
+    mPendingAudioTrackSelection = std::move(trackId);
+    mPendingSelectionFrames     = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueAudioClipSelection(std::string trackId, std::string clipId) {
+    clearPendingSelection();
+    mPendingAudioClipTrackId = std::move(trackId);
+    mPendingAudioClipId      = std::move(clipId);
+    mPendingSelectionFrames  = kPendingSelectionFrames;
+}
+
 void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     if (mPendingSelectionFrames <= 0) return;
     auto const project = ctx.state.project;
@@ -1068,6 +1136,17 @@ void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     } else if (mPendingTimelapseKeyframeSelection.has_value()) {
         if (project->timelapseTrack.keysByTick.contains(*mPendingTimelapseKeyframeSelection)) {
             ctx.selection.selectTimelapseKeyframe(*mPendingTimelapseKeyframeSelection);
+            done = true;
+        }
+    } else if (!mPendingAudioTrackSelection.empty()) {
+        if (state::editing::ClipOps::findAudioTrack(*project, mPendingAudioTrackSelection) != nullptr) {
+            ctx.selection.selectAudioTrack(mPendingAudioTrackSelection);
+            done = true;
+        }
+    } else if (!mPendingAudioClipTrackId.empty() && !mPendingAudioClipId.empty()) {
+        if (auto const* track = state::editing::ClipOps::findAudioTrack(*project, mPendingAudioClipTrackId);
+            track && state::editing::ClipOps::findAudioClip(*track, mPendingAudioClipId) != nullptr) {
+            ctx.selection.selectAudioClip(mPendingAudioClipTrackId, mPendingAudioClipId);
             done = true;
         }
     } else {
@@ -1878,8 +1957,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     drawList->PushClipRect({listLeft, layout.camerasTop}, {listLeft + listW, layout.bodyBottom}, true);
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) mTrackDragCancelled = false;
 
-    auto const* selectedCamera   = ctx.selection.getAs<state::editing::model::SelectedCamera>();
-    auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
+    auto const* selectedCamera       = ctx.selection.getAs<state::editing::model::SelectedCamera>();
+    auto const* selectedKeyframe     = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
+    auto const  selectedAudioTrackId = ctx.selection.selectedAudioTrackId();
+    auto const  selectedAudioClip    = ctx.selection.selectedAudioClip();
     std::string selectedClipCameraId;
     if (project) {
         if (auto const* selectedClip = ctx.selection.getAs<state::editing::model::SelectedClip>()) {
@@ -1900,6 +1981,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     bool   openTimelapseMenu = false;
     ImVec2 timelapseMenuMin{};
     ImVec2 timelapseMenuMax{};
+    bool   openAudioMenu = false;
+    ImVec2 audioMenuMin{};
+    ImVec2 audioMenuMax{};
     float  rowY = layout.camerasTop - mScrollY;
     for (auto const& row : mTrackTree.rows()) {
         float const rowBottom = rowY + row.height;
@@ -1910,6 +1994,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         bool const isSpeedRow     = row.kind == TrackRowKind::Speed;
         bool const isFreezeRow    = row.kind == TrackRowKind::Freeze;
         bool const isTimelapseRow = row.kind == TrackRowKind::Timelapse;
+        bool const isAudioRow     = row.kind == TrackRowKind::Audio;
         bool const isSpecialRow   = isSpeedRow || isFreezeRow || isTimelapseRow;
         bool const selected =
             isSpeedRow ? (ctx.selection.isSpeedTrackSelected() || ctx.selection.selectedSpeedKeyframe().has_value())
@@ -1917,10 +2002,12 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 ? (ctx.selection.isFreezeTrackSelected() || ctx.selection.selectedFreezeKeyframe().has_value())
             : isTimelapseRow
                 ? (ctx.selection.isTimelapseTrackSelected() || ctx.selection.selectedTimelapseKeyframe().has_value())
-                : (!row.cameraId.empty()
-                   && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
-                       || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId)
-                       || (!selectedClipCameraId.empty() && selectedClipCameraId == row.cameraId)));
+            : isAudioRow ? ((selectedAudioTrackId && *selectedAudioTrackId == row.id)
+                            || (selectedAudioClip && selectedAudioClip->trackId == row.id))
+                         : (!row.cameraId.empty()
+                            && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
+                                || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId)
+                                || (!selectedClipCameraId.empty() && selectedClipCameraId == row.cameraId)));
 
         ImGui::SetCursorScreenPos({listLeft, rowY});
         ImGui::InvisibleButton(("##track-row-" + row.id).c_str(), {listW, row.height});
@@ -1944,6 +2031,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         ImU32 const baseSwatch = isSpeedRow     ? theme::kSpeedFast
                                : isFreezeRow    ? kFreezeAccent
                                : isTimelapseRow ? kTimelapseAccent
+                               : isAudioRow     ? kAudioAccent
                                                 : theme::trackColor(row.cameraIndex);
         ImU32 const swatch     = row.enabled ? baseSwatch : theme::kTrackDisabled;
         float const swatchPadX = 2.0f * scale;
@@ -1958,12 +2046,14 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         float const indent = swatchPadX + metrics::trackSwatch() + metrics::gutter();
         float       labelX = listLeft + indent;
 
-        ImU32 const        textColor = row.enabled ? theme::kText : theme::kTextDim;
-        ImU32 const        iconColor =
+        ImU32 const textColor = row.enabled ? theme::kText : theme::kTextDim;
+        ImU32 const iconColor =
             isSpeedRow
-                       ? (row.enabled ? theme::kSpeedFast : theme::kTextDim)
-                       : (isFreezeRow ? (row.enabled ? kFreezeAccent : theme::kTextDim)
-                                      : (isTimelapseRow ? (row.enabled ? kTimelapseAccent : theme::kTextDim) : textColor));
+                ? (row.enabled ? theme::kSpeedFast : theme::kTextDim)
+                : (isFreezeRow
+                       ? (row.enabled ? kFreezeAccent : theme::kTextDim)
+                       : (isTimelapseRow ? (row.enabled ? kTimelapseAccent : theme::kTextDim)
+                                         : (isAudioRow ? (row.enabled ? kAudioAccent : theme::kTextDim) : textColor)));
         std::string const& label     = row.name;
         // Text centres on the fractional row, then the icon centres on the text's optical middle.
         float const rowCentre = (rowY + rowBottom) * 0.5f;
@@ -1972,19 +2062,22 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         widgets::drawIconAtCentre(
             drawList,
             isSpeedRow ? ICON_CHEVRONS_RIGHT
-                       : (isFreezeRow ? ICON_FREEZE : (isTimelapseRow ? ICON_TIMELAPSE : ICON_CAMERA)),
+                       : (isFreezeRow ? ICON_FREEZE
+                                      : (isTimelapseRow ? ICON_TIMELAPSE : (isAudioRow ? ICON_AUDIO : ICON_CAMERA))),
             {labelX + iconBox * 0.5f, widgets::textInkCentre(textY, label.c_str())},
             iconColor
         );
         labelX += iconBox + metrics::gutter() * 0.5f;
 
-        float const controlWidth = std::round(metrics::font() * 1.15f);
-        float const eyeX         = listLeft + listW - controlWidth - metrics::gutter();
-        float const lockX        = eyeX - controlWidth - 2.0f * scale;
-        float const addX         = lockX - controlWidth - 2.0f * scale;
-        bool const  showLock     = row.locked || hovered;
-        float const controlsLeft = isSpecialRow ? addX : (showLock ? lockX : eyeX);
-        float const rightLimit   = controlsLeft - 4.0f * scale;
+        float const controlWidth  = std::round(metrics::font() * 1.15f);
+        float const eyeX          = listLeft + listW - controlWidth - metrics::gutter();
+        float const muteX         = isAudioRow ? (eyeX - controlWidth - 2.0f * scale) : eyeX;
+        float const lockX         = (isAudioRow ? muteX : eyeX) - controlWidth - 2.0f * scale;
+        float const addX          = lockX - controlWidth - 2.0f * scale;
+        bool const  showLock      = row.locked || hovered;
+        bool const  hasAddControl = isSpecialRow || isAudioRow;
+        float const controlsLeft  = hasAddControl ? addX : (showLock ? lockX : eyeX);
+        float const rightLimit    = controlsLeft - 4.0f * scale;
         if (rightLimit > labelX) {
             std::string const elided =
                 elideTextToWidth(ImGui::GetFont(), ImGui::GetFontSize(), label, rightLimit - labelX);
@@ -2000,16 +2093,24 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             isFreezeRow && project && !row.locked && !project->freezeTrack.keysByTick.contains(playheadTick);
         bool const canAddTimelapseKey =
             isTimelapseRow && project && !row.locked && !project->timelapseTrack.keysByTick.contains(playheadTick);
-        bool const canAddSpecialKey = canAddSpeedKey || canAddFreezeKey || canAddTimelapseKey;
+        bool const canAddAudioClip = isAudioRow && project && !row.locked;
+        bool const canAddControl   = canAddSpeedKey || canAddFreezeKey || canAddTimelapseKey || canAddAudioClip;
         bool const addHovered =
-            isSpecialRow && allowInput && contains({addX, rowY}, {addX + controlWidth, rowBottom}, mouse);
+            hasAddControl && allowInput && contains({addX, rowY}, {addX + controlWidth, rowBottom}, mouse);
+        bool const muteHovered =
+            isAudioRow && allowInput && contains({muteX, rowY}, {muteX + controlWidth, rowBottom}, mouse);
         bool const eyeHovered = allowInput && contains({eyeX, rowY}, {eyeX + controlWidth, rowBottom}, mouse);
         bool const lockHovered =
             allowInput && showLock && contains({lockX, rowY}, {lockX + controlWidth, rowBottom}, mouse);
         if (addHovered) {
             widgets::hoverTooltip((isFreezeRow      ? "playback.refactorEditor.freeze.addKeyframeAtPlayhead"_tr()
                                    : isTimelapseRow ? "playback.refactorEditor.timelapse.addKeyframeAtPlayhead"_tr()
+                                   : isAudioRow     ? "playback.refactorEditor.audio.addAudioAtPlayhead"_tr()
                                                     : "playback.refactorEditor.speed.addKeyframeAtPlayhead"_tr())
+                                      .c_str());
+        } else if (muteHovered) {
+            widgets::hoverTooltip((row.muted ? "playback.refactorEditor.audio.unmuteTrack"_tr()
+                                             : "playback.refactorEditor.audio.muteTrack"_tr())
                                       .c_str());
         } else if (eyeHovered) {
             widgets::hoverTooltip((row.enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
@@ -2020,7 +2121,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                                               : "playback.refactorEditor.timeline.lockTrack"_tr())
                                       .c_str());
         }
-        if (allowInput && addHovered && canAddSpecialKey && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        if (allowInput && addHovered && canAddControl && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             if (isSpeedRow) {
                 float const sampled = static_cast<float>(
                     keyframe::sampleSpeedTrackAt(project->speedTrack, static_cast<long double>(playheadTick))
@@ -2032,10 +2133,18 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 queueSpeedKeyframeSelection(playheadTick);
             } else if (isFreezeRow) {
                 addFreezeKeyframeAt(ctx, playheadTick);
-            } else {
+            } else if (isTimelapseRow) {
                 addTimelapseKeyframeAt(ctx, playheadTick);
+            } else if (isAudioRow) {
+                promptAndAddAudioClip(ctx, row.id, playheadTick);
             }
-        } else if (allowInput && eyeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        } else if (allowInput && muteHovered && !row.locked && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            EditorAction action{EditorActionType::SetAudioTrackMuted};
+            action.id    = row.id;
+            action.value = !row.muted;
+            ctx.submitAction(std::move(action));
+        } else if (allowInput && eyeHovered && !(isAudioRow && row.locked)
+                   && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             if (isSpeedRow) {
                 EditorAction action{EditorActionType::SetSpeedTrackEnabled};
                 action.value = !row.enabled;
@@ -2046,6 +2155,11 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 ctx.submitAction(std::move(action));
             } else if (isTimelapseRow) {
                 EditorAction action{EditorActionType::SetTimelapseTrackEnabled};
+                action.value = !row.enabled;
+                ctx.submitAction(std::move(action));
+            } else if (isAudioRow) {
+                EditorAction action{EditorActionType::SetAudioTrackEnabled};
+                action.id    = row.id;
                 action.value = !row.enabled;
                 ctx.submitAction(std::move(action));
             } else {
@@ -2067,6 +2181,11 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 EditorAction action{EditorActionType::SetTimelapseTrackLocked};
                 action.value = !row.locked;
                 ctx.submitAction(std::move(action));
+            } else if (isAudioRow) {
+                EditorAction action{EditorActionType::SetAudioTrackLocked};
+                action.id    = row.id;
+                action.value = !row.locked;
+                ctx.submitAction(std::move(action));
             } else {
                 EditorAction action{EditorActionType::SetCameraLocked};
                 action.id    = row.cameraId;
@@ -2076,9 +2195,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         }
 
         float const controlGlyphSize = std::round(metrics::font() * 1.05f);
-        if (isSpecialRow) {
-            ImU32 const addCol = canAddSpecialKey ? (addHovered ? theme::kIconHighlight : theme::kIconInactive)
-                                                  : theme::withAlpha(theme::kTextDim, 0x70);
+        if (hasAddControl) {
+            ImU32 const addCol = canAddControl ? (addHovered ? theme::kIconHighlight : theme::kIconInactive)
+                                               : theme::withAlpha(theme::kTextDim, 0x70);
             drawCompactIconAtCentre(
                 drawList,
                 ICON_ADD,
@@ -2087,14 +2206,25 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 addCol
             );
         }
+        if (isAudioRow) {
+            ImU32 const muteCol =
+                row.locked
+                    ? (row.muted ? theme::withAlpha(theme::kWarning, 0x90) : theme::withAlpha(theme::kTextDim, 0x55))
+                    : (row.muted
+                           ? (muteHovered ? theme::kIconHighlight : theme::kWarning)
+                           : (muteHovered ? theme::kIconHighlight : theme::withAlpha(theme::kIconInactive, 0x70)));
+            drawCompactIconAtCentre(
+                drawList,
+                ICON_MUTE,
+                {muteX + controlWidth * 0.5f, rowCentre},
+                controlGlyphSize,
+                muteCol
+            );
+        }
         char const* eyeIcon = row.enabled ? ICON_EYE : ICON_HIDE;
-        drawCompactIconAtCentre(
-            drawList,
-            eyeIcon,
-            {eyeX + controlWidth * 0.5f, rowCentre},
-            controlGlyphSize,
-            eyeHovered ? theme::kIconHighlight : theme::kIconInactive
-        );
+        ImU32 const eyeCol  = (isAudioRow && row.locked) ? theme::withAlpha(theme::kTextDim, 0x70)
+                                                         : (eyeHovered ? theme::kIconHighlight : theme::kIconInactive);
+        drawCompactIconAtCentre(drawList, eyeIcon, {eyeX + controlWidth * 0.5f, rowCentre}, controlGlyphSize, eyeCol);
         if (showLock) {
             ImU32 const lockCol =
                 row.locked ? theme::kWarning
@@ -2136,6 +2266,17 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 timelapseMenuMin       = ImGui::GetItemRectMin();
                 timelapseMenuMax       = ImGui::GetItemRectMax();
                 openTimelapseMenu      = true;
+            }
+        } else if (isAudioRow) {
+            if (clicked && mouse.x < controlsLeft) {
+                ctx.selection.selectAudioTrack(row.id);
+            } else if (rowRightClicked && mouse.x < controlsLeft && mTrackDragCameraId.empty()) {
+                ctx.selection.selectAudioTrack(row.id);
+                mAudioTrackMenuId  = row.id;
+                mAudioLaneMenuTick = -1;
+                audioMenuMin       = ImGui::GetItemRectMin();
+                audioMenuMax       = ImGui::GetItemRectMax();
+                openAudioMenu      = true;
             }
         } else {
             // Reordering changes which camera wins a tick, so it is only offered on the unfiltered list.
@@ -2242,6 +2383,9 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     }
     if (openTimelapseMenu) {
         widgets::openAnchoredPopup("##timeline-timelapse-menu", timelapseMenuMin, timelapseMenuMax);
+    }
+    if (openAudioMenu) {
+        widgets::openAnchoredPopup("##timeline-audio-menu", audioMenuMin, audioMenuMax);
     }
 
     drawList->AddLine({listLeft + listW, layout.rulerTop}, {listLeft + listW, layout.bodyBottom}, theme::kLine);
@@ -3076,17 +3220,6 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                 ctx.submitAction(std::move(action));
             }
             if (ImGui::MenuItem(
-                    "playback.refactorEditor.timeline.muteClip"_tr().c_str(),
-                    nullptr,
-                    clip->muted,
-                    editable
-                )) {
-                EditorAction action{EditorActionType::SetClipMuted};
-                action.id    = clip->id;
-                action.value = !clip->muted;
-                ctx.submitAction(std::move(action));
-            }
-            if (ImGui::MenuItem(
                     (clip->locked ? "playback.refactorEditor.timeline.unlockClip"_tr()
                                   : "playback.refactorEditor.timeline.lockClip"_tr())
                         .c_str(),
@@ -3317,6 +3450,14 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
         if (ImGui::MenuItem(timelapseItem.c_str(), nullptr, hasTimelapseTrack, !hasTimelapseTrack)) {
             ctx.submitAction({EditorActionType::AddTimelapseTrack});
             queueTimelapseTrackSelection();
+        }
+        std::string const audioItem =
+            std::string(ICON_AUDIO) + "  " + "playback.refactorEditor.timeline.addAudioTrack"_tr();
+        if (ImGui::MenuItem(audioItem.c_str())) {
+            std::string const newTrackId =
+                project ? state::editing::ClipOps::nextAudioTrackId(*project) : std::string{};
+            ctx.submitAction({EditorActionType::AddAudioTrack});
+            if (!newTrackId.empty()) queueAudioTrackSelection(newTrackId);
         }
         widgets::endAnchoredPopup();
     }
@@ -3596,6 +3737,125 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
         }
         widgets::endAnchoredPopup();
     }
+
+    if (widgets::beginAnchoredPopup("##timeline-audio-clip-menu")) {
+        auto const* track =
+            project ? state::editing::ClipOps::findAudioTrack(*project, mAudioClipMenuTrackId) : nullptr;
+        auto const* clip = track ? state::editing::ClipOps::findAudioClip(*track, mAudioClipMenuClipId) : nullptr;
+        if (!project || !track || !clip) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            bool const editable = !track->locked;
+            if (ImGui::MenuItem(
+                    (clip->muted ? "playback.refactorEditor.audio.unmuteClip"_tr()
+                                 : "playback.refactorEditor.audio.muteClip"_tr())
+                        .c_str(),
+                    nullptr,
+                    clip->muted,
+                    editable
+                )) {
+                EditorAction action{EditorActionType::SetAudioClipProps};
+                action.id               = track->id;
+                action.secondaryId      = clip->id;
+                action.trimStartSeconds = clip->trimStartSeconds;
+                action.durationSeconds  = clip->durationSeconds;
+                action.volume           = clip->volume;
+                action.muted            = !clip->muted;
+                ctx.submitAction(std::move(action));
+            }
+            if (ImGui::MenuItem("playback.refactorEditor.timeline.seekHere"_tr().c_str())) {
+                seekTo(ctx, clip->startTick);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.audio.deleteClip"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::DeleteSelection).c_str(),
+                    false,
+                    editable
+                )) {
+                EditorAction action{EditorActionType::RemoveAudioClip};
+                action.id          = track->id;
+                action.secondaryId = clip->id;
+                ctx.submitAction(std::move(action));
+                ctx.selection.clear();
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-audio-menu")) {
+        auto const* track = project ? state::editing::ClipOps::findAudioTrack(*project, mAudioTrackMenuId) : nullptr;
+        if (!project || !track) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            int const  playheadTick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+            bool const editable     = !track->locked;
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.audio.addAudioAtPlayhead"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable
+                )) {
+                promptAndAddAudioClip(ctx, track->id, playheadTick);
+            }
+            if (mAudioLaneMenuTick >= 0 && mAudioLaneMenuTick != playheadTick) {
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.audio.addAudioAtCursor"_tr().c_str(),
+                        nullptr,
+                        false,
+                        editable
+                    )) {
+                    promptAndAddAudioClip(ctx, track->id, mAudioLaneMenuTick);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    (track->muted ? "playback.refactorEditor.audio.unmuteTrack"_tr()
+                                  : "playback.refactorEditor.audio.muteTrack"_tr())
+                        .c_str(),
+                    nullptr,
+                    track->muted,
+                    editable
+                )) {
+                EditorAction action{EditorActionType::SetAudioTrackMuted};
+                action.id    = track->id;
+                action.value = !track->muted;
+                ctx.submitAction(std::move(action));
+            }
+            if (ImGui::MenuItem(
+                    (track->enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
+                                    : "playback.refactorEditor.timeline.enableTrack"_tr())
+                        .c_str(),
+                    nullptr,
+                    false,
+                    editable
+                )) {
+                EditorAction action{EditorActionType::SetAudioTrackEnabled};
+                action.id    = track->id;
+                action.value = !track->enabled;
+                ctx.submitAction(std::move(action));
+            }
+            if (ImGui::MenuItem((track->locked ? "playback.refactorEditor.timeline.unlockTrack"_tr()
+                                               : "playback.refactorEditor.timeline.lockTrack"_tr())
+                                    .c_str())) {
+                EditorAction action{EditorActionType::SetAudioTrackLocked};
+                action.id    = track->id;
+                action.value = !track->locked;
+                ctx.submitAction(std::move(action));
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("playback.refactorEditor.audio.removeTrack"_tr().c_str(), nullptr, false, editable)) {
+                EditorAction action{EditorActionType::RemoveAudioTrack};
+                action.id = track->id;
+                ctx.submitAction(std::move(action));
+                if (ctx.selection.selectedAudioTrackId() == track->id
+                    || (ctx.selection.selectedAudioClip() && ctx.selection.selectedAudioClip()->trackId == track->id)) {
+                    ctx.selection.clear();
+                }
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
 }
 
 void TimelinePanel::drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput) {
@@ -3809,7 +4069,12 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mDraggingTimelapseKeyframeOriginTick = -1;
         mDraggingTimelapseKeyframeTick       = -1;
         mDraggingTimelapseKeyframeMoved      = false;
-        mRangeDragMode                   = 0;
+        mDraggingAudioTrackId.clear();
+        mDraggingAudioClipId.clear();
+        mDraggingAudioOriginTick   = -1;
+        mDraggingAudioDraftTick    = -1;
+        mDraggingAudioMoved        = false;
+        mRangeDragMode             = 0;
         mExportMarkerDrag          = 0;
         mExportDragInTick          = -1;
         mExportDragOutTick         = -1;
@@ -3841,7 +4106,12 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mDraggingTimelapseKeyframeOriginTick = -1;
         mDraggingTimelapseKeyframeTick       = -1;
         mDraggingTimelapseKeyframeMoved      = false;
-        mGroupDrag                       = false;
+        mDraggingAudioTrackId.clear();
+        mDraggingAudioClipId.clear();
+        mDraggingAudioOriginTick   = -1;
+        mDraggingAudioDraftTick    = -1;
+        mDraggingAudioMoved        = false;
+        mGroupDrag                 = false;
         mGroupDragDelta            = 0;
         mBoxPending                = false;
         mBoxSelecting              = false;
@@ -4101,6 +4371,11 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         auto const  it          = std::lower_bound(transitions.begin(), transitions.end(), tick);
         return it == transitions.end() ? state.totalTicks : std::min(state.totalTicks, *it);
     };
+    std::optional<keyframe::SpeedTimeMapping> audioTimeMapping;
+    if (!project->audioTracks.empty()
+        && (keyframe::hasActiveSpeedCurve(*project) || keyframe::hasActiveTimelapseTrack(*project))) {
+        audioTimeMapping.emplace(*project);
+    }
     for (auto const& row : mTrackTree.rows()) {
         float const rowBottom = y + row.height;
         if (rowBottom < layout.camerasTop || y > layout.bodyBottom) {
@@ -4919,6 +5194,274 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 ImU32 const outline   = lit ? theme::kKeyframeSelected : theme::kKeyframeOutline;
                 drawKeyframeDiamond(drawList, kx, bandCenterY, radius, fill, outline);
             }
+        } else if (row.kind == TrackRowKind::Audio) {
+            auto const* audioTrack = state::editing::ClipOps::findAudioTrack(*project, row.id);
+            if (audioTrack) {
+                bool const trackEnabled = audioTrack->enabled;
+                bool const trackMuted   = audioTrack->muted;
+                bool const trackLocked  = audioTrack->locked;
+                bool const mouseInRow =
+                    allowInput && contains({layout.canvasLeft, y}, {layout.fullMax.x, rowBottom}, mouse);
+                auto const    selectedAudioClip = ctx.selection.selectedAudioClip();
+                float const   rounding          = 4.0f * uiScale;
+                float const   midY              = (blockTop + blockBot) * 0.5f;
+                float const   waveHalfH         = std::max(2.0f, (blockBot - blockTop) * 0.5f - 2.0f * uiScale);
+                float const   stepX             = std::max(2.0f, 2.0f * uiScale);
+                float const   barW              = std::max(1.0f, stepX - 0.5f * uiScale);
+                ImFont* const font              = ImGui::GetFont();
+
+                state::editing::model::AudioClip const*                   hoveredAudioClip = nullptr;
+                float                                                     hoveredAudioX0   = 0.0f;
+                float                                                     hoveredAudioX1   = 0.0f;
+                std::shared_ptr<audio::external::DecodedAudioAsset const> hoveredAsset;
+                double                                                    hoveredEffDur   = 0.0;
+                double                                                    hoveredStartSec = 0.0;
+                double                                                    hoveredEndSec   = 0.0;
+
+                for (auto const& clip : audioTrack->clips) {
+                    bool const draggingThis =
+                        mDraggingAudioTrackId == audioTrack->id && mDraggingAudioClipId == clip.id;
+                    int const    drawnStartTick = draggingThis ? mDraggingAudioDraftTick : clip.startTick;
+                    auto const   asset          = audio::external::getOrRequestAudioAsset(clip.filePath);
+                    double const effectiveDur =
+                        std::max(0.0, audio::external::effectiveAudioClipDurationSeconds(clip, asset.get()));
+                    double const startOutSec =
+                        audioTimeMapping
+                            ? (audioTimeMapping->unscaledTicksAt(static_cast<long double>(drawnStartTick)) / 20.0)
+                            : (static_cast<double>(drawnStartTick) / 20.0);
+                    double const endOutSec = startOutSec + effectiveDur;
+                    double const endReplayTick =
+                        audioTimeMapping
+                            ? audioTimeMapping->replayTickForUnscaled(static_cast<long double>(endOutSec * 20.0))
+                            : (static_cast<double>(drawnStartTick) + effectiveDur * 20.0);
+
+                    float const rawX0 = scale.xAt(static_cast<float>(drawnStartTick));
+                    float const rawX1 = std::max(rawX0 + 24.0f * uiScale, scale.xAt(static_cast<float>(endReplayTick)));
+                    float const x0    = std::max(layout.canvasLeft, rawX0);
+                    float const x1    = std::min(layout.fullMax.x, rawX1);
+                    if (x1 <= x0) continue;
+
+                    bool const clipSelected = selectedAudioClip && selectedAudioClip->trackId == audioTrack->id
+                                           && selectedAudioClip->clipId == clip.id;
+                    bool const isFailed   = asset && asset->state == audio::external::AudioLoadState::Failed;
+                    bool const isPending  = !asset || asset->state == audio::external::AudioLoadState::Pending;
+                    bool const isReady    = asset && asset->state == audio::external::AudioLoadState::Ready;
+                    bool const activeClip = trackEnabled && !trackMuted && !clip.muted;
+
+                    ImU32 const baseTint  = activeClip ? kAudioAccent : theme::kTrackDisabled;
+                    int const   fillAlpha = activeClip ? (clipSelected ? 0x5c : 0x42) : (clipSelected ? 0x48 : 0x2e);
+                    drawList->AddRectFilled(
+                        {x0, blockTop},
+                        {x1, blockBot},
+                        theme::withAlpha(baseTint, fillAlpha),
+                        rounding
+                    );
+
+                    if (isReady && !asset->peakEnvelope.empty() && effectiveDur > 0.0) {
+                        drawList->AddLine(
+                            {x0 + 1.0f, midY},
+                            {x1 - 1.0f, midY},
+                            theme::withAlpha(baseTint, activeClip ? 0x55 : 0x30),
+                            1.0f
+                        );
+                        float const waveX0 = std::max(x0 + 1.0f, layout.canvasLeft);
+                        float const waveX1 = std::min(x1 - 1.0f, layout.fullMax.x);
+                        float const trackVol =
+                            std::isfinite(audioTrack->volume) ? std::max(0.0f, audioTrack->volume) : 1.0f;
+                        float const  clipVol  = std::isfinite(clip.volume) ? std::max(0.0f, clip.volume) : 1.0f;
+                        float const  volScale = std::clamp(clipVol * trackVol, 0.25f, 1.5f);
+                        double const trimStart =
+                            std::isfinite(clip.trimStartSeconds) ? std::max(0.0, clip.trimStartSeconds) : 0.0;
+                        ImU32 const waveCol     = theme::withAlpha(baseTint, activeClip ? 0xb8 : 0x50);
+                        float const maxBarHalfH = waveHalfH * 0.92f;
+                        for (float bx = waveX0; bx < waveX1; bx += stepX) {
+                            float const  bxEnd = std::min(bx + barW, waveX1);
+                            double const t0    = static_cast<double>(scale.tickAtExact(bx));
+                            double const t1    = static_cast<double>(scale.tickAtExact(bx + stepX));
+                            double const outSec0 =
+                                audioTimeMapping ? (audioTimeMapping->unscaledTicksAt(t0) / 20.0) : (t0 / 20.0);
+                            double const outSec1 =
+                                audioTimeMapping ? (audioTimeMapping->unscaledTicksAt(t1) / 20.0) : (t1 / 20.0);
+                            if (outSec1 <= startOutSec || outSec0 >= endOutSec) continue;
+                            double const  s0   = trimStart + std::max(0.0, outSec0 - startOutSec);
+                            double const  s1   = trimStart + std::max(0.0, std::min(endOutSec, outSec1) - startOutSec);
+                            uint8_t const peak = asset->samplePeakRange(s0, std::max(s0, s1));
+                            float const   amp  = std::clamp((static_cast<float>(peak) / 255.0f) * volScale, 0.0f, 1.0f);
+                            float const   barH = std::max(1.0f, amp * maxBarHalfH);
+                            drawList->AddRectFilled({bx, midY - barH}, {bxEnd, midY + barH}, waveCol);
+                        }
+                    }
+
+                    ImU32 const borderCol = isFailed
+                                              ? kAudioErrorEdge
+                                              : (clipSelected ? theme::kKeyframeSelected
+                                                              : theme::withAlpha(baseTint, activeClip ? 0xc0 : 0x6c));
+                    drawList->AddRect(
+                        {x0, blockTop},
+                        {x1, blockBot},
+                        borderCol,
+                        rounding,
+                        0,
+                        (clipSelected || isFailed) ? 1.5f : 1.0f
+                    );
+
+                    float rightEdge = x1 - 4.0f * uiScale;
+                    if (isFailed && rightEdge - (x0 + 6.0f * uiScale) >= eyeIconSize + 6.0f * uiScale) {
+                        drawCompactIconAtCentre(
+                            drawList,
+                            ICON_WARNING,
+                            {rightEdge - eyeIconSize * 0.5f, cornerCenterY},
+                            eyeIconSize,
+                            kAudioErrorText
+                        );
+                        rightEdge -= eyeIconSize + 2.0f * uiScale;
+                    }
+                    if ((clip.muted || trackMuted)
+                        && rightEdge - (x0 + 6.0f * uiScale) >= eyeIconSize + 6.0f * uiScale) {
+                        drawCompactIconAtCentre(
+                            drawList,
+                            ICON_MUTE,
+                            {rightEdge - eyeIconSize * 0.5f, cornerCenterY},
+                            eyeIconSize,
+                            theme::kWarning
+                        );
+                        rightEdge -= eyeIconSize + 2.0f * uiScale;
+                    }
+
+                    std::string displayName = clip.name;
+                    if (displayName.empty() && !clip.filePath.empty()) {
+                        auto const sep = clip.filePath.find_last_of("/\\");
+                        displayName    = sep == std::string::npos ? clip.filePath : clip.filePath.substr(sep + 1);
+                    }
+                    if (isPending) {
+                        displayName += " (" + "playback.refactorEditor.audio.statusLoading"_tr() + ")";
+                    } else if (std::isfinite(clip.volume) && std::abs(clip.volume - 1.0f) >= 0.01f) {
+                        char volBuf[24]{};
+                        std::snprintf(
+                            volBuf,
+                            sizeof(volBuf),
+                            " (%d%%)",
+                            static_cast<int>(std::lround(clip.volume * 100.0f))
+                        );
+                        displayName += volBuf;
+                    }
+                    float const textX = x0 + 5.0f * uiScale;
+                    if (!displayName.empty() && rightEdge > textX + 4.0f * uiScale) {
+                        std::string const elided =
+                            elideTextToWidth(font, cornerFontSize, displayName, rightEdge - textX);
+                        if (!elided.empty()) {
+                            float const  textY = std::floor(cornerCenterY - cornerFontSize * 0.5f + 0.5f);
+                            ImVec4 const labelClip{textX, blockTop, rightEdge, blockBot};
+                            ImU32 const  labelCol =
+                                isFailed ? kAudioErrorText : (activeClip ? theme::kText : theme::kTextDim);
+                            drawList->AddText(
+                                font,
+                                cornerFontSize,
+                                {textX, textY},
+                                labelCol,
+                                elided.c_str(),
+                                nullptr,
+                                0.0f,
+                                &labelClip
+                            );
+                        }
+                    }
+
+                    if (mouseInRow && contains({x0, blockTop}, {x1, blockBot}, mouse)) {
+                        hoveredAudioClip = &clip;
+                        hoveredAudioX0   = x0;
+                        hoveredAudioX1   = x1;
+                        hoveredAsset     = asset;
+                        hoveredEffDur    = effectiveDur;
+                        hoveredStartSec  = startOutSec;
+                        hoveredEndSec    = endOutSec;
+                    }
+                }
+
+                if (hoveredAudioClip) {
+                    if (mDraggingAudioClipId.empty()) {
+                        if (!trackLocked) ImGui::SetMouseCursor(theme::kCursorGrab);
+                        std::string baseName = hoveredAudioClip->filePath;
+                        if (auto const sep = baseName.find_last_of("/\\"); sep != std::string::npos) {
+                            baseName = baseName.substr(sep + 1);
+                        }
+                        std::string tip = hoveredAudioClip->name.empty() ? baseName : hoveredAudioClip->name;
+                        if (!baseName.empty() && baseName != tip) tip += "\n" + baseName;
+                        char timeBuf[128]{};
+                        std::snprintf(
+                            timeBuf,
+                            sizeof(timeBuf),
+                            "%s  (%.2fs -> %.2fs, %.2fs)",
+                            formatTick(hoveredAudioClip->startTick).c_str(),
+                            hoveredStartSec,
+                            hoveredEndSec,
+                            hoveredEffDur
+                        );
+                        tip += "\n" + std::string(timeBuf);
+                        char volBuf[64]{};
+                        std::snprintf(
+                            volBuf,
+                            sizeof(volBuf),
+                            "%s: %d%%",
+                            "playback.refactorEditor.audio.volume"_tr().c_str(),
+                            static_cast<int>(std::lround(hoveredAudioClip->volume * 100.0f))
+                        );
+                        tip += "\n" + std::string(volBuf);
+                        if (hoveredAudioClip->muted || trackMuted) {
+                            tip += "  [" + "playback.refactorEditor.audio.muted"_tr() + "]";
+                        }
+                        if (!hoveredAsset || hoveredAsset->state == audio::external::AudioLoadState::Pending) {
+                            tip += "\n" + "playback.refactorEditor.audio.statusLoading"_tr();
+                        } else if (hoveredAsset->state == audio::external::AudioLoadState::Ready) {
+                            tip += "\n" + "playback.refactorEditor.audio.statusReady"_tr(hoveredAsset->durationSeconds);
+                        } else {
+                            tip += "\n" + "playback.refactorEditor.audio.statusFailed"_tr();
+                            if (!hoveredAsset->errorMessage.empty()) tip += ": " + hoveredAsset->errorMessage;
+                        }
+                        widgets::hoverTooltip(tip.c_str());
+                    }
+
+                    if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                        clickConsumed = true;
+                        ctx.selection.selectAudioClip(audioTrack->id, hoveredAudioClip->id);
+                        mAudioClipMenuTrackId = audioTrack->id;
+                        mAudioClipMenuClipId  = hoveredAudioClip->id;
+                        widgets::openAnchoredPopup(
+                            "##timeline-audio-clip-menu",
+                            {hoveredAudioX0, blockTop},
+                            {hoveredAudioX1, blockBot}
+                        );
+                    } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                        clickConsumed = true;
+                        ctx.selection.selectAudioClip(audioTrack->id, hoveredAudioClip->id);
+                        if (!trackLocked) {
+                            mDraggingAudioTrackId     = audioTrack->id;
+                            mDraggingAudioClipId      = hoveredAudioClip->id;
+                            mDraggingAudioStartMouseX = mouse.x;
+                            mDraggingAudioOriginTick  = hoveredAudioClip->startTick;
+                            mDraggingAudioDraftTick   = hoveredAudioClip->startTick;
+                            mDraggingAudioMoved       = false;
+                        } else {
+                            submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
+                        }
+                    }
+                } else if (mouseInRow && !clickConsumed) {
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                        clickConsumed = true;
+                        int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                        if (mSnapEnabled) tick = snapTick(tick);
+                        mAudioTrackMenuId   = audioTrack->id;
+                        mAudioLaneMenuTick  = tick;
+                        float const anchorX = scale.xAt(static_cast<float>(tick));
+                        ctx.selection.selectAudioTrack(audioTrack->id);
+                        widgets::openAnchoredPopup("##timeline-audio-menu", {anchorX, blockTop}, {anchorX, blockBot});
+                    } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                        clickConsumed = true;
+                        ctx.selection.selectAudioTrack(audioTrack->id);
+                        submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
+                    }
+                }
+            }
         } else if (row.kind == TrackRowKind::Camera && row.cameraIndex >= 0
                    && row.cameraIndex < static_cast<int>(project->cameras.size())) {
             auto const& camera     = project->cameras[row.cameraIndex];
@@ -5112,7 +5655,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         hoveredClipRightEdge = overRightEdge;
                     }
 
-                    bool const  activeClip = camera.enabled && clip.exportEnabled && !clip.muted;
+                    bool const  activeClip = camera.enabled && clip.exportEnabled;
                     ImU32 const swatch     = activeClip ? trackColor : theme::kTrackDisabled;
                     int const   fillAlpha  = activeClip ? (clipSelected ? 0x82 : 0x64) : (clipSelected ? 0x64 : 0x46);
                     drawList
@@ -5201,16 +5744,6 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                             {rightEdge - eyeIconSize * 0.5f, cornerCenterY},
                             eyeIconSize,
                             theme::kWarning
-                        );
-                        rightEdge -= eyeIconSize + 2.0f * uiScale;
-                    }
-                    if (clip.muted && rightEdge - (x0 + 6.0f * uiScale) >= eyeIconSize + 10.0f * uiScale) {
-                        drawCompactIconAtCentre(
-                            drawList,
-                            ICON_MUTE,
-                            {rightEdge - eyeIconSize * 0.5f, cornerCenterY},
-                            eyeIconSize,
-                            theme::kTextDim
                         );
                         rightEdge -= eyeIconSize + 2.0f * uiScale;
                     }
@@ -6060,6 +6593,73 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 mClipDragCameraId.clear();
                 mClipDragId.clear();
                 mClipDragMoved = false;
+            }
+        }
+    } else if (allowInput && !mDraggingAudioTrackId.empty() && !mDraggingAudioClipId.empty()) {
+        auto const* track = state::editing::ClipOps::findAudioTrack(*project, mDraggingAudioTrackId);
+        auto const* clip  = track ? state::editing::ClipOps::findAudioClip(*track, mDraggingAudioClipId) : nullptr;
+        if (!track || !clip || track->locked || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            mDraggingAudioTrackId.clear();
+            mDraggingAudioClipId.clear();
+            mDraggingAudioOriginTick = -1;
+            mDraggingAudioDraftTick  = -1;
+            mDraggingAudioMoved      = false;
+        } else {
+            ImGui::SetMouseCursor(theme::kCursorGrabbing);
+            if (std::abs(ImGui::GetMousePos().x - mDraggingAudioStartMouseX) >= 2.0f * metrics::scale()) {
+                mDraggingAudioMoved = true;
+            }
+            int candidateTick = mDraggingAudioOriginTick;
+            if (mDraggingAudioMoved) {
+                int const rawDelta = static_cast<int>(std::round(
+                    (ImGui::GetMousePos().x - mDraggingAudioStartMouseX) / std::max(0.0001f, scale.pixelsPerTick)
+                ));
+                int       target   = mDraggingAudioOriginTick + rawDelta;
+                if (shiftSnap) {
+                    target = snapToEditPoints(
+                        ctx,
+                        target,
+                        scale.pixelsPerTick,
+                        true,
+                        true,
+                        {},
+                        {},
+                        {},
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        mDraggingAudioClipId
+                    );
+                } else if (mSnapEnabled) {
+                    target = snapTick(target);
+                }
+                candidateTick = state.totalTicks > 0 ? std::clamp(target, 0, state.totalTicks) : std::max(0, target);
+            }
+            mDraggingAudioDraftTick = candidateTick;
+            float const markerX     = scale.xAt(static_cast<float>(candidateTick));
+            drawList->AddLine(
+                {markerX, layout.bodyTop},
+                {markerX, layout.bodyBottom},
+                theme::withAlpha(theme::kKeyframeSelected, 180),
+                1.0f
+            );
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (mDraggingAudioMoved) {
+                    if (candidateTick != mDraggingAudioOriginTick) {
+                        EditorAction action{EditorActionType::MoveAudioClip};
+                        action.id          = mDraggingAudioTrackId;
+                        action.secondaryId = mDraggingAudioClipId;
+                        action.tick        = candidateTick;
+                        ctx.submitAction(std::move(action));
+                    }
+                } else {
+                    submitSeek(ctx, std::clamp(scale.tickAt(mDraggingAudioStartMouseX), 0, state.totalTicks));
+                }
+                mDraggingAudioTrackId.clear();
+                mDraggingAudioClipId.clear();
+                mDraggingAudioOriginTick = -1;
+                mDraggingAudioDraftTick  = -1;
+                mDraggingAudioMoved      = false;
             }
         }
     }

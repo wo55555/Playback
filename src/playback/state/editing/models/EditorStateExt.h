@@ -17,6 +17,7 @@ struct Scene {
     SpeedTrack                speedTrack;
     FreezeTrack               freezeTrack;
     TimelapseTrack            timelapseTrack;
+    std::vector<AudioTrack>   audioTracks;
 
     int exportInTick{-1};
     int exportOutTick{-1};
@@ -40,6 +41,7 @@ struct EditorStateExt {
     SpeedTrack                speedTrack;
     FreezeTrack               freezeTrack;
     TimelapseTrack            timelapseTrack;
+    std::vector<AudioTrack>   audioTracks;
     int                       exportInTick{-1};
     int                       exportOutTick{-1};
 

@@ -21,6 +21,13 @@ float finiteOr(json const& node, char const* key, float fallback) {
     return std::isfinite(result) ? result : fallback;
 }
 
+double doubleOr(json const& node, char const* key, double fallback) {
+    auto const value = node.find(key);
+    if (value == node.end() || !value->is_number()) return fallback;
+    auto const result = value->get<double>();
+    return std::isfinite(result) ? result : fallback;
+}
+
 int intOr(json const& node, char const* key, int fallback) {
     auto const value = node.find(key);
     if (value == node.end() || !value->is_number_integer()) return fallback;
@@ -266,7 +273,6 @@ json toJson(Clip const& clip) {
         {"trackTick",     clip.trackTick    },
         {"name",          clip.name         },
         {"color",         toJson(clip.color)},
-        {"muted",         clip.muted        },
         {"locked",        clip.locked       },
         {"exportEnabled", clip.exportEnabled}
     };
@@ -281,10 +287,76 @@ Clip clipFrom(json const& node) {
     clip.trackTick     = intOr(node, "trackTick", 0);
     clip.name          = stringOr(node, "name");
     clip.color         = colorFrom(node, "color", clip.color);
-    clip.muted         = boolOr(node, "muted", false);
     clip.locked        = boolOr(node, "locked", false);
     clip.exportEnabled = boolOr(node, "exportEnabled", true);
     return clip;
+}
+
+json toJson(AudioClip const& clip) {
+    return {
+        {"id",               clip.id              },
+        {"name",             clip.name            },
+        {"filePath",         clip.filePath        },
+        {"startTick",        clip.startTick       },
+        {"trimStartSeconds", clip.trimStartSeconds},
+        {"durationSeconds",  clip.durationSeconds },
+        {"volume",           clip.volume          },
+        {"muted",            clip.muted           }
+    };
+}
+
+AudioClip audioClipFrom(json const& node) {
+    AudioClip clip;
+    clip.id               = stringOr(node, "id");
+    clip.name             = stringOr(node, "name");
+    clip.filePath         = stringOr(node, "filePath");
+    clip.startTick        = std::max(0, intOr(node, "startTick", 0));
+    clip.trimStartSeconds = clampAudioSeconds(doubleOr(node, "trimStartSeconds", 0.0));
+    clip.durationSeconds  = clampAudioSeconds(doubleOr(node, "durationSeconds", 0.0));
+    clip.volume           = clampAudioVolume(finiteOr(node, "volume", 1.0f));
+    clip.muted            = boolOr(node, "muted", false);
+    return clip;
+}
+
+json toJson(AudioTrack const& track) {
+    auto clips = json::array();
+    for (auto const& clip : track.clips) clips.push_back(toJson(clip));
+    return {
+        {"id",      track.id        },
+        {"name",    track.name      },
+        {"enabled", track.enabled   },
+        {"muted",   track.muted     },
+        {"locked",  track.locked    },
+        {"volume",  track.volume    },
+        {"clips",   std::move(clips)}
+    };
+}
+
+AudioTrack audioTrackFrom(json const& node) {
+    AudioTrack track;
+    track.id      = stringOr(node, "id");
+    track.name    = stringOr(node, "name");
+    track.enabled = boolOr(node, "enabled", true);
+    track.muted   = boolOr(node, "muted", false);
+    track.locked  = boolOr(node, "locked", false);
+    track.volume  = clampAudioVolume(finiteOr(node, "volume", 1.0f));
+    if (auto const* clips = arrayAt(node, "clips")) {
+        for (auto const& entry : *clips) {
+            if (entry.is_object()) track.clips.push_back(audioClipFrom(entry));
+        }
+        std::ranges::stable_sort(track.clips, {}, &AudioClip::startTick);
+    }
+    return track;
+}
+
+std::vector<AudioTrack> audioTracksFrom(json const& node) {
+    std::vector<AudioTrack> tracks;
+    if (auto const* arr = arrayAt(node, "audioTracks")) {
+        for (auto const& entry : *arr) {
+            if (entry.is_object()) tracks.push_back(audioTrackFrom(entry));
+        }
+    }
+    return tracks;
 }
 
 struct LegacyClip {
@@ -478,6 +550,11 @@ json toJson(Scene const& scene) {
     if (scene.timelapseTrack.isVisible()) {
         result["timelapseTrack"] = toJson(scene.timelapseTrack);
     }
+    if (!scene.audioTracks.empty()) {
+        auto audioTracks = json::array();
+        for (auto const& track : scene.audioTracks) audioTracks.push_back(toJson(track));
+        result["audioTracks"] = std::move(audioTracks);
+    }
     return result;
 }
 
@@ -532,6 +609,7 @@ Scene sceneFrom(json const& node) {
     if (auto const* timelapseTrack = objectAt(node, "timelapseTrack")) {
         scene.timelapseTrack = timelapseTrackFrom(*timelapseTrack);
     }
+    scene.audioTracks = audioTracksFrom(node);
     return scene;
 }
 
@@ -579,6 +657,7 @@ std::string serializeProject(model::EditorStateExt const& project) {
                 synced.speedTrack     = project.speedTrack;
                 synced.freezeTrack    = project.freezeTrack;
                 synced.timelapseTrack = project.timelapseTrack;
+                synced.audioTracks    = project.audioTracks;
                 synced.exportInTick   = project.exportInTick;
                 synced.exportOutTick  = project.exportOutTick;
                 scenesJson.push_back(toJson(synced));
@@ -596,6 +675,7 @@ std::string serializeProject(model::EditorStateExt const& project) {
         fallback.speedTrack     = project.speedTrack;
         fallback.freezeTrack    = project.freezeTrack;
         fallback.timelapseTrack = project.timelapseTrack;
+        fallback.audioTracks    = project.audioTracks;
         fallback.exportInTick   = project.exportInTick;
         fallback.exportOutTick = project.exportOutTick;
         scenesJson.push_back(toJson(fallback));
@@ -755,6 +835,7 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.speedTrack     = it->speedTrack;
         loaded.freezeTrack    = it->freezeTrack;
         loaded.timelapseTrack = it->timelapseTrack;
+        loaded.audioTracks    = it->audioTracks;
         loaded.exportInTick   = it->exportInTick;
         loaded.exportOutTick = it->exportOutTick;
     }

@@ -1007,8 +1007,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         }
         bool const timelapseTrackActive = state.project && keyframe::hasActiveTimelapseTrack(*state.project);
         bool const fixedTimelapseActive = mExportTimelapse && !timelapseTrackActive;
-        mExportTab                  = std::clamp(mExportTab, 0, IM_ARRAYSIZE(tabLabels) - 1);
-        if (fixedTimelapseActive && mExportTab == TabAudio) mExportTab = TabGeneral;
+        bool const hasExternalTracks    = state.project && !state.project->audioTracks.empty();
+        mExportTab                      = std::clamp(mExportTab, 0, IM_ARRAYSIZE(tabLabels) - 1);
         mExportAudioChannels        = std::clamp(mExportAudioChannels, 0, 1);
         mExportAudioCodec           = std::clamp(mExportAudioCodec, 0, IM_ARRAYSIZE(kAudioCodecs) - 1);
         mExportAudioBitrate         = std::clamp(mExportAudioBitrate, 0, IM_ARRAYSIZE(kAudioBitratesKbps) - 1);
@@ -1047,13 +1047,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
         // Settings are split over pages, so each one is short enough to show whole; the summary below spans them all.
         ImGui::Dummy({0.0f, 2.0f * uiScale});
-        bool const tabChanged = tabStrip(
-            "##export-tabs",
-            tabLabels,
-            IM_ARRAYSIZE(tabLabels),
-            mExportTab,
-            fixedTimelapseActive ? (1 << TabAudio) : 0
-        );
+        bool const tabChanged = tabStrip("##export-tabs", tabLabels, IM_ARRAYSIZE(tabLabels), mExportTab, 0);
 
         // Taller cells give the rows room to breathe without widening the label column.
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, cellPaddingY});
@@ -1479,18 +1473,39 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndTable();
             }
         } else if (mExportTab == TabAudio) {
-            ImGui::BeginDisabled(fixedTimelapseActive);
+            bool const gameAudioActive           = mExportAudio && !fixedTimelapseActive;
+            bool const audioEncodeControlsActive = gameAudioActive || mExportExternalAudio;
+
             sectionHeader("playback.refactorEditor.export.capture"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-audio", labelWidth)) {
                 propertyLabel(
                     "playback.refactorEditor.export.recordAudio"_tr().c_str(),
                     "playback.refactorEditor.export.recordAudioHint"_tr().c_str()
                 );
+                ImGui::BeginDisabled(fixedTimelapseActive);
                 ImGui::Checkbox("##export-record-audio", &mExportAudio);
+                ImGui::EndDisabled();
+                if (fixedTimelapseActive) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::PushTextWrapPos(0.0f);
+                    ImGui::TextColored(
+                        ImGui::ColorConvertU32ToFloat4(theme::kWarning),
+                        "%s",
+                        "playback.refactorEditor.export.gameAudioDisabledTimelapseHint"_tr().c_str()
+                    );
+                    ImGui::PopTextWrapPos();
+                }
+
+                propertyLabel(
+                    "playback.refactorEditor.export.externalAudio"_tr().c_str(),
+                    "playback.refactorEditor.export.externalAudioHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-external-audio", &mExportExternalAudio);
 
                 // Rows stay in place while audio is off, so the page keeps its layout.
                 propertyLabel("playback.refactorEditor.export.audioChannels"_tr().c_str());
-                ImGui::BeginDisabled(!mExportAudio);
+                ImGui::BeginDisabled(!audioEncodeControlsActive);
                 segmented(
                     "##export-audio-channels",
                     audioChannelOptions,
@@ -1509,7 +1524,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     "playback.refactorEditor.export.audioCodec"_tr().c_str(),
                     "playback.refactorEditor.export.audioCodecHint"_tr().c_str()
                 );
-                ImGui::BeginDisabled(mExportFormat != 0 || !mExportAudio);
+                ImGui::BeginDisabled(mExportFormat != 0 || !audioEncodeControlsActive);
                 segmented(
                     "##export-audio-codec",
                     audioCodecOptions,
@@ -1524,7 +1539,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     "playback.refactorEditor.export.audioBitrateHint"_tr().c_str()
                 );
                 ImGui::BeginDisabled(
-                    mExportFormat != 0 || !mExportAudio || !exporting::audioCodecUsesBitrate(audioCodec)
+                    mExportFormat != 0 || !audioEncodeControlsActive || !exporting::audioCodecUsesBitrate(audioCodec)
                 );
                 segmented(
                     "##export-audio-bitrate",
@@ -1536,7 +1551,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndDisabled();
                 ImGui::EndTable();
             }
-            ImGui::EndDisabled();
         } else {
             sectionHeader("playback.refactorEditor.export.advancedRender"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-rendering", labelWidth)) {
@@ -1637,6 +1651,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         baseSettings.videoCrf         = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         baseSettings.hideHud          = mExportHideHud;
         baseSettings.audio            = mExportAudio && !fixedTimelapseActive;
+        baseSettings.externalAudio    = mExportExternalAudio;
         baseSettings.audioStereo      = mExportAudioChannels == 1;
         baseSettings.audioCodec       = audioCodec;
         baseSettings.audioBitrateKbps = kAudioBitratesKbps[mExportAudioBitrate];
@@ -1798,7 +1813,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             std::string encodeValue = mExportFormat == 0 ? std::string(encodeSpeedOptions[mExportEncodeSpeed])
                                                                + " | CRF " + std::to_string(mExportCrf)
                                                          : std::string("PNG");
-            if (baseSettings.audio) {
+            bool const  hasAnyExportAudio = baseSettings.audio || (baseSettings.externalAudio && hasExternalTracks);
+            if (hasAnyExportAudio) {
                 // A PNG sequence keeps its sound as a WAV file beside the frames.
                 std::string audioValue = mExportFormat == 0 ? audioCodecOptions[mExportAudioCodec] : "WAV";
                 if (mExportFormat == 0 && exporting::audioCodecUsesBitrate(audioCodec))
