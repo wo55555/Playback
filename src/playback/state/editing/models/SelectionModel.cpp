@@ -28,6 +28,17 @@ std::optional<int> SelectionModel::selectedSpeedKeyframe() const {
     return std::nullopt;
 }
 
+void SelectionModel::selectFreezeTrack() { select(SelectedFreezeTrack{}); }
+
+void SelectionModel::selectFreezeKeyframe(int tick) { select(SelectedFreezeKeyframe{tick}); }
+
+bool SelectionModel::isFreezeTrackSelected() const { return getAs<SelectedFreezeTrack>() != nullptr; }
+
+std::optional<int> SelectionModel::selectedFreezeKeyframe() const {
+    if (auto const* key = getAs<SelectedFreezeKeyframe>()) return key->tick;
+    return std::nullopt;
+}
+
 void SelectionModel::setKeyframes(std::vector<SelectedKeyframe> keys) {
     if (keys.empty()) {
         clear();
@@ -87,6 +98,10 @@ std::vector<std::string> SelectionModel::selectedIds() const {
                 return {"speed_track"};
             } else if constexpr (std::is_same_v<T, SelectedSpeedKeyframe>) {
                 return {"speed_track", std::to_string(sel.tick)};
+            } else if constexpr (std::is_same_v<T, SelectedFreezeTrack>) {
+                return {"freeze_track"};
+            } else if constexpr (std::is_same_v<T, SelectedFreezeKeyframe>) {
+                return {"freeze_track", std::to_string(sel.tick)};
             }
             return {};
         },
@@ -149,6 +164,10 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
                 return state.speedTrack.isVisible();
             } else if constexpr (std::is_same_v<T, SelectedSpeedKeyframe>) {
                 return state.speedTrack.keysByTick.contains(sel.tick);
+            } else if constexpr (std::is_same_v<T, SelectedFreezeTrack>) {
+                return state.freezeTrack.isVisible();
+            } else if constexpr (std::is_same_v<T, SelectedFreezeKeyframe>) {
+                return state.freezeTrack.keysByTick.contains(sel.tick);
             }
             return true;
         },

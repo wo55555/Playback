@@ -19,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <span>
 
 namespace playback::editor::ui {
@@ -344,8 +345,14 @@ void drawLogSpeedSlider(
     widgets::itemTooltip(tip.c_str());
 }
 
-template <typename SubmitSpeedFn>
-void drawSpeedPresetChips(float displayedSpeed, std::span<float const> presets, SubmitSpeedFn&& onSelect) {
+template <typename T, typename FormatLabelFn, typename IsActiveFn, typename AccentFn, typename OnSelectFn>
+void drawPresetChips(
+    std::span<T const> presets,
+    FormatLabelFn&&    formatLabel,
+    IsActiveFn&&       isActive,
+    AccentFn&&         accentFor,
+    OnSelectFn&&       onSelect
+) {
     if (presets.empty()) return;
     float const  scale    = metrics::scale();
     size_t const count    = presets.size();
@@ -358,10 +365,8 @@ void drawSpeedPresetChips(float displayedSpeed, std::span<float const> presets, 
     std::vector<float>       textWidths(count);
     float                    sumTextW = 0.0f;
     for (size_t i = 0; i < count; ++i) {
-        char buf[16]{};
-        std::snprintf(buf, sizeof(buf), "%.2gx", static_cast<double>(presets[i]));
-        labels[i]       = buf;
-        float const tw  = ImGui::CalcTextSize(buf).x;
+        labels[i]        = formatLabel(presets[i]);
+        float const tw   = ImGui::CalcTextSize(labels[i].c_str()).x;
         textWidths[i]   = tw;
         sumTextW       += tw;
     }
@@ -375,9 +380,9 @@ void drawSpeedPresetChips(float displayedSpeed, std::span<float const> presets, 
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
     for (size_t i = 0; i < count; ++i) {
         if (i > 0) ImGui::SameLine();
-        float const preset       = presets[i];
-        bool const  active       = std::abs(displayedSpeed - preset) < 0.001f;
-        ImU32 const presetAccent = speedAccentColor(preset);
+        auto const& preset       = presets[i];
+        bool const  active       = isActive(preset);
+        ImU32 const presetAccent = accentFor(preset);
         float const targetW      = textWidths[i] * shrink + extra;
         float const w = (i == count - 1) ? std::max(1.0f, ImGui::GetContentRegionAvail().x) : std::round(targetW);
         if (active) {
@@ -393,12 +398,29 @@ void drawSpeedPresetChips(float displayedSpeed, std::span<float const> presets, 
             ImGui::PushStyleColor(ImGuiCol_Border, theme::kButtonSubtleBorder);
             ImGui::PushStyleColor(ImGuiCol_Text, theme::kText);
         }
+        ImGui::PushID(static_cast<int>(i));
         if (ImGui::Button(labels[i].c_str(), {w, chipH})) {
             onSelect(preset);
         }
+        ImGui::PopID();
         ImGui::PopStyleColor(5);
     }
     ImGui::PopStyleVar(4);
+}
+
+template <typename SubmitSpeedFn>
+void drawSpeedPresetChips(float displayedSpeed, std::span<float const> presets, SubmitSpeedFn&& onSelect) {
+    drawPresetChips(
+        presets,
+        [](float preset) {
+            char buf[16]{};
+            std::snprintf(buf, sizeof(buf), "%.2gx", static_cast<double>(preset));
+            return std::string(buf);
+        },
+        [displayedSpeed](float preset) { return std::abs(displayedSpeed - preset) < 0.001f; },
+        [](float preset) { return speedAccentColor(preset); },
+        std::forward<SubmitSpeedFn>(onSelect)
+    );
 }
 
 template <typename CommitBezierFn>
@@ -562,6 +584,8 @@ void DetailsPanel::draw(PanelContext const& ctx) {
         mSpeedKeyDragTick      = -1;
         mSpeedBezierDragHandle = 0;
         mSpeedBezierDragTick   = -1;
+        mFreezeDelayDragging   = false;
+        mFreezeDelayDragTick   = -1;
         widgets::noActiveProjectPlaceholder();
     } else {
         if (mPage != InspectorPage::Selection) {
@@ -569,6 +593,8 @@ void DetailsPanel::draw(PanelContext const& ctx) {
             mSpeedKeyDragTick      = -1;
             mSpeedBezierDragHandle = 0;
             mSpeedBezierDragTick   = -1;
+            mFreezeDelayDragging   = false;
+            mFreezeDelayDragTick   = -1;
         }
         switch (mPage) {
         case InspectorPage::Selection:
@@ -654,6 +680,10 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
         subject = "playback.refactorEditor.speed.keyframeDetailsTitle"_tr();
     } else if (selection.isSpeedTrackSelected()) {
         subject = "playback.refactorEditor.speed.trackDetailsTitle"_tr();
+    } else if (selection.selectedFreezeKeyframe()) {
+        subject = "playback.refactorEditor.freeze.keyframeDetailsTitle"_tr();
+    } else if (selection.isFreezeTrackSelected()) {
+        subject = "playback.refactorEditor.freeze.trackDetailsTitle"_tr();
     }
     property::beginInspector("playback.refactorEditor.inspector.selection"_tr(), subject);
 
@@ -664,6 +694,8 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawMarker(ctx)) return;
     if (drawSpeedKeyframe(ctx)) return;
     if (drawSpeedTrack(ctx)) return;
+    if (drawFreezeKeyframe(ctx)) return;
+    if (drawFreezeTrack(ctx)) return;
     drawOverview(ctx);
 }
 
@@ -2324,6 +2356,246 @@ bool DetailsPanel::drawSpeedTrack(PanelContext const& ctx) {
                 ICON_TRASH
             )) {
             ctx.submitAction(EditorAction{EditorActionType::RemoveSpeedTrack});
+            ctx.selection.clear();
+        }
+        if (track.locked) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    }
+    return true;
+}
+
+bool DetailsPanel::drawFreezeKeyframe(PanelContext const& ctx) {
+    auto const selectedTick = ctx.selection.selectedFreezeKeyframe();
+    if (!selectedTick) {
+        mFreezeDelayDragging = false;
+        mFreezeDelayDragTick = -1;
+        return false;
+    }
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->freezeTrack;
+    auto const  key     = track.keysByTick.find(*selectedTick);
+    if (key == track.keysByTick.end()) {
+        mFreezeDelayDragging = false;
+        mFreezeDelayDragTick = -1;
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
+        return true;
+    }
+
+    int const  originalTick = key->first;
+    bool const editable     = !track.locked;
+    if (mFreezeDelayDragging && (!editable || !key->second.frozen || mFreezeDelayDragTick != originalTick)) {
+        mFreezeDelayDragging = false;
+        mFreezeDelayDragTick = -1;
+    }
+
+    if (property::beginSection("playback.refactorEditor.freeze.keyframeDetailsTitle"_tr().c_str())) {
+        float const scale      = metrics::scale();
+        float const labelWidth = measureLabelColumn({"playback.refactorEditor.details.tick"_tr()});
+
+        auto const submitFreeze = [&](bool nextFrozen, int nextDelay) {
+            int const clampedDelay = state::editing::model::clampFreezeDelayTicks(nextDelay);
+            if (nextFrozen != key->second.frozen || clampedDelay != key->second.frozenDelay) {
+                EditorAction action{EditorActionType::SetFreezeKeyframe};
+                action.tick  = originalTick;
+                action.value = nextFrozen;
+                action.kind  = clampedDelay;
+                ctx.submitAction(std::move(action));
+            }
+        };
+
+        ImGui::BeginDisabled(!editable);
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##freeze-keyframe-properties",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            int tick = originalTick;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
+            ImGui::TableNextColumn();
+            drawInputWithHint(formatTick(originalTick), [&] {
+                ImGui::InputInt("##freeze-key-tick", &tick, 0, 0);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    tick = std::clamp(tick, 0, std::max(0, project->totalTicks));
+                    if (tick != originalTick && !track.keysByTick.contains(tick)) {
+                        EditorAction action{EditorActionType::MoveFreezeKeyframe};
+                        action.tick          = originalTick;
+                        action.secondaryTick = tick;
+                        ctx.submitAction(std::move(action));
+                        ctx.selection.selectFreezeKeyframe(tick);
+                    }
+                }
+            });
+
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        bool frozen = key->second.frozen;
+        if (ImGui::Checkbox("playback.refactorEditor.freeze.frozen"_tr().c_str(), &frozen)) {
+            submitFreeze(frozen, key->second.frozenDelay);
+        }
+
+        property::separator();
+        ImGui::BeginDisabled(!key->second.frozen);
+        ImGui::TextUnformatted("playback.refactorEditor.freeze.slowdownDelay"_tr().c_str());
+
+        int const displayedDelay = (mFreezeDelayDragging && mFreezeDelayDragTick == originalTick)
+                                     ? mFreezeDelayDragValue
+                                     : key->second.frozenDelay;
+        int       delayDraft     = displayedDelay;
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::SliderInt(
+            "##freeze-delay",
+            &delayDraft,
+            state::editing::model::MinFreezeDelayTicks,
+            state::editing::model::MaxFreezeDelayTicks,
+            "%dt",
+            ImGuiSliderFlags_AlwaysClamp
+        );
+        // Hold slider edits in a local draft so dragging commits a single undo entry on release.
+        if (ImGui::IsItemActive()) {
+            mFreezeDelayDragging  = true;
+            mFreezeDelayDragTick  = originalTick;
+            mFreezeDelayDragValue = state::editing::model::clampFreezeDelayTicks(delayDraft);
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            submitFreeze(key->second.frozen, delayDraft);
+        }
+        if (!ImGui::IsItemActive()) {
+            mFreezeDelayDragging = false;
+            mFreezeDelayDragTick = -1;
+        }
+
+        {
+            static constexpr int kFreezeDelayPresets[] = {0, 3, 5, 10};
+            drawPresetChips<int>(
+                kFreezeDelayPresets,
+                [](int preset) {
+                    char buf[16]{};
+                    std::snprintf(buf, sizeof(buf), "%dt", preset);
+                    return std::string(buf);
+                },
+                [displayedDelay](int preset) { return displayedDelay == preset; },
+                [](int) { return theme::kAccent; },
+                [&](int preset) { submitFreeze(key->second.frozen, preset); }
+            );
+        }
+
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.freeze.slowdownDelayHint"_tr().c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::EndDisabled();
+
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.freeze.deleteKeyframe"_tr().c_str(),
+                true,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            mFreezeDelayDragging = false;
+            mFreezeDelayDragTick = -1;
+            EditorAction action{EditorActionType::DeleteFreezeKeyframe};
+            action.tick = originalTick;
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        ImGui::EndDisabled();
+        if (!editable) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    } else {
+        mFreezeDelayDragging = false;
+        mFreezeDelayDragTick = -1;
+    }
+    return true;
+}
+
+bool DetailsPanel::drawFreezeTrack(PanelContext const& ctx) {
+    if (!ctx.selection.isFreezeTrackSelected()) return false;
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->freezeTrack;
+    if (!track.isVisible()) return false;
+    if (property::beginSection("playback.refactorEditor.freeze.trackDetailsTitle"_tr().c_str())) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.freeze.trackHint"_tr().c_str());
+        ImGui::PopTextWrapPos();
+        property::separator();
+
+        property::textRow(
+            "playback.refactorEditor.freeze.keyframeCount"_tr().c_str(),
+            std::to_string(track.keysByTick.size()).c_str()
+        );
+        if (track.keysByTick.empty()) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", "playback.refactorEditor.freeze.emptyHint"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+
+        property::separator();
+        bool enabled = track.enabled;
+        if (ImGui::Checkbox("playback.refactorEditor.details.enabled"_tr().c_str(), &enabled)) {
+            EditorAction action{EditorActionType::SetFreezeTrackEnabled};
+            action.value = enabled;
+            ctx.submitAction(std::move(action));
+        }
+        bool locked = track.locked;
+        if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+            EditorAction action{EditorActionType::SetFreezeTrackLocked};
+            action.value = locked;
+            ctx.submitAction(std::move(action));
+        }
+
+        property::separator();
+        int const  playheadTick = std::clamp(ctx.state.currentTick, 0, std::max(0, project->totalTicks));
+        bool const canAdd       = !track.locked && !track.keysByTick.contains(playheadTick);
+        if (property::actionButton(
+                "playback.refactorEditor.freeze.addKeyframeAtPlayhead"_tr().c_str(),
+                canAdd,
+                property::ButtonVariant::Primary,
+                ICON_ADD_KEYFRAME
+            )) {
+            auto const   nextIt     = track.keysByTick.upper_bound(playheadTick);
+            bool const   prevFrozen = nextIt != track.keysByTick.begin() && std::prev(nextIt)->second.frozen;
+            EditorAction action{EditorActionType::AddFreezeKeyframe};
+            action.tick  = playheadTick;
+            action.value = !prevFrozen;
+            action.kind  = 0;
+            ctx.submitAction(std::move(action));
+        }
+        bool const canClear = !track.locked && !track.keysByTick.empty();
+        if (property::actionButton(
+                "playback.refactorEditor.freeze.clearKeyframes"_tr().c_str(),
+                canClear,
+                property::ButtonVariant::Subtle,
+                ICON_RESET
+            )) {
+            ctx.submitAction(EditorAction{EditorActionType::ClearFreezeKeyframes});
+        }
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.freeze.removeTrack"_tr().c_str(),
+                !track.locked,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            ctx.submitAction(EditorAction{EditorActionType::RemoveFreezeTrack});
             ctx.selection.clear();
         }
         if (track.locked) {

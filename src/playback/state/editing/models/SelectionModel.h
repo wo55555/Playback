@@ -37,6 +37,12 @@ struct SelectedSpeedKeyframe {
     int tick{};
 };
 
+struct SelectedFreezeTrack {};
+
+struct SelectedFreezeKeyframe {
+    int tick{};
+};
+
 using Selection = std::variant<
     SelectedKeyframe,
     SelectedClip,
@@ -44,7 +50,9 @@ using Selection = std::variant<
     SelectedTransition,
     SelectedCamera,
     SelectedSpeedTrack,
-    SelectedSpeedKeyframe>;
+    SelectedSpeedKeyframe,
+    SelectedFreezeTrack,
+    SelectedFreezeKeyframe>;
 
 struct EditorStateExt;
 
@@ -56,6 +64,10 @@ public:
     void                                   selectSpeedKeyframe(int tick);
     [[nodiscard]] bool                     isSpeedTrackSelected() const;
     [[nodiscard]] std::optional<int>       selectedSpeedKeyframe() const;
+    void                                   selectFreezeTrack();
+    void                                   selectFreezeKeyframe(int tick);
+    [[nodiscard]] bool                     isFreezeTrackSelected() const;
+    [[nodiscard]] std::optional<int>       selectedFreezeKeyframe() const;
     [[nodiscard]] bool                     hasSelection() const;
     [[nodiscard]] const Selection*         getSelection() const;
     [[nodiscard]] std::vector<std::string> selectedIds() const;
