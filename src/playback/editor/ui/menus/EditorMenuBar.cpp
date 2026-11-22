@@ -5,6 +5,8 @@
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
+#include "playback/state/editing/ClipOps.h"
+#include "playback/utils/ShellUtils.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -19,6 +21,8 @@
 #include <ctime>
 #include <filesystem>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -42,6 +46,63 @@ namespace {
 [[nodiscard]] std::filesystem::path utf8Path(std::string const& value) {
     auto const* begin = reinterpret_cast<char8_t const*>(value.data());
     return std::filesystem::path(std::u8string{begin, begin + value.size()});
+}
+
+[[nodiscard]] std::string stripMp4Extension(std::string name) {
+    if (name.size() >= 4) {
+        auto const offset = name.size() - 4;
+        if (name[offset] == '.' && std::tolower(static_cast<unsigned char>(name[offset + 1])) == 'm'
+            && std::tolower(static_cast<unsigned char>(name[offset + 2])) == 'p' && name[offset + 3] == '4') {
+            name.resize(offset);
+        }
+    }
+    return name;
+}
+
+[[nodiscard]] std::string truncateUtf8(std::string value, size_t maxBytes) {
+    if (value.size() <= maxBytes) return value;
+    size_t len = maxBytes;
+    while (len > 0 && (static_cast<unsigned char>(value[len]) & 0xC0u) == 0x80u) {
+        --len;
+    }
+    value.resize(len);
+    return value;
+}
+
+[[nodiscard]] std::string sanitizeOutputName(std::string raw, std::string_view fallback = "export") {
+    std::string out;
+    out.reserve(raw.size());
+    for (unsigned char const ch : raw) {
+        if (ch < 0x20 || ch == 0x7f || ch == '/' || ch == '\\' || ch == ':' || ch == '*' || ch == '?' || ch == '"'
+            || ch == '<' || ch == '>' || ch == '|') {
+            out.push_back('_');
+        } else {
+            out.push_back(static_cast<char>(ch));
+        }
+    }
+    while (!out.empty() && (out.back() == '.' || out.back() == ' ')) out.pop_back();
+    size_t lead = 0;
+    while (lead < out.size() && out[lead] == ' ') ++lead;
+    if (lead > 0) out.erase(0, lead);
+    if (out.empty() || out == "." || out == "..") out.assign(fallback);
+    out = truncateUtf8(std::move(out), 120);
+    while (!out.empty() && (out.back() == '.' || out.back() == ' ')) out.pop_back();
+    if (out.empty() || out == "." || out == "..") out.assign(fallback);
+    return out;
+}
+
+[[nodiscard]] std::string uniqueOutputName(std::string desired, std::unordered_set<std::string>& usedNames) {
+    std::string base = sanitizeOutputName(std::move(desired));
+    if (usedNames.insert(base).second) return base;
+    for (int index = 2; index < 10'000; ++index) {
+        std::string const suffix = "_" + std::to_string(index);
+        std::string       cand   = truncateUtf8(base, 128 - suffix.size());
+        while (!cand.empty() && (cand.back() == '.' || cand.back() == ' ')) cand.pop_back();
+        if (cand.empty()) cand = "export";
+        cand += suffix;
+        if (usedNames.insert(cand).second) return cand;
+    }
+    return base;
 }
 
 // Typed digits apply as they are entered, so leaving the field any way (the export button included) keeps them.
@@ -128,7 +189,7 @@ bool frameIconButton(char const* id, char const* icon, char const* tooltip) {
 }
 
 // Row of page tabs: plain labels over a full-width hairline, the current page underlined in the accent colour.
-bool tabStrip(char const* id, char const* const* labels, int count, int& index) {
+bool tabStrip(char const* id, char const* const* labels, int count, int& index, int disabledMask = 0) {
     float const  s      = metrics::scale();
     float const  height = ImGui::GetFrameHeight() + 4.0f * s;
     float const  padX   = 10.0f * s;
@@ -144,18 +205,22 @@ bool tabStrip(char const* id, char const* const* labels, int count, int& index) 
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() - padX);
     for (int i = 0; i < count; ++i) {
         if (i > 0) ImGui::SameLine();
+        bool const   disabled = (disabledMask >> i) & 1;
         ImVec2 const textSize = ImGui::CalcTextSize(labels[i]);
         ImVec2 const min      = ImGui::GetCursorScreenPos();
         ImGui::PushID(i);
-        if (ImGui::InvisibleButton("##tab", {textSize.x + padX * 2.0f, height}) && i != index) {
+        if (ImGui::InvisibleButton("##tab", {textSize.x + padX * 2.0f, height}) && !disabled && i != index) {
             index   = i;
             changed = true;
         }
         ImGui::PopID();
         bool const active  = i == index;
-        bool const hovered = ImGui::IsItemHovered();
+        bool const hovered = !disabled && ImGui::IsItemHovered();
         if (hovered && !active) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        ImU32 const tone = active ? theme::kIconHighlight : hovered ? theme::kText : theme::kTextDim;
+        ImU32 const tone = disabled ? theme::withAlpha(theme::kTextDim, 0x66)
+                         : active   ? theme::kIconHighlight
+                         : hovered  ? theme::kText
+                                    : theme::kTextDim;
         dl->AddText({min.x + padX, min.y + (height - textSize.y) * 0.5f}, tone, labels[i]);
         if (active) {
             dl->AddRectFilled(
@@ -264,10 +329,17 @@ struct ShortcutGroup {
              {key(EditorKeybind::SaveProject), "playback.refactorEditor.shortcuts.saveProject"_tr()},
              {key(EditorKeybind::AddKeyframe), "playback.refactorEditor.shortcuts.keyframe"_tr()},
              {key(EditorKeybind::AddCameraTrack), "playback.refactorEditor.shortcuts.addCamera"_tr()},
+             {key(EditorKeybind::SelectTool) + " / " + key(EditorKeybind::RazorTool) + " / "
+                  + key(EditorKeybind::PenTool),
+              "playback.refactorEditor.shortcuts.tools"_tr()},
+             {key(EditorKeybind::SplitClip), "playback.refactorEditor.shortcuts.splitClip"_tr()},
+             {shortcutPair(EditorKeybind::TrimClipInToPlayhead, EditorKeybind::TrimClipOutToPlayhead),
+              "playback.refactorEditor.shortcuts.trimClipEdges"_tr()},
+             {key(EditorKeybind::ToggleClipExport), "playback.refactorEditor.shortcuts.toggleClipExport"_tr()},
              {"1 / 2 / 3", "playback.refactorEditor.shortcuts.selectCamera"_tr()},
              {key(EditorKeybind::DeleteSelection), "playback.refactorEditor.shortcuts.delete"_tr()},
              {key(EditorKeybind::SelectAll), "playback.refactorEditor.shortcuts.selectAll"_tr()},
-             {"Ctrl+Click / Drag", "playback.refactorEditor.shortcuts.boxSelect"_tr()},
+             {"Ctrl+Click / Alt+Drag", "playback.refactorEditor.shortcuts.boxSelect"_tr()},
              {key(EditorKeybind::ClearSelection), "playback.refactorEditor.shortcuts.clearSelection"_tr()},
              {shortcutPair(EditorKeybind::Copy, EditorKeybind::Paste),
               "playback.refactorEditor.shortcuts.copyPaste"_tr()},
@@ -281,6 +353,7 @@ struct ShortcutGroup {
              {key(EditorKeybind::ResetTimelineZoom), "playback.refactorEditor.shortcuts.zoomReset"_tr()},
              {shortcutPair(EditorKeybind::MarkExportIn, EditorKeybind::MarkExportOut),
               "playback.refactorEditor.shortcuts.exportRange"_tr()},
+             {key(EditorKeybind::ClearExportRange), "playback.refactorEditor.shortcuts.clearExportRange"_tr()},
          }},
         {"playback.refactorEditor.shortcuts.application"_tr(),
          {
@@ -310,19 +383,14 @@ struct ShortcutColumn {
 
 } // namespace
 
-void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
+void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable, int exportInTick, int exportOutTick) {
     totalTicks = std::max(0, totalTicks);
-    // The dialog always edits a concrete range, so an unset marker resolves to the replay bounds here.
-    if (mExportStartTick < 0 || mExportEndTick < 0 || mExportEndTick <= mExportStartTick) {
+    if (exportInTick >= 0 && exportOutTick > exportInTick && exportOutTick <= totalTicks) {
+        mExportStartTick = exportInTick;
+        mExportEndTick   = exportOutTick;
+    } else {
         mExportStartTick = 0;
         mExportEndTick   = totalTicks;
-    } else {
-        mExportStartTick = std::clamp(mExportStartTick, 0, totalTicks);
-        mExportEndTick   = std::clamp(mExportEndTick, 0, totalTicks);
-        if (mExportEndTick <= mExportStartTick) {
-            mExportStartTick = 0;
-            mExportEndTick   = totalTicks;
-        }
     }
     if (!mExportSettingsInitialized) {
         auto const stamp = timestampName();
@@ -331,28 +399,47 @@ void EditorMenuBar::openExportDialog(int totalTicks, bool ffmpegAvailable) {
     mExportSettingsInitialized = true;
     if (!ffmpegAvailable && mExportFormat == 0) mExportFormat = 1;
     // Always opens on the first page; the page height is measured again in case the font changed meanwhile.
+    bool const hasSceneRange =
+        exportInTick >= 0 && exportOutTick > exportInTick && (exportInTick > 0 || exportOutTick < totalTicks);
+    mExportRangeMode  = hasSceneRange ? static_cast<int>(exporting::ExportRangeMode::SequenceInOut)
+                                      : static_cast<int>(exporting::ExportRangeMode::EnabledClips);
+    mExportSceneScope = 0;
+    mExportSplitClips = false;
+    mExportSingleClipId.clear();
+    mExportSelectedSceneIds.clear();
     mExportTab            = 0;
     mExportBodyHeight     = 0.0f;
     mExportBodyScrollable = false;
     mExportDialogOpen     = true;
 }
 
-void EditorMenuBar::markExportPoint(bool isIn, int tick, int totalTicks) {
-    totalTicks = std::max(0, totalTicks);
-    tick       = std::clamp(tick, 0, totalTicks);
-    int start  = mExportStartTick < 0 ? 0 : mExportStartTick;
-    int end    = mExportEndTick < 0 ? totalTicks : mExportEndTick;
-    if (isIn) start = std::min(tick, end);
-    else end = std::max(tick, start);
+void EditorMenuBar::openExportSingleClip(
+    std::string const& clipId,
+    int                totalTicks,
+    bool               ffmpegAvailable,
+    int                exportInTick,
+    int                exportOutTick
+) {
+    openExportDialog(totalTicks, ffmpegAvailable, exportInTick, exportOutTick);
+    mExportRangeMode    = static_cast<int>(exporting::ExportRangeMode::SingleClip);
+    mExportSingleClipId = clipId;
+}
 
-    // A range covering the whole replay is the same as having no range at all.
-    if (start <= 0 && end >= totalTicks) {
-        mExportStartTick = -1;
-        mExportEndTick   = -1;
-        return;
+void EditorMenuBar::openExportScene(
+    std::string const& sceneId,
+    std::string const& activeSceneId,
+    std::size_t        sceneCount,
+    int                totalTicks,
+    bool               ffmpegAvailable,
+    int                exportInTick,
+    int                exportOutTick
+) {
+    openExportDialog(totalTicks, ffmpegAvailable, exportInTick, exportOutTick);
+    if (sceneCount > 1 && !sceneId.empty() && sceneId != activeSceneId) {
+        mExportSceneScope       = 1;
+        mExportRangeMode        = static_cast<int>(exporting::ExportRangeMode::EnabledClips);
+        mExportSelectedSceneIds = {sceneId};
     }
-    mExportStartTick = start;
-    mExportEndTick   = end;
 }
 
 void EditorMenuBar::draw(PanelContext const& ctx) {
@@ -372,7 +459,6 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
     auto const  saveShortcut   = input::KeyMap::displayString(input::EditorKeybind::SaveProject);
     if (ImGui::BeginMenuBar()) {
         if (widgets::beginMenu("playback.refactorEditor.menu.file"_tr().c_str())) {
-            ImGui::MenuItem("playback.refactorEditor.menu.openReplay"_tr().c_str(), nullptr, false, false);
             if (ImGui::MenuItem(
                     "playback.refactorEditor.menu.saveProject"_tr().c_str(),
                     saveShortcut.c_str(),
@@ -396,10 +482,18 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                     false,
                     capabilities.videoExport && !exportActive && state.totalTicks > 0
                 )) {
-                openExportDialog(state.totalTicks, capabilities.ffmpegVideoExport);
+                openExportDialog(
+                    state.totalTicks,
+                    capabilities.ffmpegVideoExport,
+                    ctx.commands.exportStartTick(),
+                    ctx.commands.exportEndTick()
+                );
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("playback.refactorEditor.menu.exit"_tr().c_str(), "Esc (hold)")) {
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.menu.exit"_tr().c_str(),
+                    "playback.refactorEditor.menu.exitShortcut"_tr().c_str()
+                )) {
                 ctx.submitAction({playback::state::EditorActionType::StopReplay});
             }
             widgets::endMenu();
@@ -464,6 +558,82 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                 )) {
                 (void)ctx.commands.addMarkerAtPlayhead();
             }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeline.splitClip"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::SplitClip).c_str(),
+                    false,
+                    ctx.commands.canSplitClipAtPlayhead()
+                )) {
+                (void)ctx.commands.splitClipAtPlayhead();
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeline.trimClipInToPlayhead"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::TrimClipInToPlayhead).c_str(),
+                    false,
+                    ctx.commands.canTrimClipAtPlayhead(true)
+                )) {
+                (void)ctx.commands.trimClipAtPlayhead(true);
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeline.trimClipOutToPlayhead"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::TrimClipOutToPlayhead).c_str(),
+                    false,
+                    ctx.commands.canTrimClipAtPlayhead(false)
+                )) {
+                (void)ctx.commands.trimClipAtPlayhead(false);
+            }
+            {
+                auto const* selectedClip = ctx.selection.getAs<state::editing::model::SelectedClip>();
+                state::editing::ClipOps::ClipWithCamera hit{};
+                if (state.project && selectedClip) {
+                    hit = state::editing::ClipOps::findClipWithCamera(*state.project, selectedClip->clipId);
+                } else if (state.project) {
+                    int const tick       = state.currentTick;
+                    int const totalTicks = state.totalTicks;
+                    for (auto const& camera : state.project->cameras) {
+                        for (auto const& candidate : camera.clips) {
+                            if (candidate.inTick <= tick
+                                && (tick < candidate.outTick
+                                    || (tick == totalTicks && candidate.outTick == totalTicks))) {
+                                hit = {&camera, &candidate};
+                                break;
+                            }
+                        }
+                        if (hit) break;
+                    }
+                }
+                bool const canToggle = hit && !hit.camera->locked;
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.details.exportEnabled"_tr().c_str(),
+                        input::KeyMap::displayString(input::EditorKeybind::ToggleClipExport).c_str(),
+                        hit && hit.clip->exportEnabled,
+                        canToggle
+                    )) {
+                    (void)ctx.commands.toggleSelectedClipExport();
+                }
+            }
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeline.addScene"_tr().c_str(),
+                    nullptr,
+                    false,
+                    state.project != nullptr
+                )) {
+                ctx.submitAction({EditorActionType::AddScene});
+            }
+            {
+                bool const ranged =
+                    ctx.commands.exportStartTick() > 0
+                    || (ctx.commands.exportEndTick() >= 0 && ctx.commands.exportEndTick() < state.totalTicks);
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.clearExportRange"_tr().c_str(),
+                        input::KeyMap::displayString(input::EditorKeybind::ClearExportRange).c_str(),
+                        false,
+                        ranged
+                    )) {
+                    ctx.commands.clearExportRange();
+                }
+            }
             widgets::endMenu();
         }
 
@@ -503,7 +673,7 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
             }
             ImGui::Separator();
             if (ImGui::MenuItem(
-                    "playback.refactorEditor.timeline.maximize"_tr().c_str(),
+                    "playback.refactorEditor.menu.maximizeViewport"_tr().c_str(),
                     input::KeyMap::displayString(input::EditorKeybind::ToggleViewportMaximized).c_str(),
                     ctx.commands.isViewportMaximized(),
                     viewEnabled
@@ -515,9 +685,6 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
 
         if (widgets::beginMenu("playback.refactorEditor.menu.help"_tr().c_str())) {
             if (ImGui::MenuItem("playback.refactorEditor.menu.shortcuts"_tr().c_str())) mShortcutDialogOpen = true;
-            ImGui::MenuItem("playback.refactorEditor.menu.documentation"_tr().c_str(), nullptr, false, false);
-            ImGui::Separator();
-            ImGui::MenuItem("playback.refactorEditor.menu.about"_tr().c_str(), nullptr, false, false);
             widgets::endMenu();
         }
 
@@ -687,7 +854,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     float const hintExtra        = style.ItemInnerSpacing.x + textWidth("(?)") + style.CellPadding.x * 2.0f;
     float       hintedLabelWidth = 0.0f;
     for (std::string const& label :
-         {"playback.refactorEditor.export.ssaa"_tr(),
+         {"playback.refactorEditor.export.multiClipOutput"_tr(),
+          "playback.refactorEditor.export.ssaa"_tr(),
           "playback.refactorEditor.export.warmupFrames"_tr(),
           "playback.refactorEditor.export.hideHud"_tr(),
           "playback.refactorEditor.export.encodeSpeed"_tr(),
@@ -695,7 +863,9 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
           "playback.refactorEditor.export.recordAudio"_tr(),
           "playback.refactorEditor.export.audioCodec"_tr(),
           "playback.refactorEditor.export.audioBitrate"_tr(),
-          "playback.refactorEditor.export.extraRenders"_tr()}) {
+          "playback.refactorEditor.export.extraRenders"_tr(),
+          "playback.refactorEditor.export.timelapse"_tr(),
+          "playback.refactorEditor.export.timelapseInterval"_tr()}) {
         hintedLabelWidth = std::max(hintedLabelWidth, textWidth(label) + hintExtra);
     }
     // Fixed label column aligns every value; the capped value column stops inputs spanning the dialog.
@@ -715,11 +885,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
     float const   summaryRowH  = font + cellPaddingY * 2.0f;
     float const belowBody = 6.0f * uiScale + (12.0f * uiScale + summaryRowH * kSummaryRows) + (frameH + 6.0f * uiScale)
                           + 1.0f + 5.0f * uiScale + buttonH + style.ItemSpacing.y * 6.0f + dialogPadding.y;
-    // The shared page height was measured at one font size.
-    if (font != mExportLayoutKey) {
-        mExportLayoutKey  = font;
-        mExportBodyHeight = 0.0f;
-    }
 
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     // Height fits the content; on a viewport shorter than that the page scrolls and the footer stays in place.
@@ -763,13 +928,52 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         std::string const tabAdvanced = "playback.refactorEditor.export.tabAdvanced"_tr();
         char const*       tabLabels[] = {tabGeneral.c_str(), tabVideo.c_str(), tabAudio.c_str(), tabAdvanced.c_str()};
         enum ExportTab { TabGeneral, TabVideo, TabAudio, TabAdvanced };
+        std::vector<state::editing::ClipOps::ClipWithCamera> orderedClips;
+        if (state.project) orderedClips = state::editing::ClipOps::collectAllClipsWithCamera(*state.project);
+        auto const clipExists = [&](std::string const& id) {
+            return std::ranges::any_of(orderedClips, [&](auto const& item) {
+                return item.clip && item.clip->id == id;
+            });
+        };
+        std::vector<state::editing::model::Scene> const emptyScenes;
+        auto const&                                     scenes = state.project ? state.project->scenes : emptyScenes;
+        auto const                                      sceneExists = [&](std::string const& id) {
+            return std::ranges::any_of(scenes, [&](auto const& scene) { return scene.id == id; });
+        };
+        std::erase_if(mExportSelectedSceneIds, [&](std::string const& id) { return !sceneExists(id); });
+        if (scenes.size() <= 1) mExportSceneScope = 0;
+        mExportSceneScope = std::clamp(mExportSceneScope, 0, 1);
+        if (!mExportSingleClipId.empty() && !clipExists(mExportSingleClipId)) mExportSingleClipId.clear();
+        mExportRangeMode = std::clamp(mExportRangeMode, 0, 2);
+        if (mExportSceneScope == 1) {
+            mExportRangeMode = static_cast<int>(exporting::ExportRangeMode::EnabledClips);
+        } else if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::SingleClip)
+                   && mExportSingleClipId.empty() && !orderedClips.empty() && orderedClips.front().clip) {
+            mExportSingleClipId = orderedClips.front().clip->id;
+        }
+        // The shared page height depends on font size, range mode, scene scope, and whether the scope row is shown.
+        bool const multiScene = scenes.size() > 1;
+        if (font != mExportLayoutKey || mExportRangeMode != mExportLayoutRangeMode
+            || mExportSceneScope != mExportLayoutSceneScope || multiScene != mExportLayoutMultiScene) {
+            mExportLayoutKey        = font;
+            mExportLayoutRangeMode  = mExportRangeMode;
+            mExportLayoutSceneScope = mExportSceneScope;
+            mExportLayoutMultiScene = multiScene;
+            mExportBodyHeight       = 0.0f;
+        }
         mExportTab                  = std::clamp(mExportTab, 0, IM_ARRAYSIZE(tabLabels) - 1);
+        if (mExportTimelapse && mExportTab == TabAudio) mExportTab = TabGeneral;
         mExportAudioChannels        = std::clamp(mExportAudioChannels, 0, 1);
         mExportAudioCodec           = std::clamp(mExportAudioCodec, 0, IM_ARRAYSIZE(kAudioCodecs) - 1);
         mExportAudioBitrate         = std::clamp(mExportAudioBitrate, 0, IM_ARRAYSIZE(kAudioBitratesKbps) - 1);
         mExportEncodeSpeed          = std::clamp(mExportEncodeSpeed, 0, 2);
         auto const audioCodec       = kAudioCodecs[mExportAudioCodec];
         mExportSsaa                 = std::clamp(mExportSsaa, 0, 2);
+        mExportTimelapseIntervalMs  = std::clamp(
+            mExportTimelapseIntervalMs,
+            static_cast<int>(exporting::MinTimelapseIntervalMs),
+            static_cast<int>(exporting::MaxTimelapseIntervalMs)
+        );
         int const maximumReplayTick = std::max(state.totalTicks, 0);
 
         // Header: accent-tinted icon tile with title and subtitle stacked beside it.
@@ -797,7 +1001,13 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
         // Settings are split over pages, so each one is short enough to show whole; the summary below spans them all.
         ImGui::Dummy({0.0f, 2.0f * uiScale});
-        bool const tabChanged = tabStrip("##export-tabs", tabLabels, IM_ARRAYSIZE(tabLabels), mExportTab);
+        bool const tabChanged = tabStrip(
+            "##export-tabs",
+            tabLabels,
+            IM_ARRAYSIZE(tabLabels),
+            mExportTab,
+            mExportTimelapse ? (1 << TabAudio) : 0
+        );
 
         // Taller cells give the rows room to breathe without widening the label column.
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, cellPaddingY});
@@ -838,8 +1048,24 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::InputText("##export-name", mExportName.data(), mExportName.size());
 
                 propertyLabel("playback.refactorEditor.export.location"_tr().c_str());
-                ImGui::SetNextItemWidth(valueWidth);
+                ImGui::SetNextItemWidth(valueWidth - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
                 ImGui::InputText("##export-directory", mExportDirectory.data(), mExportDirectory.size());
+                ImGui::SameLine();
+                if (frameIconButton(
+                        "##export-browse",
+                        ICON_FOLDER_OPEN,
+                        "playback.refactorEditor.export.browseLocation"_tr().c_str()
+                    )) {
+                    if (auto const picked = playback::utils::pickFolder(utf8Path(mExportDirectory.data()))) {
+                        auto const text = picked->u8string();
+                        std::snprintf(
+                            mExportDirectory.data(),
+                            mExportDirectory.size(),
+                            "%s",
+                            reinterpret_cast<char const*>(text.c_str())
+                        );
+                    }
+                }
 
                 propertyLabel("playback.refactorEditor.export.format"_tr().c_str());
                 segmented(
@@ -853,7 +1079,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndTable();
             }
 
-            sectionHeader("playback.refactorEditor.export.timeline"_tr().c_str());
+            sectionHeader("playback.refactorEditor.export.timeline"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-timeline", labelWidth)) {
                 propertyLabel("playback.refactorEditor.export.frameRate"_tr().c_str());
                 float const presetWidth = valueWidth - (mFpsPreset == 3 ? fieldWidth + style.ItemSpacing.x : 0.0f);
@@ -877,41 +1103,232 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     inputClampedInt("##export-custom-fps", mFps, 1, 240, fieldWidth);
                 }
 
-                std::string const usePlayhead = "playback.refactorEditor.export.usePlayhead"_tr();
-                propertyLabel("playback.refactorEditor.export.startTick"_tr().c_str());
-                float const tickRowRight = ImGui::GetCursorScreenPos().x + valueWidth;
-                inputClampedInt("##export-start-tick", mExportStartTick, 0, maximumReplayTick, fieldWidth);
-                ImGui::SameLine();
-                if (frameIconButton("##export-start-current", ICON_CLOCK, usePlayhead.c_str()))
-                    mExportStartTick = std::clamp(state.currentTick, 0, maximumReplayTick);
-                trailingText(widgets::formatTick(mExportStartTick).c_str(), tickRowRight);
-
-                propertyLabel("playback.refactorEditor.export.endTick"_tr().c_str());
-                inputClampedInt("##export-end-tick", mExportEndTick, 0, maximumReplayTick, fieldWidth);
-                ImGui::SameLine();
-                if (frameIconButton("##export-end-current", ICON_CLOCK, usePlayhead.c_str()))
-                    mExportEndTick = std::clamp(state.currentTick, 0, maximumReplayTick);
-                trailingText(widgets::formatTick(mExportEndTick).c_str(), tickRowRight);
-
-                // Range bar under the tick fields, with the reset-to-full-replay button at its end.
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(1);
-                rangePreview(
-                    mExportStartTick,
-                    mExportEndTick,
-                    state.currentTick,
-                    maximumReplayTick,
-                    valueWidth - frameH - style.ItemSpacing.x
-                );
-                ImGui::SameLine();
-                if (frameIconButton(
-                        "##export-full-range",
-                        ICON_RESET,
-                        "playback.refactorEditor.export.fullRange"_tr().c_str()
-                    )) {
-                    mExportStartTick = 0;
-                    mExportEndTick   = maximumReplayTick;
+                if (scenes.size() > 1) {
+                    std::string const scopeActive    = "playback.refactorEditor.export.scopeActiveScene"_tr();
+                    std::string const scopeSelected  = "playback.refactorEditor.export.scopeSelectedScenes"_tr();
+                    char const*       scopeOptions[] = {scopeActive.c_str(), scopeSelected.c_str()};
+                    propertyLabel("playback.refactorEditor.export.sceneScope"_tr().c_str());
+                    if (segmented(
+                            "##export-scene-scope",
+                            scopeOptions,
+                            IM_ARRAYSIZE(scopeOptions),
+                            mExportSceneScope,
+                            valueWidth
+                        )) {
+                        if (mExportSceneScope == 1) {
+                            mExportRangeMode = static_cast<int>(exporting::ExportRangeMode::EnabledClips);
+                            if (mExportSelectedSceneIds.empty() && state.project
+                                && !state.project->activeSceneId.empty()) {
+                                mExportSelectedSceneIds.push_back(state.project->activeSceneId);
+                            }
+                        }
+                    }
                 }
+
+                std::string const rangeEnabled   = "playback.refactorEditor.export.rangeEnabledClips"_tr();
+                std::string const rangeInOut     = "playback.refactorEditor.export.rangeSequenceInOut"_tr();
+                std::string const rangeSingle    = "playback.refactorEditor.export.rangeSingleClip"_tr();
+                char const*       rangeOptions[] = {rangeEnabled.c_str(), rangeInOut.c_str(), rangeSingle.c_str()};
+                int const rangeDisabledMask      = mExportSceneScope == 1 ? 0b110 : (orderedClips.empty() ? 0b100 : 0);
+                propertyLabel("playback.refactorEditor.export.rangeMode"_tr().c_str());
+                segmented(
+                    "##export-range-mode",
+                    rangeOptions,
+                    IM_ARRAYSIZE(rangeOptions),
+                    mExportRangeMode,
+                    valueWidth,
+                    rangeDisabledMask
+                );
+                if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::SingleClip)
+                    && mExportSingleClipId.empty() && !orderedClips.empty() && orderedClips.front().clip) {
+                    mExportSingleClipId = orderedClips.front().clip->id;
+                }
+
+                auto const formatClipOption = [](state::editing::model::Clip const& clip) {
+                    std::string text = clip.name + " (" + widgets::formatTick(clip.inTick) + " - "
+                                     + widgets::formatTick(clip.outTick) + ")";
+                    if (std::abs(clip.speed - 1.0f) > 0.001f) {
+                        char buf[16]{};
+                        std::snprintf(buf, sizeof(buf), " %.2gx", static_cast<double>(clip.speed));
+                        text += buf;
+                    }
+                    return text;
+                };
+                auto const formatClipWithCameraOption = [&](state::editing::ClipOps::ClipWithCamera const& item) {
+                    std::string text = item.camera ? (item.camera->name + " · ") : std::string{};
+                    if (item.clip) text += formatClipOption(*item.clip);
+                    return text;
+                };
+
+                if (mExportSceneScope == 1) {
+                    propertyLabel("playback.refactorEditor.export.selectedScenes"_tr().c_str());
+                    if (ImGui::SmallButton("playback.refactorEditor.export.selectAllScenes"_tr().c_str())) {
+                        mExportSelectedSceneIds.clear();
+                        for (auto const& scene : scenes) mExportSelectedSceneIds.push_back(scene.id);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("playback.refactorEditor.export.clearScenes"_tr().c_str())) {
+                        mExportSelectedSceneIds.clear();
+                    }
+
+                    float const listHeight = std::min(88.0f * uiScale, frameH * 2.85f);
+                    if (ImGui::BeginChild("##export-multi-scenes", {valueWidth, listHeight}, ImGuiChildFlags_Borders)) {
+                        for (auto const& scene : scenes) {
+                            auto const it           = std::ranges::find(mExportSelectedSceneIds, scene.id);
+                            bool       checked      = it != mExportSelectedSceneIds.end();
+                            int        enabledCount = 0;
+                            int        totalTicks   = 0;
+                            if (state.project) {
+                                auto const sceneProj =
+                                    state::editing::ClipOps::buildProjectForScene(*state.project, scene);
+                                auto const enabledSlices =
+                                    state::editing::ClipOps::collectCompositedSlices(sceneProj, true);
+                                enabledCount = static_cast<int>(enabledSlices.size());
+                                for (auto const& slice : enabledSlices) {
+                                    totalTicks += std::max(0, slice.outTick - slice.inTick);
+                                }
+                            }
+                            std::string const label =
+                                totalTicks > 0
+                                    ? (scene.name + "  ("
+                                       + "playback.refactorEditor.export.enabledClipCount"_tr(enabledCount) + " · "
+                                       + widgets::formatTick(totalTicks) + ")")
+                                    : (scene.name + "  ("
+                                       + "playback.refactorEditor.export.enabledClipCount"_tr(enabledCount) + ")");
+                            ImGui::PushID(scene.id.c_str());
+                            if (ImGui::Checkbox(label.c_str(), &checked)) {
+                                if (checked) {
+                                    if (it == mExportSelectedSceneIds.end())
+                                        mExportSelectedSceneIds.push_back(scene.id);
+                                } else if (it != mExportSelectedSceneIds.end()) {
+                                    mExportSelectedSceneIds.erase(it);
+                                }
+                            }
+                            ImGui::PopID();
+                        }
+                    }
+                    ImGui::EndChild();
+                }
+
+                if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::EnabledClips)
+                    || mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::SequenceInOut)) {
+                    std::string const mergeLabel     = "playback.refactorEditor.export.mergeClips"_tr();
+                    std::string const separateLabel  = "playback.refactorEditor.export.separateClips"_tr();
+                    char const*       multiOptions[] = {mergeLabel.c_str(), separateLabel.c_str()};
+                    int               splitMode      = mExportSplitClips ? 1 : 0;
+                    propertyLabel(
+                        "playback.refactorEditor.export.multiClipOutput"_tr().c_str(),
+                        "playback.refactorEditor.export.multiClipOutputHint"_tr().c_str()
+                    );
+                    if (segmented(
+                            "##export-multi-clip-mode",
+                            multiOptions,
+                            IM_ARRAYSIZE(multiOptions),
+                            splitMode,
+                            valueWidth
+                        )) {
+                        mExportSplitClips = splitMode == 1;
+                    }
+                }
+                if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::SequenceInOut)) {
+                    std::string const usePlayhead = "playback.refactorEditor.export.usePlayhead"_tr();
+                    propertyLabel("playback.refactorEditor.export.startTick"_tr().c_str());
+                    float const tickRowRight = ImGui::GetCursorScreenPos().x + valueWidth;
+                    inputClampedInt("##export-start-tick", mExportStartTick, 0, maximumReplayTick, fieldWidth);
+                    ImGui::SameLine();
+                    if (frameIconButton("##export-start-current", ICON_CLOCK, usePlayhead.c_str()))
+                        mExportStartTick = std::clamp(state.currentTick, 0, maximumReplayTick);
+                    trailingText(widgets::formatTick(mExportStartTick).c_str(), tickRowRight);
+
+                    propertyLabel("playback.refactorEditor.export.endTick"_tr().c_str());
+                    inputClampedInt("##export-end-tick", mExportEndTick, 0, maximumReplayTick, fieldWidth);
+                    ImGui::SameLine();
+                    if (frameIconButton("##export-end-current", ICON_CLOCK, usePlayhead.c_str()))
+                        mExportEndTick = std::clamp(state.currentTick, 0, maximumReplayTick);
+                    trailingText(widgets::formatTick(mExportEndTick).c_str(), tickRowRight);
+
+                    // Range bar under the tick fields, with the reset-to-full-replay button at its end.
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(1);
+                    rangePreview(
+                        mExportStartTick,
+                        mExportEndTick,
+                        state.currentTick,
+                        maximumReplayTick,
+                        valueWidth - frameH - style.ItemSpacing.x
+                    );
+                    ImGui::SameLine();
+                    if (frameIconButton(
+                            "##export-full-range",
+                            ICON_RESET,
+                            "playback.refactorEditor.export.fullRange"_tr().c_str()
+                        )) {
+                        mExportStartTick = 0;
+                        mExportEndTick   = maximumReplayTick;
+                    }
+                } else if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::SingleClip)) {
+                    propertyLabel("playback.refactorEditor.export.singleClip"_tr().c_str());
+                    std::string preview = "playback.refactorEditor.export.noClips"_tr();
+                    for (auto const& item : orderedClips) {
+                        if (item.clip && item.clip->id == mExportSingleClipId) {
+                            preview = formatClipWithCameraOption(item);
+                            break;
+                        }
+                    }
+                    ImGui::SetNextItemWidth(valueWidth);
+                    if (widgets::beginCombo("##export-single-clip", preview.c_str())) {
+                        for (auto const& item : orderedClips) {
+                            if (!item.clip) continue;
+                            bool const isSelected = item.clip->id == mExportSingleClipId;
+                            ImGui::PushID(item.clip->id.c_str());
+                            if (ImGui::Selectable(formatClipWithCameraOption(item).c_str(), isSelected)) {
+                                mExportSingleClipId = item.clip->id;
+                            }
+                            ImGui::PopID();
+                        }
+                        widgets::endCombo();
+                    }
+                }
+
+                propertyLabel(
+                    "playback.refactorEditor.export.timelapse"_tr().c_str(),
+                    "playback.refactorEditor.export.timelapseHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-timelapse", &mExportTimelapse);
+
+                propertyLabel(
+                    "playback.refactorEditor.export.timelapseInterval"_tr().c_str(),
+                    "playback.refactorEditor.export.timelapseIntervalHint"_tr().c_str()
+                );
+                ImGui::BeginDisabled(!mExportTimelapse);
+                {
+                    constexpr int     kIntervalPresets[] = {50, 250, 1000, 5000, 60000};
+                    char const* const kPresetLabels[]    = {"50ms", "250ms", "1s", "5s", "60s"};
+                    int               presetIdx          = -1;
+                    for (int i = 0; i < IM_ARRAYSIZE(kIntervalPresets); ++i) {
+                        if (mExportTimelapseIntervalMs == kIntervalPresets[i]) presetIdx = i;
+                    }
+                    float const presetsWidth = valueWidth - fieldWidth - style.ItemSpacing.x;
+                    if (segmented(
+                            "##export-timelapse-presets",
+                            kPresetLabels,
+                            IM_ARRAYSIZE(kPresetLabels),
+                            presetIdx,
+                            presetsWidth
+                        )
+                        && presetIdx >= 0) {
+                        mExportTimelapseIntervalMs = kIntervalPresets[presetIdx];
+                    }
+                    ImGui::SameLine();
+                    inputClampedInt(
+                        "##export-timelapse-ms",
+                        mExportTimelapseIntervalMs,
+                        static_cast<int>(exporting::MinTimelapseIntervalMs),
+                        static_cast<int>(exporting::MaxTimelapseIntervalMs),
+                        fieldWidth
+                    );
+                }
+                ImGui::EndDisabled();
                 ImGui::EndTable();
             }
         } else if (mExportTab == TabVideo) {
@@ -1009,6 +1426,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndTable();
             }
         } else if (mExportTab == TabAudio) {
+            ImGui::BeginDisabled(mExportTimelapse);
             sectionHeader("playback.refactorEditor.export.capture"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-audio", labelWidth)) {
                 propertyLabel(
@@ -1065,6 +1483,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndDisabled();
                 ImGui::EndTable();
             }
+            ImGui::EndDisabled();
         } else {
             sectionHeader("playback.refactorEditor.export.advancedRender"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-rendering", labelWidth)) {
@@ -1090,9 +1509,48 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
         int const      safeSsaaIndex = std::clamp(mExportSsaa, 0, 2);
         uint32_t const ssaaValue     = 1u << safeSsaaIndex;
-        bool const     validOutput   = mExportName.front() != '\0' && mExportDirectory.front() != '\0';
-        bool const     validTimeline =
-            mExportStartTick >= 0 && mExportEndTick > mExportStartTick && mExportEndTick <= maximumReplayTick;
+        auto const     isValidName   = [](std::string_view name) {
+            if (name.empty() || name.size() > 128 || name == "." || name == ".." || name.back() == '.'
+                || name.back() == ' ') {
+                return false;
+            }
+            for (unsigned char const ch : name) {
+                if (ch < 0x20 || ch == 0x7f || ch == '/' || ch == '\\' || ch == ':' || ch == '*' || ch == '?'
+                    || ch == '"' || ch == '<' || ch == '>' || ch == '|') {
+                    return false;
+                }
+            }
+            return true;
+        };
+        bool const validOutput = mExportDirectory.front() != '\0' && isValidName(mExportName.data())
+                              && !stripMp4Extension(mExportName.data()).empty();
+        bool const validTimeline = [&] {
+            if (!state.project) return false;
+            if (mExportSceneScope == 1) {
+                if (mExportSelectedSceneIds.empty()) return false;
+                for (auto const& scene : scenes) {
+                    if (std::ranges::find(mExportSelectedSceneIds, scene.id) == mExportSelectedSceneIds.end()) continue;
+                    auto const sceneProj = state::editing::ClipOps::buildProjectForScene(*state.project, scene);
+                    if (state::editing::ClipOps::collectCompositedSlices(sceneProj, true).empty()) return false;
+                }
+                return true;
+            }
+            if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::EnabledClips)) {
+                return !state::editing::ClipOps::collectCompositedSlices(*state.project, true).empty();
+            }
+            if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::SequenceInOut)) {
+                if (mExportStartTick < 0 || mExportEndTick <= mExportStartTick || mExportEndTick > maximumReplayTick) {
+                    return false;
+                }
+                if (orderedClips.empty()) return true;
+                auto const slices = state::editing::ClipOps::collectCompositedSlices(*state.project, true);
+                return std::ranges::any_of(slices, [&](auto const& slice) {
+                    return std::max(slice.inTick, mExportStartTick) < std::min(slice.outTick, mExportEndTick);
+                });
+            }
+            return !mExportSingleClipId.empty()
+                && state::editing::ClipOps::findClipById(*state.project, mExportSingleClipId) != nullptr;
+        }();
         bool const validFps        = mFps >= 1 && mFps <= 240;
         bool const validResolution = mExportWidth >= 16 && mExportHeight >= 16
                                   && static_cast<uint32_t>(mExportWidth) <= exporting::MaxExportResolution
@@ -1111,38 +1569,164 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         bool const rawSettingsValid = validOutput && validTimeline && validFps && validResolution && validCapture
                                    && formatAvailable && state.project != nullptr;
 
-        exporting::ExportSettings previewSettings;
-        previewSettings.outputDirectory   = utf8Path(mExportDirectory.data());
-        previewSettings.outputName        = mExportName.data();
-        previewSettings.startTick         = mExportStartTick;
-        previewSettings.endTick           = mExportEndTick;
-        previewSettings.frameRate         = {mFps, 1};
-        previewSettings.resolutionX       = static_cast<uint32_t>(std::max(0, mExportWidth));
-        previewSettings.resolutionY       = static_cast<uint32_t>(std::max(0, mExportHeight));
-        previewSettings.ssaa              = ssaaValue;
-        previewSettings.warmupFrames      = static_cast<uint32_t>(std::max(0, mExportWarmupFrames));
-        previewSettings.extraRenders      = static_cast<uint32_t>(std::max(0, mExportExtraRenders));
-        previewSettings.encodeSpeed = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
-        previewSettings.videoCrf          = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
-        previewSettings.hideHud           = mExportHideHud;
-        previewSettings.audio             = mExportAudio;
-        previewSettings.audioStereo       = mExportAudioChannels == 1;
-        previewSettings.audioCodec        = audioCodec;
-        previewSettings.audioBitrateKbps  = kAudioBitratesKbps[mExportAudioBitrate];
-        previewSettings.format =
+        exporting::ExportSettings baseSettings;
+        baseSettings.outputDirectory  = utf8Path(mExportDirectory.data());
+        baseSettings.outputName       = mExportName.data();
+        baseSettings.startTick        = mExportStartTick;
+        baseSettings.endTick          = mExportEndTick;
+        baseSettings.frameRate        = {mFps, 1};
+        baseSettings.resolutionX      = static_cast<uint32_t>(std::max(0, mExportWidth));
+        baseSettings.resolutionY      = static_cast<uint32_t>(std::max(0, mExportHeight));
+        baseSettings.ssaa             = ssaaValue;
+        baseSettings.warmupFrames     = static_cast<uint32_t>(std::max(0, mExportWarmupFrames));
+        baseSettings.extraRenders     = static_cast<uint32_t>(std::max(0, mExportExtraRenders));
+        baseSettings.encodeSpeed      = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
+        baseSettings.videoCrf         = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
+        baseSettings.hideHud          = mExportHideHud;
+        baseSettings.audio            = mExportAudio && !mExportTimelapse;
+        baseSettings.audioStereo      = mExportAudioChannels == 1;
+        baseSettings.audioCodec       = audioCodec;
+        baseSettings.audioBitrateKbps = kAudioBitratesKbps[mExportAudioBitrate];
+        baseSettings.format =
             mExportFormat == 0 ? exporting::ExportFormat::Mp4Video : exporting::ExportFormat::PngSequence;
+        baseSettings.rangeMode = static_cast<exporting::ExportRangeMode>(mExportRangeMode);
+        if (baseSettings.rangeMode == exporting::ExportRangeMode::SingleClip && !mExportSingleClipId.empty()) {
+            baseSettings.selectedClipIds = {mExportSingleClipId};
+        }
+        baseSettings.timelapse           = mExportTimelapse;
+        baseSettings.timelapseIntervalMs = static_cast<uint32_t>(mExportTimelapseIntervalMs);
 
-        exporting::ExportPlanCompileResult compiled;
-        if (rawSettingsValid) compiled = exporting::ExportPlanCompiler::compile(previewSettings, *state.project);
-        bool const     validSettings   = rawSettingsValid && static_cast<bool>(compiled);
-        double const   durationSeconds = validTimeline ? (mExportEndTick - mExportStartTick) / 20.0 : 0.0;
-        uint64_t const frameCount      = compiled.plan ? compiled.plan->frameCount : 0;
+        std::vector<QueuedExportJob>    previewJobs;
+        std::string const               baseStem = stripMp4Extension(mExportName.data());
+        std::unordered_set<std::string> usedOutputNames;
+        if (state.project) {
+            auto const addSplitJobsForScene =
+                [&](state::editing::model::Scene const& scene, bool includeSceneInName, bool singleScene) {
+                    auto const sceneProj  = state::editing::ClipOps::buildProjectForScene(*state.project, scene);
+                    auto const composited = state::editing::ClipOps::collectCompositedSlices(sceneProj, true);
+                    for (size_t i = 0; i < composited.size(); ++i) {
+                        auto const&       slice = composited[i];
+                        std::string const clipName =
+                            slice.clip ? slice.clip->name : "playback.refactorEditor.defaults.clip"_tr(i + 1);
+                        auto jobSettings      = baseSettings;
+                        jobSettings.rangeMode = exporting::ExportRangeMode::SequenceInOut;
+                        jobSettings.startTick = slice.inTick;
+                        jobSettings.endTick   = slice.outTick;
+                        if (singleScene && composited.size() == 1) {
+                            jobSettings.outputName = uniqueOutputName(baseStem, usedOutputNames);
+                        } else if (includeSceneInName) {
+                            jobSettings.outputName =
+                                uniqueOutputName(baseStem + "_" + scene.name + "_" + clipName, usedOutputNames);
+                        } else {
+                            jobSettings.outputName = uniqueOutputName(baseStem + "_" + clipName, usedOutputNames);
+                        }
+                        std::string const label = includeSceneInName ? (scene.name + " / " + clipName) : clipName;
+                        previewJobs.push_back(QueuedExportJob{std::move(jobSettings), scene.id, label});
+                    }
+                };
+
+            if (mExportSceneScope == 1) {
+                std::vector<state::editing::model::Scene const*> selectedScenes;
+                for (auto const& scene : scenes) {
+                    if (std::ranges::find(mExportSelectedSceneIds, scene.id) != mExportSelectedSceneIds.end()) {
+                        selectedScenes.push_back(&scene);
+                    }
+                }
+                for (auto const* scene : selectedScenes) {
+                    if (mExportSplitClips) {
+                        addSplitJobsForScene(*scene, selectedScenes.size() > 1, selectedScenes.size() == 1);
+                    } else {
+                        auto jobSettings       = baseSettings;
+                        jobSettings.rangeMode  = exporting::ExportRangeMode::EnabledClips;
+                        jobSettings.outputName = selectedScenes.size() == 1
+                                                   ? uniqueOutputName(baseStem, usedOutputNames)
+                                                   : uniqueOutputName(baseStem + "_" + scene->name, usedOutputNames);
+                        previewJobs.push_back(QueuedExportJob{std::move(jobSettings), scene->id, scene->name});
+                    }
+                }
+            } else {
+                auto const*       active     = state::editing::ClipOps::activeScene(*state.project);
+                std::string const activeId   = active ? active->id : state.project->activeSceneId;
+                std::string const activeName = active ? active->name : std::string{};
+                if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::EnabledClips) && mExportSplitClips
+                    && active) {
+                    addSplitJobsForScene(*active, false, true);
+                } else if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::SequenceInOut)
+                           && mExportSplitClips && !orderedClips.empty()) {
+                    struct OverlappingSlice {
+                        std::string name;
+                        int         startTick;
+                        int         endTick;
+                    };
+                    auto const composited = state::editing::ClipOps::collectCompositedSlices(*state.project, true);
+                    std::vector<OverlappingSlice> overlapping;
+                    for (size_t i = 0; i < composited.size(); ++i) {
+                        auto const& slice  = composited[i];
+                        int const   cStart = std::max(slice.inTick, mExportStartTick);
+                        int const   cEnd   = std::min(slice.outTick, mExportEndTick);
+                        if (cStart < cEnd) {
+                            std::string clipName =
+                                slice.clip ? slice.clip->name : "playback.refactorEditor.defaults.clip"_tr(i + 1);
+                            overlapping.push_back({std::move(clipName), cStart, cEnd});
+                        }
+                    }
+                    if (overlapping.empty()) {
+                        previewJobs.push_back(QueuedExportJob{baseSettings, activeId, activeName});
+                    } else {
+                        for (auto const& item : overlapping) {
+                            auto jobSettings       = baseSettings;
+                            jobSettings.rangeMode  = exporting::ExportRangeMode::SequenceInOut;
+                            jobSettings.startTick  = item.startTick;
+                            jobSettings.endTick    = item.endTick;
+                            jobSettings.outputName = overlapping.size() == 1
+                                                       ? uniqueOutputName(baseStem, usedOutputNames)
+                                                       : uniqueOutputName(baseStem + "_" + item.name, usedOutputNames);
+                            previewJobs.push_back(QueuedExportJob{std::move(jobSettings), activeId, item.name});
+                        }
+                    }
+                } else {
+                    previewJobs.push_back(QueuedExportJob{baseSettings, activeId, activeName});
+                }
+            }
+        }
+
+        uint64_t                                     frameCount = 0;
+        std::optional<exporting::CompiledExportPlan> firstPlan;
+        exporting::ExportPlanCompileResult           firstFailure;
+        bool                                         allCompiled = !previewJobs.empty();
+        if (rawSettingsValid && allCompiled) {
+            for (auto const& job : previewJobs) {
+                auto const* scene    = state::editing::ClipOps::findScene(*state.project, job.sceneId);
+                auto const  compiled = scene ? exporting::ExportPlanCompiler::compile(
+                                                  job.settings,
+                                                  state::editing::ClipOps::buildProjectForScene(*state.project, *scene)
+                                              )
+                                             : exporting::ExportPlanCompiler::compile(job.settings, *state.project);
+                if (!compiled) {
+                    allCompiled  = false;
+                    firstFailure = compiled;
+                    break;
+                }
+                if (!firstPlan) firstPlan = compiled.plan;
+                frameCount += compiled.plan->frameCount;
+            }
+        }
+        bool const   validSettings = rawSettingsValid && allCompiled;
+        double const durationSeconds =
+            validSettings && mFps > 0 ? static_cast<double>(frameCount) / static_cast<double>(mFps) : 0.0;
 
         // Read-only recap on a tinted block without an outline, so it reads apart from the editable rows above.
         ImGui::Dummy({0.0f, 6.0f * uiScale});
         if (showSummary) {
             std::string const timelineValue =
-                "playback.refactorEditor.export.summaryValue"_tr(mFps, durationSeconds, frameCount);
+                previewJobs.size() > 1
+                    ? "playback.refactorEditor.export.summaryValueBatch"_tr(
+                          mFps,
+                          durationSeconds,
+                          frameCount,
+                          previewJobs.size()
+                      )
+                    : "playback.refactorEditor.export.summaryValue"_tr(mFps, durationSeconds, frameCount);
             std::string const captureValue = "playback.refactorEditor.export.captureValue"_tr(
                 mExportWidth,
                 mExportHeight,
@@ -1151,15 +1735,17 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             );
             // Shows the name the plan resolved, so a PNG sequence reads as a folder and MP4 as a file.
             std::string outputValue = "-";
-            if (compiled.plan) {
-                auto const u8 = compiled.plan->outputPath.filename().u8string();
+            if (validSettings && previewJobs.size() > 1) {
+                outputValue = "playback.refactorEditor.export.batchOutputSummary"_tr(previewJobs.size());
+            } else if (validSettings && firstPlan) {
+                auto const u8 = firstPlan->outputPath.filename().u8string();
                 outputValue.assign(reinterpret_cast<char const*>(u8.data()), u8.size());
             }
             // Encoder choices live on other pages than the one open, so the recap names them: video first, then audio.
             std::string encodeValue = mExportFormat == 0 ? std::string(encodeSpeedOptions[mExportEncodeSpeed])
                                                                + " | CRF " + std::to_string(mExportCrf)
                                                          : std::string("PNG");
-            if (mExportAudio) {
+            if (baseSettings.audio) {
                 // A PNG sequence keeps its sound as a WAV file beside the frames.
                 std::string audioValue = mExportFormat == 0 ? audioCodecOptions[mExportAudioCodec] : "WAV";
                 if (mExportFormat == 0 && exporting::audioCodecUsesBitrate(audioCodec))
@@ -1253,7 +1839,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     0.0f,
                     &clip
                 );
-                widgets::itemTooltip(!compiled.message.empty() ? compiled.message.c_str() : note.c_str());
+                widgets::itemTooltip(!firstFailure.message.empty() ? firstFailure.message.c_str() : note.c_str());
             }
         }
 
@@ -1274,9 +1860,12 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         ImGui::PushStyleColor(ImGuiCol_Button, theme::withAlpha(theme::kButton, 0x00));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kButtonHover);
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kButtonActive);
-        if (ImGui::Button(cancelLabel.c_str(), {cancelWidth, buttonH})) {
+        auto const closeDialog = [&] {
             mExportDialogOpen = false;
             ImGui::CloseCurrentPopup();
+        };
+        if (ImGui::Button(cancelLabel.c_str(), {cancelWidth, buttonH})) {
+            closeDialog();
         }
         ImGui::PopStyleColor(3);
         ImGui::SameLine(0.0f, footerGap);
@@ -1287,23 +1876,19 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         ImGui::PushStyleColor(ImGuiCol_Text, theme::kIconHighlight);
         if (ImGui::Button(startLabel.c_str(), {startWidth, buttonH})) {
             EditorAction action{EditorActionType::StartExport};
-            action.exportSettings = std::move(previewSettings);
+            action.exportJobs = std::move(previewJobs);
             ctx.submitAction(std::move(action));
-            mExportDialogOpen = false;
-            ImGui::CloseCurrentPopup();
+            closeDialog();
         }
         ImGui::PopStyleColor(4);
         ImGui::EndDisabled();
         ImGui::PopStyleVar();
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-            mExportDialogOpen = false;
-            ImGui::CloseCurrentPopup();
+            closeDialog();
         }
         ImGui::EndPopup();
     }
 }
-
-bool EditorMenuBar::isAnyMenuOpen() const { return ImGui::IsAnyItemHovered(); }
 
 } // namespace playback::editor::ui

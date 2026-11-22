@@ -1,6 +1,8 @@
 ﻿#include "ReplayEntityInterpolator.h"
 
 #include "mc/deps/ecs/gamerefs_entity/EntityContext.h"
+#include "mc/deps/vanilla_components/AABBShapeComponent.h"
+#include "mc/deps/vanilla_components/OffsetsComponent.h"
 #include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
@@ -294,6 +296,8 @@ struct ScopedReplayEntityPose::State {
         Vec3                           statePosition{};
         Vec3                           statePositionPrevious{};
         Vec3                           statePositionDelta{};
+        AABBShapeComponent*            aabbShape{};
+        AABB                           aabbValue{};
         RenderPositionComponent*       renderPosition{};
         Vec3                           renderPositionValue{};
         Vec3                           exportPosition{};
@@ -337,6 +341,7 @@ struct ScopedReplayEntityPose::State {
             state->stateVector->mPos      = state->statePosition;
             state->stateVector->mPosPrev  = state->statePositionPrevious;
             state->stateVector->mPosDelta = state->statePositionDelta;
+            if (state->aabbShape) state->aabbShape->mAABB = state->aabbValue;
             state->renderPosition->mValue = state->renderPositionValue;
             if (state->movementInterpolator) {
                 *state->movementInterpolator->mPos          = state->movementPosition;
@@ -371,7 +376,14 @@ ScopedReplayEntityPose::~ScopedReplayEntityPose() = default;
 
 bool isReplayEntityHiddenInScope(Actor const& actor) {
     auto const* state = ScopedReplayEntityPose::State::gActiveState;
-    return state && state->hidden && state->hidden->actor == &actor;
+    if (!state || !state->hidden) return false;
+    if (state->hidden->actor == &actor) return true;
+    // Hide passengers (such as server disguise blocks) riding the first-person subject.
+    int depth = 0;
+    for (auto const* vehicle = actor.getVehicle(); vehicle && depth < 16; vehicle = vehicle->getVehicle(), ++depth) {
+        if (vehicle == state->hidden->actor) return true;
+    }
+    return false;
 }
 
 Actor* replayHiddenActorInScope() {
@@ -450,6 +462,7 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             auto* renderRotation       = context.tryGetComponent<RenderRotationComponent>().as_ptr();
             auto* movementInterpolator = context.tryGetComponent<MovementInterpolatorComponent>().as_ptr();
             auto* stateVector          = target.actor->mBuiltInComponents->mStateVectorComponent.get();
+            auto* aabbShape            = target.actor->mBuiltInComponents->mAABBShapeComponent.get();
             auto* actorRotation        = target.actor->mBuiltInComponents->mActorRotationComponent.get();
             auto* headRotation         = context.tryGetComponent<ActorHeadRotationComponent>().as_ptr();
             auto* bodyRotation         = context.tryGetComponent<MobBodyRotationComponent>().as_ptr();
@@ -465,6 +478,8 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                     stateVector->mPos.get(),
                     stateVector->mPosPrev.get(),
                     stateVector->mPosDelta.get(),
+                    aabbShape,
+                    aabbShape ? aabbShape->mAABB.get() : AABB{},
                     renderPosition,
                     renderPosition->mValue.get(),
                     Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
@@ -506,6 +521,13 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                 applied.movementInterpolator->mRotationSteps = 0;
                 applied.movementInterpolator->mHeadYawSteps  = 0;
             }
+            // Replay positions are written straight into the state, so the bounding box the game moves along with
+            // them stays wherever the entity was spawned or last teleported. The fire overlay, culling and the
+            // viewport's entity picking read it, so it follows the drawn pose and restores when the scope ends.
+            if (applied.aabbShape) {
+                Vec3 const position = positioned ? applied.exportPosition : Vec3{stateVector->mPos};
+                syncReplayEntityBoundingBox(*target.actor, position);
+            }
             if (applied.renderRotation) {
                 applied.renderRotation->mRot = Vec2{sampled.pitch, sampled.yaw};
             }
@@ -530,6 +552,27 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
     } catch (...) {
         return {};
     }
+}
+
+void syncReplayEntityBoundingBox(Actor& actor, Vec3 const& position) {
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)) {
+        return;
+    }
+    auto* shape = actor.mBuiltInComponents->mAABBShapeComponent.get();
+    if (!shape) return;
+    auto const* offsets = actor.getEntityContext().tryGetComponent<OffsetsComponent>().as_ptr();
+    Vec2 const  size    = shape->mBBDim;
+    if (!std::isfinite(size.x) || !std::isfinite(size.y)) return;
+    float const width  = std::max(0.0f, static_cast<float>(size.x));
+    float const height = std::max(0.0f, static_cast<float>(size.y));
+    // Players stand eye height above their box; most entities stand on it.
+    float const rawLift = offsets ? static_cast<float>(offsets->mHeightOffset) : 0.0f;
+    float const lift    = std::isfinite(rawLift) ? rawLift : 0.0f;
+    float const half    = width * 0.5f;
+    shape->mAABB        = AABB{
+        Vec3{position.x - half, position.y - lift,          position.z - half},
+        Vec3{position.x + half, position.y - lift + height, position.z + half}
+    };
 }
 
 void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, EntityRenderPose current) {
@@ -644,7 +687,8 @@ void noteReplaySubjectPosture(int64_t tick, bool snap, ReplaySubjectPosture cons
     bool const  recorder = isReplaySubjectRecorder();
     // The measured offsets are a player's; another entity keeps its own eye height.
     bool const  player   = isReplaySubjectPlayer();
-    float const target   = !recorder && player && posture.swimming ? kSwimCameraOffsetY
+    float const target   = !recorder && player && (posture.swimming || posture.crawling || posture.gliding)
+                             ? kSwimCameraOffsetY
                          : !recorder && player && posture.sneaking ? kSneakCameraOffsetY
                                                                    : 0.0f;
     bool const  sleeping = player && (posture.sleeping || posture.actorSleeping);
@@ -733,11 +777,14 @@ bool isReplaySubjectViewDriven() {
     return (gSubjectHidden.load(std::memory_order_acquire) & mask) != 0;
 }
 
-std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample) {
-    auto const subject = subjectKey();
-    if (!subject) return std::nullopt;
-    EntityRenderKey const key = *subject;
-
+std::optional<EntityRenderPose> sampleReplayEntityPose(
+    EntityRenderKey         key,
+    ReplaySampleTime const& sample,
+    bool                    isRecorder,
+    bool                    isPlayer,
+    float                   eyeHeight,
+    float                   postureOffsetY
+) {
     std::optional<EntityRenderPose> found;
     if (auto const poses = gEntityPoses.load(std::memory_order_acquire)) {
         if (auto const entry = poses->find(key); entry != poses->end()) {
@@ -753,15 +800,15 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
     if (!found) return std::nullopt;
     auto pose = *found;
     // Any other entity records its feet and turns its head independently of its body.
-    if (!isReplaySubjectPlayer()) {
-        pose.position.y += gSubjectEyeHeight.load(std::memory_order_relaxed);
+    if (!isPlayer) {
+        pose.position.y += std::isfinite(eyeHeight) ? std::max(0.0f, eyeHeight) : 0.0f;
         pose.yaw = pose.headYaw;
         return pose;
     }
     // Recorded player positions are already standing eye height. The recorder uses its recorded camera offset.
     // Another player has no such track, so sneak and swim add the offset measured on the local player.
-    if (!isReplaySubjectRecorder()) {
-        pose.position.y += replaySubjectPostureOffsetY();
+    if (!isRecorder) {
+        pose.position.y += std::isfinite(postureOffsetY) ? postureOffsetY : 0.0f;
         return pose;
     }
     if (auto const camera = sampleSubjectCamera(sample)) {
@@ -782,6 +829,19 @@ std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& 
         }
     }
     return pose;
+}
+
+std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample) {
+    auto const subject = subjectKey();
+    if (!subject) return std::nullopt;
+    return sampleReplayEntityPose(
+        *subject,
+        sample,
+        isReplaySubjectRecorder(),
+        isReplaySubjectPlayer(),
+        gSubjectEyeHeight.load(std::memory_order_relaxed),
+        replaySubjectPostureOffsetY()
+    );
 }
 
 float sampleReplaySubjectViewWeight(ReplaySampleTime const& sample) {

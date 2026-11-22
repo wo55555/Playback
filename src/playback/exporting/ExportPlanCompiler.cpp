@@ -1,9 +1,14 @@
 ﻿#include "ExportPlanCompiler.h"
 
+#include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <iterator>
 #include <limits>
+#include <unordered_set>
 
 namespace playback::exporting {
 
@@ -103,6 +108,42 @@ constexpr uint64_t MaxFramePixels       = MaxExportPixels;
     return ExportPlanCompileResult{std::nullopt, error, message};
 }
 
+struct ExportSlice {
+    int64_t inTick{};
+    int64_t outTick{};
+    float   speed{1.0f};
+    bool    muteAudio{false};
+    bool    hardCutBefore{false};
+};
+
+[[nodiscard]] int64_t quantizeSpeedMilli(float speed) noexcept {
+    return std::clamp<int64_t>(
+        std::llround(static_cast<double>(state::editing::model::clampClipSpeed(speed)) * 1000.0),
+        50,
+        32000
+    );
+}
+
+void appendOrMergeSlice(
+    std::vector<ExportSlice>& slices,
+    int64_t                   inTick,
+    int64_t                   outTick,
+    float                     speed,
+    bool                      muteAudio
+) {
+    float const clampedSpeed = state::editing::model::clampClipSpeed(speed);
+    if (!slices.empty()) {
+        auto& prev = slices.back();
+        if (prev.outTick == inTick && prev.muteAudio == muteAudio
+            && quantizeSpeedMilli(prev.speed) == quantizeSpeedMilli(clampedSpeed)) {
+            prev.outTick = outTick;
+            return;
+        }
+    }
+    bool const hardCutBefore = !slices.empty() && inTick != slices.back().outTick;
+    slices.push_back(ExportSlice{inTick, outTick, clampedSpeed, muteAudio, hardCutBefore});
+}
+
 } // namespace
 
 std::filesystem::path buildExportOutputPath(ExportSettings const& settings) {
@@ -128,16 +169,28 @@ std::filesystem::path findAvailableExportPath(std::filesystem::path const& desir
 }
 
 std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t frameIndex) const {
-    if (frameIndex >= frameCount) return std::nullopt;
-
-    int64_t frameOffset = 0;
+    if (frameIndex >= frameCount || segments.empty()) return std::nullopt;
     if (frameIndex > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) return std::nullopt;
-    if (!checkedSignedMultiply(static_cast<int64_t>(frameIndex), replayTickStepNumerator, frameOffset)) {
+
+    auto const it = std::upper_bound(
+        segments.begin(),
+        segments.end(),
+        frameIndex,
+        [](uint64_t target, CompiledExportSegment const& seg) { return target < seg.firstFrame; }
+    );
+    if (it == segments.begin()) return std::nullopt;
+    auto const& seg = *std::prev(it);
+    if (frameIndex >= seg.firstFrame + seg.frameCount) return std::nullopt;
+
+    uint64_t const localIndex  = frameIndex - seg.firstFrame;
+    int64_t        frameOffset = 0;
+    if (!checkedSignedMultiply(static_cast<int64_t>(localIndex), seg.replayStepNumerator, frameOffset)) {
         return std::nullopt;
     }
 
     int64_t replayTickNumerator = 0;
-    if (!checkedSignedAdd(replayTickStartNumerator, frameOffset, replayTickNumerator)) return std::nullopt;
+    if (!checkedSignedAdd(seg.replayStartNumerator, frameOffset, replayTickNumerator)) return std::nullopt;
+    replayTickNumerator = std::min(seg.maxNumerator, replayTickNumerator);
 
     int64_t ptsNumerator = 0;
     if (!checkedSignedMultiply(static_cast<int64_t>(frameIndex), settings.frameRate.denominator, ptsNumerator)) {
@@ -146,10 +199,12 @@ std::optional<ExportFramePlan> CompiledExportPlan::frame(uint64_t frameIndex) co
 
     ExportFramePlan result;
     result.replayTickNumerator   = replayTickNumerator;
-    result.replayTickDenominator = replayTickDenominator;
+    result.replayTickDenominator = seg.replayDenominator;
     result.ticket.frameIndex     = frameIndex;
     result.ticket.ptsNumerator   = ptsNumerator;
     result.ticket.ptsDenominator = settings.frameRate.numerator;
+    result.hardCut               = (localIndex == 0 && seg.hardCutBefore);
+    result.muteAudio             = seg.muteAudio;
     return result;
 }
 
@@ -158,15 +213,13 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     if (settings.format != ExportFormat::PngSequence && settings.format != ExportFormat::Mp4Video) {
         return failure(ExportError::InvalidSettings, "The requested export format is not supported");
     }
+    if (settings.rangeMode != ExportRangeMode::EnabledClips && settings.rangeMode != ExportRangeMode::SequenceInOut
+        && settings.rangeMode != ExportRangeMode::SingleClip) {
+        return failure(ExportError::InvalidSettings, "The requested export range mode is not supported");
+    }
     if (settings.outputDirectory.empty() || !validOutputName(settings.outputName)
         || outputBaseName(settings.outputName).empty()) {
         return failure(ExportError::InvalidOutputPath, "The export output path is invalid");
-    }
-    if (settings.startTick < 0 || settings.endTick <= settings.startTick) {
-        return failure(ExportError::InvalidTimeline, "The export timeline must have a positive duration");
-    }
-    if (project.totalTicks < 0 || settings.endTick > project.totalTicks) {
-        return failure(ExportError::InvalidTimeline, "The export timeline exceeds the replay duration");
     }
     if (settings.frameRate.numerator <= 0 || settings.frameRate.denominator <= 0
         || settings.frameRate.numerator > MaxFrameRateValue || settings.frameRate.denominator > MaxFrameRateValue) {
@@ -203,63 +256,197 @@ ExportPlanCompiler::compile(ExportSettings const& settings, state::editing::mode
     if (settings.videoCrf > MaxExportCrf || settings.encodeSpeed > VideoEncodeSpeed::Fastest) {
         return failure(ExportError::InvalidSettings, "The video encoder quality or speed setting is invalid");
     }
+    if (settings.timelapse
+        && (settings.timelapseIntervalMs < MinTimelapseIntervalMs
+            || settings.timelapseIntervalMs > MaxTimelapseIntervalMs)) {
+        return failure(ExportError::InvalidSettings, "The timelapse interval is invalid");
+    }
+    if (project.totalTicks < 0) {
+        return failure(ExportError::InvalidTimeline, "The replay duration is invalid");
+    }
 
     ExportSettings normalized = settings;
     normalized.frameRate      = normalizeFrameRate(normalized.frameRate);
+    if (normalized.timelapse) normalized.audio = false;
 
-    uint64_t const durationTicks = static_cast<uint64_t>(settings.endTick - settings.startTick);
-    uint64_t       denominator   = 0;
-    if (!checkedMultiply(
-            static_cast<uint64_t>(ReplayTicksPerSecond),
-            static_cast<uint64_t>(normalized.frameRate.denominator),
-            denominator
-        )) {
-        return failure(ExportError::InvalidSettings, "The export frame rate denominator is too large");
+    std::vector<ExportSlice> slices;
+    switch (normalized.rangeMode) {
+    case ExportRangeMode::EnabledClips: {
+        auto const composited = state::editing::ClipOps::collectCompositedSlices(project, true);
+        if (composited.empty()) {
+            return failure(ExportError::InvalidTimeline, "No enabled clips are available to export");
+        }
+        for (auto const& slice : composited) {
+            if (slice.inTick < 0 || slice.inTick >= slice.outTick || slice.outTick > project.totalTicks) {
+                return failure(ExportError::InvalidTimeline, "An enabled clip is out of timeline bounds");
+            }
+            appendOrMergeSlice(slices, slice.inTick, slice.outTick, slice.speed, slice.muted);
+        }
+        break;
+    }
+    case ExportRangeMode::SequenceInOut: {
+        if (settings.startTick < 0 || settings.endTick <= settings.startTick) {
+            return failure(ExportError::InvalidTimeline, "The export timeline must have a positive duration");
+        }
+        if (settings.endTick > project.totalTicks) {
+            return failure(ExportError::InvalidTimeline, "The export timeline exceeds the replay duration");
+        }
+
+        if (project.cameras.empty()) {
+            slices.push_back(ExportSlice{settings.startTick, settings.endTick, 1.0f, false, false});
+            break;
+        }
+
+        auto const composited = state::editing::ClipOps::collectCompositedSlices(project, true);
+        for (auto const& slice : composited) {
+            int64_t const cStart = std::max<int64_t>(slice.inTick, settings.startTick);
+            int64_t const cEnd   = std::min<int64_t>(slice.outTick, settings.endTick);
+            if (cStart >= cEnd) continue;
+            appendOrMergeSlice(slices, cStart, cEnd, slice.speed, slice.muted);
+        }
+        if (slices.empty()) {
+            return failure(ExportError::InvalidTimeline, "No enabled clips lie within the selected export range");
+        }
+        break;
+    }
+    case ExportRangeMode::SingleClip: {
+        if (settings.selectedClipIds.size() != 1) {
+            return failure(ExportError::InvalidTimeline, "Single-clip export requires exactly one selected clip");
+        }
+        auto const* clip = state::editing::ClipOps::findClipById(project, settings.selectedClipIds.front());
+        if (!clip || clip->inTick < 0 || clip->inTick >= clip->outTick || clip->outTick > project.totalTicks) {
+            return failure(ExportError::InvalidTimeline, "The selected clip is missing or out of timeline bounds");
+        }
+        slices.push_back(
+            ExportSlice{
+                clip->inTick,
+                clip->outTick,
+                state::editing::model::clampClipSpeed(clip->speed),
+                clip->muted,
+                false,
+            }
+        );
+        break;
+    }
     }
 
-    uint64_t wholeFrames         = durationTicks / denominator;
-    uint64_t remainder           = durationTicks % denominator;
-    uint64_t fractionalNumerator = 0;
-    if (!checkedMultiply(remainder, static_cast<uint64_t>(normalized.frameRate.numerator), fractionalNumerator)) {
-        return failure(ExportError::InvalidTimeline, "The export duration is too large");
+    if (slices.empty()) {
+        return failure(ExportError::InvalidTimeline, "The export timeline produced no segments");
     }
-    uint64_t fractionalFrames = fractionalNumerator / denominator;
-    if (fractionalNumerator % denominator != 0) ++fractionalFrames;
 
-    uint64_t frameCount = 0;
-    if (!checkedMultiply(wholeFrames, static_cast<uint64_t>(normalized.frameRate.numerator), frameCount)
-        || !checkedAdd(frameCount, fractionalFrames, frameCount) || frameCount == 0 || frameCount > MaxExportFrames) {
+    std::vector<CompiledExportSegment> segments;
+    segments.reserve(slices.size());
+    uint64_t totalFrames = 0;
+    int64_t  maxOutTick  = 0;
+
+    for (auto const& slice : slices) {
+        int64_t const speedMilli =
+            std::clamp<int64_t>(std::llround(static_cast<double>(slice.speed) * 1000.0), 50, 32000);
+        int64_t const speedGcd = gcd(speedMilli, 1000);
+        int64_t const speedNum = speedMilli / speedGcd;
+        int64_t const speedDen = 1000 / speedGcd;
+
+        int64_t stepRawNum = 0;
+        int64_t stepRawDen = 0;
+        if (!normalized.timelapse) {
+            int64_t tmpDen = 0;
+            if (!checkedSignedMultiply(ReplayTicksPerSecond, normalized.frameRate.denominator, tmpDen)
+                || !checkedSignedMultiply(tmpDen, speedNum, stepRawNum)) {
+                return failure(ExportError::InvalidSettings, "The export frame rate is too large");
+            }
+            if (!checkedSignedMultiply(normalized.frameRate.numerator, speedDen, stepRawDen)) {
+                return failure(ExportError::InvalidSettings, "The export frame rate is too large");
+            }
+        } else {
+            if (!checkedSignedMultiply(static_cast<int64_t>(normalized.timelapseIntervalMs), speedNum, stepRawNum)) {
+                return failure(ExportError::InvalidSettings, "The timelapse interval is too large");
+            }
+            if (!checkedSignedMultiply(50, speedDen, stepRawDen)) {
+                return failure(ExportError::InvalidSettings, "The timelapse speed denominator is too large");
+            }
+        }
+
+        int64_t const stepGcd   = gcd(stepRawNum, stepRawDen);
+        int64_t const stepNum   = stepRawNum / stepGcd;
+        int64_t const replayDen = stepRawDen / stepGcd;
+
+        uint64_t const durationTicks = static_cast<uint64_t>(slice.outTick - slice.inTick);
+        uint64_t const whole         = durationTicks / static_cast<uint64_t>(stepNum);
+        uint64_t const rem           = durationTicks % static_cast<uint64_t>(stepNum);
+        uint64_t       fracNumerator = 0;
+        if (!checkedMultiply(rem, static_cast<uint64_t>(replayDen), fracNumerator)) {
+            return failure(ExportError::InvalidTimeline, "The export duration is too large");
+        }
+        uint64_t const fracFrames =
+            (fracNumerator + static_cast<uint64_t>(stepNum) - 1) / static_cast<uint64_t>(stepNum);
+
+        uint64_t segFrameCount = 0;
+        if (!checkedMultiply(whole, static_cast<uint64_t>(replayDen), segFrameCount)
+            || !checkedAdd(segFrameCount, fracFrames, segFrameCount)) {
+            return failure(ExportError::InvalidTimeline, "The export timeline produces too many frames");
+        }
+        if (segFrameCount == 0) segFrameCount = 1;
+
+        uint64_t nextTotalFrames = 0;
+        if (!checkedAdd(totalFrames, segFrameCount, nextTotalFrames) || nextTotalFrames > MaxExportFrames) {
+            return failure(ExportError::InvalidTimeline, "The export timeline produces too many frames");
+        }
+        if (nextTotalFrames - 1 > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+            return failure(ExportError::InvalidTimeline, "The export frame index is too large");
+        }
+
+        int64_t startNum = 0;
+        if (!checkedSignedMultiply(slice.inTick, replayDen, startNum)) {
+            return failure(ExportError::InvalidTimeline, "The export start tick is too large");
+        }
+        int64_t maxNum = 0;
+        if (!checkedSignedMultiply(slice.outTick, replayDen, maxNum)) {
+            return failure(ExportError::InvalidTimeline, "The export end tick is too large");
+        }
+        int64_t lastOffset = 0;
+        if (!checkedSignedMultiply(static_cast<int64_t>(segFrameCount - 1), stepNum, lastOffset)) {
+            return failure(ExportError::InvalidTimeline, "The export timeline is too large");
+        }
+        int64_t lastSample = 0;
+        if (!checkedSignedAdd(startNum, lastOffset, lastSample)) {
+            return failure(ExportError::InvalidTimeline, "The export timeline is too large");
+        }
+        (void)lastSample;
+
+        segments.push_back(
+            CompiledExportSegment{
+                slice.inTick,
+                slice.outTick,
+                totalFrames,
+                segFrameCount,
+                startNum,
+                stepNum,
+                replayDen,
+                maxNum,
+                slice.hardCutBefore,
+                slice.muteAudio,
+            }
+        );
+        totalFrames = nextTotalFrames;
+        maxOutTick  = std::max(maxOutTick, slice.outTick);
+    }
+
+    if (totalFrames == 0 || totalFrames > MaxExportFrames) {
         return failure(ExportError::InvalidTimeline, "The export timeline produces too many frames");
     }
-    if (frameCount - 1 > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
-        return failure(ExportError::InvalidTimeline, "The export frame index is too large");
-    }
-
-    int64_t replayStartNumerator = 0;
-    if (!checkedSignedMultiply(settings.startTick, normalized.frameRate.numerator, replayStartNumerator)) {
-        return failure(ExportError::InvalidTimeline, "The export start tick is too large");
-    }
-    int64_t replayStepNumerator = 0;
-    if (!checkedSignedMultiply(ReplayTicksPerSecond, normalized.frameRate.denominator, replayStepNumerator)) {
-        return failure(ExportError::InvalidSettings, "The export frame rate is too large");
-    }
-    int64_t lastOffset = 0;
-    if (!checkedSignedMultiply(static_cast<int64_t>(frameCount - 1), replayStepNumerator, lastOffset)) {
-        return failure(ExportError::InvalidTimeline, "The export timeline is too large");
-    }
-    int64_t lastSample = 0;
-    if (!checkedSignedAdd(replayStartNumerator, lastOffset, lastSample)) {
-        return failure(ExportError::InvalidTimeline, "The export timeline is too large");
-    }
-    (void)lastSample;
 
     CompiledExportPlan plan;
-    plan.settings                 = std::move(normalized);
-    plan.outputPath               = buildExportOutputPath(plan.settings);
-    plan.frameCount               = frameCount;
-    plan.replayTickStartNumerator = replayStartNumerator;
-    plan.replayTickStepNumerator  = replayStepNumerator;
-    plan.replayTickDenominator    = plan.settings.frameRate.numerator;
+    plan.settings           = std::move(normalized);
+    plan.settings.startTick = segments.front().inTick;
+    plan.settings.endTick   = maxOutTick;
+    plan.outputPath         = buildExportOutputPath(plan.settings);
+    plan.frameCount         = totalFrames;
+    plan.segments           = std::move(segments);
+    if (plan.segments.size() == 1) {
+        plan.replayTickStartNumerator = plan.segments[0].replayStartNumerator;
+        plan.replayTickStepNumerator  = plan.segments[0].replayStepNumerator;
+        plan.replayTickDenominator    = plan.segments[0].replayDenominator;
+    }
     return ExportPlanCompileResult{std::move(plan), ExportError::None, {}};
 }
 

@@ -86,7 +86,9 @@ private:
     waiting(OfflineRenderWaitReason reason, OfflineRenderStepResult result = OfflineRenderStepResult::Waiting) noexcept;
     [[nodiscard]] int                                     targetTick(ExportFramePlan const& frame) const;
     [[nodiscard]] std::optional<OfflineRenderClockSample> clockSample(ExportFramePlan const& frame) const;
+    void                                                  prepareExportObserver(ExportFramePlan const& frame);
     void                                                  updateExportCamera(ExportFramePlan const& frame);
+    void updateExportCameraAt(visuals::ReplaySampleTime const& time, bool allowObserverFallback);
     [[nodiscard]] OfflineRenderStepResult                 advanceWarmup(ExportFramePlan const& frame);
     [[nodiscard]] bool                                    warmupComplete() const;
     [[nodiscard]] bool                                    hasStep(OfflineRenderClockKind kind) const;
@@ -146,6 +148,8 @@ private:
     bool                                  mDimensionLoadingForced{};
     bool                                  mTimelineInitialized{};
     bool                                  mInitializationTickObserved{};
+    bool                                  mTimelapse{};
+    bool                                  mPendingCutHandled{};
     OfflineRenderBoundaryState            mState{OfflineRenderBoundaryState::Closed};
     OfflineRenderBoundaryError            mError{OfflineRenderBoundaryError::None};
     OfflineRenderWaitReason               mLastWaitReason{OfflineRenderWaitReason::Unknown};

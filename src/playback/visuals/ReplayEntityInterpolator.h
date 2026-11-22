@@ -9,6 +9,7 @@
 
 class Actor;
 class StrictEntityContext;
+class Vec3;
 struct RenderPositionComponent;
 
 namespace playback::visuals {
@@ -44,6 +45,9 @@ class ScopedReplayEntityPose;
 [[nodiscard]] std::unique_ptr<ScopedReplayEntityPose>
 createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, ReplaySampleTime const& sample);
 
+// Rebuilds an entity's bounding box around position from its current dimensions and height offset.
+void syncReplayEntityBoundingBox(Actor& actor, Vec3 const& position);
+
 void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, EntityRenderPose current);
 
 // The recorded local player's view at one rendered frame between two ticks; fraction is the partial tick.
@@ -77,11 +81,12 @@ void setReplaySubjectEntity(bool player, float eyeHeight) noexcept;
 [[nodiscard]] bool hasReplaySubject() noexcept;
 
 // Flags of the followed replay actor, read once per replay tick. Other players have no recorded camera
-// offset, so sneak and swim use the offsets measured on the local player. Crawl is recorded but not applied.
+// offset, so sneak, swim, crawl, and glide use the offsets measured on the local player.
 struct ReplaySubjectPosture {
     bool sneaking{};
     bool swimming{};
     bool crawling{};
+    bool gliding{};
     bool sleeping{};
     bool actorSleeping{};
 };
@@ -169,6 +174,16 @@ void queueReplaySubjectCameraOffset(
 
 // The subject's entity pose with the recorded camera offset added to its position, i.e. the first-person view.
 [[nodiscard]] std::optional<EntityRenderPose> sampleReplaySubjectPose(ReplaySampleTime const& sample);
+
+// Thread-safe pose sample for an arbitrary replay entity without reading or modifying global subject state.
+[[nodiscard]] std::optional<EntityRenderPose> sampleReplayEntityPose(
+    EntityRenderKey         key,
+    ReplaySampleTime const& sample,
+    bool                    isRecorder,
+    bool                    isPlayer,
+    float                   eyeHeight,
+    float                   postureOffsetY
+);
 
 // How much of the recorded game camera view (sleeping) replaces the entity pose, 0 to 1.
 [[nodiscard]] float sampleReplaySubjectViewWeight(ReplaySampleTime const& sample);

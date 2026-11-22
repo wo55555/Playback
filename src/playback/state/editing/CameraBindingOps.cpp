@@ -1,8 +1,10 @@
 ﻿#include "CameraBindingOps.h"
 
 #include "ll/api/i18n/I18n.h"
+#include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace playback::state::editing::CameraBindingOps {
 
@@ -22,20 +24,10 @@ std::string makeCameraId(model::EditorStateExt const& state) {
     }
 }
 
-model::SubActor* findSubActor(model::EditorStateExt& state, std::string const& id) {
-    auto it =
-        std::find_if(state.worldActor.subActors.begin(), state.worldActor.subActors.end(), [&](auto const& actor) {
-            return actor.id == id;
-        });
-    return it == state.worldActor.subActors.end() ? nullptr : &*it;
-}
-
 // Counting cameras would reuse a name after a delete, so probe upwards until the name is free.
-std::string defaultCameraName(model::EditorStateExt const& state, model::CameraTrackKind kind) {
+std::string defaultCameraName(model::EditorStateExt const& state) {
     for (size_t next = state.cameras.size() + 1;; ++next) {
-        auto name = kind == model::CameraTrackKind::FirstPerson ? "playback.refactorEditor.defaults.firstPersonCamera"_tr(next)
-                  : kind == model::CameraTrackKind::ThirdPerson ? "playback.refactorEditor.defaults.thirdPersonCamera"_tr(next)
-                                                                : "playback.refactorEditor.defaults.camera"_tr(next);
+        auto name = "playback.refactorEditor.defaults.camera"_tr(next);
         if (std::none_of(state.cameras.begin(), state.cameras.end(), [&name](auto const& camera) {
                 return camera.name == name;
             })) {
@@ -46,47 +38,22 @@ std::string defaultCameraName(model::EditorStateExt const& state, model::CameraT
 } // namespace
 
 
-std::string addFreeCamera(model::EditorStateExt& state, std::string const& name, model::CameraTrackKind kind) {
+std::string addFreeCamera(model::EditorStateExt& state, std::string const& name) {
     model::CameraEntity camera;
     camera.id   = makeCameraId(state);
-    camera.kind = kind;
-    camera.name = name.empty() ? defaultCameraName(state, kind) : name;
-    state.cameras.push_back(camera);
-    return camera.id;
-}
-
-std::string createBindingCamera(model::EditorStateExt& state, std::string const& subActorId, std::string const& name) {
-    auto* actor = findSubActor(state, subActorId);
-    if (!actor) return {};
-
-    model::CameraEntity camera;
-    camera.id                = makeCameraId(state);
-    camera.name              = name.empty() ? actor->name + " (bind)" : name;
-    camera.bindingEntityUuid = actor->id;
-    actor->boundCameraIds.push_back(camera.id);
-    state.cameras.push_back(camera);
-    return camera.id;
-}
-
-bool unbindCamera(model::EditorStateExt& state, std::string const& cameraId) {
-    auto it = std::find_if(state.cameras.begin(), state.cameras.end(), [&](auto const& camera) {
-        return camera.id == cameraId;
-    });
-    if (it == state.cameras.end() || it->locked || state.cameras.size() <= 1) return false;
-
-    bool changed = !it->bindingEntityUuid.empty();
-    for (auto& actor : state.worldActor.subActors) {
-        auto const oldSize = actor.boundCameraIds.size();
-        actor.boundCameraIds.erase(
-            std::remove(actor.boundCameraIds.begin(), actor.boundCameraIds.end(), cameraId),
-            actor.boundCameraIds.end()
-        );
-        changed = changed || actor.boundCameraIds.size() != oldSize;
+    camera.name = name.empty() ? defaultCameraName(state) : name;
+    if (state.totalTicks > 0) {
+        model::Clip clip;
+        clip.id            = ClipOps::nextClipId(state);
+        clip.name          = ClipOps::defaultClipName(state);
+        clip.inTick        = 0;
+        clip.outTick       = state.totalTicks;
+        clip.speed         = 1.0f;
+        clip.exportEnabled = true;
+        camera.clips.push_back(std::move(clip));
     }
-    if (!changed) return false;
-
-    it->bindingEntityUuid.clear();
-    return true;
+    state.cameras.push_back(std::move(camera));
+    return state.cameras.back().id;
 }
 
 bool deleteCamera(model::EditorStateExt& state, std::string const& cameraId) {
@@ -95,12 +62,6 @@ bool deleteCamera(model::EditorStateExt& state, std::string const& cameraId) {
     });
     if (it == state.cameras.end() || it->locked || state.cameras.size() <= 1) return false;
 
-    for (auto& actor : state.worldActor.subActors) {
-        actor.boundCameraIds.erase(
-            std::remove(actor.boundCameraIds.begin(), actor.boundCameraIds.end(), cameraId),
-            actor.boundCameraIds.end()
-        );
-    }
     state.cameras.erase(it);
     return true;
 }

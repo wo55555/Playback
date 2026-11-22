@@ -2,11 +2,34 @@
 
 #include "imgui.h"
 
+#include <array>
+#include <cmath>
 #include <string>
 
 namespace playback::editor::ui::widgets {
 
 constexpr int kTicksPerSecond = 20;
+
+struct AspectPreset {
+    char const* label;
+    float       ratio;
+};
+
+inline constexpr std::array kAspectPresets{
+    AspectPreset{"16:9",   16.0f / 9.0f},
+    AspectPreset{"21:9",   21.0f / 9.0f},
+    AspectPreset{"4:3",    4.0f / 3.0f },
+    AspectPreset{"1:1",    1.0f        },
+    AspectPreset{"9:16",   9.0f / 16.0f},
+    AspectPreset{"2.39:1", 2.39f       },
+};
+
+[[nodiscard]] inline char const* aspectPresetLabel(float ratio) {
+    for (auto const& preset : kAspectPresets) {
+        if (std::abs(preset.ratio - ratio) < 0.01f) return preset.label;
+    }
+    return nullptr;
+}
 
 // mm:ss.cc, shared by every panel that shows a timeline position.
 [[nodiscard]] std::string formatTick(int tick);
@@ -43,7 +66,19 @@ void drawIconCentred(ImDrawList* drawList, char const* icon, ImVec2 const& origi
 void drawIconAtCentre(ImDrawList* drawList, char const* icon, ImVec2 const& centre, ImU32 color);
 
 // Transport and window glyphs drawn from primitives so they share one weight and exact centring.
-enum class VectorIcon { SkipStart, StepBack, Play, Pause, StepForward, SkipEnd, Maximize, Restore };
+enum class VectorIcon {
+    SkipStart,
+    StepBack,
+    Play,
+    Pause,
+    StepForward,
+    SkipEnd,
+    Maximize,
+    Restore,
+    SelectCursor,
+    PenTool,
+    SnapMagnet
+};
 
 void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, ImU32 color, VectorIcon icon);
 

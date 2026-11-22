@@ -2,6 +2,7 @@
 
 #include "playback/keyframe/CameraRenderState.h"
 #include "playback/record/Recorder.h"
+#include "playback/state/editing/models/MathTypes.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 
 #include "mc/deps/core/math/Vec2.h"
@@ -220,8 +221,10 @@ private:
     bool                                 mSeekParticlesStale{};
     ReplayExportTimelinePhase            mExportTimelinePhase{ReplayExportTimelinePhase::Inactive};
     int                                  mExportTargetTick{-1};
+    bool                                 mExportForceSnapshotOnSeek{false};
     std::optional<ReplayCameraViewpoint> mExportCameraViewpoint;
     float                                mPlaybackSpeed{1.0f};
+    float                                mClipSpeedScale{1.0f};
     float                                mPlaybackTickAccumulator{};
     std::atomic<SteadyTimePoint>         mTickAdvancedAt{};
     std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
@@ -290,6 +293,7 @@ private:
     std::unordered_set<ChunkPos>                                mDirtySnapshotColumns;
     std::unordered_set<ChunkPos>                                mReusableSnapshotColumns;
     std::unordered_set<ChunkPos>                                mDirectSnapshotColumns;
+    std::unordered_set<ChunkPos>                                mDirectSubChunkColumns;
     std::unordered_set<int>                                     mDirectLevelChunkIndices;
     std::vector<int>                                            mPendingSubChunkIndices;
     std::vector<PendingSubChunkPacket>                          mPendingSubChunkPackets;
@@ -357,6 +361,7 @@ private:
         int                id{};
         int                type{};
         int                openTick{};
+        int64_t            entityRaw{-1};
 
         [[nodiscard]] bool shows(RecordedScreen const& screen) const {
             return packetId == screen.packetId && id == screen.id && openTick == screen.openTick;
@@ -364,7 +369,12 @@ private:
     };
     std::optional<ScreenPreview> mScreenPreview;
     // Open tick of the last interval a preview was tried for, so a skipped one is not retried every tick.
-    int mTriedScreenOpenTick{-1};
+    int               mTriedScreenOpenTick{-1};
+    int               mScreenCloseWaitTicks{0};
+    std::atomic<bool> mWaitingForScreenClose{false};
+    int               mScreenPreviewTicks{0};
+    int               mLastScreenSkipTick{-1};
+    std::string       mLastScreenSkipAction;
 
     std::atomic<std::shared_ptr<ResourcePacksInfoPacket const>> mReplayResourcePacksInfo;
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
@@ -449,6 +459,15 @@ private:
 
     void updateScreenPreview();
 
+    [[nodiscard]] bool hasPoppableReplayScreenOpen() const;
+
+    // Closes any open preview/native screen and waits for SceneStack to pop it before entity-removing mutations.
+    [[nodiscard]] bool ensureReplayScreenClosedForMutation(char const* reason);
+
+    void compactPendingChunkInjectionQueue();
+
+    [[nodiscard]] bool nextReaderForcesSnapshot() const;
+
     // Last record whose half-open interval [openTick, closeTick) contains tick. Unread closes stay open.
     [[nodiscard]] RecordedScreen const* recordedScreenOpenAt(int tick) const;
 
@@ -500,6 +519,9 @@ private:
     void releasePreviewObserver();
 
     void updatePausedObserverPreview();
+    void moveObserverTo(::Vec3 const& feetPosition, ::Vec2 const& rotation);
+    void syncPreviewObserverForTick(int targetTick, bool onlyIfMoved = false);
+    void syncSeekObserver();
 
     // Parks the observer on the recorded player for a pending teleport or while following; true if following.
     [[nodiscard]] bool updateSubjectFollow();
@@ -644,6 +666,14 @@ public:
     // Pulls an eye pose back behind the subject like vanilla F5, stopping short of walls.
     [[nodiscard]] keyframe::CameraRenderState thirdPersonView(keyframe::CameraRenderState const& eye) const;
 
+    // Thread-safe eye/anchor pose of any replay player or entity (`choice` empty = recorder).
+    [[nodiscard]] std::optional<keyframe::CameraRenderState>
+    sampleEntityAnchor(visuals::ReplaySampleTime const& time, std::string const& choice) const;
+
+    // Clips a camera ray from `anchor` to `target` against camera-colliding blocks.
+    [[nodiscard]] state::editing::model::Vec3
+    clipCameraRay(state::editing::model::Vec3 const& anchor, state::editing::model::Vec3 const& target) const;
+
     struct ReplayPlayerInfo {
         std::string uuid;
         std::string name;
@@ -676,11 +706,13 @@ public:
         std::string label;
         bool        player{};
         bool        recorder{};
-        float       x{}, y{}, z{};    // feet
-        float       height{};         // collision box height
+        bool        mob{};
+        float       x{}, y{}, z{}; // feet
+        float       height{};      // collision box height
+        float       distance{};    // distance to the observer
     };
 
-    // Living mobs and players in the replay, observer excluded, nearest to the observer first, as of the last
+    // Players, mobs, and other entities in the replay, observer excluded, nearest to the observer first, as of the last
     // replay tick.
     [[nodiscard]] std::vector<ReplayEntityInfo> replayEntities() const;
 
@@ -701,6 +733,9 @@ public:
     [[nodiscard]] int getAppliedReplayTick() const { return mCurrentTick; }
 
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
+    [[nodiscard]] bool isWaitingForScreenClose() const noexcept {
+        return mWaitingForScreenClose.load(std::memory_order_acquire);
+    }
     [[nodiscard]] std::optional<visuals::ReplaySampleTime> getCameraRenderSampleTime() const noexcept;
     [[nodiscard]] std::optional<visuals::ReplaySampleTime> getEntityRenderSampleTime() const noexcept;
     void                                                   markReplayTickAdvanced() noexcept;
@@ -714,6 +749,8 @@ public:
     }
 
     [[nodiscard]] float getPlaybackSpeed() const { return mPlaybackSpeed; }
+    [[nodiscard]] float effectivePlaybackSpeed() const noexcept;
+    void                setClipSpeedScale(float scale) noexcept;
 
     void adjustPlaybackSpeed(int direction);
 
@@ -724,6 +761,7 @@ public:
     [[nodiscard]] bool setPaused(bool paused);
 
     [[nodiscard]] bool beginExportTimeline(int startTick);
+    [[nodiscard]] bool beginExportCutSeek(int targetTick, bool forceSnapshot = true);
 
     void setExportCameraViewpoint(std::optional<ReplayCameraViewpoint> viewpoint) noexcept;
     [[nodiscard]] std::optional<ReplayCameraViewpoint> currentCameraViewpoint() const noexcept;
@@ -819,6 +857,23 @@ public:
 private:
     ReplaySession();
     ~ReplaySession();
+
+    struct EntityAnchorMeta {
+        std::optional<visuals::EntityRenderKey> renderKey;
+        bool                                    isRecorder{};
+        bool                                    isPlayer{};
+        float                                   eyeHeight{};
+        float                                   postureOffsetY{};
+        float                                   fallbackX{};
+        float                                   fallbackY{};
+        float                                   fallbackZ{};
+        float                                   fallbackYaw{};
+        float                                   fallbackPitch{};
+    };
+
+    mutable std::mutex                            mEntityAnchorMutex;
+    std::unordered_map<int64_t, EntityAnchorMeta> mEntityAnchors;
+    std::optional<int64_t>                        mRecorderAnchorId;
 
     mutable std::mutex            mReplayEntitiesMutex;
     std::vector<ReplayEntityInfo> mReplayEntities;

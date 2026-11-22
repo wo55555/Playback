@@ -44,11 +44,13 @@
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
+#include "mc/entity/components/DynamicRenderOffsetComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/ItemInUseTicksDuringMovementComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/entity/components/MovementWasCorrectedComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
@@ -92,9 +94,11 @@
 #include "mc/network/packet/UpdateAttributesPacket.h"
 #include "mc/network/packet/UpdateBlockPacket.h"
 #include "mc/network/packet/UpdateBlockSyncedPacket.h"
+#include "mc/network/packet/UpdateEquipPacket.h"
 #include "mc/network/packet/UpdatePlayerGameTypePacket.h"
 #include "mc/network/packet/UpdateSubChunkBlocksPacket.h"
 #include "mc/network/packet/UpdateSubChunkNetworkBlockInfo.h"
+#include "mc/network/packet/UpdateTradePacket.h"
 #include "mc/resources/IResourcePackRepository.h"
 #include "mc/resources/MinEngineVersion.h"
 #include "mc/resources/ResourcePack.h"
@@ -326,8 +330,19 @@ void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 
     actor.mBuiltInComponents->mStateVectorComponent->mPosDelta  = Vec3{};
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    visuals::syncReplayEntityBoundingBox(actor, position);
 
-    auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
+    auto& context = actor.getEntityContext();
+    context.removeComponent<MovementWasCorrectedComponent>();
+    if (auto dynamicOffset = context.tryGetComponent<DynamicRenderOffsetComponent>()) {
+        dynamicOffset->mCurrentOffset      = Vec3{};
+        dynamicOffset->mNormalizedOffset   = Vec3{};
+        dynamicOffset->mPreviousOffset     = Vec3{};
+        dynamicOffset->mInterpolationSpeed = 0.0f;
+        dynamicOffset->mCurrentPosDelta    = Vec3{};
+    }
+
+    auto const interpolator = context.tryGetComponent<MovementInterpolatorComponent>();
     if (!interpolator) return;
 
     *interpolator->mPos          = position;
@@ -515,6 +530,7 @@ void applyReplayEntityMovement(
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    visuals::syncReplayEntityBoundingBox(actor, position);
 
     auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
     if (!interpolator) return;
@@ -664,13 +680,35 @@ void ageReplayParticles() {
 // Server teleport lands one eye height above the request; compensate so the feet agree.
 constexpr float kServerEyeHeight = 1.62f;
 
-// ContainerClose does not dismiss the player inventory. Pop it by name so a screen opened later is left alone.
+bool isContainerScreenOpener(MinecraftPacketIds packetId) {
+    return packetId == MinecraftPacketIds::ContainerOpen || packetId == MinecraftPacketIds::UpdateTrade
+        || packetId == MinecraftPacketIds::UpdateEquip;
+}
+
+bool isReplayPoppableScreen(std::string_view name) {
+    constexpr std::array<std::string_view, 28> kScreens{
+        "inventory_screen",     "crafting_screen",       "trade_screen",       "trade2.trade_screen",
+        "trade.trade_screen",   "horse_screen",          "small_chest_screen", "large_chest_screen",
+        "ender_chest_screen",   "shulker_box_screen",    "barrel_screen",      "furnace_screen",
+        "blast_furnace_screen", "smoker_screen",         "dispenser_screen",   "dropper_screen",
+        "hopper_screen",        "brewing_stand_screen",  "beacon_screen",      "anvil_screen",
+        "enchanting_screen",    "loom_screen",           "cartography_screen", "grindstone_screen",
+        "stonecutter_screen",   "smithing_table_screen", "crafter_screen",     "third_party_server_screen",
+    };
+    return std::find(kScreens.begin(), kScreens.end(), name) != kScreens.end();
+}
+
+// ContainerClose does not always dismiss a replay screen (player inventory, or a screen whose backing entity/block
+// was cleared). Pop only known container, trade, and form screens so user menus are left alone.
 void popReplayScreen() {
     auto client = ll::service::getClientInstance();
     if (!client) return;
     auto const name = client->getTopScreenName();
-    if (name != "inventory_screen" && name != "crafting_screen") return;
-    client->getCurrentSceneStack()->schedulePopScreenWithExpectedNames(std::vector<std::string>{name});
+    if (!isReplayPoppableScreen(name)) return;
+    auto         sceneStackHolder = client->getCurrentSceneStack();
+    ISceneStack* sceneStack       = sceneStackHolder.get();
+    if (!sceneStack || sceneStack->getScheduledPopCount() > 0) return;
+    sceneStack->schedulePopScreenWithExpectedNames(std::vector<std::string>{name});
     getLogger().info("screenPreview pop screen={}", name);
 }
 
@@ -800,6 +838,11 @@ bool ReplaySession::start(std::filesystem::path filePath) {
     }
 
     forceFirstPersonCamera();
+    mScreenCloseWaitTicks = 0;
+    mWaitingForScreenClose.store(false, std::memory_order_release);
+    mScreenPreviewTicks = 0;
+    mLastScreenSkipTick = -1;
+    mLastScreenSkipAction.clear();
     // Installed once per replay (inert until the subject is hidden) so toggling follow never hooks anything.
     visuals::hookReplaySubjectHide(true, visuals::SubjectHideReason::Session);
     visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Session);
@@ -901,7 +944,12 @@ void ReplaySession::clearReplayData() {
     mInjectingPacket.store(nullptr, std::memory_order_release);
     mScreenPreview.reset();
     mRecordedScreens.clear();
-    mTriedScreenOpenTick = -1;
+    mTriedScreenOpenTick  = -1;
+    mScreenCloseWaitTicks = 0;
+    mWaitingForScreenClose.store(false, std::memory_order_release);
+    mScreenPreviewTicks = 0;
+    mLastScreenSkipTick = -1;
+    mLastScreenSkipAction.clear();
     visuals::setReplayContainerKeepOpen(false);
     visuals::setReplayHudGameType(-1);
     mLevelSimFrozen       = false;
@@ -920,10 +968,12 @@ void ReplaySession::clearReplayData() {
     mSeekTargetTick          = -1;
     mExportSeekRequested     = false;
     mSnapMovementDuringSeek  = false;
-    mExportTimelinePhase     = ReplayExportTimelinePhase::Inactive;
-    mExportTargetTick        = -1;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Inactive;
+    mExportTargetTick          = -1;
+    mExportForceSnapshotOnSeek = false;
     mExportCameraViewpoint.reset();
     mPlaybackSpeed           = 1.0f;
+    mClipSpeedScale          = 1.0f;
     mPlaybackTickAccumulator = 0.0f;
     mObserverPreviewInRange  = false;
     mPausedPreviewPose.reset();
@@ -985,6 +1035,7 @@ void ReplaySession::clearReplayData() {
     mDirtySnapshotColumns.clear();
     mReusableSnapshotColumns.clear();
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
     mPendingSubChunkPackets.clear();
@@ -1190,7 +1241,7 @@ void ReplaySession::clearPreviewShot() {
 // user's follow; a person track follows its subject; with no track the user's follow comes back.
 void ReplaySession::updatePreviewShot() {
     if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return;
-    using state::editing::model::CameraTrackKind;
+    using state::editing::model::CameraKeyframeMode;
     auto                       mode = PreviewShotMode::None;
     std::optional<std::string> subject;
     bool                       third = false;
@@ -1199,12 +1250,12 @@ void ReplaySession::updatePreviewShot() {
         if (auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
             auto const time = getCameraRenderSampleTime();
             auto const shot = timeline->shotAt(time ? time->floorTick() : getCurrentTick());
-            if (shot && shot.kind() == CameraTrackKind::Keyframe) {
+            if (shot && shot.isEvaluatorDriven()) {
                 mode = PreviewShotMode::Keyframe;
             } else if (shot) {
                 mode    = PreviewShotMode::Person;
                 subject = shot.subject;
-                third   = shot.kind() == CameraTrackKind::ThirdPerson;
+                third   = shot.mode == CameraKeyframeMode::ThirdPerson;
             }
         }
     }
@@ -1224,6 +1275,99 @@ void ReplaySession::updatePreviewShot() {
 
 keyframe::CameraRenderState ReplaySession::thirdPersonView(keyframe::CameraRenderState const& eye) const {
     return mReplayPlayer ? thirdPersonFollowPose(*mReplayPlayer, eye) : eye;
+}
+
+std::optional<keyframe::CameraRenderState>
+ReplaySession::sampleEntityAnchor(visuals::ReplaySampleTime const& time, std::string const& choice) const {
+    std::optional<int64_t> rawId;
+    if (choice.empty()) {
+        std::lock_guard lock(mEntityAnchorMutex);
+        rawId = mRecorderAnchorId;
+    } else if (auto const parsed = parseEntityChoice(choice)) {
+        rawId = *parsed;
+    } else if (auto const resolved = resolveReplaySubjectId(choice)) {
+        rawId = resolved->rawID;
+    }
+    if (!rawId) return std::nullopt;
+
+    EntityAnchorMeta meta;
+    {
+        std::lock_guard lock(mEntityAnchorMutex);
+        auto const      it = mEntityAnchors.find(*rawId);
+        if (it == mEntityAnchors.end()) return std::nullopt;
+        meta = it->second;
+    }
+
+    if (meta.renderKey) {
+        if (auto const pose = visuals::sampleReplayEntityPose(
+                *meta.renderKey,
+                time,
+                meta.isRecorder,
+                meta.isPlayer,
+                meta.eyeHeight,
+                meta.postureOffsetY
+            )) {
+            return keyframe::CameraRenderState{
+                pose->position.x,
+                pose->position.y,
+                pose->position.z,
+                pose->yaw,
+                pose->pitch,
+                0.0f,
+                70.0f,
+            };
+        }
+    }
+
+    if (!std::isfinite(meta.fallbackX) || !std::isfinite(meta.fallbackY) || !std::isfinite(meta.fallbackZ)) {
+        return std::nullopt;
+    }
+    return keyframe::CameraRenderState{
+        meta.fallbackX,
+        meta.fallbackY,
+        meta.fallbackZ,
+        meta.fallbackYaw,
+        meta.fallbackPitch,
+        0.0f,
+        70.0f,
+    };
+}
+
+state::editing::model::Vec3 ReplaySession::clipCameraRay(
+    state::editing::model::Vec3 const& anchor,
+    state::editing::model::Vec3 const& target
+) const {
+    if (!mReplayPlayer || !mReplayWorldJoined || mPendingReplayDimension) return target;
+    float const dx       = target.x - anchor.x;
+    float const dy       = target.y - anchor.y;
+    float const dz       = target.z - anchor.z;
+    float const distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (!std::isfinite(distance) || distance <= 1e-4f) return target;
+
+    constexpr float WallMargin = 0.2f;
+    ::Vec3 const    start{anchor.x, anchor.y, anchor.z};
+    ::Vec3 const    end{target.x, target.y, target.z};
+    auto const      hit = mReplayPlayer->getDimensionBlockSource().clip(
+        start,
+        end,
+        false,
+        ShapeType::CollisionForCamera,
+        static_cast<int>(std::ceil(distance)) + 1,
+        false,
+        false,
+        nullptr,
+        [](BlockSource const&, Block const&, bool) { return true; },
+        false
+    );
+    if (hit.mType != HitResultType::Tile) return target;
+
+    float const hx      = hit.mPos.x - anchor.x;
+    float const hy      = hit.mPos.y - anchor.y;
+    float const hz      = hit.mPos.z - anchor.z;
+    float const hitDist = std::sqrt(hx * hx + hy * hy + hz * hz);
+    float const clamped = std::clamp(hitDist - WallMargin, 0.0f, distance);
+    float const scale   = clamped / distance;
+    return {anchor.x + dx * scale, anchor.y + dy * scale, anchor.z + dz * scale};
 }
 
 void ReplaySession::parkObserverAfterFollow() {
@@ -1329,6 +1473,11 @@ void ReplaySession::clearReplayPlayers(bool clearChoice) {
         std::lock_guard entitiesLock(mReplayEntitiesMutex);
         mReplayEntities.clear();
     }
+    {
+        std::lock_guard anchorLock(mEntityAnchorMutex);
+        mEntityAnchors.clear();
+        mRecorderAnchorId.reset();
+    }
     mObserverOriginalSkin.reset();
     mObserverSkinApplied = false;
 }
@@ -1336,8 +1485,9 @@ void ReplaySession::clearReplayPlayers(bool clearChoice) {
 void ReplaySession::refreshReplayPlayerRoster() {
     if (!mReplayPlayer || mPendingReplayDimension || mPendingSnapshotApply || mChunkInjectionPending) return;
 
+    auto&      level     = mReplayPlayer->getLevel();
     auto const dimension = mReplayPlayer->getDimensionId();
-    auto const actors    = mReplayPlayer->getLevel().getRuntimeActorList();
+    auto const actors    = level.getRuntimeActorList();
     struct LivePlayer {
         ActorUniqueID id;
         std::string   name;
@@ -1345,18 +1495,22 @@ void ReplaySession::refreshReplayPlayerRoster() {
     };
     std::unordered_map<std::string, LivePlayer> live;
     live.reserve(actors.size());
+    auto const collectPlayer = [&](Player const& player) {
+        if (&player == mReplayPlayer || player.getDimensionId() != dimension) return;
+        std::string uuid = player.getUuid().asString();
+        if (uuid.empty()) return;
+        auto const uniqueId = player.getOrCreateUniqueID();
+        bool const recorder = mRecordedLocalPlayerId && uniqueId == *mRecordedLocalPlayerId;
+        live.insert_or_assign(std::move(uuid), LivePlayer{uniqueId, firstNameLine(player.getNameTag()), recorder});
+    };
     for (auto const* actor : actors) {
-        if (!actor || actor == mReplayPlayer || !actor->isPlayer()) continue;
-        if (actor->getDimensionId() != dimension) continue;
-        auto const* player = static_cast<Player const*>(actor);
-        std::string uuid   = player->getUuid().asString();
-        if (uuid.empty()) continue;
-        bool const recorder = mRecordedLocalPlayerId && actor->getOrCreateUniqueID() == *mRecordedLocalPlayerId;
-        live.insert_or_assign(
-            std::move(uuid),
-            LivePlayer{actor->getOrCreateUniqueID(), firstNameLine(actor->getNameTag()), recorder}
-        );
+        if (!actor || !actor->isPlayer()) continue;
+        collectPlayer(static_cast<Player const&>(*actor));
     }
+    level.forEachPlayer([&](Player& player) {
+        collectPlayer(player);
+        return true;
+    });
 
     std::lock_guard lock(mReplayPlayersMutex);
     bool            changed = false;
@@ -1465,54 +1619,123 @@ std::optional<ActorUniqueID> ReplaySession::resolveReplaySubjectId(std::string c
 }
 
 void ReplaySession::refreshReplayEntityList() {
-    std::vector<ReplayEntityInfo> entities;
+    std::vector<ReplayEntityInfo>                 entities;
+    std::unordered_map<int64_t, EntityAnchorMeta> anchors;
+    std::optional<int64_t>                        recorderAnchorId;
     if (mReplayPlayer) {
-        auto& level = mReplayPlayer->getLevel();
+        auto&                                    level    = mReplayPlayer->getLevel();
+        auto const                               observer = mReplayPlayer->getPosition();
         std::unordered_map<int64_t, std::string> playerUuids;
         {
             std::lock_guard lock(mReplayPlayersMutex);
             for (auto const& [uuid, record] : mReplayPlayers) playerUuids.emplace(record.id.rawID, uuid);
         }
-        // Every recorded add, not only the actors that moved: a mob standing still has no render key yet.
-        entities.reserve(mRecordedEntityIds.size());
-        for (auto const& id : mRecordedEntityIds) {
+
+        auto processEntity = [&](ActorUniqueID const& id, bool addToList) {
             Actor* actor = level.fetchEntity(id, false);
-            if (!actor || actor == mReplayPlayer || actor->mRemoved || !actor->isAlive()) continue;
+            if (!actor || actor == mReplayPlayer || actor->mRemoved) return;
             bool const player = actor->isPlayer();
-            if (!player && !actor->hasCategory(ActorCategory::Mob)) continue;
+            bool const isMob  = !player && actor->hasCategory(ActorCategory::Mob);
+            if ((player || isMob) && !actor->isAlive()) return;
+
+            bool const isRecorder = player && mRecordedLocalPlayerId && *mRecordedLocalPlayerId == id;
+            if (isRecorder) recorderAnchorId = id.rawID;
+
+            auto const  position  = actor->getPosition();
+            auto const& box       = actor->getAABB();
+            float const boxHeight = std::isfinite(box.max.y - box.min.y) ? std::max(0.0f, box.max.y - box.min.y) : 0.0f;
+
+            float eyeHeight = 0.0f;
+            if (!player) {
+                if (isMob) {
+                    eyeHeight = entityEyeHeight(*actor);
+                } else {
+                    float const eye =
+                        actor->getAttachPos(SharedTypes::Legacy::ActorLocation::Eyes).y - position.y;
+                    if (std::isfinite(eye) && eye > 0.05f && eye < 64.0f) {
+                        eyeHeight = eye;
+                    } else if (boxHeight > 0.05f) {
+                        eyeHeight = boxHeight * 0.5f;
+                    }
+                }
+            }
+
+            float postureOffsetY = 0.0f;
+            if (player && !isRecorder) {
+                if (actor->getStatusFlag(ActorFlags::Swimming) || actor->getStatusFlag(ActorFlags::Crawling)
+                    || actor->getStatusFlag(ActorFlags::Gliding)) {
+                    postureOffsetY = -1.22f;
+                } else if (actor->getStatusFlag(ActorFlags::Sneaking)) {
+                    postureOffsetY = -0.35f;
+                }
+            }
+
+            std::optional<visuals::EntityRenderKey> renderKey;
+            if (auto const rk = mEntityRenderKeys.find(id); rk != mEntityRenderKeys.end()) {
+                renderKey = rk->second;
+            } else {
+                renderKey = replayEntityRenderKey(level, id);
+            }
+
+            auto const       pose = replayRenderPose(*actor);
+            EntityAnchorMeta meta;
+            meta.renderKey      = renderKey;
+            meta.isRecorder     = isRecorder;
+            meta.isPlayer       = player;
+            meta.eyeHeight      = eyeHeight;
+            meta.postureOffsetY = postureOffsetY;
+            meta.fallbackX      = pose.position.x;
+            meta.fallbackY      = pose.position.y + (player ? (isRecorder ? 0.0f : postureOffsetY) : eyeHeight);
+            meta.fallbackZ      = pose.position.z;
+            meta.fallbackYaw    = player ? pose.yaw : pose.headYaw;
+            meta.fallbackPitch  = pose.pitch;
+            anchors.insert_or_assign(id.rawID, meta);
+
+            if (!addToList) return;
+
             ReplayEntityInfo info;
-            info.player = player;
-            if (player && mRecordedLocalPlayerId && *mRecordedLocalPlayerId == id) {
-                info.recorder = true; // the empty choice
+            info.player   = player;
+            info.mob      = isMob;
+            info.recorder = isRecorder;
+            if (isRecorder) {
+                // the empty choice
             } else if (player) {
                 auto const uuid = playerUuids.find(id.rawID);
-                if (uuid == playerUuids.end()) continue;
+                if (uuid == playerUuids.end()) return;
                 info.choice = uuid->second;
             } else {
                 info.choice = entityChoice(id.rawID);
             }
             info.label = plainNameTag(actor->getNameTag());
             if (info.label.empty()) info.label = entityTypeLabel(*actor);
-            auto const position = actor->getPosition();
-            auto const& box     = actor->getAABB();
-            info.x              = position.x;
-            info.y              = player ? box.min.y : position.y;
-            info.z              = position.z;
-            info.height         = box.max.y - box.min.y;
-            if (!std::isfinite(info.x) || !std::isfinite(info.y) || !std::isfinite(info.z)) continue;
-            if (!std::isfinite(info.height) || info.height <= 0.0f) info.height = 1.0f;
+            info.x      = position.x;
+            info.y      = player ? box.min.y : position.y;
+            info.z      = position.z;
+            info.height = boxHeight > 0.0f ? boxHeight : 1.0f;
+            if (!std::isfinite(info.x) || !std::isfinite(info.y) || !std::isfinite(info.z)) return;
+            float const dx = info.x - observer.x;
+            float const dy = info.y - observer.y;
+            float const dz = info.z - observer.z;
+            info.distance  = std::sqrt(dx * dx + dy * dy + dz * dz);
             entities.push_back(std::move(info));
-        }
-        auto const observer   = mReplayPlayer->getPosition();
-        auto const distanceSq = [&observer](ReplayEntityInfo const& entity) {
-            float const dx = entity.x - observer.x;
-            float const dy = entity.y - observer.y;
-            float const dz = entity.z - observer.z;
-            return dx * dx + dy * dy + dz * dz;
         };
-        std::sort(entities.begin(), entities.end(), [&](ReplayEntityInfo const& a, ReplayEntityInfo const& b) {
-            return distanceSq(a) < distanceSq(b);
+
+        // Every recorded add, not only the actors that moved: a stationary entity has no render key yet.
+        entities.reserve(mRecordedEntityIds.size());
+        anchors.reserve(mRecordedEntityIds.size() + 1);
+        for (auto const& id : mRecordedEntityIds) processEntity(id, true);
+        if (mRecordedLocalPlayerId && !anchors.contains(mRecordedLocalPlayerId->rawID)) {
+            processEntity(*mRecordedLocalPlayerId, true);
+        }
+
+        std::sort(entities.begin(), entities.end(), [](ReplayEntityInfo const& a, ReplayEntityInfo const& b) {
+            return a.distance < b.distance;
         });
+    }
+    {
+        std::lock_guard anchorLock(mEntityAnchorMutex);
+        mEntityAnchors    = std::move(anchors);
+        mRecorderAnchorId = recorderAnchorId;
     }
     std::lock_guard lock(mReplayEntitiesMutex);
     mReplayEntities = std::move(entities);
@@ -1787,7 +2010,8 @@ void ReplaySession::rebindReplaySubject() {
         setReplaySubjectChoice({});
     };
     Actor* actor = mReplayPlayer->getLevel().fetchEntity(id, false);
-    if (!actor || actor == mReplayPlayer || (entityRaw && (actor->mRemoved || !actor->isAlive()))) {
+    if (!actor || actor == mReplayPlayer
+        || (entityRaw && (actor->mRemoved || (actor->hasCategory(ActorCategory::Mob) && !actor->isAlive())))) {
         if (entityRaw) loseEntity();
         else loseSubject(choice);
         return;
@@ -1862,6 +2086,7 @@ void ReplaySession::updateReplaySubjectPosture(bool snap) {
             actor->getStatusFlag(ActorFlags::Sneaking),
             actor->getStatusFlag(ActorFlags::Swimming),
             actor->getStatusFlag(ActorFlags::Crawling),
+            actor->getStatusFlag(ActorFlags::Gliding),
             actor->getStatusFlag(ActorFlags::Sleeping),
             actor->isSleeping(),
         }
@@ -1991,7 +2216,8 @@ void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& r
     move.mRot           = rotation;
     move.mYHeadRot      = rotation.y;
     move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
-    move.mOnGround      = true;
+    // The spectator observer flies with noclip, so setting on-ground leaves ground friction stuck on it.
+    move.mOnGround = false;
     mInjectingPacket.store(packet.get(), std::memory_order_release);
     InjectionReset reset{mInjectingPacket};
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
@@ -2077,16 +2303,68 @@ void ReplaySession::updateObserverPreview() {
     mObserverPreviewInRange = true;
 
     // First-person spectator: camera sits at the feet, so the pose is the feet position.
-    Vec3 const     feetPosition{sample->state.x, sample->state.y, sample->state.z};
-    Vec2 const     rotation{sample->state.pitch, sample->state.yaw};
+    Vec3 const feetPosition{sample->state.x, sample->state.y, sample->state.z};
+    Vec2 const rotation{sample->state.pitch, sample->state.yaw};
+    mLastObserverPreviewFeet     = feetPosition;
+    mLastObserverPreviewRotation = rotation;
+    moveObserverTo(feetPosition, rotation);
+}
+
+void ReplaySession::moveObserverTo(Vec3 const& feetPosition, Vec2 const& rotation) {
+    forceFirstPersonCamera();
     ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
     bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
                                || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    mLastObserverPreviewFeet     = feetPosition;
-    mLastObserverPreviewRotation = rotation;
     teleportReplayPlayer(feetPosition, rotation);
     cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
     if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
+}
+
+void ReplaySession::syncPreviewObserverForTick(int targetTick, bool onlyIfMoved) {
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || !mReplayPlayer || !mReplayWorldJoined
+        || !mNetworkHandler || mPendingReplayDimension) {
+        return;
+    }
+    if (isFollowViewActive() || editor::input::isGameInputCaptured()) return;
+    auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
+    if (!timeline) return;
+
+    auto const moveIfNeeded = [&](Vec3 const& feetPosition, Vec2 const& rotation) {
+        if (onlyIfMoved && mReplayPlayer->getPosition().distanceToSqr(feetPosition) <= 1e-4f) return;
+        moveObserverTo(feetPosition, rotation);
+    };
+
+    auto const sampleTime = visuals::ReplaySampleTime::fromPreview(targetTick, 0.0f);
+    if (sampleTime) {
+        if (auto const sample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Preview, *sampleTime)) {
+            moveIfNeeded(
+                Vec3{sample->state.x, sample->state.y, sample->state.z},
+                Vec2{sample->state.pitch, sample->state.yaw}
+            );
+            return;
+        }
+    }
+
+    auto const shot = timeline->shotAt(targetTick);
+    if (!shot || shot.isEvaluatorDriven()) return;
+    auto const id = resolveReplaySubjectId(shot.subject);
+    if (!id) return;
+    auto* actor = mReplayPlayer->getLevel().fetchEntity(*id, false);
+    if (!actor || actor == mReplayPlayer) return;
+    moveIfNeeded(actor->getPosition(), actor->getRotation());
+}
+
+void ReplaySession::syncSeekObserver() {
+    if (!mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler || mPendingReplayDimension) return;
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) {
+        if (!mExportCameraViewpoint) return;
+        Vec3 const target{mExportCameraViewpoint->x, mExportCameraViewpoint->y, mExportCameraViewpoint->z};
+        if (mReplayPlayer->getPosition().distanceToSqr(target) > 1e-4f) {
+            updateExportObserver(*mExportCameraViewpoint);
+        }
+        return;
+    }
+    syncPreviewObserverForTick(mSeekTargetTick, true);
 }
 
 void ReplaySession::markReplayTickAdvanced() noexcept {
@@ -2097,7 +2375,7 @@ void ReplaySession::markReplayTickAdvanced() noexcept {
 // Backdate the tick start by the frozen fraction so the first resumed frame keeps the paused pose.
 void ReplaySession::resumePreviewClockFromFrozenPartial() noexcept {
     auto const frozen = mFrozenPreviewPartial.exchange(-1.0f, std::memory_order_acq_rel);
-    auto const speed  = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
+    auto const speed  = effectivePlaybackSpeed();
     auto const offset = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         std::chrono::duration<float>(std::max(0.0f, frozen) / (20.0f * speed))
     );
@@ -2111,7 +2389,7 @@ float ReplaySession::previewPartialTick() const noexcept {
     auto const advancedAt = mTickAdvancedAt.load(std::memory_order_acquire);
     if (advancedAt == SteadyTimePoint{}) return 0.0f;
 
-    auto const speed = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
+    auto const speed = effectivePlaybackSpeed();
     auto const elapsed =
         std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - advancedAt).count();
     constexpr float SecondsPerTick = 1.0f / 20.0f;
@@ -2149,15 +2427,41 @@ bool ReplaySession::beginExportTimeline(int startTick) {
     mPlaybackTickAccumulator  = 0.0f;
 
     mRequestedSeekTick.store(startTick, std::memory_order_release);
-    mSeekTargetTick         = -1;
-    mExportSeekRequested    = true;
-    mSnapMovementDuringSeek = false;
-    mExportTargetTick       = startTick;
-    mExportTimelinePhase    = ReplayExportTimelinePhase::Initializing;
+    mSeekTargetTick            = -1;
+    mExportSeekRequested       = true;
+    mSnapMovementDuringSeek    = false;
+    mExportTargetTick          = startTick;
+    mExportForceSnapshotOnSeek = true;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Initializing;
     mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
     mObserverServerPositionDirty = false;
     mLastObserverServerSyncChunk.reset();
     getLogger().debug("Export timeline initialization queued (startTick={}, currentTick={})", startTick, mCurrentTick);
+    return true;
+}
+
+bool ReplaySession::beginExportCutSeek(int targetTick, bool forceSnapshot) {
+    if (!mActive || mReplayFailed || mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) return false;
+
+    targetTick               = std::clamp(targetTick, 0, getTotalTicks());
+    mIsPaused                = true;
+    mPlaybackTickAccumulator = 0.0f;
+    mRequestedSeekTick.store(targetTick, std::memory_order_release);
+    mSeekTargetTick            = -1;
+    mExportSeekRequested       = true;
+    mSnapMovementDuringSeek    = false;
+    mExportTargetTick          = targetTick;
+    mExportForceSnapshotOnSeek = forceSnapshot;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Initializing;
+    mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
+    mObserverServerPositionDirty = false;
+    mLastObserverServerSyncChunk.reset();
+    getLogger().debug(
+        "Export cut seek queued (targetTick={}, currentTick={}, forceSnapshot={})",
+        targetTick,
+        mCurrentTick,
+        forceSnapshot
+    );
     return true;
 }
 
@@ -2194,15 +2498,7 @@ void ReplaySession::updateExportObserver(ReplayCameraViewpoint const& viewpoint)
         return;
     }
 
-    forceFirstPersonCamera();
-    Vec3 const     feetPosition{viewpoint.x, viewpoint.y, viewpoint.z};
-    Vec2 const     rotation{viewpoint.pitch, viewpoint.yaw};
-    ChunkPos const cameraChunk{feetPosition.x, feetPosition.z};
-    bool const     serverSyncNeeded = !mLastObserverServerSyncChunk || mLastObserverServerSyncChunk->x != cameraChunk.x
-                               || mLastObserverServerSyncChunk->z != cameraChunk.z;
-    teleportReplayPlayer(feetPosition, rotation);
-    cancelNativeMovementInterpolation(*mReplayPlayer, feetPosition, rotation, rotation.y);
-    if (serverSyncNeeded) syncObserverServerPosition(feetPosition, rotation);
+    moveObserverTo(Vec3{viewpoint.x, viewpoint.y, viewpoint.z}, Vec2{viewpoint.pitch, viewpoint.yaw});
 }
 
 std::unique_ptr<visuals::ScopedReplayEntityPose>
@@ -2273,9 +2569,10 @@ bool ReplaySession::finishExportTimelineInitialization() {
         return false;
     }
 
-    mExportSeekRequested    = false;
-    mSnapMovementDuringSeek = false;
-    mExportTimelinePhase    = ReplayExportTimelinePhase::Continuous;
+    mExportSeekRequested       = false;
+    mSnapMovementDuringSeek    = false;
+    mExportForceSnapshotOnSeek = false;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Continuous;
     syncScreenPreviewAfterSeek();
     return true;
 }
@@ -2283,11 +2580,12 @@ bool ReplaySession::finishExportTimelineInitialization() {
 void ReplaySession::endExportTimeline() {
     bool const wasActive = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
     mRequestedSeekTick.store(-1, std::memory_order_release);
-    mSeekTargetTick         = -1;
-    mExportSeekRequested    = false;
-    mSnapMovementDuringSeek = false;
-    mExportTargetTick       = -1;
-    mExportTimelinePhase    = ReplayExportTimelinePhase::Inactive;
+    mSeekTargetTick            = -1;
+    mExportSeekRequested       = false;
+    mSnapMovementDuringSeek    = false;
+    mExportTargetTick          = -1;
+    mExportForceSnapshotOnSeek = false;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Inactive;
     mExportCameraViewpoint.reset();
     if (wasActive) {
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
@@ -2302,6 +2600,15 @@ void ReplaySession::endExportTimeline() {
 }
 
 int ReplaySession::getTotalTicks() const { return std::max(0, mMeta.totalTicks); }
+
+float ReplaySession::effectivePlaybackSpeed() const noexcept {
+    float const base = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
+    return std::clamp(base * mClipSpeedScale, 0.05f, 32.0f);
+}
+
+void ReplaySession::setClipSpeedScale(float scale) noexcept {
+    mClipSpeedScale = std::isfinite(scale) ? std::clamp(scale, 0.05f, 32.0f) : 1.0f;
+}
 
 void ReplaySession::adjustPlaybackSpeed(int direction) {
     if (!mActive || direction == 0) return;
@@ -2348,6 +2655,7 @@ void ReplaySession::finishSeek() {
     mSnapMovementDuringSeek = false;
     mSeekFinishCount.fetch_add(1, std::memory_order_acq_rel);
     settleAfterSeek();
+    refreshReplayEntityList();
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();
     if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
@@ -2424,8 +2732,15 @@ void ReplaySession::beginSeek(int targetTick) {
         }
     }
     bool const followRecordedPlayer = changesDimension || crossesForcedSnapshot;
-    bool const forceExportSnapshot  = exportSeek && mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
+    bool const forceExportSnapshot  = exportSeek && mExportTimelinePhase == ReplayExportTimelinePhase::Initializing
+                                  && (mExportForceSnapshotOnSeek || selectedReader != mReaderIndex);
     if (targetTick >= mCurrentTick && !followRecordedPlayer && !forceExportSnapshot) {
+        auto const* landing    = recordedScreenOpenAt(targetTick);
+        bool const  sameScreen = mScreenPreview && landing && mScreenPreview->shows(*landing);
+        if (!sameScreen) {
+            closeScreenPreview("seek");
+            if (!mScreenPreview) popReplayScreen();
+        }
         if (exportSeek) mSnapMovementDuringSeek = mExportTimelinePhase == ReplayExportTimelinePhase::Initializing;
         getLogger().debug(
             "Fast-forwarding replay from tick {} to tick {} without reloading snapshots",
@@ -2448,7 +2763,10 @@ void ReplaySession::beginSeek(int targetTick) {
     // nothing. The same interval does not close: the screen stays until the landing tick leaves it.
     auto const* landing    = recordedScreenOpenAt(targetTick);
     bool const  sameScreen = mScreenPreview && landing && mScreenPreview->shows(*landing);
-    if (changesDimension || forceExportSnapshot || !sameScreen) closeScreenPreview("seek");
+    if (changesDimension || forceExportSnapshot || !sameScreen) {
+        closeScreenPreview("seek");
+        if (!mScreenPreview) popReplayScreen();
+    }
     mSeekParticlesStale = true;
     mReaderIndex        = selectedReader;
     mCurrentTick        = selectedStart;
@@ -2476,6 +2794,10 @@ void ReplaySession::tick() {
 
         if (mPendingSnapshotApply) {
             if (mPendingReplayDimension) return;
+            if ((mScreenPreview || hasPoppableReplayScreenOpen() || mScreenCloseWaitTicks > 0)
+                && !ensureReplayScreenClosedForMutation("snapshot")) {
+                return;
+            }
             auto pending = *mPendingSnapshotApply;
             mPendingSnapshotApply.reset();
             if (pending.readerIndex >= mReaders.size()) {
@@ -2504,9 +2826,66 @@ void ReplaySession::tick() {
 
         auto const pendingRequestedSeek = mRequestedSeekTick.load(std::memory_order_acquire);
         if (hasPendingReplayReaderBoundary() && pendingRequestedSeek < 0) {
+            if (nextReaderForcesSnapshot()
+                && (mScreenPreview || hasPoppableReplayScreenOpen() || mScreenCloseWaitTicks > 0)
+                && !ensureReplayScreenClosedForMutation("snapshot")) {
+                return;
+            }
             bool const stopAtEnd = mExportTimelinePhase == ReplayExportTimelinePhase::Inactive && mSeekTargetTick < 0;
             (void)advanceReplayReader(stopAtEnd);
             if (mChunkInjectionPending || mPendingSnapshotApply || mPendingReplayDimension) return;
+        }
+
+        if (pendingRequestedSeek >= 0
+            && (mScreenPreview || hasPoppableReplayScreenOpen() || mScreenCloseWaitTicks > 0)) {
+            bool keepOpenForSameScreenFastForward = false;
+            if (!mReaders.empty()) {
+                int const clampedSeek    = std::clamp(pendingRequestedSeek, 0, getTotalTicks());
+                size_t    selectedReader = mReaders.size() - 1;
+                int       chunkStart     = 0;
+                size_t    chunkIndex     = 0;
+                for (auto const& [_, chunkMeta] : mMeta.chunks) {
+                    int const chunkEnd = chunkStart + std::max(0, chunkMeta.duration);
+                    if (clampedSeek < chunkEnd || chunkIndex + 1 == mReaders.size()) {
+                        selectedReader = chunkIndex;
+                        break;
+                    }
+                    chunkStart = chunkEnd;
+                    ++chunkIndex;
+                }
+                if (selectedReader < mSnapshotContexts.size()) {
+                    bool const changesDimension =
+                        mReplayPlayer->getDimensionId() != DimensionType{mSnapshotContexts[selectedReader].dimensionId};
+                    bool crossesForcedSnapshot = false;
+                    if (selectedReader != mReaderIndex) {
+                        size_t const firstReader = std::min(selectedReader, mReaderIndex);
+                        size_t const lastReader  = std::max(selectedReader, mReaderIndex);
+                        size_t       readerIndex = 0;
+                        for (auto const& [_, chunkMeta] : mMeta.chunks) {
+                            if (readerIndex > firstReader && readerIndex <= lastReader && chunkMeta.forcePlaySnapshot) {
+                                crossesForcedSnapshot = true;
+                                break;
+                            }
+                            ++readerIndex;
+                        }
+                    }
+                    bool const followRecordedPlayer = changesDimension || crossesForcedSnapshot;
+                    bool const forceExportSnapshot  = mExportSeekRequested
+                                                  && mExportTimelinePhase == ReplayExportTimelinePhase::Initializing
+                                                  && (mExportForceSnapshotOnSeek || selectedReader != mReaderIndex);
+                    bool const fastForward =
+                        clampedSeek >= mCurrentTick && !followRecordedPlayer && !forceExportSnapshot;
+                    auto const* landing              = recordedScreenOpenAt(clampedSeek);
+                    bool const  sameScreen           = mScreenPreview && landing && mScreenPreview->shows(*landing);
+                    keepOpenForSameScreenFastForward = fastForward && sameScreen;
+                }
+            }
+            if (!keepOpenForSameScreenFastForward) {
+                if (!ensureReplayScreenClosedForMutation("seek")) return;
+            } else {
+                mScreenCloseWaitTicks = 0;
+                mWaitingForScreenClose.store(false, std::memory_order_release);
+            }
         }
 
         int const requestedSeek = mRequestedSeekTick.exchange(-1, std::memory_order_acq_rel);
@@ -2565,6 +2944,7 @@ void ReplaySession::tick() {
                 }
                 refreshReplayPlayerRoster();
                 refreshReplaySubjectBinding();
+                syncSeekObserver();
                 // A tick resumed after its entity's chunks landed already ticked the level the first time through.
                 bool const resumingTick = std::exchange(mSeekTickResuming, false);
                 // Export seeks keep the clear at the landing frame so their first frames stay unchanged.
@@ -2596,6 +2976,7 @@ void ReplaySession::tick() {
                     finishSeek();
                     return;
                 }
+                if (hasPendingReplayReaderBoundary()) break;
                 advancedThisCall = true;
                 if (std::chrono::steady_clock::now() >= deadline) break;
             }
@@ -2615,8 +2996,11 @@ void ReplaySession::tick() {
             if (mCurrentTick > mExportTargetTick) {
                 throw std::runtime_error("Continuous export replay tick moved past its frame target");
             }
-            if (mCurrentTick < mExportTargetTick && !advanceReplayTick(false)) {
-                throw std::runtime_error("Replay ended before the continuous export frame target");
+            if (mCurrentTick < mExportTargetTick) {
+                if (!advanceReplayTick(false)) {
+                    throw std::runtime_error("Replay ended before the continuous export frame target");
+                }
+                refreshReplayEntityList();
             }
             return;
         }
@@ -2627,20 +3011,22 @@ void ReplaySession::tick() {
             holdItemUseBetweenTicks();
             return;
         }
-        mPlaybackTickAccumulator += mPlaybackSpeed;
+        float const speed          = effectivePlaybackSpeed();
+        mPlaybackTickAccumulator  += speed;
         int const ticksToAdvance  = static_cast<int>(mPlaybackTickAccumulator);
         mPlaybackTickAccumulator -= static_cast<float>(ticksToAdvance);
         if (ticksToAdvance == 0) holdItemUseBetweenTicks();
-        for (int tick = 0;
-             tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
+        for (int tick = 0; tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply
+                           && !mPendingReplayDimension && !hasPendingReplayReaderBoundary();
              ++tick) {
             int const before = mCurrentTick;
+            syncPreviewObserverForTick(before + 1);
             if (!advanceReplayTick(true)) break;
             if (mCurrentTick != before) markReplayTickAdvanced();
         }
         // The next client tick runs before its replay tick, so freeze it only when that replay tick will not advance.
         bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
-        levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + mPlaybackSpeed < 1.0f;
+        levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + speed < 1.0f;
     } catch (std::exception const& e) {
         getLogger().error("Replay session failed: {}", e.what());
         stop();
@@ -2768,10 +3154,12 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mSeekTargetTick          = -1;
     mExportSeekRequested     = false;
     mSnapMovementDuringSeek  = false;
-    mExportTimelinePhase     = ReplayExportTimelinePhase::Inactive;
-    mExportTargetTick        = -1;
-    mPlaybackSpeed           = 1.0f;
-    mPlaybackTickAccumulator = 0.0f;
+    mExportTimelinePhase       = ReplayExportTimelinePhase::Inactive;
+    mExportTargetTick          = -1;
+    mExportForceSnapshotOnSeek = false;
+    mPlaybackSpeed             = 1.0f;
+    mClipSpeedScale            = 1.0f;
+    mPlaybackTickAccumulator   = 0.0f;
     mReplayTime.reset();
     mPendingReplayDimension.reset();
     mPendingSnapshotApply.reset();
@@ -2813,6 +3201,7 @@ bool ReplaySession::init(std::filesystem::path filePath) {
     mDirtySnapshotColumns.clear();
     mReusableSnapshotColumns.clear();
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
     mPendingLevelChunkIndices.clear();
     mPendingSubChunkIndices.clear();
@@ -3064,7 +3453,8 @@ void ReplaySession::applyRecordedBlockRegistry() {
             return entry == definitions->mBlockDefinitions->end() ? nullptr : entry->second.get();
         };
 
-        size_t registered = 0;
+        size_t                              registered = 0;
+        std::vector<BlockDefinition const*> newlyRegisteredDefinitions;
         for (auto const& [name, tag] : properties) {
             // Blocks the client already has are kept; only the recording's custom blocks are registered here.
             if (registry.lookupByName(HashedString{name}, false)) continue;
@@ -3077,19 +3467,20 @@ void ReplaySession::applyRecordedBlockRegistry() {
 
             blockType->createBlockPermutations(*updaterVersion);
             definitions->initBlockTypeFromDefinition(*blockType, *definition);
+            newlyRegisteredDefinitions.push_back(definition);
             ++registered;
         }
 
         auto const injectedVisuals = injectRecordedBlockMaterialComponents(properties);
 
+        // Component descriptions require mAllowModifyingComponents == true, so initialize newly registered blocks
+        // (and never already-finalized vanilla/prior blocks) before finalizeBlockComponentStorage() locks them.
+        for (auto const* definition : newlyRegisteredDefinitions) {
+            definitions->initializeBlockFromDefinition(*definition, *level);
+        }
+
         registry.setupDirectAccessBlocks();
         registry.finalizeBlockComponentStorage();
-
-        for (auto const& [name, tag] : properties) {
-            if (auto const* definition = findDefinition(name)) {
-                definitions->initializeBlockFromDefinition(*definition, *level);
-            }
-        }
 
         getLogger().debug(
             "Registered {} recorded custom block types (geometry={}, visuals={})",
@@ -3346,22 +3737,25 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
         snapshotContext.yaw,
         snapshotContext.pitch
     };
-    PlaybackView transitionView = snapshotView;
-    if (!followRecordedPlayer) {
+    auto const   targetDimension  = DimensionType{snapshotContext.dimensionId};
+    bool const   changesDimension = replayPlayer->getDimensionId() != targetDimension;
+    bool const   useSnapshotView  = followRecordedPlayer || changesDimension || mTeleportToSubjectPending;
+    PlaybackView transitionView   = snapshotView;
+    if (!useSnapshotView) {
         auto const& position = replayPlayer->getPosition();
         auto const& rotation = replayPlayer->getRotation();
         transitionView       = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
     }
     // Actor::teleport lands one eye height above the request. Snapshot and observer positions are already eye height.
     transitionView.y -= kServerEyeHeight;
-    bool const relocateWithinDimension = followRecordedPlayer && !serverPlayerRelocated;
-    if (!ensureReplayDimension(DimensionType{snapshotContext.dimensionId}, transitionView, relocateWithinDimension)) {
+    bool const relocateWithinDimension  = useSnapshotView && !serverPlayerRelocated;
+    if (!ensureReplayDimension(targetDimension, transitionView, relocateWithinDimension)) {
         if (!mReplayFailed) {
             auto const generation = mDimensionTransitionRequest ? mDimensionTransitionRequest->generation : 0;
             mPendingSnapshotApply = PendingSnapshotApply{
                 mReaderIndex,
-                followRecordedPlayer,
-                serverPlayerRelocated || followRecordedPlayer,
+                followRecordedPlayer || changesDimension,
+                serverPlayerRelocated || useSnapshotView,
                 generation
             };
         }
@@ -3407,6 +3801,7 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
     mPendingSnapshotColumns.clear();
     mReusableSnapshotColumns.clear();
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
     mInjectedLevelChunks     = 0;
     mInjectedSubChunkPackets = 0;
@@ -3445,13 +3840,13 @@ void ReplaySession::applySnapshot(ReplayReader& reader, bool followRecordedPlaye
     );
 
     PlaybackView view;
-    if (followRecordedPlayer) {
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive && mExportCameraViewpoint) {
+        auto const& position = *mExportCameraViewpoint;
+        view                 = PlaybackView{position.x, position.y, position.z, position.yaw, position.pitch};
+        replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
+    } else if (useSnapshotView) {
         view = snapshotView;
         replayPlayer->moveTo(Vec3{view.x, view.y, view.z}, Vec2{view.pitch, view.yaw});
-    } else if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive && mExportCameraViewpoint) {
-        auto const& position = *mExportCameraViewpoint;
-        auto const& rotation = replayPlayer->getRotation();
-        view                 = PlaybackView{position.x, position.y, position.z, rotation.y, rotation.x};
     } else {
         auto const& position = replayPlayer->getPosition();
         auto const& rotation = replayPlayer->getRotation();
@@ -3494,21 +3889,26 @@ bool ReplaySession::ensureReplayDimension(
     bool                relocateWithinDimension
 ) {
     if (!mReplayPlayer) return false;
+    if (mPendingReplayDimension) {
+        if (*mPendingReplayDimension == target) return false;
+        getLogger().info(
+            "Superseding pending replay dimension transition to {} with new target {}",
+            mPendingReplayDimension->id,
+            target.id
+        );
+        mDimensionTransitionGeneration.fetch_add(1, std::memory_order_acq_rel);
+        if (mDimensionTransitionRequest) {
+            mDimensionTransitionRequest->status.store(DimensionTransitionStatus::Cancelled, std::memory_order_release);
+            mDimensionTransitionRequest.reset();
+        }
+        mPendingReplayDimension.reset();
+        mDimensionTransitionSettledUpdates = 0;
+        mDimensionTransitionStartedAt      = {};
+    }
     bool const changesDimension = mReplayPlayer->getDimensionId() != target;
     if (!changesDimension && !relocateWithinDimension) {
         mReplayDimension.store(&mReplayPlayer->getDimension(), std::memory_order_release);
         return true;
-    }
-    if (mPendingReplayDimension) {
-        if (*mPendingReplayDimension != target) {
-            getLogger().error(
-                "Replay requested dimension {} while dimension {} is still pending",
-                target.id,
-                mPendingReplayDimension->id
-            );
-            mReplayFailed = true;
-        }
-        return false;
     }
     if (changesDimension && mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) {
         mExportCameraViewpoint.reset();
@@ -3770,6 +4170,7 @@ void ReplaySession::completeReplayDimensionTransition() {
     mDimensionTransitionStartedAt      = {};
     mCompletedDimensionGeneration      = completedGeneration;
     resetDimensionScopedReplayState();
+    mChunkIsolationDimension = mReplayPlayer->getDimensionId();
     // The observer keeps its old coordinates in the new dimension; bring it to the recorded player once that is known.
     if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) mTeleportToSubjectPending = true;
 }
@@ -3794,6 +4195,7 @@ void ReplaySession::resetDimensionScopedReplayState() {
     mDirtySnapshotColumns.clear();
     mReusableSnapshotColumns.clear();
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
     mCenterChunkPositions.clear();
     mRecordedEntityIds.clear();
@@ -3999,6 +4401,8 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     auto& protectedChunks = mApplyingChunkSnapshot ? mApplyingSnapshotChunks : mSnapshotChunks;
     protectedChunks.insert(levelChunkPositions.begin(), levelChunkPositions.end());
 
+    auto& chunkSource = replayDimension->getChunkSource();
+
     std::vector<PrioritizedSubChunk> subChunks;
     subChunks.reserve(mPendingSubChunkIndices.size());
     mRemainingSubChunkPacketsByColumn.clear();
@@ -4067,7 +4471,11 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
                     );
                     return false;
                 }
-                continue;
+                auto existing = chunkSource.getExistingChunk(target);
+                if (!existing || existing->mIsEmptyClientChunk
+                    || existing->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+                    continue;
+                }
             }
 
             playableEntries.emplace_back(entry);
@@ -4105,6 +4513,16 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
         auto applied = mAppliedSnapshotColumns.find(pos);
         if (identity.levelChunkIndex >= 0 && applied != mAppliedSnapshotColumns.end() && applied->second == identity
             && !mDirtySnapshotColumns.contains(pos)) {
+            auto chunk = chunkSource.getExistingChunk(pos);
+            if (!chunk || chunk->mIsEmptyClientChunk
+                || chunk->mLoadState->load(std::memory_order_acquire) != ChunkState::Loaded) {
+                continue;
+            }
+            {
+                std::scoped_lock lock(mPendingLevelChunksMutex);
+                auto const       retained = mRetainedReplayChunks.find(pos);
+                if (retained == mRetainedReplayChunks.end() || retained->second != chunk) continue;
+            }
             mReusableSnapshotColumns.emplace(pos);
         }
     }
@@ -4120,9 +4538,21 @@ bool ReplaySession::prepareChunkInjectionPlan(PlaybackView const& view) {
     }
 
     mDirectSnapshotColumns.clear();
+    mDirectSubChunkColumns.clear();
     mDirectLevelChunkIndices.clear();
+    if (!mApplyingChunkSnapshot) {
+        // Already-loaded columns with no LevelChunk in this batch do not reset subchunks to NeedsRequest, so vanilla
+        // SubChunkPacket handling would ignore their updates; apply them directly instead.
+        for (auto const& [pos, _] : subChunkIndicesByColumn) {
+            if (levelChunkPositions.contains(pos)) continue;
+            auto existing = chunkSource.getExistingChunk(pos);
+            if (existing && !existing->mIsEmptyClientChunk
+                && existing->mLoadState->load(std::memory_order_acquire) == ChunkState::Loaded) {
+                mDirectSubChunkColumns.emplace(pos);
+            }
+        }
+    }
     bool const seekFlushedBatch = mSeekFlushedBatch;
-    auto&      chunkSource      = replayDimension->getChunkSource();
     for (auto const& [pos, identity] : targetColumns) {
         if (mReusableSnapshotColumns.contains(pos) || identity.levelChunkIndex < 0) continue;
         // Applied directly, a merged seek batch left the loaded columns of a dimension it just entered empty.
@@ -4272,6 +4702,7 @@ bool ReplaySession::tryFinishChunkInjection(std::optional<std::chrono::steady_cl
         mDirtySnapshotColumns.clear();
         mReusableSnapshotColumns.clear();
         mDirectSnapshotColumns.clear();
+        mDirectSubChunkColumns.clear();
         mDirectLevelChunkIndices.clear();
         mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
         mChunkInjectionPending   = false;
@@ -4389,8 +4820,7 @@ bool ReplaySession::injectPendingLevelChunks(std::chrono::steady_clock::time_poi
             applied = applyRequestModeLevelChunkDirect(mChunkPackets[static_cast<size_t>(index)]);
             if (!applied) {
                 getLogger().debug("Direct replay LevelChunk update unavailable; using native loading");
-                mDirectLevelChunkIndices.clear();
-                mDirectSnapshotColumns.clear();
+                mDirectLevelChunkIndices.erase(index);
                 continue;
             }
         } else {
@@ -4432,7 +4862,8 @@ bool ReplaySession::injectReadySubChunkPackets(
             continue;
         }
         bool const direct = std::all_of(pending.targets.begin(), pending.targets.end(), [this](ChunkPos const& pos) {
-            return mDirectSnapshotColumns.contains(pos) || mReusableSnapshotColumns.contains(pos);
+            return mDirectSubChunkColumns.contains(pos) || mDirectSnapshotColumns.contains(pos)
+                || mReusableSnapshotColumns.contains(pos);
         });
         std::string_view payload = pending.payload.empty()
                                      ? std::string_view{mChunkPackets[static_cast<size_t>(pending.index)]}
@@ -4441,7 +4872,10 @@ bool ReplaySession::injectReadySubChunkPackets(
             direct ? applySubChunkDirect(payload) : injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
         if (direct && !applied) {
             getLogger().debug("Direct replay SubChunk update unavailable; using native loading");
-            for (auto const& target : pending.targets) mDirectSnapshotColumns.erase(target);
+            for (auto const& target : pending.targets) {
+                mDirectSubChunkColumns.erase(target);
+                mDirectSnapshotColumns.erase(target);
+            }
             applied = injectChunkPacket(payload, MinecraftPacketIds::SubChunkPacket);
         }
         if (!applied) {
@@ -4631,6 +5065,7 @@ bool ReplaySession::finishChunkInjection() {
         mPendingSnapshotColumns.clear();
         mReusableSnapshotColumns.clear();
         mDirectSnapshotColumns.clear();
+        mDirectSubChunkColumns.clear();
         mDirectLevelChunkIndices.clear();
         mInjectedLevelChunks     = 0;
         mInjectedSubChunkPackets = 0;
@@ -4715,6 +5150,42 @@ bool ReplaySession::hasPendingReplayReaderBoundary() const {
     return mReaderIndex < mReaders.size() && !mReaders[mReaderIndex]->hasRemainingActions();
 }
 
+bool ReplaySession::nextReaderForcesSnapshot() const {
+    if (mReaderIndex + 1 >= mReaders.size()) return false;
+    auto chunkMeta = mMeta.chunks.begin();
+    std::advance(chunkMeta, static_cast<std::ptrdiff_t>(mReaderIndex + 1));
+    return chunkMeta->second.forcePlaySnapshot;
+}
+
+void ReplaySession::compactPendingChunkInjectionQueue() {
+    if (!mChunkInjectionPlanPrepared) return;
+
+    if (mPendingLevelChunkCursor > 0) {
+        auto const eraseCount = std::min(mPendingLevelChunkCursor, mPendingLevelChunkIndices.size());
+        mPendingLevelChunkIndices.erase(
+            mPendingLevelChunkIndices.begin(),
+            mPendingLevelChunkIndices.begin() + static_cast<std::ptrdiff_t>(eraseCount)
+        );
+        mPendingLevelChunkCursor = 0;
+    }
+
+    std::vector<int> remainingSubChunkIndices;
+    remainingSubChunkIndices.reserve(mPendingSubChunkPackets.size());
+    for (auto const& pending : mPendingSubChunkPackets) {
+        if (!pending.injected && pending.index >= 0) {
+            remainingSubChunkIndices.push_back(pending.index);
+        }
+    }
+    if (!remainingSubChunkIndices.empty()) {
+        remainingSubChunkIndices
+            .insert(remainingSubChunkIndices.end(), mPendingSubChunkIndices.begin(), mPendingSubChunkIndices.end());
+        mPendingSubChunkIndices = std::move(remainingSubChunkIndices);
+    }
+    mPendingSubChunkPackets.clear();
+    mPendingSubChunkCursor      = 0;
+    mChunkInjectionPlanPrepared = false;
+}
+
 bool ReplaySession::advanceReplayReader(bool stopAtEnd) {
     ++mReaderIndex;
     if (mReaderIndex >= mReaders.size()) {
@@ -4753,6 +5224,11 @@ bool ReplaySession::advanceReplayTick(bool stopAtEnd) {
 
         auto& reader = mReaders[mReaderIndex];
         if (!reader->handleNextAction(*this)) {
+            if (nextReaderForcesSnapshot()
+                && (mScreenPreview || hasPoppableReplayScreenOpen() || mScreenCloseWaitTicks > 0)
+                && !ensureReplayScreenClosedForMutation("snapshot")) {
+                return true;
+            }
             return advanceReplayReader(stopAtEnd);
         }
 
@@ -4820,6 +5296,8 @@ void ReplaySession::handleLevelChunkCached(int index) {
         mChunkInjectionIdleTicks = 0;
         mCenterChunksReady       = false;
         mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    } else {
+        compactPendingChunkInjectionQueue();
     }
     mPendingLevelChunkIndices.emplace_back(index);
     mChunkInjectionPending      = true;
@@ -4837,6 +5315,8 @@ void ReplaySession::handleSubChunkCached(int index) {
         mChunkInjectionIdleTicks = 0;
         mCenterChunksReady       = false;
         mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    } else {
+        compactPendingChunkInjectionQueue();
     }
     mPendingSubChunkIndices.emplace_back(index);
     mChunkInjectionPending      = true;
@@ -5064,6 +5544,8 @@ void ReplaySession::flushSeekChunks() {
         mChunkInjectionIdleTicks = 0;
         mCenterChunksReady       = false;
         mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
+    } else {
+        compactPendingChunkInjectionQueue();
     }
     // The plan lets a later index win per column, and anything already queued arrived after these were held.
     mPendingLevelChunkIndices.insert(mPendingLevelChunkIndices.begin(), levelIndices.begin(), levelIndices.end());
@@ -5477,33 +5959,105 @@ bool ReplaySession::dispatchUiPacket(std::shared_ptr<Packet> packet) {
     return true;
 }
 
+bool ReplaySession::hasPoppableReplayScreenOpen() const {
+    auto client = ll::service::getClientInstance();
+    return client && isReplayPoppableScreen(client->getTopScreenName());
+}
+
+bool ReplaySession::ensureReplayScreenClosedForMutation(char const* reason) {
+    if (mScreenPreview) closeScreenPreview(reason);
+    if (hasPoppableReplayScreenOpen()) {
+        popReplayScreen();
+        if (mScreenCloseWaitTicks < 20) {
+            ++mScreenCloseWaitTicks;
+            mWaitingForScreenClose.store(true, std::memory_order_release);
+            return false;
+        }
+        getLogger().warn(
+            "Timed out waiting for replay screen to close before {}; proceeding after {} ticks",
+            reason,
+            mScreenCloseWaitTicks
+        );
+    }
+    mScreenCloseWaitTicks = 0;
+    mWaitingForScreenClose.store(false, std::memory_order_release);
+    return true;
+}
+
 // Container screens and server forms are only previewed for a followed, settled replay; every other case skips.
 bool ReplaySession::trackScreenPacket(MinecraftPacketIds packetId, std::string_view payload) {
-    if (packetId != MinecraftPacketIds::ContainerOpen && packetId != MinecraftPacketIds::ShowModalForm) {
-        // ContainerClose leaves a form alone; ClientboundCloseScreen closes whichever screen is open.
-        auto const closes = [&](MinecraftPacketIds opener) {
-            return packetId != MinecraftPacketIds::ContainerClose || opener == MinecraftPacketIds::ContainerOpen;
+    bool const isOpener = isContainerScreenOpener(packetId) || packetId == MinecraftPacketIds::ShowModalForm;
+    if (!isOpener) {
+        int closeId = static_cast<int>(ContainerID::None);
+        if (packetId == MinecraftPacketIds::ContainerClose) {
+            if (auto packet = MinecraftPackets::createPacket(packetId)) {
+                ReadOnlyBinaryStream stream(payload, false);
+                if (packet->read(stream) && stream.ensureReadCompleted()) {
+                    closeId = static_cast<int>(static_cast<ContainerClosePacket const&>(*packet).mContainerId);
+                }
+            }
+        }
+        // ContainerClose leaves a form alone and matches its container ID (unless None); ClientboundCloseScreen closes
+        // whichever screen is open.
+        auto const closes = [&](MinecraftPacketIds opener, int openId) {
+            if (packetId != MinecraftPacketIds::ContainerClose) return true;
+            if (!isContainerScreenOpener(opener)) return false;
+            return closeId == static_cast<int>(ContainerID::None) || openId == closeId;
         };
         for (auto it = mRecordedScreens.rbegin(); it != mRecordedScreens.rend(); ++it) {
-            if (it->openTick > mCurrentTick || !closes(it->packetId)) continue;
+            if (it->openTick > mCurrentTick || !closes(it->packetId, it->id)) continue;
             if (it->closeTick < 0) it->closeTick = mCurrentTick;
             break;
         }
         // A seek records every packet it crosses and decides the screen once, at the landing tick.
-        if (mSeekTargetTick < 0 && mScreenPreview && closes(mScreenPreview->packetId)) {
+        if (mSeekTargetTick < 0 && mScreenPreview && closes(mScreenPreview->packetId, mScreenPreview->id)) {
             closeScreenPreview(packetId == MinecraftPacketIds::ContainerClose ? "recordedClose" : "closeScreen");
             popReplayScreen();
         }
         return true;
     }
 
-    int id = 0;
-    if (packetId == MinecraftPacketIds::ContainerOpen) {
-        auto packet = MinecraftPackets::createPacket(packetId);
-        if (!packet) return true;
+    int                     id = 0;
+    std::shared_ptr<Packet> decodedPacket;
+    if (isContainerScreenOpener(packetId)) {
+        decodedPacket = MinecraftPackets::createPacket(packetId);
+        if (!decodedPacket) return true;
         ReadOnlyBinaryStream stream(payload, false);
-        if (!packet->read(stream) || !stream.ensureReadCompleted()) return true;
-        id = static_cast<int>(static_cast<ContainerOpenPacket&>(*packet).mContainerId);
+        if (!decodedPacket->read(stream) || !stream.ensureReadCompleted()) return true;
+        if (packetId == MinecraftPacketIds::ContainerOpen) {
+            auto const& open = static_cast<ContainerOpenPacket const&>(*decodedPacket);
+            // The player inventory screen is not previewed and must not enter mRecordedScreens or close active ones.
+            if (open.mType == SharedTypes::Legacy::ContainerType::Inventory) return true;
+            id = static_cast<int>(open.mContainerId);
+        } else if (packetId == MinecraftPacketIds::UpdateTrade) {
+            id = static_cast<int>(static_cast<UpdateTradePacket const&>(*decodedPacket).mContainerId);
+        } else if (packetId == MinecraftPacketIds::UpdateEquip) {
+            id = static_cast<int>(static_cast<UpdateEquipPacket const&>(*decodedPacket).mContainerId);
+        }
+    }
+
+    if (packetId == MinecraftPacketIds::UpdateTrade) {
+        // Trade offer refreshes arrive as additional UpdateTrade packets on the same container ID; update in place
+        // instead of creating duplicate intervals or reopening the screen.
+        for (auto it = mRecordedScreens.rbegin(); it != mRecordedScreens.rend(); ++it) {
+            if (it->packetId == MinecraftPacketIds::UpdateTrade && it->id == id && it->openTick <= mCurrentTick
+                && (it->closeTick < 0 || it->closeTick > mCurrentTick)) {
+                it->payload = std::string(payload);
+                if (mSeekTargetTick < 0) {
+                    if (mScreenPreview && mScreenPreview->packetId == MinecraftPacketIds::UpdateTrade
+                        && mScreenPreview->id == id) {
+                        (void)dispatchUiPacket(std::move(decodedPacket));
+                    } else {
+                        if (mScreenPreview) {
+                            closeScreenPreview("replaced");
+                            popReplayScreen();
+                        }
+                        openScreenPreview(*it);
+                    }
+                }
+                return true;
+            }
+        }
     }
 
     // Reads repeat after a backward seek, so an interval is only recorded once.
@@ -5515,22 +6069,36 @@ bool ReplaySession::trackScreenPacket(MinecraftPacketIds packetId, std::string_v
     if (!screen) screen = &mRecordedScreens.emplace_back(packetId, id, mCurrentTick, -1, std::string(payload));
 
     if (mSeekTargetTick >= 0) return true;
-    if (mScreenPreview && !mScreenPreview->shows(*screen)) closeScreenPreview("replaced");
+    if (mScreenPreview && !mScreenPreview->shows(*screen)) {
+        closeScreenPreview("replaced");
+        popReplayScreen();
+    }
     openScreenPreview(*screen);
     return true;
 }
 
 void ReplaySession::openScreenPreview(RecordedScreen const& screen) {
-    mTriedScreenOpenTick = screen.openTick;
-    auto packet          = MinecraftPackets::createPacket(screen.packetId);
+    auto packet = MinecraftPackets::createPacket(screen.packetId);
     if (!packet) return;
     ReadOnlyBinaryStream stream(screen.payload, false);
     if (!packet->read(stream) || !stream.ensureReadCompleted()) return;
 
     auto* const open =
         screen.packetId == MinecraftPacketIds::ContainerOpen ? &static_cast<ContainerOpenPacket&>(*packet) : nullptr;
-    int const  type      = open ? static_cast<int>(open->mType) : -1;
-    auto const entityRaw = open ? open->mEntityUniqueID.get().rawID : int64{-1};
+    auto* const trade =
+        screen.packetId == MinecraftPacketIds::UpdateTrade ? &static_cast<UpdateTradePacket&>(*packet) : nullptr;
+    auto* const equip =
+        screen.packetId == MinecraftPacketIds::UpdateEquip ? &static_cast<UpdateEquipPacket&>(*packet) : nullptr;
+    bool const container = isContainerScreenOpener(screen.packetId);
+    int const  type      = open  ? static_cast<int>(open->mType)
+                         : trade ? static_cast<int>(trade->mType)
+                         : equip ? static_cast<int>(equip->mType)
+                                 : -1;
+    auto const entityId  = open  ? open->mEntityUniqueID.get()
+                         : trade ? trade->mEntityUniqueID.get()
+                         : equip ? equip->mEntityUniqueID.get()
+                                 : ActorUniqueID{-1};
+    auto const entityRaw = entityId.rawID;
     bool const following = visuals::isReplaySubjectViewDriven() && visuals::isReplaySubjectRecorder();
 
     char const* action      = "inject";
@@ -5544,37 +6112,58 @@ void ReplaySession::openScreenPreview(RecordedScreen const& screen) {
     else if (mScreenPreview) action = "skip:alreadyOpen";
     else if (open) {
         if (auto const skip = containerPreviewSkip(*mReplayPlayer, *open, blockEntity)) action = skip;
+    } else if (trade || equip) {
+        if (entityRaw != -1 && entityRaw != 0 && !mReplayPlayer->getLevel().fetchEntity(entityId, false)) {
+            action = "skip:entityMissing";
+        }
     }
 
-    getLogger().info(
-        "screenPreview open action={} screen={} id={} type={} entity={} blockEntity={} following={} tick={} "
-        "openTick={}",
-        action,
-        open ? "container" : "form",
-        screen.id,
-        type,
-        entityRaw,
-        blockEntity,
-        following,
-        mCurrentTick,
-        screen.openTick
-    );
-    if (std::string_view(action) != "inject") return;
+    char const* const screenKind = open ? "container" : trade ? "trade" : equip ? "equip" : "form";
+    bool const        injecting  = std::string_view(action) == "inject";
+    if (injecting || screen.openTick != mLastScreenSkipTick || action != mLastScreenSkipAction) {
+        getLogger().info(
+            "screenPreview open action={} screen={} id={} type={} entity={} blockEntity={} following={} tick={} "
+            "openTick={}",
+            action,
+            screenKind,
+            screen.id,
+            type,
+            entityRaw,
+            blockEntity,
+            following,
+            mCurrentTick,
+            screen.openTick
+        );
+    }
+    if (!injecting) {
+        if (std::string_view(action) == "skip:inventory") mTriedScreenOpenTick = screen.openTick;
+        mLastScreenSkipTick   = screen.openTick;
+        mLastScreenSkipAction = action;
+        return;
+    }
 
-    mScreenPreview = ScreenPreview{screen.packetId, screen.id, type, screen.openTick};
-    if (open) visuals::setReplayContainerKeepOpen(true);
+    mTriedScreenOpenTick = screen.openTick;
+    mLastScreenSkipTick  = -1;
+    mLastScreenSkipAction.clear();
+    mScreenPreview      = ScreenPreview{screen.packetId, screen.id, type, screen.openTick, entityRaw};
+    mScreenPreviewTicks = 0;
+    if (container) visuals::setReplayContainerKeepOpen(true);
     (void)dispatchUiPacket(std::move(packet));
 }
 
 void ReplaySession::closeScreenPreview(char const* reason) {
     if (!mScreenPreview) return;
     auto const preview   = *mScreenPreview;
-    bool const container = preview.packetId == MinecraftPacketIds::ContainerOpen;
+    bool const container = isContainerScreenOpener(preview.packetId);
     if (container) visuals::setReplayContainerKeepOpen(false);
+    char const* const screenKind = preview.packetId == MinecraftPacketIds::ContainerOpen ? "container"
+                                 : preview.packetId == MinecraftPacketIds::UpdateTrade   ? "trade"
+                                 : preview.packetId == MinecraftPacketIds::UpdateEquip   ? "equip"
+                                                                                         : "form";
     getLogger().info(
         "screenPreview close reason={} screen={} id={} type={} openTick={} tick={} keepOpenOverrides={}",
         reason,
-        container ? "container" : "form",
+        screenKind,
         preview.id,
         preview.type,
         preview.openTick,
@@ -5595,6 +6184,7 @@ void ReplaySession::closeScreenPreview(char const* reason) {
         }
     }
     mScreenPreview.reset();
+    mScreenPreviewTicks = 0;
 }
 
 void ReplaySession::updateScreenPreview() {
@@ -5603,14 +6193,32 @@ void ReplaySession::updateScreenPreview() {
         // Following the recorder again shows the screen it still has open, tried once per interval.
         if (!following) mTriedScreenOpenTick = -1;
         else if (auto const* wanted = recordedScreenOpenAt(mCurrentTick);
-                 wanted && wanted->openTick != mTriedScreenOpenTick && mSeekTargetTick < 0) {
+                 wanted && wanted->openTick != mTriedScreenOpenTick && mSeekTargetTick < 0
+                 && mRequestedSeekTick.load(std::memory_order_acquire) < 0 && mScreenCloseWaitTicks == 0) {
             openScreenPreview(*wanted);
         }
         return;
     }
+    ++mScreenPreviewTicks;
     // A native screen would keep the dimension loading screen from clearing, so it closes before the transition.
     if (!following) closeScreenPreview("followEnded");
     else if (mPendingReplayDimension) closeScreenPreview("dimension");
+    else if (mSeekTargetTick < 0 && mScreenPreviewTicks >= 4) {
+        if (auto client = ll::service::getClientInstance(); client && client->getTopScreenName() == "hud_screen") {
+            auto const preview = *mScreenPreview;
+            visuals::setReplayContainerKeepOpen(false);
+            mScreenPreview.reset();
+            mScreenPreviewTicks = 0;
+            getLogger().info(
+                "screenPreview closed natively id={} type={} openTick={} tick={}",
+                preview.id,
+                preview.type,
+                preview.openTick,
+                mCurrentTick
+            );
+            return;
+        }
+    }
     if (!mScreenPreview) popReplayScreen();
 }
 
@@ -5633,7 +6241,7 @@ void ReplaySession::syncScreenPreviewAfterSeek() {
 }
 
 bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_view payload, bool recordedLocalPlayer) {
-    if (packetId == MinecraftPacketIds::ContainerOpen || packetId == MinecraftPacketIds::ContainerClose
+    if (isContainerScreenOpener(packetId) || packetId == MinecraftPacketIds::ContainerClose
         || packetId == MinecraftPacketIds::ShowModalForm || packetId == MinecraftPacketIds::ClientboundCloseScreen) {
         return trackScreenPacket(packetId, payload);
     }
@@ -5845,6 +6453,14 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                     static_cast<int>(mapPacket.mScale)
                 );
             }
+        }
+    }
+
+    if (packetId == MinecraftPacketIds::RemoveActor && mScreenPreview && mScreenPreview->entityRaw != -1) {
+        auto const id = *static_cast<RemoveActorPacket const&>(*packet).mEntityId;
+        if (mScreenPreview->entityRaw == id.rawID) {
+            closeScreenPreview("entityRemoved");
+            popReplayScreen();
         }
     }
 
@@ -6113,6 +6729,7 @@ bool ReplaySession::applyRequestModeLevelChunkDirect(std::string_view payload) {
     auto const& levelChunk = static_cast<LevelChunkPacket const&>(*packet);
     if (!applyRequestModeLevelChunkData(levelChunk)) return false;
 
+    mDirectSubChunkColumns.emplace(*levelChunk.mPos);
     {
         std::scoped_lock lock(mPendingLevelChunksMutex);
         mCompletedLevelChunkPositions.emplace(*levelChunk.mPos);
@@ -6344,7 +6961,11 @@ bool ReplaySession::shouldSuppressNativeChunk(ChunkPos const& pos, DimensionType
     if (mPendingReplayDimension && *mPendingReplayDimension == packetDimension) return false;
     if (mChunkIsolationDimension && *mChunkIsolationDimension != packetDimension) return false;
 
-    if (!mChunkInjectionPlanPrepared && (!mWorldReady || mApplyingChunkSnapshot)) return true;
+    if (!mChunkInjectionPlanPrepared
+        && (!mWorldReady || mApplyingChunkSnapshot || mPendingSnapshotApply
+            || (mSnapshotChunks.empty() && mChunkIsolationDimension && *mChunkIsolationDimension == packetDimension))) {
+        return true;
+    }
 
     return mSnapshotChunks.contains(pos) || mApplyingSnapshotChunks.contains(pos);
 }

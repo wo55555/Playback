@@ -96,11 +96,15 @@ void StatusPanel::draw(PanelContext const& ctx) {
     drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, theme::kBgHeader);
     drawList->AddLine(origin, {origin.x + width, origin.y}, theme::kBorder);
 
-    float const pad         = theme::kPanelPadding;
+    float const pad         = 10.0f * metrics::scale();
     float const textY       = origin.y + (height - ImGui::GetFontSize()) * 0.5f;
     float const statusWidth = ImGui::CalcTextSize(statusText.c_str()).x;
-    if (ImGui::CalcTextSize(leftText.c_str()).x + statusWidth + pad * 4.0f <= width) {
+    // A narrow window clips the file text at the status text instead of dropping it.
+    float const leftRight = origin.x + std::max(pad, width - statusWidth - pad * 3.0f);
+    if (leftRight > origin.x + pad) {
+        drawList->PushClipRect({origin.x + pad, origin.y}, {leftRight, origin.y + height}, true);
         drawList->AddText({origin.x + pad, textY}, theme::kTextDim, leftText.c_str());
+        drawList->PopClipRect();
     }
     ImGui::SetCursorScreenPos({origin.x + std::max(pad, width - statusWidth - pad), textY});
     ImGui::TextColored(color, "%s", statusText.c_str());

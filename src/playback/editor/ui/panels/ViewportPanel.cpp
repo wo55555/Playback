@@ -25,26 +25,6 @@ using namespace ll::i18n_literals;
 
 namespace {
 
-struct AspectPreset {
-    char const* label;
-    float       ratio;
-};
-
-constexpr std::array kAspectPresets{
-    AspectPreset{"16:9",   16.0f / 9.0f},
-    AspectPreset{"21:9",   21.0f / 9.0f},
-    AspectPreset{"4:3",    4.0f / 3.0f },
-    AspectPreset{"1:1",    1.0f        },
-    AspectPreset{"9:16",   9.0f / 16.0f},
-    AspectPreset{"2.39:1", 2.39f       },
-};
-
-char const* aspectLabel(float ratio) {
-    for (auto const& preset : kAspectPresets)
-        if (std::abs(preset.ratio - ratio) < 0.01f) return preset.label;
-    return nullptr;
-}
-
 // Pixels around an entity's projected box that still count as clicking it.
 constexpr float kPickSlackPixels = 6.0f;
 // Entries in the nearby entities menu.
@@ -60,6 +40,56 @@ void submitFollow(PanelContext const& ctx, std::string choice) {
 std::string entityMenuLabel(replay::ReplaySession::ReplayEntityInfo const& entity) {
     if (entity.recorder) return "playback.refactorEditor.playerPicker.recorder"_tr() + " (" + entity.label + ")";
     return entity.label;
+}
+
+struct SubjectSelectionInfo {
+    std::vector<editing::model::KeyframeRef> refs;
+    bool                                     anyUnlocked{};
+    bool                                     allSameSubject{true};
+};
+
+SubjectSelectionInfo collectSelectedPersonKeyframes(PanelContext const& ctx, std::string_view choice) {
+    SubjectSelectionInfo info;
+    auto const           project = ctx.state.project;
+    if (!project) return info;
+    for (auto const& entry : ctx.selection.keyframes()) {
+        auto const it =
+            std::ranges::find_if(project->cameras, [&](auto const& camera) { return camera.id == entry.trackId; });
+        if (it == project->cameras.end()) continue;
+        auto const key = it->keysByTick.find(entry.tick);
+        if (key == it->keysByTick.end()) continue;
+        if (key->second.mode == editing::model::CameraKeyframeMode::Interpolated) continue;
+        info.refs.push_back({entry.trackId, entry.tick, std::nullopt});
+        info.anyUnlocked    |= !it->locked;
+        info.allSameSubject &= (key->second.subject == choice);
+    }
+    return info;
+}
+
+struct LookAtSelectionInfo {
+    std::vector<editing::model::KeyframeRef> refs;
+    bool                                     anyUnlocked{};
+    bool                                     allSameTarget{true};
+    float                                    firstOffsetY{0.0f};
+};
+
+LookAtSelectionInfo collectSelectedFreeKeyframes(PanelContext const& ctx, std::string_view choice) {
+    LookAtSelectionInfo info;
+    auto const          project = ctx.state.project;
+    if (!project) return info;
+    for (auto const& entry : ctx.selection.keyframes()) {
+        auto const it =
+            std::ranges::find_if(project->cameras, [&](auto const& camera) { return camera.id == entry.trackId; });
+        if (it == project->cameras.end()) continue;
+        auto const key = it->keysByTick.find(entry.tick);
+        if (key == it->keysByTick.end()) continue;
+        if (key->second.mode != editing::model::CameraKeyframeMode::Interpolated) continue;
+        if (info.refs.empty()) info.firstOffsetY = key->second.lookAtOffsetY;
+        info.refs.push_back({entry.trackId, entry.tick, std::nullopt});
+        info.anyUnlocked   |= !it->locked;
+        info.allSameTarget &= (key->second.lookAtEnabled && key->second.lookAtTarget == choice);
+    }
+    return info;
 }
 
 } // namespace
@@ -124,6 +154,60 @@ void ViewportPanel::drawEntityPickMenu(PanelContext const& ctx) {
         std::string const label =
             "playback.refactorEditor.viewport.followEntity"_tr(entityMenuLabel(entity)) + "##pick-follow";
         if (ImGui::MenuItem(label.c_str(), nullptr, selected)) submitFollow(ctx, entity.choice);
+        auto target = collectSelectedPersonKeyframes(ctx, entity.choice);
+        if (!target.refs.empty()) {
+            std::string const setLabel =
+                (target.refs.size() == 1
+                     ? "playback.refactorEditor.viewport.setKeyframeSubject"_tr(entityMenuLabel(entity))
+                     : "playback.refactorEditor.viewport.setKeyframesSubject"_tr(
+                           target.refs.size(),
+                           entityMenuLabel(entity)
+                       ))
+                + "##pick-keyframe-subject";
+            if (ImGui::MenuItem(setLabel.c_str(), nullptr, target.allSameSubject, target.anyUnlocked)) {
+                if (target.refs.size() == 1) {
+                    EditorAction action{EditorActionType::SetKeyframeSubject};
+                    action.id          = target.refs[0].cameraId;
+                    action.tick        = target.refs[0].tick;
+                    action.secondaryId = entity.choice;
+                    ctx.submitAction(std::move(action));
+                } else {
+                    EditorAction action{EditorActionType::SetKeyframesSubject};
+                    action.keyframeRefs = std::move(target.refs);
+                    action.secondaryId  = entity.choice;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+        }
+        auto lookAtTarget = collectSelectedFreeKeyframes(ctx, entity.choice);
+        if (!lookAtTarget.refs.empty()) {
+            std::string const lookAtLabel =
+                (lookAtTarget.refs.size() == 1
+                     ? "playback.refactorEditor.viewport.lookAtEntity"_tr(entityMenuLabel(entity))
+                     : "playback.refactorEditor.viewport.lookAtEntityKeyframes"_tr(
+                           lookAtTarget.refs.size(),
+                           entityMenuLabel(entity)
+                       ))
+                + "##pick-keyframe-lookat";
+            if (ImGui::MenuItem(lookAtLabel.c_str(), nullptr, lookAtTarget.allSameTarget, lookAtTarget.anyUnlocked)) {
+                if (lookAtTarget.refs.size() == 1) {
+                    EditorAction action{EditorActionType::SetKeyframeLookAt};
+                    action.id          = lookAtTarget.refs[0].cameraId;
+                    action.tick        = lookAtTarget.refs[0].tick;
+                    action.value       = true;
+                    action.secondaryId = entity.choice;
+                    action.speed       = lookAtTarget.firstOffsetY;
+                    ctx.submitAction(std::move(action));
+                } else {
+                    EditorAction action{EditorActionType::SetKeyframesLookAt};
+                    action.keyframeRefs  = std::move(lookAtTarget.refs);
+                    action.value         = true;
+                    action.secondaryId   = entity.choice;
+                    action.secondaryTick = 1;
+                    ctx.submitAction(std::move(action));
+                }
+            }
+        }
     } else {
         ImGui::TextDisabled("%s", "playback.refactorEditor.viewport.noEntityHere"_tr().c_str());
     }
@@ -210,9 +294,13 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     char const* cameraIcon  = nullptr;
     if (activeCamera) {
         cameraLabel = activeCamera->name;
-        cameraIcon  = activeCamera->kind == state::editing::model::CameraTrackKind::Keyframe ? ICON_CAMERA : ICON_USER;
+        auto const activeMode =
+            state.cameraTimeline
+                ? state.cameraTimeline->shotAt(state.currentTick).mode
+                : state::editing::model::CameraKeyframeMode::Interpolated;
+        cameraIcon = activeMode == state::editing::model::CameraKeyframeMode::Interpolated ? ICON_CAMERA : ICON_USER;
     } else if (following) {
-        auto const subject = playerSubjectLabel(state.replayPlayers, state.replaySubjectChoice);
+        auto const subject = playerSubjectLabel(state.replayPlayers, state.replayEntities, state.replaySubjectChoice);
         cameraLabel        = state.followThirdPerson ? "playback.refactorEditor.viewport.followSubjectThird"_tr(subject)
                                                      : "playback.refactorEditor.viewport.followSubject"_tr(subject);
     } else if (project && selectedCamera) {
@@ -245,11 +333,10 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         }
         if (project && !project->cameras.empty()) ImGui::Separator();
         if (project) {
-            // Person tracks have no pose of their own to preview; they play from the timeline.
             for (auto const& camera : project->cameras) {
-                if (camera.kind != state::editing::model::CameraTrackKind::Keyframe) continue;
-                bool const current = !following && selectedCamera && selectedCamera->cameraId == camera.id;
-                if (ImGui::MenuItem(camera.name.c_str(), nullptr, current)) {
+                bool const        current = !following && selectedCamera && selectedCamera->cameraId == camera.id;
+                std::string const label   = camera.name + "##cam-" + camera.id;
+                if (ImGui::MenuItem(label.c_str(), nullptr, current)) {
                     ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
                     EditorAction action{EditorActionType::SetPreviewCamera};
                     action.id = camera.id;
@@ -269,23 +356,21 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         if (ImGui::MenuItem(
                 "playback.refactorEditor.viewport.firstPerson"_tr().c_str(),
                 nullptr,
-                following && !replay::ReplaySession::parseEntityChoice(state.replaySubjectChoice),
+                following,
                 state.replayVisible
             )) {
             ImGui::CloseCurrentPopup();
             openPlayerPicker = true;
         }
-        // Any living mob, nearest first. Players stay in the picker above.
-        auto const entities  = replay::ReplaySession::getInstance().replayEntities();
-        bool const hasEntity = std::ranges::any_of(entities, [](auto const& entity) { return !entity.player; });
+        // Quick access to nearby entities, prioritizing living mobs; players and full search live in the picker above.
         if (ImGui::BeginMenu(
                 "playback.refactorEditor.viewport.nearbyEntities"_tr().c_str(),
-                state.replayVisible && hasEntity
+                state.replayVisible && !state.replayEntities.empty()
             )) {
-            size_t shown = 0;
-            for (auto const& entity : entities) {
-                if (entity.player) continue;
-                if (shown++ >= kNearbyEntityLimit) break;
+            size_t     shown          = 0;
+            auto const emitEntityItem = [&](state::ReplayEntityView const& entity) {
+                if (shown >= kNearbyEntityLimit) return;
+                ++shown;
                 bool const        selected = following && state.replaySubjectChoice == entity.choice;
                 std::string const label    = entity.label + "##" + entity.choice;
                 if (ImGui::MenuItem(label.c_str(), nullptr, selected)) {
@@ -294,6 +379,12 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
                     action.id    = entity.choice;
                     ctx.submitAction(std::move(action));
                 }
+            };
+            for (auto const& entity : state.replayEntities) {
+                if (entity.mob) emitEntityItem(entity);
+            }
+            for (auto const& entity : state.replayEntities) {
+                if (!entity.mob) emitEntityItem(entity);
             }
             ImGui::EndMenu();
         }
@@ -305,6 +396,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             "##viewport-player-picker",
             PlayerPickerMode::Follow,
             state.replayPlayers,
+            state.replayEntities,
             state.replaySubjectChoice,
             following,
             playerPick
@@ -320,7 +412,8 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
 
     ImGui::SameLine(0.0f, metrics::gutter());
     char aspectText[32]{};
-    if (char const* label = aspectLabel(mVideoAspectRatio)) std::snprintf(aspectText, sizeof(aspectText), "%s", label);
+    if (char const* label = widgets::aspectPresetLabel(mVideoAspectRatio))
+        std::snprintf(aspectText, sizeof(aspectText), "%s", label);
     else std::snprintf(aspectText, sizeof(aspectText), "%.2f:1", mVideoAspectRatio);
     if (widgets::dropdownChip(
             "viewport-aspect",
@@ -330,7 +423,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         widgets::openAnchoredPopup("##viewport-aspect-menu");
     }
     if (widgets::beginAnchoredPopup("##viewport-aspect-menu")) {
-        for (auto const& preset : kAspectPresets) {
+        for (auto const& preset : widgets::kAspectPresets) {
             bool const current = std::abs(preset.ratio - mVideoAspectRatio) < 0.01f;
             // Routed through the editor so the choice reaches the persisted layout preferences.
             if (ImGui::MenuItem(preset.label, nullptr, current)) ctx.commands.setVideoAspectRatio(preset.ratio);
@@ -340,10 +433,13 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
 
     ImGui::SameLine(0.0f, metrics::gutter() * 2.0f);
     ImGui::SetCursorPosY((height - ImGui::GetFrameHeight()) * 0.5f);
-    ImGui::Checkbox(
-        ("playback.refactorEditor.viewport.autoPreview"_tr() + "##viewport-auto-preview").c_str(),
-        &mAutoPreview
-    );
+    bool autoPreview = mAutoPreview;
+    if (ImGui::Checkbox(
+            ("playback.refactorEditor.viewport.autoPreview"_tr() + "##viewport-auto-preview").c_str(),
+            &autoPreview
+        )) {
+        ctx.commands.setAutoPreviewEnabled(autoPreview);
+    }
     widgets::itemTooltip("playback.refactorEditor.viewport.autoPreviewTooltip"_tr().c_str());
 
     // Maximize sits with the transport controls; the camera-path toggle stays in the View menu.
@@ -355,7 +451,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             "playback.refactorEditor.viewport.infoOverlay"_tr().c_str(),
             mInfoOverlayVisible
         )) {
-        mInfoOverlayVisible = !mInfoOverlayVisible;
+        ctx.commands.setInfoOverlayVisible(!mInfoOverlayVisible);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -392,7 +488,12 @@ void ViewportPanel::drawInfoOverlay(PanelContext const& ctx, ImVec2 const& video
         pose.yaw,
         pose.pitch
     );
-    std::snprintf(lens, sizeof(lens), "FOV %.1f    Tick %d", pose.fov, ctx.state.currentTick);
+    std::snprintf(
+        lens,
+        sizeof(lens),
+        "%s",
+        "playback.refactorEditor.viewport.lensOverlay"_tr(pose.fov, ctx.state.currentTick).c_str()
+    );
 
     float const pad   = metrics::gutter();
     float const lineY = ImGui::GetFontSize() + 2.0f;
@@ -437,18 +538,28 @@ void ViewportPanel::drawFloatingTransport(PanelContext const& ctx, ImVec2 const&
     float const startX = capsuleMin.x + pad * 2.0f + textWidth;
     float const y      = capsuleMin.y + pad * 0.5f;
     using widgets::VectorIcon;
-    auto const button = [&](char const* id, int index, VectorIcon icon) {
+    auto const button = [&](char const* id, int index, VectorIcon icon, std::string const& tooltip) {
         ImGui::SetCursorScreenPos({startX + (unit + gap) * static_cast<float>(index), y});
-        return widgets::vectorIconButton(id, icon, nullptr);
+        return widgets::vectorIconButton(id, icon, tooltip.c_str());
     };
 
-    if (button("##fv-start", 0, VectorIcon::SkipStart)) ctx.commands.seekTo(0);
-    if (button("##fv-back", 1, VectorIcon::StepBack)) ctx.commands.seekRelative(-widgets::kTicksPerSecond);
-    if (button("##fv-play", 2, state.paused ? VectorIcon::Play : VectorIcon::Pause))
+    if (button("##fv-start", 0, VectorIcon::SkipStart, "playback.refactorEditor.timeline.skipToStart"_tr()))
+        ctx.commands.seekTo(0);
+    if (button("##fv-back", 1, VectorIcon::StepBack, "playback.refactorEditor.timeline.previousTick"_tr()))
+        ctx.commands.seekRelative(-1);
+    if (button(
+            "##fv-play",
+            2,
+            state.paused ? VectorIcon::Play : VectorIcon::Pause,
+            state.paused ? "playback.refactorEditor.timeline.play"_tr() : "playback.refactorEditor.timeline.pause"_tr()
+        ))
         ctx.submitAction({EditorActionType::TogglePause});
-    if (button("##fv-forward", 3, VectorIcon::StepForward)) ctx.commands.seekRelative(widgets::kTicksPerSecond);
-    if (button("##fv-end", 4, VectorIcon::SkipEnd)) ctx.commands.seekTo(state.totalTicks);
-    if (button("##fv-restore", 5, VectorIcon::Restore)) ctx.commands.toggleViewportMaximized();
+    if (button("##fv-forward", 3, VectorIcon::StepForward, "playback.refactorEditor.timeline.nextTick"_tr()))
+        ctx.commands.seekRelative(1);
+    if (button("##fv-end", 4, VectorIcon::SkipEnd, "playback.refactorEditor.timeline.skipToEnd"_tr()))
+        ctx.commands.seekTo(state.totalTicks);
+    if (button("##fv-restore", 5, VectorIcon::Restore, "playback.refactorEditor.timeline.restore"_tr()))
+        ctx.commands.toggleViewportMaximized();
 }
 
 void ViewportPanel::setGameTexture(ImTextureID texture) { mGameTexture = texture; }

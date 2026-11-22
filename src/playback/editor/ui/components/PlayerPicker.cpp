@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <ranges>
 #include <string>
@@ -21,10 +22,16 @@ using namespace ll::i18n_literals;
 
 namespace {
 
+constexpr int kEntityDisplayLimit = 100;
+constexpr int kEntityMeasureLimit = 30;
+
 struct PickerUi {
-    char search[128]{};
-    int  highlight{-1};
-    bool absentOpen{false};
+    char        search[128]{};
+    int         highlight{-1};
+    bool        entitiesOpen{true};
+    bool        otherEntitiesOpen{false};
+    bool        absentOpen{false};
+    std::string lastCurrent;
 };
 
 std::unordered_map<ImGuiID, PickerUi>& pickerUi() {
@@ -81,21 +88,39 @@ int searchCallback(ImGuiInputTextCallbackData* data) {
     return count > 1;
 }
 
+[[nodiscard]] std::string entityIdTag(std::string_view choice) {
+    if (choice.starts_with(replay::ReplaySession::EntityChoicePrefix)) {
+        return "#" + std::string(choice.substr(replay::ReplaySession::EntityChoicePrefix.size()));
+    }
+    return std::string(choice);
+}
+
+[[nodiscard]] std::string formatDistance(float distance) {
+    if (!std::isfinite(distance) || distance < 0.0f) return {};
+    return std::to_string(static_cast<long long>(std::llround(distance))) + "m";
+}
+
 struct Row {
-    enum class Kind { Recorder, Player, Header, Note };
+    enum class Kind { Recorder, Player, Entity, Header, Note };
 
     Kind        kind{Kind::Player};
     std::string uuid;
     std::string label;
     std::string hint;
     bool        selectable{false};
+    bool        entitiesHeader{false};
+    bool        otherEntitiesHeader{false};
     bool        absentHeader{false};
 };
 
 [[nodiscard]] std::vector<Row> buildRows(
     std::span<state::ReplayPlayerView const> players,
-    std::string_view                          query,
-    bool                                      absentOpen
+    std::span<state::ReplayEntityView const> entities,
+    std::string_view                         query,
+    bool                                     entitiesOpen,
+    bool                                     otherEntitiesOpen,
+    bool                                     absentOpen,
+    size_t                                   entityLimit = kEntityDisplayLimit
 ) {
     std::vector<Row> rows;
     state::ReplayPlayerView const* recorder = nullptr;
@@ -105,8 +130,8 @@ struct Row {
         break;
     }
 
-    auto const matches = [&](std::string_view name, std::string_view uuid) {
-        return containsFolded(name, query) || containsFolded(uuid, query);
+    auto const matches = [&](std::string_view name, std::string_view id) {
+        return containsFolded(name, query) || containsFolded(id, query);
     };
 
     std::string const recorderLabel = recorder ? rawName(*recorder) : "playback.refactorEditor.playerPicker.recorder"_tr();
@@ -164,7 +189,7 @@ struct Row {
         header.label = "playback.refactorEditor.playerPicker.present"_tr() + "  " + std::to_string(presentMatches);
         rows.push_back(std::move(header));
         appendPlayers(present, true);
-    } else if (query.empty()) {
+    } else if (query.empty() && entities.empty()) {
         int presentTotal = 0;
         for (auto const& player : players) {
             if (!player.recorder && player.present) ++presentTotal;
@@ -176,6 +201,63 @@ struct Row {
             rows.push_back(std::move(note));
         }
     }
+
+    std::unordered_map<std::string_view, int> entityLabelCounts;
+    entityLabelCounts.reserve(entities.size());
+    std::vector<state::ReplayEntityView const*> matchingMobs;
+    std::vector<state::ReplayEntityView const*> matchingOtherEntities;
+    matchingMobs.reserve(entities.size());
+    for (auto const& entity : entities) {
+        ++entityLabelCounts[entity.label];
+        if (!matches(entity.label, entity.choice) && !containsFolded(entityIdTag(entity.choice), query)) continue;
+        if (entity.mob) matchingMobs.push_back(&entity);
+        else matchingOtherEntities.push_back(&entity);
+    }
+
+    auto const appendEntityGroup = [&](std::vector<state::ReplayEntityView const*> const& group,
+                                       std::string const&                                 headerLabel,
+                                       bool                                               isMobsHeader,
+                                       bool                                               open) {
+        if (group.empty()) return;
+        Row header;
+        header.kind                = Row::Kind::Header;
+        header.entitiesHeader      = isMobsHeader;
+        header.otherEntitiesHeader = !isMobsHeader;
+        header.label               = headerLabel + "  " + std::to_string(group.size());
+        rows.push_back(std::move(header));
+        if (open || !query.empty()) {
+            size_t const shown = std::min(group.size(), entityLimit);
+            for (size_t index = 0; index < shown; ++index) {
+                auto const* entity = group[index];
+                Row         row;
+                row.kind         = Row::Kind::Entity;
+                row.uuid         = entity->choice;
+                row.label        = entity->label;
+                row.selectable   = true;
+                std::string hint = formatDistance(entity->distance);
+                if (entityLabelCounts[entity->label] > 1) {
+                    if (!hint.empty()) hint += "  ";
+                    hint += entityIdTag(entity->choice);
+                }
+                row.hint = std::move(hint);
+                rows.push_back(std::move(row));
+            }
+            if (group.size() > shown) {
+                Row note;
+                note.kind  = Row::Kind::Note;
+                note.label = "playback.refactorEditor.playerPicker.moreEntities"_tr(group.size() - shown);
+                rows.push_back(std::move(note));
+            }
+        }
+    };
+
+    appendEntityGroup(matchingMobs, "playback.refactorEditor.playerPicker.nearbyMobs"_tr(), true, entitiesOpen);
+    appendEntityGroup(
+        matchingOtherEntities,
+        "playback.refactorEditor.playerPicker.otherEntities"_tr(),
+        false,
+        otherEntitiesOpen
+    );
 
     int const absentMatches = static_cast<int>(std::ranges::count_if(absent, [&](auto const* player) {
         return matches(rawName(*player), player->uuid);
@@ -190,7 +272,7 @@ struct Row {
     }
 
     if (!query.empty() && std::ranges::none_of(rows, [](Row const& row) {
-            return row.kind == Row::Kind::Recorder || row.kind == Row::Kind::Player;
+            return row.kind == Row::Kind::Recorder || row.kind == Row::Kind::Player || row.kind == Row::Kind::Entity;
         })) {
         rows.clear();
         Row note;
@@ -232,10 +314,17 @@ void moveHighlight(std::vector<Row> const& rows, int& highlight, int direction) 
 
 } // namespace
 
-std::string playerSubjectLabel(std::span<state::ReplayPlayerView const> players, std::string_view uuid) {
+std::string playerSubjectLabel(
+    std::span<state::ReplayPlayerView const> players,
+    std::span<state::ReplayEntityView const> entities,
+    std::string_view                         uuid
+) {
     if (uuid.empty()) return "playback.refactorEditor.playerPicker.recorder"_tr();
-    // A mob picked in the viewport; the session keeps its label while it is loaded.
+    // A mob picked in the viewport or list; fall back to the session cache or id when currently unloaded.
     if (replay::ReplaySession::parseEntityChoice(uuid)) {
+        for (auto const& entity : entities) {
+            if (entity.choice == uuid) return entity.label;
+        }
         return replay::ReplaySession::getInstance().replaySubjectLabel(std::string{uuid});
     }
     for (auto const& player : players) {
@@ -255,12 +344,15 @@ constexpr int kPopupRows    = 9;
 constexpr int kEmbeddedRows = 10;
 
 // Width that fits the longest row, so the popup grows to the names instead of the trigger.
-[[nodiscard]] float preferredContentWidth(std::span<state::ReplayPlayerView const> players) {
+[[nodiscard]] float preferredContentWidth(
+    std::span<state::ReplayPlayerView const> players,
+    std::span<state::ReplayEntityView const> entities
+) {
     float const scale   = metrics::scale();
     float const iconBox = metrics::iconButton();
     float       widest =
         ImGui::CalcTextSize("playback.refactorEditor.playerPicker.searchHint"_tr().c_str()).x + iconBox * 2.0f;
-    auto const rows = buildRows(players, {}, true);
+    auto const rows = buildRows(players, entities, {}, true, true, true, kEntityMeasureLimit);
     for (auto const& row : rows) {
         float width = ImGui::CalcTextSize(row.label.c_str()).x + 16.0f * scale + iconBox;
         if (!row.hint.empty()) width += 8.0f * scale + ImGui::CalcTextSize(row.hint.c_str()).x;
@@ -277,6 +369,7 @@ struct ListOptions {
     // Resets the highlight to the current subject and puts the caret in the search box.
     bool             appearing{};
     bool             focusSearch{};
+    bool             mixed{};
     int              maxRows{kPopupRows};
 };
 
@@ -284,6 +377,7 @@ struct ListOptions {
 void drawListBody(
     PickerUi&                                ui,
     std::span<state::ReplayPlayerView const> players,
+    std::span<state::ReplayEntityView const> entities,
     std::string_view                         current,
     ListOptions const&                       options,
     PlayerPickerResult&                      result
@@ -357,16 +451,28 @@ void drawListBody(
     }
     ImGui::SetCursorScreenPos({origin.x, origin.y + rowHeight + 4.0f * scale});
 
-    std::string_view const query = trim(ui.search);
-    bool const             showAbsent = ui.absentOpen || !query.empty();
-    auto                   rows       = buildRows(players, query, showAbsent);
+    if ((appearing || current != ui.lastCurrent) && !options.mixed && !current.empty()) {
+        for (auto const& entity : entities) {
+            if (!entity.mob && entity.choice == current) {
+                ui.otherEntitiesOpen = true;
+                break;
+            }
+        }
+    }
+    ui.lastCurrent = std::string(current);
+
+    std::string_view const query             = trim(ui.search);
+    bool const             showEntities      = ui.entitiesOpen || !query.empty();
+    bool const             showOtherEntities = ui.otherEntitiesOpen || !query.empty();
+    bool const             showAbsent        = ui.absentOpen || !query.empty();
+    auto                   rows              = buildRows(players, entities, query, showEntities, showOtherEntities, showAbsent);
     std::string            recorderUuid;
     for (auto const& player : players) {
         if (!player.recorder) continue;
         recorderUuid = player.uuid;
         break;
     }
-    if (appearing) {
+    if (appearing && !options.mixed) {
         int seen = -1;
         for (auto const& row : rows) {
             if (!row.selectable) continue;
@@ -382,10 +488,21 @@ void drawListBody(
     if (edit.move != 0) moveHighlight(rows, ui.highlight, edit.move);
     int const highlightedRow = selectableIndex(rows, ui.highlight);
 
-    bool currentMissing = !current.empty() && current != recorderUuid;
+    bool currentMissing = !options.mixed && !current.empty() && current != recorderUuid;
     if (currentMissing) {
         for (auto const& player : players) {
-            if (player.uuid == current) currentMissing = false;
+            if (player.uuid == current) {
+                currentMissing = false;
+                break;
+            }
+        }
+    }
+    if (currentMissing) {
+        for (auto const& entity : entities) {
+            if (entity.choice == current) {
+                currentMissing = false;
+                break;
+            }
         }
     }
 
@@ -405,7 +522,7 @@ void drawListBody(
         bool const hovered = ImGui::IsItemHovered();
         ImGui::PopID();
         bool const selected = !pinned && index == highlightedRow;
-        bool const active   = !pinned && rowIsCurrent(row, current, recorderUuid);
+        bool const active   = !pinned && !options.mixed && rowIsCurrent(row, current, recorderUuid);
         if (selected || (hovered && row.selectable)) {
             listDraw->AddRectFilled(minimum, maximum, theme::kRowHighlight);
         }
@@ -441,22 +558,26 @@ void drawListBody(
             result.picked = true;
             result.uuid   = row.uuid;
         }
-        if (pressed && row.absentHeader) ui.absentOpen = !ui.absentOpen;
     };
 
     if (currentMissing) {
         Row pinned;
         pinned.kind  = Row::Kind::Note;
-        pinned.label = playerSubjectLabel(players, current);
+        pinned.label = playerSubjectLabel(players, entities, current);
         drawRow(pinned, -1, true);
     }
     for (int index = 0; index < static_cast<int>(rows.size()); ++index) {
         Row const& row = rows[static_cast<size_t>(index)];
         if (row.kind == Row::Kind::Header) {
             ImGui::PushID(index);
+            bool const  collapsible = row.entitiesHeader || row.otherEntitiesHeader || row.absentHeader;
+            bool const  open =
+                row.entitiesHeader ? showEntities : (row.otherEntitiesHeader ? showOtherEntities : showAbsent);
             std::string header = row.label;
-            if (row.absentHeader) header = std::string(showAbsent ? "-  " : "+  ") + header;
-            if (ImGui::Selectable(header.c_str(), false, row.absentHeader ? 0 : ImGuiSelectableFlags_Disabled)) {
+            if (collapsible) header = std::string(open ? "-  " : "+  ") + header;
+            if (ImGui::Selectable(header.c_str(), false, collapsible ? 0 : ImGuiSelectableFlags_Disabled)) {
+                if (row.entitiesHeader && query.empty()) ui.entitiesOpen = !ui.entitiesOpen;
+                if (row.otherEntitiesHeader && query.empty()) ui.otherEntitiesOpen = !ui.otherEntitiesOpen;
                 if (row.absentHeader && query.empty()) ui.absentOpen = !ui.absentOpen;
             }
             ImGui::PopID();
@@ -493,6 +614,7 @@ bool drawPlayerPicker(
     char const*                              popupId,
     PlayerPickerMode                         mode,
     std::span<state::ReplayPlayerView const> players,
+    std::span<state::ReplayEntityView const> entities,
     std::string_view                         current,
     bool                                     following,
     PlayerPickerResult&                      result
@@ -506,7 +628,7 @@ bool drawPlayerPicker(
     float const padding  = ImGui::GetStyle().WindowPadding.x * 2.0f + 20.0f * metrics::scale();
     float const ceiling  = std::max(font * 22.0f, viewport * 0.34f);
     float const width    = std::clamp(
-        std::max(widgets::anchoredPopupTriggerWidth(popupId), preferredContentWidth(players) + padding),
+        std::max(widgets::anchoredPopupTriggerWidth(popupId), preferredContentWidth(players, entities) + padding),
         font * 22.0f,
         ceiling
     );
@@ -521,7 +643,7 @@ bool drawPlayerPicker(
     options.popup     = true;
     options.appearing = ImGui::IsWindowAppearing();
     options.maxRows   = kPopupRows;
-    drawListBody(pickerUi()[id], players, current, options, result);
+    drawListBody(pickerUi()[id], players, entities, current, options, result);
     if (result.picked || result.stop) ImGui::CloseCurrentPopup();
 
     widgets::endAnchoredPopup();
@@ -532,9 +654,11 @@ bool drawPlayerList(
     char const*                              listId,
     PlayerPickerMode                         mode,
     std::span<state::ReplayPlayerView const> players,
+    std::span<state::ReplayEntityView const> entities,
     std::string_view                         current,
     bool                                     focusSearch,
-    PlayerPickerResult&                      result
+    PlayerPickerResult&                      result,
+    bool                                     mixed
 ) {
     result                 = {};
     ImGuiID const id       = ImGui::GetID(listId);
@@ -544,8 +668,9 @@ bool drawPlayerList(
     options.mode        = mode;
     options.appearing   = inserted || focusSearch;
     options.focusSearch = focusSearch;
+    options.mixed       = mixed;
     options.maxRows     = kEmbeddedRows;
-    drawListBody(entry->second, players, current, options, result);
+    drawListBody(entry->second, players, entities, current, options, result);
     ImGui::PopID();
     return result.picked;
 }

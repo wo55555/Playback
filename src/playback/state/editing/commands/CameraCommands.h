@@ -69,7 +69,7 @@ private:
 
 class AddFreeCamera final : public model::IEditCommand {
 public:
-    AddFreeCamera(std::string name, model::CameraTrackKind kind);
+    explicit AddFreeCamera(std::string name);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -77,40 +77,12 @@ public:
 
 private:
     std::string                          mName;
-    model::CameraTrackKind               mKind;
     std::optional<model::EditorStateExt> mBefore;
 };
 
 class DeleteCamera final : public model::IEditCommand {
 public:
     explicit DeleteCamera(std::string id);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mId;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
-class CreateBindingCamera final : public model::IEditCommand {
-public:
-    CreateBindingCamera(std::string subActorId, std::string name);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mSubActorId;
-    std::string                          mName;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
-class UnbindCamera final : public model::IEditCommand {
-public:
-    explicit UnbindCamera(std::string id);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -282,6 +254,206 @@ private:
     std::string                          mCameraId;
     int                                  mTick;
     model::Vec3                          mRotation;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetCameraShake final : public model::IEditCommand {
+public:
+    SetCameraShake(std::string cameraId, std::optional<model::CameraShake> shake);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    std::optional<model::CameraShake>    mShake;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetCameraKeyframeBezierControls final : public model::IEditCommand {
+public:
+    SetCameraKeyframeBezierControls(std::string cameraId, int tick, model::Vec2 ctrl1, model::Vec2 ctrl2);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    model::Vec2                          mCtrl1;
+    model::Vec2                          mCtrl2;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetCameraKeyframeMode final : public model::IEditCommand {
+public:
+    SetCameraKeyframeMode(std::string cameraId, int tick, model::CameraKeyframeMode mode);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    model::CameraKeyframeMode            mMode;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetKeyframesMode final : public model::IEditCommand {
+public:
+    SetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    model::CameraKeyframeMode            mMode;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetKeyframesSubject final : public model::IEditCommand {
+public:
+    SetKeyframesSubject(std::vector<model::KeyframeRef> refs, std::string subject);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    std::string                          mSubject;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+// Moves a camera to `targetIndex` in the camera list. The list order is the shot priority: a
+// camera earlier in the list wins when several have an active keyframe at the same tick.
+class MoveCamera final : public model::IEditCommand {
+public:
+    MoveCamera(std::string cameraId, int targetIndex);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTargetIndex;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetCameraKeyframeIgnoreClipSpeed final : public model::IEditCommand {
+public:
+    SetCameraKeyframeIgnoreClipSpeed(std::string cameraId, int tick, bool ignoreClipSpeed);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    bool                                 mIgnoreClipSpeed;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetKeyframesIgnoreClipSpeed final : public model::IEditCommand {
+public:
+    SetKeyframesIgnoreClipSpeed(std::vector<model::KeyframeRef> refs, bool ignoreClipSpeed);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    bool                                 mIgnoreClipSpeed;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetCameraKeyframeThirdPersonSettings final : public model::IEditCommand {
+public:
+    SetCameraKeyframeThirdPersonSettings(std::string cameraId, int tick, model::CameraKeyframe settings);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    model::CameraKeyframe                mSettings;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetKeyframesThirdPersonCustom final : public model::IEditCommand {
+public:
+    SetKeyframesThirdPersonCustom(std::vector<model::KeyframeRef> refs, bool custom);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    bool                                 mCustom;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetCameraKeyframeLookAt final : public model::IEditCommand {
+public:
+    SetCameraKeyframeLookAt(std::string cameraId, int tick, bool enabled, std::string target, float offsetY);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    bool                                 mEnabled;
+    std::string                          mTarget;
+    float                                mOffsetY;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class SetKeyframesLookAt final : public model::IEditCommand {
+public:
+    SetKeyframesLookAt(
+        std::vector<model::KeyframeRef> refs,
+        bool                            enabled,
+        std::string                     target,
+        std::optional<float>            offsetY
+    );
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::KeyframeRef>      mRefs;
+    bool                                 mEnabled;
+    std::string                          mTarget;
+    std::optional<float>                 mOffsetY;
+    std::optional<model::EditorStateExt> mBefore;
+};
+
+class UpdateCameraKeyframePose final : public model::IEditCommand {
+public:
+    UpdateCameraKeyframePose(std::string cameraId, int tick, model::CameraKeyframe pose);
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::string                          mCameraId;
+    int                                  mTick;
+    model::CameraKeyframe                mPose;
     std::optional<model::EditorStateExt> mBefore;
 };
 

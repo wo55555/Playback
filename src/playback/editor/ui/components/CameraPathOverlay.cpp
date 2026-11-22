@@ -247,10 +247,12 @@ void drawCameraGlyph(
     painter.flush();
 }
 
-// Person tracks view a replay player, so they have no path of their own to draw.
+bool isInterpolatedKey(state::editing::model::CameraKeyframe const& key) {
+    return key.mode == state::editing::model::CameraKeyframeMode::Interpolated;
+}
+
 bool isKeyframePath(state::editing::model::CameraEntity const& camera) {
-    return camera.enabled && !camera.keysByTick.empty()
-        && camera.kind == state::editing::model::CameraTrackKind::Keyframe;
+    return camera.enabled && !camera.keysByTick.empty();
 }
 
 struct NeighborTicks {
@@ -271,13 +273,16 @@ NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, i
         if (!isKeyframePath(camera)) continue;
         auto const nextIt = camera.keysByTick.upper_bound(currentTick);
         if (nextIt != camera.keysByTick.begin()) {
-            int const tick = std::prev(nextIt)->first;
-            if (tick >= 0 && inSegment(tick) && (!hasLast || tick > window.last)) {
+            auto const prevIt = std::prev(nextIt);
+            int const  tick   = prevIt->first;
+            if (isInterpolatedKey(prevIt->second) && tick >= 0 && inSegment(tick)
+                && (!hasLast || tick > window.last)) {
                 window.last = tick;
                 hasLast     = true;
             }
         }
-        if (nextIt != camera.keysByTick.end() && nextIt->first >= 0 && inSegment(nextIt->first)) {
+        if (nextIt != camera.keysByTick.end() && isInterpolatedKey(nextIt->second) && nextIt->first >= 0
+            && inSegment(nextIt->first)) {
             if (!hasNext || nextIt->first < window.next) {
                 window.next = nextIt->first;
                 hasNext     = true;
@@ -294,8 +299,10 @@ NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, i
         if (hasLast) {
             auto const it = camera.keysByTick.lower_bound(window.last);
             if (it != camera.keysByTick.begin()) {
-                int const tick = std::prev(it)->first;
-                if (tick >= 0 && inSegment(tick) && (!hasLastLast || tick > window.lastLast)) {
+                auto const prevIt = std::prev(it);
+                int const  tick   = prevIt->first;
+                if (isInterpolatedKey(prevIt->second) && tick >= 0 && inSegment(tick)
+                    && (!hasLastLast || tick > window.lastLast)) {
                     window.lastLast = tick;
                     hasLastLast     = true;
                 }
@@ -303,7 +310,8 @@ NeighborTicks neighborTicks(keyframe::CameraTimelineEvaluator const& timeline, i
         }
         if (hasNext) {
             auto const it = camera.keysByTick.upper_bound(window.next);
-            if (it != camera.keysByTick.end() && it->first >= 0 && inSegment(it->first)) {
+            if (it != camera.keysByTick.end() && isInterpolatedKey(it->second) && it->first >= 0
+                && inSegment(it->first)) {
                 if (!hasNextNext || it->first < window.nextNext) {
                     window.nextNext = it->first;
                     hasNextNext     = true;
@@ -320,9 +328,20 @@ bool holdAt(keyframe::CameraTimelineEvaluator const& timeline, int tick) {
     for (auto const& camera : timeline.cameras()) {
         if (!isKeyframePath(camera)) continue;
         auto const it = camera.keysByTick.find(tick);
-        if (it != camera.keysByTick.end()) {
+        if (it != camera.keysByTick.end() && isInterpolatedKey(it->second)) {
             return it->second.interpolationType == state::editing::model::CameraInterpolationType::Hold;
         }
+    }
+    return false;
+}
+
+bool sameInterpolatedRun(keyframe::CameraTimelineEvaluator const& timeline, int from, int to) {
+    for (auto const& camera : timeline.cameras()) {
+        if (!isKeyframePath(camera)) continue;
+        auto const it = camera.keysByTick.find(from);
+        if (it == camera.keysByTick.end() || !isInterpolatedKey(it->second)) continue;
+        auto const next = std::next(it);
+        if (next != camera.keysByTick.end() && next->first == to && isInterpolatedKey(next->second)) return true;
     }
     return false;
 }
@@ -370,7 +389,7 @@ void CameraPathOverlay::rebuild(keyframe::CameraTimelineHandle const& timeline, 
     };
     auto addSegment = [&](int from, int to, float opacity) {
         if (from < 0 || to < 0 || to <= from) return;
-        if (holdAt(*timeline, from)) return;
+        if (holdAt(*timeline, from) || !sameInterpolatedRun(*timeline, from, to)) return;
         auto const dimension = timeline->dimensionSegmentForTick(from);
         if (timeline->dimensionSegmentForTick(to) != dimension) return;
         int64_t const duration = static_cast<int64_t>(to) - from;
@@ -457,15 +476,17 @@ void CameraPathOverlay::draw(PanelContext const& ctx, Rect const& videoRect, ImD
         if (marker.dimensionSegment != dimension) continue;
         drawCameraGlyph(painter, marker.pose, aspect, fade(theme::kCameraPath, marker.opacity), kGlyphThickness);
     }
-    // The playhead glyph marks a keyframe camera's pose; person tracks and the follow view show the player itself.
+    // The playhead glyph marks an evaluator-driven shot's pose (interpolated or custom third-person); fixed person
+    // keyframes and follow view show the player itself.
     auto const shot         = timeline->shotAt(ctx.state.currentTick);
-    bool const keyframeView = shot ? shot.kind() == state::editing::model::CameraTrackKind::Keyframe
-                                   : !ctx.state.followingRecordedPlayer;
+    bool const keyframeView = shot ? shot.isEvaluatorDriven() : !ctx.state.followingRecordedPlayer;
     if (ctx.state.paused && keyframeView) {
         // Reuse the render frame's sample time so the glyph matches the pose the camera was drawn with.
         auto const time =
             ctx.cameraProjection->sampleTime.value_or(visuals::ReplaySampleTime{ctx.state.currentTick, 1});
-        if (auto const current = timeline->sample(time)) {
+        auto current = timeline->sample(time);
+        if (!current) current = timeline->sampleKeyframePath(time);
+        if (current) {
             drawCameraGlyph(painter, current->state, aspect, theme::kCameraPathPlayhead, kGlyphThickness);
         }
     }

@@ -15,15 +15,15 @@ void EditMode::draw(PanelContext const& ctx) {
     float const fontSize = ImGui::GetFontSize();
     auto const& style    = ImGui::GetStyle();
     // The menu bar is the only always-visible chrome, so it runs a size up from the rest of the editor.
-    float const kMenuFontScale = 1.25f;
+    float const kMenuFontScale     = 1.12f;
     float const kMenuHeight   = fontSize * kMenuFontScale + style.FramePadding.y * 2.0f + style.WindowBorderSize * 2.0f;
     float const kStatusHeight = metrics::statusBar();
     float const kSplitterThickness = metrics::splitter();
     float const kDetailsMinWidth   = std::max(240.0f, fontSize * 14.0f + metrics::rail());
     float const kViewportMinWidth  = std::max(320.0f, fontSize * 22.0f);
     float const kViewportMinHeight = std::max(180.0f, fontSize * 12.0f);
-    float const kTimelineMinHeight =
-        metrics::toolbarRow() + metrics::ruler() + metrics::cameraRow() * 2.0f + metrics::rangeBar();
+    float const kTimelineMinHeight = metrics::toolbarRow() + metrics::sceneTabRow() + metrics::ruler()
+                                   + metrics::cameraRow() * 1.5f + metrics::rangeBar();
 
     ImVec2 displaySize                    = ImGui::GetIO().DisplaySize;
     float  contentHeight                  = std::max(1.0f, displaySize.y - kMenuHeight - kStatusHeight);

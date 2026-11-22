@@ -2,8 +2,10 @@
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
+#include <unordered_set>
 
 namespace playback::state::editing {
 
@@ -103,15 +105,29 @@ Color4 colorFrom(json const& node, char const* key, Color4 fallback) {
 
 json toJson(CameraKeyframe const& key) {
     return {
-        {"position",          toJson(key.position)                   },
-        {"yaw",               key.yaw                                },
-        {"pitch",             key.pitch                              },
-        {"roll",              key.roll                               },
-        {"fov",               key.fov                                },
-        {"interpolationType", static_cast<int>(key.interpolationType)},
-        {"bezierCtrl1",       toJson(key.bezierCtrl1)                },
-        {"bezierCtrl2",       toJson(key.bezierCtrl2)                },
-        {"subject",           key.subject                            }
+        {"position",                  toJson(key.position)                   },
+        {"yaw",                       key.yaw                                },
+        {"pitch",                     key.pitch                              },
+        {"roll",                      key.roll                               },
+        {"fov",                       key.fov                                },
+        {"mode",                      static_cast<int>(key.mode)             },
+        {"interpolationType",         static_cast<int>(key.interpolationType)},
+        {"bezierCtrl1",               toJson(key.bezierCtrl1)                },
+        {"bezierCtrl2",               toJson(key.bezierCtrl2)                },
+        {"subject",                   key.subject                            },
+        {"ignoreClipSpeed",           key.ignoreClipSpeed                    },
+        {"thirdPersonCustom",         key.thirdPersonCustom                  },
+        {"thirdPersonDistance",       key.thirdPersonDistance                },
+        {"thirdPersonYaw",            key.thirdPersonYaw                     },
+        {"thirdPersonPitch",          key.thirdPersonPitch                   },
+        {"thirdPersonRoll",           key.thirdPersonRoll                    },
+        {"thirdPersonFov",            key.thirdPersonFov                     },
+        {"thirdPersonOffset",         toJson(key.thirdPersonOffset)          },
+        {"thirdPersonFollowRotation", key.thirdPersonFollowRotation          },
+        {"thirdPersonCollideBlocks",  key.thirdPersonCollideBlocks           },
+        {"lookAtEnabled",             key.lookAtEnabled                      },
+        {"lookAtTarget",              key.lookAtTarget                       },
+        {"lookAtOffsetY",             key.lookAtOffsetY                      },
     };
 }
 
@@ -122,17 +138,34 @@ CameraKeyframe keyframeFrom(json const& node) {
     key.pitch             = finiteOr(node, "pitch", key.pitch);
     key.roll              = finiteOr(node, "roll", key.roll);
     key.fov               = finiteOr(node, "fov", key.fov);
+    key.mode              = enumOr(node, "mode", key.mode, static_cast<int>(CameraKeyframeMode::ThirdPerson));
     key.interpolationType = enumOr(
         node,
         "interpolationType",
         key.interpolationType,
         static_cast<int>(CameraInterpolationType::CubicBezier)
     );
-    key.bezierCtrl1 = vec2From(node, "bezierCtrl1", key.bezierCtrl1);
-    key.bezierCtrl2 = vec2From(node, "bezierCtrl2", key.bezierCtrl2);
-    key.subject     = stringOr(node, "subject");
+    key.bezierCtrl1               = vec2From(node, "bezierCtrl1", key.bezierCtrl1);
+    key.bezierCtrl2               = vec2From(node, "bezierCtrl2", key.bezierCtrl2);
+    key.subject                   = stringOr(node, "subject");
+    key.ignoreClipSpeed           = boolOr(node, "ignoreClipSpeed", false);
+    key.thirdPersonCustom         = boolOr(node, "thirdPersonCustom", false);
+    key.thirdPersonDistance       = std::max(0.0f, finiteOr(node, "thirdPersonDistance", key.thirdPersonDistance));
+    key.thirdPersonYaw            = finiteOr(node, "thirdPersonYaw", key.thirdPersonYaw);
+    key.thirdPersonPitch          = finiteOr(node, "thirdPersonPitch", key.thirdPersonPitch);
+    key.thirdPersonRoll           = finiteOr(node, "thirdPersonRoll", key.thirdPersonRoll);
+    key.thirdPersonFov            = std::clamp(finiteOr(node, "thirdPersonFov", key.thirdPersonFov), 1.0f, 179.0f);
+    key.thirdPersonOffset         = vec3From(node, "thirdPersonOffset", key.thirdPersonOffset);
+    key.thirdPersonFollowRotation = boolOr(node, "thirdPersonFollowRotation", false);
+    key.thirdPersonCollideBlocks  = boolOr(node, "thirdPersonCollideBlocks", true);
+    key.lookAtEnabled             = boolOr(node, "lookAtEnabled", false);
+    key.lookAtTarget              = stringOr(node, "lookAtTarget");
+    key.lookAtOffsetY             = finiteOr(node, "lookAtOffsetY", 0.0f);
     return key;
 }
+
+json toJson(Clip const& clip);
+Clip clipFrom(json const& node);
 
 json toJson(CameraEntity const& camera) {
     auto keys = json::array();
@@ -142,16 +175,16 @@ json toJson(CameraEntity const& camera) {
         keys.push_back(std::move(entry));
     }
 
+    auto clips = json::array();
+    for (auto const& clip : camera.clips) clips.push_back(toJson(clip));
+
     json result{
-        {"id",                camera.id               },
-        {"name",              camera.name             },
-        {"kind",              static_cast<int>(camera.kind)},
-        {"enabled",           camera.enabled          },
-        {"locked",            camera.locked           },
-        {"bindingEntityUuid", camera.bindingEntityUuid},
-        {"bindingMode",       camera.bindingMode      },
-        {"bindingDamping",    camera.bindingDamping   },
-        {"keys",              std::move(keys)         }
+        {"id",      camera.id       },
+        {"name",    camera.name     },
+        {"enabled", camera.enabled  },
+        {"locked",  camera.locked   },
+        {"keys",    std::move(keys) },
+        {"clips",   std::move(clips)}
     };
     if (camera.shake) {
         result["shake"] = {
@@ -174,20 +207,28 @@ json toJson(CameraEntity const& camera) {
 
 CameraEntity cameraFrom(json const& node) {
     CameraEntity camera;
-    camera.id                = stringOr(node, "id");
-    camera.name              = stringOr(node, "name");
-    camera.kind = enumOr(node, "kind", camera.kind, static_cast<int>(CameraTrackKind::ThirdPerson));
-    camera.enabled           = boolOr(node, "enabled", true);
-    camera.locked            = boolOr(node, "locked", false);
-    camera.bindingEntityUuid = stringOr(node, "bindingEntityUuid");
-    camera.bindingMode       = intOr(node, "bindingMode", 0);
-    camera.bindingDamping    = finiteOr(node, "bindingDamping", 0.1f);
+    camera.id            = stringOr(node, "id");
+    camera.name          = stringOr(node, "name");
+    int const legacyKind = intOr(node, "kind", 0);
+    camera.enabled       = boolOr(node, "enabled", true);
+    camera.locked        = boolOr(node, "locked", false);
 
     if (auto const* keys = arrayAt(node, "keys")) {
         for (auto const& entry : *keys) {
             if (!entry.is_object()) continue;
-            camera.keysByTick.insert_or_assign(intOr(entry, "tick", 0), keyframeFrom(entry));
+            auto key = keyframeFrom(entry);
+            // Migrate legacy track-level person kinds onto keyframes that lack an explicit mode.
+            if (!entry.contains("mode") && (legacyKind == 1 || legacyKind == 2)) {
+                key.mode = legacyKind == 2 ? CameraKeyframeMode::ThirdPerson : CameraKeyframeMode::FirstPerson;
+            }
+            camera.keysByTick.insert_or_assign(intOr(entry, "tick", 0), std::move(key));
         }
+    }
+    if (auto const* clips = arrayAt(node, "clips")) {
+        for (auto const& entry : *clips) {
+            if (entry.is_object()) camera.clips.push_back(clipFrom(entry));
+        }
+        std::ranges::stable_sort(camera.clips, {}, &Clip::inTick);
     }
     if (auto const* shake = objectAt(node, "shake")) {
         camera.shake = CameraShake{
@@ -208,65 +249,6 @@ CameraEntity cameraFrom(json const& node) {
     return camera;
 }
 
-json toJson(WorldActorSegment const& segment) {
-    return {
-        {"id",         segment.id           },
-        {"startTick",  segment.startTick    },
-        {"endTick",    segment.endTick      },
-        {"sourceTick", segment.sourceTick   },
-        {"speed",      segment.speed        },
-        {"color",      toJson(segment.color)},
-        {"locked",     segment.locked       }
-    };
-}
-
-WorldActorSegment worldActorSegmentFrom(json const& node) {
-    WorldActorSegment segment;
-    segment.id         = stringOr(node, "id");
-    segment.startTick  = intOr(node, "startTick", 0);
-    segment.endTick    = intOr(node, "endTick", 0);
-    segment.sourceTick = intOr(node, "sourceTick", 0);
-    segment.speed      = finiteOr(node, "speed", 1.0f);
-    segment.color      = colorFrom(node, "color", segment.color);
-    segment.locked     = boolOr(node, "locked", false);
-    return segment;
-}
-
-json toJson(SubActor const& actor) {
-    auto details = json::object();
-    for (auto const& [key, value] : actor.agentDetails) details[key] = value;
-
-    return {
-        {"id",             actor.id                        },
-        {"name",           actor.name                      },
-        {"category",       static_cast<int>(actor.category)},
-        {"position",       toJson(actor.position)          },
-        {"rotation",       toJson(actor.rotation)          },
-        {"agentDetails",   std::move(details)              },
-        {"boundCameraIds", actor.boundCameraIds            }
-    };
-}
-
-SubActor subActorFrom(json const& node) {
-    SubActor actor;
-    actor.id       = stringOr(node, "id");
-    actor.name     = stringOr(node, "name");
-    actor.category = enumOr(node, "category", actor.category, static_cast<int>(SubActorCategory::Entities));
-    actor.position = vec3From(node, "position", {});
-    actor.rotation = vec2From(node, "rotation", {});
-    if (auto const* details = objectAt(node, "agentDetails")) {
-        for (auto const& [key, value] : details->items()) {
-            if (value.is_string()) actor.agentDetails.insert_or_assign(key, value.get<std::string>());
-        }
-    }
-    if (auto const* bound = arrayAt(node, "boundCameraIds")) {
-        for (auto const& entry : *bound) {
-            if (entry.is_string()) actor.boundCameraIds.push_back(entry.get<std::string>());
-        }
-    }
-    return actor;
-}
-
 json toJson(Marker const& marker) {
     return {
         {"id",    marker.id   },
@@ -277,65 +259,121 @@ json toJson(Marker const& marker) {
 
 json toJson(Clip const& clip) {
     return {
-        {"id",                   clip.id                  },
-        {"replayFile",           clip.replayFile          },
-        {"inTick",               clip.inTick              },
-        {"outTick",              clip.outTick             },
-        {"trackTick",            clip.trackTick           },
-        {"activeCameraTrackIdx", clip.activeCameraTrackIdx},
-        {"speed",                clip.speed               },
-        {"name",                 clip.name                },
-        {"color",                toJson(clip.color)       },
-        {"muted",                clip.muted               },
-        {"locked",               clip.locked              }
+        {"id",            clip.id           },
+        {"replayFile",    clip.replayFile   },
+        {"inTick",        clip.inTick       },
+        {"outTick",       clip.outTick      },
+        {"trackTick",     clip.trackTick    },
+        {"speed",         clip.speed        },
+        {"name",          clip.name         },
+        {"color",         toJson(clip.color)},
+        {"muted",         clip.muted        },
+        {"locked",        clip.locked       },
+        {"exportEnabled", clip.exportEnabled}
     };
 }
 
 Clip clipFrom(json const& node) {
     Clip clip;
-    clip.id                   = stringOr(node, "id");
-    clip.replayFile           = stringOr(node, "replayFile");
-    clip.inTick               = intOr(node, "inTick", 0);
-    clip.outTick              = intOr(node, "outTick", 0);
-    clip.trackTick            = intOr(node, "trackTick", 0);
-    clip.activeCameraTrackIdx = intOr(node, "activeCameraTrackIdx", 0);
-    clip.speed                = finiteOr(node, "speed", 1.0f);
-    clip.name                 = stringOr(node, "name");
-    clip.color                = colorFrom(node, "color", clip.color);
-    clip.muted                = boolOr(node, "muted", false);
-    clip.locked               = boolOr(node, "locked", false);
+    clip.id            = stringOr(node, "id");
+    clip.replayFile    = stringOr(node, "replayFile");
+    clip.inTick        = std::max(0, intOr(node, "inTick", 0));
+    clip.outTick       = std::max(clip.inTick, intOr(node, "outTick", 0));
+    clip.trackTick     = intOr(node, "trackTick", 0);
+    clip.speed         = clampClipSpeed(finiteOr(node, "speed", 1.0f));
+    clip.name          = stringOr(node, "name");
+    clip.color         = colorFrom(node, "color", clip.color);
+    clip.muted         = boolOr(node, "muted", false);
+    clip.locked        = boolOr(node, "locked", false);
+    clip.exportEnabled = boolOr(node, "exportEnabled", true);
     return clip;
 }
 
-json toJson(Track const& track) {
-    auto clips = json::array();
-    for (auto const& clip : track.clips) clips.push_back(toJson(clip));
+struct LegacyClip {
+    Clip clip;
+    int  activeCameraTrackIdx{0};
+};
 
-    return {
-        {"id",      track.id                    },
-        {"name",    track.name                  },
-        {"kind",    static_cast<int>(track.kind)},
-        {"visible", track.visible               },
-        {"locked",  track.locked                },
-        {"height",  track.height                },
-        {"clips",   std::move(clips)            }
-    };
-}
+struct LegacyTrack {
+    std::vector<LegacyClip> clips;
+    bool                    visible{true};
+    bool                    locked{false};
+};
 
-Track trackFrom(json const& node) {
-    Track track;
-    track.id      = stringOr(node, "id");
-    track.name    = stringOr(node, "name");
-    track.kind    = enumOr(node, "kind", track.kind, static_cast<int>(TrackKind::Marker));
+LegacyTrack legacyTrackFrom(json const& node) {
+    LegacyTrack track;
     track.visible = boolOr(node, "visible", true);
     track.locked  = boolOr(node, "locked", false);
-    track.height  = intOr(node, "height", 48);
     if (auto const* clips = arrayAt(node, "clips")) {
         for (auto const& entry : *clips) {
-            if (entry.is_object()) track.clips.push_back(clipFrom(entry));
+            if (entry.is_object()) {
+                track.clips.push_back(LegacyClip{clipFrom(entry), intOr(entry, "activeCameraTrackIdx", 0)});
+            }
         }
     }
     return track;
+}
+
+json toJson(Scene const& scene) {
+    auto cameras = json::array();
+    for (auto const& camera : scene.cameras) cameras.push_back(toJson(camera));
+
+    auto markers = json::array();
+    for (auto const& marker : scene.markers) markers.push_back(toJson(marker));
+
+    return {
+        {"id",            scene.id           },
+        {"name",          scene.name         },
+        {"exportInTick",  scene.exportInTick },
+        {"exportOutTick", scene.exportOutTick},
+        {"cameras",       std::move(cameras) },
+        {"markers",       std::move(markers) }
+    };
+}
+
+Scene sceneFrom(json const& node) {
+    Scene scene;
+    scene.id            = stringOr(node, "id");
+    scene.name          = stringOr(node, "name");
+    scene.exportInTick  = intOr(node, "exportInTick", -1);
+    scene.exportOutTick = intOr(node, "exportOutTick", -1);
+    if (scene.exportInTick < 0) scene.exportInTick = -1;
+    if (scene.exportOutTick < 0) scene.exportOutTick = -1;
+    if (scene.exportInTick >= 0 && scene.exportOutTick >= 0 && scene.exportInTick >= scene.exportOutTick) {
+        scene.exportInTick  = -1;
+        scene.exportOutTick = -1;
+    }
+
+    bool anyCameraHadClips = false;
+    if (auto const* cameras = arrayAt(node, "cameras")) {
+        for (auto const& entry : *cameras) {
+            if (!entry.is_object()) continue;
+            if (arrayAt(entry, "clips") != nullptr) anyCameraHadClips = true;
+            scene.cameras.push_back(cameraFrom(entry));
+        }
+    }
+    // Migrate earlier v2 scene-level clips onto the primary camera track.
+    if (auto const* legacyClips = arrayAt(node, "clips"); legacyClips && !anyCameraHadClips) {
+        if (scene.cameras.empty()) {
+            CameraEntity camera;
+            camera.id   = "camera_1";
+            camera.name = "Camera 1";
+            scene.cameras.push_back(std::move(camera));
+        }
+        auto& primary = scene.cameras.front();
+        for (auto const& entry : *legacyClips) {
+            if (entry.is_object()) primary.clips.push_back(clipFrom(entry));
+        }
+        std::ranges::stable_sort(primary.clips, {}, &Clip::inTick);
+        if (boolOr(node, "clipTrackLocked", false)) primary.locked = true;
+    }
+    if (auto const* markers = arrayAt(node, "markers")) {
+        for (auto const& entry : *markers) {
+            if (!entry.is_object()) continue;
+            scene.markers.push_back({stringOr(entry, "id"), stringOr(entry, "label"), intOr(entry, "tick", 0)});
+        }
+    }
+    return scene;
 }
 
 json toJson(Transition const& transition) {
@@ -365,44 +403,52 @@ Transition transitionFrom(json const& node) {
 } // namespace
 
 std::string serializeProject(model::EditorStateExt const& project) {
-    auto cameras = json::array();
-    for (auto const& camera : project.cameras) cameras.push_back(toJson(camera));
+    auto        scenesJson    = json::array();
+    std::string activeSceneId = project.activeSceneId;
 
-    auto worldSegments = json::array();
-    for (auto const& segment : project.worldActor.segments) worldSegments.push_back(toJson(segment));
-
-    auto subActors = json::array();
-    for (auto const& actor : project.worldActor.subActors) subActors.push_back(toJson(actor));
-
-    auto markers = json::array();
-    for (auto const& marker : project.markers) markers.push_back(toJson(marker));
-
-    auto videoTracks = json::array();
-    for (auto const& track : project.videoTracks) videoTracks.push_back(toJson(track));
+    if (!project.scenes.empty()) {
+        if (std::ranges::none_of(project.scenes, [&](Scene const& scene) { return scene.id == activeSceneId; })) {
+            activeSceneId = project.scenes.front().id;
+        }
+        for (auto const& scene : project.scenes) {
+            if (scene.id == activeSceneId) {
+                Scene synced;
+                synced.id            = scene.id;
+                synced.name          = scene.name;
+                synced.cameras       = project.cameras;
+                synced.markers       = project.markers;
+                synced.exportInTick  = project.exportInTick;
+                synced.exportOutTick = project.exportOutTick;
+                scenesJson.push_back(toJson(synced));
+            } else {
+                scenesJson.push_back(toJson(scene));
+            }
+        }
+    } else {
+        activeSceneId = "scene_1";
+        Scene fallback;
+        fallback.id            = activeSceneId;
+        fallback.name          = "Scene 1";
+        fallback.cameras       = project.cameras;
+        fallback.markers       = project.markers;
+        fallback.exportInTick  = project.exportInTick;
+        fallback.exportOutTick = project.exportOutTick;
+        scenesJson.push_back(toJson(fallback));
+    }
 
     auto transitions = json::array();
     for (auto const& transition : project.transitions) transitions.push_back(toJson(transition));
 
     json const document{
-        {"formatVersion",       kProjectFormatVersion      },
-        {"projectName",         project.projectName        },
-        {"replayPath",          project.projectPath        },
-        {"totalTicks",          project.totalTicks         },
-        {"currentTick",         project.currentTick        },
-        {"fps",                 project.fps                },
-        {"activeVideoTrackIdx", project.activeVideoTrackIdx},
-        {"cameras",             std::move(cameras)         },
-        {"worldActor",
-         json{
-             {"id", project.worldActor.id},
-             {"name", project.worldActor.name},
-             {"totalTicks", project.worldActor.totalTicks},
-             {"segments", std::move(worldSegments)},
-             {"subActors", std::move(subActors)}
-         }                                                 },
-        {"markers",             std::move(markers)         },
-        {"videoTracks",         std::move(videoTracks)     },
-        {"transitions",         std::move(transitions)     }
+        {"formatVersion", kProjectFormatVersion },
+        {"projectName",   project.projectName   },
+        {"replayPath",    project.projectPath   },
+        {"totalTicks",    project.totalTicks    },
+        {"currentTick",   project.currentTick   },
+        {"fps",           project.fps           },
+        {"activeSceneId", activeSceneId         },
+        {"scenes",        std::move(scenesJson) },
+        {"transitions",   std::move(transitions)}
     };
     return document.dump(2);
 }
@@ -427,44 +473,124 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
     }
 
     model::EditorStateExt loaded;
-    loaded.projectName         = stringOr(document, "projectName");
-    loaded.projectPath         = stringOr(document, "replayPath");
-    loaded.totalTicks          = intOr(document, "totalTicks", 0);
-    loaded.currentTick         = intOr(document, "currentTick", 0);
-    loaded.fps                 = finiteOr(document, "fps", 60.0f);
-    loaded.activeVideoTrackIdx = intOr(document, "activeVideoTrackIdx", 0);
+    loaded.projectName = stringOr(document, "projectName");
+    loaded.projectPath = stringOr(document, "replayPath");
+    loaded.totalTicks  = intOr(document, "totalTicks", 0);
+    loaded.currentTick = intOr(document, "currentTick", 0);
+    loaded.fps         = finiteOr(document, "fps", 60.0f);
 
-    if (auto const* cameras = arrayAt(document, "cameras")) {
-        for (auto const& entry : *cameras) {
-            if (entry.is_object()) loaded.cameras.push_back(cameraFrom(entry));
+    if (auto const* scenesArray = arrayAt(document, "scenes"); formatVersion >= 2 && scenesArray) {
+        for (auto const& entry : *scenesArray) {
+            if (entry.is_object()) loaded.scenes.push_back(sceneFrom(entry));
         }
-    }
-    if (auto const* worldActor = objectAt(document, "worldActor")) {
-        loaded.worldActor.id         = stringOr(*worldActor, "id");
-        loaded.worldActor.name       = stringOr(*worldActor, "name");
-        loaded.worldActor.totalTicks = intOr(*worldActor, "totalTicks", loaded.totalTicks);
-        if (auto const* segments = arrayAt(*worldActor, "segments")) {
-            for (auto const& entry : *segments) {
-                if (entry.is_object()) loaded.worldActor.segments.push_back(worldActorSegmentFrom(entry));
+        loaded.activeSceneId = stringOr(document, "activeSceneId");
+    } else {
+        // Legacy v1 migration: merge videoTracks into a single default scene.
+        Scene migrated;
+        migrated.id   = "scene_1";
+        migrated.name = "Scene 1";
+
+        if (auto const* cameras = arrayAt(document, "cameras")) {
+            for (auto const& entry : *cameras) {
+                if (entry.is_object()) migrated.cameras.push_back(cameraFrom(entry));
             }
         }
-        if (auto const* subActors = arrayAt(*worldActor, "subActors")) {
-            for (auto const& entry : *subActors) {
-                if (entry.is_object()) loaded.worldActor.subActors.push_back(subActorFrom(entry));
+        if (migrated.cameras.empty()) {
+            CameraEntity camera;
+            camera.id   = "camera_1";
+            camera.name = "Camera 1";
+            migrated.cameras.push_back(std::move(camera));
+        }
+        if (auto const* markers = arrayAt(document, "markers")) {
+            for (auto const& entry : *markers) {
+                if (!entry.is_object()) continue;
+                migrated.markers.push_back({stringOr(entry, "id"), stringOr(entry, "label"), intOr(entry, "tick", 0)});
+            }
+        }
+
+        std::vector<LegacyTrack> legacyTracks;
+        if (auto const* tracks = arrayAt(document, "videoTracks")) {
+            for (auto const& entry : *tracks) {
+                if (entry.is_object()) legacyTracks.push_back(legacyTrackFrom(entry));
+            }
+        }
+        int const activeTrackIdx = intOr(document, "activeVideoTrackIdx", 0);
+
+        std::vector<size_t> orderedIndices;
+        orderedIndices.reserve(legacyTracks.size());
+        if (activeTrackIdx >= 0 && static_cast<size_t>(activeTrackIdx) < legacyTracks.size()) {
+            orderedIndices.push_back(static_cast<size_t>(activeTrackIdx));
+        }
+        for (size_t i = 0; i < legacyTracks.size(); ++i) {
+            if (static_cast<int>(i) != activeTrackIdx && legacyTracks[i].visible) orderedIndices.push_back(i);
+        }
+        for (size_t i = 0; i < legacyTracks.size(); ++i) {
+            if (static_cast<int>(i) != activeTrackIdx && !legacyTracks[i].visible) orderedIndices.push_back(i);
+        }
+
+        for (size_t idx : orderedIndices) {
+            auto const& track = legacyTracks[idx];
+            for (auto const& legacyEntry : track.clips) {
+                Clip clip = legacyEntry.clip;
+                if (!track.visible) clip.exportEnabled = false;
+                size_t const targetIdx =
+                    (legacyEntry.activeCameraTrackIdx >= 0
+                     && static_cast<size_t>(legacyEntry.activeCameraTrackIdx) < migrated.cameras.size())
+                        ? static_cast<size_t>(legacyEntry.activeCameraTrackIdx)
+                        : 0;
+                auto&      targetClips = migrated.cameras[targetIdx].clips;
+                bool const overlaps    = std::ranges::any_of(targetClips, [&](Clip const& existing) {
+                    return existing.inTick < clip.outTick && clip.inTick < existing.outTick;
+                });
+                if (!overlaps) targetClips.push_back(std::move(clip));
+            }
+        }
+        for (auto& camera : migrated.cameras) {
+            std::ranges::stable_sort(camera.clips, {}, &Clip::inTick);
+        }
+
+        loaded.scenes.push_back(std::move(migrated));
+        loaded.activeSceneId = "scene_1";
+    }
+
+    // Ensure unique non-empty clip IDs across all loaded scenes and cameras.
+    {
+        std::unordered_set<std::string> reservedIds;
+        for (auto const& scene : loaded.scenes) {
+            for (auto const& camera : scene.cameras) {
+                for (auto const& clip : camera.clips) {
+                    if (!clip.id.empty()) reservedIds.insert(clip.id);
+                }
+            }
+        }
+        std::unordered_set<std::string> seenIds;
+        size_t                          nextId = 1;
+        for (auto& scene : loaded.scenes) {
+            for (auto& camera : scene.cameras) {
+                for (auto& clip : camera.clips) {
+                    if (!clip.id.empty() && seenIds.insert(clip.id).second) continue;
+                    for (;;) {
+                        auto candidate = "clip_" + std::to_string(nextId++);
+                        if (!reservedIds.contains(candidate) && seenIds.insert(candidate).second) {
+                            clip.id = std::move(candidate);
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
-    if (auto const* markers = arrayAt(document, "markers")) {
-        for (auto const& entry : *markers) {
-            if (!entry.is_object()) continue;
-            loaded.markers.push_back({stringOr(entry, "id"), stringOr(entry, "label"), intOr(entry, "tick", 0)});
-        }
+
+    if (!loaded.scenes.empty()) {
+        auto it = std::ranges::find(loaded.scenes, loaded.activeSceneId, &Scene::id);
+        if (it == loaded.scenes.end()) it = loaded.scenes.begin();
+        loaded.activeSceneId = it->id;
+        loaded.cameras       = it->cameras;
+        loaded.markers       = it->markers;
+        loaded.exportInTick  = it->exportInTick;
+        loaded.exportOutTick = it->exportOutTick;
     }
-    if (auto const* tracks = arrayAt(document, "videoTracks")) {
-        for (auto const& entry : *tracks) {
-            if (entry.is_object()) loaded.videoTracks.push_back(trackFrom(entry));
-        }
-    }
+
     if (auto const* transitions = arrayAt(document, "transitions")) {
         for (auto const& entry : *transitions) {
             if (entry.is_object()) loaded.transitions.push_back(transitionFrom(entry));

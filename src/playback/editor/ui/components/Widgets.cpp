@@ -11,6 +11,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -158,18 +159,24 @@ ButtonFrame squareButton(char const* id, bool enabled, bool active) {
     bool const held    = ImGui::IsItemActive();
     ImGui::EndDisabled();
 
-    ImU32 fill = active ? theme::withAlpha(theme::kAccent, 0x59) : IM_COL32(0, 0, 0, 0);
-    if (enabled && held) fill = active ? theme::kAccent : theme::kButtonActive;
-    else if (enabled && hovered)
-        fill = active ? theme::withAlpha(theme::kAccent, 0x80) : theme::withAlpha(theme::kButtonHover, 0x80);
+    ImU32 fill   = active ? theme::withAlpha(theme::kAccent, 0x48) : IM_COL32(0, 0, 0, 0);
+    ImU32 border = active ? theme::withAlpha(theme::kAccent, 0x98) : IM_COL32(0, 0, 0, 0);
+    if (enabled && held) {
+        fill   = active ? theme::kAccent : theme::kButtonActive;
+        border = active ? theme::kButtonPrimaryBorder : theme::kButtonBorder;
+    } else if (enabled && hovered) {
+        fill   = active ? theme::withAlpha(theme::kAccent, 0x70) : theme::withAlpha(theme::kButtonHover, 0xb0);
+        border = active ? theme::kButtonPrimaryBorder : theme::kButtonBorder;
+    }
 
+    float const rounding = theme::kButtonRounding * metrics::scale();
+    ImVec2 const maxPos{frame.origin.x + frame.size, frame.origin.y + frame.size};
+    auto*        drawList = ImGui::GetWindowDrawList();
     if ((fill & IM_COL32_A_MASK) != 0) {
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            frame.origin,
-            {frame.origin.x + frame.size, frame.origin.y + frame.size},
-            fill,
-            theme::kFrameRounding
-        );
+        drawList->AddRectFilled(frame.origin, maxPos, fill, rounding);
+    }
+    if ((border & IM_COL32_A_MASK) != 0) {
+        drawList->AddRect(frame.origin, maxPos, border, rounding, 0, 1.0f);
     }
     frame.color = !enabled ? theme::kTextDim : (hovered || active) ? theme::kIconHighlight : theme::kIconInactive;
     return frame;
@@ -299,6 +306,61 @@ void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, I
         );
         break;
     }
+    case VectorIcon::SelectCursor: {
+        // Classic diagonal pointer split into convex primitives so the inner notch has zero concave artifacts.
+        ImVec2 const tip{centre.x - h * 0.62f, centre.y - h * 0.95f};
+        ImVec2 const leftBottom{centre.x - h * 0.62f, centre.y + h * 0.72f};
+        ImVec2 const notch{centre.x - h * 0.14f, centre.y + h * 0.30f};
+        ImVec2 const tailLeft{centre.x + h * 0.18f, centre.y + h * 0.98f};
+        ImVec2 const tailRight{centre.x + h * 0.44f, centre.y + h * 0.86f};
+        ImVec2 const innerRight{centre.x + h * 0.12f, centre.y + h * 0.20f};
+        ImVec2 const rightWing{centre.x + h * 0.72f, centre.y + h * 0.20f};
+        drawList->AddTriangleFilled(tip, notch, leftBottom, color);
+        drawList->AddTriangleFilled(tip, innerRight, notch, color);
+        drawList->AddTriangleFilled(tip, rightWing, innerRight, color);
+        drawList->AddQuadFilled(notch, innerRight, tailRight, tailLeft, color);
+        break;
+    }
+    case VectorIcon::PenTool: {
+        // Upright fountain-pen nib with collar bar, shouldered outline, center slit, and breather hole.
+        drawList->AddRectFilled(
+            {centre.x - h * 0.52f, centre.y + h * 0.68f},
+            {centre.x + h * 0.52f, centre.y + h * 0.98f},
+            color,
+            1.0f
+        );
+        ImVec2 const nibPoints[]{
+            {centre.x,             centre.y - h * 0.98f},
+            {centre.x + h * 0.66f, centre.y + h * 0.05f},
+            {centre.x + h * 0.40f, centre.y + h * 0.62f},
+            {centre.x - h * 0.40f, centre.y + h * 0.62f},
+            {centre.x - h * 0.66f, centre.y + h * 0.05f},
+        };
+        drawList->AddPolyline(nibPoints, 5, color, ImDrawFlags_Closed, stroke);
+        float const holeY = centre.y + h * 0.05f;
+        float const holeR = std::max(1.4f, h * 0.20f);
+        drawList->AddLine({centre.x, centre.y - h * 0.92f}, {centre.x, holeY}, color, stroke);
+        drawList->AddCircleFilled({centre.x, holeY}, holeR, color);
+        break;
+    }
+    case VectorIcon::SnapMagnet: {
+        // Upright U-shaped horseshoe magnet with separated rectangular pole tips at the top of each leg.
+        float const r          = h * 0.68f;
+        float const topY       = centre.y - h * 0.85f;
+        float const arcCenterY = centre.y + h * 0.15f;
+        float const legStroke  = stroke * 1.45f;
+        float const capBottomY = topY + h * 0.34f;
+        float const gap        = std::max(1.2f, stroke * 0.85f);
+        float const uStartY    = capBottomY + gap;
+        float const capHalfW   = legStroke * 0.55f;
+        drawList->AddRectFilled({centre.x - r - capHalfW, topY}, {centre.x - r + capHalfW, capBottomY}, color, 0.5f);
+        drawList->AddRectFilled({centre.x + r - capHalfW, topY}, {centre.x + r + capHalfW, capBottomY}, color, 0.5f);
+        drawList->PathLineTo({centre.x + r, uStartY});
+        drawList->PathArcTo({centre.x, arcCenterY}, r, 0.0f, std::numbers::pi_v<float>, 16);
+        drawList->PathLineTo({centre.x - r, uStartY});
+        drawList->PathStroke(color, 0, legStroke);
+        break;
+    }
     }
 }
 
@@ -390,7 +452,10 @@ bool dropdownChip(char const* id, char const* label, char const* tooltip, bool e
 
     auto*       drawList = ImGui::GetWindowDrawList();
     ImU32 const fill     = held ? theme::kInputBgActive : hovered ? theme::kInputBgHover : theme::kInputBg;
-    drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, fill, theme::kFrameRounding);
+    ImU32 const border   = (enabled && (hovered || held)) ? theme::kButtonBorder : theme::kFineDivider;
+    float const rounding = theme::kButtonRounding * metrics::scale();
+    drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, fill, rounding);
+    drawList->AddRect(origin, {origin.x + width, origin.y + height}, border, rounding, 0, 1.0f);
     ImU32 const textColor = enabled ? theme::kText : theme::kTextDim;
     ImU32 const iconColor = enabled ? (hovered ? theme::kIconHighlight : theme::kIconInactive) : theme::kTextDim;
 

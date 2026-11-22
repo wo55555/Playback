@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1-mc26.10] - 2026-11-22
+
+### Added
+
+- Added a horizontal scene bar above the timeline for adding, duplicating, renaming, reordering, switching and deleting independent scenes, each with its own camera tracks, markers and export range. Clips and keyframes are edited directly on each camera track, where higher tracks cover lower tracks across active clips and uncover them across gaps; a left tool strip provides Select (`V`), Razor (`C`) and Pen (`P`) tools, and clips default to the full replay and can be split (`Ctrl+B`, `Ctrl+K` or Razor), trimmed (`Alt+[`, `Alt+]` or edge drag), moved within free gaps, renamed, muted, locked, toggled for export directly on the timeline (`Shift+E`), or deleted without shifting later clips.
+- Clips support playback speeds from `0.05x` to `32x` in both preview and export, with muted clips silencing preview and exported audio. Interpolated camera keyframes can enable Ignore clip speed to keep 1x camera motion across sped-up or slowed-down clips, marked with a `1x` badge on the timeline.
+- Video export can render the active scene (enabled clips, in/out range, or a single clip) or batch-export multiple selected scenes sequentially, with an option to merge multiple enabled clips into one video or export them as separate videos, cutting cleanly across gaps and disabled clips.
+- Video export includes a Timelapse mode that samples the replay at fixed real-time intervals (50 ms to 3,600,000 ms, with presets and custom input) while disabling audio export.
+- Camera tracks can be reordered to change their priority. Drag a track in the timeline's track list, or use Move to top, Raise priority, Lower priority and Move to bottom in its right-click menu. Where tracks overlap, the track higher in the list plays, in preview and in export. Reordering can be undone and is saved with the project.
+- Third-person keyframes can now enable Custom orbit / interpolate (`3P+`) to smoothly interpolate distance, anchor offset, yaw, pitch, roll and FOV around a subject using any interpolation curve (and Ignore clip speed), with options to follow the subject's rotation, clip against blocks, and capture or jump to the current free-camera view; existing fixed third-person keyframes stay unchanged.
+- Interpolated free-camera keyframes can enable Look at entity (`Aim`) to keep yaw and pitch aimed at a chosen player, mob or non-mob entity (with vertical offset, smooth blending across target or free transitions, and viewport right-click assignment), and the entity picker now also lists non-mob entities such as boats, minecarts and projectiles in a collapsible section.
+
+### Changed
+
+- Refined the replay editor's right inspector and status bar with consistent inner padding, bordered inputs and checkboxes, styled primary/secondary/destructive action buttons with icons, responsive paired actions and two-column toggle grids, proportional clip speed chips, and aligned multi-axis keyframe inputs.
+- Replaced the first-person and third-person camera track types with a lens mode on each keyframe: interpolated, first person or third person. A keyframe applies until the next keyframe on its track, and a person keyframe keeps its subject across dimension changes until the replay ends. The timeline marks each mode with its own keyframe shape and a `1P` or `3P` bar, the inspector and the keyframe menu change the mode of one or several keyframes, and the "+" button adds a camera track directly. When person keyframes are selected, the inspector can change the subject for all of them at once, and players or nearby mobs can be chosen from the searchable subject picker in the viewport and inspector as well as by right-clicking them in the viewport.
+
+### Fixed
+
+- The free camera no longer freezes in a replay while the recording held the player's input locked, such as with `/inputpermission` or a cutscene add-on, and no longer snaps back to positions the server corrected the recording player to. The recording player's input-permission and movement-correction packets are no longer recorded or applied to the replay viewer.
+- Recorded player positions and replay player lists no longer drop players during respawn or when another entity reuses their runtime ID.
+- Piston animations now stay aligned when camera tracks or cuts move the view across long distances during preview and export.
+- First-person camera views no longer jitter or clip into nearby blocks from integrated-server movement corrections.
+- First-person follow for other players now lowers the camera while crawling or gliding, and hides entities riding the followed player.
+- Burning entities in replays show their fire on their bodies instead of floating above or beside them. Replay entities' bounding boxes now follow their current and interpolated poses, so fire overlays, culling, and viewport entity picking stay aligned with where entities are drawn.
+- Opening a replay from a world with custom blocks that use custom components no longer crashes.
+- A keyframe's roll now shows in the editor preview, both while paused and while playing. Before, only the export applied it.
+- Moving the free camera in the replay editor no longer slows down after adding keyframes, pausing a camera preview, or jumping to a keyframe or player.
+- Fixed missing chunks and stalled terrain loading when recording or scrubbing across repeated dimension transitions.
+- Fixed free-camera lockups and backward-seek crashes when scrubbing across villager trade, mount equipment, or other previewed screens.
+
 ## [0.4.0-mc26.10] - 2026-11-15
 
 ### Added
@@ -335,7 +366,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.0-mc26.10...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.1-mc26.10...HEAD
+[0.4.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.4.0-mc26.10...v0.4.1-mc26.10
 [0.4.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.10...v0.4.0-mc26.10
 [0.3.3-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.10...v0.3.3-mc26.10
 [0.3.1-mc26.40]: https://github.com/wo55555/Playback/releases/tag/v0.3.1-mc26.40

@@ -2,8 +2,10 @@
 
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/state/editing/CameraBindingOps.h"
+#include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 #include <map>
 #include <set>
@@ -24,14 +26,15 @@ void restore(std::optional<model::EditorStateExt> const& before, model::EditorSt
 
 } // namespace
 
-AddFreeCamera::AddFreeCamera(std::string name, model::CameraTrackKind kind) : mName(std::move(name)), mKind(kind) {}
+AddFreeCamera::AddFreeCamera(std::string name) : mName(std::move(name)) {}
 
 void AddFreeCamera::execute(model::EditorStateExt& state) {
     auto before = state;
-    if (CameraBindingOps::addFreeCamera(state, mName, mKind).empty()) {
+    if (CameraBindingOps::addFreeCamera(state, mName).empty()) {
         mBefore.reset();
         return;
     }
+    ClipOps::syncActiveSceneFromWorking(state);
     mBefore = std::move(before);
 }
 
@@ -46,41 +49,12 @@ void DeleteCamera::execute(model::EditorStateExt& state) {
         mBefore.reset();
         return;
     }
+    ClipOps::syncActiveSceneFromWorking(state);
     mBefore = std::move(before);
 }
 
 void        DeleteCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string DeleteCamera::label() const { return "Delete Camera"; }
-
-CreateBindingCamera::CreateBindingCamera(std::string subActorId, std::string name)
-: mSubActorId(std::move(subActorId)),
-  mName(std::move(name)) {}
-
-void CreateBindingCamera::execute(model::EditorStateExt& state) {
-    auto before = state;
-    if (CameraBindingOps::createBindingCamera(state, mSubActorId, mName).empty()) {
-        mBefore.reset();
-        return;
-    }
-    mBefore = std::move(before);
-}
-
-void        CreateBindingCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string CreateBindingCamera::label() const { return "Create Binding Camera"; }
-
-UnbindCamera::UnbindCamera(std::string id) : mId(std::move(id)) {}
-
-void UnbindCamera::execute(model::EditorStateExt& state) {
-    auto before = state;
-    if (!CameraBindingOps::unbindCamera(state, mId)) {
-        mBefore.reset();
-        return;
-    }
-    mBefore = std::move(before);
-}
-
-void        UnbindCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string UnbindCamera::label() const { return "Unbind Camera"; }
 
 AddKeyframe::AddKeyframe(std::string cameraId, int tick) : mCameraId(std::move(cameraId)), mTick(tick) {}
 
@@ -99,14 +73,14 @@ void AddKeyframe::execute(model::EditorStateExt& state) {
 
     mBefore = state;
     model::CameraKeyframe key;
-    if (mCaptured) key = *mCaptured;
-    else if (!camera->keysByTick.empty()) key = camera->keysByTick.rbegin()->second;
-    else if (auto captured = keyframe::captureClientCamera()) key.fov = captured->fov;
-    if (camera->kind == model::CameraTrackKind::Keyframe) {
-        key.subject.clear();
-    } else if (auto const previous = camera->keysByTick.lower_bound(tick); previous != camera->keysByTick.begin()) {
-        // A person track keeps viewing the same player until a key says otherwise.
-        key.subject = std::prev(previous)->second.subject;
+    if (mCaptured) {
+        key = *mCaptured;
+    } else if (!camera->keysByTick.empty()) {
+        key = camera->keysByTick.rbegin()->second;
+        // New keyframes default to interpolated lens mode rather than inheriting a person keyframe.
+        key.mode = model::CameraKeyframeMode::Interpolated;
+    } else if (auto captured = keyframe::captureClientCamera()) {
+        key.fov = captured->fov;
     }
     camera->keysByTick.emplace(tick, std::move(key));
 }
@@ -345,7 +319,7 @@ SetCameraKeyframeSubject::SetCameraKeyframeSubject(std::string cameraId, int tic
 
 void SetCameraKeyframeSubject::execute(model::EditorStateExt& state) {
     auto* camera = findCamera(state, mCameraId);
-    if (!camera || camera->locked || camera->kind == model::CameraTrackKind::Keyframe) {
+    if (!camera || camera->locked) {
         mBefore.reset();
         return;
     }
@@ -362,6 +336,77 @@ void SetCameraKeyframeSubject::execute(model::EditorStateExt& state) {
 
 void        SetCameraKeyframeSubject::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string SetCameraKeyframeSubject::label() const { return "Set Keyframe Subject"; }
+
+SetCameraShake::SetCameraShake(std::string cameraId, std::optional<model::CameraShake> shake)
+: mCameraId(std::move(cameraId)),
+  mShake(shake) {}
+
+void SetCameraShake::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    std::optional<model::CameraShake> normalized = mShake;
+    if (normalized) {
+        normalized->startTick         = std::clamp(normalized->startTick, 0, state.totalTicks);
+        normalized->endTick           = std::clamp(normalized->endTick, normalized->startTick, state.totalTicks);
+        normalized->positionAmplitude = std::max(0.0f, normalized->positionAmplitude);
+        normalized->rotationAmplitude = std::max(0.0f, normalized->rotationAmplitude);
+        normalized->frequency         = std::clamp(normalized->frequency, 0.01f, 100.0f);
+    }
+    if (camera->shake == normalized) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore       = state;
+    camera->shake = normalized;
+}
+
+void        SetCameraShake::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraShake::label() const { return "Set Camera Shake"; }
+
+SetCameraKeyframeBezierControls::SetCameraKeyframeBezierControls(
+    std::string cameraId,
+    int         tick,
+    model::Vec2 ctrl1,
+    model::Vec2 ctrl2
+)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mCtrl1(ctrl1),
+  mCtrl2(ctrl2) {}
+
+void SetCameraKeyframeBezierControls::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end()) {
+        mBefore.reset();
+        return;
+    }
+
+    model::Vec2 const ctrl1{std::clamp(mCtrl1.x, 0.0f, 1.0f), std::clamp(mCtrl1.y, 0.0f, 1.0f)};
+    model::Vec2 const ctrl2{std::clamp(mCtrl2.x, 0.0f, 1.0f), std::clamp(mCtrl2.y, 0.0f, 1.0f)};
+    if (key->second.bezierCtrl1.x == ctrl1.x && key->second.bezierCtrl1.y == ctrl1.y
+        && key->second.bezierCtrl2.x == ctrl2.x && key->second.bezierCtrl2.y == ctrl2.y) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore                 = state;
+    key->second.bezierCtrl1 = ctrl1;
+    key->second.bezierCtrl2 = ctrl2;
+}
+
+void        SetCameraKeyframeBezierControls::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraKeyframeBezierControls::label() const { return "Set Keyframe Bezier Controls"; }
 
 MoveKeyframes::MoveKeyframes(std::vector<model::KeyframeRef> refs, int delta) : mRefs(std::move(refs)), mDelta(delta) {}
 
@@ -456,5 +501,399 @@ void AddKeyframes::execute(model::EditorStateExt& state) {
 
 void        AddKeyframes::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string AddKeyframes::label() const { return "Paste Keyframes"; }
+
+SetCameraKeyframeMode::SetCameraKeyframeMode(std::string cameraId, int tick, model::CameraKeyframeMode mode)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mMode(mode) {}
+
+void SetCameraKeyframeMode::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end() || key->second.mode == mMode) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore          = state;
+    key->second.mode = mMode;
+}
+
+void        SetCameraKeyframeMode::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraKeyframeMode::label() const { return "Set Keyframe Mode"; }
+
+SetKeyframesMode::SetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode)
+: mRefs(std::move(refs)),
+  mMode(mode) {}
+
+void SetKeyframesMode::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked) continue;
+        auto const key = camera->keysByTick.find(ref.tick);
+        if (key == camera->keysByTick.end() || key->second.mode == mMode) continue;
+        key->second.mode = mMode;
+        changed          = true;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        SetKeyframesMode::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframesMode::label() const { return "Set Keyframes Mode"; }
+
+SetKeyframesSubject::SetKeyframesSubject(std::vector<model::KeyframeRef> refs, std::string subject)
+: mRefs(std::move(refs)),
+  mSubject(std::move(subject)) {}
+
+void SetKeyframesSubject::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked) continue;
+        auto const key = camera->keysByTick.find(ref.tick);
+        if (key == camera->keysByTick.end()) continue;
+        if (key->second.mode == model::CameraKeyframeMode::Interpolated || key->second.subject == mSubject) continue;
+        key->second.subject = mSubject;
+        changed             = true;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        SetKeyframesSubject::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframesSubject::label() const { return "Set Keyframes Subject"; }
+
+MoveCamera::MoveCamera(std::string cameraId, int targetIndex)
+: mCameraId(std::move(cameraId)),
+  mTargetIndex(targetIndex) {}
+
+void MoveCamera::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto const found = std::ranges::find(state.cameras, mCameraId, &model::CameraEntity::id);
+    if (found == state.cameras.end()) return;
+    auto const from = static_cast<int>(std::distance(state.cameras.begin(), found));
+    auto const to   = std::clamp(mTargetIndex, 0, static_cast<int>(state.cameras.size()) - 1);
+    if (from == to) return;
+    auto before = state;
+    if (from < to) std::rotate(found, std::next(found), std::next(state.cameras.begin(), to + 1));
+    else std::rotate(std::next(state.cameras.begin(), to), found, std::next(found));
+    mBefore = std::move(before);
+}
+
+void        MoveCamera::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string MoveCamera::label() const { return "Move Camera"; }
+
+SetCameraKeyframeIgnoreClipSpeed::SetCameraKeyframeIgnoreClipSpeed(std::string cameraId, int tick, bool ignoreClipSpeed)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mIgnoreClipSpeed(ignoreClipSpeed) {}
+
+namespace {
+
+bool supportsIgnoreClipSpeed(model::CameraKeyframe const& key) noexcept {
+    return key.mode == model::CameraKeyframeMode::Interpolated
+        || (key.mode == model::CameraKeyframeMode::ThirdPerson && key.thirdPersonCustom);
+}
+
+float sanitizeFinite(float value, float fallback) noexcept { return std::isfinite(value) ? value : fallback; }
+
+} // namespace
+
+void SetCameraKeyframeIgnoreClipSpeed::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end() || !supportsIgnoreClipSpeed(key->second)
+        || key->second.ignoreClipSpeed == mIgnoreClipSpeed) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore                     = state;
+    key->second.ignoreClipSpeed = mIgnoreClipSpeed;
+}
+
+void        SetCameraKeyframeIgnoreClipSpeed::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraKeyframeIgnoreClipSpeed::label() const { return "Set Keyframe Ignore Clip Speed"; }
+
+SetKeyframesIgnoreClipSpeed::SetKeyframesIgnoreClipSpeed(std::vector<model::KeyframeRef> refs, bool ignoreClipSpeed)
+: mRefs(std::move(refs)),
+  mIgnoreClipSpeed(ignoreClipSpeed) {}
+
+void SetKeyframesIgnoreClipSpeed::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked) continue;
+        auto const key = camera->keysByTick.find(ref.tick);
+        if (key == camera->keysByTick.end() || !supportsIgnoreClipSpeed(key->second)
+            || key->second.ignoreClipSpeed == mIgnoreClipSpeed) {
+            continue;
+        }
+        key->second.ignoreClipSpeed = mIgnoreClipSpeed;
+        changed                     = true;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        SetKeyframesIgnoreClipSpeed::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframesIgnoreClipSpeed::label() const { return "Set Keyframes Ignore Clip Speed"; }
+
+SetCameraKeyframeThirdPersonSettings::SetCameraKeyframeThirdPersonSettings(
+    std::string           cameraId,
+    int                   tick,
+    model::CameraKeyframe settings
+)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mSettings(std::move(settings)) {}
+
+void SetCameraKeyframeThirdPersonSettings::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end() || key->second.mode != model::CameraKeyframeMode::ThirdPerson) {
+        mBefore.reset();
+        return;
+    }
+
+    auto&       target         = key->second;
+    bool const  custom         = mSettings.thirdPersonCustom;
+    float const distance       = std::max(0.0f, sanitizeFinite(mSettings.thirdPersonDistance, target.thirdPersonDistance));
+    float const yaw            = sanitizeFinite(mSettings.thirdPersonYaw, target.thirdPersonYaw);
+    float const pitch          = sanitizeFinite(mSettings.thirdPersonPitch, target.thirdPersonPitch);
+    float const roll           = sanitizeFinite(mSettings.thirdPersonRoll, target.thirdPersonRoll);
+    float const fov            = std::clamp(sanitizeFinite(mSettings.thirdPersonFov, target.thirdPersonFov), 1.0f, 179.0f);
+    model::Vec3 offset{
+        sanitizeFinite(mSettings.thirdPersonOffset.x, target.thirdPersonOffset.x),
+        sanitizeFinite(mSettings.thirdPersonOffset.y, target.thirdPersonOffset.y),
+        sanitizeFinite(mSettings.thirdPersonOffset.z, target.thirdPersonOffset.z),
+    };
+    bool const followRotation = mSettings.thirdPersonFollowRotation;
+    bool const collideBlocks  = mSettings.thirdPersonCollideBlocks;
+
+    if (target.thirdPersonCustom == custom && target.thirdPersonDistance == distance && target.thirdPersonYaw == yaw
+        && target.thirdPersonPitch == pitch && target.thirdPersonRoll == roll && target.thirdPersonFov == fov
+        && target.thirdPersonOffset.x == offset.x && target.thirdPersonOffset.y == offset.y
+        && target.thirdPersonOffset.z == offset.z && target.thirdPersonFollowRotation == followRotation
+        && target.thirdPersonCollideBlocks == collideBlocks) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore                          = state;
+    target.thirdPersonCustom         = custom;
+    target.thirdPersonDistance       = distance;
+    target.thirdPersonYaw            = yaw;
+    target.thirdPersonPitch          = pitch;
+    target.thirdPersonRoll           = roll;
+    target.thirdPersonFov            = fov;
+    target.thirdPersonOffset         = offset;
+    target.thirdPersonFollowRotation = followRotation;
+    target.thirdPersonCollideBlocks  = collideBlocks;
+}
+
+void        SetCameraKeyframeThirdPersonSettings::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraKeyframeThirdPersonSettings::label() const { return "Set Keyframe Third-Person Settings"; }
+
+SetKeyframesThirdPersonCustom::SetKeyframesThirdPersonCustom(std::vector<model::KeyframeRef> refs, bool custom)
+: mRefs(std::move(refs)),
+  mCustom(custom) {}
+
+void SetKeyframesThirdPersonCustom::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked) continue;
+        auto const key = camera->keysByTick.find(ref.tick);
+        if (key == camera->keysByTick.end() || key->second.mode != model::CameraKeyframeMode::ThirdPerson
+            || key->second.thirdPersonCustom == mCustom) {
+            continue;
+        }
+        key->second.thirdPersonCustom = mCustom;
+        changed                       = true;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        SetKeyframesThirdPersonCustom::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframesThirdPersonCustom::label() const { return "Set Keyframes Third-Person Mode"; }
+
+SetCameraKeyframeLookAt::SetCameraKeyframeLookAt(
+    std::string cameraId,
+    int         tick,
+    bool        enabled,
+    std::string target,
+    float       offsetY
+)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mEnabled(enabled),
+  mTarget(std::move(target)),
+  mOffsetY(offsetY) {}
+
+void SetCameraKeyframeLookAt::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end() || key->second.mode != model::CameraKeyframeMode::Interpolated) {
+        mBefore.reset();
+        return;
+    }
+
+    float const offsetY = sanitizeFinite(mOffsetY, key->second.lookAtOffsetY);
+    if (key->second.lookAtEnabled == mEnabled && key->second.lookAtTarget == mTarget
+        && key->second.lookAtOffsetY == offsetY) {
+        mBefore.reset();
+        return;
+    }
+
+    mBefore                   = state;
+    key->second.lookAtEnabled = mEnabled;
+    key->second.lookAtTarget  = mTarget;
+    key->second.lookAtOffsetY = offsetY;
+}
+
+void        SetCameraKeyframeLookAt::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetCameraKeyframeLookAt::label() const { return "Set Keyframe Look-At"; }
+
+SetKeyframesLookAt::SetKeyframesLookAt(
+    std::vector<model::KeyframeRef> refs,
+    bool                            enabled,
+    std::string                     target,
+    std::optional<float>            offsetY
+)
+: mRefs(std::move(refs)),
+  mEnabled(enabled),
+  mTarget(std::move(target)),
+  mOffsetY(offsetY) {}
+
+void SetKeyframesLookAt::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    auto before  = state;
+    bool changed = false;
+    for (auto const& ref : mRefs) {
+        auto* camera = findCamera(state, ref.cameraId);
+        if (!camera || camera->locked) continue;
+        auto const key = camera->keysByTick.find(ref.tick);
+        if (key == camera->keysByTick.end() || key->second.mode != model::CameraKeyframeMode::Interpolated) continue;
+        float const nextOffsetY =
+            mOffsetY ? sanitizeFinite(*mOffsetY, key->second.lookAtOffsetY) : key->second.lookAtOffsetY;
+        if (key->second.lookAtEnabled == mEnabled && key->second.lookAtTarget == mTarget
+            && key->second.lookAtOffsetY == nextOffsetY) {
+            continue;
+        }
+        key->second.lookAtEnabled = mEnabled;
+        key->second.lookAtTarget  = mTarget;
+        key->second.lookAtOffsetY = nextOffsetY;
+        changed                   = true;
+    }
+    if (changed) mBefore = std::move(before);
+}
+
+void        SetKeyframesLookAt::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string SetKeyframesLookAt::label() const { return "Set Keyframes Look-At"; }
+
+UpdateCameraKeyframePose::UpdateCameraKeyframePose(std::string cameraId, int tick, model::CameraKeyframe pose)
+: mCameraId(std::move(cameraId)),
+  mTick(tick),
+  mPose(std::move(pose)) {}
+
+void UpdateCameraKeyframePose::execute(model::EditorStateExt& state) {
+    auto* camera = findCamera(state, mCameraId);
+    if (!camera || camera->locked) {
+        mBefore.reset();
+        return;
+    }
+
+    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    if (key == camera->keysByTick.end()) {
+        mBefore.reset();
+        return;
+    }
+
+    auto& target = key->second;
+    if (target.mode == model::CameraKeyframeMode::Interpolated) {
+        model::Vec3 const pos{
+            sanitizeFinite(mPose.position.x, target.position.x),
+            sanitizeFinite(mPose.position.y, target.position.y),
+            sanitizeFinite(mPose.position.z, target.position.z),
+        };
+        float const yaw   = sanitizeFinite(mPose.yaw, target.yaw);
+        float const pitch = sanitizeFinite(mPose.pitch, target.pitch);
+        float const roll  = sanitizeFinite(mPose.roll, target.roll);
+        float const fov   = std::clamp(sanitizeFinite(mPose.fov, target.fov), 1.0f, 179.0f);
+        if (target.position.x == pos.x && target.position.y == pos.y && target.position.z == pos.z
+            && target.yaw == yaw && target.pitch == pitch && target.roll == roll && target.fov == fov) {
+            mBefore.reset();
+            return;
+        }
+        mBefore         = state;
+        target.position = pos;
+        target.yaw      = yaw;
+        target.pitch    = pitch;
+        target.roll     = roll;
+        target.fov      = fov;
+        return;
+    }
+
+    if (target.mode == model::CameraKeyframeMode::ThirdPerson && target.thirdPersonCustom) {
+        model::Vec3 const offset{
+            sanitizeFinite(mPose.thirdPersonOffset.x, target.thirdPersonOffset.x),
+            sanitizeFinite(mPose.thirdPersonOffset.y, target.thirdPersonOffset.y),
+            sanitizeFinite(mPose.thirdPersonOffset.z, target.thirdPersonOffset.z),
+        };
+        float const distance = std::max(0.0f, sanitizeFinite(mPose.thirdPersonDistance, target.thirdPersonDistance));
+        float const yaw      = sanitizeFinite(mPose.thirdPersonYaw, target.thirdPersonYaw);
+        float const pitch    = sanitizeFinite(mPose.thirdPersonPitch, target.thirdPersonPitch);
+        float const roll     = sanitizeFinite(mPose.thirdPersonRoll, target.thirdPersonRoll);
+        float const fov      = std::clamp(sanitizeFinite(mPose.thirdPersonFov, target.thirdPersonFov), 1.0f, 179.0f);
+        if (target.thirdPersonOffset.x == offset.x && target.thirdPersonOffset.y == offset.y
+            && target.thirdPersonOffset.z == offset.z && target.thirdPersonDistance == distance
+            && target.thirdPersonYaw == yaw && target.thirdPersonPitch == pitch && target.thirdPersonRoll == roll
+            && target.thirdPersonFov == fov) {
+            mBefore.reset();
+            return;
+        }
+        mBefore                    = state;
+        target.thirdPersonOffset   = offset;
+        target.thirdPersonDistance = distance;
+        target.thirdPersonYaw      = yaw;
+        target.thirdPersonPitch    = pitch;
+        target.thirdPersonRoll     = roll;
+        target.thirdPersonFov      = fov;
+        return;
+    }
+
+    mBefore.reset();
+}
+
+void        UpdateCameraKeyframePose::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+std::string UpdateCameraKeyframePose::label() const { return "Capture Keyframe Pose"; }
 
 } // namespace playback::state::editing::command

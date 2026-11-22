@@ -1,7 +1,6 @@
 ﻿#pragma once
 
 #include "CameraKeyframe.h"
-#include "SubActor.h"
 #include "Track.h"
 
 #include <optional>
@@ -17,7 +16,6 @@ struct SelectedKeyframe {
 };
 
 struct SelectedClip {
-    std::string trackId;
     std::string clipId;
 };
 
@@ -25,35 +23,15 @@ struct SelectedMarker {
     std::string markerId;
 };
 
-struct SelectedTrack {
-    std::string trackId;
-};
-
 struct SelectedTransition {
     std::string transitionId;
 };
 
-struct SelectedWorldActor {};
-struct SelectedWorldActorSegment {
-    std::string segmentId;
-};
-struct SelectedSubActor {
-    std::string subActorId;
-};
 struct SelectedCamera {
     std::string cameraId;
 };
 
-using Selection = std::variant<
-    SelectedKeyframe,
-    SelectedClip,
-    SelectedMarker,
-    SelectedTrack,
-    SelectedTransition,
-    SelectedWorldActor,
-    SelectedWorldActorSegment,
-    SelectedSubActor,
-    SelectedCamera>;
+using Selection = std::variant<SelectedKeyframe, SelectedClip, SelectedMarker, SelectedTransition, SelectedCamera>;
 
 struct EditorStateExt;
 

@@ -5,8 +5,6 @@
 #include <string>
 
 namespace playback::state::editing::CameraBindingOps {
-std::string addFreeCamera(model::EditorStateExt& state, const std::string& name, model::CameraTrackKind kind);
-std::string createBindingCamera(model::EditorStateExt& state, const std::string& subActorId, const std::string& name);
-bool        unbindCamera(model::EditorStateExt& state, const std::string& cameraId);
+std::string addFreeCamera(model::EditorStateExt& state, const std::string& name);
 bool        deleteCamera(model::EditorStateExt& state, const std::string& cameraId);
 } // namespace playback::state::editing::CameraBindingOps

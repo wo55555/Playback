@@ -1,11 +1,11 @@
 ﻿#pragma once
 
 #include "playback/exporting/ExportTypes.h"
+#include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/CameraKeyframe.h"
 #include "playback/state/editing/models/MathTypes.h"
 
 #include <filesystem>
-#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -38,39 +38,77 @@ enum class EditorActionType {
     SetFollowThirdPerson,
     UndoEditorEdit,
     RedoEditorEdit,
-    // kind: 0 keyframe track, 1 first-person track, 2 third-person track.
     AddFreeCamera,
-    SplitWorldActor,
-    TrimWorldActor,
-    RippleDeleteWorldActorSegment,
     AddCameraKeyframe,
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
+    SetKeyframeMode,
     SetKeyframeInterpolation,
+    SetKeyframeBezierControls,
     SetKeyframePosition,
     SetKeyframeRotation,
     SetKeyframeFov,
-    // A person track key's subject in secondaryId; empty is the recorder.
+    // A person keyframe's subject in secondaryId; empty is the recorder.
     SetKeyframeSubject,
     SetCameraEnabled,
     SetCameraLocked,
+    SetCameraShake,
     RenameCamera,
+    // id is the camera, kind its new index in the camera list (the list order is the shot priority).
+    MoveCamera,
     ClearCameraKeyframes,
     DeleteCamera,
-    UnbindCamera,
-    CreateBindingCamera,
-    SetSubActorDetails,
     SetPreviewCamera,
     ClearPreviewCamera,
     MoveViewToKeyframe,
     MoveCameraKeyframes,
     DeleteCameraKeyframes,
+    SetKeyframesMode,
     SetKeyframesInterpolation,
+    SetKeyframesSubject,
     AddCameraKeyframes,
     AddMarker,
     DeleteMarker,
     MoveMarker,
     RenameMarker,
+    SetKeyframeIgnoreClipSpeed,
+    SetKeyframesIgnoreClipSpeed,
+    // id + tick + keyframe (carries updated thirdPerson* fields); value=true converts offset/yaw/pitch when
+    // toggling thirdPersonFollowRotation to preserve the world camera view.
+    SetKeyframeThirdPersonSettings,
+    // keyframeRefs + value (new thirdPersonCustom flag for ThirdPerson keyframes).
+    SetKeyframesThirdPersonCustom,
+    // id + tick + value (lookAtEnabled) + secondaryId (lookAtTarget) + speed (lookAtOffsetY).
+    SetKeyframeLookAt,
+    // keyframeRefs + value (lookAtEnabled) + secondaryId (lookAtTarget) + speed (lookAtOffsetY when secondaryTick == 0
+    // and speed is finite; set secondaryTick != 0 or NaN speed to preserve each keyframe's existing lookAtOffsetY).
+    SetKeyframesLookAt,
+    // id + tick: captures the live client camera pose into a Free or Custom Third-Person keyframe.
+    CaptureKeyframeFromView,
+    AddClip,
+    SplitClip,
+    MoveAndTrimClip,
+    SetClipSpeed,
+    RenameClip,
+    SetClipMuted,
+    SetClipLocked,
+    SetClipExportEnabled,
+    SetAllClipsExportEnabled,
+    ResetClipsToFullRange,
+    DeleteClip,
+    AddScene,
+    DuplicateScene,
+    RenameScene,
+    MoveScene,
+    DeleteScene,
+    SwitchScene,
+    SetSceneExportRange,
+};
+
+struct QueuedExportJob {
+    exporting::ExportSettings settings;
+    std::string               sceneId;
+    std::string               label;
 };
 
 struct EditorAction {
@@ -86,11 +124,14 @@ struct EditorAction {
     int                                      kind{};
     bool                                     value{};
     state::editing::model::Vec3              position{};
+    state::editing::model::Vec2              bezierCtrl1{};
+    state::editing::model::Vec2              bezierCtrl2{};
     std::optional<exporting::ExportSettings> exportSettings;
+    std::vector<QueuedExportJob>             exportJobs;
     std::vector<std::string>                 replayIds;
     // Set only when pasting a copied keyframe. An empty value captures the live camera, as before.
     std::optional<editing::model::CameraKeyframe> keyframe;
-    std::map<std::string, std::string>       details;
+    std::optional<editing::model::CameraShake>    shake;
     // Batch keyframe edits (multi-select move / delete / interpolation / paste).
     std::vector<editing::model::KeyframeRef> keyframeRefs;
 };

@@ -100,6 +100,8 @@ bool OfflineRenderBoundary::open(
 
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
+    mTimelapse                     = settings.timelapse;
+    mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mWarmupFrames                  = settings.warmupFrames;
     mWarmupFramesRemaining         = mWarmupFrames;
@@ -173,6 +175,8 @@ void OfflineRenderBoundary::close() {
     mTickGateSuspendedForDimension = false;
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
+    mTimelapse                     = false;
+    mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Closed;
     mError                         = OfflineRenderBoundaryError::None;
@@ -204,6 +208,8 @@ void OfflineRenderBoundary::cancel() {
     mTickGateSuspendedForDimension = false;
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
+    mTimelapse                     = false;
+    mPendingCutHandled             = false;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Cancelled;
     mError                         = OfflineRenderBoundaryError::None;
@@ -266,6 +272,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
             return waiting(OfflineRenderWaitReason::CaptureCapacity, OfflineRenderStepResult::Backpressured);
         }
         mPendingFrame           = frame;
+        mPendingCutHandled      = false;
         mFrameTimeSpent         = false;
         mExtraRendersDone       = 0;
         mExtraRendersComplete   = false;
@@ -276,6 +283,33 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
         mState = !mTimelineInitialized ? OfflineRenderBoundaryState::InitializingReplay
                : warmupComplete()      ? OfflineRenderBoundaryState::PreparingReplay
                                        : OfflineRenderBoundaryState::WarmingUp;
+    }
+
+    if (mTimelineInitialized && !mPendingCutHandled) {
+        mPendingCutHandled  = true;
+        int const  nextTick = targetTick(*mPendingFrame);
+        int const  applied  = mReplay.getAppliedReplayTick();
+        bool const hardCut  = mPendingFrame->hardCut;
+        bool const needSeek = hardCut || nextTick < applied || (mTimelapse && nextTick - applied > 1);
+        if (needSeek) {
+            if (!mReplay.beginExportCutSeek(nextTick, hardCut || nextTick < applied)) {
+                fault(
+                    OfflineRenderBoundaryError::ReplayUnavailable,
+                    "The replay could not seek to the next export segment"
+                );
+                return OfflineRenderStepResult::Failed;
+            }
+            mTimelineInitialized        = false;
+            mInitializationTickObserved = false;
+            mCaptureArmed               = false;
+            if (hardCut) {
+                mWarmupFramesRemaining = mWarmupFrames;
+                mWarmupStableFrames    = 0;
+                mWarmupStartedAt       = {};
+                mWarmupLastLoggedAt    = {};
+            }
+            mState = OfflineRenderBoundaryState::InitializingReplay;
+        }
     }
 
     if (mTickGateOpen && mReplay.isDimensionTransitionPending()
@@ -303,6 +337,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
     if (!mTickGateOpen
         && (mState == OfflineRenderBoundaryState::InitializingReplay
             || mState == OfflineRenderBoundaryState::PreparingReplay)) {
+        prepareExportObserver(*mPendingFrame);
         switch (mReplay.prepareExportTick(targetTick(*mPendingFrame))) {
         case replay::ReplayExportTickState::Unavailable:
             fault(OfflineRenderBoundaryError::ReplayUnavailable, "The replay became unavailable during export");
@@ -403,7 +438,10 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
                 );
                 return OfflineRenderStepResult::Failed;
             }
-            if (!mTimelineInitialized) mInitializationTickObserved = true;
+            if (!mTimelineInitialized && completion->replayTickAfter == targetTick(*mPendingFrame)
+                && !mReplay.isSeekPending()) {
+                mInitializationTickObserved = true;
+            }
             mReplayTickToken.reset();
             mReplayTickRequestedAt = {};
         }
@@ -425,6 +463,7 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
             return waiting(OfflineRenderWaitReason::NativeTick);
         };
 
+        prepareExportObserver(*mPendingFrame);
         switch (mReplay.prepareExportTick(targetTick(*mPendingFrame))) {
         case replay::ReplayExportTickState::Unavailable:
             fault(OfflineRenderBoundaryError::ReplayUnavailable, "The replay became unavailable during export");
@@ -680,7 +719,7 @@ std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(Expor
 
     long double delta             = 0.0L;
     int64_t     previousWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
-    if (mLastSubmittedFrame) {
+    if (mLastSubmittedFrame && !frame.hardCut) {
         delta = current
               - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
                     / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
@@ -700,16 +739,31 @@ std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(Expor
     };
 }
 
+void OfflineRenderBoundary::prepareExportObserver(ExportFramePlan const& frame) {
+    if (mReplay.isDimensionTransitionPending()) return;
+    int const nextTick = targetTick(frame);
+    if (mTimelineInitialized && mReplay.getAppliedReplayTick() >= nextTick) return;
+    auto const sample = clockSample(frame);
+    if (!sample) return;
+    // Move the observer to the upcoming tick's camera before prepareExportTick runs that tick's packets
+    // (e.g. OptiPiston checks the local player position when BlockActorDataPacket arrives).
+    auto const probeTime =
+        mReplay.getAppliedReplayTick() < nextTick ? visuals::ReplaySampleTime{nextTick, 1} : sample->replayTime;
+    updateExportCameraAt(probeTime, !mTickGateSuspendedForDimension && mTimelineInitialized);
+}
+
 void OfflineRenderBoundary::updateExportCamera(ExportFramePlan const& frame) {
     auto const sample = clockSample(frame);
     if (!sample) {
         mReplay.setExportCameraViewpoint(std::nullopt);
         return;
     }
+    updateExportCameraAt(sample->replayTime, !mTickGateSuspendedForDimension);
+}
 
-    auto const cameraSample =
-        keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, sample->replayTime);
-    auto viewpoint = mReplay.exportCameraViewpoint();
+void OfflineRenderBoundary::updateExportCameraAt(visuals::ReplaySampleTime const& time, bool allowObserverFallback) {
+    auto const cameraSample = keyframe::sampleCameraTimeline(keyframe::CameraTimelineSource::Export, time);
+    auto       viewpoint    = mReplay.exportCameraViewpoint();
     if (cameraSample) {
         viewpoint = replay::ReplayCameraViewpoint{
             cameraSample->state.x,
@@ -720,7 +774,7 @@ void OfflineRenderBoundary::updateExportCamera(ExportFramePlan const& frame) {
             cameraSample->state.roll,
             cameraSample->state.fov,
         };
-    } else if (!viewpoint && !mTickGateSuspendedForDimension) {
+    } else if (!viewpoint && allowObserverFallback) {
         // A dimension change drops the viewpoint, whose coordinates belong to the old dimension. Without a camera of
         // its own the export goes on from where the replay put the observer in the new one. Not behind the game's
         // loading screen, though: moving the observer there keeps the screen up.
@@ -921,6 +975,8 @@ void OfflineRenderBoundary::fault(OfflineRenderBoundaryError error, std::string 
     mWarmupStartedAt               = {};
     mWarmupLastLoggedAt            = {};
     mTickGateSuspendedForDimension = false;
+    mTimelapse                     = false;
+    mPendingCutHandled             = false;
     mState                         = OfflineRenderBoundaryState::Faulted;
     mError                         = error;
     mMessage                       = std::move(message);

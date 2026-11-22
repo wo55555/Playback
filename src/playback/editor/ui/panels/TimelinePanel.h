@@ -30,7 +30,11 @@ public:
     // Copies the selected keyframes; paste keeps their spacing and lands the earliest one on the playhead.
     bool copySelection(PanelContext const& ctx);
     bool pasteAtPlayhead(PanelContext const& ctx);
-    bool addMarkerAtPlayhead(PanelContext const& ctx);
+    bool               addMarkerAtPlayhead(PanelContext const& ctx);
+    [[nodiscard]] bool canSplitClipAtPlayhead(PanelContext const& ctx) const;
+    bool               splitClipAtPlayhead(PanelContext const& ctx);
+    [[nodiscard]] bool canTrimClipAtPlayhead(PanelContext const& ctx, bool trimIn) const;
+    bool               trimClipAtPlayhead(PanelContext const& ctx, bool trimIn);
     void seekAdjacentMarker(PanelContext const& ctx, bool forward);
     void zoomIn();
     void zoomOut();
@@ -45,15 +49,22 @@ public:
     void               setSnapEnabled(bool enabled) { mSnapEnabled = enabled; }
     void               toggleSnap() { mSnapEnabled = !mSnapEnabled; }
 
+    [[nodiscard]] TimelineTool tool() const { return mTool; }
+    void                       setTool(TimelineTool tool) { mTool = tool; }
+
 private:
     struct Layout {
         ImVec2 fullMin{};
         ImVec2 fullMax{};
         float  titleBottom{};
+        float  sceneTabBottom{};
         float  rulerTop{};
         float  headerHeight{};
         float  bodyTop{};
+        float  camerasTop{};
         float  bodyBottom{};
+        float  toolStripRight{};
+        float  listLeft{};
         float  listWidth{};
         float  canvasLeft{};
         float  canvasWidth{};
@@ -71,14 +82,15 @@ private:
     bool pasteKeyframes(PanelContext const& ctx, int anchorTick, std::string const& targetCameraId);
     // Shift-drag snapping onto keyframes, markers, the playhead, in/out and segment edges within a few pixels.
     // The thing being dragged is excluded so it does not stick to its own position.
-    int  snapToEditPoints(
+    int snapToEditPoints(
         PanelContext const&                                 ctx,
         int                                                 tick,
         float                                               pixelsPerTick,
         bool                                                includePlayhead,
         bool                                                includeExportRange,
         std::function<bool(std::string const&, int)> const& skipKey,
-        std::string_view                                    skipMarkerId
+        std::string_view                                    skipMarkerId,
+        std::string_view                                    skipClipId = {}
     );
     bool addMarkerAt(PanelContext const& ctx, int tick);
     // Selections that point at objects an queued action has not created yet; applied once they exist.
@@ -93,14 +105,12 @@ private:
     ) const;
     void drawMarkers(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale);
 
-    void drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick, bool allowInput);
+    void drawTitleRow(PanelContext const& ctx, Layout const& layout, int displayTick);
+    void drawSceneTabs(PanelContext const& ctx, Layout const& layout, bool allowInput);
+    void drawToolStrip(PanelContext const& ctx, Layout const& layout, bool allowInput);
     void drawTrackHeaders(PanelContext const& ctx, Layout const& layout, bool allowInput);
-    void drawRuler(
-        PanelContext const&  ctx,
-        Layout const&        layout,
-        TimelineScale const& scale,
-        int                  displayTick
-    ); // Drawn after the track rows so the row bands do not cover it.
+    // Drawn after the track rows so the row bands do not cover it.
+    void drawRuler(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale, int displayTick);
     void drawTrackGrid(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale);
     // In/out markers for the export range, drawn over the canvas and draggable by their handles.
     void drawExportRange(PanelContext const& ctx, Layout const& layout, TimelineScale const& scale, bool allowInput);
@@ -108,15 +118,17 @@ private:
     void drawContextMenus(PanelContext const& ctx);
 
     void drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput);
-    void drawTitleLabel(PanelContext const& ctx, float height);
-    void drawTransportGroup(PanelContext const& ctx, int displayTick, float width);
+    float drawTimecodeReadout(PanelContext const& ctx, float height, int displayTick);
+    float drawTransportGroup(PanelContext const& ctx, float height, float width, float minStartX, float maxRightX);
 
     TrackTreeModel mTrackTree;
     Animator       mAnimator;
+    TimelineTool   mTool{TimelineTool::Select};
+    std::string    mLastActiveSceneId;
     float          mZoomScale{1.0f};
     float          mScrollX{};
     float          mScrollY{};
-    float          mTrackListWidthRatio{0.30f};
+    float          mTrackListWidthRatio{0.18f};
     int            mPendingSeekTick{-1};
     int            mRulerDragTick{-1};
     std::string    mTrackSearch;
@@ -124,6 +136,8 @@ private:
     bool           mDraggingPlayhead{};
     // 0 none, 1 in marker, 2 out marker.
     int         mExportMarkerDrag{};
+    int         mExportDragInTick{-1};
+    int         mExportDragOutTick{-1};
     std::string mDraggingKeyframeCameraId;
     float       mDraggingKeyframeStartMouseX{};
     int         mDraggingKeyframeStartTick{};
@@ -143,10 +157,34 @@ private:
     std::string                                           mLaneMenuCameraId;
     int                                                   mLaneMenuTick{-1};
     std::string                                           mTrackMenuCameraId;
+    // The camera whose track row is being dragged to a new priority; empty when no reorder is in progress.
+    std::string mTrackDragCameraId;
+    // Set after Escape cancels a track drag so holding the button down does not immediately start it again.
+    bool                                                  mTrackDragCancelled{};
     int                                                   mRulerMenuTick{-1};
     // Inline rename field of the track menu; refilled whenever the menu targets another camera.
     std::string                                           mRenameCameraId;
     std::array<char, 128>                                 mRenameBuffer{};
+    // Scene tabs, clip context menu, inline rename, and drag state.
+    std::string           mSceneMenuId;
+    std::string           mSceneRenameId;
+    bool                  mFocusSceneRename{false};
+    std::array<char, 128> mSceneRenameBuffer{};
+    std::string           mClipMenuClipId;
+    int                   mClipMenuTick{-1};
+    std::string           mClipRenameId;
+    bool                  mFocusClipRename{false};
+    std::array<char, 128> mClipRenameBuffer{};
+    // 0 none, 1 trim in, 2 trim out, 3 move.
+    int         mClipDragMode{};
+    std::string mClipDragCameraId;
+    std::string mClipDragId;
+    float       mClipDragStartMouseX{};
+    int         mClipDragOrigInTick{};
+    int         mClipDragOrigOutTick{};
+    int         mClipDragInTick{};
+    int         mClipDragOutTick{};
+    bool        mClipDragMoved{};
 
     // Grabbing a key that is part of a multi-selection moves the whole set by one delta.
     bool mGroupDrag{};
@@ -157,6 +195,8 @@ private:
     bool        mBoxAdditive{};
     ImVec2      mBoxStart{};
     std::string mBoxClickCameraId;
+    bool        mPenPendingAdd{};
+    int         mPenPendingTick{-1};
     // Marker pins live in the ruler band: drag to move, right-click for the menu.
     std::string           mMarkerDragId;
     float                 mMarkerDragStartX{};

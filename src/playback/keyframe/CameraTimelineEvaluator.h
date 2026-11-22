@@ -16,20 +16,24 @@
 namespace playback::keyframe {
 
 struct CameraTimelineEvaluation {
-    CameraRenderState                      state;
-    std::string                            cameraId;
-    state::editing::model::CameraTrackKind kind{state::editing::model::CameraTrackKind::Keyframe};
+    CameraRenderState                       state;
+    std::string                             cameraId;
+    state::editing::model::CameraKeyframeMode mode{state::editing::model::CameraKeyframeMode::Interpolated};
 };
 
-// The camera track that owns a tick: the highest one in the list whose first and last keys cover it.
+// The camera track that owns a tick: the highest one covering the tick with an active keyframe at or before it.
 struct CameraShot {
     state::editing::model::CameraEntity const* camera{};
-    // Person tracks only: the replay player the key at or before the tick names. Empty means the recorder.
+    state::editing::model::CameraKeyframeMode  mode{state::editing::model::CameraKeyframeMode::Interpolated};
+    // Person keyframes only: the replay player or entity the key at or before the tick names. Empty means the recorder.
     std::string subject;
+    bool        thirdPersonCustom{false};
 
     [[nodiscard]] explicit operator bool() const noexcept { return camera != nullptr; }
-    [[nodiscard]] state::editing::model::CameraTrackKind kind() const noexcept {
-        return camera ? camera->kind : state::editing::model::CameraTrackKind::Keyframe;
+    [[nodiscard]] bool     isEvaluatorDriven() const noexcept {
+        return camera != nullptr
+            && (mode == state::editing::model::CameraKeyframeMode::Interpolated
+                || (mode == state::editing::model::CameraKeyframeMode::ThirdPerson && thirdPersonCustom));
     }
 };
 
@@ -38,31 +42,94 @@ struct CameraShot {
 using SubjectViewSampler = std::function<
     std::optional<CameraRenderState>(visuals::ReplaySampleTime const&, std::string const& subject, bool thirdPerson)>;
 
+// Thread-safe eye/anchor pose sampler for any replay player or entity (`subject` empty = recorder).
+using EntityPoseSampler = std::function<
+    std::optional<CameraRenderState>(visuals::ReplaySampleTime const&, std::string const& subject)>;
+
+// Clips a camera ray from `anchor` to `target` against camera-colliding blocks.
+using CameraRayClipper = std::function<
+    state::editing::model::Vec3(state::editing::model::Vec3 const& anchor, state::editing::model::Vec3 const& target)>;
+
 class CameraTimelineEvaluator {
 private:
-    struct CameraTrackSegment {
-        size_t        dimensionSegment{};
-        int           firstTick{};
-        int           lastTick{};
-        KeyframeTrack track;
+    struct SpeedSpan {
+        int         startTick{};
+        int         endTick{};
+        long double speed{1.0L};
+        long double startUnscaled{0.0L};
     };
 
-    state::editing::model::EditorStateExt                            mProject;
-    std::optional<std::string>                                       mManualCameraId;
-    bool                                                             mHoldOutsideTracks{};
-    std::vector<int>                                                 mDimensionTransitionTicks;
-    std::unordered_map<std::string, std::vector<CameraTrackSegment>> mKeyframeTracks;
-    SubjectViewSampler                                               mSubjectSampler;
+    struct SegmentInterval {
+        long double rStart{};
+        long double rEnd{};
+        long double uStart{};
+        int         kStartTick{};
+        int         kEndTick{};
+        bool        ignoreClipSpeed{false};
+    };
+
+    struct CameraTrackSegment {
+        size_t                       dimensionSegment{};
+        int                          firstTick{};
+        int                          lastTick{};
+        KeyframeTrack                track;
+        std::vector<SegmentInterval> intervals;
+        bool                         hasUnscaledIntervals{false};
+    };
+
+    struct CustomThirdPersonTrackSegment {
+        CameraTrackSegment segment;
+        std::string        subject;
+        bool               followRotation{false};
+        bool               collideBlocks{true};
+    };
+
+    state::editing::model::EditorStateExt                                       mProject;
+    std::optional<std::string>                                                  mManualCameraId;
+    bool                                                                        mHoldOutsideTracks{};
+    bool                                                                        mAnyCameraHasClips{false};
+    std::vector<int>                                                            mDimensionTransitionTicks;
+    std::vector<SpeedSpan>                                                      mSpeedSpans;
+    long double                                                                 mSpeedSpanEndU{0.0L};
+    std::unordered_map<std::string, std::vector<CameraTrackSegment>>            mKeyframeTracks;
+    std::unordered_map<std::string, std::vector<CustomThirdPersonTrackSegment>> mCustomThirdPersonTracks;
+    SubjectViewSampler                                                          mSubjectSampler;
+    EntityPoseSampler                                                           mEntityPoseSampler;
+    CameraRayClipper                                                            mCameraRayClipper;
 
 private:
-    [[nodiscard]] std::optional<CameraRenderState>
-    sampleKeyframes(state::editing::model::CameraEntity const& camera, long double tick, bool clamp) const;
+    void               buildSpeedSpans();
+    [[nodiscard]] bool cameraCoversTick(state::editing::model::CameraEntity const& camera, int64_t tick) const noexcept;
+
+    [[nodiscard]] long double
+    mapSegmentSampleTick(CameraTrackSegment const& segment, long double replayTick) const noexcept;
+
+    [[nodiscard]] std::optional<CameraRenderState> sampleKeyframes(
+        state::editing::model::CameraEntity const& camera,
+        long double                                tick,
+        bool                                       clamp,
+        bool                                       allowBeforeFirst    = false,
+        visuals::ReplaySampleTime const*           sampleTimeForLookAt = nullptr
+    ) const;
+
+    [[nodiscard]] std::optional<CameraRenderState> sampleCustomThirdPerson(
+        state::editing::model::CameraEntity const&   camera,
+        visuals::ReplaySampleTime const&             time,
+        bool                                         clamp,
+        bool                                         allowBeforeFirst = false,
+        state::editing::model::CameraKeyframe const* activeKey        = nullptr
+    ) const;
 
     [[nodiscard]] std::optional<CameraTimelineEvaluation>
     sampleTrack(state::editing::model::CameraEntity const& camera, visuals::ReplaySampleTime const& time) const;
 
 public:
-    [[nodiscard]] size_t dimensionSegmentForTick(long double tick) const noexcept;
+    [[nodiscard]] size_t                  dimensionSegmentForTick(long double tick) const noexcept;
+    [[nodiscard]] long double             unscaledTicksAt(long double replayTick) const noexcept;
+    [[nodiscard]] long double             replayTickForUnscaled(long double unscaledTicks) const noexcept;
+    [[nodiscard]] std::vector<int> const& dimensionTransitionTicks() const noexcept {
+        return mDimensionTransitionTicks;
+    }
     [[nodiscard]] std::span<state::editing::model::CameraEntity const> cameras() const noexcept {
         return mProject.cameras;
     }
@@ -74,7 +141,9 @@ public:
         std::optional<std::string>            manualCameraId           = std::nullopt,
         bool                                  holdOutsideTracks        = false,
         std::vector<int>                      dimensionTransitionTicks = {},
-        SubjectViewSampler                    subjectSampler           = {}
+        SubjectViewSampler                    subjectSampler           = {},
+        EntityPoseSampler                     entityPoseSampler        = {},
+        CameraRayClipper                      cameraRayClipper         = {}
     );
 
     [[nodiscard]] CameraShot shotAt(int64_t tick) const;

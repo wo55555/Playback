@@ -3,6 +3,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace playback::editor::ui::theme {
 
@@ -16,21 +17,37 @@ constexpr ImU32 kBgHeader = IM_COL32(0x22, 0x22, 0x22, 0xff);
 constexpr ImU32 kBorder   = IM_COL32(0x2c, 0x2c, 0x2c, 0xff);
 constexpr ImU32 kText     = IM_COL32(0xd4, 0xd4, 0xd4, 0xff);
 constexpr ImU32 kTextDim  = IM_COL32(0x8a, 0x8a, 0x8a, 0xff);
-constexpr ImU32 kAccent   = IM_COL32(0x3a, 0x8c, 0xf0, 0xff);
-constexpr ImU32 kSelected = IM_COL32(0xff, 0xd2, 0x3c, 0xff);
-constexpr ImU32 kHover    = IM_COL32(0x3a, 0x5a, 0x8c, 0x99);
-constexpr ImU32 kSuccess  = IM_COL32(0x66, 0xc8, 0x7a, 0xff);
-constexpr ImU32 kWarning  = IM_COL32(0xf2, 0xa3, 0x3c, 0xff);
-constexpr ImU32 kError    = IM_COL32(0xf0, 0x60, 0x5c, 0xff);
+constexpr ImU32 kAccent    = IM_COL32(0x3a, 0x8c, 0xf0, 0xff);
+constexpr ImU32 kSelected  = IM_COL32(0xff, 0xd2, 0x3c, 0xff);
+constexpr ImU32 kHover     = IM_COL32(0x3a, 0x5a, 0x8c, 0x99);
+constexpr ImU32 kSuccess   = IM_COL32(0x66, 0xc8, 0x7a, 0xff);
+constexpr ImU32 kWarning   = IM_COL32(0xf2, 0xa3, 0x3c, 0xff);
+constexpr ImU32 kSpeedFast = IM_COL32(0xf5, 0x9e, 0x0b, 0xff);
+constexpr ImU32 kSpeedSlow = IM_COL32(0x38, 0xbd, 0xf8, 0xff);
+constexpr ImU32 kError     = IM_COL32(0xf0, 0x60, 0x5c, 0xff);
 
 // Generic controls.
-constexpr ImU32 kInputBg       = IM_COL32(0x12, 0x12, 0x12, 0xff);
-constexpr ImU32 kInputBgHover  = IM_COL32(0x1e, 0x1e, 0x1e, 0xff);
-constexpr ImU32 kInputBgActive = IM_COL32(0x24, 0x24, 0x24, 0xff);
-constexpr ImU32 kButton        = IM_COL32(0x2a, 0x2a, 0x2a, 0xff);
-constexpr ImU32 kButtonHover   = IM_COL32(0x38, 0x38, 0x38, 0xff);
-constexpr ImU32 kButtonActive  = IM_COL32(0x44, 0x44, 0x44, 0xff);
-constexpr ImU32 kScrollThumb   = IM_COL32(0x50, 0x50, 0x50, 0xff);
+constexpr ImU32 kInputBg             = IM_COL32(0x12, 0x12, 0x12, 0xff);
+constexpr ImU32 kInputBgHover        = IM_COL32(0x1e, 0x1e, 0x1e, 0xff);
+constexpr ImU32 kInputBgActive       = IM_COL32(0x24, 0x24, 0x24, 0xff);
+constexpr ImU32 kButton              = IM_COL32(0x2c, 0x2e, 0x33, 0xff);
+constexpr ImU32 kButtonHover         = IM_COL32(0x38, 0x3b, 0x42, 0xff);
+constexpr ImU32 kButtonActive        = IM_COL32(0x44, 0x48, 0x52, 0xff);
+constexpr ImU32 kButtonBorder        = IM_COL32(0x46, 0x4a, 0x54, 0xd0);
+constexpr ImU32 kButtonPrimary       = kAccent;
+constexpr ImU32 kButtonPrimaryHover  = IM_COL32(0x52, 0x9c, 0xf6, 0xff);
+constexpr ImU32 kButtonPrimaryActive = IM_COL32(0x2e, 0x76, 0xd4, 0xff);
+constexpr ImU32 kButtonPrimaryBorder = IM_COL32(0x6c, 0xb2, 0xff, 0x90);
+constexpr ImU32 kButtonDanger        = IM_COL32(0x3a, 0x20, 0x22, 0xff);
+constexpr ImU32 kButtonDangerHover   = IM_COL32(0x5a, 0x26, 0x29, 0xff);
+constexpr ImU32 kButtonDangerActive  = IM_COL32(0x74, 0x2c, 0x30, 0xff);
+constexpr ImU32 kButtonDangerBorder  = IM_COL32(0xc8, 0x48, 0x48, 0xb8);
+constexpr ImU32 kButtonDangerText    = IM_COL32(0xf2, 0x86, 0x82, 0xff);
+constexpr ImU32 kButtonSubtle        = IM_COL32(0x21, 0x22, 0x25, 0xff);
+constexpr ImU32 kButtonSubtleHover   = IM_COL32(0x2d, 0x2f, 0x35, 0xff);
+constexpr ImU32 kButtonSubtleActive  = IM_COL32(0x38, 0x3b, 0x42, 0xff);
+constexpr ImU32 kButtonSubtleBorder  = IM_COL32(0x38, 0x3a, 0x40, 0xb0);
+constexpr ImU32 kScrollThumb         = IM_COL32(0x50, 0x50, 0x50, 0xff);
 // Timeline zoom bar: a thin grey bar with ring handles, brightening on hover and drag.
 constexpr ImU32 kRangeTrack       = IM_COL32(0x30, 0x30, 0x30, 0xff);
 constexpr ImU32 kRangeThumb       = IM_COL32(0x5a, 0x5a, 0x5a, 0xff);
@@ -53,8 +70,10 @@ constexpr ImU32 kRulerMinor        = IM_COL32(0x44, 0x44, 0x44, 0xff);
 constexpr ImU32 kTrackGrid         = IM_COL32(0xff, 0xff, 0xff, 0x0c);
 constexpr ImU32 kRowHighlight      = IM_COL32(0x2a, 0x2a, 0x2a, 0xff);
 constexpr ImU32 kRowSelectedBorder = IM_COL32(0x5a, 0x6e, 0x86, 0xff);
-constexpr ImU32 kKeyframe          = IM_COL32(0x46, 0xc8, 0xa0, 0xff);
-constexpr ImU32 kKeyframeSelected  = IM_COL32(0xff, 0xd2, 0x3c, 0xff);
+constexpr ImU32 kKeyframe            = IM_COL32(0x46, 0xc8, 0xa0, 0xff);
+constexpr ImU32 kKeyframeFirstPerson = IM_COL32(0x4f, 0xc3, 0xf7, 0xff);
+constexpr ImU32 kKeyframeThirdPerson = IM_COL32(0xb8, 0x86, 0xf8, 0xff);
+constexpr ImU32 kKeyframeSelected    = IM_COL32(0xff, 0xd2, 0x3c, 0xff);
 constexpr ImU32 kKeyframeDisabled  = IM_COL32(0x6a, 0x6a, 0x6a, 0xff);
 constexpr ImU32 kKeyframeOutline   = IM_COL32(0x10, 0x10, 0x10, 0xff);
 constexpr ImU32 kPlayhead          = IM_COL32(0xf2, 0xa3, 0x3c, 0xff);
@@ -115,10 +134,13 @@ constexpr ImU32 kCameraPath         = IM_COL32(0xff, 0xff, 0x20, 0xeb);
 constexpr ImU32 kCameraPathSelected = IM_COL32(0xff, 0x30, 0x30, 0xff);
 constexpr ImU32 kCameraPathPlayhead = IM_COL32(0x20, 0xff, 0x20, 0xff);
 
-constexpr float kPanelPadding     = 6.0f;
-constexpr float kItemSpacing      = 3.0f;
-constexpr float kFrameRounding    = 2.0f;
-constexpr float kFineDividerWidth = 0.75f;
+constexpr float kPanelPadding      = 6.0f;
+constexpr float kInspectorPaddingX = 12.0f;
+constexpr float kInspectorPaddingY = 10.0f;
+constexpr float kItemSpacing       = 3.0f;
+constexpr float kFrameRounding     = 3.0f;
+constexpr float kButtonRounding    = 4.0f;
+constexpr float kFineDividerWidth  = 0.75f;
 
 void apply();
 
@@ -132,21 +154,22 @@ namespace playback::editor::ui::metrics {
 // Ratio of the live font size to the rasterised base, i.e. the active UI scale.
 [[nodiscard]] inline float scale() { return std::max(1.0f, font() / 14.0f); }
 
-[[nodiscard]] inline float iconButton() { return font() + 16.0f * scale(); }
+[[nodiscard]] inline float iconButton() { return std::round(font() + 9.0f * scale()); }
 // Above body-text size so icons read as controls; Lucide fills its em box, so the margin stays small.
-[[nodiscard]] inline float iconGlyph() { return font() * 1.22f; }
-[[nodiscard]] inline float toolbarRow() { return iconButton() + 6.0f * scale(); }
-[[nodiscard]] inline float ruler() { return font() + 8.0f * scale(); }
-[[nodiscard]] inline float statusBar() { return font() + 6.0f * scale(); }
-[[nodiscard]] inline float cameraRow() { return font() * 1.85f; }
+[[nodiscard]] inline float iconGlyph() { return font() * 1.12f; }
+[[nodiscard]] inline float toolbarRow() { return iconButton() + 4.0f * scale(); }
+[[nodiscard]] inline float sceneTabRow() { return std::max(22.0f, std::round(font() * 1.45f)); }
+[[nodiscard]] inline float ruler() { return std::max(22.0f, std::round(font() * 1.45f)); }
+[[nodiscard]] inline float statusBar() { return font() + 4.0f * scale(); }
+[[nodiscard]] inline float cameraRow() { return std::round(font() * 2.38f); }
 [[nodiscard]] inline float subRow() { return font() * 1.55f; }
 [[nodiscard]] inline float propertyRow() { return font() + 8.0f * scale(); }
-[[nodiscard]] inline float rail() { return font() * 2.3f; }
-[[nodiscard]] inline float rangeBar() { return font() * 1.2f; }
+[[nodiscard]] inline float rail() { return iconButton() + 6.0f * scale(); }
+[[nodiscard]] inline float rangeBar() { return std::max(20.0f, std::round(font() * 1.30f)); }
 [[nodiscard]] inline float labelColumn() { return font() * 4.6f; }
 [[nodiscard]] inline float splitter() { return 4.0f * scale(); }
 [[nodiscard]] inline float trackSwatch() { return std::max(3.0f, 3.0f * scale()); }
-[[nodiscard]] inline float keyframeRadius() { return std::max(4.0f, font() * 0.34f); }
+[[nodiscard]] inline float keyframeRadius() { return std::max(3.5f, font() * 0.31f); }
 [[nodiscard]] inline float gutter() { return 6.0f * scale(); }
 
 } // namespace playback::editor::ui::metrics
