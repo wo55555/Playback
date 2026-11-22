@@ -19,65 +19,15 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
+#include <cstring>
 #include <mutex>
-#include <optional>
 #include <utility>
 
 namespace playback::editor::graphics {
 
 namespace {
 
-using PresentFn       = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
-using Present1Fn      = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, DXGI_PRESENT_PARAMETERS const*);
-using ResizeBuffersFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
-using ResizeBuffers1Fn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, UINT const*, IUnknown* const*);
-using CreateSwapChainFn =
-    HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
-using CreateSwapChainForHwndFn = HRESULT(STDMETHODCALLTYPE*)(
-    IDXGIFactory2*,
-    IUnknown*,
-    HWND,
-    DXGI_SWAP_CHAIN_DESC1 const*,
-    DXGI_SWAP_CHAIN_FULLSCREEN_DESC const*,
-    IDXGIOutput*,
-    IDXGISwapChain1**
-);
-using CreateSwapChainForCoreWindowFn = HRESULT(STDMETHODCALLTYPE*)(
-    IDXGIFactory2*,
-    IUnknown*,
-    IUnknown*,
-    DXGI_SWAP_CHAIN_DESC1 const*,
-    IDXGIOutput*,
-    IDXGISwapChain1**
-);
-using CreateSwapChainForCompositionFn = HRESULT(STDMETHODCALLTYPE*)(
-    IDXGIFactory2*,
-    IUnknown*,
-    DXGI_SWAP_CHAIN_DESC1 const*,
-    IDXGIOutput*,
-    IDXGISwapChain1**
-);
-
-constexpr size_t SwapChainPresentIndex                     = 8;
-constexpr size_t SwapChainPresent1Index                    = 22;
-constexpr size_t SwapChainResizeBuffersIndex               = 13;
-constexpr size_t SwapChainResizeBuffers1Index              = 39;
-constexpr size_t FactoryCreateSwapChainIndex               = 10;
-constexpr size_t FactoryCreateSwapChainForHwndIndex        = 15;
-constexpr size_t FactoryCreateSwapChainForCoreWindowIndex  = 16;
-constexpr size_t FactoryCreateSwapChainForCompositionIndex = 24;
-constexpr DWORD  DetourWaitTimeoutMsLocal                  = 2000;
-
-ll::memory::FuncPtr gOriginalPresent{};
-ll::memory::FuncPtr gOriginalPresent1{};
-ll::memory::FuncPtr gOriginalResizeBuffers{};
-ll::memory::FuncPtr gOriginalResizeBuffers1{};
-ll::memory::FuncPtr gOriginalCreateSwapChain{};
-ll::memory::FuncPtr gOriginalCreateSwapChainForHwnd{};
-ll::memory::FuncPtr gOriginalCreateSwapChainForCoreWindow{};
-ll::memory::FuncPtr gOriginalCreateSwapChainForComposition{};
+constexpr DWORD DetourWaitTimeoutMsLocal = 2000;
 
 std::atomic<bool> gTimelineHooksStopping{true};
 std::atomic<bool> gRendererInitHookStopping{true};
@@ -122,450 +72,62 @@ void runDetourInstrumentation(Callback&& callback) noexcept {
 }
 
 
-bool renderPresentFrame(IDXGISwapChain* swapChain);
+constexpr uint32_t BgfxResetVsync         = 0x00000080u;
+constexpr int32_t  BgfxFatalDeviceRemoved = 4;
+constexpr int32_t  BgfxFatalCount         = 5;
 
-template <class T>
-void* getVtableEntry(T* object, size_t index) {
-    return (*reinterpret_cast<void***>(object))[index];
-}
-
-struct HookTargets {
-    void* present{};
-    void* present1{};
-    void* resizeBuffers{};
-    void* resizeBuffers1{};
-    void* createSwapChain{};
-    void* createSwapChainForHwnd{};
-    void* createSwapChainForCoreWindow{};
-    void* createSwapChainForComposition{};
+struct BgfxResolutionLayout {
+    uint32_t width{};
+    uint32_t height{};
+    uint32_t reset{};
 };
 
-struct HookState {
-    HookTargets targets;
-    bool        present{};
-    bool        present1{};
-    bool        resizeBuffers{};
-    bool        resizeBuffers1{};
-    bool        createSwapChain{};
-    bool        createSwapChainForHwnd{};
-    bool        createSwapChainForCoreWindow{};
-    bool        createSwapChainForComposition{};
+struct BgfxFatalErrorLayout {
+    int32_t type{};
+    HRESULT hr{};
 };
 
-HookState& hookState() {
-    static HookState state;
-    return state;
+static_assert(sizeof(BgfxResolutionLayout) == sizeof(bgfx::d3d12::RendererContextD3D12::m_resolution));
+static_assert(sizeof(BgfxResolutionLayout) == sizeof(bgfx::d3d11::RendererContextD3D11::m_resolution));
+static_assert(sizeof(BgfxFatalErrorLayout) == sizeof(bgfx::d3d12::RendererContextD3D12::m_fatalError));
+static_assert(sizeof(BgfxFatalErrorLayout) == sizeof(bgfx::d3d11::RendererContextD3D11::m_fatalError));
+
+BgfxFatalErrorLayout readFatalError(bgfx::FatalError const& error) noexcept {
+    BgfxFatalErrorLayout layout{};
+    std::memcpy(&layout, &error, sizeof(layout));
+    return layout;
 }
 
-bool coreInstalled(HookState const& state) {
-    return state.present && state.present1 && state.resizeBuffers && state.resizeBuffers1;
-}
+class ScopedDisableVsync {
+public:
+    ScopedDisableVsync(bgfx::Resolution* resolution, bool disable) noexcept {
+        if (!disable || !resolution || !exporting::isOfflineRenderActivityActive()) return;
+        auto* const layout = reinterpret_cast<BgfxResolutionLayout*>(resolution);
+        if ((layout->reset & BgfxResetVsync) == 0) return;
+        mLayout         = layout;
+        mPreviousReset  = layout->reset;
+        layout->reset  &= ~BgfxResetVsync;
+    }
+    ~ScopedDisableVsync() {
+        if (mLayout) mLayout->reset = mPreviousReset;
+    }
+    ScopedDisableVsync(ScopedDisableVsync const&)            = delete;
+    ScopedDisableVsync& operator=(ScopedDisableVsync const&) = delete;
 
-bool captureInstalled(HookState const& state) {
-    return state.createSwapChain && state.createSwapChainForHwnd && state.createSwapChainForCoreWindow
-        && state.createSwapChainForComposition;
-}
+private:
+    BgfxResolutionLayout* mLayout{};
+    uint32_t              mPreviousReset{};
+};
 
-bool noneInstalled(HookState const& state) {
-    return !state.present && !state.present1 && !state.resizeBuffers && !state.resizeBuffers1 && !state.createSwapChain
-        && !state.createSwapChainForHwnd && !state.createSwapChainForCoreWindow && !state.createSwapChainForComposition;
-}
-
-#define DECLARE_DETOUR_FN(NAME, RET, ...)                                                                              \
-    RET WINAPI NAME##Detour(__VA_ARGS__);                                                                              \
-    RET WINAPI NAME##Detour(__VA_ARGS__)
-
-DECLARE_DETOUR_FN(present, HRESULT, IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
-    ActiveDetour activeDetour;
-    UINT         effectiveSyncInterval = syncInterval;
-    runDetourInstrumentation([&] {
-        if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
-            (void)renderPresentFrame(swapChain);
+void ensureD3D12SwapChainQueue(bgfx::d3d12::RendererContextD3D12* ctx, IDXGISwapChain* swapChain) {
+    if (!ctx || !swapChain || getSwapChainQueue(swapChain)) return;
+    // m_cmd stores its active ID3D12CommandQueue* at offset 0.
+    if (auto* const queuePtr = *reinterpret_cast<IUnknown* const*>(&ctx->m_cmd.get())) {
+        ComPtr<ID3D12CommandQueue> queue;
+        if (getDirectCommandQueue(queuePtr, queue)) {
+            bindSwapChainQueue(swapChain, queue.Get());
         }
-        bool const offlinePresent =
-            exporting::isOfflineRenderActivityActive() && gImGuiRenderer.ownsSwapChain(swapChain);
-        effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
-    });
-    HRESULT const result = reinterpret_cast<PresentFn>(gOriginalPresent)(swapChain, effectiveSyncInterval, flags);
-    runDetourInstrumentation([&] { gImGuiRenderer.afterPresent(swapChain, result); });
-    return result;
-}
-
-DECLARE_DETOUR_FN(
-    present1,
-    HRESULT,
-    IDXGISwapChain1*               swapChain,
-    UINT                           syncInterval,
-    UINT                           flags,
-    DXGI_PRESENT_PARAMETERS const* parameters
-) {
-    ActiveDetour activeDetour;
-    auto* const  baseSwapChain         = static_cast<IDXGISwapChain*>(swapChain);
-    UINT         effectiveSyncInterval = syncInterval;
-
-    DXGI_PRESENT_PARAMETERS fullSurfacePresent{};
-    auto const*             effectiveParameters = parameters;
-    runDetourInstrumentation([&] {
-        bool timelineRendered{};
-        if ((flags & DXGI_PRESENT_TEST) == 0 && !gTimelineHooksStopping.load(std::memory_order_acquire)) {
-            timelineRendered = renderPresentFrame(baseSwapChain);
-        }
-        if (timelineRendered && parameters) {
-            fullSurfacePresent                 = *parameters;
-            fullSurfacePresent.DirtyRectsCount = 0;
-            fullSurfacePresent.pDirtyRects     = nullptr;
-            fullSurfacePresent.pScrollRect     = nullptr;
-            fullSurfacePresent.pScrollOffset   = nullptr;
-            effectiveParameters                = &fullSurfacePresent;
-        }
-        bool const offlinePresent =
-            exporting::isOfflineRenderActivityActive() && gImGuiRenderer.ownsSwapChain(baseSwapChain);
-        effectiveSyncInterval = offlinePresent ? 0 : syncInterval;
-    });
-    HRESULT const result =
-        reinterpret_cast<Present1Fn>(gOriginalPresent1)(swapChain, effectiveSyncInterval, flags, effectiveParameters);
-    runDetourInstrumentation([&] { gImGuiRenderer.afterPresent(swapChain, result); });
-    return result;
-}
-
-DECLARE_DETOUR_FN(
-    resizeBuffers,
-    HRESULT,
-    IDXGISwapChain* swapChain,
-    UINT            bufferCount,
-    UINT            width,
-    UINT            height,
-    DXGI_FORMAT     format,
-    UINT            flags
-) {
-    ActiveDetour activeDetour;
-    bool         allowResize{true};
-    runDetourInstrumentation([&] { allowResize = gImGuiRenderer.beforeResize(swapChain); });
-    if (!allowResize) {
-        runDetourInstrumentation([&] { getLogger().error("ResizeBuffers blocked: overlay GPU work did not drain"); });
-        return DXGI_ERROR_INVALID_CALL;
     }
-    HRESULT const result =
-        reinterpret_cast<ResizeBuffersFn>(gOriginalResizeBuffers)(swapChain, bufferCount, width, height, format, flags);
-    if (FAILED(result)) {
-        runDetourInstrumentation([&] {
-            getLogger().error(
-                "ResizeBuffers failed: HRESULT=0x{:08X}, size={}x{}",
-                static_cast<uint32_t>(result),
-                width,
-                height
-            );
-        });
-    }
-    return result;
-}
-
-DECLARE_DETOUR_FN(
-    resizeBuffers1,
-    HRESULT,
-    IDXGISwapChain3* swapChain,
-    UINT             bufferCount,
-    UINT             width,
-    UINT             height,
-    DXGI_FORMAT      format,
-    UINT             flags,
-    UINT const*      creationNodeMask,
-    IUnknown* const* presentQueue
-) {
-    ActiveDetour               activeDetour;
-    ComPtr<ID3D12CommandQueue> queue;
-    bool const                 updatesQueueBinding = bufferCount > 0 && presentQueue;
-    bool                       allowResize{true};
-    runDetourInstrumentation([&] {
-        queue       = getResizePresentQueue(bufferCount, presentQueue);
-        allowResize = gImGuiRenderer.beforeResize(swapChain);
-    });
-    if (!allowResize) {
-        runDetourInstrumentation([&] { getLogger().error("ResizeBuffers1 blocked: overlay GPU work did not drain"); });
-        return DXGI_ERROR_INVALID_CALL;
-    }
-    HRESULT const result = reinterpret_cast<ResizeBuffers1Fn>(gOriginalResizeBuffers1)(
-        swapChain,
-        bufferCount,
-        width,
-        height,
-        format,
-        flags,
-        creationNodeMask,
-        presentQueue
-    );
-    if (SUCCEEDED(result) && updatesQueueBinding) {
-        runDetourInstrumentation([&] {
-            if (queue) bindSwapChainQueue(swapChain, queue.Get());
-            else unbindSwapChainQueue(swapChain);
-        });
-    }
-    if (FAILED(result)) {
-        runDetourInstrumentation([&] {
-            getLogger().error(
-                "ResizeBuffers1 failed: HRESULT=0x{:08X}, size={}x{}",
-                static_cast<uint32_t>(result),
-                width,
-                height
-            );
-        });
-    }
-    return result;
-}
-
-DECLARE_DETOUR_FN(
-    createSwapChain,
-    HRESULT,
-    IDXGIFactory*         factory,
-    IUnknown*             device,
-    DXGI_SWAP_CHAIN_DESC* description,
-    IDXGISwapChain**      swapChain
-) {
-    ActiveDetour  activeDetour;
-    HRESULT const result =
-        reinterpret_cast<CreateSwapChainFn>(gOriginalCreateSwapChain)(factory, device, description, swapChain);
-    if (SUCCEEDED(result) && swapChain && *swapChain) {
-        runDetourInstrumentation([&] { bindSwapChainQueue(*swapChain, device); });
-    }
-    return result;
-}
-
-DECLARE_DETOUR_FN(
-    createSwapChainForHwnd,
-    HRESULT,
-    IDXGIFactory2*                         factory,
-    IUnknown*                              device,
-    HWND                                   window,
-    DXGI_SWAP_CHAIN_DESC1 const*           description,
-    DXGI_SWAP_CHAIN_FULLSCREEN_DESC const* fullscreenDescription,
-    IDXGIOutput*                           restrictToOutput,
-    IDXGISwapChain1**                      swapChain
-) {
-    ActiveDetour  activeDetour;
-    HRESULT const result = reinterpret_cast<CreateSwapChainForHwndFn>(gOriginalCreateSwapChainForHwnd)(
-        factory,
-        device,
-        window,
-        description,
-        fullscreenDescription,
-        restrictToOutput,
-        swapChain
-    );
-    if (SUCCEEDED(result) && swapChain && *swapChain) {
-        runDetourInstrumentation([&] { bindSwapChainQueue(*swapChain, device); });
-    }
-    return result;
-}
-
-DECLARE_DETOUR_FN(
-    createSwapChainForCoreWindow,
-    HRESULT,
-    IDXGIFactory2*               factory,
-    IUnknown*                    device,
-    IUnknown*                    window,
-    DXGI_SWAP_CHAIN_DESC1 const* description,
-    IDXGIOutput*                 restrictToOutput,
-    IDXGISwapChain1**            swapChain
-) {
-    ActiveDetour  activeDetour;
-    HRESULT const result = reinterpret_cast<CreateSwapChainForCoreWindowFn>(gOriginalCreateSwapChainForCoreWindow)(
-        factory,
-        device,
-        window,
-        description,
-        restrictToOutput,
-        swapChain
-    );
-    if (SUCCEEDED(result) && swapChain && *swapChain) {
-        runDetourInstrumentation([&] { bindSwapChainQueue(*swapChain, device); });
-    }
-    return result;
-}
-
-DECLARE_DETOUR_FN(
-    createSwapChainForComposition,
-    HRESULT,
-    IDXGIFactory2*               factory,
-    IUnknown*                    device,
-    DXGI_SWAP_CHAIN_DESC1 const* description,
-    IDXGIOutput*                 restrictToOutput,
-    IDXGISwapChain1**            swapChain
-) {
-    ActiveDetour  activeDetour;
-    HRESULT const result = reinterpret_cast<CreateSwapChainForCompositionFn>(gOriginalCreateSwapChainForComposition)(
-        factory,
-        device,
-        description,
-        restrictToOutput,
-        swapChain
-    );
-    if (SUCCEEDED(result) && swapChain && *swapChain) {
-        runDetourInstrumentation([&] { bindSwapChainQueue(*swapChain, device); });
-    }
-    return result;
-}
-
-#undef DECLARE_DETOUR_FN
-
-bool installPresentHook(HookState& state) {
-    if (state.present) return true;
-    if (ll::memory::hook(
-            state.targets.present,
-            ll::memory::toFuncPtr(&presentDetour),
-            &gOriginalPresent,
-            ll::memory::HookPriority::Normal
-        )
-        != 0)
-        return false;
-    state.present = true;
-    return true;
-}
-
-bool installPresent1Hook(HookState& state) {
-    if (state.present1) return true;
-    if (ll::memory::hook(
-            state.targets.present1,
-            ll::memory::toFuncPtr(&present1Detour),
-            &gOriginalPresent1,
-            ll::memory::HookPriority::Normal
-        )
-        != 0)
-        return false;
-    state.present1 = true;
-    return true;
-}
-
-bool installResizeBuffersHook(HookState& state) {
-    if (state.resizeBuffers) return true;
-    if (ll::memory::hook(
-            state.targets.resizeBuffers,
-            ll::memory::toFuncPtr(&resizeBuffersDetour),
-            &gOriginalResizeBuffers,
-            ll::memory::HookPriority::Normal
-        )
-        != 0)
-        return false;
-    state.resizeBuffers = true;
-    return true;
-}
-
-bool installResizeBuffers1Hook(HookState& state) {
-    if (state.resizeBuffers1) return true;
-    if (ll::memory::hook(
-            state.targets.resizeBuffers1,
-            ll::memory::toFuncPtr(&resizeBuffers1Detour),
-            &gOriginalResizeBuffers1,
-            ll::memory::HookPriority::Normal
-        )
-        != 0)
-        return false;
-    state.resizeBuffers1 = true;
-    return true;
-}
-
-bool installCreateSwapChainHook(HookState& state) {
-    if (state.createSwapChain) return true;
-    if (ll::memory::hook(
-            state.targets.createSwapChain,
-            ll::memory::toFuncPtr(&createSwapChainDetour),
-            &gOriginalCreateSwapChain,
-            ll::memory::HookPriority::Normal
-        )
-        != 0)
-        return false;
-    state.createSwapChain = true;
-    return true;
-}
-
-bool installCreateSwapChainForHwndHook(HookState& state) {
-    if (state.createSwapChainForHwnd) return true;
-    if (ll::memory::hook(
-            state.targets.createSwapChainForHwnd,
-            ll::memory::toFuncPtr(&createSwapChainForHwndDetour),
-            &gOriginalCreateSwapChainForHwnd,
-            ll::memory::HookPriority::Normal
-        )
-        != 0)
-        return false;
-    state.createSwapChainForHwnd = true;
-    return true;
-}
-
-bool installCreateSwapChainForCoreWindowHook(HookState& state) {
-    if (state.createSwapChainForCoreWindow) return true;
-    if (ll::memory::hook(
-            state.targets.createSwapChainForCoreWindow,
-            ll::memory::toFuncPtr(&createSwapChainForCoreWindowDetour),
-            &gOriginalCreateSwapChainForCoreWindow,
-            ll::memory::HookPriority::Normal
-        )
-        != 0)
-        return false;
-    state.createSwapChainForCoreWindow = true;
-    return true;
-}
-
-bool installCreateSwapChainForCompositionHook(HookState& state) {
-    if (state.createSwapChainForComposition) return true;
-    if (ll::memory::hook(
-            state.targets.createSwapChainForComposition,
-            ll::memory::toFuncPtr(&createSwapChainForCompositionDetour),
-            &gOriginalCreateSwapChainForComposition,
-            ll::memory::HookPriority::Normal
-        )
-        != 0)
-        return false;
-    state.createSwapChainForComposition = true;
-    return true;
-}
-
-bool installCoreHooks(HookState& state) {
-    return installResizeBuffersHook(state) && installResizeBuffers1Hook(state) && installPresentHook(state)
-        && installPresent1Hook(state);
-}
-
-bool installCaptureHooks(HookState& state) {
-    bool ok = true;
-    ok      = installCreateSwapChainHook(state) && ok;
-    ok      = installCreateSwapChainForHwndHook(state) && ok;
-    ok      = installCreateSwapChainForCoreWindowHook(state) && ok;
-    ok      = installCreateSwapChainForCompositionHook(state) && ok;
-    return ok;
-}
-
-bool removeAll(HookState& state) {
-    if (state.present1 && ll::memory::unhook(state.targets.present1, ll::memory::toFuncPtr(&present1Detour)))
-        state.present1 = false;
-    if (state.present && ll::memory::unhook(state.targets.present, ll::memory::toFuncPtr(&presentDetour)))
-        state.present = false;
-    if (state.resizeBuffers1
-        && ll::memory::unhook(state.targets.resizeBuffers1, ll::memory::toFuncPtr(&resizeBuffers1Detour)))
-        state.resizeBuffers1 = false;
-    if (state.resizeBuffers
-        && ll::memory::unhook(state.targets.resizeBuffers, ll::memory::toFuncPtr(&resizeBuffersDetour)))
-        state.resizeBuffers = false;
-    if (state.createSwapChainForComposition
-        && ll::memory::unhook(
-            state.targets.createSwapChainForComposition,
-            ll::memory::toFuncPtr(&createSwapChainForCompositionDetour)
-        ))
-        state.createSwapChainForComposition = false;
-    if (state.createSwapChainForCoreWindow
-        && ll::memory::unhook(
-            state.targets.createSwapChainForCoreWindow,
-            ll::memory::toFuncPtr(&createSwapChainForCoreWindowDetour)
-        ))
-        state.createSwapChainForCoreWindow = false;
-    if (state.createSwapChainForHwnd
-        && ll::memory::unhook(
-            state.targets.createSwapChainForHwnd,
-            ll::memory::toFuncPtr(&createSwapChainForHwndDetour)
-        ))
-        state.createSwapChainForHwnd = false;
-    if (state.createSwapChain
-        && ll::memory::unhook(state.targets.createSwapChain, ll::memory::toFuncPtr(&createSwapChainDetour)))
-        state.createSwapChain = false;
-    return noneInstalled(state);
 }
 
 bool renderPresentFrame(IDXGISwapChain* swapChain) {
@@ -574,7 +136,6 @@ bool renderPresentFrame(IDXGISwapChain* swapChain) {
     if (!exporting::isOfflineRenderActivityActive() && !exporting::isExportActivityActive()) {
         return gImGuiRenderer.render(swapChain);
     }
-    if (!gImGuiRenderer.ownsSwapChain(swapChain)) return false;
     // Captures before drawing the overlay, so the export frame holds the bare world.
     return gImGuiRenderer.renderExportOverlay(swapChain);
 }
@@ -648,6 +209,81 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 LL_TYPE_INSTANCE_HOOK(
+    RendererFlipHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d12::RendererContextD3D12,
+    &bgfx::d3d12::RendererContextD3D12::$flip,
+    void
+) {
+    ActiveDetour    activeDetour;
+    IDXGISwapChain* swapChain{};
+    bool            hadDeviceLost{};
+    bool            disableVsync{};
+    runDetourInstrumentation([&] {
+        auto const fatalError = readFatalError(this->m_fatalError.get());
+        hadDeviceLost         = fatalError.type == BgfxFatalDeviceRemoved;
+        if (gTimelineHooksStopping.load(std::memory_order_acquire)
+            || gRendererInitHookStopping.load(std::memory_order_acquire)) {
+            return;
+        }
+        swapChain = static_cast<IDXGISwapChain*>(this->m_swapChain);
+        if (!swapChain || this->m_fatal || fatalError.type < BgfxFatalCount) return;
+        gD3D12RendererActive.store(true, std::memory_order_release);
+        ensureD3D12SwapChainQueue(this, swapChain);
+        (void)renderPresentFrame(swapChain);
+        disableVsync = exporting::isOfflineRenderActivityActive();
+    });
+    {
+        ScopedDisableVsync vsyncGuard(&this->m_resolution.get(), disableVsync);
+        origin();
+    }
+    runDetourInstrumentation([&] {
+        if (!swapChain || hadDeviceLost) return;
+        auto const fatalError = readFatalError(this->m_fatalError.get());
+        if (fatalError.type == BgfxFatalDeviceRemoved) {
+            gImGuiRenderer.onDeviceLost(swapChain, fatalError.hr);
+        }
+    });
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    RendererFlipD3D11Hook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d11::RendererContextD3D11,
+    &bgfx::d3d11::RendererContextD3D11::$flip,
+    void
+) {
+    ActiveDetour    activeDetour;
+    IDXGISwapChain* swapChain{};
+    bool            hadDeviceLost{};
+    bool            disableVsync{};
+    runDetourInstrumentation([&] {
+        auto const fatalError = readFatalError(this->m_fatalError.get());
+        hadDeviceLost         = fatalError.type == BgfxFatalDeviceRemoved;
+        if (gTimelineHooksStopping.load(std::memory_order_acquire)
+            || gRendererInitHookStopping.load(std::memory_order_acquire)) {
+            return;
+        }
+        swapChain = static_cast<IDXGISwapChain*>(this->m_swapChain);
+        if (!swapChain || this->m_fatal || !this->m_needPresent || fatalError.type < BgfxFatalCount) return;
+        gD3D12RendererActive.store(false, std::memory_order_release);
+        (void)renderPresentFrame(swapChain);
+        disableVsync = exporting::isOfflineRenderActivityActive();
+    });
+    {
+        ScopedDisableVsync vsyncGuard(&this->m_resolution.get(), disableVsync);
+        origin();
+    }
+    runDetourInstrumentation([&] {
+        if (!swapChain || hadDeviceLost) return;
+        auto const fatalError = readFatalError(this->m_fatalError.get());
+        if (fatalError.type == BgfxFatalDeviceRemoved) {
+            gImGuiRenderer.onDeviceLost(swapChain, fatalError.hr);
+        }
+    });
+}
+
+LL_TYPE_INSTANCE_HOOK(
     RendererPreResetHook,
     ll::memory::HookPriority::Highest,
     bgfx::d3d12::RendererContextD3D12,
@@ -672,7 +308,12 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     ActiveRendererInitDetour activeDetour;
     origin(swapChainReset);
-    if (!gRendererInitHookStopping.load(std::memory_order_acquire)) gImGuiRenderer.afterRendererReset();
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire)) {
+        if (auto* const swapChain = static_cast<IDXGISwapChain*>(this->m_swapChain)) {
+            ensureD3D12SwapChainQueue(this, swapChain);
+        }
+        gImGuiRenderer.afterRendererReset();
+    }
 }
 
 LL_TYPE_INSTANCE_HOOK(
@@ -686,6 +327,9 @@ LL_TYPE_INSTANCE_HOOK(
     gD3D12RendererActive.store(false, std::memory_order_release);
     if (!gRendererInitHookStopping.load(std::memory_order_acquire) && !gImGuiRenderer.beforeRendererReset(true)) {
         getLogger().error("D3D12 shutdown: overlay GPU work did not drain");
+    }
+    if (auto* const swapChain = static_cast<IDXGISwapChain*>(this->m_swapChain)) {
+        unbindSwapChainQueue(swapChain);
     }
     origin();
 }
@@ -706,8 +350,77 @@ LL_TYPE_INSTANCE_HOOK(
     }
     bool const initialized = origin(init);
     gD3D12RendererActive.store(initialized, std::memory_order_release);
-    if (initialized && !gRendererInitHookStopping.load(std::memory_order_acquire)) {
-        gImGuiRenderer.afterRendererReset();
+    if (initialized) {
+        if (auto* const swapChain = static_cast<IDXGISwapChain*>(this->m_swapChain)) {
+            ensureD3D12SwapChainQueue(this, swapChain);
+        }
+        if (!gRendererInitHookStopping.load(std::memory_order_acquire)) {
+            gImGuiRenderer.afterRendererReset();
+        }
+    }
+    return initialized;
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    RendererD3D11PreResetHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d11::RendererContextD3D11,
+    &bgfx::d3d11::RendererContextD3D11::preReset,
+    void
+) {
+    ActiveRendererInitDetour activeDetour;
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire) && !gImGuiRenderer.beforeRendererReset()) {
+        getLogger().error("D3D11 reset: overlay GPU work did not drain; preview/capture remain suspended");
+    }
+    origin();
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    RendererD3D11PostResetHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d11::RendererContextD3D11,
+    &bgfx::d3d11::RendererContextD3D11::postReset,
+    void
+) {
+    ActiveRendererInitDetour activeDetour;
+    origin();
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire)) gImGuiRenderer.afterRendererReset();
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    RendererD3D11ShutdownHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d11::RendererContextD3D11,
+    &bgfx::d3d11::RendererContextD3D11::shutdown,
+    void
+) {
+    ActiveRendererInitDetour activeDetour;
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire) && !gImGuiRenderer.beforeRendererReset(true)) {
+        getLogger().error("D3D11 shutdown: overlay GPU work did not drain");
+    }
+    origin();
+}
+
+LL_TYPE_INSTANCE_HOOK(
+    RendererD3D11InitHook,
+    ll::memory::HookPriority::Highest,
+    bgfx::d3d11::RendererContextD3D11,
+    &bgfx::d3d11::RendererContextD3D11::init,
+    bool,
+    bgfx::Init const& init
+) {
+    ActiveRendererInitDetour activeDetour;
+    if (!gRendererInitHookStopping.load(std::memory_order_acquire) && !hookD3D12(true)) {
+        Playback::getInstance().getSelf().getLogger().error(
+            "Unable to install replay ImGui timeline hooks before D3D11 renderer initialization"
+        );
+    }
+    bool const initialized = origin(init);
+    if (initialized) {
+        gD3D12RendererActive.store(false, std::memory_order_release);
+        if (!gRendererInitHookStopping.load(std::memory_order_acquire)) {
+            gImGuiRenderer.afterRendererReset();
+        }
     }
     return initialized;
 }
@@ -768,121 +481,20 @@ void unbindSwapChainQueue(IDXGISwapChain* swapChain) {
     if (swapChain) swapChain->SetPrivateDataInterface(SwapChainQueueGuid, nullptr);
 }
 
-ComPtr<ID3D12CommandQueue> getResizePresentQueue(UINT bufferCount, IUnknown* const* presentQueues) {
-    if (!presentQueues || bufferCount == 0) return nullptr;
-    ComPtr<ID3D12CommandQueue> selectedQueue;
-    ComPtr<IUnknown>           selectedIdentity;
-    for (UINT index = 0; index < bufferCount; ++index) {
-        ComPtr<ID3D12CommandQueue> queue;
-        if (!getDirectCommandQueue(presentQueues[index], queue)) return nullptr;
-        ComPtr<IUnknown> identity;
-        if (FAILED(queue.As(&identity))) return nullptr;
-        if (!selectedQueue) {
-            selectedQueue    = std::move(queue);
-            selectedIdentity = std::move(identity);
-        } else if (selectedIdentity.Get() != identity.Get()) {
-            return nullptr;
-        }
-    }
-    return selectedQueue;
-}
-
-bool resolveHookTargets(
-    void*& outPresent,
-    void*& outPresent1,
-    void*& outResizeBuffers,
-    void*& outResizeBuffers1,
-    void*& outCreateSwapChain,
-    void*& outCreateSwapChainForHwnd,
-    void*& outCreateSwapChainForCoreWindow,
-    void*& outCreateSwapChainForComposition
-) {
-    ComPtr<IDXGIFactory4> factory;
-    HRESULT               result = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
-    if (FAILED(result)) {
-        getLogger().error(
-            "Unable to create the DXGI factory for replay timeline hooks (HRESULT=0x{:08X})",
-            static_cast<uint32_t>(result)
-        );
-        return false;
-    }
-
-    ComPtr<ID3D12Device> device;
-    result = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
-    if (FAILED(result)) {
-        getLogger().error(
-            "Unable to create the D3D12 device for replay timeline hooks (HRESULT=0x{:08X})",
-            static_cast<uint32_t>(result)
-        );
-        return false;
-    }
-
-    D3D12_COMMAND_QUEUE_DESC queueDesc{};
-    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    ComPtr<ID3D12CommandQueue> commandQueue;
-    result = device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&commandQueue));
-    if (FAILED(result)) {
-        getLogger().error(
-            "Unable to create a D3D12 queue for replay timeline hooks (HRESULT=0x{:08X})",
-            static_cast<uint32_t>(result)
-        );
-        return false;
-    }
-
-    DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
-    swapChainDesc.Width       = 2;
-    swapChainDesc.Height      = 2;
-    swapChainDesc.Format      = DXGI_FORMAT_R8G8B8A8_UNORM;
-    swapChainDesc.SampleDesc  = {1, 0};
-    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    swapChainDesc.BufferCount = 2;
-    swapChainDesc.Scaling     = DXGI_SCALING_STRETCH;
-    swapChainDesc.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-    swapChainDesc.AlphaMode   = DXGI_ALPHA_MODE_PREMULTIPLIED;
-
-    ComPtr<IDXGISwapChain1> swapChain;
-    result = factory->CreateSwapChainForComposition(commandQueue.Get(), &swapChainDesc, nullptr, &swapChain);
-    if (FAILED(result)) {
-        getLogger().error(
-            "Unable to create the dummy DXGI swap chain for replay timeline hooks (HRESULT=0x{:08X})",
-            static_cast<uint32_t>(result)
-        );
-        return false;
-    }
-
-    ComPtr<IDXGISwapChain3> swapChain3;
-    result = swapChain.As(&swapChain3);
-    if (FAILED(result)) {
-        getLogger().error(
-            "The dummy replay timeline swap chain does not expose IDXGISwapChain3 (HRESULT=0x{:08X})",
-            static_cast<uint32_t>(result)
-        );
-        return false;
-    }
-
-    outPresent                       = getVtableEntry(swapChain3.Get(), SwapChainPresentIndex);
-    outPresent1                      = getVtableEntry(swapChain3.Get(), SwapChainPresent1Index);
-    outResizeBuffers                 = getVtableEntry(swapChain3.Get(), SwapChainResizeBuffersIndex);
-    outResizeBuffers1                = getVtableEntry(swapChain3.Get(), SwapChainResizeBuffers1Index);
-    outCreateSwapChain               = getVtableEntry(factory.Get(), FactoryCreateSwapChainIndex);
-    outCreateSwapChainForHwnd        = getVtableEntry(factory.Get(), FactoryCreateSwapChainForHwndIndex);
-    outCreateSwapChainForCoreWindow  = getVtableEntry(factory.Get(), FactoryCreateSwapChainForCoreWindowIndex);
-    outCreateSwapChainForComposition = getVtableEntry(factory.Get(), FactoryCreateSwapChainForCompositionIndex);
-    bool const resolved = outPresent && outPresent1 && outResizeBuffers && outResizeBuffers1 && outCreateSwapChain
-                       && outCreateSwapChainForHwnd && outCreateSwapChainForCoreWindow
-                       && outCreateSwapChainForComposition;
-    if (!resolved) getLogger().error("One or more replay timeline DXGI vtable targets resolved to null");
-    return resolved;
-}
-
 bool hookRendererInit(bool enable) {
     std::scoped_lock lock(gRendererInitHookMutex);
     static bool      initInstalled{};
+    static bool      initD3D11Installed{};
     static bool      preResetInstalled{};
+    static bool      preResetD3D11Installed{};
     static bool      postResetInstalled{};
+    static bool      postResetD3D11Installed{};
     static bool      shutdownInstalled{};
+    static bool      shutdownD3D11Installed{};
     static bool      submitInstalled{};
     static bool      submitD3D11Installed{};
+    static bool      flipInstalled{};
+    static bool      flipD3D11Installed{};
 
     if (enable) {
         if (!initInstalled) {
@@ -890,17 +502,33 @@ bool hookRendererInit(bool enable) {
             if (RendererInitHook::hook() != 0) return false;
             initInstalled = true;
         }
+        if (!initD3D11Installed) {
+            if (RendererD3D11InitHook::hook() != 0) return false;
+            initD3D11Installed = true;
+        }
         if (!preResetInstalled) {
             if (RendererPreResetHook::hook() != 0) return false;
             preResetInstalled = true;
+        }
+        if (!preResetD3D11Installed) {
+            if (RendererD3D11PreResetHook::hook() != 0) return false;
+            preResetD3D11Installed = true;
         }
         if (!postResetInstalled) {
             if (RendererPostResetHook::hook() != 0) return false;
             postResetInstalled = true;
         }
+        if (!postResetD3D11Installed) {
+            if (RendererD3D11PostResetHook::hook() != 0) return false;
+            postResetD3D11Installed = true;
+        }
         if (!shutdownInstalled) {
             if (RendererShutdownHook::hook() != 0) return false;
             shutdownInstalled = true;
+        }
+        if (!shutdownD3D11Installed) {
+            if (RendererD3D11ShutdownHook::hook() != 0) return false;
+            shutdownD3D11Installed = true;
         }
         // Both backend hooks are installed up front; only the backend BGFX actually selected will run.
         if (!submitInstalled) {
@@ -917,6 +545,20 @@ bool hookRendererInit(bool enable) {
             }
             submitD3D11Installed = true;
         }
+        if (!flipInstalled) {
+            if (RendererFlipHook::hook() != 0) {
+                getLogger().error("Unable to install the BGFX D3D12 flip overlay hook");
+                return false;
+            }
+            flipInstalled = true;
+        }
+        if (!flipD3D11Installed) {
+            if (RendererFlipD3D11Hook::hook() != 0) {
+                getLogger().error("Unable to install the BGFX D3D11 flip overlay hook");
+                return false;
+            }
+            flipD3D11Installed = true;
+        }
 
         gRendererInitHookStopping.store(false, std::memory_order_release);
         return true;
@@ -924,12 +566,32 @@ bool hookRendererInit(bool enable) {
 
     gRendererInitHookStopping.store(true, std::memory_order_release);
     gD3D12RendererActive.store(false, std::memory_order_release);
+    if (flipD3D11Installed) {
+        if (RendererFlipD3D11Hook::unhook()) flipD3D11Installed = false;
+        else return false;
+    }
+    if (flipInstalled) {
+        if (RendererFlipHook::unhook()) flipInstalled = false;
+        else return false;
+    }
+    if (shutdownD3D11Installed) {
+        if (RendererD3D11ShutdownHook::unhook()) shutdownD3D11Installed = false;
+        else return false;
+    }
     if (shutdownInstalled) {
         if (RendererShutdownHook::unhook()) shutdownInstalled = false;
         else return false;
     }
+    if (postResetD3D11Installed) {
+        if (RendererD3D11PostResetHook::unhook()) postResetD3D11Installed = false;
+        else return false;
+    }
     if (postResetInstalled) {
         if (RendererPostResetHook::unhook()) postResetInstalled = false;
+        else return false;
+    }
+    if (preResetD3D11Installed) {
+        if (RendererD3D11PreResetHook::unhook()) preResetD3D11Installed = false;
         else return false;
     }
     if (preResetInstalled) {
@@ -944,6 +606,10 @@ bool hookRendererInit(bool enable) {
         if (OfflineRenderSubmitHook::unhook()) submitInstalled = false;
         else return false;
     }
+    if (initD3D11Installed) {
+        if (RendererD3D11InitHook::unhook()) initD3D11Installed = false;
+        else return false;
+    }
     if (initInstalled) {
         if (RendererInitHook::unhook()) initInstalled = false;
         else return false;
@@ -954,108 +620,19 @@ bool hookRendererInit(bool enable) {
 
 bool hookD3D12(bool enable) {
     std::scoped_lock lock(gTimelineHookMutex);
-    auto&            state = hookState();
-
     if (enable) {
-        if (coreInstalled(state)) {
-            if (!captureInstalled(state) && !installCaptureHooks(state)) {
-                bool const removed  = removeAll(state);
-                bool const drained  = removed && waitForActiveDetours();
-                bool const released = drained && gImGuiRenderer.shutdown();
-                getLogger().error(
-                    "Unable to restore the replay swap-chain queue hooks (removed={}, drained={}, cleanup={})",
-                    removed,
-                    drained,
-                    released
-                );
-                return false;
-            }
-            gTimelineHooksStopping.store(false, std::memory_order_release);
-            return true;
-        }
-        gTimelineHooksStopping.store(true, std::memory_order_release);
-        if (!noneInstalled(state)) {
-            if (!removeAll(state)) {
-                getLogger().error("Unable to remove partially installed replay ImGui timeline hooks");
-                return false;
-            }
-            if (!waitForActiveDetours()) {
-                getLogger().error("Timed out while waiting for partial replay ImGui timeline detours to finish");
-                return false;
-            }
-            if (!gImGuiRenderer.shutdown()) {
-                getLogger().error("Unable to release replay ImGui timeline resources before reinstalling hooks");
-                return false;
-            }
-        }
-        if (!state.targets.present
-            && !resolveHookTargets(
-                state.targets.present,
-                state.targets.present1,
-                state.targets.resizeBuffers,
-                state.targets.resizeBuffers1,
-                state.targets.createSwapChain,
-                state.targets.createSwapChainForHwnd,
-                state.targets.createSwapChainForCoreWindow,
-                state.targets.createSwapChainForComposition
-            )) {
-            getLogger().error("Unable to resolve D3D12 hook targets for the replay ImGui timeline");
-            return false;
-        }
-        bool const captureOk = installCaptureHooks(state);
-        if (!captureOk) {
-            bool const removed  = removeAll(state);
-            bool const drained  = removed && waitForActiveDetours();
-            bool const released = drained && gImGuiRenderer.shutdown();
-            getLogger().error(
-                "Unable to install the replay swap-chain queue hooks (removed={}, drained={}, cleanup={})",
-                removed,
-                drained,
-                released
-            );
-            return false;
-        }
-        if (installCoreHooks(state)) {
-            gTimelineHooksStopping.store(false, std::memory_order_release);
-            return true;
-        }
-
-        bool const removed  = removeAll(state);
-        bool const drained  = removed && waitForActiveDetours();
-        bool const released = drained && gImGuiRenderer.shutdown();
-        getLogger().error(
-            "Unable to install replay ImGui timeline hooks; rollback status "
-            "(removed={}, drained={}, cleanup={}, present={}, present1={}, resize={}, resize1={}, "
-            "create={}/{}/{}/{})",
-            removed,
-            drained,
-            released,
-            state.present,
-            state.present1,
-            state.resizeBuffers,
-            state.resizeBuffers1,
-            state.createSwapChain,
-            state.createSwapChainForHwnd,
-            state.createSwapChainForCoreWindow,
-            state.createSwapChainForComposition
-        );
-        return false;
+        gTimelineHooksStopping.store(false, std::memory_order_release);
+        return true;
     }
 
     gTimelineHooksStopping.store(true, std::memory_order_release);
-    if (!noneInstalled(state)) {
-        if (!removeAll(state)) {
-            getLogger().error("Unable to remove replay ImGui timeline hooks");
-            return false;
-        }
-        if (!waitForActiveDetours()) {
-            getLogger().error("Timed out while waiting for replay ImGui timeline detours to finish");
-            return false;
-        }
-        if (!gImGuiRenderer.shutdown()) {
-            getLogger().error("Unable to release replay ImGui timeline resources during shutdown");
-            return false;
-        }
+    if (!waitForActiveDetours()) {
+        getLogger().error("Timed out while waiting for replay ImGui timeline detours to finish");
+        return false;
+    }
+    if (!gImGuiRenderer.shutdown()) {
+        getLogger().error("Unable to release replay ImGui timeline resources during shutdown");
+        return false;
     }
     return true;
 }
