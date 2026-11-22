@@ -22,9 +22,10 @@ package("playback-ffmpeg")
             "-leo",
             "pipefail",
             "-c",
-            "pacman --noconfirm -S --needed --overwrite '*' make mingw-w64-x86_64-uchardet " ..
-                "mingw-w64-x86_64-gcc mingw-w64-x86_64-iconv mingw-w64-x86_64-pkgconf"
+            "pacman --noconfirm -S --needed --overwrite '*' make mingw-w64-ucrt-x86_64-uchardet " ..
+                "mingw-w64-ucrt-x86_64-iconv mingw-w64-ucrt-x86_64-pkgconf"
         })
+        os.addenv("PATH", msys2_base:installdir("ucrt64", "bin"))
         package:base():script("install")(package)
     end)
     on_test(function (package)
