@@ -5,6 +5,7 @@
 #include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
+#include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/visuals/ReplaySampleTime.h"
 
@@ -30,6 +31,17 @@ constexpr float WarmupStepTicks = 1.0f;
 bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
     return left.frameIndex == right.frameIndex && left.ptsNumerator == right.ptsNumerator
         && left.ptsDenominator == right.ptsDenominator;
+}
+
+// True when the world is frozen or client time still trails replay time during slowdown easing.
+[[nodiscard]] bool isClientTimeLagged(ExportFramePlan const& frame) noexcept {
+    if (frame.worldFrozen) return true;
+    if (frame.replayTickDenominator <= 0 || frame.clientTickDenominator <= 0) return false;
+    long double const replayTick =
+        static_cast<long double>(frame.replayTickNumerator) / static_cast<long double>(frame.replayTickDenominator);
+    long double const clientTick =
+        static_cast<long double>(frame.clientTickNumerator) / static_cast<long double>(frame.clientTickDenominator);
+    return clientTick + 1e-6L < replayTick;
 }
 
 } // namespace
@@ -90,7 +102,20 @@ bool OfflineRenderBoundary::open(
             "Export camera timeline has no sample at the start tick; using the observer viewpoint"
         );
     }
-    if (!mReplay.beginExportTimeline(static_cast<int>(startTick))) {
+    if (!mReplay.beginExportTimeline(static_cast<int>([&]() -> int64_t {
+            if (!settings.timelapse && keyframe::hasActiveFreezeTrack(project)) {
+                auto const freezeEval =
+                    keyframe::evaluateFreezeAt(project.freezeTrack, static_cast<long double>(startTick));
+                if (freezeEval.frozen) {
+                    auto const cNum = static_cast<int64_t>(std::llround(freezeEval.clientTick * 1'000'000.0L));
+                    if (auto const cTime =
+                            visuals::ReplaySampleTime::fromRational(std::max<int64_t>(0, cNum), 1'000'000)) {
+                        return std::clamp<int64_t>(cTime->requiredAppliedTick(), 0, maximumIntTick);
+                    }
+                }
+            }
+            return startTick;
+        }()))) {
         mReplay.endExportTimeline();
         editor::graphics::gImGuiRenderer.closeExportCapture();
         mExecutor.close();
@@ -287,10 +312,12 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
 
     if (mTimelineInitialized && !mPendingCutHandled) {
         mPendingCutHandled  = true;
-        int const  nextTick = targetTick(*mPendingFrame);
-        int const  applied  = mReplay.getAppliedReplayTick();
-        bool const hardCut  = mPendingFrame->hardCut;
-        bool const needSeek = hardCut || nextTick < applied || (mTimelapse && nextTick - applied > 1);
+        int const  nextTick     = targetTick(*mPendingFrame);
+        int const  applied      = mReplay.getAppliedReplayTick();
+        bool const hardCut      = mPendingFrame->hardCut;
+        bool const unfreezeJump = mLastSubmittedFrame && isClientTimeLagged(*mLastSubmittedFrame)
+                               && !isClientTimeLagged(*mPendingFrame) && nextTick - applied > 1;
+        bool const needSeek = hardCut || nextTick < applied || (mTimelapse && nextTick - applied > 1) || unfreezeJump;
         if (needSeek) {
             if (!mReplay.beginExportCutSeek(nextTick, hardCut || nextTick < applied)) {
                 fault(
@@ -703,7 +730,7 @@ OfflineRenderBoundaryStatus OfflineRenderBoundary::status() {
 }
 
 int OfflineRenderBoundary::targetTick(ExportFramePlan const& frame) const {
-    auto const sample = visuals::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
+    auto const sample = visuals::ReplaySampleTime::fromRational(frame.clientTickNumerator, frame.clientTickDenominator);
     if (!sample) return 0;
     auto const clamped = std::clamp<int64_t>(sample->requiredAppliedTick(), 0, mMaximumReplayTick);
     return clamped > std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : static_cast<int>(clamped);
@@ -712,27 +739,40 @@ int OfflineRenderBoundary::targetTick(ExportFramePlan const& frame) const {
 std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(ExportFramePlan const& frame) const {
     auto const replayTime =
         visuals::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
-    if (!replayTime) return std::nullopt;
+    auto const clientTime =
+        visuals::ReplaySampleTime::fromRational(frame.clientTickNumerator, frame.clientTickDenominator);
+    if (!replayTime || !clientTime) return std::nullopt;
 
-    long double const current = replayTime->value();
+    long double const current = clientTime->value();
     if (current < 0.0L || current > static_cast<long double>(mMaximumReplayTick)) return std::nullopt;
 
+    bool unfreezeJump = false;
+    if (mLastSubmittedFrame && isClientTimeLagged(*mLastSubmittedFrame) && !isClientTimeLagged(frame)) {
+        if (auto const lastClientTime = visuals::ReplaySampleTime::fromRational(
+                mLastSubmittedFrame->clientTickNumerator,
+                mLastSubmittedFrame->clientTickDenominator
+            )) {
+            unfreezeJump = clientTime->requiredAppliedTick() - lastClientTime->requiredAppliedTick() > 1;
+        }
+    }
+
     long double delta             = 0.0L;
-    int64_t     previousWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
-    if (mLastSubmittedFrame && !frame.hardCut) {
+    int64_t     previousWholeTick = frame.clientTickNumerator / frame.clientTickDenominator;
+    if (mLastSubmittedFrame && !frame.hardCut && !unfreezeJump) {
         delta = current
-              - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
-                    / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
-        previousWholeTick = mLastSubmittedFrame->replayTickNumerator / mLastSubmittedFrame->replayTickDenominator;
+              - static_cast<long double>(mLastSubmittedFrame->clientTickNumerator)
+                    / static_cast<long double>(mLastSubmittedFrame->clientTickDenominator);
+        previousWholeTick = mLastSubmittedFrame->clientTickNumerator / mLastSubmittedFrame->clientTickDenominator;
     }
     if (delta < 0.0L || delta > static_cast<long double>(std::numeric_limits<float>::max())) return std::nullopt;
 
-    int64_t const currentWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
+    int64_t const currentWholeTick = frame.clientTickNumerator / frame.clientTickDenominator;
     int64_t const wholeTicks       = currentWholeTick - previousWholeTick;
     if (wholeTicks < 0 || wholeTicks > std::numeric_limits<int>::max()) return std::nullopt;
 
     return OfflineRenderClockSample{
         *replayTime,
+        *clientTime,
         static_cast<float>(delta),
         static_cast<int>(wholeTicks),
         frame.ticket.frameIndex,

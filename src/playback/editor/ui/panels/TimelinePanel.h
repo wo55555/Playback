@@ -91,15 +91,20 @@ private:
         bool                                                includeExportRange,
         std::function<bool(std::string const&, int)> const& skipKey,
         std::string_view                                    skipMarkerId,
-        std::string_view                                    skipClipId       = {},
-        std::optional<int>                                  skipSpeedKeyTick = std::nullopt
+        std::string_view                                    skipClipId        = {},
+        std::optional<int>                                  skipSpeedKeyTick  = std::nullopt,
+        std::optional<int>                                  skipFreezeKeyTick = std::nullopt
     );
     bool addMarkerAt(PanelContext const& ctx, int tick);
+    bool addFreezeKeyframeAt(PanelContext const& ctx, int tick);
     // Selections that point at objects an queued action has not created yet; applied once they exist.
+    void                      clearPendingSelection();
     void queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys);
     void queueMarkerSelection(std::string markerId);
     void                      queueSpeedTrackSelection();
     void                      queueSpeedKeyframeSelection(int tick);
+    void                      queueFreezeTrackSelection();
+    void                      queueFreezeKeyframeSelection(int tick);
     void applyPendingSelection(PanelContext const& ctx);
     [[nodiscard]] std::string markerAt(
         PanelContext const&  ctx,
@@ -215,6 +220,8 @@ private:
     std::string                                          mPendingMarkerSelection;
     bool                                                 mPendingSpeedTrackSelection{false};
     std::optional<int>                                   mPendingSpeedKeyframeSelection;
+    bool                                                 mPendingFreezeTrackSelection{false};
+    std::optional<int>                                   mPendingFreezeKeyframeSelection;
     int                                                  mPendingSelectionFrames{};
 
     int   mDraggingSpeedKeyframeOriginTick{-1};
@@ -223,6 +230,13 @@ private:
     bool  mDraggingSpeedKeyframeMoved{};
     int   mSpeedKeyframeMenuTick{-1};
     int   mSpeedLaneMenuTick{-1};
+
+    int   mDraggingFreezeKeyframeOriginTick{-1};
+    float mDraggingFreezeKeyframeStartMouseX{};
+    int   mDraggingFreezeKeyframeTick{-1};
+    bool  mDraggingFreezeKeyframeMoved{};
+    int   mFreezeKeyframeMenuTick{-1};
+    int   mFreezeLaneMenuTick{-1};
 
     struct OutputDurationCache {
         bool                              valid{};

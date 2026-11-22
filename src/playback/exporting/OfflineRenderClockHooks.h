@@ -13,6 +13,7 @@ enum class OfflineRenderClockKind : uint8_t { KeepAlive, Capture, Warmup, ExtraR
 
 struct OfflineRenderClockSample {
     visuals::ReplaySampleTime replayTime;
+    visuals::ReplaySampleTime clientTime;
     // Time the step adds for the game timer and the renderers' clock. It passes with the step's first render; any
     // further render of the step draws the same instant again and adds none.
     float                     deltaTicks{};

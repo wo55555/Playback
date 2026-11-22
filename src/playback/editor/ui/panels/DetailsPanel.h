@@ -33,6 +33,8 @@ private:
     bool drawMarker(PanelContext const& ctx);
     bool drawSpeedKeyframe(PanelContext const& ctx);
     bool drawSpeedTrack(PanelContext const& ctx);
+    bool drawFreezeKeyframe(PanelContext const& ctx);
+    bool drawFreezeTrack(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
     void drawKeyframeInterpolationRows(
         PanelContext const&                          ctx,
@@ -59,6 +61,9 @@ private:
     int                         mSpeedKeyDragTick{-1};
     bool                        mSpeedKeyDragging{false};
     float                       mSpeedKeyDragValue{1.0f};
+    int                         mFreezeDelayDragTick{-1};
+    bool                        mFreezeDelayDragging{false};
+    int                         mFreezeDelayDragValue{0};
 };
 
 } // namespace playback::editor::ui

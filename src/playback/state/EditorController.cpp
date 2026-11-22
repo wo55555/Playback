@@ -8,6 +8,7 @@
 #include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/ClientCameraCapture.h"
+#include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/keyframe/SpeedTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/CameraBindingOps.h"
@@ -92,11 +93,12 @@ void EditorController::setRendererAvailable(bool available) {
 }
 
 void EditorController::publishCameraTimeline() {
+    auto& session = replay::ReplaySession::getInstance();
+    session.setPreviewFreezeTrack(mProject.freezeTrack);
     if (mProject.cameras.empty()) {
         keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
         return;
     }
-    auto& session                  = replay::ReplaySession::getInstance();
     auto  dimensionTransitionTicks = session.getDimensionTransitionTicks();
     // No subject sampler: the replay session follows legacy person tracks natively, like the user's follow.
     // Entity pose sampler and ray clipper still power custom third-person and Free Look-At tracks.
@@ -145,6 +147,7 @@ void EditorController::reset() {
     mBrowserSnapshot = std::make_shared<ReplayBrowserSnapshot>();
     mProject         = {};
     mPreviewCameraId.reset();
+    replay::ReplaySession::getInstance().setPreviewFreezeTrack({});
     audio::preview::setClipMuted(false);
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
     mCommandStack.clear();
@@ -773,6 +776,33 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::ClearSpeedKeyframes:
         mCommandStack.push(CommandFactory::createClearSpeedKeyframes(), mProject);
         break;
+    case EditorActionType::AddFreezeTrack:
+        mCommandStack.push(CommandFactory::createAddFreezeTrack(), mProject);
+        break;
+    case EditorActionType::RemoveFreezeTrack:
+        mCommandStack.push(CommandFactory::createRemoveFreezeTrack(), mProject);
+        break;
+    case EditorActionType::AddFreezeKeyframe:
+        mCommandStack.push(CommandFactory::createAddFreezeKeyframe(action.tick, action.value, action.kind), mProject);
+        break;
+    case EditorActionType::MoveFreezeKeyframe:
+        mCommandStack.push(CommandFactory::createMoveFreezeKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::DeleteFreezeKeyframe:
+        mCommandStack.push(CommandFactory::createDeleteFreezeKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::SetFreezeKeyframe:
+        mCommandStack.push(CommandFactory::createSetFreezeKeyframe(action.tick, action.value, action.kind), mProject);
+        break;
+    case EditorActionType::SetFreezeTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetFreezeTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetFreezeTrackLocked:
+        mCommandStack.push(CommandFactory::createSetFreezeTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::ClearFreezeKeyframes:
+        mCommandStack.push(CommandFactory::createClearFreezeKeyframes(), mProject);
+        break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
         mPreviewCameraId.reset();
@@ -1253,9 +1283,14 @@ void EditorController::tick(bool hudVisible) {
         int const         currentTick = std::max(0, session.getCurrentTick());
         long double const replayTick =
             static_cast<long double>(currentTick) + static_cast<long double>(session.previewPartialTick());
+        session.setPreviewFreezeTrack(mProject.freezeTrack);
         session.setClipSpeedScale(static_cast<float>(keyframe::effectiveSpeedAt(mProject, replayTick)));
-        audio::preview::setClipMuted(state::editing::ClipOps::isClipMutedAt(mProject, currentTick));
+        auto const freezeEval = keyframe::evaluateFreezeAt(mProject.freezeTrack, replayTick);
+        audio::preview::setClipMuted(
+            state::editing::ClipOps::isClipMutedAt(mProject, currentTick) || freezeEval.worldFrozen
+        );
     } else {
+        session.setPreviewFreezeTrack({});
         session.setClipSpeedScale(1.0f);
         audio::preview::setClipMuted(false);
     }

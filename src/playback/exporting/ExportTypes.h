@@ -165,9 +165,12 @@ struct ExportStatus {
 struct ExportFramePlan {
     int64_t              replayTickNumerator{};
     int64_t              replayTickDenominator{1};
+    int64_t              clientTickNumerator{};
+    int64_t              clientTickDenominator{1};
     visuals::FrameTicket ticket;
     bool                 hardCut{false};
     bool                 muteAudio{false};
+    bool                 worldFrozen{false};
 };
 
 struct CompiledExportSegment {
