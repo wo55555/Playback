@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1-mc26.50] - 2026-11-22
+
 ### Added
 
 - Added a horizontal scene bar above the timeline for adding, duplicating, renaming, reordering, switching and deleting independent scenes, each with its own camera tracks, markers and export range. Clips and keyframes are edited directly on each camera track, where higher tracks cover lower tracks across active clips and uncover them across gaps; a left tool strip provides Select (`V`), Razor (`C`) and Pen (`P`) tools, and clips default to the full replay and can be split (`Ctrl+B`, `Ctrl+K` or Razor), trimmed (`Alt+[`, `Alt+]` or edge drag), moved within free gaps, renamed, muted, locked, toggled for export directly on the timeline (`Shift+E`), or deleted without shifting later clips.
@@ -369,7 +371,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.0-mc26.50...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.1-mc26.50...HEAD
+[0.4.1-mc26.50]: https://github.com/wo55555/Playback/compare/v0.4.0-mc26.50...v0.4.1-mc26.50
 [0.4.0-mc26.50]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.50...v0.4.0-mc26.50
 [0.3.3-mc26.50]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.50...v0.3.3-mc26.50
 [0.3.1-mc26.50]: https://github.com/wo55555/Playback/compare/v0.3.1-mc26.20...v0.3.1-mc26.50
