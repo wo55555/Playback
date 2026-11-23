@@ -21,6 +21,7 @@
 #include "playback/runtime/command/Command.h"
 #include "playback/screen/MainMenuHooks.h"
 #include "playback/screen/RecordControlsHooks.h"
+#include "playback/visuals/ReplayAttachableHooks.h"
 #include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
@@ -209,6 +210,7 @@ bool Playback::unhook() {
     exporting::releaseOfflineRenderTimeHooks();
     // The replay session installs these for its whole lifetime; release them with the mod.
     visuals::hookReplayFirstPersonHands(false, visuals::SubjectHideReason::Session);
+    visuals::hookReplayAttachables(false, visuals::SubjectHideReason::Session);
     visuals::hookReplaySubjectHide(false, visuals::SubjectHideReason::Session);
     visuals::releaseReplayContainerKeepOpen();
     visuals::releaseReplayHudHooks();

@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Undoing back to the saved state now clears the unsaved indicator in the status bar instead of leaving the project marked as dirty.
 - Undoing or redoing edits made in another scene now switches back to that scene and clears stale timeline selections, and dragging a clip's speed slider now records a single history entry on release instead of pushing one per frame.
 - The replay browser, editor overlay, export progress screen, and frame capture now remain visible without hanging when third-party overlays or capture tools (such as RTSS) hook, patch, or bypass DXGI swap-chain presentation and resizing.
+- Held weapons and attachables (such as bows, crossbows, and tridents) now stay attached to the player's hand across skin loads and mid-replay skin swaps, remain visible alongside the player's arm in first-person follow for persona skins, and continue updating on the recorded player while following someone else.
 
 ## [0.4.1-mc26.10] - 2026-11-22
 

@@ -15,11 +15,13 @@
 #include "mc/client/gui/screens/InGamePlayScreen.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
+#include "mc/client/renderer/actor/ActorRenderDispatcher.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/client/renderer/screen/MinecraftUIRenderContext.h"
 #include "mc/deps/core/math/Color.h"
 #include "mc/deps/core/math/Matrix.h"
+#include "mc/deps/core/string/HashedString.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/entity/components/AbilitiesComponent.h"
 #include "mc/entity/components/ActorGameTypeComponent.h"
@@ -35,6 +37,9 @@
 #include "mc/world/actor/player/AbilitiesIndex.h"
 #include "mc/world/actor/player/Ability.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/player/SerializedSkinImpl.h"
+#include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/item/ItemStack.h"
 
 #include <Windows.h>
@@ -441,6 +446,45 @@ LL_TYPE_INSTANCE_HOOK(
     origin(context, itemFlags);
 }
 
+// Keeps the observer's renderer id resolvable in ActorRenderDispatcher for the first-person arm/attachable pass.
+// ClientSkinSystem registers persona skins under a session-local id asynchronously on the subject actor; if the
+// observer still holds the recorded id (or the skin is still loading), _renderFirstPersonHandsAndAttachables bails
+// early and hides both the arm and every attachable (bow, crossbow, trident, shield, spyglass).
+class ScopedObserverHandRenderer {
+public:
+    ScopedObserverHandRenderer(BaseActorRenderContext& context, Player& player, Player* subject) : mPlayer(player) {
+        if (!subject || !player.isLocalPlayer()) return;
+        auto* const dispatcher = context.mEntityRenderDispatcher.get();
+        if (!dispatcher) return;
+
+        bool const subjectHasRenderer = dispatcher->getRenderer(*subject) != nullptr;
+        if (subjectHasRenderer && player.mActorRendererId.get() != subject->mActorRendererId.get() && subject->mSkin
+            && subject->mSkin->mSkinImpl) {
+            player.updateSkin(*subject->mSkin, static_cast<int>(subject->getClientSubId()));
+            player.mFirstPersonAnimationComponent.reset();
+        }
+
+        if (dispatcher->getRenderer(player) != nullptr) return;
+
+        static HashedString const defaultPlayerRendererId{"minecraft:player"};
+        mSavedRendererId = player.mActorRendererId.get();
+        mSwapped         = true;
+        player.setActorRendererId(subjectHasRenderer ? subject->getActorRendererId() : defaultPlayerRendererId);
+    }
+
+    ~ScopedObserverHandRenderer() {
+        if (mSwapped) mPlayer.setActorRendererId(mSavedRendererId);
+    }
+
+    ScopedObserverHandRenderer(ScopedObserverHandRenderer const&)            = delete;
+    ScopedObserverHandRenderer& operator=(ScopedObserverHandRenderer const&) = delete;
+
+private:
+    Player&      mPlayer;
+    HashedString mSavedRendererId;
+    bool         mSwapped{};
+};
+
 LL_TYPE_INSTANCE_HOOK(
     HandHandsHook,
     ll::memory::HookPriority::High,
@@ -450,7 +494,9 @@ LL_TYPE_INSTANCE_HOOK(
     BaseActorRenderContext& context,
     Player&                 player
 ) {
-    origin(context, handPlayer(player));
+    auto&                      target = handPlayer(player);
+    ScopedObserverHandRenderer rendererGuard(context, target, subjectPlayer());
+    origin(context, target);
 }
 
 LL_TYPE_INSTANCE_HOOK(
