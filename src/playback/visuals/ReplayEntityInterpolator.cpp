@@ -508,9 +508,31 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             if (positioned) {
                 applied.stateVector->mPos     = applied.exportPosition;
                 applied.stateVector->mPosPrev = applied.stateVector->mPos;
-                // The hidden subject keeps its per-tick movement: its first-person hand bob is driven by it.
-                bool const isSubject           = state->hidden && state->hidden->actor == target.actor;
-                applied.stateVector->mPosDelta = isSubject ? applied.statePositionDelta : Vec3{};
+                // The hidden subject keeps its per-tick movement for first-person hand bob; a gliding entity needs its
+                // flight velocity for body banking, gliding speed damping, and elytra wing spread.
+                bool const isSubject = state->hidden && state->hidden->actor == target.actor;
+                if (isSubject) {
+                    applied.stateVector->mPosDelta = applied.statePositionDelta;
+                } else if (target.actor->getStatusFlag(ActorFlags::Gliding)) {
+                    Vec3 glideDelta = applied.statePositionDelta;
+                    if (history->second.currentTick > history->second.previousTick) {
+                        float const invTicks =
+                            1.0f / static_cast<float>(history->second.currentTick - history->second.previousTick);
+                        Vec3 const sampledDelta{
+                            (history->second.current.position.x - history->second.previous.position.x) * invTicks,
+                            (history->second.current.position.y - history->second.previous.position.y) * invTicks,
+                            (history->second.current.position.z - history->second.previous.position.z) * invTicks,
+                        };
+                        if (std::isfinite(sampledDelta.x) && std::isfinite(sampledDelta.y)
+                            && std::isfinite(sampledDelta.z)
+                            && (sampledDelta.x != 0.0f || sampledDelta.y != 0.0f || sampledDelta.z != 0.0f)) {
+                            glideDelta = sampledDelta;
+                        }
+                    }
+                    applied.stateVector->mPosDelta = glideDelta;
+                } else {
+                    applied.stateVector->mPosDelta = Vec3{};
+                }
                 applied.renderPosition->mValue = applied.exportPosition;
             }
             if (applied.movementInterpolator) {

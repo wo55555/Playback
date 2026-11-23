@@ -47,6 +47,7 @@
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/DynamicRenderOffsetComponent.h"
+#include "mc/entity/components/FallFlyTicksComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/ItemInUseTicksDuringMovementComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
@@ -504,6 +505,26 @@ void updateReplayHandBob(Actor& actor, float horizontalSpeed) {
     float const target = actor.getStatusFlag(ActorFlags::Swimming) ? 0.0f : std::min(0.1f, horizontalSpeed);
     bob->mBobPrev      = bob->mBob;
     bob->mBob         += (target - bob->mBob) * 0.08f;
+}
+
+// GlideInputSystem only ticks players with a local/server input request, leaving RemotePlayer::FallFlyTicksComponent
+// stuck at 0 so getDamageOrGlidingXYRotation keeps the gliding body nearly upright.
+constexpr int FullGlideFallFlyTicks = 10;
+
+void updateReplayGlidingTicks(Player& player, bool snapToFull) {
+    auto& context = player.getEntityContext();
+    auto  fallFly = context.tryGetComponent<FallFlyTicksComponent>();
+    if (!fallFly) {
+        context.getRegistry().emplace<FallFlyTicksComponent>(context.mEntity);
+        fallFly = context.tryGetComponent<FallFlyTicksComponent>();
+        if (!fallFly) return;
+    }
+    int& ticks = fallFly->mValue;
+    if (player.getStatusFlag(ActorFlags::Gliding)) {
+        ticks = snapToFull ? std::max(ticks, FullGlideFallFlyTicks) : (ticks + 1);
+    } else {
+        ticks = 0;
+    }
 }
 
 void applyReplayEntityMovement(
@@ -5240,6 +5261,12 @@ void ReplaySession::handleNextTick() {
             updateReplayHandBob(*actor, 0.0f);
             bobTick = mCurrentTick;
         }
+        level.forEachPlayer([&](Player& player) {
+            if (&player == mReplayPlayer) return true;
+            if (!mRecordedEntityIds.contains(player.getOrCreateUniqueID())) return true;
+            updateReplayGlidingTicks(player, false);
+            return true;
+        });
     }
     visuals::commitReplayEntityPoses(static_cast<int64_t>(mCurrentTick) + 1);
     mCurrentTick += 1;
@@ -6705,6 +6732,9 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                     player.mFirstPersonAnimationComponent.reset();
                     getLogger()
                         .debug("replay skin applied name={} uuid={}", *addPlayer.mName, addPlayer.mUuid->asString());
+                }
+                if (player.getStatusFlag(ActorFlags::Gliding)) {
+                    updateReplayGlidingTicks(player, true);
                 }
             }
             if (auto const renderKey = replayEntityRenderKey(level, entityId)) {
