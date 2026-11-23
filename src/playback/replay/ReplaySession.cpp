@@ -9,6 +9,7 @@
 #include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/runtime/ClientTickHooks.h"
+#include "playback/visuals/ReplayAttachableHooks.h"
 #include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
@@ -778,16 +779,6 @@ bool divertRecordedHudPacket(Packet& packet, FollowedHudMirror& mirror) {
         ++mirror.diverted;
         return true;
     }
-    case MinecraftPacketIds::PlayerEquipment: {
-        auto& equipment = static_cast<MobEquipmentPacket&>(packet);
-        if (equipment.mRuntimeId->rawID != record::RecordedPlayerRuntimeIdValue) return false;
-        if (equipment.mContainerId != ContainerID::Inventory || !level) return true;
-        int const slot = std::clamp(static_cast<int>(equipment.mSlot), 0, 8);
-        mirror.savedHotbar[static_cast<size_t>(slot)] = toItem(*equipment.mItem);
-        mirror.savedSelected                          = std::clamp(static_cast<int>(equipment.mSelectedSlot), 0, 8);
-        ++mirror.diverted;
-        return true;
-    }
     default:
         return false;
     }
@@ -829,6 +820,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
     mLastScreenSkipAction.clear();
     // Installed once per replay (inert until the subject is hidden) so toggling follow never hooks anything.
     visuals::hookReplaySubjectHide(true, visuals::SubjectHideReason::Session);
+    visuals::hookReplayAttachables(true, visuals::SubjectHideReason::Session);
     visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Session);
     visuals::installReplayHudHooks();
 
@@ -1756,6 +1748,7 @@ void ReplaySession::applyObserverSkin(SerializedSkinRef const& skin) {
         if (current.mSkinImpl) mObserverOriginalSkin = std::make_unique<SerializedSkinRef>(current);
     }
     mReplayPlayer->updateSkin(skin, static_cast<int>(mReplayPlayer->getClientSubId()));
+    mReplayPlayer->mFirstPersonAnimationComponent.reset();
     mObserverSkinApplied = true;
 }
 
@@ -1765,6 +1758,7 @@ void ReplaySession::restoreObserverSkin() {
         return;
     }
     mReplayPlayer->updateSkin(*mObserverOriginalSkin, static_cast<int>(mReplayPlayer->getClientSubId()));
+    mReplayPlayer->mFirstPersonAnimationComponent.reset();
     mObserverSkinApplied = false;
     getLogger().debug("replay observer skin restored");
 }
@@ -2038,18 +2032,21 @@ void ReplaySession::rebindReplaySubject() {
     }
     bool applied = false;
     if (actor->isPlayer()) {
-        auto&       subject = static_cast<Player&>(*actor);
-        auto const& entries = subject.getLevel().getPlayerList();
-        auto const  entry   = entries.find(subject.getUuid());
-        if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
-            applyObserverSkin(*entry->second.mSkin);
-            getLogger().debug("replay observer skin applied name={} uuid={}", name, uuid);
-            applied = true;
-        } else if (subject.getSkin().mSkinImpl) {
-            // The player list can lag the actor. The actor skin is what third person already draws.
+        auto& subject = static_cast<Player&>(*actor);
+        if (subject.getSkin().mSkinImpl) {
+            // Prefer the live actor skin over the player list entry: ClientSkinSystem rebuilds persona skins with a
+            // session-local id and registers the renderer under the actor's rebuilt skin, not the recorded list entry.
             applyObserverSkin(subject.getSkin());
             getLogger().debug("replay observer skin applied from actor name={} uuid={}", name, uuid);
             applied = true;
+        } else {
+            auto const& entries = subject.getLevel().getPlayerList();
+            auto const  entry   = entries.find(subject.getUuid());
+            if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
+                applyObserverSkin(*entry->second.mSkin);
+                getLogger().debug("replay observer skin applied name={} uuid={}", name, uuid);
+                applied = true;
+            }
         }
     }
     if (!applied) restoreObserverSkin();
@@ -6627,6 +6624,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
                     auto& player = static_cast<Player&>(*actor);
                     player.updateSkin(*entry->second.mSkin, static_cast<int>(player.getClientSubId()));
+                    player.mFirstPersonAnimationComponent.reset();
                     getLogger()
                         .debug("replay skin applied name={} uuid={}", *addPlayer.mName, addPlayer.mUuid->asString());
                 }
