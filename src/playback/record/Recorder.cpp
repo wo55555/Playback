@@ -23,6 +23,7 @@
 #include "mc/entity/components/LoadingStateComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
+#include "mc/entity/components/UserEntityIdentifierComponent.h"
 #include "mc/entity/components/VanillaOffsetComponent.h"
 #include "mc/entity/systems/VanillaOffsetSystem.h"
 #include "mc/network/MinecraftPacketIds.h"
@@ -76,6 +77,8 @@
 #include "mc/world/actor/player/Inventory.h"
 #include "mc/world/actor/player/PlayerInventory.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
+#include "mc/world/actor/player/SerializedSkinImpl.h"
+#include "mc/world/actor/player/SerializedSkinRef.h"
 #include "mc/world/actor/state/PropertyComponent.h"
 #include "mc/world/attribute/Attribute.h"
 #include "mc/world/attribute/AttributeData.h"
@@ -1913,7 +1916,16 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
         auto const                              playerUuid     = finalPlayer->getUuid().asString();
         std::vector<PlayerListEntry>            identity;
         std::unordered_map<std::string, size_t> identityIndex;
-        auto const hasSkin = [](PlayerListEntry const& entry) { return static_cast<bool>(entry.mSkin->mSkinImpl); };
+        auto const                              hasUsableSkin = [](SerializedSkinRef const& skin) {
+            if (!skin.mSkinImpl) return false;
+            auto const& image = *skin.mSkinImpl->mObject.mSkinImage;
+            if (image.mWidth == 0 || image.mHeight == 0 || image.mWidth > 4096 || image.mHeight > 4096) {
+                return false;
+            }
+            auto const expectedBytes = static_cast<size_t>(image.mWidth) * static_cast<size_t>(image.mHeight) * 4u;
+            return image.mImageBytes.size() == expectedBytes;
+        };
+        auto const hasSkin = [&](PlayerListEntry const& entry) { return hasUsableSkin(*entry.mSkin); };
         std::unordered_map<std::string, Player const*> playersByUuid;
         playersByUuid.emplace(playerUuid, finalPlayer);
         level.forEachPlayer([&](Player& player) {
@@ -1921,11 +1933,11 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
             return true;
         });
         auto const upsertIdentity = [&](PlayerListEntry entry) {
-            // A listed entry can lack its skin; fall back to the skin the player actor already renders with.
+            // A listed entry can carry an empty default-constructed skin; fall back to the skin the actor renders with.
             if (!hasSkin(entry)) {
                 auto const source = playersByUuid.find(entry.mUUID->asString());
                 if (source != playersByUuid.end()) {
-                    if (auto const& ownSkin = source->second->mSkin; ownSkin && static_cast<bool>(ownSkin->mSkinImpl)) {
+                    if (auto const& ownSkin = source->second->mSkin; ownSkin && hasUsableSkin(*ownSkin)) {
                         entry.mSkin->mSkinImpl = ownSkin->mSkinImpl;
                     }
                 }
@@ -1996,10 +2008,28 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
             return true;
         };
 
+        auto const createSnapshotAddPlayerPacket = [](Player& player) {
+            std::unique_ptr<AddPlayerPacket> packet;
+            if (auto nativePacket = player.tryCreateAddActorPacket();
+                nativePacket && nativePacket->getId() == MinecraftPacketIds::AddPlayer) {
+                packet.reset(static_cast<AddPlayerPacket*>(nativePacket.release()));
+            } else {
+                packet = std::make_unique<AddPlayerPacket>(player);
+            }
+            if (*packet->mUuid == mce::UUID{}) {
+                if (auto const userId =
+                        player.getEntityContext().tryGetComponent<UserEntityIdentifierComponent>()) {
+                    packet->mUuid        = *userId->mClientUUID;
+                    packet->mSenderSubId = userId->mClientSubId;
+                }
+            }
+            return packet;
+        };
+
         // The recorded local player is required snapshot state, independent of the transient runtime actor list.
-        AddPlayerPacket recordedPlayer(*finalPlayer);
+        auto recordedPlayer = createSnapshotAddPlayerPacket(*finalPlayer);
         remapRecordedPlayerReferences(
-            recordedPlayer,
+            *recordedPlayer,
             finalPlayer->getOrCreateUniqueID(),
             finalPlayer->getRuntimeID(),
             finalPlayer->getUuid(),
@@ -2007,9 +2037,9 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
             *mRecordedLocalPlayerRuntimeId,
             *mRecordedLocalPlayerUuid
         );
-        recordedPlayer.mPlayerGameType = finalPlayer->getPlayerGameType();
+        recordedPlayer->mPlayerGameType = finalPlayer->getPlayerGameType();
         PlaybackBuffer recordedPlayerStream;
-        recordedPlayer.write(recordedPlayerStream);
+        recordedPlayer->write(recordedPlayerStream);
         mSnapshotLocalPlayerPayload = std::move(recordedPlayerStream.mBuffer);
         if (!appendActorState(*finalPlayer, *mRecordedLocalPlayerRuntimeId)) {
             return SnapshotCaptureResult::Failed;
@@ -2051,9 +2081,9 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
             if (!appendActorState(*actor, actor->getRuntimeID())) return SnapshotCaptureResult::Failed;
         }
         for (auto* player : spawnPlayers) {
-            AddPlayerPacket packet(*player);
+            auto packet = createSnapshotAddPlayerPacket(*player);
             serializedPlayers.insert(player->getOrCreateUniqueID().rawID);
-            appendEntityPacket(packet);
+            appendEntityPacket(*packet);
             if (!appendActorState(*player, player->getRuntimeID())) return SnapshotCaptureResult::Failed;
         }
         getLogger().debug(
