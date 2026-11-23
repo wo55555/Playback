@@ -52,6 +52,7 @@ private:
     int  mExportCrf{18};
     bool mExportHideHud{false};
     bool mExportAudio{true};
+    bool mExportExternalAudio{true};
     int  mExportAudioChannels{1};
     int  mExportAudioCodec{0};
     int  mExportAudioBitrate{1};

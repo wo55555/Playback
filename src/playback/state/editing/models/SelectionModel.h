@@ -31,7 +31,73 @@ struct SelectedCamera {
     std::string cameraId;
 };
 
-using Selection = std::variant<SelectedKeyframe, SelectedClip, SelectedMarker, SelectedTransition, SelectedCamera>;
+struct SelectedSpeedTrack {};
+
+struct SelectedSpeedKeyframe {
+    int tick{};
+};
+
+struct SelectedFreezeTrack {};
+
+struct SelectedFreezeKeyframe {
+    int tick{};
+};
+
+struct SelectedTimelapseTrack {};
+
+struct SelectedTimelapseKeyframe {
+    int tick{};
+};
+
+struct SelectedTimeOfDayTrack {};
+
+struct SelectedTimeOfDayKeyframe {
+    int tick{};
+};
+
+struct SelectedTimeOfDayKeyframes {
+    std::vector<int> ticks;
+};
+
+struct SelectedWeatherTrack {};
+
+struct SelectedWeatherKeyframe {
+    int tick{};
+};
+
+struct SelectedWeatherKeyframes {
+    std::vector<int> ticks;
+};
+
+struct SelectedAudioTrack {
+    std::string trackId;
+};
+
+struct SelectedAudioClip {
+    std::string trackId;
+    std::string clipId;
+};
+
+using Selection = std::variant<
+    SelectedKeyframe,
+    SelectedClip,
+    SelectedMarker,
+    SelectedTransition,
+    SelectedCamera,
+    SelectedSpeedTrack,
+    SelectedSpeedKeyframe,
+    SelectedFreezeTrack,
+    SelectedFreezeKeyframe,
+    SelectedTimelapseTrack,
+    SelectedTimelapseKeyframe,
+    SelectedTimeOfDayTrack,
+    SelectedTimeOfDayKeyframe,
+    SelectedTimeOfDayKeyframes,
+    SelectedWeatherTrack,
+    SelectedWeatherKeyframe,
+    SelectedWeatherKeyframes,
+    SelectedAudioTrack,
+    SelectedAudioClip>;
 
 struct EditorStateExt;
 
@@ -39,6 +105,36 @@ class SelectionModel {
 public:
     void                                   select(Selection sel);
     void                                   clear();
+    void                                   selectSpeedTrack();
+    void                                   selectSpeedKeyframe(int tick);
+    [[nodiscard]] bool                     isSpeedTrackSelected() const;
+    [[nodiscard]] std::optional<int>       selectedSpeedKeyframe() const;
+    void                                   selectFreezeTrack();
+    void                                   selectFreezeKeyframe(int tick);
+    [[nodiscard]] bool                     isFreezeTrackSelected() const;
+    [[nodiscard]] std::optional<int>       selectedFreezeKeyframe() const;
+    void                                   selectTimelapseTrack();
+    void                                   selectTimelapseKeyframe(int tick);
+    [[nodiscard]] bool                     isTimelapseTrackSelected() const;
+    [[nodiscard]] std::optional<int>       selectedTimelapseKeyframe() const;
+    void                                           selectTimeOfDayTrack();
+    void                                           selectTimeOfDayKeyframe(int tick);
+    void                                           selectTimeOfDayKeyframes(std::vector<int> ticks);
+    [[nodiscard]] bool                             isTimeOfDayTrackSelected() const;
+    [[nodiscard]] std::optional<int>               selectedTimeOfDayKeyframe() const;
+    [[nodiscard]] std::vector<int>                 selectedTimeOfDayKeyframes() const;
+    [[nodiscard]] bool                             isTimeOfDayKeyframeSelected(int tick) const;
+    void                                           selectWeatherTrack();
+    void                                           selectWeatherKeyframe(int tick);
+    void                                           selectWeatherKeyframes(std::vector<int> ticks);
+    [[nodiscard]] bool                             isWeatherTrackSelected() const;
+    [[nodiscard]] std::optional<int>               selectedWeatherKeyframe() const;
+    [[nodiscard]] std::vector<int>                 selectedWeatherKeyframes() const;
+    [[nodiscard]] bool                             isWeatherKeyframeSelected(int tick) const;
+    void                                           selectAudioTrack(std::string trackId);
+    void                                           selectAudioClip(std::string trackId, std::string clipId);
+    [[nodiscard]] std::optional<std::string>       selectedAudioTrackId() const;
+    [[nodiscard]] std::optional<SelectedAudioClip> selectedAudioClip() const;
     [[nodiscard]] bool                     hasSelection() const;
     [[nodiscard]] const Selection*         getSelection() const;
     [[nodiscard]] std::vector<std::string> selectedIds() const;
@@ -63,6 +159,7 @@ public:
 private:
     std::optional<Selection>      mSelection;
     std::vector<SelectedKeyframe> mKeyframes;
+    std::string                   mLastSceneId;
 };
 
 } // namespace playback::state::editing::model

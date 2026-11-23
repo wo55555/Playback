@@ -13,10 +13,13 @@
 #include "panels/StatusPanel.h"
 #include "panels/TimelinePanel.h"
 #include "panels/ViewportPanel.h"
+#include "playback/editor/ui/components/EditorToast.h"
 #include "playback/editor/ui/components/Splitter.h"
 #include "playback/editor/ui/menus/EditorMenuBar.h"
 #include "playback/editor/ui/modes/ModeManager.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <string>
@@ -30,6 +33,7 @@ public:
 
     void initialize();
     void shutdown();
+    void saveLayoutPreferences() const;
 
     void draw(playback::state::EditorState const& state, SubmitAction const& submit);
 
@@ -43,6 +47,8 @@ public:
 
     void               seekTo(int tick) override;
     void               seekRelative(int tickDelta) override;
+    void                       undo(std::size_t steps = 1) override;
+    void                       redo(std::size_t steps = 1) override;
     void               toggleViewportMaximized() override { mViewportMaximized = !mViewportMaximized; }
     [[nodiscard]] bool isViewportMaximized() const override { return mViewportMaximized; }
     void               toggleCameraPath() override;
@@ -120,6 +126,8 @@ private:
     SubmitAction const*                   mSubmit{};
     state::editing::model::SelectionModel mSelection;
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
+    EditorToast                           mToast;
+    std::uint64_t                         mLastHistoryEventSeq{0};
 
     bool  mFollowExitTapArmed{false};
     bool  mExitHoldBlocked{false};
@@ -139,7 +147,6 @@ private:
     std::string                                    mActiveReplayPath;
 
     void loadLayoutPreferences();
-    void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
     void updateExitHold(bool escapeConsumedByUi);
 

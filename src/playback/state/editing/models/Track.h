@@ -1,16 +1,139 @@
 ﻿#pragma once
 
+#include "CameraKeyframe.h"
 #include "MathTypes.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
 namespace playback::state::editing::model {
 
-constexpr float MinClipSpeed = 0.05f;
-constexpr float MaxClipSpeed = 32.0f;
+inline constexpr float MinSpeedKeyframeValue = 0.01f;
+inline constexpr float MaxSpeedKeyframeValue = 32.0f;
+
+struct SpeedKeyframe {
+    float                   speed{1.0f};
+    CameraInterpolationType interpolationType{CameraInterpolationType::Smooth};
+    Vec2                    bezierCtrl1{0.42f, 0.0f};
+    Vec2                    bezierCtrl2{0.58f, 1.0f};
+};
+
+struct SpeedTrack {
+    bool                         present{false};
+    bool                         enabled{true};
+    bool                         locked{false};
+    std::map<int, SpeedKeyframe> keysByTick;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+[[nodiscard]] inline float clampSpeedKeyframeValue(float speed) noexcept {
+    if (!std::isfinite(speed)) return 1.0f;
+    return std::clamp(speed, MinSpeedKeyframeValue, MaxSpeedKeyframeValue);
+}
+
+inline constexpr int MinFreezeDelayTicks = 0;
+inline constexpr int MaxFreezeDelayTicks = 10;
+
+struct FreezeKeyframe {
+    bool frozen{true};
+    int  frozenDelay{0};
+
+    bool operator==(FreezeKeyframe const&) const = default;
+};
+
+struct FreezeTrack {
+    bool                          present{false};
+    bool                          enabled{true};
+    bool                          locked{false};
+    std::map<int, FreezeKeyframe> keysByTick;
+
+    bool operator==(FreezeTrack const&) const = default;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+[[nodiscard]] inline int clampFreezeDelayTicks(int delayTicks) noexcept {
+    return std::clamp(delayTicks, MinFreezeDelayTicks, MaxFreezeDelayTicks);
+}
+
+inline constexpr int    MinTimelapseOutputTicks = 0;
+inline constexpr int    MaxTimelapseOutputTicks = 20 * 60 * 60 * 24;
+inline constexpr double MinTimelapseSpeed       = 0.001;
+inline constexpr double MaxTimelapseSpeed       = 10000.0;
+
+struct TimelapseKeyframe {
+    int outputTicks{0};
+
+    bool operator==(TimelapseKeyframe const&) const = default;
+};
+
+struct TimelapseTrack {
+    bool                             present{false};
+    bool                             enabled{true};
+    bool                             locked{false};
+    std::map<int, TimelapseKeyframe> keysByTick;
+
+    bool operator==(TimelapseTrack const&) const = default;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+[[nodiscard]] inline int clampTimelapseOutputTicks(int ticks) noexcept {
+    return std::clamp(ticks, MinTimelapseOutputTicks, MaxTimelapseOutputTicks);
+}
+
+inline constexpr int MinTimeOfDayTicks = 0;
+inline constexpr int DayCycleTicks     = 24000;
+inline constexpr int MaxTimeOfDayTicks = 240000;
+
+enum class WeatherOverride : uint8_t { Recorded = 0, Clear = 1, Overcast = 2, Rain = 3, Snow = 4, Thunder = 5 };
+
+struct TimeOfDayKeyframe {
+    int                     timeOfDay{6000};
+    CameraInterpolationType interpolationType{CameraInterpolationType::Linear};
+    Vec2                    bezierCtrl1{0.42f, 0.0f};
+    Vec2                    bezierCtrl2{0.58f, 1.0f};
+};
+
+struct TimeOfDayTrack {
+    bool                             present{false};
+    bool                             enabled{true};
+    bool                             locked{false};
+    std::map<int, TimeOfDayKeyframe> keysByTick;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+struct WeatherKeyframe {
+    WeatherOverride weather{WeatherOverride::Clear};
+
+    bool operator==(WeatherKeyframe const&) const = default;
+};
+
+struct WeatherTrack {
+    bool                           present{false};
+    bool                           enabled{true};
+    bool                           locked{false};
+    std::map<int, WeatherKeyframe> keysByTick;
+
+    bool operator==(WeatherTrack const&) const = default;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+[[nodiscard]] inline int clampTimeOfDayTicks(int ticks) noexcept {
+    return std::clamp(ticks, MinTimeOfDayTicks, MaxTimeOfDayTicks);
+}
+
+[[nodiscard]] inline double clampTimeOfDayDouble(double ticks) noexcept {
+    if (!std::isfinite(ticks)) return 6000.0;
+    return std::clamp(ticks, static_cast<double>(MinTimeOfDayTicks), static_cast<double>(MaxTimeOfDayTicks));
+}
 
 struct Clip {
     std::string id;
@@ -18,13 +141,46 @@ struct Clip {
     int         inTick{};
     int         outTick{};
     int         trackTick{};
-    float       speed{1.0f};
     std::string name;
     Color4      color{0, 0, 1, 1};
-    bool        muted{false};
     bool        locked{false};
     bool        exportEnabled{true};
 };
+
+inline constexpr float  MinAudioVolume   = 0.0f;
+inline constexpr float  MaxAudioVolume   = 2.0f;
+inline constexpr double MinAudioTrimSecs = 0.0;
+
+struct AudioClip {
+    std::string id;
+    std::string name;
+    std::string filePath;
+    int         startTick{0};
+    double      trimStartSeconds{0.0};
+    double      durationSeconds{0.0}; // 0 means full remaining duration of the audio file
+    float       volume{1.0f};
+    bool        muted{false};
+};
+
+struct AudioTrack {
+    std::string            id;
+    std::string            name;
+    bool                   enabled{true};
+    bool                   muted{false};
+    bool                   locked{false};
+    float                  volume{1.0f};
+    std::vector<AudioClip> clips;
+};
+
+[[nodiscard]] inline float clampAudioVolume(float volume) noexcept {
+    if (!std::isfinite(volume)) return 1.0f;
+    return std::clamp(volume, MinAudioVolume, MaxAudioVolume);
+}
+
+[[nodiscard]] inline double clampAudioSeconds(double seconds) noexcept {
+    if (!std::isfinite(seconds)) return 0.0;
+    return std::max(MinAudioTrimSecs, seconds);
+}
 
 enum class TransitionKind : uint8_t { Cut = 0, Fade, CrossDissolve };
 
@@ -54,18 +210,8 @@ inline float Transition::blendAlpha(int tickInTransition) const {
     return t;
 }
 
-[[nodiscard]] inline float clampClipSpeed(float speed) noexcept {
-    if (!std::isfinite(speed)) return 1.0f;
-    return std::clamp(speed, MinClipSpeed, MaxClipSpeed);
-}
-
 [[nodiscard]] inline int clipSourceDurationTicks(Clip const& clip) noexcept {
     return std::max(0, clip.outTick - clip.inTick);
-}
-
-[[nodiscard]] inline double clipOutputDurationSeconds(Clip const& clip) noexcept {
-    return static_cast<double>(clipSourceDurationTicks(clip))
-         / (20.0 * static_cast<double>(clampClipSpeed(clip.speed)));
 }
 
 } // namespace playback::state::editing::model

@@ -3,9 +3,11 @@
 #include "playback/Playback.h"
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/HistoryLabel.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
+#include "playback/keyframe/TimelapseTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/utils/ShellUtils.h"
 
@@ -21,6 +23,7 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -264,23 +267,34 @@ void trailingText(char const* text, float rightEdge) {
 }
 
 // Slim bar showing the chosen range against the whole replay, with the playhead marked.
-void rangePreview(int start, int end, int current, int total, float width) {
+// Returns the clicked/scrubbed tick when the user interacts with the bar.
+std::optional<int> rangePreview(int start, int end, int current, int total, float width) {
     float const  h     = 6.0f * metrics::scale();
     float const  w     = std::max(1.0f, width);
     float const  slotH = ImGui::GetFrameHeight();
     ImVec2 const slot  = ImGui::GetCursorScreenPos();
-    ImGui::Dummy({w, slotH});
+    ImGui::InvisibleButton("##export-range-bar", {w, slotH});
+    bool const hovered = ImGui::IsItemHovered();
+    bool const active  = ImGui::IsItemActive();
+    if (hovered && total > 0) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    widgets::itemTooltip("playback.refactorEditor.export.rangePreviewHint"_tr().c_str());
+
     // Occupies a frame-height slot so it lines up with the button sharing its row.
     ImVec2 const min{slot.x, slot.y + (slotH - h) * 0.5f};
     auto*        drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(min, {min.x + w, min.y + h}, theme::kInputBg, h * 0.5f);
-    if (total <= 0) return;
+    if (total <= 0) return std::nullopt;
     auto const at = [&](int tick) {
         return min.x + w * static_cast<float>(std::clamp(tick, 0, total)) / static_cast<float>(total);
     };
     if (end > start) drawList->AddRectFilled({at(start), min.y}, {at(end), min.y + h}, theme::kAccent, h * 0.5f);
     float const px = at(current);
     drawList->AddLine({px, min.y - 2.0f}, {px, min.y + h + 2.0f}, theme::kPlayhead, 2.0f);
+    if (active && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        float const t = std::clamp((ImGui::GetMousePos().x - min.x) / w, 0.0f, 1.0f);
+        return std::clamp(static_cast<int>(std::lround(t * static_cast<float>(total))), 0, total);
+    }
+    return std::nullopt;
 }
 
 void shortcutRow(std::string const& keys, std::string const& description) {
@@ -354,6 +368,8 @@ struct ShortcutGroup {
              {key(EditorKeybind::ResetTimelineZoom), "playback.refactorEditor.shortcuts.zoomReset"_tr()},
              {shortcutPair(EditorKeybind::MarkExportIn, EditorKeybind::MarkExportOut),
               "playback.refactorEditor.shortcuts.exportRange"_tr()},
+             {shortcutPair(EditorKeybind::JumpExportIn, EditorKeybind::JumpExportOut),
+              "playback.refactorEditor.shortcuts.jumpExportRange"_tr()},
              {key(EditorKeybind::ClearExportRange), "playback.refactorEditor.shortcuts.clearExportRange"_tr()},
          }},
         {"playback.refactorEditor.shortcuts.application"_tr(),
@@ -501,21 +517,63 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
         }
 
         if (widgets::beginMenu("playback.refactorEditor.menu.edit"_tr().c_str())) {
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.menu.undo"_tr().c_str(),
-                    undoShortcut.c_str(),
-                    false,
-                    state.canUndo
-                )) {
-                ctx.submitAction({EditorActionType::UndoEditorEdit});
+            std::string const undoText =
+                (state.canUndo && !state.undoLabel.empty())
+                    ? ("playback.refactorEditor.menu.undoAction"_tr(translateHistoryLabel(state.undoLabel))
+                       + "###menu-undo")
+                    : ("playback.refactorEditor.menu.undo"_tr() + "###menu-undo");
+            if (ImGui::MenuItem(undoText.c_str(), undoShortcut.c_str(), false, state.canUndo && !exportActive)) {
+                ctx.commands.undo();
             }
-            if (ImGui::MenuItem(
-                    "playback.refactorEditor.menu.redo"_tr().c_str(),
-                    redoShortcut.c_str(),
-                    false,
-                    state.canRedo
-                )) {
-                ctx.submitAction({EditorActionType::RedoEditorEdit});
+            std::string const redoText =
+                (state.canRedo && !state.redoLabel.empty())
+                    ? ("playback.refactorEditor.menu.redoAction"_tr(translateHistoryLabel(state.redoLabel))
+                       + "###menu-redo")
+                    : ("playback.refactorEditor.menu.redo"_tr() + "###menu-redo");
+            if (ImGui::MenuItem(redoText.c_str(), redoShortcut.c_str(), false, state.canRedo && !exportActive)) {
+                ctx.commands.redo();
+            }
+            if (widgets::beginMenu("playback.refactorEditor.menu.history"_tr().c_str())) {
+                if ((!state.canUndo && !state.canRedo) || (state.undoHistory.empty() && state.redoHistory.empty())) {
+                    ImGui::MenuItem("playback.refactorEditor.menu.historyEmpty"_tr().c_str(), nullptr, false, false);
+                } else {
+                    if (!state.undoHistory.empty()) {
+                        ImGui::MenuItem(
+                            "playback.refactorEditor.menu.historyUndoSection"_tr(state.undoCount).c_str(),
+                            nullptr,
+                            false,
+                            false
+                        );
+                        for (std::size_t i = 0; i < state.undoHistory.size(); ++i) {
+                            std::string const itemLabel = std::to_string(i + 1) + ". "
+                                                        + translateHistoryLabel(state.undoHistory[i])
+                                                        + "##history-undo-" + std::to_string(i);
+                            if (ImGui::MenuItem(itemLabel.c_str(), nullptr, false, !exportActive)) {
+                                ctx.commands.undo(i + 1);
+                            }
+                        }
+                    }
+                    if (!state.undoHistory.empty() && !state.redoHistory.empty()) {
+                        ImGui::Separator();
+                    }
+                    if (!state.redoHistory.empty()) {
+                        ImGui::MenuItem(
+                            "playback.refactorEditor.menu.historyRedoSection"_tr(state.redoCount).c_str(),
+                            nullptr,
+                            false,
+                            false
+                        );
+                        for (std::size_t i = 0; i < state.redoHistory.size(); ++i) {
+                            std::string const itemLabel = std::to_string(i + 1) + ". "
+                                                        + translateHistoryLabel(state.redoHistory[i])
+                                                        + "##history-redo-" + std::to_string(i);
+                            if (ImGui::MenuItem(itemLabel.c_str(), nullptr, false, !exportActive)) {
+                                ctx.commands.redo(i + 1);
+                            }
+                        }
+                    }
+                }
+                widgets::endMenu();
             }
             ImGui::Separator();
             if (ImGui::MenuItem(
@@ -962,8 +1020,10 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             mExportLayoutMultiScene = multiScene;
             mExportBodyHeight       = 0.0f;
         }
-        mExportTab                  = std::clamp(mExportTab, 0, IM_ARRAYSIZE(tabLabels) - 1);
-        if (mExportTimelapse && mExportTab == TabAudio) mExportTab = TabGeneral;
+        bool const timelapseTrackActive = state.project && keyframe::hasActiveTimelapseTrack(*state.project);
+        bool const fixedTimelapseActive = mExportTimelapse && !timelapseTrackActive;
+        bool const hasExternalTracks    = state.project && !state.project->audioTracks.empty();
+        mExportTab                      = std::clamp(mExportTab, 0, IM_ARRAYSIZE(tabLabels) - 1);
         mExportAudioChannels        = std::clamp(mExportAudioChannels, 0, 1);
         mExportAudioCodec           = std::clamp(mExportAudioCodec, 0, IM_ARRAYSIZE(kAudioCodecs) - 1);
         mExportAudioBitrate         = std::clamp(mExportAudioBitrate, 0, IM_ARRAYSIZE(kAudioBitratesKbps) - 1);
@@ -1002,13 +1062,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
 
         // Settings are split over pages, so each one is short enough to show whole; the summary below spans them all.
         ImGui::Dummy({0.0f, 2.0f * uiScale});
-        bool const tabChanged = tabStrip(
-            "##export-tabs",
-            tabLabels,
-            IM_ARRAYSIZE(tabLabels),
-            mExportTab,
-            mExportTimelapse ? (1 << TabAudio) : 0
-        );
+        bool const tabChanged = tabStrip("##export-tabs", tabLabels, IM_ARRAYSIZE(tabLabels), mExportTab, 0);
 
         // Taller cells give the rows room to breathe without widening the label column.
         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {style.CellPadding.x, cellPaddingY});
@@ -1146,14 +1200,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 }
 
                 auto const formatClipOption = [](state::editing::model::Clip const& clip) {
-                    std::string text = clip.name + " (" + widgets::formatTick(clip.inTick) + " - "
-                                     + widgets::formatTick(clip.outTick) + ")";
-                    if (std::abs(clip.speed - 1.0f) > 0.001f) {
-                        char buf[16]{};
-                        std::snprintf(buf, sizeof(buf), " %.2gx", static_cast<double>(clip.speed));
-                        text += buf;
-                    }
-                    return text;
+                    return clip.name + " (" + widgets::formatTick(clip.inTick) + " - "
+                         + widgets::formatTick(clip.outTick) + ")";
                 };
                 auto const formatClipWithCameraOption = [&](state::editing::ClipOps::ClipWithCamera const& item) {
                     std::string text = item.camera ? (item.camera->name + " · ") : std::string{};
@@ -1233,12 +1281,16 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 }
                 if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::SequenceInOut)) {
                     std::string const usePlayhead = "playback.refactorEditor.export.usePlayhead"_tr();
+                    std::string const jumpToFrame = "playback.refactorEditor.export.jumpToFrame"_tr();
                     propertyLabel("playback.refactorEditor.export.startTick"_tr().c_str());
                     float const tickRowRight = ImGui::GetCursorScreenPos().x + valueWidth;
                     inputClampedInt("##export-start-tick", mExportStartTick, 0, maximumReplayTick, fieldWidth);
                     ImGui::SameLine();
                     if (frameIconButton("##export-start-current", ICON_CLOCK, usePlayhead.c_str()))
                         mExportStartTick = std::clamp(state.currentTick, 0, maximumReplayTick);
+                    ImGui::SameLine();
+                    if (frameIconButton("##export-start-jump", ICON_EYE, jumpToFrame.c_str()))
+                        ctx.commands.seekTo(mExportStartTick);
                     trailingText(widgets::formatTick(mExportStartTick).c_str(), tickRowRight);
 
                     propertyLabel("playback.refactorEditor.export.endTick"_tr().c_str());
@@ -1246,18 +1298,23 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     ImGui::SameLine();
                     if (frameIconButton("##export-end-current", ICON_CLOCK, usePlayhead.c_str()))
                         mExportEndTick = std::clamp(state.currentTick, 0, maximumReplayTick);
+                    ImGui::SameLine();
+                    if (frameIconButton("##export-end-jump", ICON_EYE, jumpToFrame.c_str()))
+                        ctx.commands.seekTo(mExportEndTick);
                     trailingText(widgets::formatTick(mExportEndTick).c_str(), tickRowRight);
 
                     // Range bar under the tick fields, with the reset-to-full-replay button at its end.
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(1);
-                    rangePreview(
-                        mExportStartTick,
-                        mExportEndTick,
-                        state.currentTick,
-                        maximumReplayTick,
-                        valueWidth - frameH - style.ItemSpacing.x
-                    );
+                    if (auto const seekTick = rangePreview(
+                            mExportStartTick,
+                            mExportEndTick,
+                            state.currentTick,
+                            maximumReplayTick,
+                            valueWidth - frameH - style.ItemSpacing.x
+                        )) {
+                        ctx.commands.seekTo(*seekTick);
+                    }
                     ImGui::SameLine();
                     if (frameIconButton(
                             "##export-full-range",
@@ -1295,13 +1352,15 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     "playback.refactorEditor.export.timelapse"_tr().c_str(),
                     "playback.refactorEditor.export.timelapseHint"_tr().c_str()
                 );
+                ImGui::BeginDisabled(timelapseTrackActive);
                 ImGui::Checkbox("##export-timelapse", &mExportTimelapse);
+                ImGui::EndDisabled();
 
                 propertyLabel(
                     "playback.refactorEditor.export.timelapseInterval"_tr().c_str(),
                     "playback.refactorEditor.export.timelapseIntervalHint"_tr().c_str()
                 );
-                ImGui::BeginDisabled(!mExportTimelapse);
+                ImGui::BeginDisabled(timelapseTrackActive || !mExportTimelapse);
                 {
                     constexpr int     kIntervalPresets[] = {50, 250, 1000, 5000, 60000};
                     char const* const kPresetLabels[]    = {"50ms", "250ms", "1s", "5s", "60s"};
@@ -1330,6 +1389,17 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     );
                 }
                 ImGui::EndDisabled();
+                if (timelapseTrackActive) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::PushTextWrapPos(0.0f);
+                    ImGui::TextColored(
+                        ImGui::ColorConvertU32ToFloat4(theme::kWarning),
+                        "%s",
+                        "playback.refactorEditor.export.timelapseTrackOverrideHint"_tr().c_str()
+                    );
+                    ImGui::PopTextWrapPos();
+                }
                 ImGui::EndTable();
             }
         } else if (mExportTab == TabVideo) {
@@ -1427,18 +1497,39 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndTable();
             }
         } else if (mExportTab == TabAudio) {
-            ImGui::BeginDisabled(mExportTimelapse);
+            bool const gameAudioActive           = mExportAudio && !fixedTimelapseActive;
+            bool const audioEncodeControlsActive = gameAudioActive || mExportExternalAudio;
+
             sectionHeader("playback.refactorEditor.export.capture"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-audio", labelWidth)) {
                 propertyLabel(
                     "playback.refactorEditor.export.recordAudio"_tr().c_str(),
                     "playback.refactorEditor.export.recordAudioHint"_tr().c_str()
                 );
+                ImGui::BeginDisabled(fixedTimelapseActive);
                 ImGui::Checkbox("##export-record-audio", &mExportAudio);
+                ImGui::EndDisabled();
+                if (fixedTimelapseActive) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::PushTextWrapPos(0.0f);
+                    ImGui::TextColored(
+                        ImGui::ColorConvertU32ToFloat4(theme::kWarning),
+                        "%s",
+                        "playback.refactorEditor.export.gameAudioDisabledTimelapseHint"_tr().c_str()
+                    );
+                    ImGui::PopTextWrapPos();
+                }
+
+                propertyLabel(
+                    "playback.refactorEditor.export.externalAudio"_tr().c_str(),
+                    "playback.refactorEditor.export.externalAudioHint"_tr().c_str()
+                );
+                ImGui::Checkbox("##export-external-audio", &mExportExternalAudio);
 
                 // Rows stay in place while audio is off, so the page keeps its layout.
                 propertyLabel("playback.refactorEditor.export.audioChannels"_tr().c_str());
-                ImGui::BeginDisabled(!mExportAudio);
+                ImGui::BeginDisabled(!audioEncodeControlsActive);
                 segmented(
                     "##export-audio-channels",
                     audioChannelOptions,
@@ -1457,7 +1548,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     "playback.refactorEditor.export.audioCodec"_tr().c_str(),
                     "playback.refactorEditor.export.audioCodecHint"_tr().c_str()
                 );
-                ImGui::BeginDisabled(mExportFormat != 0 || !mExportAudio);
+                ImGui::BeginDisabled(mExportFormat != 0 || !audioEncodeControlsActive);
                 segmented(
                     "##export-audio-codec",
                     audioCodecOptions,
@@ -1472,7 +1563,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     "playback.refactorEditor.export.audioBitrateHint"_tr().c_str()
                 );
                 ImGui::BeginDisabled(
-                    mExportFormat != 0 || !mExportAudio || !exporting::audioCodecUsesBitrate(audioCodec)
+                    mExportFormat != 0 || !audioEncodeControlsActive || !exporting::audioCodecUsesBitrate(audioCodec)
                 );
                 segmented(
                     "##export-audio-bitrate",
@@ -1484,7 +1575,6 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 ImGui::EndDisabled();
                 ImGui::EndTable();
             }
-            ImGui::EndDisabled();
         } else {
             sectionHeader("playback.refactorEditor.export.advancedRender"_tr().c_str(), 6.0f);
             if (beginPropertyTable("##export-rendering", labelWidth)) {
@@ -1584,7 +1674,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         baseSettings.encodeSpeed      = static_cast<exporting::VideoEncodeSpeed>(std::clamp(mExportEncodeSpeed, 0, 2));
         baseSettings.videoCrf         = static_cast<uint32_t>(std::clamp(mExportCrf, 0, 51));
         baseSettings.hideHud          = mExportHideHud;
-        baseSettings.audio            = mExportAudio && !mExportTimelapse;
+        baseSettings.audio            = mExportAudio && !fixedTimelapseActive;
+        baseSettings.externalAudio    = mExportExternalAudio;
         baseSettings.audioStereo      = mExportAudioChannels == 1;
         baseSettings.audioCodec       = audioCodec;
         baseSettings.audioBitrateKbps = kAudioBitratesKbps[mExportAudioBitrate];
@@ -1594,7 +1685,7 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
         if (baseSettings.rangeMode == exporting::ExportRangeMode::SingleClip && !mExportSingleClipId.empty()) {
             baseSettings.selectedClipIds = {mExportSingleClipId};
         }
-        baseSettings.timelapse           = mExportTimelapse;
+        baseSettings.timelapse           = fixedTimelapseActive;
         baseSettings.timelapseIntervalMs = static_cast<uint32_t>(mExportTimelapseIntervalMs);
 
         std::vector<QueuedExportJob>    previewJobs;
@@ -1746,7 +1837,8 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
             std::string encodeValue = mExportFormat == 0 ? std::string(encodeSpeedOptions[mExportEncodeSpeed])
                                                                + " | CRF " + std::to_string(mExportCrf)
                                                          : std::string("PNG");
-            if (baseSettings.audio) {
+            bool const  hasAnyExportAudio = baseSettings.audio || (baseSettings.externalAudio && hasExternalTracks);
+            if (hasAnyExportAudio) {
                 // A PNG sequence keeps its sound as a WAV file beside the frames.
                 std::string audioValue = mExportFormat == 0 ? audioCodecOptions[mExportAudioCodec] : "WAV";
                 if (mExportFormat == 0 && exporting::audioCodecUsesBitrate(audioCodec))

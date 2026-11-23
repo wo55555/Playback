@@ -186,8 +186,8 @@ public:
       mAdjustTime(mTimer.mAdjustTime),
       mSteppingTick(mTimer.mSteppingTick) {
         constexpr float ticksPerSecond = 20.0f;
-        auto const      absoluteTick   = sample.replayTime.value();
-        auto const      partialTick    = sample.replayTime.partialTick();
+        auto const      absoluteTick   = sample.clientTime.value();
+        auto const      partialTick    = sample.clientTime.partialTick();
         auto const      absoluteMilliseconds =
             static_cast<int64>(std::llround(absoluteTick * 1000.0L / static_cast<long double>(ticksPerSecond)));
 
@@ -352,8 +352,8 @@ LL_TYPE_INSTANCE_HOOK(
             visuals::setReplaySubjectHidden(visuals::SubjectHideReason::Export, firstPerson);
             visuals::setReplaySubjectThirdPerson(mode == state::editing::model::CameraKeyframeMode::ThirdPerson);
             // The hand and sleep-vignette hooks read the view weight sampled for the frame being drawn.
-            if (firstPerson) (void)visuals::sampleReplaySubjectViewWeight(sample->sample.replayTime);
-            auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.replayTime);
+            if (firstPerson) (void)visuals::sampleReplaySubjectViewWeight(sample->sample.clientTime);
+            auto pose   = replay::ReplaySession::getInstance().createReplayEntityRenderScope(sample->sample.clientTime);
             poseApplied = pose != nullptr;
 
             // The renderers' clock moves by the same step the timer override just applied.
@@ -398,7 +398,7 @@ LL_TYPE_INSTANCE_HOOK(
     }
     ++sample->gameRenderCalls;
     recordGameRenderStart(sample->token, sample->renderSerial, sample->gameRenderCalls);
-    replay::ReplaySession::getInstance().enforceReplayWorldTime();
+    replay::ReplaySession::getInstance().enforceReplayWorldTime(partialTick);
     origin(partialTick);
 }
 
@@ -468,8 +468,8 @@ OfflineRenderClockPublishResult
 publishOfflineRenderClockSample(OfflineRenderClockSample sample, OfflineRenderClockToken& token) {
     token                    = {};
     bool const captureSample = sample.kind == OfflineRenderClockKind::Capture;
-    if (!sample.replayTime.isValid() || !std::isfinite(sample.deltaTicks) || sample.deltaTicks < 0.0f
-        || sample.wholeTicks < 0) {
+    if (!sample.replayTime.isValid() || !sample.clientTime.isValid() || !std::isfinite(sample.deltaTicks)
+        || sample.deltaTicks < 0.0f || sample.wholeTicks < 0) {
         return OfflineRenderClockPublishResult::InvalidSample;
     }
     if (!gHookInstalled.load(std::memory_order_acquire)) return OfflineRenderClockPublishResult::Unavailable;

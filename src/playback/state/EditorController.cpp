@@ -1,13 +1,20 @@
 ﻿#include "EditorController.h"
 
 #include "playback/Playback.h"
+#include "playback/audio/ExternalAudioPreview.h"
 #include "playback/audio/PreviewAudio.h"
+#include "playback/editor/ui/ReplayEditor.h"
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/io/ReplayLibrary.h"
 #include "playback/keyframe/CameraFollowMath.h"
 #include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/ClientCameraCapture.h"
+#include "playback/keyframe/FreezeTimelineEvaluator.h"
+#include "playback/keyframe/SpeedTimelineEvaluator.h"
+#include "playback/keyframe/TimeOfDayTimelineEvaluator.h"
+#include "playback/keyframe/TimelapseTimelineEvaluator.h"
+#include "playback/keyframe/WeatherTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/CameraBindingOps.h"
 #include "playback/state/editing/ClipOps.h"
@@ -15,6 +22,7 @@
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/CommandFactory.h"
 #include "playback/visuals/FrameTap.h"
+#include "playback/visuals/ReplayWorldEnvHooks.h"
 
 #include "ll/api/i18n/I18n.h"
 #include <algorithm>
@@ -45,6 +53,11 @@ ReplayBrowserEntry makeBrowserEntry(io::ReplaySummary summary) {
 std::string replayPreferenceKey(std::filesystem::path const& path) {
     auto const utf8Path = path.lexically_normal().generic_u8string();
     return {reinterpret_cast<char const*>(utf8Path.data()), utf8Path.size()};
+}
+
+std::string pathToUtf8(std::filesystem::path const& path) {
+    auto const u8 = path.u8string();
+    return {reinterpret_cast<char const*>(u8.data()), u8.size()};
 }
 
 constexpr auto kAutosaveInterval = std::chrono::seconds(30);
@@ -91,11 +104,12 @@ void EditorController::setRendererAvailable(bool available) {
 }
 
 void EditorController::publishCameraTimeline() {
+    auto& session = replay::ReplaySession::getInstance();
+    session.setPreviewFreezeTrack(mProject.freezeTrack);
     if (mProject.cameras.empty()) {
         keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
         return;
     }
-    auto& session                  = replay::ReplaySession::getInstance();
     auto  dimensionTransitionTicks = session.getDimensionTransitionTicks();
     // No subject sampler: the replay session follows legacy person tracks natively, like the user's follow.
     // Entity pose sampler and ray clipper still power custom third-person and Free Look-At tracks.
@@ -144,13 +158,16 @@ void EditorController::reset() {
     mBrowserSnapshot = std::make_shared<ReplayBrowserSnapshot>();
     mProject         = {};
     mPreviewCameraId.reset();
+    replay::ReplaySession::getInstance().setPreviewFreezeTrack({});
     audio::preview::setClipMuted(false);
+    audio::external::stopPreview();
     keyframe::clearCameraTimeline(keyframe::CameraTimelineSource::Preview);
     mCommandStack.clear();
+    mCommandStack.markSaved();
     mActiveReplayPath.clear();
     mProjectFile.clear();
     mProjectError.clear();
-    mSavedRevision                  = mCommandStack.revision();
+    mLastHistoryEvent               = {};
     mEditorReadyLatched             = false;
     mProjectTotalTicks              = -1;
     mExportTickedBeforeClientUpdate = false;
@@ -195,10 +212,11 @@ void EditorController::ensureProject(int totalTicks, std::string_view replayPath
     state::editing::CameraBindingOps::addFreeCamera(mProject, {});
     state::editing::ClipOps::ensureDefaultScene(mProject);
     mCommandStack.clear();
+    mLastHistoryEvent = {};
     mPreviewCameraId.reset();
     mProjectTotalTicks = totalTicks;
     loadProjectForReplay(replayPath);
-    mSavedRevision = mCommandStack.revision();
+    mCommandStack.markSaved();
     mLastAutosave  = std::chrono::steady_clock::now();
     publishCameraTimeline();
 }
@@ -241,7 +259,7 @@ bool EditorController::saveProject(std::filesystem::path const& path) {
     }
     mProjectFile = path;
     mProjectError.clear();
-    mSavedRevision = mCommandStack.revision();
+    mCommandStack.markSaved();
     mLastAutosave  = std::chrono::steady_clock::now();
     logger().debug("Saved editor project {}", path);
     return true;
@@ -265,15 +283,46 @@ void EditorController::flushProjectOnClose() {
 void EditorController::applyEditorAction(EditorAction const& action) {
     using namespace state::editing::command;
 
+    std::string const previousSceneId = mProject.activeSceneId;
     state::editing::ClipOps::syncActiveSceneFromWorking(mProject);
 
     switch (action.type) {
-    case EditorActionType::UndoEditorEdit:
-        (void)mCommandStack.undo(mProject);
+    case EditorActionType::UndoEditorEdit: {
+        size_t const steps = std::max<size_t>(1, action.historySteps);
+        size_t       performed{};
+        std::string  lastLabel;
+        for (size_t i = 0; i < steps; ++i) {
+            std::string stepLabel;
+            if (!mCommandStack.undo(mProject, &stepLabel)) break;
+            ++performed;
+            lastLabel = std::move(stepLabel);
+        }
+        if (performed > 0) {
+            ++mLastHistoryEvent.seq;
+            mLastHistoryEvent.kind  = EditorHistoryEventKind::Undo;
+            mLastHistoryEvent.label = std::move(lastLabel);
+            mLastHistoryEvent.steps = performed;
+        }
         break;
-    case EditorActionType::RedoEditorEdit:
-        (void)mCommandStack.redo(mProject);
+    }
+    case EditorActionType::RedoEditorEdit: {
+        size_t const steps = std::max<size_t>(1, action.historySteps);
+        size_t       performed{};
+        std::string  lastLabel;
+        for (size_t i = 0; i < steps; ++i) {
+            std::string stepLabel;
+            if (!mCommandStack.redo(mProject, &stepLabel)) break;
+            ++performed;
+            lastLabel = std::move(stepLabel);
+        }
+        if (performed > 0) {
+            ++mLastHistoryEvent.seq;
+            mLastHistoryEvent.kind  = EditorHistoryEventKind::Redo;
+            mLastHistoryEvent.label = std::move(lastLabel);
+            mLastHistoryEvent.steps = performed;
+        }
         break;
+    }
     case EditorActionType::AddFreeCamera:
         mCommandStack.push(CommandFactory::createAddFreeCamera(action.name), mProject);
         break;
@@ -286,11 +335,50 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             break;
         }
         auto& session = replay::ReplaySession::getInstance();
-        state::editing::model::CameraKeyframe const* prevKey = nullptr;
+        int const                                    clampedTick = std::clamp(action.tick, 0, mProject.totalTicks);
+        state::editing::model::CameraEntity const*   targetCam   = nullptr;
+        state::editing::model::CameraKeyframe const* existingKey = nullptr;
+        state::editing::model::CameraKeyframe const* prevKey     = nullptr;
         if (auto const camIt = std::ranges::find(mProject.cameras, action.id, &state::editing::model::CameraEntity::id);
-            camIt != mProject.cameras.end() && !camIt->keysByTick.empty()) {
-            auto const upper = camIt->keysByTick.upper_bound(action.tick);
-            if (upper != camIt->keysByTick.begin()) prevKey = &std::prev(upper)->second;
+            camIt != mProject.cameras.end()) {
+            targetCam = &*camIt;
+            if (auto const exact = camIt->keysByTick.find(clampedTick); exact != camIt->keysByTick.end()) {
+                existingKey = &exact->second;
+            }
+            if (!camIt->keysByTick.empty()) {
+                auto const upper = camIt->keysByTick.upper_bound(action.tick);
+                if (upper != camIt->keysByTick.begin()) prevKey = &std::prev(upper)->second;
+            }
+        }
+
+        auto const resolvePersonSubject = [&]() -> std::string {
+            if (targetCam) {
+                auto upper = targetCam->keysByTick.lower_bound(clampedTick);
+                while (upper != targetCam->keysByTick.begin()) {
+                    --upper;
+                    if (upper->second.mode != state::editing::model::CameraKeyframeMode::Interpolated
+                        && !upper->second.subject.empty()) {
+                        return upper->second.subject;
+                    }
+                }
+            }
+            return session.userReplaySubjectChoice();
+        };
+
+        auto const requestedMode = action.value ? std::optional<state::editing::model::CameraKeyframeMode>{static_cast<
+                                                      state::editing::model::CameraKeyframeMode>(action.kind)}
+                                                : std::nullopt;
+        if (requestedMode && *requestedMode != state::editing::model::CameraKeyframeMode::Interpolated) {
+            state::editing::model::CameraKeyframe key;
+            if (existingKey) key = *existingKey;
+            else if (auto captured = captureCameraKeyframe()) key = *captured;
+            key.mode = *requestedMode;
+            if (key.subject.empty()) key.subject = resolvePersonSubject();
+            mCommandStack.push(
+                CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(key)),
+                mProject
+            );
+            break;
         }
 
         auto const sampleTime = [&]() -> visuals::ReplaySampleTime {
@@ -299,7 +387,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             return visuals::ReplaySampleTime{std::max(0, action.tick), 1};
         }();
 
-        if (prevKey && prevKey->mode == state::editing::model::CameraKeyframeMode::ThirdPerson
+        if (!requestedMode && prevKey && prevKey->mode == state::editing::model::CameraKeyframeMode::ThirdPerson
             && prevKey->thirdPersonCustom) {
             state::editing::model::CameraKeyframe key;
             key.mode                      = state::editing::model::CameraKeyframeMode::ThirdPerson;
@@ -351,7 +439,14 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         if (auto captured = captureCameraKeyframe()) {
             logger().debug("Captured camera keyframe (camera={}, tick={})", action.id, action.tick);
             // A person track's first key views whoever the user follows; later keys keep the previous subject.
-            captured->subject = session.userReplaySubjectChoice();
+            captured->subject =
+                existingKey && !existingKey->subject.empty() ? existingKey->subject : session.userReplaySubjectChoice();
+            if (existingKey && existingKey->mode == state::editing::model::CameraKeyframeMode::Interpolated) {
+                captured->interpolationType = existingKey->interpolationType;
+                captured->bezierCtrl1       = existingKey->bezierCtrl1;
+                captured->bezierCtrl2       = existingKey->bezierCtrl2;
+                captured->ignoreClipSpeed   = existingKey->ignoreClipSpeed;
+            }
             if (prevKey && prevKey->mode == state::editing::model::CameraKeyframeMode::Interpolated
                 && prevKey->lookAtEnabled) {
                 captured->lookAtEnabled = true;
@@ -386,7 +481,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             CommandFactory::createSetCameraKeyframeMode(
                 action.id,
                 action.tick,
-                static_cast<state::editing::model::CameraKeyframeMode>(action.kind)
+                static_cast<state::editing::model::CameraKeyframeMode>(action.kind),
+                replay::ReplaySession::getInstance().userReplaySubjectChoice()
             ),
             mProject
         );
@@ -464,7 +560,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(
             CommandFactory::createSetKeyframesMode(
                 action.keyframeRefs,
-                static_cast<state::editing::model::CameraKeyframeMode>(action.kind)
+                static_cast<state::editing::model::CameraKeyframeMode>(action.kind),
+                replay::ReplaySession::getInstance().userReplaySubjectChoice()
             ),
             mProject
         );
@@ -637,13 +734,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     }
     case EditorActionType::AddClip:
         mCommandStack.push(
-            CommandFactory::createAddClip(
-                action.id,
-                action.tick,
-                action.secondaryTick,
-                action.name,
-                action.speed > 0.0f ? action.speed : 1.0f
-            ),
+            CommandFactory::createAddClip(action.id, action.tick, action.secondaryTick, action.name),
             mProject
         );
         break;
@@ -656,14 +747,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             mProject
         );
         break;
-    case EditorActionType::SetClipSpeed:
-        mCommandStack.push(CommandFactory::createSetClipSpeed(action.id, action.speed), mProject);
-        break;
     case EditorActionType::RenameClip:
         mCommandStack.push(CommandFactory::createRenameClip(action.id, action.name), mProject);
-        break;
-    case EditorActionType::SetClipMuted:
-        mCommandStack.push(CommandFactory::createSetClipMuted(action.id, action.value), mProject);
         break;
     case EditorActionType::SetClipLocked:
         mCommandStack.push(CommandFactory::createSetClipLocked(action.id, action.value), mProject);
@@ -705,6 +790,281 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::SetSceneExportRange:
         mCommandStack.push(CommandFactory::createSetSceneExportRange(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::AddSpeedTrack:
+        mCommandStack.push(CommandFactory::createAddSpeedTrack(), mProject);
+        break;
+    case EditorActionType::RemoveSpeedTrack:
+        mCommandStack.push(CommandFactory::createRemoveSpeedTrack(), mProject);
+        break;
+    case EditorActionType::AddSpeedKeyframe:
+        mCommandStack.push(CommandFactory::createAddSpeedKeyframe(action.tick, action.speedValue), mProject);
+        break;
+    case EditorActionType::MoveSpeedKeyframe:
+        mCommandStack.push(CommandFactory::createMoveSpeedKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::DeleteSpeedKeyframe:
+        mCommandStack.push(CommandFactory::createDeleteSpeedKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::SetSpeedKeyframeValue:
+        mCommandStack.push(CommandFactory::createSetSpeedKeyframeValue(action.tick, action.speedValue), mProject);
+        break;
+    case EditorActionType::SetSpeedKeyframeInterpolation:
+        mCommandStack.push(
+            CommandFactory::createSetSpeedKeyframeInterpolation(
+                action.tick,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SetSpeedKeyframeBezierControls:
+        mCommandStack.push(
+            CommandFactory::createSetSpeedKeyframeBezierControls(action.tick, action.bezierCtrl1, action.bezierCtrl2),
+            mProject
+        );
+        break;
+    case EditorActionType::SetSpeedTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetSpeedTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetSpeedTrackLocked:
+        mCommandStack.push(CommandFactory::createSetSpeedTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::ClearSpeedKeyframes:
+        mCommandStack.push(CommandFactory::createClearSpeedKeyframes(), mProject);
+        break;
+    case EditorActionType::AddFreezeTrack:
+        mCommandStack.push(CommandFactory::createAddFreezeTrack(), mProject);
+        break;
+    case EditorActionType::RemoveFreezeTrack:
+        mCommandStack.push(CommandFactory::createRemoveFreezeTrack(), mProject);
+        break;
+    case EditorActionType::AddFreezeKeyframe:
+        mCommandStack.push(CommandFactory::createAddFreezeKeyframe(action.tick, action.value, action.kind), mProject);
+        break;
+    case EditorActionType::MoveFreezeKeyframe:
+        mCommandStack.push(CommandFactory::createMoveFreezeKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::DeleteFreezeKeyframe:
+        mCommandStack.push(CommandFactory::createDeleteFreezeKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::SetFreezeKeyframe:
+        mCommandStack.push(CommandFactory::createSetFreezeKeyframe(action.tick, action.value, action.kind), mProject);
+        break;
+    case EditorActionType::SetFreezeTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetFreezeTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetFreezeTrackLocked:
+        mCommandStack.push(CommandFactory::createSetFreezeTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::ClearFreezeKeyframes:
+        mCommandStack.push(CommandFactory::createClearFreezeKeyframes(), mProject);
+        break;
+    case EditorActionType::AddTimelapseTrack:
+        mCommandStack.push(CommandFactory::createAddTimelapseTrack(), mProject);
+        break;
+    case EditorActionType::RemoveTimelapseTrack:
+        mCommandStack.push(CommandFactory::createRemoveTimelapseTrack(), mProject);
+        break;
+    case EditorActionType::AddTimelapseKeyframe:
+        mCommandStack.push(CommandFactory::createAddTimelapseKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::MoveTimelapseKeyframe:
+        mCommandStack.push(CommandFactory::createMoveTimelapseKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::DeleteTimelapseKeyframe:
+        mCommandStack.push(CommandFactory::createDeleteTimelapseKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::SetTimelapseKeyframeOutputTicks:
+        mCommandStack.push(
+            CommandFactory::createSetTimelapseKeyframeOutputTicks(action.tick, action.secondaryTick),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimelapseTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetTimelapseTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetTimelapseTrackLocked:
+        mCommandStack.push(CommandFactory::createSetTimelapseTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::ClearTimelapseKeyframes:
+        mCommandStack.push(CommandFactory::createClearTimelapseKeyframes(), mProject);
+        break;
+    case EditorActionType::AddTimeOfDayTrack:
+        mCommandStack.push(CommandFactory::createAddTimeOfDayTrack(), mProject);
+        break;
+    case EditorActionType::RemoveTimeOfDayTrack:
+        mCommandStack.push(CommandFactory::createRemoveTimeOfDayTrack(), mProject);
+        break;
+    case EditorActionType::AddTimeOfDayKeyframe:
+        mCommandStack.push(
+            CommandFactory::createAddTimeOfDayKeyframe(
+                action.tick,
+                action.secondaryTick,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::MoveTimeOfDayKeyframe:
+        mCommandStack.push(CommandFactory::createMoveTimeOfDayKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::MoveTimeOfDayKeyframes:
+        mCommandStack.push(CommandFactory::createMoveTimeOfDayKeyframes(action.ticks, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::RemoveTimeOfDayKeyframe:
+        mCommandStack.push(CommandFactory::createRemoveTimeOfDayKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::RemoveTimeOfDayKeyframes:
+        mCommandStack.push(CommandFactory::createRemoveTimeOfDayKeyframes(action.ticks), mProject);
+        break;
+    case EditorActionType::SetTimeOfDayKeyframeValue:
+        mCommandStack.push(
+            CommandFactory::createSetTimeOfDayKeyframeValue(action.tick, action.secondaryTick),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimeOfDayKeyframeInterpolation:
+        mCommandStack.push(
+            CommandFactory::createSetTimeOfDayKeyframeInterpolation(
+                action.tick,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimeOfDayKeyframesInterpolation:
+        mCommandStack.push(
+            CommandFactory::createSetTimeOfDayKeyframesInterpolation(
+                action.ticks,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimeOfDayKeyframeBezier:
+        mCommandStack.push(
+            CommandFactory::createSetTimeOfDayKeyframeBezier(action.tick, action.bezierCtrl1, action.bezierCtrl2),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimeOfDayTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetTimeOfDayTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetTimeOfDayTrackLocked:
+        mCommandStack.push(CommandFactory::createSetTimeOfDayTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::ClearTimeOfDayKeyframes:
+        mCommandStack.push(CommandFactory::createClearTimeOfDayKeyframes(), mProject);
+        break;
+    case EditorActionType::SetDaytimeOverride:
+        mCommandStack.push(CommandFactory::createSetSceneDaytimeOverride(action.value, action.tick), mProject);
+        break;
+    case EditorActionType::SetWeatherOverride:
+        mCommandStack.push(
+            CommandFactory::createSetSceneWeatherOverride(
+                static_cast<state::editing::model::WeatherOverride>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::AddWeatherTrack:
+        mCommandStack.push(CommandFactory::createAddWeatherTrack(), mProject);
+        break;
+    case EditorActionType::RemoveWeatherTrack:
+        mCommandStack.push(CommandFactory::createRemoveWeatherTrack(), mProject);
+        break;
+    case EditorActionType::SetWeatherTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetWeatherTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetWeatherTrackLocked:
+        mCommandStack.push(CommandFactory::createSetWeatherTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::AddWeatherKeyframe:
+        mCommandStack.push(
+            CommandFactory::createAddWeatherKeyframe(
+                action.tick,
+                static_cast<state::editing::model::WeatherOverride>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::RemoveWeatherKeyframe:
+        mCommandStack.push(CommandFactory::createRemoveWeatherKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::RemoveWeatherKeyframes:
+        mCommandStack.push(CommandFactory::createRemoveWeatherKeyframes(action.ticks), mProject);
+        break;
+    case EditorActionType::MoveWeatherKeyframe:
+        mCommandStack.push(CommandFactory::createMoveWeatherKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::MoveWeatherKeyframes:
+        mCommandStack.push(CommandFactory::createMoveWeatherKeyframes(action.ticks, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::SetWeatherKeyframeValue:
+        mCommandStack.push(
+            CommandFactory::createSetWeatherKeyframeValue(
+                action.tick,
+                static_cast<state::editing::model::WeatherOverride>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SetWeatherKeyframesValue:
+        mCommandStack.push(
+            CommandFactory::createSetWeatherKeyframesValue(
+                action.ticks,
+                static_cast<state::editing::model::WeatherOverride>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::AddAudioTrack:
+        mCommandStack.push(CommandFactory::createAddAudioTrack(action.name), mProject);
+        break;
+    case EditorActionType::RemoveAudioTrack:
+        mCommandStack.push(CommandFactory::createRemoveAudioTrack(action.id), mProject);
+        break;
+    case EditorActionType::RenameAudioTrack:
+        mCommandStack.push(CommandFactory::createRenameAudioTrack(action.id, action.name), mProject);
+        break;
+    case EditorActionType::SetAudioTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetAudioTrackEnabled(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetAudioTrackMuted:
+        mCommandStack.push(CommandFactory::createSetAudioTrackMuted(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetAudioTrackLocked:
+        mCommandStack.push(CommandFactory::createSetAudioTrackLocked(action.id, action.value), mProject);
+        break;
+    case EditorActionType::SetAudioTrackVolume:
+        mCommandStack.push(CommandFactory::createSetAudioTrackVolume(action.id, action.volume), mProject);
+        break;
+    case EditorActionType::AddAudioClip:
+        mCommandStack.push(
+            CommandFactory::createAddAudioClip(action.id, pathToUtf8(action.path), action.tick, action.name),
+            mProject
+        );
+        break;
+    case EditorActionType::RemoveAudioClip:
+        mCommandStack.push(CommandFactory::createRemoveAudioClip(action.id, action.secondaryId), mProject);
+        break;
+    case EditorActionType::MoveAudioClip:
+        mCommandStack.push(CommandFactory::createMoveAudioClip(action.id, action.secondaryId, action.tick), mProject);
+        break;
+    case EditorActionType::SetAudioClipProps:
+        mCommandStack.push(
+            CommandFactory::createSetAudioClipProps(
+                action.id,
+                action.secondaryId,
+                pathToUtf8(action.path),
+                action.trimStartSeconds,
+                action.durationSeconds,
+                action.volume,
+                action.muted
+            ),
+            mProject
+        );
         break;
     case EditorActionType::SetPreviewCamera:
         replay::ReplaySession::getInstance().setFollowRecordedPlayer(false);
@@ -783,6 +1143,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
 
     state::editing::ClipOps::syncActiveSceneFromWorking(mProject);
 
+    if (mProject.activeSceneId != previousSceneId) mPreviewCameraId.reset();
     if (mPreviewCameraId && !std::ranges::any_of(mProject.cameras, [&](auto const& camera) {
             return camera.id == *mPreviewCameraId && state::editing::model::isCameraRenderable(camera);
         })) {
@@ -831,14 +1192,32 @@ void EditorController::publishState(bool hudVisible) {
             state.totalTicks
         );
     }
-    if (!sessionActive) {
+    if (!sessionActive && !session.hasPendingReload()) {
         flushProjectOnClose();
         mActiveReplayPath.clear();
+    } else if (sessionActive && mActiveReplayPath.empty() && !session.getReplayFilePath().empty()) {
+        mActiveReplayPath = replayPreferenceKey(session.getReplayFilePath());
     }
     ensureProject(state.totalTicks, mActiveReplayPath);
-    mProject.currentTick             = state.currentTick;
-    mProject.playing                 = !state.paused;
-    mProject.playbackSpeed           = state.playbackSpeed;
+    mProject.currentTick                        = state.currentTick;
+    mProject.playing                            = !state.paused;
+    mProject.playbackSpeed                      = state.playbackSpeed;
+    state.replayHasServerResourcePacks          = session.replayHasServerResourcePacks();
+    state.loadedWithServerResourcePacksDisabled = session.loadedWithServerResourcePacksDisabled();
+    state.disableServerResourcePacks            = Playback::getInstance().getConfig().replay.disableServerResourcePacks;
+    if (sessionActive && session.hasJoinedReplayWorld()
+        && !exporting::isExportActive(mExportCoordinator.status().state)) {
+        double const sampleTick = session.getEntityRenderSampleTime()
+                                    ? static_cast<double>(session.getEntityRenderSampleTime()->value())
+                                    : static_cast<double>(state.currentTick);
+        session.setTimeOfDayOverride(keyframe::resolveEffectiveTimeOfDay(mProject, sampleTick));
+        session.setWeatherOverride(
+            static_cast<visuals::ReplayWeatherMode>(
+                static_cast<uint8_t>(keyframe::resolveEffectiveWeather(mProject, sampleTick))
+            )
+        );
+        session.enforceReplayWorldTime();
+    }
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
     state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
     if (state.cameraTimeline) {
@@ -846,6 +1225,13 @@ void EditorController::publishState(bool hudVisible) {
     }
     state.canUndo                    = mCommandStack.canUndo();
     state.canRedo                    = mCommandStack.canRedo();
+    state.undoCount                  = mCommandStack.undoCount();
+    state.redoCount                  = mCommandStack.redoCount();
+    state.undoLabel                  = mCommandStack.undoLabel();
+    state.redoLabel                  = mCommandStack.redoLabel();
+    state.undoHistory                = mCommandStack.recentUndoLabels(20);
+    state.redoHistory                = mCommandStack.recentRedoLabels(20);
+    state.historyEvent               = mLastHistoryEvent;
     state.persistence.dirty          = state.editorVisible && isProjectDirty();
     state.persistence.projectFile    = mProjectFile.empty() ? std::string{} : mProjectFile.filename().string();
     state.persistence.error          = mProjectError;
@@ -970,6 +1356,16 @@ void EditorController::tick(bool hudVisible) {
     for (auto const& action : mContext.takeActions()) {
         if (mExportDriver && mExportDriver->isActive() && action.type != EditorActionType::CancelExport
             && action.type != EditorActionType::StopReplay) {
+            continue;
+        }
+        if (action.type == EditorActionType::SetDisableServerResourcePacks) {
+            Playback::getInstance().getConfig().replay.disableServerResourcePacks = action.value;
+            editor::ui::ReplayEditor::getInstance().saveLayoutPreferences();
+            continue;
+        }
+        if (action.type == EditorActionType::ReloadReplayAtCurrentTick) {
+            flushProjectOnClose();
+            (void)session.requestReloadCurrentReplay(session.getCurrentTick());
             continue;
         }
         if (action.type >= EditorActionType::UndoEditorEdit) {
@@ -1158,7 +1554,8 @@ void EditorController::tick(bool hudVisible) {
             mProjectFile                 = target;
             mProjectError.clear();
             mCommandStack.clear();
-            mSavedRevision = mCommandStack.revision();
+            mCommandStack.markSaved();
+            mLastHistoryEvent = {};
             mPreviewCameraId.reset();
             publishCameraTimeline();
             break;
@@ -1174,12 +1571,28 @@ void EditorController::tick(bool hudVisible) {
     autosaveIfDue();
     publishState(hudVisible);
     if (session.isActive() && (!mExportDriver || !mExportDriver->isActive())) {
-        int const currentTick = std::max(0, session.getCurrentTick());
-        session.setClipSpeedScale(state::editing::ClipOps::activeClipSpeedAt(mProject, currentTick));
-        audio::preview::setClipMuted(state::editing::ClipOps::isClipMutedAt(mProject, currentTick));
+        int const         currentTick = std::max(0, session.getCurrentTick());
+        long double const replayTick =
+            static_cast<long double>(currentTick) + static_cast<long double>(session.previewPartialTick());
+        session.setPreviewFreezeTrack(mProject.freezeTrack);
+        session.setClipSpeedScale(static_cast<float>(keyframe::effectiveSpeedAt(mProject, replayTick)));
+        auto const freezeEval    = keyframe::evaluateFreezeAt(mProject.freezeTrack, replayTick);
+        auto const timelapseEval = keyframe::evaluateTimelapseAt(mProject.timelapseTrack, replayTick);
+        audio::preview::setClipMuted(freezeEval.worldFrozen || timelapseEval.active);
+        audio::external::updatePreview(
+            mProject,
+            replayTick,
+            !session.isPaused(),
+            session.isSeekPending(),
+            mExportDriver && mExportDriver->isActive(),
+            audio::preview::volume(),
+            audio::preview::isMuted()
+        );
     } else {
+        session.setPreviewFreezeTrack({});
         session.setClipSpeedScale(1.0f);
         audio::preview::setClipMuted(false);
+        audio::external::stopPreview();
     }
 }
 

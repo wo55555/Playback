@@ -4,6 +4,8 @@
 #include "playback/action/Action.h"
 #include "playback/audio/AudioHooks.h"
 #include "playback/audio/ExportAudioCapture.h"
+#include "playback/audio/ExternalAudioCache.h"
+#include "playback/audio/ExternalAudioPreview.h"
 #include "playback/configuration/Config.h"
 #include "playback/editor/ReplayUI.h"
 #include "playback/editor/graphics/CameraRenderHooks.h"
@@ -26,6 +28,7 @@
 #include "playback/visuals/ReplayHudHooks.h"
 #include "playback/visuals/ReplayHudVisibility.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
+#include "playback/visuals/ReplayWorldEnvHooks.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -120,11 +123,15 @@ bool Playback::hook() {
     if (!editor::graphics::hookSeekFreeze(true)) {
         getSelf().getLogger().warn("Unable to install the seek freeze hook; seeks will show catch-up frames");
     }
+    audio::external::setFfmpegSearchDirectory(getSelf().getModDir());
     if (audio::hooks::install()) {
         (void)audio::exportcap::install();
     }
     screen::hookRecordControls(true);
     visuals::hookReplayHudVisibility(true);
+    if (!visuals::hookReplayWorldEnv(true)) {
+        getSelf().getLogger().warn("Unable to install replay world environment hooks");
+    }
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -227,11 +234,14 @@ bool Playback::unhook() {
         return false;
     }
 
+    audio::external::shutdownPreview();
+    audio::external::shutdownAudioCache();
     audio::exportcap::uninstall();
     audio::hooks::uninstall();
     if (!editor::graphics::hookSeekFreeze(false)) {
         getSelf().getLogger().warn("Unable to remove the seek freeze hook during shutdown");
     }
+    visuals::hookReplayWorldEnv(false);
     visuals::hookReplayHudVisibility(false);
     screen::hookRecordControls(false);
     screen::hookMainMenu(false);

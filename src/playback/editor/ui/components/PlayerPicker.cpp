@@ -617,7 +617,8 @@ bool drawPlayerPicker(
     std::span<state::ReplayEntityView const> entities,
     std::string_view                         current,
     bool                                     following,
-    PlayerPickerResult&                      result
+    PlayerPickerResult&                      result,
+    bool                                     mixed
 ) {
     result           = {};
     ImGuiID const id = ImGui::GetID(popupId);
@@ -642,6 +643,7 @@ bool drawPlayerPicker(
     options.following = following;
     options.popup     = true;
     options.appearing = ImGui::IsWindowAppearing();
+    options.mixed     = mixed;
     options.maxRows   = kPopupRows;
     drawListBody(pickerUi()[id], players, entities, current, options, result);
     if (result.picked || result.stop) ImGui::CloseCurrentPopup();
