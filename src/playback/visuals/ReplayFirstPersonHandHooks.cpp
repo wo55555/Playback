@@ -7,35 +7,39 @@
 
 #include "ll/api/memory/Hook.h"
 #include "ll/api/service/Bedrock.h"
-#include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/game/ClientInputCallbacks.h"
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/controls/UIControl.h"
 #include "mc/client/gui/controls/renderers/HudVignetteRenderer.h"
 #include "mc/client/gui/screens/InGamePlayScreen.h"
+#include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
+#include "mc/client/renderer/actor/ActorRenderDispatcher.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
 #include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/client/renderer/screen/MinecraftUIRenderContext.h"
 #include "mc/deps/core/math/Color.h"
 #include "mc/deps/core/math/Matrix.h"
+#include "mc/deps/core/string/HashedString.h"
+#include "mc/deps/input/RectangleArea.h"
+#include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
+#include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/entity/components/AbilitiesComponent.h"
+#include "mc/entity/components/ActorGameTypeComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
-#include "mc/entity/components/ActorGameTypeComponent.h"
-#include "mc/world/actor/provider/SynchedActorDataAccess.h"
-#include "mc/deps/input/RectangleArea.h"
-#include "mc/deps/vanilla_camera/VanillaCameraAPI.h"
-#include "mc/deps/vanilla_components/StateVectorComponent.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
-#include "mc/world/actor/player/Ability.h"
 #include "mc/world/actor/player/AbilitiesIndex.h"
+#include "mc/world/actor/player/Ability.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/actor/player/SerializedSkinImpl.h"
+#include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/item/ItemStack.h"
 
 #include <Windows.h>
@@ -416,6 +420,45 @@ LL_TYPE_INSTANCE_HOOK(
     player.setOffhandSlot(savedOffhand);
 }
 
+// Keeps the observer's renderer id resolvable in ActorRenderDispatcher for the first-person arm/attachable pass.
+// ClientSkinSystem registers persona skins under a session-local id asynchronously on the subject actor; if the
+// observer still holds the recorded id (or the skin is still loading), first-person hand and attachable rendering
+// bails early and hides both the arm and every attachable (bow, crossbow, trident, shield, spyglass).
+class ScopedObserverHandRenderer {
+public:
+    ScopedObserverHandRenderer(BaseActorRenderContext& context, Player& player, Player* subject) : mPlayer(player) {
+        if (!subject || !player.isLocalPlayer()) return;
+        auto* const dispatcher = context.mEntityRenderDispatcher.get();
+        if (!dispatcher) return;
+
+        bool const subjectHasRenderer = dispatcher->_getRenderer(*subject) != nullptr;
+        if (subjectHasRenderer && player.mActorRendererId.get() != subject->mActorRendererId.get() && subject->mSkin
+            && subject->mSkin->mSkinImpl) {
+            player.updateSkin(*subject->mSkin, static_cast<int>(subject->getClientSubId()));
+            player.mFirstPersonAnimationComponent.reset();
+        }
+
+        if (dispatcher->_getRenderer(player) != nullptr) return;
+
+        static HashedString const defaultPlayerRendererId{"minecraft:player"};
+        mSavedRendererId = player.mActorRendererId.get();
+        mSwapped         = true;
+        player.setActorRendererId(subjectHasRenderer ? subject->getActorRendererId() : defaultPlayerRendererId);
+    }
+
+    ~ScopedObserverHandRenderer() {
+        if (mSwapped) mPlayer.setActorRendererId(mSavedRendererId);
+    }
+
+    ScopedObserverHandRenderer(ScopedObserverHandRenderer const&)            = delete;
+    ScopedObserverHandRenderer& operator=(ScopedObserverHandRenderer const&) = delete;
+
+private:
+    Player&      mPlayer;
+    HashedString mSavedRendererId;
+    bool         mSwapped{};
+};
+
 LL_TYPE_INSTANCE_HOOK(
     HandRenderFirstPersonHook,
     ll::memory::HookPriority::High,
@@ -434,6 +477,11 @@ LL_TYPE_INSTANCE_HOOK(
     if (subjectSleepSuppressesHand()) return;
     syncRenderer(*this, *subject);
     ScopedHandPass pass(*subject);
+    if (auto* observer = context.mClientInstance.getLocalPlayer()) {
+        ScopedObserverHandRenderer rendererGuard(context, *observer, subject);
+        origin(context, prevProj, itemFlags);
+        return;
+    }
     origin(context, prevProj, itemFlags);
 }
 
@@ -451,7 +499,9 @@ LL_TYPE_INSTANCE_HOOK(
     Player&                 player,
     ItemContextFlags        itemFlags
 ) {
-    origin(context, handPlayer(player), itemFlags);
+    auto&                      target = handPlayer(player);
+    ScopedObserverHandRenderer rendererGuard(context, target, subjectPlayer());
+    origin(context, target, itemFlags);
 }
 
 LL_TYPE_INSTANCE_HOOK(
