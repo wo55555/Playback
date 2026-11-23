@@ -56,6 +56,7 @@ constexpr Entry Entries[] = {
     {GameFunction::BgfxD3D11PostReset,                       0xE803E30},
     {GameFunction::BgfxContextInitFinalize,                  0xBC63080},
     {GameFunction::BgfxContextShutdownBegin,                 0xBC654A0},
+    {GameFunction::DataDrivenModelSetupAttachableNoChecks,   0x58B7AC0},
 };
 
 constexpr bool entriesInOrder() {

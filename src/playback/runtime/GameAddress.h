@@ -39,6 +39,7 @@ enum class GameFunction : uint8_t {
     BgfxD3D11PostReset,
     BgfxContextInitFinalize,
     BgfxContextShutdownBegin,
+    DataDrivenModelSetupAttachableNoChecks,
     Count,
 };
 
