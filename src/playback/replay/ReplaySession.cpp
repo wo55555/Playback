@@ -123,6 +123,7 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/actor/player/TrustedSkinFlag.h"
 #include "mc/world/attribute/Attribute.h"
 #include "mc/world/attribute/AttributeData.h"
 #include "mc/world/attribute/AttributeInstance.h"
@@ -468,6 +469,16 @@ void keepRecordedAttributes(FollowedHudMirror& mirror, UpdateAttributesPacket co
 
 // Bedrock's WalkDistComponent advances by exactly the horizontal distance moved (measured live, ratio 1.000).
 constexpr float WalkDistancePerBlock = 1.0f;
+
+bool hasUsableReplaySkin(SerializedSkinRef const& skin) {
+    if (!skin.mSkinImpl) return false;
+    auto const& image = *skin.mSkinImpl->mObject.mSkinImage;
+    if (image.mWidth == 0 || image.mHeight == 0 || image.mWidth > 4096 || image.mHeight > 4096) {
+        return false;
+    }
+    auto const expectedBytes = static_cast<size_t>(image.mWidth) * static_cast<size_t>(image.mHeight) * 4u;
+    return image.mImageBytes.size() == expectedBytes;
+}
 
 // Items flagged to tick during movement (trident) are skipped by the normal use-duration system, and a replayed
 // player has no move request to drive the movement one.
@@ -6452,16 +6463,18 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 bool const recorder = mRecordedLocalPlayerId && addEntry->mId->rawID == mRecordedLocalPlayerId->rawID;
                 noteReplayIdentity(std::move(uuid), *addEntry->mName, ActorUniqueID{addEntry->mId->rawID}, recorder);
             }
-            // Servers may withhold a player's skin; give that entry the default skin instead of dropping the player.
-            if (!addEntry->mSkin->mSkinImpl) {
+            // Servers may withhold a player's skin or leave a default-constructed empty skin; substitute the default
+            // skin instead of dropping the player, and mark valid recorded skins trusted inside the offline replay.
+            if (!hasUsableReplaySkin(*addEntry->mSkin)) {
                 getLogger().debug(
-                    "Replay player-list entry '{}' has no skin data; using the default skin",
+                    "Replay player-list entry '{}' has no usable skin data; using the default skin",
                     *addEntry->mName
                 );
                 *addEntry->mSkin = SerializedSkinRef::createTrustedDefaultSerializedSkin();
                 if (!addEntry->mSkin->mSkinImpl) continue;
             }
             addEntry->mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
+            addEntry->mSkin->mSkinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
         }
         if (subjectLeft) {
             getLogger().debug("replay subject left uuid={} tick={} fallback=recorder", choice, mCurrentTick);
@@ -6473,12 +6486,13 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     if (packetId == MinecraftPacketIds::PlayerSkin) {
         // Same rule as the player list: a recorded skin must never be treated as the viewer's own.
-        auto& skinImpl = static_cast<PlayerSkinPacket&>(*packet).mSkin->mSkinImpl;
-        if (!skinImpl) {
-            getLogger().debug("Skipping a replay player skin packet without skin data");
+        auto& skin = *static_cast<PlayerSkinPacket&>(*packet).mSkin;
+        if (!hasUsableReplaySkin(skin)) {
+            getLogger().debug("Skipping a replay player skin packet without usable skin data");
             return true;
         }
-        skinImpl->mObject.mIsPrimaryUser = false;
+        skin.mSkinImpl->mObject.mIsPrimaryUser = false;
+        skin.mSkinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
     }
 
     if (packetId == MinecraftPacketIds::ChangeDimension) {
@@ -6536,6 +6550,29 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 if (link.B->rawID == sourceId->rawID) link.B = RecordedPlayerUniqueId;
             }
         }
+        // 26.40 carries the player's unique ID inside the abilities payload.
+        entityId  = *addPlayer.mAbilitiesData->mTargetPlayer;
+        runtimeId = *addPlayer.mRuntimeId;
+        if (mReplayPlayer && *addPlayer.mUuid == mce::UUID{}) {
+            // Older snapshots built from AddPlayerPacketPayload left other players' UUIDs all-zero; recover them from
+            // the player list so the spawned RemotePlayer resolves its recorded skin.
+            auto const& entries = mReplayPlayer->getLevel().getPlayerList();
+            mce::UUID   byName{};
+            for (auto const& [uuid, listed] : entries) {
+                if (uuid == mce::UUID{}) continue;
+                if (listed.mId->rawID == entityId.rawID) {
+                    addPlayer.mUuid = uuid;
+                    byName          = mce::UUID{};
+                    break;
+                }
+                if (byName == mce::UUID{} && !addPlayer.mName->empty() && *listed.mName == *addPlayer.mName) {
+                    byName = uuid;
+                }
+            }
+            if (*addPlayer.mUuid == mce::UUID{} && byName != mce::UUID{}) {
+                addPlayer.mUuid = byName;
+            }
+        }
         if (recordedLocalPlayer && mReplayPlayer && *addPlayer.mName == "__playback_" + addPlayer.mUuid->asString()) {
             // Older snapshots kept the original name in the player list under the synthetic UUID.
             auto const& entries = mReplayPlayer->getLevel().getPlayerList();
@@ -6557,9 +6594,6 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 addPlayer.mPlayerGameType = GameType::Adventure;
             }
         }
-        // 26.40 carries the player's unique ID inside the abilities payload.
-        entityId  = *addPlayer.mAbilitiesData->mTargetPlayer;
-        runtimeId = *addPlayer.mRuntimeId;
         break;
     }
     default:
@@ -6665,7 +6699,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         }();
         if (!subject.empty() && packetId == MinecraftPacketIds::PlayerSkin) {
             auto const& skinPacket = static_cast<PlayerSkinPacket const&>(*packet);
-            if (skinPacket.mUUID->asString() == subject && skinPacket.mSkin->mSkinImpl) {
+            if (skinPacket.mUUID->asString() == subject && hasUsableReplaySkin(*skinPacket.mSkin)) {
                 applyObserverSkin(*skinPacket.mSkin);
                 getLogger().debug("replay observer skin refreshed uuid={}", subject);
             }
@@ -6673,7 +6707,9 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             auto const& playerList = static_cast<PlayerListPacket const&>(*packet);
             for (auto const& entry : *playerList.mEntries) {
                 auto const* addEntry = std::get_if<PlayerListPacketPayload::AddEntry>(&entry);
-                if (!addEntry || addEntry->mUUID->asString() != subject || !addEntry->mSkin->mSkinImpl) continue;
+                if (!addEntry || addEntry->mUUID->asString() != subject || !hasUsableReplaySkin(*addEntry->mSkin)) {
+                    continue;
+                }
                 applyObserverSkin(*addEntry->mSkin);
                 getLogger().debug("replay observer skin refreshed uuid={}", subject);
                 break;
@@ -6718,10 +6754,10 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         auto& level = mReplayPlayer->getLevel();
         if (auto* actor = level.fetchEntity(entityId, false)) {
             if (actor->isPlayer()) {
+                auto&       player  = static_cast<Player&>(*actor);
                 auto const& entries = level.getPlayerList();
                 auto const  entry   = entries.find(*addPlayer.mUuid);
-                if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
-                    auto& player = static_cast<Player&>(*actor);
+                if (entry != entries.end() && hasUsableReplaySkin(*entry->second.mSkin)) {
                     player.updateSkin(*entry->second.mSkin, static_cast<int>(player.getClientSubId()));
                     player.mFirstPersonAnimationComponent.reset();
                     getLogger()
