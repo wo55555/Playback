@@ -33,6 +33,7 @@ public:
 
     void initialize();
     void shutdown();
+    void saveLayoutPreferences() const;
 
     void draw(playback::state::EditorState const& state, SubmitAction const& submit);
 
@@ -146,7 +147,6 @@ private:
     std::string                                    mActiveReplayPath;
 
     void loadLayoutPreferences();
-    void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
     void updateExitHold(bool escapeConsumedByUi);
 

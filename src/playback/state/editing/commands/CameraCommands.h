@@ -107,6 +107,7 @@ private:
     int                                  mTick;
     std::optional<model::CameraKeyframe> mCaptured;
     std::optional<model::EditorStateExt> mBefore;
+    bool                                 mReplaced{false};
 };
 
 class MoveKeyframe final : public model::IEditCommand {
@@ -289,7 +290,12 @@ private:
 
 class SetCameraKeyframeMode final : public model::IEditCommand {
 public:
-    SetCameraKeyframeMode(std::string cameraId, int tick, model::CameraKeyframeMode mode);
+    SetCameraKeyframeMode(
+        std::string               cameraId,
+        int                       tick,
+        model::CameraKeyframeMode mode,
+        std::string               defaultSubject = {}
+    );
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -299,12 +305,17 @@ private:
     std::string                          mCameraId;
     int                                  mTick;
     model::CameraKeyframeMode            mMode;
+    std::string                          mDefaultSubject;
     std::optional<model::EditorStateExt> mBefore;
 };
 
 class SetKeyframesMode final : public model::IEditCommand {
 public:
-    SetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode);
+    SetKeyframesMode(
+        std::vector<model::KeyframeRef> refs,
+        model::CameraKeyframeMode       mode,
+        std::string                     defaultSubject = {}
+    );
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -313,6 +324,7 @@ public:
 private:
     std::vector<model::KeyframeRef>      mRefs;
     model::CameraKeyframeMode            mMode;
+    std::string                          mDefaultSubject;
     std::optional<model::EditorStateExt> mBefore;
 };
 
