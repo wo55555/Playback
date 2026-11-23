@@ -2,6 +2,7 @@
 
 #include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/IEditCommand.h"
+#include "playback/state/editing/models/Track.h"
 
 #include <memory>
 #include <optional>
@@ -31,8 +32,12 @@ public:
     static std::unique_ptr<model::IEditCommand> createSetCameraKeyframeFov(const std::string& id, int tick, float fov);
     static std::unique_ptr<model::IEditCommand>
     createSetCameraKeyframeSubject(const std::string& id, int tick, const std::string& subject);
-    static std::unique_ptr<model::IEditCommand>
-    createSetCameraKeyframeMode(const std::string& id, int tick, model::CameraKeyframeMode mode);
+    static std::unique_ptr<model::IEditCommand> createSetCameraKeyframeMode(
+        const std::string&        id,
+        int                       tick,
+        model::CameraKeyframeMode mode,
+        const std::string&        defaultSubject = {}
+    );
     static std::unique_ptr<model::IEditCommand> createSetCameraEnabled(const std::string& id, bool enabled);
     static std::unique_ptr<model::IEditCommand> createSetCameraLocked(const std::string& id, bool locked);
     static std::unique_ptr<model::IEditCommand>
@@ -45,8 +50,11 @@ public:
     static std::unique_ptr<model::IEditCommand> createDeleteCameraKeyframes(std::vector<model::KeyframeRef> refs);
     static std::unique_ptr<model::IEditCommand>
     createSetKeyframesInterpolation(std::vector<model::KeyframeRef> refs, model::CameraInterpolationType interpolation);
-    static std::unique_ptr<model::IEditCommand>
-    createSetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode);
+    static std::unique_ptr<model::IEditCommand> createSetKeyframesMode(
+        std::vector<model::KeyframeRef> refs,
+        model::CameraKeyframeMode       mode,
+        const std::string&              defaultSubject = {}
+    );
     static std::unique_ptr<model::IEditCommand>
     createSetKeyframesSubject(std::vector<model::KeyframeRef> refs, const std::string& subject);
     static std::unique_ptr<model::IEditCommand> createAddCameraKeyframes(std::vector<model::KeyframeRef> refs);
@@ -134,6 +142,44 @@ public:
     static std::unique_ptr<model::IEditCommand> createSetTimelapseTrackEnabled(bool enabled);
     static std::unique_ptr<model::IEditCommand> createSetTimelapseTrackLocked(bool locked);
     static std::unique_ptr<model::IEditCommand> createClearTimelapseKeyframes();
+
+    static std::unique_ptr<model::IEditCommand> createAddTimeOfDayTrack();
+    static std::unique_ptr<model::IEditCommand> createRemoveTimeOfDayTrack();
+    static std::unique_ptr<model::IEditCommand> createSetTimeOfDayTrackEnabled(bool enabled);
+    static std::unique_ptr<model::IEditCommand> createSetTimeOfDayTrackLocked(bool locked);
+    static std::unique_ptr<model::IEditCommand> createAddTimeOfDayKeyframe(
+        int                            tick,
+        int                            timeOfDay         = 6000,
+        model::CameraInterpolationType interpolationType = model::CameraInterpolationType::Linear
+    );
+    static std::unique_ptr<model::IEditCommand> createRemoveTimeOfDayKeyframe(int tick);
+    static std::unique_ptr<model::IEditCommand> createRemoveTimeOfDayKeyframes(std::vector<int> ticks);
+    static std::unique_ptr<model::IEditCommand> createMoveTimeOfDayKeyframe(int fromTick, int toTick);
+    static std::unique_ptr<model::IEditCommand> createMoveTimeOfDayKeyframes(std::vector<int> ticks, int tickDelta);
+    static std::unique_ptr<model::IEditCommand> createSetTimeOfDayKeyframeValue(int tick, int timeOfDay);
+    static std::unique_ptr<model::IEditCommand>
+    createSetTimeOfDayKeyframeInterpolation(int tick, model::CameraInterpolationType interpolation);
+    static std::unique_ptr<model::IEditCommand>
+    createSetTimeOfDayKeyframeBezier(int tick, model::Vec2 ctrl1, model::Vec2 ctrl2);
+    static std::unique_ptr<model::IEditCommand>
+    createSetTimeOfDayKeyframesInterpolation(std::vector<int> ticks, model::CameraInterpolationType interpolation);
+    static std::unique_ptr<model::IEditCommand> createClearTimeOfDayKeyframes();
+    static std::unique_ptr<model::IEditCommand> createSetSceneDaytimeOverride(bool enabled, int ticks);
+    static std::unique_ptr<model::IEditCommand> createSetSceneWeatherOverride(model::WeatherOverride weather);
+
+    static std::unique_ptr<model::IEditCommand> createAddWeatherTrack();
+    static std::unique_ptr<model::IEditCommand> createRemoveWeatherTrack();
+    static std::unique_ptr<model::IEditCommand> createSetWeatherTrackEnabled(bool enabled);
+    static std::unique_ptr<model::IEditCommand> createSetWeatherTrackLocked(bool locked);
+    static std::unique_ptr<model::IEditCommand>
+    createAddWeatherKeyframe(int tick, model::WeatherOverride weather = model::WeatherOverride::Clear);
+    static std::unique_ptr<model::IEditCommand> createRemoveWeatherKeyframe(int tick);
+    static std::unique_ptr<model::IEditCommand> createRemoveWeatherKeyframes(std::vector<int> ticks);
+    static std::unique_ptr<model::IEditCommand> createMoveWeatherKeyframe(int fromTick, int toTick);
+    static std::unique_ptr<model::IEditCommand> createMoveWeatherKeyframes(std::vector<int> ticks, int tickDelta);
+    static std::unique_ptr<model::IEditCommand> createSetWeatherKeyframeValue(int tick, model::WeatherOverride weather);
+    static std::unique_ptr<model::IEditCommand>
+    createSetWeatherKeyframesValue(std::vector<int> ticks, model::WeatherOverride weather);
 
     static std::unique_ptr<model::IEditCommand> createAddAudioTrack(const std::string& name = {});
     static std::unique_ptr<model::IEditCommand> createRemoveAudioTrack(const std::string& trackId);

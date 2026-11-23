@@ -40,6 +40,13 @@ enum class GameFunction : uint8_t {
     BgfxContextInitFinalize,
     BgfxContextShutdownBegin,
     DataDrivenModelSetupAttachableNoChecks,
+    WeatherTick,
+    WeatherGetTopSnowBlockPos,
+    LevelChunkGetTopRainBlockPos,
+    LevelRendererPlayerTickRain,
+    BiomeRegistryGetBiomesInDimension,
+    GameRulesSetGameRule,
+    LevelDataSetDaylightCycle,
     Count,
 };
 

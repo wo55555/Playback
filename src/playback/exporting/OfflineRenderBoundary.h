@@ -6,6 +6,7 @@
 #include "OfflineRenderWaitReason.h"
 
 #include "playback/runtime/ClientTickHooks.h"
+#include "playback/state/editing/models/Track.h"
 #include "playback/visuals/FrameTap.h"
 
 #include <chrono>
@@ -100,6 +101,7 @@ private:
     [[nodiscard]] std::chrono::milliseconds submittedCaptureWait();
     void               clearStep();
     void               fault(OfflineRenderBoundaryError error, std::string message);
+    void applyExportWorldEnv(double replayTick, std::optional<float> partialTick = std::nullopt);
 
     // The clock hooks hold one render step at a time.
     struct PublishedStep {
@@ -149,8 +151,13 @@ private:
     bool                                  mTimelineInitialized{};
     bool                                  mInitializationTickObserved{};
     bool                                  mTimelapse{};
-    bool                                  mPendingCutHandled{};
-    OfflineRenderBoundaryState            mState{OfflineRenderBoundaryState::Closed};
+    bool                                   mPendingCutHandled{};
+    state::editing::model::TimeOfDayTrack  mExportTimeOfDayTrack;
+    state::editing::model::WeatherTrack    mExportWeatherTrack;
+    bool                                   mExportDaytimeOverrideEnabled{false};
+    int                                    mExportDaytimeOverrideTicks{6000};
+    state::editing::model::WeatherOverride mExportWeatherOverride{state::editing::model::WeatherOverride::Recorded};
+    OfflineRenderBoundaryState             mState{OfflineRenderBoundaryState::Closed};
     OfflineRenderBoundaryError            mError{OfflineRenderBoundaryError::None};
     OfflineRenderWaitReason               mLastWaitReason{OfflineRenderWaitReason::Unknown};
     std::string                           mMessage;

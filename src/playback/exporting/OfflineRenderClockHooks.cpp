@@ -413,7 +413,7 @@ LL_TYPE_INSTANCE_HOOK(
     }
     ++sample->gameRenderCalls;
     recordGameRenderStart(sample->token, sample->renderSerial, sample->gameRenderCalls);
-    replay::ReplaySession::getInstance().enforceReplayWorldTime();
+    replay::ReplaySession::getInstance().enforceReplayWorldTime(partialTick);
     origin(partialTick);
 }
 

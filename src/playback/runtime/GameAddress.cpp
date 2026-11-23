@@ -57,6 +57,13 @@ constexpr Entry Entries[] = {
     {GameFunction::BgfxContextInitFinalize,                  0xBC63080},
     {GameFunction::BgfxContextShutdownBegin,                 0xBC654A0},
     {GameFunction::DataDrivenModelSetupAttachableNoChecks,   0x58B7AC0},
+    {GameFunction::WeatherTick,                              0x5E27530},
+    {GameFunction::WeatherGetTopSnowBlockPos,                0x5E29180},
+    {GameFunction::LevelChunkGetTopRainBlockPos,             0x3868920},
+    {GameFunction::LevelRendererPlayerTickRain,              0x538EC80},
+    {GameFunction::BiomeRegistryGetBiomesInDimension,        0x5D68790},
+    {GameFunction::GameRulesSetGameRule,                     0x70F1A0 },
+    {GameFunction::LevelDataSetDaylightCycle,                0x1067B50},
 };
 
 constexpr bool entriesInOrder() {

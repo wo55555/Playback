@@ -9,7 +9,9 @@
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/keyframe/SpeedTimelineEvaluator.h"
+#include "playback/keyframe/TimeOfDayTimelineEvaluator.h"
 #include "playback/keyframe/TimelapseTimelineEvaluator.h"
+#include "playback/keyframe/WeatherTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/utils/ShellUtils.h"
 
@@ -23,6 +25,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <iterator>
+#include <optional>
 #include <span>
 
 namespace playback::editor::ui {
@@ -51,6 +54,176 @@ std::string keyframeModeName(state::editing::model::CameraKeyframeMode mode) {
     default:
         return "playback.refactorEditor.details.lensModeType.interpolated"_tr();
     }
+}
+
+std::string lensModeChipLabel(state::editing::model::CameraKeyframeMode mode) {
+    using Mode = state::editing::model::CameraKeyframeMode;
+    switch (mode) {
+    case Mode::FirstPerson:
+        return "playback.refactorEditor.details.lensModeChip.firstPerson"_tr();
+    case Mode::ThirdPerson:
+        return "playback.refactorEditor.details.lensModeChip.thirdPerson"_tr();
+    case Mode::Interpolated:
+    default:
+        return "playback.refactorEditor.details.lensModeChip.interpolated"_tr();
+    }
+}
+
+template <typename OnSelectFn>
+void drawLensModeChips(char const* idPrefix, std::optional<int> activeMode, bool mixed, OnSelectFn&& onSelect) {
+    float const scale  = metrics::scale();
+    float const gap    = 4.0f * scale;
+    float const availW = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    float const chipW  = (availW - gap * 2.0f) / 3.0f;
+    ImGui::PushID(idPrefix);
+    for (int index = 0; index < 3; ++index) {
+        if (index > 0) ImGui::SameLine(0.0f, gap);
+        auto const        value  = static_cast<state::editing::model::CameraKeyframeMode>(index);
+        bool const        active = !mixed && activeMode && *activeMode == index;
+        float const       width  = index == 2 ? -1.0f : std::floor(chipW);
+        std::string const label  = lensModeChipLabel(value) + "##mode-" + std::to_string(index);
+        if (property::choiceChip(label.c_str(), active, width)) {
+            onSelect(index);
+        }
+        widgets::itemTooltip(keyframeModeName(value).c_str());
+    }
+    ImGui::PopID();
+}
+
+template <typename OnSelectFn>
+void drawThirdPersonStyleChips(char const* idPrefix, std::optional<bool> isCustom, bool mixed, OnSelectFn&& onSelect) {
+    float const scale  = metrics::scale();
+    float const gap    = 4.0f * scale;
+    float const availW = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    float const halfW  = (availW - gap) * 0.5f;
+    ImGui::TextDisabled("%s", "playback.refactorEditor.details.thirdPersonStyle"_tr().c_str());
+    if (mixed) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.mixed"_tr().c_str());
+    }
+    ImGui::PushID(idPrefix);
+    if (property::choiceChip(
+            ("playback.refactorEditor.details.thirdPersonVanilla"_tr() + "##3p-vanilla").c_str(),
+            !mixed && isCustom && !*isCustom,
+            std::floor(halfW)
+        )) {
+        onSelect(false);
+    }
+    ImGui::SameLine(0.0f, gap);
+    if (property::choiceChip(
+            ("playback.refactorEditor.details.thirdPersonCustomOrbit"_tr() + "##3p-custom").c_str(),
+            !mixed && isCustom && *isCustom,
+            -1.0f
+        )) {
+        onSelect(true);
+    }
+    ImGui::PopID();
+}
+
+bool drawTargetDropdownButton(char const* id, char const* label, char const* icon) {
+    float const  scale    = metrics::scale();
+    float const  height   = metrics::iconButton();
+    float const  width    = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    float const  padX     = 8.0f * scale;
+    float const  iconBox  = icon ? metrics::iconGlyph() : 0.0f;
+    float const  caretW   = height * 0.5f;
+    ImVec2 const origin   = ImGui::GetCursorScreenPos();
+    bool const   clicked  = ImGui::InvisibleButton(id, {width, height});
+    bool const   hovered  = ImGui::IsItemHovered();
+    bool const   held     = ImGui::IsItemActive();
+    auto*        drawList = ImGui::GetWindowDrawList();
+    ImU32 const  fill     = held ? theme::kInputBgActive : hovered ? theme::kInputBgHover : theme::kInputBg;
+    ImU32 const  border   = (hovered || held) ? theme::kButtonBorder : theme::kFineDivider;
+    float const  rounding = theme::kButtonRounding * scale;
+    drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, fill, rounding);
+    drawList->AddRect(origin, {origin.x + width, origin.y + height}, border, rounding, 0, 1.0f);
+
+    ImU32 const  textColor  = theme::kText;
+    ImU32 const  iconColor  = hovered ? theme::kIconHighlight : theme::kIconInactive;
+    float const  textStartX = origin.x + padX + (icon ? iconBox + padX * 0.5f : 0.0f);
+    float const  textMaxX   = std::max(textStartX, origin.x + width - padX - caretW - padX * 0.5f);
+    ImVec2 const textPos{textStartX, widgets::textYForCentre(origin.y + height * 0.5f, label)};
+    if (icon) {
+        widgets::drawIconAtCentre(
+            drawList,
+            icon,
+            {origin.x + padX + iconBox * 0.5f, widgets::textInkCentre(textPos.y, label)},
+            iconColor
+        );
+    }
+    drawList->PushClipRect({textStartX, origin.y}, {textMaxX, origin.y + height}, true);
+    drawList->AddText(textPos, textColor, label);
+    drawList->PopClipRect();
+    if (hovered && ImGui::CalcTextSize(label).x > (textMaxX - textStartX)) {
+        widgets::hoverTooltip(label);
+    }
+
+    float const  stroke = std::max(1.5f, height * 0.045f);
+    ImVec2 const c{origin.x + width - padX - caretW * 0.5f, origin.y + height * 0.5f};
+    float const  w = height * 0.11f;
+    drawList->AddLine({c.x - w, c.y - w * 0.5f}, {c.x, c.y + w * 0.5f}, iconColor, stroke);
+    drawList->AddLine({c.x, c.y + w * 0.5f}, {c.x + w, c.y - w * 0.5f}, iconColor, stroke);
+    return clicked;
+}
+
+template <typename OnPickFn>
+void drawCompactSubjectPicker(
+    char const*         idPrefix,
+    PanelContext const& ctx,
+    char const*         label,
+    std::string const&  currentUuid,
+    bool                mixed,
+    OnPickFn&&          onPick
+) {
+    ImGui::PushID(idPrefix);
+    ImGui::TextDisabled("%s", label);
+    std::string const displayLabel =
+        mixed ? "playback.refactorEditor.details.mixed"_tr()
+              : playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, currentUuid);
+    std::string const popupId = std::string("##") + idPrefix + "-popup";
+    if (drawTargetDropdownButton("##target-btn", displayLabel.c_str(), ICON_USER)) {
+        widgets::openAnchoredPopup(popupId.c_str());
+    }
+    PlayerPickerResult picked;
+    if (drawPlayerPicker(
+            popupId.c_str(),
+            PlayerPickerMode::SegmentSubject,
+            ctx.state.replayPlayers,
+            ctx.state.replayEntities,
+            currentUuid,
+            false,
+            picked,
+            mixed
+        )
+        && (mixed || picked.uuid != currentUuid)) {
+        onPick(std::move(picked.uuid));
+    }
+
+    float const       scale        = metrics::scale();
+    float const       gap          = 4.0f * scale;
+    float const       availW       = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    float const       halfW        = (availW - gap) * 0.5f;
+    std::string const followChoice = ctx.state.replaySubjectChoice;
+    std::string const followLabel = playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, followChoice);
+    if (property::choiceChip(
+            ("playback.refactorEditor.playerPicker.recorder"_tr() + "##quick-recorder").c_str(),
+            !mixed && currentUuid.empty(),
+            std::floor(halfW)
+        )
+        && (mixed || !currentUuid.empty())) {
+        onPick(std::string{});
+    }
+    ImGui::SameLine(0.0f, gap);
+    if (property::choiceChip(
+            ("playback.refactorEditor.details.currentFollowChip"_tr() + "##quick-follow").c_str(),
+            !mixed && !followChoice.empty() && currentUuid == followChoice,
+            -1.0f
+        )
+        && (mixed || currentUuid != followChoice)) {
+        onPick(followChoice);
+    }
+    widgets::itemTooltip("playback.refactorEditor.details.currentFollowTooltip"_tr(followLabel).c_str());
+    ImGui::PopID();
 }
 
 std::string interpolationName(state::editing::model::CameraInterpolationType interpolation) {
@@ -426,6 +599,102 @@ void drawSpeedPresetChips(float displayedSpeed, std::span<float const> presets, 
     );
 }
 
+std::string formatMinecraftClock(int ticks) {
+    int const clamped      = std::max(0, ticks);
+    int const day          = clamped / state::editing::model::DayCycleTicks;
+    int const tickInDay    = clamped % state::editing::model::DayCycleTicks;
+    int const totalMinutes = ((tickInDay * 1440) / state::editing::model::DayCycleTicks + 360) % 1440;
+    int const hour         = totalMinutes / 60;
+    int const minute       = totalMinutes % 60;
+    char      buf[32]{};
+    if (day > 0) {
+        std::snprintf(buf, sizeof(buf), "+%dd %02d:%02d", day, hour, minute);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%02d:%02d", hour, minute);
+    }
+    return std::string(buf);
+}
+
+template <typename SubmitTicksFn>
+void drawTimeOfDayPresetChips(char const* idPrefix, int displayedTicks, SubmitTicksFn&& onSelect) {
+    struct TimePreset {
+        int         ticks;
+        std::string label;
+    };
+    std::array const presets{
+        TimePreset{0,     "playback.refactorEditor.timeOfDay.presetSunrise"_tr() },
+        TimePreset{6000,  "playback.refactorEditor.timeOfDay.presetNoon"_tr()    },
+        TimePreset{12000, "playback.refactorEditor.timeOfDay.presetSunset"_tr()  },
+        TimePreset{18000, "playback.refactorEditor.timeOfDay.presetMidnight"_tr()},
+    };
+    ImGui::PushID(idPrefix);
+    drawPresetChips<TimePreset>(
+        presets,
+        [](TimePreset const& preset) { return preset.label; },
+        [displayedTicks](TimePreset const& preset) { return displayedTicks == preset.ticks; },
+        [](TimePreset const&) { return theme::kAccent; },
+        [&](TimePreset const& preset) { onSelect(preset.ticks); }
+    );
+    ImGui::PopID();
+}
+
+template <typename SubmitWeatherFn>
+void drawWeatherModeChips(
+    char const*                                           idPrefix,
+    std::optional<state::editing::model::WeatherOverride> activeMode,
+    SubmitWeatherFn&&                                     onSelect
+) {
+    struct WeatherOption {
+        state::editing::model::WeatherOverride mode;
+        std::string                            label;
+    };
+    std::array const weatherOptions{
+        WeatherOption{
+                      state::editing::model::WeatherOverride::Recorded,
+                      "playback.refactorEditor.worldEnv.weatherRecorded"_tr()
+        },
+        WeatherOption{
+                      state::editing::model::WeatherOverride::Clear,
+                      "playback.refactorEditor.worldEnv.weatherClear"_tr()
+        },
+        WeatherOption{
+                      state::editing::model::WeatherOverride::Overcast,
+                      "playback.refactorEditor.worldEnv.weatherOvercast"_tr()
+        },
+        WeatherOption{
+                      state::editing::model::WeatherOverride::Rain,
+                      "playback.refactorEditor.worldEnv.weatherRain"_tr()
+        },
+        WeatherOption{
+                      state::editing::model::WeatherOverride::Snow,
+                      "playback.refactorEditor.worldEnv.weatherSnow"_tr()
+        },
+        WeatherOption{
+                      state::editing::model::WeatherOverride::Thunder,
+                      "playback.refactorEditor.worldEnv.weatherThunder"_tr()
+        },
+    };
+    float const scale  = metrics::scale();
+    float const gap    = 4.0f * scale;
+    float const availW = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    int const   cols   = availW >= 200.0f * scale ? 3 : 2;
+    float const cellW  = std::max(1.0f, (availW - gap * static_cast<float>(cols - 1)) / static_cast<float>(cols));
+    ImGui::PushID(idPrefix);
+    for (int i = 0; i < static_cast<int>(weatherOptions.size()); ++i) {
+        auto const& option = weatherOptions[static_cast<size_t>(i)];
+        int const   col    = i % cols;
+        if (col > 0) ImGui::SameLine(0.0f, gap);
+        float const w        = (col == cols - 1) ? -1.0f : std::floor(cellW);
+        bool const  selected = activeMode.has_value() && *activeMode == option.mode;
+        ImGui::PushID(static_cast<int>(option.mode));
+        if (property::choiceChip(option.label.c_str(), selected, w)) {
+            onSelect(option.mode);
+        }
+        ImGui::PopID();
+    }
+    ImGui::PopID();
+}
+
 template <typename CommitBezierFn>
 void drawBezierCurveRows(
     char const*                  idPrefix,
@@ -684,6 +953,11 @@ void DetailsPanel::draw(PanelContext const& ctx) {
         mTimelapseTextTick.reset();
         mTimelapseTextBuffer.fill('\0');
         mTimelapseTextEditing = false;
+        mTimeOfDayKeyDragging      = false;
+        mTimeOfDayKeyDragTick      = -1;
+        mTimeOfDayBezierDragHandle = 0;
+        mTimeOfDayBezierDragTick   = -1;
+        mDaytimeOverrideDragging   = false;
         resetAudioDrafts();
         widgets::noActiveProjectPlaceholder();
     } else {
@@ -696,8 +970,15 @@ void DetailsPanel::draw(PanelContext const& ctx) {
             mFreezeDelayDragTick   = -1;
             mTimelapseTextTick.reset();
             mTimelapseTextBuffer.fill('\0');
-            mTimelapseTextEditing = false;
+            mTimelapseTextEditing      = false;
+            mTimeOfDayKeyDragging      = false;
+            mTimeOfDayKeyDragTick      = -1;
+            mTimeOfDayBezierDragHandle = 0;
+            mTimeOfDayBezierDragTick   = -1;
             resetAudioDrafts();
+        }
+        if (mPage != InspectorPage::Preview) {
+            mDaytimeOverrideDragging = false;
         }
         switch (mPage) {
         case InspectorPage::Selection:
@@ -791,6 +1072,18 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
         subject = "playback.refactorEditor.timelapse.keyframeDetailsTitle"_tr();
     } else if (selection.isTimelapseTrackSelected()) {
         subject = "playback.refactorEditor.timelapse.trackDetailsTitle"_tr();
+    } else if (selection.selectedTimeOfDayKeyframes().size() > 1) {
+        subject = "playback.refactorEditor.timeOfDay.keyframesTitle"_tr();
+    } else if (selection.selectedTimeOfDayKeyframe()) {
+        subject = "playback.refactorEditor.timeOfDay.keyframeTitle"_tr();
+    } else if (selection.isTimeOfDayTrackSelected()) {
+        subject = "playback.refactorEditor.timeOfDay.trackTitle"_tr();
+    } else if (selection.selectedWeatherKeyframes().size() > 1) {
+        subject = "playback.refactorEditor.weather.keyframesTitle"_tr();
+    } else if (selection.selectedWeatherKeyframe()) {
+        subject = "playback.refactorEditor.weather.keyframeTitle"_tr();
+    } else if (selection.isWeatherTrackSelected()) {
+        subject = "playback.refactorEditor.weather.trackTitle"_tr();
     } else if (auto const selectedAudioClip = selection.selectedAudioClip()) {
         auto const* track = state::editing::ClipOps::findAudioTrack(*project, selectedAudioClip->trackId);
         auto const* clip  = track ? state::editing::ClipOps::findAudioClip(*track, selectedAudioClip->clipId) : nullptr;
@@ -812,6 +1105,12 @@ void DetailsPanel::drawSelectionPage(PanelContext const& ctx) {
     if (drawFreezeTrack(ctx)) return;
     if (drawTimelapseKeyframe(ctx)) return;
     if (drawTimelapseTrack(ctx)) return;
+    if (drawTimeOfDayKeyframes(ctx)) return;
+    if (drawTimeOfDayKeyframe(ctx)) return;
+    if (drawTimeOfDayTrack(ctx)) return;
+    if (drawWeatherKeyframes(ctx)) return;
+    if (drawWeatherKeyframe(ctx)) return;
+    if (drawWeatherTrack(ctx)) return;
     if (drawAudioClip(ctx)) return;
     if (drawAudioTrack(ctx)) return;
     drawOverview(ctx);
@@ -1043,6 +1342,28 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                 if (clip.exportEnabled) ++enabledClips;
             }
             property::formattedRow("playback.refactorEditor.details.clipsSummary"_tr(camera->clips.size(), enabledClips));
+            int const   playheadTick = std::clamp(ctx.state.currentTick, 0, project->totalTicks);
+            std::string activeLensText;
+            if (camera->keysByTick.empty()) {
+                activeLensText = "playback.refactorEditor.details.noKeyframesYet"_tr();
+            } else {
+                auto const upper = camera->keysByTick.upper_bound(playheadTick);
+                if (upper == camera->keysByTick.begin()) {
+                    activeLensText = "playback.refactorEditor.details.beforeFirstKeyframe"_tr();
+                } else {
+                    auto const& activeKey = std::prev(upper)->second;
+                    activeLensText        = keyframeModeName(activeKey.mode);
+                    if (activeKey.mode != state::editing::model::CameraKeyframeMode::Interpolated) {
+                        activeLensText +=
+                            " · "
+                            + playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, activeKey.subject);
+                    }
+                }
+            }
+            property::textRow(
+                "playback.refactorEditor.details.activeLensAtPlayhead"_tr().c_str(),
+                activeLensText.c_str()
+            );
             property::separator();
             float const scale     = metrics::scale();
             bool const  pairFlags = ImGui::GetContentRegionAvail().x >= 168.0f * scale;
@@ -1205,17 +1526,37 @@ bool DetailsPanel::drawCamera(PanelContext const& ctx) {
                 }
             }
             property::separator();
+            auto const exactIt          = camera->keysByTick.find(playheadTick);
+            bool const hasKeyAtPlayhead = exactIt != camera->keysByTick.end();
             if (property::actionButton(
-                    "playback.refactorEditor.details.addKeyframeAtPlayhead"_tr().c_str(),
+                    (hasKeyAtPlayhead ? "playback.refactorEditor.details.overwriteKeyframeAtPlayhead"_tr()
+                                      : "playback.refactorEditor.details.addKeyframeAtPlayhead"_tr())
+                        .c_str(),
                     true,
                     property::ButtonVariant::Primary,
                     ICON_ADD_KEYFRAME
                 )) {
                 EditorAction action{EditorActionType::AddCameraKeyframe};
                 action.id   = camera->id;
-                action.tick = ctx.state.currentTick;
+                action.tick = playheadTick;
                 submit(std::move(action));
             }
+            ImGui::TextDisabled(
+                "%s",
+                (hasKeyAtPlayhead ? "playback.refactorEditor.details.quickOverwriteMode"_tr()
+                                  : "playback.refactorEditor.details.quickAddMode"_tr())
+                    .c_str()
+            );
+            std::optional<int> const exactMode =
+                hasKeyAtPlayhead ? std::optional<int>{static_cast<int>(exactIt->second.mode)} : std::nullopt;
+            drawLensModeChips("camera-quick-mode", exactMode, false, [&](int modeIndex) {
+                EditorAction action{EditorActionType::AddCameraKeyframe};
+                action.id    = camera->id;
+                action.tick  = playheadTick;
+                action.value = true;
+                action.kind  = modeIndex;
+                submit(std::move(action));
+            });
             bool const canResetClips = !camera->locked && project->totalTicks > 0
                                     && std::ranges::none_of(camera->clips, &state::editing::model::Clip::locked);
             if (property::actionButton(
@@ -1333,10 +1674,20 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
         );
         property::textRow("playback.refactorEditor.details.trackCount"_tr().c_str(), std::to_string(tracks).c_str());
         property::separator();
-        {
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.lensMode"_tr().c_str());
+        if (mixedMode) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.mixed"_tr().c_str());
+        }
+        drawLensModeChips("batch-lens-mode", sharedMode, mixedMode, [&](int modeIndex) {
+            EditorAction action{EditorActionType::SetKeyframesMode};
+            action.keyframeRefs = refs;
+            action.kind         = modeIndex;
+            ctx.submitAction(std::move(action));
+        });
+        if (anyInterpolated || anyCustomThirdPerson) {
             float const scale      = metrics::scale();
             float const labelWidth = measureLabelColumn({
-                "playback.refactorEditor.details.lensMode"_tr(),
                 "playback.refactorEditor.details.interpolation"_tr(),
             });
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
@@ -1351,18 +1702,18 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("%s", "playback.refactorEditor.details.lensMode"_tr().c_str());
+                ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
                 ImGui::TableNextColumn();
                 ImGui::SetNextItemWidth(-1.0f);
-                std::string const modePreview =
-                    mixedMode || !sharedMode
+                std::string const preview =
+                    mixed || !shared
                         ? "playback.refactorEditor.details.mixed"_tr()
-                        : keyframeModeName(static_cast<state::editing::model::CameraKeyframeMode>(*sharedMode));
-                if (widgets::beginCombo("##batch-lens-mode", modePreview.c_str())) {
-                    for (int index = 0; index < 3; ++index) {
-                        auto const value = static_cast<state::editing::model::CameraKeyframeMode>(index);
-                        if (ImGui::Selectable(keyframeModeName(value).c_str(), !mixedMode && sharedMode == index)) {
-                            EditorAction action{EditorActionType::SetKeyframesMode};
+                        : interpolationName(static_cast<state::editing::model::CameraInterpolationType>(*shared));
+                if (widgets::beginCombo("##batch-interpolation", preview.c_str())) {
+                    for (int index = 0; index < 8; ++index) {
+                        auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+                        if (ImGui::Selectable(interpolationName(value).c_str(), !mixed && shared == index)) {
+                            EditorAction action{EditorActionType::SetKeyframesInterpolation};
                             action.keyframeRefs = refs;
                             action.kind         = index;
                             ctx.submitAction(std::move(action));
@@ -1370,78 +1721,41 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                     }
                     widgets::endCombo();
                 }
-
-                if (anyInterpolated || anyCustomThirdPerson) {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
-                    ImGui::TableNextColumn();
-                    ImGui::SetNextItemWidth(-1.0f);
-                    std::string const preview =
-                        mixed || !shared
-                            ? "playback.refactorEditor.details.mixed"_tr()
-                            : interpolationName(static_cast<state::editing::model::CameraInterpolationType>(*shared));
-                    if (widgets::beginCombo("##batch-interpolation", preview.c_str())) {
-                        for (int index = 0; index < 8; ++index) {
-                            auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
-                            if (ImGui::Selectable(interpolationName(value).c_str(), !mixed && shared == index)) {
-                                EditorAction action{EditorActionType::SetKeyframesInterpolation};
-                                action.keyframeRefs = refs;
-                                action.kind         = index;
-                                ctx.submitAction(std::move(action));
-                            }
-                        }
-                        widgets::endCombo();
-                    }
-                }
                 ImGui::EndTable();
             }
             ImGui::PopStyleVar();
         }
         if (anyThirdPerson) {
             property::separator();
-            bool              customValue = !mixedThirdPersonCustom && sharedThirdPersonCustom.value_or(false);
-            std::string const customLabel =
-                mixedThirdPersonCustom
-                    ? ("playback.refactorEditor.details.thirdPersonCustom"_tr() + " ("
-                       + "playback.refactorEditor.details.mixed"_tr() + ")##batch-3p-custom")
-                    : ("playback.refactorEditor.details.thirdPersonCustom"_tr() + "##batch-3p-custom");
-            if (ImGui::Checkbox(customLabel.c_str(), &customValue)) {
-                EditorAction action{EditorActionType::SetKeyframesThirdPersonCustom};
-                action.keyframeRefs = refs;
-                action.value        = customValue;
-                ctx.submitAction(std::move(action));
-            }
+            drawThirdPersonStyleChips(
+                "batch-3p-style",
+                sharedThirdPersonCustom,
+                mixedThirdPersonCustom,
+                [&](bool custom) {
+                    if (!mixedThirdPersonCustom && sharedThirdPersonCustom && *sharedThirdPersonCustom == custom)
+                        return;
+                    EditorAction action{EditorActionType::SetKeyframesThirdPersonCustom};
+                    action.keyframeRefs = refs;
+                    action.value        = custom;
+                    ctx.submitAction(std::move(action));
+                }
+            );
         }
         if (anyPerson) {
             property::separator();
-            std::string const current =
-                mixedSubject || !sharedSubject
-                    ? "playback.refactorEditor.details.mixed"_tr()
-                    : playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, *sharedSubject);
-            ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeSubject"_tr().c_str());
-            ImGui::SameLine();
-            ImGui::PushTextWrapPos(0.0f);
-            ImGui::TextUnformatted(current.c_str());
-            ImGui::PopTextWrapPos();
-            PlayerPickerResult picked;
-            if (drawPlayerList(
-                    "##keyframes-subject-list",
-                    PlayerPickerMode::SegmentSubject,
-                    ctx.state.replayPlayers,
-                    ctx.state.replayEntities,
-                    sharedSubject.value_or(std::string{}),
-                    false,
-                    picked,
-                    mixedSubject
-                )
-                && (mixedSubject || !sharedSubject || picked.uuid != *sharedSubject)) {
-                EditorAction action{EditorActionType::SetKeyframesSubject};
-                action.keyframeRefs = refs;
-                action.secondaryId  = std::move(picked.uuid);
-                ctx.submitAction(std::move(action));
-            }
+            drawCompactSubjectPicker(
+                "keyframes-subject",
+                ctx,
+                "playback.refactorEditor.details.keyframeSubject"_tr().c_str(),
+                sharedSubject.value_or(std::string{}),
+                mixedSubject || !sharedSubject,
+                [&](std::string pickedUuid) {
+                    EditorAction action{EditorActionType::SetKeyframesSubject};
+                    action.keyframeRefs = refs;
+                    action.secondaryId  = std::move(pickedUuid);
+                    ctx.submitAction(std::move(action));
+                }
+            );
         }
         if (anyInterpolated) {
             property::separator();
@@ -1460,35 +1774,22 @@ bool DetailsPanel::drawKeyframes(PanelContext const& ctx) {
                 ctx.submitAction(std::move(action));
             }
             if (anyLookAtEnabled) {
-                bool const        targetMixed = mixedLookAtEnabled || mixedLookAtTarget || !sharedLookAtTarget;
-                std::string const currentTarget =
-                    targetMixed
-                        ? "playback.refactorEditor.details.mixed"_tr()
-                        : playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, *sharedLookAtTarget);
-                ImGui::TextDisabled("%s", "playback.refactorEditor.details.lookAtTarget"_tr().c_str());
-                ImGui::SameLine();
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextUnformatted(currentTarget.c_str());
-                ImGui::PopTextWrapPos();
-                PlayerPickerResult picked;
-                if (drawPlayerList(
-                        "##keyframes-lookat-list",
-                        PlayerPickerMode::SegmentSubject,
-                        ctx.state.replayPlayers,
-                        ctx.state.replayEntities,
-                        sharedLookAtTarget.value_or(std::string{}),
-                        false,
-                        picked,
-                        targetMixed
-                    )
-                    && (targetMixed || picked.uuid != *sharedLookAtTarget)) {
-                    EditorAction action{EditorActionType::SetKeyframesLookAt};
-                    action.keyframeRefs  = refs;
-                    action.value         = true;
-                    action.secondaryId   = std::move(picked.uuid);
-                    action.secondaryTick = 1;
-                    ctx.submitAction(std::move(action));
-                }
+                bool const targetMixed = mixedLookAtEnabled || mixedLookAtTarget || !sharedLookAtTarget;
+                drawCompactSubjectPicker(
+                    "keyframes-lookat",
+                    ctx,
+                    "playback.refactorEditor.details.lookAtTarget"_tr().c_str(),
+                    sharedLookAtTarget.value_or(std::string{}),
+                    targetMixed,
+                    [&](std::string pickedUuid) {
+                        EditorAction action{EditorActionType::SetKeyframesLookAt};
+                        action.keyframeRefs  = refs;
+                        action.value         = true;
+                        action.secondaryId   = std::move(pickedUuid);
+                        action.secondaryTick = 1;
+                        ctx.submitAction(std::move(action));
+                    }
+                );
             }
         }
         if (anyInterpolated || anyCustomThirdPerson) {
@@ -1665,30 +1966,32 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     action.secondaryTick = tick;
                     submit(std::move(action));
                 }
+                ImGui::EndTable();
+            }
+            ImGui::PopStyleVar();
 
-                int const currentMode = static_cast<int>(key->second.mode);
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("%s", "playback.refactorEditor.details.lensMode"_tr().c_str());
-                ImGui::TableNextColumn();
-                ImGui::SetNextItemWidth(-1.0f);
-                if (widgets::beginCombo("##lens-mode", keyframeModeName(key->second.mode).c_str())) {
-                    for (int index = 0; index < 3; ++index) {
-                        auto const value = static_cast<state::editing::model::CameraKeyframeMode>(index);
-                        if (ImGui::Selectable(keyframeModeName(value).c_str(), index == currentMode)) {
-                            EditorAction action{EditorActionType::SetKeyframeMode};
-                            action.id   = camera->id;
-                            action.tick = originalTick;
-                            action.kind = index;
-                            submit(std::move(action));
-                        }
-                    }
-                    widgets::endCombo();
-                }
+            int const currentMode = static_cast<int>(key->second.mode);
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.lensMode"_tr().c_str());
+            drawLensModeChips("lens-mode", currentMode, false, [&](int modeIndex) {
+                if (modeIndex == currentMode) return;
+                EditorAction action{EditorActionType::SetKeyframeMode};
+                action.id   = camera->id;
+                action.tick = originalTick;
+                action.kind = modeIndex;
+                submit(std::move(action));
+            });
 
-                // Interpolated keyframes use explicit world pose and curve controls.
-                if (isFree) {
+            // Interpolated keyframes use explicit world pose and curve controls.
+            if (isFree) {
+                ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+                if (ImGui::BeginTable(
+                        "##keyframe-pose-properties",
+                        2,
+                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+                    )) {
+                    ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+                    ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
                     float position[3] = {key->second.position.x, key->second.position.y, key->second.position.z};
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
@@ -1736,10 +2039,10 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     }
 
                     drawKeyframeInterpolationRows(ctx, *camera, originalTick, key->second);
+                    ImGui::EndTable();
                 }
-                ImGui::EndTable();
+                ImGui::PopStyleVar();
             }
-            ImGui::PopStyleVar();
 
             if (isFree) {
                 property::separator();
@@ -1793,50 +2096,42 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     }
                     ImGui::PopStyleVar();
 
-                    std::string const currentTarget =
-                        playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, key->second.lookAtTarget);
-                    ImGui::TextDisabled("%s", "playback.refactorEditor.details.lookAtTarget"_tr().c_str());
-                    ImGui::SameLine();
-                    ImGui::PushTextWrapPos(0.0f);
-                    ImGui::TextUnformatted(currentTarget.c_str());
-                    ImGui::PopTextWrapPos();
-                    PlayerPickerResult picked;
-                    if (drawPlayerList(
-                            "##keyframe-lookat-list",
-                            PlayerPickerMode::SegmentSubject,
-                            ctx.state.replayPlayers,
-                            ctx.state.replayEntities,
-                            key->second.lookAtTarget,
-                            false,
-                            picked
-                        )
-                        && picked.uuid != key->second.lookAtTarget) {
-                        EditorAction action{EditorActionType::SetKeyframeLookAt};
-                        action.id          = camera->id;
-                        action.tick        = originalTick;
-                        action.value       = true;
-                        action.secondaryId = std::move(picked.uuid);
-                        action.speed       = key->second.lookAtOffsetY;
-                        submit(std::move(action));
-                    }
+                    drawCompactSubjectPicker(
+                        "keyframe-lookat",
+                        ctx,
+                        "playback.refactorEditor.details.lookAtTarget"_tr().c_str(),
+                        key->second.lookAtTarget,
+                        false,
+                        [&](std::string pickedUuid) {
+                            EditorAction action{EditorActionType::SetKeyframeLookAt};
+                            action.id          = camera->id;
+                            action.tick        = originalTick;
+                            action.value       = true;
+                            action.secondaryId = std::move(pickedUuid);
+                            action.speed       = key->second.lookAtOffsetY;
+                            submit(std::move(action));
+                        }
+                    );
                 }
             }
 
             if (isPerson) {
                 property::separator();
                 if (isThirdPerson) {
-                    bool customThird = key->second.thirdPersonCustom;
-                    if (ImGui::Checkbox(
-                            ("playback.refactorEditor.details.thirdPersonCustom"_tr() + "##keyframe-3p-custom").c_str(),
-                            &customThird
-                        )) {
-                        EditorAction action{EditorActionType::SetKeyframeThirdPersonSettings};
-                        action.id                          = camera->id;
-                        action.tick                        = originalTick;
-                        action.keyframe                    = key->second;
-                        action.keyframe->thirdPersonCustom = customThird;
-                        submit(std::move(action));
-                    }
+                    drawThirdPersonStyleChips(
+                        "keyframe-3p-style",
+                        key->second.thirdPersonCustom,
+                        false,
+                        [&](bool customThird) {
+                            if (customThird == key->second.thirdPersonCustom) return;
+                            EditorAction action{EditorActionType::SetKeyframeThirdPersonSettings};
+                            action.id                          = camera->id;
+                            action.tick                        = originalTick;
+                            action.keyframe                    = key->second;
+                            action.keyframe->thirdPersonCustom = customThird;
+                            submit(std::move(action));
+                        }
+                    );
                 }
                 if (!isCustomThird) {
                     // The subject holds from this key until the next key on the same track (or end of replay).
@@ -1844,30 +2139,20 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                     ImGui::TextDisabled("%s", "playback.refactorEditor.details.personApplyHint"_tr().c_str());
                     ImGui::PopTextWrapPos();
                 }
-                std::string const current =
-                    playerSubjectLabel(ctx.state.replayPlayers, ctx.state.replayEntities, key->second.subject);
-                ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeSubject"_tr().c_str());
-                ImGui::SameLine();
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextUnformatted(current.c_str());
-                ImGui::PopTextWrapPos();
-                PlayerPickerResult picked;
-                if (drawPlayerList(
-                        "##keyframe-subject-list",
-                        PlayerPickerMode::SegmentSubject,
-                        ctx.state.replayPlayers,
-                        ctx.state.replayEntities,
-                        key->second.subject,
-                        false,
-                        picked
-                    )
-                    && picked.uuid != key->second.subject) {
-                    EditorAction action{EditorActionType::SetKeyframeSubject};
-                    action.id          = camera->id;
-                    action.tick        = originalTick;
-                    action.secondaryId = std::move(picked.uuid);
-                    submit(std::move(action));
-                }
+                drawCompactSubjectPicker(
+                    "keyframe-subject",
+                    ctx,
+                    "playback.refactorEditor.details.keyframeSubject"_tr().c_str(),
+                    key->second.subject,
+                    false,
+                    [&](std::string pickedUuid) {
+                        EditorAction action{EditorActionType::SetKeyframeSubject};
+                        action.id          = camera->id;
+                        action.tick        = originalTick;
+                        action.secondaryId = std::move(pickedUuid);
+                        submit(std::move(action));
+                    }
+                );
 
                 if (isCustomThird) {
                     property::separator();
@@ -3004,6 +3289,702 @@ bool DetailsPanel::drawTimelapseTrack(PanelContext const& ctx) {
     return true;
 }
 
+bool DetailsPanel::drawTimeOfDayKeyframes(PanelContext const& ctx) {
+    auto const ticks = ctx.selection.selectedTimeOfDayKeyframes();
+    if (ticks.size() <= 1) return false;
+
+    mTimeOfDayKeyDragging      = false;
+    mTimeOfDayKeyDragTick      = -1;
+    mTimeOfDayBezierDragHandle = 0;
+    mTimeOfDayBezierDragTick   = -1;
+
+    auto const  project  = ctx.state.project;
+    auto const& track    = project->timeOfDayTrack;
+    bool const  editable = !track.locked;
+
+    std::vector<int>   validTicks;
+    std::optional<int> sharedInterp;
+    bool               mixedInterp = false;
+    validTicks.reserve(ticks.size());
+    for (int const tick : ticks) {
+        auto const it = track.keysByTick.find(tick);
+        if (it == track.keysByTick.end()) continue;
+        validTicks.push_back(tick);
+        int const interp = static_cast<int>(it->second.interpolationType);
+        if (!sharedInterp) sharedInterp = interp;
+        else if (*sharedInterp != interp) mixedInterp = true;
+    }
+
+    if (validTicks.empty()) {
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
+        return true;
+    }
+
+    if (property::beginSection("playback.refactorEditor.timeOfDay.keyframesTitle"_tr().c_str())) {
+        property::textRow(
+            "playback.refactorEditor.timeOfDay.keyCount"_tr().c_str(),
+            std::to_string(validTicks.size()).c_str()
+        );
+        property::separator();
+
+        float const scale      = metrics::scale();
+        float const labelWidth = measureLabelColumn({
+            "playback.refactorEditor.details.interpolation"_tr(),
+        });
+
+        ImGui::BeginDisabled(!editable);
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##tod-batch-properties",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            std::string const preview =
+                mixedInterp || !sharedInterp
+                    ? "playback.refactorEditor.details.mixed"_tr()
+                    : interpolationName(static_cast<state::editing::model::CameraInterpolationType>(*sharedInterp));
+            if (widgets::beginCombo("##tod-batch-interpolation", preview.c_str())) {
+                for (int index = 0; index < 8; ++index) {
+                    auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+                    if (ImGui::Selectable(interpolationName(value).c_str(), !mixedInterp && sharedInterp == index)) {
+                        EditorAction action{EditorActionType::SetTimeOfDayKeyframesInterpolation};
+                        action.ticks = validTicks;
+                        action.kind  = index;
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+                widgets::endCombo();
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.details.deleteKeyframes"_tr(validTicks.size()).c_str(),
+                true,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            EditorAction action{EditorActionType::RemoveTimeOfDayKeyframes};
+            action.ticks = validTicks;
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        ImGui::EndDisabled();
+        if (!editable) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    }
+    return true;
+}
+
+bool DetailsPanel::drawTimeOfDayKeyframe(PanelContext const& ctx) {
+    auto const selectedTick = ctx.selection.selectedTimeOfDayKeyframe();
+    if (!selectedTick) {
+        mTimeOfDayKeyDragging      = false;
+        mTimeOfDayKeyDragTick      = -1;
+        mTimeOfDayBezierDragHandle = 0;
+        mTimeOfDayBezierDragTick   = -1;
+        return false;
+    }
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->timeOfDayTrack;
+    auto const  key     = track.keysByTick.find(*selectedTick);
+    if (key == track.keysByTick.end()) {
+        mTimeOfDayKeyDragging      = false;
+        mTimeOfDayKeyDragTick      = -1;
+        mTimeOfDayBezierDragHandle = 0;
+        mTimeOfDayBezierDragTick   = -1;
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
+        return true;
+    }
+
+    int const  originalTick = key->first;
+    bool const editable     = !track.locked;
+    if (mTimeOfDayKeyDragging && (!editable || mTimeOfDayKeyDragTick != originalTick)) {
+        mTimeOfDayKeyDragging = false;
+        mTimeOfDayKeyDragTick = -1;
+    }
+    if (mTimeOfDayBezierDragHandle != 0 && (!editable || mTimeOfDayBezierDragTick != originalTick)) {
+        mTimeOfDayBezierDragHandle = 0;
+    }
+
+    if (property::beginSection("playback.refactorEditor.timeOfDay.keyframeTitle"_tr().c_str())) {
+        if (property::actionButton(
+                "playback.refactorEditor.timeline.seekHere"_tr().c_str(),
+                true,
+                property::ButtonVariant::Secondary,
+                ICON_CLOCK
+            )) {
+            ctx.commands.seekTo(originalTick);
+        }
+        property::separator();
+
+        float const scale      = metrics::scale();
+        float const labelWidth = measureLabelColumn({
+            "playback.refactorEditor.details.tick"_tr(),
+            "playback.refactorEditor.timeOfDay.valueLabel"_tr(),
+            "playback.refactorEditor.timeOfDay.clockLabel"_tr(),
+            "playback.refactorEditor.details.interpolation"_tr(),
+            "playback.refactorEditor.details.bezierCurve"_tr(),
+            "playback.refactorEditor.details.bezierControl1"_tr(),
+            "playback.refactorEditor.details.bezierControl2"_tr(),
+        });
+
+        int const  displayedTimeOfDay = (mTimeOfDayKeyDragging && mTimeOfDayKeyDragTick == originalTick)
+                                          ? mTimeOfDayKeyDragValue
+                                          : key->second.timeOfDay;
+        auto const submitTimeOfDay    = [&](int nextTicks) {
+            int const clamped = state::editing::model::clampTimeOfDayTicks(nextTicks);
+            if (clamped != key->second.timeOfDay) {
+                EditorAction action{EditorActionType::SetTimeOfDayKeyframeValue};
+                action.tick          = originalTick;
+                action.secondaryTick = clamped;
+                ctx.submitAction(std::move(action));
+            }
+        };
+
+        ImGui::BeginDisabled(!editable);
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##tod-keyframe-properties",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            int tick = originalTick;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
+            ImGui::TableNextColumn();
+            drawInputWithHint(formatTick(originalTick), [&] {
+                ImGui::InputInt("##tod-key-tick", &tick, 0, 0);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    tick = std::clamp(tick, 0, std::max(0, project->totalTicks));
+                    if (tick != originalTick && !track.keysByTick.contains(tick)) {
+                        mTimeOfDayKeyDragging      = false;
+                        mTimeOfDayKeyDragTick      = -1;
+                        mTimeOfDayBezierDragHandle = 0;
+                        mTimeOfDayBezierDragTick   = -1;
+                        EditorAction action{EditorActionType::MoveTimeOfDayKeyframe};
+                        action.tick          = originalTick;
+                        action.secondaryTick = tick;
+                        ctx.submitAction(std::move(action));
+                        ctx.selection.selectTimeOfDayKeyframe(tick);
+                    }
+                }
+            });
+
+            int timeInput = displayedTimeOfDay;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.timeOfDay.valueLabel"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::DragInt(
+                    "##tod-key-value",
+                    &timeInput,
+                    40.0f,
+                    state::editing::model::MinTimeOfDayTicks,
+                    state::editing::model::MaxTimeOfDayTicks,
+                    "%d",
+                    ImGuiSliderFlags_AlwaysClamp
+                )) {
+                if (ImGui::IsItemActive()) {
+                    mTimeOfDayKeyDragging  = true;
+                    mTimeOfDayKeyDragTick  = originalTick;
+                    mTimeOfDayKeyDragValue = state::editing::model::clampTimeOfDayTicks(timeInput);
+                }
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                mTimeOfDayKeyDragging = false;
+                mTimeOfDayKeyDragTick = -1;
+                submitTimeOfDay(timeInput);
+            } else if (!ImGui::IsItemActive() && mTimeOfDayKeyDragging && mTimeOfDayKeyDragTick == originalTick) {
+                mTimeOfDayKeyDragging = false;
+                mTimeOfDayKeyDragTick = -1;
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.timeOfDay.clockLabel"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(formatMinecraftClock(displayedTimeOfDay).c_str());
+
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        ImGui::TextDisabled("%s", "playback.refactorEditor.timeOfDay.presetsLabel"_tr().c_str());
+        drawTimeOfDayPresetChips("tod-key-presets", displayedTimeOfDay, submitTimeOfDay);
+        bool const canPlusDay = displayedTimeOfDay < state::editing::model::MaxTimeOfDayTicks;
+        ImGui::BeginDisabled(!canPlusDay);
+        if (property::choiceChip(
+                ("playback.refactorEditor.timeOfDay.presetPlusDay"_tr() + "##tod-plus-day").c_str(),
+                false,
+                -1.0f
+            )) {
+            submitTimeOfDay(displayedTimeOfDay + state::editing::model::DayCycleTicks);
+        }
+        ImGui::EndDisabled();
+
+        property::separator();
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##tod-keyframe-curve",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            int const currentInterpolation = static_cast<int>(key->second.interpolationType);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.interpolation"_tr().c_str());
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
+            if (widgets::beginCombo(
+                    "##tod-key-interpolation",
+                    interpolationName(key->second.interpolationType).c_str()
+                )) {
+                for (int index = 0; index < 8; ++index) {
+                    auto const value = static_cast<state::editing::model::CameraInterpolationType>(index);
+                    if (ImGui::Selectable(interpolationName(value).c_str(), index == currentInterpolation)) {
+                        EditorAction action{EditorActionType::SetTimeOfDayKeyframeInterpolation};
+                        action.tick = originalTick;
+                        action.kind = index;
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+                widgets::endCombo();
+            }
+
+            if (key->second.interpolationType == state::editing::model::CameraInterpolationType::CubicBezier) {
+                int const prevHandle = mTimeOfDayBezierDragHandle;
+                drawBezierCurveRows(
+                    "tod-bezier",
+                    !editable,
+                    key->second.bezierCtrl1,
+                    key->second.bezierCtrl2,
+                    mTimeOfDayBezierDragHandle,
+                    mTimeOfDayBezierDraftCtrl1,
+                    mTimeOfDayBezierDraftCtrl2,
+                    [&](state::editing::model::Vec2 c1, state::editing::model::Vec2 c2) {
+                        EditorAction action{EditorActionType::SetTimeOfDayKeyframeBezier};
+                        action.tick        = originalTick;
+                        action.bezierCtrl1 = c1;
+                        action.bezierCtrl2 = c2;
+                        ctx.submitAction(std::move(action));
+                    }
+                );
+                if (prevHandle == 0 && mTimeOfDayBezierDragHandle != 0) {
+                    mTimeOfDayBezierDragTick = originalTick;
+                }
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.details.deleteKeyframe"_tr().c_str(),
+                true,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            mTimeOfDayKeyDragging      = false;
+            mTimeOfDayKeyDragTick      = -1;
+            mTimeOfDayBezierDragHandle = 0;
+            mTimeOfDayBezierDragTick   = -1;
+            EditorAction action{EditorActionType::RemoveTimeOfDayKeyframe};
+            action.tick = originalTick;
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        ImGui::EndDisabled();
+        if (!editable) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    } else {
+        mTimeOfDayKeyDragging      = false;
+        mTimeOfDayKeyDragTick      = -1;
+        mTimeOfDayBezierDragHandle = 0;
+        mTimeOfDayBezierDragTick   = -1;
+    }
+    return true;
+}
+
+bool DetailsPanel::drawTimeOfDayTrack(PanelContext const& ctx) {
+    if (!ctx.selection.isTimeOfDayTrackSelected()) return false;
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->timeOfDayTrack;
+    if (!track.isVisible()) return false;
+
+    if (property::beginSection("playback.refactorEditor.timeOfDay.trackTitle"_tr().c_str())) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.timeOfDay.trackHint"_tr().c_str());
+        if (!track.enabled) {
+            ImGui::TextColored(
+                ImGui::ColorConvertU32ToFloat4(theme::kWarning),
+                "%s  %s",
+                ICON_INFO,
+                "playback.refactorEditor.timeOfDay.disabledHint"_tr().c_str()
+            );
+        }
+        ImGui::PopTextWrapPos();
+        property::separator();
+
+        property::textRow(
+            "playback.refactorEditor.timeOfDay.keyCount"_tr().c_str(),
+            std::to_string(track.keysByTick.size()).c_str()
+        );
+
+        property::separator();
+        bool enabled = track.enabled;
+        if (ImGui::Checkbox("playback.refactorEditor.details.enabled"_tr().c_str(), &enabled)) {
+            EditorAction action{EditorActionType::SetTimeOfDayTrackEnabled};
+            action.value = enabled;
+            ctx.submitAction(std::move(action));
+        }
+        bool locked = track.locked;
+        if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+            EditorAction action{EditorActionType::SetTimeOfDayTrackLocked};
+            action.value = locked;
+            ctx.submitAction(std::move(action));
+        }
+
+        property::separator();
+        int const         playheadTick     = std::clamp(ctx.state.currentTick, 0, std::max(0, project->totalTicks));
+        auto const        existingIt       = track.keysByTick.find(playheadTick);
+        bool const        hasKeyAtPlayhead = existingIt != track.keysByTick.end();
+        std::string const addLabel         = hasKeyAtPlayhead ? "playback.refactorEditor.timeOfDay.replaceKeyframe"_tr()
+                                                              : "playback.refactorEditor.timeOfDay.addKeyframe"_tr();
+        if (property::actionButton(
+                addLabel.c_str(),
+                !track.locked,
+                property::ButtonVariant::Primary,
+                ICON_ADD_KEYFRAME
+            )) {
+            int defaultTime = 6000;
+            if (auto const evaluated = keyframe::evaluateTimeOfDayAt(track, static_cast<double>(playheadTick))) {
+                defaultTime = state::editing::model::clampTimeOfDayTicks(static_cast<int>(std::llround(*evaluated)));
+            } else if (project->daytimeOverrideEnabled) {
+                defaultTime = state::editing::model::clampTimeOfDayTicks(project->daytimeOverrideTicks);
+            }
+            EditorAction action{EditorActionType::AddTimeOfDayKeyframe};
+            action.tick          = playheadTick;
+            action.secondaryTick = defaultTime;
+            action.kind          = hasKeyAtPlayhead ? static_cast<int>(existingIt->second.interpolationType)
+                                                    : static_cast<int>(state::editing::model::CameraInterpolationType::Linear);
+            ctx.submitAction(std::move(action));
+        }
+        bool const canClear = !track.locked && !track.keysByTick.empty();
+        if (property::actionButton(
+                "playback.refactorEditor.timeOfDay.clearKeyframes"_tr().c_str(),
+                canClear,
+                property::ButtonVariant::Subtle,
+                ICON_RESET
+            )) {
+            ctx.submitAction(EditorAction{EditorActionType::ClearTimeOfDayKeyframes});
+        }
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.timeOfDay.removeTrack"_tr().c_str(),
+                !track.locked,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            ctx.submitAction(EditorAction{EditorActionType::RemoveTimeOfDayTrack});
+            ctx.selection.clear();
+        }
+        if (track.locked) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    }
+    return true;
+}
+
+bool DetailsPanel::drawWeatherKeyframes(PanelContext const& ctx) {
+    auto const ticks = ctx.selection.selectedWeatherKeyframes();
+    if (ticks.size() <= 1) return false;
+
+    auto const  project  = ctx.state.project;
+    auto const& track    = project->weatherTrack;
+    bool const  editable = !track.locked;
+
+    std::vector<int>                                      validTicks;
+    std::optional<state::editing::model::WeatherOverride> sharedMode;
+    bool                                                  mixedMode = false;
+    validTicks.reserve(ticks.size());
+    for (int const tick : ticks) {
+        auto const it = track.keysByTick.find(tick);
+        if (it == track.keysByTick.end()) continue;
+        validTicks.push_back(tick);
+        auto const mode = it->second.weather;
+        if (!sharedMode) sharedMode = mode;
+        else if (*sharedMode != mode) mixedMode = true;
+    }
+
+    if (validTicks.empty()) {
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
+        return true;
+    }
+
+    if (property::beginSection("playback.refactorEditor.weather.keyframesTitle"_tr().c_str())) {
+        property::textRow(
+            "playback.refactorEditor.weather.keyCount"_tr().c_str(),
+            std::to_string(validTicks.size()).c_str()
+        );
+        property::separator();
+
+        ImGui::BeginDisabled(!editable);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.weather.modeLabel"_tr().c_str());
+        std::optional<state::editing::model::WeatherOverride> const activeMode = mixedMode ? std::nullopt : sharedMode;
+        drawWeatherModeChips("weather-batch-mode", activeMode, [&](state::editing::model::WeatherOverride mode) {
+            if (activeMode && *activeMode == mode) return;
+            EditorAction action{EditorActionType::SetWeatherKeyframesValue};
+            action.ticks = validTicks;
+            action.kind  = static_cast<int>(mode);
+            ctx.submitAction(std::move(action));
+        });
+
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.details.deleteKeyframes"_tr(validTicks.size()).c_str(),
+                true,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            EditorAction action{EditorActionType::RemoveWeatherKeyframes};
+            action.ticks = validTicks;
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        ImGui::EndDisabled();
+        if (!editable) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    }
+    return true;
+}
+
+bool DetailsPanel::drawWeatherKeyframe(PanelContext const& ctx) {
+    auto const selectedTick = ctx.selection.selectedWeatherKeyframe();
+    if (!selectedTick) return false;
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->weatherTrack;
+    auto const  key     = track.keysByTick.find(*selectedTick);
+    if (key == track.keysByTick.end()) {
+        ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
+        return true;
+    }
+
+    int const  originalTick = key->first;
+    bool const editable     = !track.locked;
+
+    if (property::beginSection("playback.refactorEditor.weather.keyframeTitle"_tr().c_str())) {
+        if (property::actionButton(
+                "playback.refactorEditor.timeline.seekHere"_tr().c_str(),
+                true,
+                property::ButtonVariant::Secondary,
+                ICON_CLOCK
+            )) {
+            ctx.commands.seekTo(originalTick);
+        }
+        property::separator();
+
+        float const scale      = metrics::scale();
+        float const labelWidth = measureLabelColumn({
+            "playback.refactorEditor.details.tick"_tr(),
+        });
+
+        ImGui::BeginDisabled(!editable);
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, {6.0f * scale, 4.0f * scale});
+        if (ImGui::BeginTable(
+                "##weather-keyframe-properties",
+                2,
+                ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX
+            )) {
+            ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+            ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+            int tick = originalTick;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("%s", "playback.refactorEditor.details.tick"_tr().c_str());
+            ImGui::TableNextColumn();
+            drawInputWithHint(formatTick(originalTick), [&] {
+                ImGui::InputInt("##weather-key-tick", &tick, 0, 0);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    tick = std::clamp(tick, 0, std::max(0, project->totalTicks));
+                    if (tick != originalTick && !track.keysByTick.contains(tick)) {
+                        EditorAction action{EditorActionType::MoveWeatherKeyframe};
+                        action.tick          = originalTick;
+                        action.secondaryTick = tick;
+                        ctx.submitAction(std::move(action));
+                        ctx.selection.selectWeatherKeyframe(tick);
+                    }
+                }
+            });
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar();
+
+        property::separator();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.weather.modeLabel"_tr().c_str());
+        drawWeatherModeChips("weather-key-mode", key->second.weather, [&](state::editing::model::WeatherOverride mode) {
+            if (key->second.weather != mode) {
+                EditorAction action{EditorActionType::SetWeatherKeyframeValue};
+                action.tick = originalTick;
+                action.kind = static_cast<int>(mode);
+                ctx.submitAction(std::move(action));
+            }
+        });
+
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.details.deleteKeyframe"_tr().c_str(),
+                true,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            EditorAction action{EditorActionType::RemoveWeatherKeyframe};
+            action.tick = originalTick;
+            ctx.submitAction(std::move(action));
+            ctx.selection.clear();
+        }
+        ImGui::EndDisabled();
+        if (!editable) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    }
+    return true;
+}
+
+bool DetailsPanel::drawWeatherTrack(PanelContext const& ctx) {
+    if (!ctx.selection.isWeatherTrackSelected()) return false;
+
+    auto const  project = ctx.state.project;
+    auto const& track   = project->weatherTrack;
+    if (!track.isVisible()) return false;
+
+    if (property::beginSection("playback.refactorEditor.weather.trackTitle"_tr().c_str())) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", "playback.refactorEditor.weather.trackHint"_tr().c_str());
+        if (!track.enabled) {
+            ImGui::TextColored(
+                ImGui::ColorConvertU32ToFloat4(theme::kWarning),
+                "%s  %s",
+                ICON_INFO,
+                "playback.refactorEditor.weather.disabledHint"_tr().c_str()
+            );
+        }
+        ImGui::PopTextWrapPos();
+        property::separator();
+
+        property::textRow(
+            "playback.refactorEditor.weather.keyCount"_tr().c_str(),
+            std::to_string(track.keysByTick.size()).c_str()
+        );
+
+        property::separator();
+        bool enabled = track.enabled;
+        if (ImGui::Checkbox("playback.refactorEditor.details.enabled"_tr().c_str(), &enabled)) {
+            EditorAction action{EditorActionType::SetWeatherTrackEnabled};
+            action.value = enabled;
+            ctx.submitAction(std::move(action));
+        }
+        bool locked = track.locked;
+        if (ImGui::Checkbox("playback.refactorEditor.details.locked"_tr().c_str(), &locked)) {
+            EditorAction action{EditorActionType::SetWeatherTrackLocked};
+            action.value = locked;
+            ctx.submitAction(std::move(action));
+        }
+
+        property::separator();
+        int const         playheadTick     = std::clamp(ctx.state.currentTick, 0, std::max(0, project->totalTicks));
+        auto const        existingIt       = track.keysByTick.find(playheadTick);
+        bool const        hasKeyAtPlayhead = existingIt != track.keysByTick.end();
+        std::string const addLabel         = hasKeyAtPlayhead ? "playback.refactorEditor.weather.replaceKeyframe"_tr()
+                                                              : "playback.refactorEditor.weather.addKeyframeAtPlayhead"_tr();
+        if (property::actionButton(
+                addLabel.c_str(),
+                !track.locked,
+                property::ButtonVariant::Primary,
+                ICON_ADD_KEYFRAME
+            )) {
+            if (hasKeyAtPlayhead) {
+                ctx.selection.selectWeatherKeyframe(playheadTick);
+            } else {
+                auto defaultWeather = state::editing::model::WeatherOverride::Rain;
+                if (auto const evaluated = keyframe::evaluateWeatherAt(track, static_cast<double>(playheadTick))) {
+                    defaultWeather = *evaluated;
+                } else if (project->weatherOverride != state::editing::model::WeatherOverride::Recorded) {
+                    defaultWeather = project->weatherOverride;
+                }
+                EditorAction action{EditorActionType::AddWeatherKeyframe};
+                action.tick = playheadTick;
+                action.kind = static_cast<int>(defaultWeather);
+                ctx.submitAction(std::move(action));
+            }
+        }
+        property::separator();
+        if (property::actionButton(
+                "playback.refactorEditor.weather.removeTrack"_tr().c_str(),
+                !track.locked,
+                property::ButtonVariant::Danger,
+                ICON_TRASH
+            )) {
+            ctx.submitAction(EditorAction{EditorActionType::RemoveWeatherTrack});
+            ctx.selection.clear();
+        }
+        if (track.locked) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s  %s", ICON_LOCK, "playback.refactorEditor.details.locked"_tr().c_str());
+            ImGui::PopTextWrapPos();
+        }
+        property::endSection();
+    }
+    return true;
+}
+
 bool DetailsPanel::drawAudioTrack(PanelContext const& ctx) {
     auto const selectedTrackId = ctx.selection.selectedAudioTrackId();
     if (!selectedTrackId) {
@@ -3519,10 +4500,36 @@ void DetailsPanel::drawExportPage(PanelContext const& ctx) {
             "playback.refactorEditor.export.frameRate"_tr().c_str(),
             (std::to_string(fps) + " FPS").c_str()
         );
-        property::textRow(
-            "playback.refactorEditor.export.timeline"_tr().c_str(),
-            (formatTick(rangeStart) + " - " + formatTick(std::max(rangeStart, rangeEnd))).c_str()
-        );
+        ImGui::TextDisabled("%s", "playback.refactorEditor.export.timeline"_tr().c_str());
+        int const clampedRangeEnd = std::max(rangeStart, rangeEnd);
+        {
+            float const scale  = metrics::scale();
+            float const gap    = 4.0f * scale;
+            float const availW = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+            float const halfW  = (availW - gap) * 0.5f;
+            if (property::choiceChip(
+                    ("playback.refactorEditor.export.startRangeChip"_tr(formatTick(rangeStart)) + "##export-jump-in")
+                        .c_str(),
+                    totalTicks > 0 && state.currentTick == rangeStart,
+                    std::floor(halfW)
+                )
+                && totalTicks > 0) {
+                ctx.commands.seekTo(rangeStart);
+            }
+            widgets::itemTooltip("playback.refactorEditor.timeline.jumpToInPoint"_tr().c_str());
+            ImGui::SameLine(0.0f, gap);
+            if (property::choiceChip(
+                    ("playback.refactorEditor.export.endRangeChip"_tr(formatTick(clampedRangeEnd))
+                     + "##export-jump-out")
+                        .c_str(),
+                    totalTicks > 0 && state.currentTick == clampedRangeEnd,
+                    -1.0f
+                )
+                && totalTicks > 0) {
+                ctx.commands.seekTo(clampedRangeEnd);
+            }
+            widgets::itemTooltip("playback.refactorEditor.timeline.jumpToOutPoint"_tr().c_str());
+        }
 
         exporting::ExportSettings previewSettings;
         previewSettings.outputDirectory = ".";
@@ -3683,6 +4690,85 @@ void DetailsPanel::drawPreviewPage(PanelContext const& ctx) {
         property::endSection();
     }
 
+    if (property::beginSection("playback.refactorEditor.worldEnv.section"_tr().c_str())) {
+        auto const project        = ctx.state.project;
+        bool       daytimeEnabled = project->daytimeOverrideEnabled;
+        if (ImGui::Checkbox(
+                ("playback.refactorEditor.worldEnv.daytimeOverride"_tr() + "##world-daytime-override").c_str(),
+                &daytimeEnabled
+            )) {
+            EditorAction action{EditorActionType::SetDaytimeOverride};
+            action.value = daytimeEnabled;
+            action.tick  = state::editing::model::clampTimeOfDayTicks(project->daytimeOverrideTicks);
+            ctx.submitAction(std::move(action));
+        }
+        if (keyframe::hasActiveTimeOfDayTrack(*project)) {
+            hint("playback.refactorEditor.worldEnv.daytimeTrackActiveHint"_tr());
+        }
+        if (project->daytimeOverrideEnabled) {
+            int const displayedDaytime =
+                mDaytimeOverrideDragging ? mDaytimeOverrideDragValue : project->daytimeOverrideTicks;
+            auto const submitDaytime = [&](int nextTicks) {
+                int const clamped = state::editing::model::clampTimeOfDayTicks(nextTicks);
+                if (clamped != project->daytimeOverrideTicks) {
+                    EditorAction action{EditorActionType::SetDaytimeOverride};
+                    action.value = true;
+                    action.tick  = clamped;
+                    ctx.submitAction(std::move(action));
+                }
+            };
+            int daytimeInput = displayedDaytime;
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::SliderInt(
+                    "##world-daytime-ticks",
+                    &daytimeInput,
+                    state::editing::model::MinTimeOfDayTicks,
+                    state::editing::model::DayCycleTicks,
+                    "%d"
+                )) {
+                if (ImGui::IsItemActive()) {
+                    mDaytimeOverrideDragging  = true;
+                    mDaytimeOverrideDragValue = state::editing::model::clampTimeOfDayTicks(daytimeInput);
+                }
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                mDaytimeOverrideDragging = false;
+                submitDaytime(daytimeInput);
+            } else if (!ImGui::IsItemActive() && mDaytimeOverrideDragging) {
+                mDaytimeOverrideDragging = false;
+            }
+            property::textRow(
+                "playback.refactorEditor.timeOfDay.clockLabel"_tr().c_str(),
+                formatMinecraftClock(displayedDaytime).c_str()
+            );
+            drawTimeOfDayPresetChips("world-daytime-presets", displayedDaytime, submitDaytime);
+        } else {
+            mDaytimeOverrideDragging = false;
+        }
+        hint("playback.refactorEditor.worldEnv.daytimeOverrideHint"_tr());
+
+        property::separator();
+        ImGui::TextDisabled("%s", "playback.refactorEditor.worldEnv.weatherLabel"_tr().c_str());
+        if (keyframe::hasActiveWeatherTrack(*project)) {
+            hint("playback.refactorEditor.worldEnv.weatherTrackActiveHint"_tr());
+        }
+        drawWeatherModeChips(
+            "world-weather-mode",
+            project->weatherOverride,
+            [&](state::editing::model::WeatherOverride mode) {
+                if (project->weatherOverride != mode) {
+                    EditorAction action{EditorActionType::SetWeatherOverride};
+                    action.kind = static_cast<int>(mode);
+                    ctx.submitAction(std::move(action));
+                }
+            }
+        );
+        hint("playback.refactorEditor.worldEnv.weatherHint"_tr());
+        property::endSection();
+    } else {
+        mDaytimeOverrideDragging = false;
+    }
+
     ImGui::EndDisabled();
 }
 
@@ -3782,6 +4868,44 @@ void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {
             }
             ImGui::PopID();
             ++index;
+        }
+        property::endSection();
+    }
+
+    if (property::beginSection("playback.refactorEditor.inspector.resourcePacks"_tr().c_str())) {
+        bool disabled = ctx.state.disableServerResourcePacks;
+        if (ImGui::Checkbox(
+                ("playback.refactorEditor.inspector.disableServerResourcePacks"_tr() + "##set-disable-server-packs")
+                    .c_str(),
+                &disabled
+            )) {
+            EditorAction action{EditorActionType::SetDisableServerResourcePacks};
+            action.value = disabled;
+            ctx.submitAction(std::move(action));
+        }
+
+        std::string const statusText = !ctx.state.replayHasServerResourcePacks
+                                         ? "playback.refactorEditor.inspector.serverPacksNoneHint"_tr()
+                                         : (ctx.state.loadedWithServerResourcePacksDisabled
+                                                ? "playback.refactorEditor.inspector.serverPacksSkippedHint"_tr()
+                                                : "playback.refactorEditor.inspector.serverPacksLoadedHint"_tr());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", statusText.c_str());
+        ImGui::TextDisabled("%s", "playback.refactorEditor.inspector.disableServerResourcePacksHint"_tr().c_str());
+        ImGui::PopTextWrapPos();
+
+        property::separator();
+        bool const exportActive = exporting::isExportActive(ctx.state.exportStatus.state);
+        bool const reloadNeeded =
+            ctx.state.replayHasServerResourcePacks
+            && ctx.state.disableServerResourcePacks != ctx.state.loadedWithServerResourcePacksDisabled;
+        if (property::actionButton(
+                "playback.refactorEditor.inspector.reloadAtCurrentTick"_tr().c_str(),
+                !exportActive,
+                reloadNeeded ? property::ButtonVariant::Primary : property::ButtonVariant::Secondary,
+                ICON_REFRESH
+            )) {
+            ctx.submitAction({EditorActionType::ReloadReplayAtCurrentTick});
         }
         property::endSection();
     }
