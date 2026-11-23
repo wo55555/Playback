@@ -5,6 +5,7 @@
 #include "playback/state/editing/models/MathTypes.h"
 #include "playback/state/editing/models/Track.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
+#include "playback/visuals/ReplayWorldEnvHooks.h"
 
 #include "mc/deps/core/math/Vec2.h"
 #include "mc/deps/core/math/Vec3.h"
@@ -259,6 +260,15 @@ private:
     std::atomic<uint64_t>                       mObserverServerSyncEpoch{0};
     std::atomic<uint64_t>                       mObserverServerSyncSequence{0};
     std::optional<int>                          mReplayTime;
+    bool                                        mRecordedDoDaylightCycle{true};
+    bool                                        mRecordedDoWeatherCycle{true};
+    float                                       mRecordedRainLevel{0.0f};
+    float                                       mRecordedLightningLevel{0.0f};
+    std::optional<double>                       mTimeOfDayOverride;
+    visuals::ReplayWeatherMode                  mWeatherOverride{visuals::ReplayWeatherMode::Recorded};
+    visuals::ReplayWeatherMode                  mLastAppliedWeatherMode{visuals::ReplayWeatherMode::Recorded};
+    bool                                        mWeatherRendererNeedsPrime{false};
+    std::optional<::Vec3>                       mLastPrimedWeatherPos;
     std::optional<DimensionType>                mPendingReplayDimension;
     std::optional<PendingSnapshotApply>         mPendingSnapshotApply;
     std::shared_ptr<DimensionTransitionRequest> mDimensionTransitionRequest;
@@ -385,6 +395,10 @@ private:
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
     bool                                                        mReplayCachedResourcePacksLoaded{};
     std::optional<std::filesystem::path>                        mMountedReplayPacks;
+    bool                                                        mReplayHasServerResourcePacks{false};
+    bool                                                        mLoadedWithServerResourcePacksDisabled{false};
+    std::filesystem::path                                       mPendingReloadReplayPath;
+    std::optional<int>                                          mPendingRestoreTickAfterReload;
 
     std::shared_ptr<StartGamePacket const> mReplayStartGame;
     // applyRecordedBlockRegistry runs from two hooks that can fire concurrently while the replay world loads.
@@ -559,6 +573,7 @@ private:
     [[nodiscard]] bool advanceReplayTick(bool stopAtEnd);
 
     void syncLevelSimPause(bool freeze);
+    void primePausedWeatherRenderer();
 
     void holdItemUseBetweenTicks();
 
@@ -625,7 +640,20 @@ public:
     [[nodiscard]] Player* getReplayPlayer() const noexcept { return mReplayPlayer; }
 
     // Something outside the replay rewrites the level clock between render passes; export pins it before each pass.
-    void enforceReplayWorldTime();
+    void enforceReplayWorldTime(std::optional<float> partialTickOverride = std::nullopt);
+
+    void                                     setTimeOfDayOverride(std::optional<double> ticks) noexcept;
+    void                                     setWeatherOverride(visuals::ReplayWeatherMode mode) noexcept;
+    [[nodiscard]] visuals::ReplayWeatherMode weatherOverride() const noexcept { return mWeatherOverride; }
+    [[nodiscard]] bool isRecordedDaylightCycleEnabled() const noexcept { return mRecordedDoDaylightCycle; }
+
+    [[nodiscard]] bool replayHasServerResourcePacks() const noexcept { return mReplayHasServerResourcePacks; }
+    [[nodiscard]] bool loadedWithServerResourcePacksDisabled() const noexcept {
+        return mLoadedWithServerResourcePacksDisabled;
+    }
+    [[nodiscard]] std::filesystem::path const& getReplayFilePath() const noexcept { return mReplayFilePath; }
+    [[nodiscard]] bool hasPendingReload() const noexcept { return !mPendingReloadReplayPath.empty(); }
+    bool               requestReloadCurrentReplay(int restoreTick);
 
     void teleportReplayPlayer(::Vec3 const& feetPosition, ::Vec2 const& rotation);
 

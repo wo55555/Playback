@@ -3,6 +3,7 @@
 #include "playback/Playback.h"
 #include "playback/audio/ExternalAudioPreview.h"
 #include "playback/audio/PreviewAudio.h"
+#include "playback/editor/ui/ReplayEditor.h"
 #include "playback/exporting/ExportPlanCompiler.h"
 #include "playback/io/ReplayLibrary.h"
 #include "playback/keyframe/CameraFollowMath.h"
@@ -11,7 +12,9 @@
 #include "playback/keyframe/ClientCameraCapture.h"
 #include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/keyframe/SpeedTimelineEvaluator.h"
+#include "playback/keyframe/TimeOfDayTimelineEvaluator.h"
 #include "playback/keyframe/TimelapseTimelineEvaluator.h"
+#include "playback/keyframe/WeatherTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/CameraBindingOps.h"
 #include "playback/state/editing/ClipOps.h"
@@ -19,6 +22,7 @@
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/CommandFactory.h"
 #include "playback/visuals/FrameTap.h"
+#include "playback/visuals/ReplayWorldEnvHooks.h"
 
 #include "ll/api/i18n/I18n.h"
 #include <algorithm>
@@ -331,11 +335,50 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             break;
         }
         auto& session = replay::ReplaySession::getInstance();
-        state::editing::model::CameraKeyframe const* prevKey = nullptr;
+        int const                                    clampedTick = std::clamp(action.tick, 0, mProject.totalTicks);
+        state::editing::model::CameraEntity const*   targetCam   = nullptr;
+        state::editing::model::CameraKeyframe const* existingKey = nullptr;
+        state::editing::model::CameraKeyframe const* prevKey     = nullptr;
         if (auto const camIt = std::ranges::find(mProject.cameras, action.id, &state::editing::model::CameraEntity::id);
-            camIt != mProject.cameras.end() && !camIt->keysByTick.empty()) {
-            auto const upper = camIt->keysByTick.upper_bound(action.tick);
-            if (upper != camIt->keysByTick.begin()) prevKey = &std::prev(upper)->second;
+            camIt != mProject.cameras.end()) {
+            targetCam = &*camIt;
+            if (auto const exact = camIt->keysByTick.find(clampedTick); exact != camIt->keysByTick.end()) {
+                existingKey = &exact->second;
+            }
+            if (!camIt->keysByTick.empty()) {
+                auto const upper = camIt->keysByTick.upper_bound(action.tick);
+                if (upper != camIt->keysByTick.begin()) prevKey = &std::prev(upper)->second;
+            }
+        }
+
+        auto const resolvePersonSubject = [&]() -> std::string {
+            if (targetCam) {
+                auto upper = targetCam->keysByTick.lower_bound(clampedTick);
+                while (upper != targetCam->keysByTick.begin()) {
+                    --upper;
+                    if (upper->second.mode != state::editing::model::CameraKeyframeMode::Interpolated
+                        && !upper->second.subject.empty()) {
+                        return upper->second.subject;
+                    }
+                }
+            }
+            return session.userReplaySubjectChoice();
+        };
+
+        auto const requestedMode = action.value ? std::optional<state::editing::model::CameraKeyframeMode>{static_cast<
+                                                      state::editing::model::CameraKeyframeMode>(action.kind)}
+                                                : std::nullopt;
+        if (requestedMode && *requestedMode != state::editing::model::CameraKeyframeMode::Interpolated) {
+            state::editing::model::CameraKeyframe key;
+            if (existingKey) key = *existingKey;
+            else if (auto captured = captureCameraKeyframe()) key = *captured;
+            key.mode = *requestedMode;
+            if (key.subject.empty()) key.subject = resolvePersonSubject();
+            mCommandStack.push(
+                CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(key)),
+                mProject
+            );
+            break;
         }
 
         auto const sampleTime = [&]() -> visuals::ReplaySampleTime {
@@ -344,7 +387,7 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             return visuals::ReplaySampleTime{std::max(0, action.tick), 1};
         }();
 
-        if (prevKey && prevKey->mode == state::editing::model::CameraKeyframeMode::ThirdPerson
+        if (!requestedMode && prevKey && prevKey->mode == state::editing::model::CameraKeyframeMode::ThirdPerson
             && prevKey->thirdPersonCustom) {
             state::editing::model::CameraKeyframe key;
             key.mode                      = state::editing::model::CameraKeyframeMode::ThirdPerson;
@@ -396,7 +439,14 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         if (auto captured = captureCameraKeyframe()) {
             logger().debug("Captured camera keyframe (camera={}, tick={})", action.id, action.tick);
             // A person track's first key views whoever the user follows; later keys keep the previous subject.
-            captured->subject = session.userReplaySubjectChoice();
+            captured->subject =
+                existingKey && !existingKey->subject.empty() ? existingKey->subject : session.userReplaySubjectChoice();
+            if (existingKey && existingKey->mode == state::editing::model::CameraKeyframeMode::Interpolated) {
+                captured->interpolationType = existingKey->interpolationType;
+                captured->bezierCtrl1       = existingKey->bezierCtrl1;
+                captured->bezierCtrl2       = existingKey->bezierCtrl2;
+                captured->ignoreClipSpeed   = existingKey->ignoreClipSpeed;
+            }
             if (prevKey && prevKey->mode == state::editing::model::CameraKeyframeMode::Interpolated
                 && prevKey->lookAtEnabled) {
                 captured->lookAtEnabled = true;
@@ -431,7 +481,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             CommandFactory::createSetCameraKeyframeMode(
                 action.id,
                 action.tick,
-                static_cast<state::editing::model::CameraKeyframeMode>(action.kind)
+                static_cast<state::editing::model::CameraKeyframeMode>(action.kind),
+                replay::ReplaySession::getInstance().userReplaySubjectChoice()
             ),
             mProject
         );
@@ -509,7 +560,8 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         mCommandStack.push(
             CommandFactory::createSetKeyframesMode(
                 action.keyframeRefs,
-                static_cast<state::editing::model::CameraKeyframeMode>(action.kind)
+                static_cast<state::editing::model::CameraKeyframeMode>(action.kind),
+                replay::ReplaySession::getInstance().userReplaySubjectChoice()
             ),
             mProject
         );
@@ -838,6 +890,135 @@ void EditorController::applyEditorAction(EditorAction const& action) {
     case EditorActionType::ClearTimelapseKeyframes:
         mCommandStack.push(CommandFactory::createClearTimelapseKeyframes(), mProject);
         break;
+    case EditorActionType::AddTimeOfDayTrack:
+        mCommandStack.push(CommandFactory::createAddTimeOfDayTrack(), mProject);
+        break;
+    case EditorActionType::RemoveTimeOfDayTrack:
+        mCommandStack.push(CommandFactory::createRemoveTimeOfDayTrack(), mProject);
+        break;
+    case EditorActionType::AddTimeOfDayKeyframe:
+        mCommandStack.push(
+            CommandFactory::createAddTimeOfDayKeyframe(
+                action.tick,
+                action.secondaryTick,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::MoveTimeOfDayKeyframe:
+        mCommandStack.push(CommandFactory::createMoveTimeOfDayKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::MoveTimeOfDayKeyframes:
+        mCommandStack.push(CommandFactory::createMoveTimeOfDayKeyframes(action.ticks, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::RemoveTimeOfDayKeyframe:
+        mCommandStack.push(CommandFactory::createRemoveTimeOfDayKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::RemoveTimeOfDayKeyframes:
+        mCommandStack.push(CommandFactory::createRemoveTimeOfDayKeyframes(action.ticks), mProject);
+        break;
+    case EditorActionType::SetTimeOfDayKeyframeValue:
+        mCommandStack.push(
+            CommandFactory::createSetTimeOfDayKeyframeValue(action.tick, action.secondaryTick),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimeOfDayKeyframeInterpolation:
+        mCommandStack.push(
+            CommandFactory::createSetTimeOfDayKeyframeInterpolation(
+                action.tick,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimeOfDayKeyframesInterpolation:
+        mCommandStack.push(
+            CommandFactory::createSetTimeOfDayKeyframesInterpolation(
+                action.ticks,
+                static_cast<state::editing::model::CameraInterpolationType>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimeOfDayKeyframeBezier:
+        mCommandStack.push(
+            CommandFactory::createSetTimeOfDayKeyframeBezier(action.tick, action.bezierCtrl1, action.bezierCtrl2),
+            mProject
+        );
+        break;
+    case EditorActionType::SetTimeOfDayTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetTimeOfDayTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetTimeOfDayTrackLocked:
+        mCommandStack.push(CommandFactory::createSetTimeOfDayTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::ClearTimeOfDayKeyframes:
+        mCommandStack.push(CommandFactory::createClearTimeOfDayKeyframes(), mProject);
+        break;
+    case EditorActionType::SetDaytimeOverride:
+        mCommandStack.push(CommandFactory::createSetSceneDaytimeOverride(action.value, action.tick), mProject);
+        break;
+    case EditorActionType::SetWeatherOverride:
+        mCommandStack.push(
+            CommandFactory::createSetSceneWeatherOverride(
+                static_cast<state::editing::model::WeatherOverride>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::AddWeatherTrack:
+        mCommandStack.push(CommandFactory::createAddWeatherTrack(), mProject);
+        break;
+    case EditorActionType::RemoveWeatherTrack:
+        mCommandStack.push(CommandFactory::createRemoveWeatherTrack(), mProject);
+        break;
+    case EditorActionType::SetWeatherTrackEnabled:
+        mCommandStack.push(CommandFactory::createSetWeatherTrackEnabled(action.value), mProject);
+        break;
+    case EditorActionType::SetWeatherTrackLocked:
+        mCommandStack.push(CommandFactory::createSetWeatherTrackLocked(action.value), mProject);
+        break;
+    case EditorActionType::AddWeatherKeyframe:
+        mCommandStack.push(
+            CommandFactory::createAddWeatherKeyframe(
+                action.tick,
+                static_cast<state::editing::model::WeatherOverride>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::RemoveWeatherKeyframe:
+        mCommandStack.push(CommandFactory::createRemoveWeatherKeyframe(action.tick), mProject);
+        break;
+    case EditorActionType::RemoveWeatherKeyframes:
+        mCommandStack.push(CommandFactory::createRemoveWeatherKeyframes(action.ticks), mProject);
+        break;
+    case EditorActionType::MoveWeatherKeyframe:
+        mCommandStack.push(CommandFactory::createMoveWeatherKeyframe(action.tick, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::MoveWeatherKeyframes:
+        mCommandStack.push(CommandFactory::createMoveWeatherKeyframes(action.ticks, action.secondaryTick), mProject);
+        break;
+    case EditorActionType::SetWeatherKeyframeValue:
+        mCommandStack.push(
+            CommandFactory::createSetWeatherKeyframeValue(
+                action.tick,
+                static_cast<state::editing::model::WeatherOverride>(action.kind)
+            ),
+            mProject
+        );
+        break;
+    case EditorActionType::SetWeatherKeyframesValue:
+        mCommandStack.push(
+            CommandFactory::createSetWeatherKeyframesValue(
+                action.ticks,
+                static_cast<state::editing::model::WeatherOverride>(action.kind)
+            ),
+            mProject
+        );
+        break;
     case EditorActionType::AddAudioTrack:
         mCommandStack.push(CommandFactory::createAddAudioTrack(action.name), mProject);
         break;
@@ -1011,14 +1192,32 @@ void EditorController::publishState(bool hudVisible) {
             state.totalTicks
         );
     }
-    if (!sessionActive) {
+    if (!sessionActive && !session.hasPendingReload()) {
         flushProjectOnClose();
         mActiveReplayPath.clear();
+    } else if (sessionActive && mActiveReplayPath.empty() && !session.getReplayFilePath().empty()) {
+        mActiveReplayPath = replayPreferenceKey(session.getReplayFilePath());
     }
     ensureProject(state.totalTicks, mActiveReplayPath);
-    mProject.currentTick             = state.currentTick;
-    mProject.playing                 = !state.paused;
-    mProject.playbackSpeed           = state.playbackSpeed;
+    mProject.currentTick                        = state.currentTick;
+    mProject.playing                            = !state.paused;
+    mProject.playbackSpeed                      = state.playbackSpeed;
+    state.replayHasServerResourcePacks          = session.replayHasServerResourcePacks();
+    state.loadedWithServerResourcePacksDisabled = session.loadedWithServerResourcePacksDisabled();
+    state.disableServerResourcePacks            = Playback::getInstance().getConfig().replay.disableServerResourcePacks;
+    if (sessionActive && session.hasJoinedReplayWorld()
+        && !exporting::isExportActive(mExportCoordinator.status().state)) {
+        double const sampleTick = session.getEntityRenderSampleTime()
+                                    ? static_cast<double>(session.getEntityRenderSampleTime()->value())
+                                    : static_cast<double>(state.currentTick);
+        session.setTimeOfDayOverride(keyframe::resolveEffectiveTimeOfDay(mProject, sampleTick));
+        session.setWeatherOverride(
+            static_cast<visuals::ReplayWeatherMode>(
+                static_cast<uint8_t>(keyframe::resolveEffectiveWeather(mProject, sampleTick))
+            )
+        );
+        session.enforceReplayWorldTime();
+    }
     state.project                    = std::make_shared<state::editing::model::EditorStateExt>(mProject);
     state.cameraTimeline             = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview);
     if (state.cameraTimeline) {
@@ -1157,6 +1356,16 @@ void EditorController::tick(bool hudVisible) {
     for (auto const& action : mContext.takeActions()) {
         if (mExportDriver && mExportDriver->isActive() && action.type != EditorActionType::CancelExport
             && action.type != EditorActionType::StopReplay) {
+            continue;
+        }
+        if (action.type == EditorActionType::SetDisableServerResourcePacks) {
+            Playback::getInstance().getConfig().replay.disableServerResourcePacks = action.value;
+            editor::ui::ReplayEditor::getInstance().saveLayoutPreferences();
+            continue;
+        }
+        if (action.type == EditorActionType::ReloadReplayAtCurrentTick) {
+            flushProjectOnClose();
+            (void)session.requestReloadCurrentReplay(session.getCurrentTick());
             continue;
         }
         if (action.type >= EditorActionType::UndoEditorEdit) {

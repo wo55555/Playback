@@ -6,9 +6,12 @@
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/FreezeTimelineEvaluator.h"
+#include "playback/keyframe/TimeOfDayTimelineEvaluator.h"
 #include "playback/keyframe/TimelapseTimelineEvaluator.h"
+#include "playback/keyframe/WeatherTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/visuals/ReplaySampleTime.h"
+#include "playback/visuals/ReplayWorldEnvHooks.h"
 
 #include <algorithm>
 #include <limits>
@@ -129,6 +132,12 @@ bool OfflineRenderBoundary::open(
     mInitializationTickObserved    = false;
     mTimelapse                     = settings.timelapse || keyframeTimelapse;
     mPendingCutHandled             = false;
+    mExportTimeOfDayTrack          = project.timeOfDayTrack;
+    mExportWeatherTrack            = project.weatherTrack;
+    mExportDaytimeOverrideEnabled  = project.daytimeOverrideEnabled;
+    mExportDaytimeOverrideTicks    = state::editing::model::clampTimeOfDayTicks(project.daytimeOverrideTicks);
+    mExportWeatherOverride         = project.weatherOverride;
+    applyExportWorldEnv(static_cast<double>(startTick), 0.0f);
     mCaptureArmed                  = false;
     mWarmupFrames                  = settings.warmupFrames;
     mWarmupFramesRemaining         = mWarmupFrames;
@@ -204,6 +213,11 @@ void OfflineRenderBoundary::close() {
     mInitializationTickObserved    = false;
     mTimelapse                     = false;
     mPendingCutHandled             = false;
+    mExportTimeOfDayTrack          = {};
+    mExportWeatherTrack            = {};
+    mExportDaytimeOverrideEnabled  = false;
+    mExportDaytimeOverrideTicks    = 6000;
+    mExportWeatherOverride         = state::editing::model::WeatherOverride::Recorded;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Closed;
     mError                         = OfflineRenderBoundaryError::None;
@@ -237,6 +251,11 @@ void OfflineRenderBoundary::cancel() {
     mInitializationTickObserved    = false;
     mTimelapse                     = false;
     mPendingCutHandled             = false;
+    mExportTimeOfDayTrack          = {};
+    mExportWeatherTrack            = {};
+    mExportDaytimeOverrideEnabled  = false;
+    mExportDaytimeOverrideTicks    = 6000;
+    mExportWeatherOverride         = state::editing::model::WeatherOverride::Recorded;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Cancelled;
     mError                         = OfflineRenderBoundaryError::None;
@@ -787,6 +806,7 @@ void OfflineRenderBoundary::prepareExportObserver(ExportFramePlan const& frame) 
     if (mTimelineInitialized && mReplay.getAppliedReplayTick() >= nextTick) return;
     auto const sample = clockSample(frame);
     if (!sample) return;
+    applyExportWorldEnv(static_cast<double>(sample->replayTime.value()), sample->clientTime.partialTick());
     // Move the observer to the upcoming tick's camera before prepareExportTick runs that tick's packets
     // (e.g. OptiPiston checks the local player position when BlockActorDataPacket arrives).
     auto const probeTime =
@@ -932,6 +952,7 @@ bool OfflineRenderBoundary::publishStep(ExportFramePlan const& frame, OfflineRen
         fault(OfflineRenderBoundaryError::InvalidFrame, "The offline render clock sample is invalid");
         return false;
     }
+    applyExportWorldEnv(static_cast<double>(sample->replayTime.value()), sample->clientTime.partialTick());
     sample->kind = kind;
     if (kind == OfflineRenderClockKind::Warmup) {
         // The scene holds still while the renderers' time runs.
@@ -1019,9 +1040,26 @@ void OfflineRenderBoundary::fault(OfflineRenderBoundaryError error, std::string 
     mTickGateSuspendedForDimension = false;
     mTimelapse                     = false;
     mPendingCutHandled             = false;
+    mExportTimeOfDayTrack          = {};
+    mExportWeatherTrack            = {};
+    mExportDaytimeOverrideEnabled  = false;
+    mExportDaytimeOverrideTicks    = 6000;
+    mExportWeatherOverride         = state::editing::model::WeatherOverride::Recorded;
     mState                         = OfflineRenderBoundaryState::Faulted;
     mError                         = error;
     mMessage                       = std::move(message);
+}
+
+void OfflineRenderBoundary::applyExportWorldEnv(double replayTick, std::optional<float> partialTick) {
+    auto timeOverride = keyframe::evaluateTimeOfDayAt(mExportTimeOfDayTrack, replayTick);
+    if (!timeOverride && mExportDaytimeOverrideEnabled) {
+        timeOverride = static_cast<double>(state::editing::model::clampTimeOfDayTicks(mExportDaytimeOverrideTicks));
+    }
+    mReplay.setTimeOfDayOverride(timeOverride);
+    auto const weatherOverride =
+        keyframe::evaluateWeatherAt(mExportWeatherTrack, replayTick).value_or(mExportWeatherOverride);
+    mReplay.setWeatherOverride(static_cast<visuals::ReplayWeatherMode>(static_cast<uint8_t>(weatherOverride)));
+    mReplay.enforceReplayWorldTime(partialTick);
 }
 
 } // namespace playback::exporting

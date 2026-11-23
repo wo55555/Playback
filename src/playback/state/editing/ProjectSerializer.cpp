@@ -526,6 +526,141 @@ TimelapseTrack timelapseTrackFrom(json const& node) {
     return track;
 }
 
+json toJson(TimeOfDayKeyframe const& key) {
+    return {
+        {"timeOfDay",         key.timeOfDay                          },
+        {"interpolationType", static_cast<int>(key.interpolationType)},
+        {"bezierCtrl1",       toJson(key.bezierCtrl1)                },
+        {"bezierCtrl2",       toJson(key.bezierCtrl2)                },
+    };
+}
+
+TimeOfDayKeyframe timeOfDayKeyframeFrom(json const& node) {
+    TimeOfDayKeyframe key;
+    key.timeOfDay         = clampTimeOfDayTicks(intOr(node, "timeOfDay", key.timeOfDay));
+    key.interpolationType = enumOr(
+        node,
+        "interpolationType",
+        key.interpolationType,
+        static_cast<int>(CameraInterpolationType::CubicBezier)
+    );
+    key.bezierCtrl1 = vec2From(node, "bezierCtrl1", key.bezierCtrl1);
+    key.bezierCtrl2 = vec2From(node, "bezierCtrl2", key.bezierCtrl2);
+    return key;
+}
+
+json toJson(TimeOfDayTrack const& track) {
+    auto keys = json::array();
+    for (auto const& [tick, key] : track.keysByTick) {
+        auto entry    = toJson(key);
+        entry["tick"] = tick;
+        keys.push_back(std::move(entry));
+    }
+    return {
+        {"present", track.isVisible()},
+        {"enabled", track.enabled    },
+        {"locked",  track.locked     },
+        {"keys",    std::move(keys)  },
+    };
+}
+
+TimeOfDayTrack timeOfDayTrackFrom(json const& node) {
+    TimeOfDayTrack track;
+    track.enabled = boolOr(node, "enabled", true);
+    track.locked  = boolOr(node, "locked", false);
+    if (auto const* keys = arrayAt(node, "keys")) {
+        for (auto const& entry : *keys) {
+            if (!entry.is_object()) continue;
+            int const tick = std::max(0, intOr(entry, "tick", 0));
+            track.keysByTick.insert_or_assign(tick, timeOfDayKeyframeFrom(entry));
+        }
+    }
+    track.present = boolOr(node, "present", !track.keysByTick.empty());
+    if (!track.keysByTick.empty()) track.present = true;
+    return track;
+}
+
+char const* weatherOverrideToString(WeatherOverride weather) noexcept {
+    switch (weather) {
+    case WeatherOverride::Clear:
+        return "clear";
+    case WeatherOverride::Overcast:
+        return "overcast";
+    case WeatherOverride::Rain:
+        return "rain";
+    case WeatherOverride::Snow:
+        return "snow";
+    case WeatherOverride::Thunder:
+        return "thunder";
+    case WeatherOverride::Recorded:
+    default:
+        return "recorded";
+    }
+}
+
+WeatherOverride weatherOverrideFrom(json const& node, char const* key) {
+    auto const value = node.find(key);
+    if (value == node.end()) return WeatherOverride::Recorded;
+    if (value->is_string()) {
+        std::string const str = value->get<std::string>();
+        if (str == "clear") return WeatherOverride::Clear;
+        if (str == "overcast") return WeatherOverride::Overcast;
+        if (str == "rain") return WeatherOverride::Rain;
+        if (str == "snow") return WeatherOverride::Snow;
+        if (str == "thunder") return WeatherOverride::Thunder;
+        return WeatherOverride::Recorded;
+    }
+    if (value->is_number_integer()) {
+        return enumOr(node, key, WeatherOverride::Recorded, static_cast<int>(WeatherOverride::Thunder));
+    }
+    return WeatherOverride::Recorded;
+}
+
+json toJson(WeatherKeyframe const& key) {
+    return {
+        {"weather", weatherOverrideToString(key.weather)},
+    };
+}
+
+WeatherKeyframe weatherKeyframeFrom(json const& node) {
+    WeatherKeyframe key;
+    if (node.contains("weather")) {
+        key.weather = weatherOverrideFrom(node, "weather");
+    }
+    return key;
+}
+
+json toJson(WeatherTrack const& track) {
+    auto keys = json::array();
+    for (auto const& [tick, key] : track.keysByTick) {
+        auto entry    = toJson(key);
+        entry["tick"] = tick;
+        keys.push_back(std::move(entry));
+    }
+    return {
+        {"present", track.isVisible()},
+        {"enabled", track.enabled    },
+        {"locked",  track.locked     },
+        {"keys",    std::move(keys)  },
+    };
+}
+
+WeatherTrack weatherTrackFrom(json const& node) {
+    WeatherTrack track;
+    track.enabled = boolOr(node, "enabled", true);
+    track.locked  = boolOr(node, "locked", false);
+    if (auto const* keys = arrayAt(node, "keys")) {
+        for (auto const& entry : *keys) {
+            if (!entry.is_object()) continue;
+            int const tick = std::max(0, intOr(entry, "tick", 0));
+            track.keysByTick.insert_or_assign(tick, weatherKeyframeFrom(entry));
+        }
+    }
+    track.present = boolOr(node, "present", !track.keysByTick.empty());
+    if (!track.keysByTick.empty()) track.present = true;
+    return track;
+}
+
 json toJson(Scene const& scene) {
     auto cameras = json::array();
     for (auto const& camera : scene.cameras) cameras.push_back(toJson(camera));
@@ -550,6 +685,15 @@ json toJson(Scene const& scene) {
     if (scene.timelapseTrack.isVisible()) {
         result["timelapseTrack"] = toJson(scene.timelapseTrack);
     }
+    if (scene.timeOfDayTrack.isVisible()) {
+        result["timeOfDayTrack"] = toJson(scene.timeOfDayTrack);
+    }
+    if (scene.weatherTrack.isVisible()) {
+        result["weatherTrack"] = toJson(scene.weatherTrack);
+    }
+    result["daytimeOverrideEnabled"] = scene.daytimeOverrideEnabled;
+    result["daytimeOverrideTicks"]   = clampTimeOfDayTicks(scene.daytimeOverrideTicks);
+    result["weatherOverride"]        = weatherOverrideToString(scene.weatherOverride);
     if (!scene.audioTracks.empty()) {
         auto audioTracks = json::array();
         for (auto const& track : scene.audioTracks) audioTracks.push_back(toJson(track));
@@ -609,6 +753,15 @@ Scene sceneFrom(json const& node) {
     if (auto const* timelapseTrack = objectAt(node, "timelapseTrack")) {
         scene.timelapseTrack = timelapseTrackFrom(*timelapseTrack);
     }
+    if (auto const* timeOfDayTrack = objectAt(node, "timeOfDayTrack")) {
+        scene.timeOfDayTrack = timeOfDayTrackFrom(*timeOfDayTrack);
+    }
+    if (auto const* weatherTrack = objectAt(node, "weatherTrack")) {
+        scene.weatherTrack = weatherTrackFrom(*weatherTrack);
+    }
+    scene.daytimeOverrideEnabled = boolOr(node, "daytimeOverrideEnabled", false);
+    scene.daytimeOverrideTicks   = clampTimeOfDayTicks(intOr(node, "daytimeOverrideTicks", 6000));
+    scene.weatherOverride        = weatherOverrideFrom(node, "weatherOverride");
     scene.audioTracks = audioTracksFrom(node);
     return scene;
 }
@@ -657,6 +810,11 @@ std::string serializeProject(model::EditorStateExt const& project) {
                 synced.speedTrack     = project.speedTrack;
                 synced.freezeTrack    = project.freezeTrack;
                 synced.timelapseTrack = project.timelapseTrack;
+                synced.timeOfDayTrack         = project.timeOfDayTrack;
+                synced.weatherTrack           = project.weatherTrack;
+                synced.daytimeOverrideEnabled = project.daytimeOverrideEnabled;
+                synced.daytimeOverrideTicks   = project.daytimeOverrideTicks;
+                synced.weatherOverride        = project.weatherOverride;
                 synced.audioTracks    = project.audioTracks;
                 synced.exportInTick   = project.exportInTick;
                 synced.exportOutTick  = project.exportOutTick;
@@ -675,6 +833,11 @@ std::string serializeProject(model::EditorStateExt const& project) {
         fallback.speedTrack     = project.speedTrack;
         fallback.freezeTrack    = project.freezeTrack;
         fallback.timelapseTrack = project.timelapseTrack;
+        fallback.timeOfDayTrack         = project.timeOfDayTrack;
+        fallback.weatherTrack           = project.weatherTrack;
+        fallback.daytimeOverrideEnabled = project.daytimeOverrideEnabled;
+        fallback.daytimeOverrideTicks   = project.daytimeOverrideTicks;
+        fallback.weatherOverride        = project.weatherOverride;
         fallback.audioTracks    = project.audioTracks;
         fallback.exportInTick   = project.exportInTick;
         fallback.exportOutTick = project.exportOutTick;
@@ -794,6 +957,16 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
             std::ranges::stable_sort(camera.clips, {}, &Clip::inTick);
         }
 
+        if (auto const* timeOfDayTrack = objectAt(document, "timeOfDayTrack")) {
+            migrated.timeOfDayTrack = timeOfDayTrackFrom(*timeOfDayTrack);
+        }
+        if (auto const* weatherTrack = objectAt(document, "weatherTrack")) {
+            migrated.weatherTrack = weatherTrackFrom(*weatherTrack);
+        }
+        migrated.daytimeOverrideEnabled = boolOr(document, "daytimeOverrideEnabled", false);
+        migrated.daytimeOverrideTicks   = clampTimeOfDayTicks(intOr(document, "daytimeOverrideTicks", 6000));
+        migrated.weatherOverride        = weatherOverrideFrom(document, "weatherOverride");
+
         loaded.scenes.push_back(std::move(migrated));
         loaded.activeSceneId = "scene_1";
     }
@@ -835,6 +1008,11 @@ bool deserializeProject(std::string const& payload, model::EditorStateExt& proje
         loaded.speedTrack     = it->speedTrack;
         loaded.freezeTrack    = it->freezeTrack;
         loaded.timelapseTrack = it->timelapseTrack;
+        loaded.timeOfDayTrack         = it->timeOfDayTrack;
+        loaded.weatherTrack           = it->weatherTrack;
+        loaded.daytimeOverrideEnabled = it->daytimeOverrideEnabled;
+        loaded.daytimeOverrideTicks   = it->daytimeOverrideTicks;
+        loaded.weatherOverride        = it->weatherOverride;
         loaded.audioTracks    = it->audioTracks;
         loaded.exportInTick   = it->exportInTick;
         loaded.exportOutTick = it->exportOutTick;

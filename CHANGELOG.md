@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an on-demand Freeze track that can be added and removed from the timeline `+` menu to freeze and unfreeze world time with a configurable 0–10 tick slowdown easing curve, keeping camera motion active while pausing world and entity animations in both live preview and offline export, automatically muting audio while frozen and seamlessly resuming after unfreezing, with full undo/redo and project persistence.
 - Added an on-demand Timelapse track that can be added and removed from the timeline `+` menu to map replay intervals to target output timestamps via keyframes, automatically computing segment output duration and effective speed while highlighting single-keyframe or non-increasing invalid segments, with multi-format duration input and quick presets, real-time high-speed preview with audio muted during active segments, explicit priority overriding the Speed track and fixed-interval export timelapse, and full undo/redo and project persistence.
 - Added on-demand multi-track Audio tracks from the timeline `+` menu to import WAV and FFmpeg-decoded external audio files via a native file picker, rendering mirrored peak waveforms mapped to output duration across speed and timelapse edits, supporting trim start offset, duration trimming, volume, mute, drag editing, real-time synchronized playback, and mixing with game audio or exporting independently into video files and sidecar WAVs (remaining available even during fixed-interval timelapse exports), with full undo/redo and project persistence.
+- Added on-demand Time of Day and Weather tracks from the timeline `+` menu alongside per-scene World Environment overrides (fixed daytime override and five-mode weather override: Clear, Overcast, Rain, Snow, and Thunder) in the Preview page. The Time of Day track animates sky time across multiple day-night cycles with interpolation curves and cubic Bezier handles, while the Weather track switches discrete color-coded weather segments along the timeline; both take priority over per-scene overrides and apply consistently across biomes in paused preview, live playback, and offline export, with full undo/redo and project persistence.
+- Improved timeline start/end frame navigation with two-stage `Home` / `End` jumping (stopping at export In/Out points before jumping to the start or end), `Shift+I` / `Shift+O` shortcuts, `Up` / `Down` adjacent edit-point stepping, an interactive Export In/Out capsule control in the transport bar, clickable ruler brackets with context menus, Export page and dialog quick-jump buttons, and a track-side navigation help icon.
+- Added a live-target searchable subject picker directly in the camera keyframe inspector for first-person, third-person, and Look at entity (`Aim`) keyframes.
+- Added an option to disable server resource packs when opening replays (available in both the Replay Browser settings menu and the editor Settings page, persisted across sessions) together with a Reload at Current Tick action to reopen the active replay in place.
 
 ### Changed
 
@@ -33,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Undoing back to the saved state now clears the unsaved indicator in the status bar instead of leaving the project marked as dirty.
 - Undoing or redoing edits made in another scene now switches back to that scene and clears stale timeline selections, and dragging a clip's speed slider now records a single history entry on release instead of pushing one per frame.
+- Dropped item entities no longer disappear during high-speed timelapse playback or seeking.
+- Replays recorded in worlds with the daylight cycle disabled now keep their recorded sun and moon time stationary during preview and export instead of advancing automatically.
 
 ## [0.4.1-mc26.50] - 2026-11-22
 

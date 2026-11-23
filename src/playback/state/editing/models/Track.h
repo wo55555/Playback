@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -84,6 +85,54 @@ struct TimelapseTrack {
 
 [[nodiscard]] inline int clampTimelapseOutputTicks(int ticks) noexcept {
     return std::clamp(ticks, MinTimelapseOutputTicks, MaxTimelapseOutputTicks);
+}
+
+inline constexpr int MinTimeOfDayTicks = 0;
+inline constexpr int DayCycleTicks     = 24000;
+inline constexpr int MaxTimeOfDayTicks = 240000;
+
+enum class WeatherOverride : uint8_t { Recorded = 0, Clear = 1, Overcast = 2, Rain = 3, Snow = 4, Thunder = 5 };
+
+struct TimeOfDayKeyframe {
+    int                     timeOfDay{6000};
+    CameraInterpolationType interpolationType{CameraInterpolationType::Linear};
+    Vec2                    bezierCtrl1{0.42f, 0.0f};
+    Vec2                    bezierCtrl2{0.58f, 1.0f};
+};
+
+struct TimeOfDayTrack {
+    bool                             present{false};
+    bool                             enabled{true};
+    bool                             locked{false};
+    std::map<int, TimeOfDayKeyframe> keysByTick;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+struct WeatherKeyframe {
+    WeatherOverride weather{WeatherOverride::Clear};
+
+    bool operator==(WeatherKeyframe const&) const = default;
+};
+
+struct WeatherTrack {
+    bool                           present{false};
+    bool                           enabled{true};
+    bool                           locked{false};
+    std::map<int, WeatherKeyframe> keysByTick;
+
+    bool operator==(WeatherTrack const&) const = default;
+
+    [[nodiscard]] bool isVisible() const noexcept { return present || !keysByTick.empty(); }
+};
+
+[[nodiscard]] inline int clampTimeOfDayTicks(int ticks) noexcept {
+    return std::clamp(ticks, MinTimeOfDayTicks, MaxTimeOfDayTicks);
+}
+
+[[nodiscard]] inline double clampTimeOfDayDouble(double ticks) noexcept {
+    if (!std::isfinite(ticks)) return 6000.0;
+    return std::clamp(ticks, static_cast<double>(MinTimeOfDayTicks), static_cast<double>(MaxTimeOfDayTicks));
 }
 
 struct Clip {

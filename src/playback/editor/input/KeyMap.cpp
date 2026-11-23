@@ -51,6 +51,8 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::SelectCamera3,           "playback.editor.camera3",           '3',          false, false, false},
     {EditorKeybind::MarkExportIn,            "playback.editor.setInPoint",        'I',          false, false, false},
     {EditorKeybind::MarkExportOut,           "playback.editor.setOutPoint",       'O',          false, false, false},
+    {EditorKeybind::JumpExportIn,            "playback.editor.jumpExportIn",      'I',          false, true,  false},
+    {EditorKeybind::JumpExportOut,           "playback.editor.jumpExportOut",     'O',          false, true,  false},
     {EditorKeybind::InsertMarker,            "playback.editor.insertMarker",      'M',          false, false, false},
     {EditorKeybind::PreviousMarker,          "playback.editor.jumpPrevMarker",    VK_OEM_4,     false, false, false},
     {EditorKeybind::NextMarker,              "playback.editor.jumpNextMarker",    VK_OEM_6,     false, false, false},

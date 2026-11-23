@@ -24,6 +24,7 @@ public:
 
     void seekTo(PanelContext const& ctx, int tick);
     void seekRelative(PanelContext const& ctx, int tickDelta);
+    void seekSmartEdge(PanelContext const& ctx, bool toEnd);
     void seekAdjacentEditPoint(PanelContext const& ctx, bool forward);
     bool addKeyframeAtPlayhead(PanelContext const& ctx);
     bool deleteSelection(PanelContext const& ctx);
@@ -95,11 +96,15 @@ private:
         std::optional<int>                                  skipSpeedKeyTick     = std::nullopt,
         std::optional<int>                                  skipFreezeKeyTick    = std::nullopt,
         std::optional<int>                                  skipTimelapseKeyTick = std::nullopt,
-        std::string_view                                    skipAudioClipId      = {}
+        std::string_view                                    skipAudioClipId      = {},
+        std::function<bool(int)> const&                     skipTimeOfDayKey     = {},
+        std::function<bool(int)> const&                     skipWeatherKey       = {}
     );
     bool addMarkerAt(PanelContext const& ctx, int tick);
     bool addFreezeKeyframeAt(PanelContext const& ctx, int tick);
     bool addTimelapseKeyframeAt(PanelContext const& ctx, int tick);
+    bool addTimeOfDayKeyframeAt(PanelContext const& ctx, int tick);
+    bool addWeatherKeyframeAt(PanelContext const& ctx, int tick);
     bool promptAndAddAudioClip(PanelContext const& ctx, std::string const& trackId, int tick);
     // Selections that point at objects an queued action has not created yet; applied once they exist.
     void                      clearPendingSelection();
@@ -111,6 +116,12 @@ private:
     void                      queueFreezeKeyframeSelection(int tick);
     void                      queueTimelapseTrackSelection();
     void                      queueTimelapseKeyframeSelection(int tick);
+    void                      queueTimeOfDayTrackSelection();
+    void                      queueTimeOfDayKeyframeSelection(int tick);
+    void                      queueTimeOfDayKeyframesSelection(std::vector<int> ticks);
+    void                      queueWeatherTrackSelection();
+    void                      queueWeatherKeyframeSelection(int tick);
+    void                      queueWeatherKeyframesSelection(std::vector<int> ticks);
     void                      queueAudioTrackSelection(std::string trackId);
     void                      queueAudioClipSelection(std::string trackId, std::string clipId);
     void applyPendingSelection(PanelContext const& ctx);
@@ -153,6 +164,8 @@ private:
     bool           mDraggingPlayhead{};
     // 0 none, 1 in marker, 2 out marker.
     int         mExportMarkerDrag{};
+    float       mExportMarkerDragStartMouseX{};
+    bool        mExportMarkerDragMoved{false};
     int         mExportDragInTick{-1};
     int         mExportDragOutTick{-1};
     std::string mDraggingKeyframeCameraId;
@@ -212,7 +225,11 @@ private:
     bool        mBoxAdditive{};
     ImVec2      mBoxStart{};
     std::string mBoxClickCameraId;
+    bool        mBoxClickTimeOfDay{};
+    bool        mBoxClickWeather{};
     bool        mPenPendingAdd{};
+    bool        mPenPendingTimeOfDay{};
+    bool        mPenPendingWeather{};
     int         mPenPendingTick{-1};
     // Marker pins live in the ruler band: drag to move, right-click for the menu.
     std::string           mMarkerDragId;
@@ -232,6 +249,12 @@ private:
     std::optional<int>                                   mPendingFreezeKeyframeSelection;
     bool                                                 mPendingTimelapseTrackSelection{false};
     std::optional<int>                                   mPendingTimelapseKeyframeSelection;
+    bool                                                 mPendingTimeOfDayTrackSelection{false};
+    std::optional<int>                                   mPendingTimeOfDayKeyframeSelection;
+    std::vector<int>                                     mPendingTimeOfDayKeyframesSelection;
+    bool                                                 mPendingWeatherTrackSelection{false};
+    std::optional<int>                                   mPendingWeatherKeyframeSelection;
+    std::vector<int>                                     mPendingWeatherKeyframesSelection;
     std::string                                          mPendingAudioTrackSelection;
     std::string                                          mPendingAudioClipTrackId;
     std::string                                          mPendingAudioClipId;
@@ -257,6 +280,26 @@ private:
     bool  mDraggingTimelapseKeyframeMoved{};
     int   mTimelapseKeyframeMenuTick{-1};
     int   mTimelapseLaneMenuTick{-1};
+
+    int   mDraggingTimeOfDayKeyframeOriginTick{-1};
+    float mDraggingTimeOfDayKeyframeStartMouseX{};
+    int   mDraggingTimeOfDayKeyframeTick{-1};
+    bool  mDraggingTimeOfDayKeyframeMoved{};
+    bool  mTimeOfDayGroupDrag{};
+    int   mTimeOfDayGroupDragDelta{};
+    int   mTimeOfDayKeyframeMenuTick{-1};
+    bool  mTimeOfDayKeyframeMenuGroup{};
+    int   mTimeOfDayLaneMenuTick{-1};
+
+    int   mDraggingWeatherKeyframeOriginTick{-1};
+    float mDraggingWeatherKeyframeStartMouseX{};
+    int   mDraggingWeatherKeyframeTick{-1};
+    bool  mDraggingWeatherKeyframeMoved{};
+    bool  mWeatherGroupDrag{};
+    int   mWeatherGroupDragDelta{};
+    int   mWeatherKeyframeMenuTick{-1};
+    bool  mWeatherKeyframeMenuGroup{};
+    int   mWeatherLaneMenuTick{-1};
 
     std::string mDraggingAudioTrackId;
     std::string mDraggingAudioClipId;
