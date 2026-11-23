@@ -26,12 +26,17 @@ constexpr int clampLocalPlayerUpdatesPerSecond(int rate) {
     return step < 20 ? 20 : step > 120 ? 120 : step;
 }
 
+struct ReplayConfigStruct {
+    bool disableServerResourcePacks = false;
+};
+
 struct Config {
     int         version    = 1;
     std::string locateName = "zh_CN";
 
     CommandStruct      command;
     RecordConfigStruct record;
+    ReplayConfigStruct replay;
 };
 
 } // namespace playback::configuration

@@ -39,6 +39,7 @@
 #include "mc/network/packet/ChangeDimensionPacket.h"
 #include "mc/network/packet/ClientboundMapItemDataPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
+#include "mc/network/packet/GameRulesChangedPacket.h"
 #include "mc/network/packet/InventorySlotPacket.h"
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
@@ -73,8 +74,8 @@
 #include "mc/util/VarIntDataOutput.h"
 #include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
-#include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/Inventory.h"
+#include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/PlayerInventory.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
@@ -100,6 +101,9 @@
 #include "mc/world/level/chunk/SubChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/saveddata/maps/MapItemSavedData.h"
+#include "mc/world/level/storage/GameRule.h"
+#include "mc/world/level/storage/GameRuleId.h"
+#include "mc/world/level/storage/GameRules.h"
 #include "mc/world/level/storage/LevelData.h"
 #include "mc/world/scores/DisplayObjective.h"
 #include "mc/world/scores/Objective.h"
@@ -1845,6 +1849,19 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
         }
         static_cast<SetTimePacket&>(*timePacket).mTime = level.getTime();
         appendEntityPacket(*timePacket);
+
+        if (auto rulesPacket = MinecraftPackets::createPacket(MinecraftPacketIds::GameRulesChanged)) {
+            auto&       rulesOut  = static_cast<GameRulesChangedPacket&>(*rulesPacket);
+            auto const& gameRules = level.getGameRules();
+            auto const& rulesVec  = *gameRules.mGameRules;
+            for (auto const index :
+                 {GameRules::GameRulesIndex::DoDaylightCycle, GameRules::GameRulesIndex::DoWeatherCycle}) {
+                if (auto const idx = static_cast<size_t>(index); idx < rulesVec.size()) {
+                    rulesOut.mRuleData->mRules->push_back(rulesVec[idx]);
+                }
+            }
+            if (!rulesOut.mRuleData->mRules->empty()) appendEntityPacket(*rulesPacket);
+        }
 
         auto spawnPacket = MinecraftPackets::createPacket(MinecraftPacketIds::SetSpawnPosition);
         if (!spawnPacket) {

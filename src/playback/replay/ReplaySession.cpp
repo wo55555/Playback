@@ -31,6 +31,7 @@
 #include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/LevelRenderer.h"
+#include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/common/SharedConstants.h"
 #include "mc/deps/core/file/Path.h"
 #include "mc/deps/core/file/PathView.h"
@@ -41,11 +42,13 @@
 #include "mc/deps/ecs/strict/StrictEntityContext.h"
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/IntTag.h"
+#include "mc/deps/shared_types/legacy/LevelEvent.h"
 #include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
+#include "mc/entity/components/AttributesComponent.h"
 #include "mc/entity/components/DynamicRenderOffsetComponent.h"
 #include "mc/entity/components/FallFlyTicksComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
@@ -54,6 +57,8 @@
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
 #include "mc/entity/components/MovementWasCorrectedComponent.h"
+#include "mc/entity/components/RenderPositionComponent.h"
+#include "mc/entity/components/RenderRotationComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
@@ -71,11 +76,13 @@
 #include "mc/network/packet/ContainerOpenPacket.h"
 #include "mc/network/packet/ContainerSetDataPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
+#include "mc/network/packet/GameRulesChangedPacket.h"
 #include "mc/network/packet/InventoryContentPacket.h"
 #include "mc/network/packet/InventorySlotPacket.h"
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
+#include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
@@ -124,7 +131,6 @@
 #include "mc/world/attribute/AttributeData.h"
 #include "mc/world/attribute/AttributeInstance.h"
 #include "mc/world/attribute/AttributeInstanceConstRef.h"
-#include "mc/entity/components/AttributesComponent.h"
 #include "mc/world/attribute/AttributeInstanceRef.h"
 #include "mc/world/attribute/AttributeModificationContext.h"
 #include "mc/world/attribute/AttributeModifier.h"
@@ -136,9 +142,11 @@
 #include "mc/world/item/registry/ItemRegistryRef.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/BlockSource.h"
+#include "mc/world/level/DaylightCycle.h"
 #include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
+#include "mc/world/level/Weather.h"
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/BlockRenderLayer.h"
 #include "mc/world/level/block/BlockType.h"
@@ -164,11 +172,13 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/saveddata/maps/MapItemSavedData.h"
+#include "mc/world/level/storage/GameRule.h"
+#include "mc/world/level/storage/GameRuleId.h"
+#include "mc/world/level/storage/GameRules.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
 #include "mc/world/phys/HitResult.h"
 #include "mc/world/phys/HitResultType.h"
-
 
 
 #include "snappy.h"
@@ -179,6 +189,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -326,6 +337,42 @@ visuals::EntityRenderPose replayRenderPose(Actor const& actor) {
     return {replayRenderPosition(actor.getPosition()), rotation.x, rotation.y, headYaw, bodyYaw};
 }
 
+void syncReplayRenderTransform(Actor& actor, Vec3 const& position, Vec2 const& rotation) {
+    auto& context = actor.getEntityContext();
+    if (auto renderPos = context.tryGetComponent<RenderPositionComponent>()) renderPos->mValue = position;
+    if (auto renderRot = context.tryGetComponent<RenderRotationComponent>()) renderRot->mRot = rotation;
+}
+
+bool equalsIgnoreCase(std::string_view left, std::string_view right) noexcept {
+    if (left.size() != right.size()) return false;
+    for (size_t index = 0; index < left.size(); ++index) {
+        if (std::tolower(static_cast<unsigned char>(left[index]))
+            != std::tolower(static_cast<unsigned char>(right[index]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void lockReplayWorldRules(GameRules& gameRules) {
+    gameRules.setRule(
+        GameRuleId{static_cast<int>(GameRules::GameRulesIndex::DoDaylightCycle)},
+        false,
+        false,
+        nullptr,
+        nullptr,
+        nullptr
+    );
+    gameRules.setRule(
+        GameRuleId{static_cast<int>(GameRules::GameRulesIndex::DoWeatherCycle)},
+        false,
+        false,
+        nullptr,
+        nullptr,
+        nullptr
+    );
+}
+
 void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 const& rotation, float headYaw) {
     // Pin the pose directly so the vanilla movement system cannot re-apply the previous one.
     actor.mBuiltInComponents->mStateVectorComponent->mPos       = position;
@@ -333,6 +380,7 @@ void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 
     actor.mBuiltInComponents->mStateVectorComponent->mPosDelta  = Vec3{};
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    syncReplayRenderTransform(actor, position, rotation);
     visuals::syncReplayEntityBoundingBox(actor, position);
 
     auto& context = actor.getEntityContext();
@@ -563,6 +611,7 @@ void applyReplayEntityMovement(
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    syncReplayRenderTransform(actor, position, rotation);
     visuals::syncReplayEntityBoundingBox(actor, position);
 
     auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
@@ -886,6 +935,29 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         prepareRecordedItemRegistry(configurationPackets);
         auto const& context = mSnapshotContexts.front();
 
+        mRecordedDoDaylightCycle = true;
+        mRecordedDoWeatherCycle  = true;
+        mRecordedRainLevel       = 0.0f;
+        mRecordedLightningLevel  = 0.0f;
+        if (mReplayStartGame) {
+            auto const&         recordedSettings = *mReplayStartGame->mSettings;
+            DaylightCycle const recordedCycle    = recordedSettings.mDaylightCycle;
+            if (recordedCycle == DaylightCycle::AlwaysDay || recordedCycle == DaylightCycle::LockTime) {
+                mRecordedDoDaylightCycle = false;
+            } else {
+                mRecordedDoDaylightCycle = recordedSettings.mGameRules->getBool(
+                    GameRuleId{static_cast<int>(GameRules::GameRulesIndex::DoDaylightCycle)},
+                    true
+                );
+            }
+            mRecordedDoWeatherCycle = recordedSettings.mGameRules->getBool(
+                GameRuleId{static_cast<int>(GameRules::GameRulesIndex::DoWeatherCycle)},
+                true
+            );
+            mRecordedRainLevel      = recordedSettings.mRainLevel;
+            mRecordedLightningLevel = recordedSettings.mLightningLevel;
+        }
+
         LevelSettings settings;
         settings.mGameType                  = GameType::Spectator;
         settings.mForceGameType             = true;
@@ -895,6 +967,8 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         settings.mLANBroadcastIntent        = false;
         settings.mDisablePlayerInteractions = true;
         settings.mDefaultSpawn              = BlockPos(Vec3{context.x, context.y, context.z});
+        settings.mDaylightCycle             = DaylightCycle::LockTime;
+        lockReplayWorldRules(*settings.mGameRules);
         if (mReplayStartGame) settings.mSeed = mReplayStartGame->mSettings->mSeed;
 
         mReplayLevelId            = createReplayLevelId();
@@ -1016,6 +1090,18 @@ void ReplaySession::clearReplayData() {
     mLastObserverServerSyncChunk.reset();
     mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
     mReplayTime.reset();
+    mRecordedDoDaylightCycle = true;
+    mRecordedDoWeatherCycle  = true;
+    mRecordedRainLevel       = 0.0f;
+    mRecordedLightningLevel  = 0.0f;
+    mTimeOfDayOverride.reset();
+    mWeatherOverride           = visuals::ReplayWeatherMode::Recorded;
+    mLastAppliedWeatherMode    = visuals::ReplayWeatherMode::Recorded;
+    mWeatherRendererNeedsPrime = false;
+    mLastPrimedWeatherPos.reset();
+    mReplayHasServerResourcePacks          = false;
+    mLoadedWithServerResourcePacksDisabled = false;
+    visuals::setReplayWorldEnvActive(false);
     mPendingReplayDimension.reset();
     mPendingSnapshotApply.reset();
     if (mDimensionTransitionRequest) {
@@ -1099,6 +1185,20 @@ void ReplaySession::finishWorldCleanup() {
     mCleanupWaitTicks  = 0;
     mReplayLevelId.clear();
     mOrphanReplayWorldsScanned = false;
+    visuals::setReplayWorldEnvActive(false);
+}
+
+bool ReplaySession::requestReloadCurrentReplay(int restoreTick) {
+    if (!mActive || mReplayFilePath.empty()) return false;
+    mPendingReloadReplayPath       = mReplayFilePath;
+    mPendingRestoreTickAfterReload = std::clamp(restoreTick, 0, getTotalTicks());
+    getLogger().debug(
+        "Requesting in-place reload of replay {} (restoreTick={})",
+        mPendingReloadReplayPath,
+        *mPendingRestoreTickAfterReload
+    );
+    stop();
+    return true;
 }
 
 void ReplaySession::stop() {
@@ -2235,10 +2335,114 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
     return state;
 }
 
-void ReplaySession::enforceReplayWorldTime() {
-    if (!mActive || !mReplayTime || !mReplayPlayer) return;
-    auto& level = mReplayPlayer->getLevel();
-    if (level.getTime() != *mReplayTime) level.setTime(*mReplayTime);
+void ReplaySession::setTimeOfDayOverride(std::optional<double> ticks) noexcept {
+    mTimeOfDayOverride = ticks;
+    visuals::setReplayWorldTimeOverride(mTimeOfDayOverride);
+    enforceReplayWorldTime();
+}
+
+void ReplaySession::setWeatherOverride(visuals::ReplayWeatherMode mode) noexcept {
+    if (mWeatherOverride != mode) {
+        mWeatherOverride           = mode;
+        mWeatherRendererNeedsPrime = mode == visuals::ReplayWeatherMode::Rain
+                                  || mode == visuals::ReplayWeatherMode::Snow
+                                  || mode == visuals::ReplayWeatherMode::Thunder;
+        if (!mWeatherRendererNeedsPrime) mLastPrimedWeatherPos.reset();
+    }
+    visuals::setReplayWeatherOverride(mWeatherOverride);
+    enforceReplayWorldTime();
+}
+
+void ReplaySession::enforceReplayWorldTime(std::optional<float> partialTickOverride) {
+    if (!mActive) return;
+
+    int const recordedWhole = mReplayTime.value_or(0);
+    int const effectiveInt  = mTimeOfDayOverride ? static_cast<int>(std::floor(*mTimeOfDayOverride)) : recordedWhole;
+
+    if (mReplayPlayer && (mReplayTime || mTimeOfDayOverride)) {
+        auto& level = mReplayPlayer->getLevel();
+        if (level.getTime() != effectiveInt) level.setTime(effectiveInt);
+    }
+
+    float partial = 0.0f;
+    if (partialTickOverride.has_value()) {
+        partial = *partialTickOverride;
+    } else if (!mIsPaused && mSeekTargetTick < 0 && mRecordedDoDaylightCycle) {
+        if (auto const sample = getEntityRenderSampleTime()) partial = sample->partialTick();
+    }
+
+    visuals::setReplayWorldTimeState(recordedWhole, mRecordedDoDaylightCycle, partial);
+    visuals::setReplayWorldTimeOverride(mTimeOfDayOverride);
+    visuals::setReplayWeatherOverride(mWeatherOverride);
+
+    if (mReplayPlayer) {
+        auto& dimension = mReplayPlayer->getDimension();
+        if (dimension.mHasWeather && dimension.mWeather.get() != nullptr) {
+            float targetRain      = mRecordedRainLevel;
+            float targetLightning = mRecordedLightningLevel;
+            switch (mWeatherOverride) {
+            case visuals::ReplayWeatherMode::Clear:
+                targetRain      = 0.0f;
+                targetLightning = 0.0f;
+                break;
+            case visuals::ReplayWeatherMode::Overcast:
+            case visuals::ReplayWeatherMode::Rain:
+            case visuals::ReplayWeatherMode::Snow:
+                targetRain      = 1.0f;
+                targetLightning = 0.0f;
+                break;
+            case visuals::ReplayWeatherMode::Thunder:
+                targetRain      = 1.0f;
+                targetLightning = 1.0f;
+                break;
+            case visuals::ReplayWeatherMode::Recorded:
+                break;
+            }
+            bool const modeChanged        = (mWeatherOverride != mLastAppliedWeatherMode);
+            mLastAppliedWeatherMode       = mWeatherOverride;
+            auto& weather                 = *dimension.mWeather.get();
+            weather.mRainLevel            = targetRain;
+            weather.mOldRainLevel         = targetRain;
+            weather.mTargetRainLevel      = targetRain;
+            weather.mLightningLevel       = targetLightning;
+            weather.mOldLightningLevel    = targetLightning;
+            weather.mTargetLightningLevel = targetLightning;
+            if (mWeatherOverride == visuals::ReplayWeatherMode::Clear) {
+                weather.mFogLevel = 0.0f;
+            } else if (mWeatherOverride != visuals::ReplayWeatherMode::Recorded) {
+                weather.mFogLevel = 1.0f;
+            } else if (modeChanged) {
+                weather.mFogLevel = mRecordedRainLevel;
+            }
+        }
+    }
+}
+
+void ReplaySession::primePausedWeatherRenderer() {
+    if (!mActive || !mWorldReady || mPendingReplayDimension) return;
+    bool const needsPrecipitation = mWeatherOverride == visuals::ReplayWeatherMode::Rain
+                                 || mWeatherOverride == visuals::ReplayWeatherMode::Snow
+                                 || mWeatherOverride == visuals::ReplayWeatherMode::Thunder;
+    if (!needsPrecipitation) {
+        mWeatherRendererNeedsPrime = false;
+        mLastPrimedWeatherPos.reset();
+        return;
+    }
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    auto* renderer = client->getLevelRenderer();
+    if (!renderer) return;
+    auto* playerRenderer = renderer->mLevelRendererPlayer.get();
+    if (!playerRenderer) return;
+    auto const& rawCamPos = playerRenderer->mWorldSpaceCamera->mPosition.get();
+    Vec3 const  camPos{rawCamPos.x, rawCamPos.y, rawCamPos.z};
+    bool const  forcePrime = mWeatherRendererNeedsPrime || !mLastPrimedWeatherPos;
+    bool const  movedFar   = mIsPaused && mLastPrimedWeatherPos && camPos.distanceToSqr(*mLastPrimedWeatherPos) > 64.0f;
+    if (!forcePrime && !movedFar) return;
+    playerRenderer->tickRain();
+    if (forcePrime) playerRenderer->tickRain();
+    mWeatherRendererNeedsPrime = false;
+    mLastPrimedWeatherPos      = camPos;
 }
 
 void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& rotation) {
@@ -2764,7 +2968,13 @@ void ReplaySession::settleAfterSeek() {
         if (!actor || actor == mReplayPlayer) continue;
         auto const rotation = actor->getRotation();
         cancelNativeMovementInterpolation(*actor, actor->getPosition(), rotation, rotation.y);
+        if (auto const renderKey = replayEntityRenderKey(level, id)) {
+            auto const pose = replayRenderPose(*actor);
+            mEntityRenderKeys.insert_or_assign(id, *renderKey);
+            visuals::queueReplayEntityPose(*renderKey, pose, pose);
+        }
     }
+    visuals::commitReplayEntityPoses(mCurrentTick);
 }
 
 void ReplaySession::beginSeek(int targetTick) {
@@ -2877,7 +3087,8 @@ void ReplaySession::tick() {
         } levelFreeze{*this};
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
-        if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
+        enforceReplayWorldTime();
+        primePausedWeatherRenderer();
         updateScreenPreview();
         syncFollowedPlayerHud();
 
@@ -3392,7 +3603,9 @@ bool ReplaySession::init(std::filesystem::path filePath) {
 bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets) {
     mReplayResourcePacksInfo.store(nullptr, std::memory_order_release);
     mReplayResourcePackStack.store(nullptr, std::memory_order_release);
-    mReplayCachedResourcePacksLoaded = false;
+    mReplayCachedResourcePacksLoaded       = false;
+    mReplayHasServerResourcePacks          = false;
+    mLoadedWithServerResourcePacksDisabled = false;
 
     auto client = ll::service::getClientInstance();
     if (!client) return false;
@@ -3416,14 +3629,34 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
         return packet;
     };
 
-    auto&       repository      = client->getResourcePackRepository();
     auto const* serializedInfo  = findPacket(MinecraftPacketIds::ResourcePacksInfo);
     auto const* serializedStack = findPacket(MinecraftPacketIds::ResourcePackStack);
 
     std::shared_ptr<ResourcePacksInfoPacket> info;
     if (serializedInfo) {
-        info      = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
-        auto keys = info->mData->collectKeys();
+        info = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
+        if (!info->mData->mResourcePacks->empty()) mReplayHasServerResourcePacks = true;
+    }
+
+    std::shared_ptr<ResourcePackStackPacket> stack;
+    if (serializedStack) {
+        stack = std::static_pointer_cast<ResourcePackStackPacket>(decodePacket(*serializedStack));
+        if (!stack->mTexturePackIdsAndVersions->empty()) mReplayHasServerResourcePacks = true;
+    }
+
+    bool const disabled                    = Playback::getInstance().getConfig().replay.disableServerResourcePacks;
+    mLoadedWithServerResourcePacksDisabled = disabled;
+    if (disabled) {
+        getLogger().debug(
+            "Skipping recorded server resource packs (disabled by config, replayHasPacks={})",
+            mReplayHasServerResourcePacks
+        );
+        return true;
+    }
+
+    auto& repository = client->getResourcePackRepository();
+    if (info) {
+        auto keys                        = info->mData->collectKeys();
         mReplayCachedResourcePacksLoaded = true;
         repository.addCachedResourcePacks(&keys);
         // Packs embedded in the replay take over from the local download cache; old replays keep using the cache.
@@ -3434,10 +3667,7 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
         }
     }
 
-    if (!serializedStack) return true;
-
-    auto stack = std::static_pointer_cast<ResourcePackStackPacket>(decodePacket(*serializedStack));
-    if (!info) return true;
+    if (!stack || !info) return true;
     mReplayResourcePacksInfo.store(std::move(info), std::memory_order_release);
     mReplayResourcePackStack.store(std::move(stack), std::memory_order_release);
     return true;
@@ -5271,10 +5501,10 @@ void ReplaySession::handleNextTick() {
     visuals::commitReplayEntityPoses(static_cast<int64_t>(mCurrentTick) + 1);
     mCurrentTick += 1;
     integration::pushReplayClock(mCurrentTick, false);
-    if (mReplayTime) {
+    if (mReplayTime && mRecordedDoDaylightCycle) {
         ++*mReplayTime;
-        if (mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
     }
+    enforceReplayWorldTime();
     updateReplaySubjectPosture(false);
 }
 
@@ -6434,6 +6664,62 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         mReplayTime = static_cast<SetTimePacket const&>(*packet).mTime;
     }
 
+    if (packetId == MinecraftPacketIds::GameRulesChanged) {
+        auto&       rulesPacket          = static_cast<GameRulesChangedPacket&>(*packet);
+        auto const& rules                = *rulesPacket.mRuleData->mRules;
+        bool        hasTimeOrWeatherRule = false;
+        for (auto const& rule : rules) {
+            if (equalsIgnoreCase(*rule.mName, "dodaylightcycle")) {
+                if (rule.mType == GameRule::Type::Bool) mRecordedDoDaylightCycle = rule.getBool();
+                hasTimeOrWeatherRule = true;
+            } else if (equalsIgnoreCase(*rule.mName, "doweathercycle")) {
+                if (rule.mType == GameRule::Type::Bool) mRecordedDoWeatherCycle = rule.getBool();
+                hasTimeOrWeatherRule = true;
+            }
+        }
+        if (hasTimeOrWeatherRule) {
+            std::vector<GameRule> filtered;
+            filtered.reserve(rules.size());
+            for (auto const& rule : rules) {
+                if (equalsIgnoreCase(*rule.mName, "dodaylightcycle")
+                    || equalsIgnoreCase(*rule.mName, "doweathercycle")) {
+                    continue;
+                }
+                filtered.push_back(rule);
+            }
+            enforceReplayWorldTime();
+            if (filtered.empty()) return true;
+            rulesPacket.mRuleData->setRules(std::move(filtered));
+        }
+    }
+
+    bool weatherEventChanged = false;
+    if (packetId == MinecraftPacketIds::LevelEvent) {
+        auto const eventId = static_cast<SharedTypes::Legacy::LevelEvent>(
+            static_cast<int>(static_cast<LevelEventPacket const&>(*packet).mEventId)
+        );
+        switch (eventId) {
+        case SharedTypes::Legacy::LevelEvent::StartRaining:
+            mRecordedRainLevel  = 1.0f;
+            weatherEventChanged = true;
+            break;
+        case SharedTypes::Legacy::LevelEvent::StopRaining:
+            mRecordedRainLevel  = 0.0f;
+            weatherEventChanged = true;
+            break;
+        case SharedTypes::Legacy::LevelEvent::StartThunderstorm:
+            mRecordedLightningLevel = 1.0f;
+            weatherEventChanged     = true;
+            break;
+        case SharedTypes::Legacy::LevelEvent::StopThunderstorm:
+            mRecordedLightningLevel = 0.0f;
+            weatherEventChanged     = true;
+            break;
+        default:
+            break;
+        }
+    }
+
     if (packetId == MinecraftPacketIds::PlayerList) {
         auto& playerList = static_cast<PlayerListPacket&>(*packet);
         auto& entries    = *playerList.mEntries;
@@ -6663,6 +6949,10 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 
+    if (packetId == MinecraftPacketIds::SetTime || weatherEventChanged) {
+        enforceReplayWorldTime();
+    }
+
     if (mReplayPlayer) {
         std::string const subject = [&]() -> std::string {
             std::string const choice = replaySubjectChoice();
@@ -6713,6 +7003,26 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     }
 
     if (addsEntity) mRecordedEntityIds.emplace(entityId);
+
+    if ((packetId == MinecraftPacketIds::AddActor || packetId == MinecraftPacketIds::AddItemActor
+         || packetId == MinecraftPacketIds::AddPainting)
+        && mReplayPlayer) {
+        auto& level = mReplayPlayer->getLevel();
+        if (auto* actor = level.fetchEntity(entityId, false)) {
+            auto const position = actor->getPosition();
+            auto const rotation = actor->getRotation();
+            if (mSeekTargetTick >= 0 && mSnapMovementDuringSeek) {
+                cancelNativeMovementInterpolation(*actor, position, rotation, rotation.y);
+            } else {
+                syncReplayRenderTransform(*actor, position, rotation);
+            }
+            if (auto const renderKey = replayEntityRenderKey(level, entityId)) {
+                auto const pose = replayRenderPose(*actor);
+                mEntityRenderKeys.insert_or_assign(entityId, *renderKey);
+                visuals::queueReplayEntityPose(*renderKey, pose, pose);
+            }
+        }
+    }
 
     if (packetId == MinecraftPacketIds::AddPlayer && mReplayPlayer) {
         auto const& addPlayer = static_cast<AddPlayerPacket const&>(*packet);
@@ -7174,6 +7484,7 @@ void ReplaySession::onLevelJoined(Player& player) {
             player.getLevel().getLevelId(),
             mReplayLevelId
         );
+        mPendingRestoreTickAfterReload.reset();
         stop();
         return;
     }
@@ -7182,6 +7493,18 @@ void ReplaySession::onLevelJoined(Player& player) {
     mReplayPlayer      = &player;
     if (!refreshReplayPlayer()) {
         getLogger().error("Replay player is unavailable immediately after joining the replay world");
+    }
+
+    auto& level = player.getLevel();
+    lockReplayWorldRules(level.getGameRules());
+    level.getLevelData().setDaylightCycle(DaylightCycle::LockTime);
+    visuals::setReplayWorldEnvActive(true);
+    enforceReplayWorldTime();
+
+    if (mPendingRestoreTickAfterReload) {
+        int const restoreTick = *mPendingRestoreTickAfterReload;
+        mPendingRestoreTickAfterReload.reset();
+        requestSeek(restoreTick);
     }
 }
 
@@ -7195,6 +7518,7 @@ void ReplaySession::onLevelStartJoin() {
 }
 
 void ReplaySession::onLevelExit() {
+    visuals::setReplayWorldEnvActive(false);
     if (mReplayLevelId.empty()) return;
     if (mCleanupState == CleanupState::None) {
         if (!mActive || !mReplayWorldJoined) return;
@@ -7211,6 +7535,8 @@ void ReplaySession::onLevelExit() {
 }
 
 void ReplaySession::onLevelJoinCancelled() {
+    visuals::setReplayWorldEnvActive(false);
+    mPendingRestoreTickAfterReload.reset();
     if (mReplayLevelId.empty() || mReplayWorldJoined) return;
     if (mCleanupState == CleanupState::None) {
         if (!mActive) return;
@@ -7236,7 +7562,19 @@ void ReplaySession::tryFinalizeWorldCleanup() {
     auto  basePathBuffer = cache.getBasePath();
     auto  worldsPath     = std::filesystem::path(basePathBuffer.get());
 
+    auto tryStartPendingReload = [this] {
+        if (mPendingReloadReplayPath.empty() || mActive || !mReplayLevelId.empty() || mScreenModel.expired()) {
+            return false;
+        }
+        auto reloadPath = std::exchange(mPendingReloadReplayPath, {});
+        if (!start(std::move(reloadPath))) {
+            mPendingRestoreTickAfterReload.reset();
+        }
+        return true;
+    };
+
     if (mCleanupState == CleanupState::None) {
+        if (tryStartPendingReload()) return;
         if (mActive || !mReplayLevelId.empty() || mOrphanReplayWorldsScanned) return;
 
         std::error_code ec;
@@ -7302,6 +7640,7 @@ void ReplaySession::tryFinalizeWorldCleanup() {
     if (!levelIsCached && !worldFilesExist) {
         getLogger().debug("Removed replay world {}", mReplayLevelId);
         finishWorldCleanup();
+        (void)tryStartPendingReload();
         return;
     }
 

@@ -10,6 +10,8 @@
 #include <windows.h>
 #include <mmsystem.h>
 
+#include <mmsystem.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>

@@ -66,12 +66,14 @@ AddKeyframe::AddKeyframe(std::string cameraId, int tick, std::optional<model::Ca
 void AddKeyframe::execute(model::EditorStateExt& state) {
     auto*      camera = findCamera(state, mCameraId);
     auto const tick   = std::clamp(mTick, 0, state.totalTicks);
-    if (!camera || camera->locked || camera->keysByTick.contains(tick)) {
+    if (!camera || camera->locked) {
         mBefore.reset();
+        mReplaced = false;
         return;
     }
 
-    mBefore = state;
+    mBefore   = state;
+    mReplaced = camera->keysByTick.contains(tick);
     model::CameraKeyframe key;
     if (mCaptured) {
         key = *mCaptured;
@@ -82,11 +84,14 @@ void AddKeyframe::execute(model::EditorStateExt& state) {
     } else if (auto captured = keyframe::captureClientCamera()) {
         key.fov = captured->fov;
     }
-    camera->keysByTick.emplace(tick, std::move(key));
+    camera->keysByTick.insert_or_assign(tick, std::move(key));
 }
 
 void        AddKeyframe::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string AddKeyframe::label() const { return "playback.refactorEditor.history.addKeyframe"; }
+std::string AddKeyframe::label() const {
+    return mReplaced ? "playback.refactorEditor.history.replaceKeyframe"
+                     : "playback.refactorEditor.history.addKeyframe";
+}
 
 MoveKeyframe::MoveKeyframe(std::string cameraId, int fromTick, int toTick)
 : mCameraId(std::move(cameraId)),
@@ -525,10 +530,32 @@ void AddKeyframes::execute(model::EditorStateExt& state) {
 void        AddKeyframes::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string AddKeyframes::label() const { return "playback.refactorEditor.history.pasteKeyframes"; }
 
-SetCameraKeyframeMode::SetCameraKeyframeMode(std::string cameraId, int tick, model::CameraKeyframeMode mode)
+namespace {
+
+std::string
+resolveDefaultPersonSubject(model::CameraEntity const& camera, int tick, std::string const& fallbackSubject) {
+    auto upper = camera.keysByTick.lower_bound(tick);
+    while (upper != camera.keysByTick.begin()) {
+        --upper;
+        if (upper->second.mode != model::CameraKeyframeMode::Interpolated && !upper->second.subject.empty()) {
+            return upper->second.subject;
+        }
+    }
+    return fallbackSubject;
+}
+
+} // namespace
+
+SetCameraKeyframeMode::SetCameraKeyframeMode(
+    std::string               cameraId,
+    int                       tick,
+    model::CameraKeyframeMode mode,
+    std::string               defaultSubject
+)
 : mCameraId(std::move(cameraId)),
   mTick(tick),
-  mMode(mode) {}
+  mMode(mode),
+  mDefaultSubject(std::move(defaultSubject)) {}
 
 void SetCameraKeyframeMode::execute(model::EditorStateExt& state) {
     auto* camera = findCamera(state, mCameraId);
@@ -537,7 +564,8 @@ void SetCameraKeyframeMode::execute(model::EditorStateExt& state) {
         return;
     }
 
-    auto const key = camera->keysByTick.find(std::clamp(mTick, 0, state.totalTicks));
+    int const  tick = std::clamp(mTick, 0, state.totalTicks);
+    auto const key  = camera->keysByTick.find(tick);
     if (key == camera->keysByTick.end() || key->second.mode == mMode) {
         mBefore.reset();
         return;
@@ -545,26 +573,41 @@ void SetCameraKeyframeMode::execute(model::EditorStateExt& state) {
 
     mBefore          = state;
     key->second.mode = mMode;
+    if (mMode != model::CameraKeyframeMode::Interpolated && key->second.subject.empty()) {
+        key->second.subject = resolveDefaultPersonSubject(*camera, tick, mDefaultSubject);
+    }
 }
 
 void        SetCameraKeyframeMode::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string SetCameraKeyframeMode::label() const { return "playback.refactorEditor.history.setKeyframeMode"; }
 
-SetKeyframesMode::SetKeyframesMode(std::vector<model::KeyframeRef> refs, model::CameraKeyframeMode mode)
+SetKeyframesMode::SetKeyframesMode(
+    std::vector<model::KeyframeRef> refs,
+    model::CameraKeyframeMode       mode,
+    std::string                     defaultSubject
+)
 : mRefs(std::move(refs)),
-  mMode(mode) {}
+  mMode(mode),
+  mDefaultSubject(std::move(defaultSubject)) {}
 
 void SetKeyframesMode::execute(model::EditorStateExt& state) {
     mBefore.reset();
     auto before  = state;
     bool changed = false;
-    for (auto const& ref : mRefs) {
+    auto refs    = mRefs;
+    std::ranges::sort(refs, [](auto const& a, auto const& b) {
+        return std::tie(a.cameraId, a.tick) < std::tie(b.cameraId, b.tick);
+    });
+    for (auto const& ref : refs) {
         auto* camera = findCamera(state, ref.cameraId);
         if (!camera || camera->locked) continue;
         auto const key = camera->keysByTick.find(ref.tick);
         if (key == camera->keysByTick.end() || key->second.mode == mMode) continue;
         key->second.mode = mMode;
-        changed          = true;
+        if (mMode != model::CameraKeyframeMode::Interpolated && key->second.subject.empty()) {
+            key->second.subject = resolveDefaultPersonSubject(*camera, ref.tick, mDefaultSubject);
+        }
+        changed = true;
     }
     if (changed) mBefore = std::move(before);
 }

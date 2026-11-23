@@ -41,7 +41,7 @@ void TrackTreeModel::setSearch(std::string_view query) { mSearch = query; }
 
 void TrackTreeModel::rebuild(const EditorStateExt& state) {
     mRows.clear();
-    mRows.reserve(state.cameras.size() + state.audioTracks.size() + 3);
+    mRows.reserve(state.cameras.size() + state.audioTracks.size() + 4);
 
     float const rowHeight = metrics::cameraRow();
 
@@ -104,6 +104,38 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
                  rowHeight,
                  state.timelapseTrack.locked,
                  state.timelapseTrack.enabled}
+            );
+        }
+    }
+
+    if (state.timeOfDayTrack.isVisible()) {
+        std::string timeOfDayName = "playback.refactorEditor.timeOfDay.trackName"_tr();
+        if (containsInsensitive(timeOfDayName, mSearch)) {
+            mRows.push_back(
+                {TrackRowKind::TimeOfDay,
+                 "time_of_day",
+                 std::move(timeOfDayName),
+                 "__time_of_day__",
+                 -1,
+                 rowHeight,
+                 state.timeOfDayTrack.locked,
+                 state.timeOfDayTrack.enabled}
+            );
+        }
+    }
+
+    if (state.weatherTrack.isVisible()) {
+        std::string weatherName = "playback.refactorEditor.weather.trackName"_tr();
+        if (containsInsensitive(weatherName, mSearch)) {
+            mRows.push_back(
+                {TrackRowKind::Weather,
+                 "weather",
+                 std::move(weatherName),
+                 "__weather__",
+                 -1,
+                 rowHeight,
+                 state.weatherTrack.locked,
+                 state.weatherTrack.enabled}
             );
         }
     }

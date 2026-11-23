@@ -14,7 +14,7 @@ struct EditorStateExt;
 
 namespace playback::editor::ui {
 
-enum class TrackRowKind : uint8_t { Camera, Speed, Freeze, Timelapse, Audio };
+enum class TrackRowKind : uint8_t { Camera, Speed, Freeze, Timelapse, TimeOfDay, Weather, Audio };
 
 struct TrackTreeRow {
     TrackRowKind kind{TrackRowKind::Camera};

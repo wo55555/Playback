@@ -38,6 +38,12 @@ private:
     bool drawFreezeTrack(PanelContext const& ctx);
     bool drawTimelapseKeyframe(PanelContext const& ctx);
     bool drawTimelapseTrack(PanelContext const& ctx);
+    bool drawTimeOfDayKeyframes(PanelContext const& ctx);
+    bool drawTimeOfDayKeyframe(PanelContext const& ctx);
+    bool drawTimeOfDayTrack(PanelContext const& ctx);
+    bool drawWeatherKeyframes(PanelContext const& ctx);
+    bool drawWeatherKeyframe(PanelContext const& ctx);
+    bool drawWeatherTrack(PanelContext const& ctx);
     bool drawAudioTrack(PanelContext const& ctx);
     bool drawAudioClip(PanelContext const& ctx);
     void drawOverview(PanelContext const& ctx);
@@ -72,6 +78,15 @@ private:
     std::optional<int>          mTimelapseTextTick;
     std::array<char, 64>        mTimelapseTextBuffer{};
     bool                        mTimelapseTextEditing{false};
+    int                         mTimeOfDayBezierDragTick{-1};
+    int                         mTimeOfDayBezierDragHandle{};
+    state::editing::model::Vec2 mTimeOfDayBezierDraftCtrl1{0.42f, 0.0f};
+    state::editing::model::Vec2 mTimeOfDayBezierDraftCtrl2{0.58f, 1.0f};
+    int                         mTimeOfDayKeyDragTick{-1};
+    bool                        mTimeOfDayKeyDragging{false};
+    int                         mTimeOfDayKeyDragValue{6000};
+    bool                        mDaytimeOverrideDragging{false};
+    int                         mDaytimeOverrideDragValue{6000};
     std::string                 mAudioTrackNameId;
     std::array<char, 128>       mAudioTrackNameBuffer{};
     bool                        mAudioTrackNameEditing{false};
