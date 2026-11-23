@@ -38,6 +38,7 @@
 #include "mc/network/packet/ChangeDimensionPacket.h"
 #include "mc/network/packet/ClientboundMapItemDataPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
+#include "mc/network/packet/GameRulesChangedPacket.h"
 #include "mc/network/packet/InventorySlotPacket.h"
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
@@ -96,6 +97,9 @@
 #include "mc/world/level/chunk/SubChunk.h"
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/saveddata/maps/MapItemSavedData.h"
+#include "mc/world/level/storage/GameRule.h"
+#include "mc/world/level/storage/GameRuleId.h"
+#include "mc/world/level/storage/GameRules.h"
 #include "mc/world/level/storage/LevelData.h"
 #include "mc/world/scores/DisplayObjective.h"
 #include "mc/world/scores/Objective.h"
@@ -1839,6 +1843,20 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
         }
         static_cast<SetTimePacket&>(*timePacket).mTime = level.getTime();
         appendEntityPacket(*timePacket);
+
+        if (auto rulesPacket = MinecraftPackets::createPacket(MinecraftPacketIds::GameRulesChanged)) {
+            auto&       rulesOut  = static_cast<GameRulesChangedPacket&>(*rulesPacket);
+            auto const& gameRules = level.getGameRules();
+            bool        anyRule   = false;
+            for (auto const index :
+                 {GameRules::GameRulesIndex::DoDaylightCycle, GameRules::GameRulesIndex::DoWeatherCycle}) {
+                if (auto const* rule = gameRules.getRule(GameRuleId{static_cast<int>(index)})) {
+                    rulesOut.mRuleData->addRule(*rule);
+                    anyRule = true;
+                }
+            }
+            if (anyRule) appendEntityPacket(*rulesPacket);
+        }
 
         auto spawnPacket = MinecraftPackets::createPacket(MinecraftPacketIds::SetSpawnPosition);
         if (!spawnPacket) {

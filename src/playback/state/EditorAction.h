@@ -133,6 +133,58 @@ enum class EditorActionType {
     SetTimelapseTrackEnabled,
     SetTimelapseTrackLocked,
     ClearTimelapseKeyframes,
+    AddTimeOfDayTrack,
+    RemoveTimeOfDayTrack,
+    // tick + secondaryTick (timeOfDay) + kind (CameraInterpolationType).
+    AddTimeOfDayKeyframe,
+    // tick (fromTick) + secondaryTick (toTick).
+    MoveTimeOfDayKeyframe,
+    // ticks + secondaryTick (tickDelta).
+    MoveTimeOfDayKeyframes,
+    // tick.
+    RemoveTimeOfDayKeyframe,
+    // ticks.
+    RemoveTimeOfDayKeyframes,
+    // tick + secondaryTick (timeOfDay).
+    SetTimeOfDayKeyframeValue,
+    // tick + kind (CameraInterpolationType).
+    SetTimeOfDayKeyframeInterpolation,
+    // ticks + kind (CameraInterpolationType).
+    SetTimeOfDayKeyframesInterpolation,
+    // tick + bezierCtrl1 + bezierCtrl2.
+    SetTimeOfDayKeyframeBezier,
+    // value (enabled).
+    SetTimeOfDayTrackEnabled,
+    // value (locked).
+    SetTimeOfDayTrackLocked,
+    ClearTimeOfDayKeyframes,
+    // value (enabled) + tick (daytimeTicks).
+    SetDaytimeOverride,
+    // kind (static_cast<int>(WeatherOverride)).
+    SetWeatherOverride,
+    AddWeatherTrack,
+    RemoveWeatherTrack,
+    // value (enabled).
+    SetWeatherTrackEnabled,
+    // value (locked).
+    SetWeatherTrackLocked,
+    // tick + kind (static_cast<int>(WeatherOverride)).
+    AddWeatherKeyframe,
+    // tick.
+    RemoveWeatherKeyframe,
+    // ticks.
+    RemoveWeatherKeyframes,
+    // tick (fromTick) + secondaryTick (toTick).
+    MoveWeatherKeyframe,
+    // ticks + secondaryTick (tickDelta).
+    MoveWeatherKeyframes,
+    // tick + kind (static_cast<int>(WeatherOverride)).
+    SetWeatherKeyframeValue,
+    // ticks + kind (static_cast<int>(WeatherOverride)).
+    SetWeatherKeyframesValue,
+    // value (disabled).
+    SetDisableServerResourcePacks,
+    ReloadReplayAtCurrentTick,
     // name (optional track name).
     AddAudioTrack,
     // id (trackId).
@@ -191,6 +243,7 @@ struct EditorAction {
     std::optional<editing::model::CameraShake>    shake;
     // Batch keyframe edits (multi-select move / delete / interpolation / paste).
     std::vector<editing::model::KeyframeRef> keyframeRefs;
+    std::vector<int>                         ticks;
     size_t                                   historySteps{1};
 };
 

@@ -9,6 +9,7 @@
 #include "playback/editor/ui/components/HistoryLabel.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/state/editing/ClipOps.h"
+#include "playback/state/editing/TimelineNavigation.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -185,6 +186,9 @@ void ReplayEditor::loadLayoutPreferences() {
             float const trackListWidthRatio =
                 readFiniteFloat(config, "trackListWidthRatio", mTimelinePanel.trackListWidthRatio());
             mTimelinePanel.setViewPreferences(trackListWidthRatio, 1.0f, 0.0f);
+            auto& replayConfig = Playback::getInstance().getConfig().replay;
+            replayConfig.disableServerResourcePacks =
+                readBool(config, "disableServerResourcePacks", replayConfig.disableServerResourcePacks);
 
             auto const hud = config.find("hud");
             if (hud != config.end() && hud->is_object()) {
@@ -251,18 +255,19 @@ void ReplayEditor::saveLayoutPreferences() const {
     };
 
     nlohmann::ordered_json const config{
-        {"detailsWidthRatio",   mDetailsWidthRatio                        },
-        {"timelineHeightRatio", mTimelineHeightRatio                      },
-        {"videoAspectRatio",    mVideoAspectRatio                         },
-        {"showCameraPath",      mCameraPathVisible                        },
-        {"infoOverlay",         mViewportPanel.isInfoOverlayVisible()     },
-        {"autoPreview",         mViewportPanel.isAutoPreviewEnabled()     },
-        {"snap",                mTimelinePanel.isSnapEnabled()            },
-        {"uiScale",             std::string(uiScaleTierName(mUiScaleTier))},
-        {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()      },
-        {"hud",                 std::move(hud)                            },
-        {"previewAudio",        std::move(previewAudio)                   },
-        {"timelineViews",       std::move(timelineViews)                  }
+        {"detailsWidthRatio",          mDetailsWidthRatio                                                   },
+        {"timelineHeightRatio",        mTimelineHeightRatio                                                 },
+        {"videoAspectRatio",           mVideoAspectRatio                                                    },
+        {"showCameraPath",             mCameraPathVisible                                                   },
+        {"infoOverlay",                mViewportPanel.isInfoOverlayVisible()                                },
+        {"autoPreview",                mViewportPanel.isAutoPreviewEnabled()                                },
+        {"snap",                       mTimelinePanel.isSnapEnabled()                                       },
+        {"uiScale",                    std::string(uiScaleTierName(mUiScaleTier))                           },
+        {"trackListWidthRatio",        mTimelinePanel.trackListWidthRatio()                                 },
+        {"disableServerResourcePacks", Playback::getInstance().getConfig().replay.disableServerResourcePacks},
+        {"hud",                        std::move(hud)                                                       },
+        {"previewAudio",               std::move(previewAudio)                                              },
+        {"timelineViews",              std::move(timelineViews)                                             }
     };
     std::ofstream output(kLayoutPreferencesPath, std::ios::trunc);
     if (output) {
@@ -800,11 +805,11 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::JumpStart)) {
-        seekTo(0);
+        mTimelinePanel.seekSmartEdge(frameContext(), false);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::JumpEnd)) {
-        seekTo(state().totalTicks);
+        mTimelinePanel.seekSmartEdge(frameContext(), true);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekTickLeft, true)) {
@@ -865,6 +870,28 @@ void ReplayEditor::handleKeyboardShortcuts() {
     }
     if (input::KeyMap::pressed(EditorKeybind::MarkExportOut)) {
         markExportPoint(false);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::JumpExportIn)) {
+        seekTo(
+            state::editing::TimelineNavigation::resolveExportPointTick(
+                state().totalTicks,
+                exportStartTick(),
+                exportEndTick(),
+                false
+            )
+        );
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::JumpExportOut)) {
+        seekTo(
+            state::editing::TimelineNavigation::resolveExportPointTick(
+                state().totalTicks,
+                exportStartTick(),
+                exportEndTick(),
+                true
+            )
+        );
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::DecreaseSpeed, true)) {

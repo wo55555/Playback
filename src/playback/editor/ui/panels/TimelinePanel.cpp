@@ -11,9 +11,12 @@
 #include "playback/editor/ui/iconfont.h"
 #include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/keyframe/SpeedTimelineEvaluator.h"
+#include "playback/keyframe/TimeOfDayTimelineEvaluator.h"
 #include "playback/keyframe/TimelapseTimelineEvaluator.h"
+#include "playback/keyframe/WeatherTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/state/editing/ClipOps.h"
+#include "playback/state/editing/TimelineNavigation.h"
 #include "playback/state/editing/commands/MarkerCommands.h"
 #include "playback/utils/ShellUtils.h"
 
@@ -56,6 +59,9 @@ constexpr ImU32 kTimelapseInvalidFill    = IM_COL32(220, 68, 68, 72);
 constexpr ImU32 kTimelapseInvalidEdge    = IM_COL32(235, 92, 82, 210);
 constexpr ImU32 kTimelapseInvalidText    = IM_COL32(255, 118, 104, 255);
 constexpr ImU32 kTimelapseInvalidKeyFill = IM_COL32(255, 95, 72, 255);
+constexpr ImU32 kTimeOfDayAccent         = IM_COL32(246, 184, 76, 255);
+constexpr ImU32 kTimeOfDayKeyFill        = IM_COL32(250, 198, 92, 255);
+constexpr ImU32 kWeatherAccent           = IM_COL32(0x52, 0xa8, 0xe8, 0xff);
 constexpr ImU32 kAudioAccent             = IM_COL32(52, 211, 153, 255);
 constexpr ImU32 kAudioErrorEdge          = IM_COL32(235, 110, 82, 220);
 constexpr ImU32 kAudioErrorText          = IM_COL32(255, 140, 118, 255);
@@ -454,6 +460,28 @@ float speedToCurveY(double speed, float plotTop, float plotBottom) {
     return static_cast<float>(static_cast<double>(plotBottom) - t * static_cast<double>(plotBottom - plotTop));
 }
 
+float timeOfDayToCurveY(double timeOfDay, double minVal, double maxVal, float plotTop, float plotBottom) {
+    double const span = std::max(1.0, maxVal - minVal);
+    double const t    = std::clamp((timeOfDay - minVal) / span, 0.0, 1.0);
+    return static_cast<float>(static_cast<double>(plotBottom) - t * static_cast<double>(plotBottom - plotTop));
+}
+
+std::string formatMinecraftClock(int ticks) {
+    int const clamped      = std::max(0, ticks);
+    int const day          = clamped / state::editing::model::DayCycleTicks;
+    int const tickInDay    = clamped % state::editing::model::DayCycleTicks;
+    int const totalMinutes = ((tickInDay * 1440) / state::editing::model::DayCycleTicks + 360) % 1440;
+    int const hour         = totalMinutes / 60;
+    int const minute       = totalMinutes % 60;
+    char      buf[32]{};
+    if (day > 0) {
+        std::snprintf(buf, sizeof(buf), "+%dd %02d:%02d", day, hour, minute);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%02d:%02d", hour, minute);
+    }
+    return std::string(buf);
+}
+
 std::string interpolationTypeLabel(state::editing::model::CameraInterpolationType type) {
     using Type = state::editing::model::CameraInterpolationType;
     switch (type) {
@@ -518,6 +546,63 @@ void drawDashedHorizontalLine(
     }
 }
 
+ImU32 weatherModeColor(state::editing::model::WeatherOverride mode) {
+    using Weather = state::editing::model::WeatherOverride;
+    switch (mode) {
+    case Weather::Recorded:
+        return IM_COL32(0x7c, 0x86, 0x94, 0xff);
+    case Weather::Clear:
+        return IM_COL32(0xee, 0xb6, 0x44, 0xff);
+    case Weather::Overcast:
+        return IM_COL32(0x8a, 0x9c, 0xb0, 0xff);
+    case Weather::Rain:
+        return IM_COL32(0x4a, 0x98, 0xe8, 0xff);
+    case Weather::Snow:
+        return IM_COL32(0x98, 0xdc, 0xf4, 0xff);
+    case Weather::Thunder:
+        return IM_COL32(0x9c, 0x76, 0xe8, 0xff);
+    }
+    return kWeatherAccent;
+}
+
+char const* weatherModeIcon(state::editing::model::WeatherOverride mode) {
+    using Weather = state::editing::model::WeatherOverride;
+    switch (mode) {
+    case Weather::Recorded:
+        return ICON_WORLD;
+    case Weather::Clear:
+        return ICON_WEATHER_CLEAR;
+    case Weather::Overcast:
+        return ICON_WEATHER_OVERCAST;
+    case Weather::Rain:
+        return ICON_WEATHER_RAIN;
+    case Weather::Snow:
+        return ICON_WEATHER_SNOW;
+    case Weather::Thunder:
+        return ICON_WEATHER_THUNDER;
+    }
+    return ICON_WEATHER;
+}
+
+std::string weatherModeLabel(state::editing::model::WeatherOverride mode) {
+    using Weather = state::editing::model::WeatherOverride;
+    switch (mode) {
+    case Weather::Recorded:
+        return "playback.refactorEditor.worldEnv.weatherRecorded"_tr();
+    case Weather::Clear:
+        return "playback.refactorEditor.worldEnv.weatherClear"_tr();
+    case Weather::Overcast:
+        return "playback.refactorEditor.worldEnv.weatherOvercast"_tr();
+    case Weather::Rain:
+        return "playback.refactorEditor.worldEnv.weatherRain"_tr();
+    case Weather::Snow:
+        return "playback.refactorEditor.worldEnv.weatherSnow"_tr();
+    case Weather::Thunder:
+        return "playback.refactorEditor.worldEnv.weatherThunder"_tr();
+    }
+    return "playback.refactorEditor.worldEnv.weatherRecorded"_tr();
+}
+
 } // namespace
 
 void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScale, float horizontalScroll) {
@@ -540,6 +625,16 @@ void TimelinePanel::setViewPreferences(float trackListWidthRatio, float zoomScal
     mDraggingTimelapseKeyframeOriginTick = -1;
     mDraggingTimelapseKeyframeTick       = -1;
     mDraggingTimelapseKeyframeMoved      = false;
+    mDraggingTimeOfDayKeyframeOriginTick = -1;
+    mDraggingTimeOfDayKeyframeTick       = -1;
+    mDraggingTimeOfDayKeyframeMoved      = false;
+    mTimeOfDayGroupDrag                  = false;
+    mTimeOfDayGroupDragDelta             = 0;
+    mDraggingWeatherKeyframeOriginTick   = -1;
+    mDraggingWeatherKeyframeTick         = -1;
+    mDraggingWeatherKeyframeMoved        = false;
+    mWeatherGroupDrag                    = false;
+    mWeatherGroupDragDelta               = 0;
     mDraggingAudioTrackId.clear();
     mDraggingAudioClipId.clear();
     mDraggingAudioOriginTick = -1;
@@ -571,6 +666,20 @@ void TimelinePanel::seekRelative(PanelContext const& ctx, int tickDelta) {
     submitSeek(ctx, baseTick + tickDelta);
 }
 
+void TimelinePanel::seekSmartEdge(PanelContext const& ctx, bool toEnd) {
+    int const baseTick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+    seekTo(
+        ctx,
+        state::editing::TimelineNavigation::resolveSmartEdgeTick(
+            baseTick,
+            ctx.state.totalTicks,
+            ctx.commands.exportStartTick(),
+            ctx.commands.exportEndTick(),
+            toEnd
+        )
+    );
+}
+
 void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward) {
     auto const& state   = ctx.state;
     auto const  project = state.project;
@@ -589,6 +698,10 @@ void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward)
 
     consider(0);
     consider(state.totalTicks);
+    int const exportIn  = ctx.commands.exportStartTick();
+    int const exportOut = ctx.commands.exportEndTick();
+    if (exportIn > 0 && exportIn < state.totalTicks) consider(exportIn);
+    if (exportOut > 0 && exportOut < state.totalTicks) consider(exportOut);
     for (auto const& camera : project->cameras) {
         for (auto const& [tick, _] : camera.keysByTick) consider(tick);
         for (auto const& clip : camera.clips) {
@@ -600,6 +713,8 @@ void TimelinePanel::seekAdjacentEditPoint(PanelContext const& ctx, bool forward)
     for (auto const& [tick, _] : project->speedTrack.keysByTick) consider(tick);
     for (auto const& [tick, _] : project->freezeTrack.keysByTick) consider(tick);
     for (auto const& [tick, _] : project->timelapseTrack.keysByTick) consider(tick);
+    for (auto const& [tick, _] : project->timeOfDayTrack.keysByTick) consider(tick);
+    for (auto const& [tick, _] : project->weatherTrack.keysByTick) consider(tick);
     for (auto const& audioTrack : project->audioTracks) {
         for (auto const& audioClip : audioTrack.clips) consider(audioClip.startTick);
     }
@@ -641,6 +756,22 @@ bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
             std::max(0, ctx.state.totalTicks)
         );
         return addTimelapseKeyframeAt(ctx, tick);
+    }
+    if (project && (ctx.selection.isTimeOfDayTrackSelected() || !ctx.selection.selectedTimeOfDayKeyframes().empty())) {
+        int const tick = std::clamp(
+            mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick,
+            0,
+            std::max(0, ctx.state.totalTicks)
+        );
+        return addTimeOfDayKeyframeAt(ctx, tick);
+    }
+    if (project && (ctx.selection.isWeatherTrackSelected() || !ctx.selection.selectedWeatherKeyframes().empty())) {
+        int const tick = std::clamp(
+            mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick,
+            0,
+            std::max(0, ctx.state.totalTicks)
+        );
+        return addWeatherKeyframeAt(ctx, tick);
     }
 
     std::string cameraId = resolveKeyframeTargetCamera(ctx);
@@ -738,6 +869,30 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
         if (project->timelapseTrack.locked) return false;
         action.type = EditorActionType::DeleteTimelapseKeyframe;
         action.tick = *timelapseTick;
+    } else if (ctx.selection.isTimeOfDayTrackSelected()) {
+        if (!project->timeOfDayTrack.isVisible() || project->timeOfDayTrack.locked) return false;
+        action.type = EditorActionType::RemoveTimeOfDayTrack;
+    } else if (auto const todTicks = ctx.selection.selectedTimeOfDayKeyframes(); !todTicks.empty()) {
+        if (project->timeOfDayTrack.locked) return false;
+        if (todTicks.size() > 1) {
+            action.type  = EditorActionType::RemoveTimeOfDayKeyframes;
+            action.ticks = todTicks;
+        } else {
+            action.type = EditorActionType::RemoveTimeOfDayKeyframe;
+            action.tick = todTicks.front();
+        }
+    } else if (ctx.selection.isWeatherTrackSelected()) {
+        if (!project->weatherTrack.isVisible() || project->weatherTrack.locked) return false;
+        action.type = EditorActionType::RemoveWeatherTrack;
+    } else if (auto const weatherTicks = ctx.selection.selectedWeatherKeyframes(); !weatherTicks.empty()) {
+        if (project->weatherTrack.locked) return false;
+        if (weatherTicks.size() > 1) {
+            action.type  = EditorActionType::RemoveWeatherKeyframes;
+            action.ticks = weatherTicks;
+        } else {
+            action.type = EditorActionType::RemoveWeatherKeyframe;
+            action.tick = weatherTicks.front();
+        }
     } else if (auto const audioClip = ctx.selection.selectedAudioClip()) {
         auto const* track = state::editing::ClipOps::findAudioTrack(*project, audioClip->trackId);
         if (!track || track->locked || !state::editing::ClipOps::findAudioClip(*track, audioClip->clipId)) {
@@ -763,6 +918,24 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
 bool TimelinePanel::selectAllKeyframes(PanelContext const& ctx) {
     auto const project = ctx.state.project;
     if (!project) return false;
+    if ((ctx.selection.isTimeOfDayTrackSelected() || !ctx.selection.selectedTimeOfDayKeyframes().empty())
+        && !project->timeOfDayTrack.locked && !project->timeOfDayTrack.keysByTick.empty()) {
+        std::vector<int> ticks;
+        ticks.reserve(project->timeOfDayTrack.keysByTick.size());
+        for (auto const& [tick, _] : project->timeOfDayTrack.keysByTick) ticks.push_back(tick);
+        if (ticks.size() == 1) ctx.selection.selectTimeOfDayKeyframe(ticks.front());
+        else ctx.selection.selectTimeOfDayKeyframes(std::move(ticks));
+        return true;
+    }
+    if ((ctx.selection.isWeatherTrackSelected() || !ctx.selection.selectedWeatherKeyframes().empty())
+        && !project->weatherTrack.locked && !project->weatherTrack.keysByTick.empty()) {
+        std::vector<int> ticks;
+        ticks.reserve(project->weatherTrack.keysByTick.size());
+        for (auto const& [tick, _] : project->weatherTrack.keysByTick) ticks.push_back(tick);
+        if (ticks.size() == 1) ctx.selection.selectWeatherKeyframe(ticks.front());
+        else ctx.selection.selectWeatherKeyframes(std::move(ticks));
+        return true;
+    }
     // Locked tracks stay out so a group move is never rejected because of them.
     std::vector<state::editing::model::SelectedKeyframe> keys;
     for (auto const& camera : project->cameras) {
@@ -878,6 +1051,63 @@ bool TimelinePanel::addTimelapseKeyframeAt(PanelContext const& ctx, int tick) {
     return true;
 }
 
+bool TimelinePanel::addTimeOfDayKeyframeAt(PanelContext const& ctx, int tick) {
+    auto const project = ctx.state.project;
+    if (!project || project->timeOfDayTrack.locked) return false;
+    tick = std::clamp(tick, 0, std::max(0, ctx.state.totalTicks));
+    if (project->timeOfDayTrack.keysByTick.contains(tick)) return false;
+    std::optional<double> sampled;
+    if (!project->timeOfDayTrack.keysByTick.empty()) {
+        if (project->timeOfDayTrack.enabled) {
+            sampled = keyframe::evaluateTimeOfDayAt(project->timeOfDayTrack, static_cast<double>(tick));
+        } else {
+            auto enabledTrack    = project->timeOfDayTrack;
+            enabledTrack.enabled = true;
+            sampled              = keyframe::evaluateTimeOfDayAt(enabledTrack, static_cast<double>(tick));
+        }
+    } else {
+        sampled = keyframe::resolveEffectiveTimeOfDay(*project, static_cast<double>(tick));
+    }
+    int const timeOfDay =
+        sampled ? state::editing::model::clampTimeOfDayTicks(static_cast<int>(std::llround(*sampled))) : 6000;
+    EditorAction action{EditorActionType::AddTimeOfDayKeyframe};
+    action.tick          = tick;
+    action.secondaryTick = timeOfDay;
+    action.kind          = static_cast<int>(state::editing::model::CameraInterpolationType::Linear);
+    ctx.submitAction(std::move(action));
+    queueTimeOfDayKeyframeSelection(tick);
+    return true;
+}
+
+bool TimelinePanel::addWeatherKeyframeAt(PanelContext const& ctx, int tick) {
+    auto const project = ctx.state.project;
+    if (!project || project->weatherTrack.locked) return false;
+    tick = std::clamp(tick, 0, std::max(0, ctx.state.totalTicks));
+    if (project->weatherTrack.keysByTick.contains(tick)) return false;
+
+    state::editing::model::WeatherOverride weather = state::editing::model::WeatherOverride::Rain;
+    if (!project->weatherTrack.keysByTick.empty()) {
+        std::optional<state::editing::model::WeatherOverride> sampled;
+        if (project->weatherTrack.enabled) {
+            sampled = keyframe::evaluateWeatherAt(project->weatherTrack, static_cast<double>(tick));
+        } else {
+            auto enabledTrack    = project->weatherTrack;
+            enabledTrack.enabled = true;
+            sampled              = keyframe::evaluateWeatherAt(enabledTrack, static_cast<double>(tick));
+        }
+        weather = sampled ? *sampled : project->weatherTrack.keysByTick.begin()->second.weather;
+    } else if (project->weatherOverride != state::editing::model::WeatherOverride::Recorded) {
+        weather = project->weatherOverride;
+    }
+
+    EditorAction action{EditorActionType::AddWeatherKeyframe};
+    action.tick = tick;
+    action.kind = static_cast<int>(weather);
+    ctx.submitAction(std::move(action));
+    queueWeatherKeyframeSelection(tick);
+    return true;
+}
+
 bool TimelinePanel::promptAndAddAudioClip(PanelContext const& ctx, std::string const& trackId, int tick) {
     auto const project = ctx.state.project;
     if (!project) return false;
@@ -962,7 +1192,9 @@ int TimelinePanel::snapToEditPoints(
     std::optional<int>                                  skipSpeedKeyTick,
     std::optional<int>                                  skipFreezeKeyTick,
     std::optional<int>                                  skipTimelapseKeyTick,
-    std::string_view                                    skipAudioClipId
+    std::string_view                                    skipAudioClipId,
+    std::function<bool(int)> const&                     skipTimeOfDayKey,
+    std::function<bool(int)> const&                     skipWeatherKey
 ) {
     auto const project = ctx.state.project;
     if (!project || pixelsPerTick <= 0.0f) return tick;
@@ -1001,6 +1233,14 @@ int TimelinePanel::snapToEditPoints(
         if (skipTimelapseKeyTick && *skipTimelapseKeyTick == timelapseTick) continue;
         consider(timelapseTick);
     }
+    for (auto const& [todTick, _] : project->timeOfDayTrack.keysByTick) {
+        if (skipTimeOfDayKey && skipTimeOfDayKey(todTick)) continue;
+        consider(todTick);
+    }
+    for (auto const& [weatherTick, _] : project->weatherTrack.keysByTick) {
+        if (skipWeatherKey && skipWeatherKey(weatherTick)) continue;
+        consider(weatherTick);
+    }
     for (auto const& audioTrack : project->audioTracks) {
         for (auto const& audioClip : audioTrack.clips) {
             if (!skipAudioClipId.empty() && audioClip.id == skipAudioClipId) continue;
@@ -1029,6 +1269,12 @@ void TimelinePanel::clearPendingSelection() {
     mPendingFreezeKeyframeSelection.reset();
     mPendingTimelapseTrackSelection = false;
     mPendingTimelapseKeyframeSelection.reset();
+    mPendingTimeOfDayTrackSelection = false;
+    mPendingTimeOfDayKeyframeSelection.reset();
+    mPendingTimeOfDayKeyframesSelection.clear();
+    mPendingWeatherTrackSelection = false;
+    mPendingWeatherKeyframeSelection.reset();
+    mPendingWeatherKeyframesSelection.clear();
     mPendingAudioTrackSelection.clear();
     mPendingAudioClipTrackId.clear();
     mPendingAudioClipId.clear();
@@ -1081,6 +1327,42 @@ void TimelinePanel::queueTimelapseKeyframeSelection(int tick) {
     clearPendingSelection();
     mPendingTimelapseKeyframeSelection = tick;
     mPendingSelectionFrames            = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueTimeOfDayTrackSelection() {
+    clearPendingSelection();
+    mPendingTimeOfDayTrackSelection = true;
+    mPendingSelectionFrames         = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueTimeOfDayKeyframeSelection(int tick) {
+    clearPendingSelection();
+    mPendingTimeOfDayKeyframeSelection = tick;
+    mPendingSelectionFrames            = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueTimeOfDayKeyframesSelection(std::vector<int> ticks) {
+    clearPendingSelection();
+    mPendingTimeOfDayKeyframesSelection = std::move(ticks);
+    mPendingSelectionFrames             = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueWeatherTrackSelection() {
+    clearPendingSelection();
+    mPendingWeatherTrackSelection = true;
+    mPendingSelectionFrames       = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueWeatherKeyframeSelection(int tick) {
+    clearPendingSelection();
+    mPendingWeatherKeyframeSelection = tick;
+    mPendingSelectionFrames          = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueWeatherKeyframesSelection(std::vector<int> ticks) {
+    clearPendingSelection();
+    mPendingWeatherKeyframesSelection = std::move(ticks);
+    mPendingSelectionFrames           = kPendingSelectionFrames;
 }
 
 void TimelinePanel::queueAudioTrackSelection(std::string trackId) {
@@ -1136,6 +1418,46 @@ void TimelinePanel::applyPendingSelection(PanelContext const& ctx) {
     } else if (mPendingTimelapseKeyframeSelection.has_value()) {
         if (project->timelapseTrack.keysByTick.contains(*mPendingTimelapseKeyframeSelection)) {
             ctx.selection.selectTimelapseKeyframe(*mPendingTimelapseKeyframeSelection);
+            done = true;
+        }
+    } else if (mPendingTimeOfDayTrackSelection) {
+        if (project->timeOfDayTrack.isVisible()) {
+            ctx.selection.selectTimeOfDayTrack();
+            done = true;
+        }
+    } else if (mPendingTimeOfDayKeyframeSelection.has_value()) {
+        if (project->timeOfDayTrack.keysByTick.contains(*mPendingTimeOfDayKeyframeSelection)) {
+            ctx.selection.selectTimeOfDayKeyframe(*mPendingTimeOfDayKeyframeSelection);
+            done = true;
+        }
+    } else if (!mPendingTimeOfDayKeyframesSelection.empty()) {
+        std::vector<int> present;
+        for (int const tick : mPendingTimeOfDayKeyframesSelection) {
+            if (project->timeOfDayTrack.keysByTick.contains(tick)) present.push_back(tick);
+        }
+        if (!present.empty() && (present.size() == mPendingTimeOfDayKeyframesSelection.size() || lastChance)) {
+            if (present.size() == 1) ctx.selection.selectTimeOfDayKeyframe(present.front());
+            else ctx.selection.selectTimeOfDayKeyframes(std::move(present));
+            done = true;
+        }
+    } else if (mPendingWeatherTrackSelection) {
+        if (project->weatherTrack.isVisible()) {
+            ctx.selection.selectWeatherTrack();
+            done = true;
+        }
+    } else if (mPendingWeatherKeyframeSelection.has_value()) {
+        if (project->weatherTrack.keysByTick.contains(*mPendingWeatherKeyframeSelection)) {
+            ctx.selection.selectWeatherKeyframe(*mPendingWeatherKeyframeSelection);
+            done = true;
+        }
+    } else if (!mPendingWeatherKeyframesSelection.empty()) {
+        std::vector<int> present;
+        for (int const tick : mPendingWeatherKeyframesSelection) {
+            if (project->weatherTrack.keysByTick.contains(tick)) present.push_back(tick);
+        }
+        if (!present.empty() && (present.size() == mPendingWeatherKeyframesSelection.size() || lastChance)) {
+            if (present.size() == 1) ctx.selection.selectWeatherKeyframe(present.front());
+            else ctx.selection.selectWeatherKeyframes(std::move(present));
             done = true;
         }
     } else if (!mPendingAudioTrackSelection.empty()) {
@@ -1258,8 +1580,17 @@ float TimelinePanel::drawTransportGroup(
     char        speedLabel[24]{};
     std::snprintf(speedLabel, sizeof(speedLabel), "%.2fx", state.playbackSpeed);
 
-    float const speedWidth  = widgets::dropdownChipWidth(speedLabel);
-    float const groupWidth  = unit * 5.0f + 4.0f + divGap * 2.0f + 1.0f + speedWidth + chipGap + unit;
+    int const   total      = std::max(0, state.totalTicks);
+    int const   exportIn   = ctx.commands.exportStartTick();
+    int const   exportOut  = ctx.commands.exportEndTick();
+    bool const  hasIn      = total > 0 && exportIn > 0 && (exportOut < 0 || exportIn < exportOut);
+    bool const  hasOut     = total > 0 && exportOut >= 0 && exportOut < total && (exportIn < 0 || exportOut > exportIn);
+    bool const  ranged     = hasIn || hasOut;
+    float const speedWidth = widgets::dropdownChipWidth(speedLabel);
+    float const ioBtnW     = std::round(unit + 2.0f * scale);
+    float const ioPillW    = ioBtnW * 2.0f + 1.0f;
+    float const groupWidth =
+        unit * 5.0f + 4.0f + divGap * 2.0f + 1.0f + speedWidth + chipGap + unit + divGap * 2.0f + 1.0f + ioPillW;
     float const idealStartX = (width - groupWidth) * 0.5f;
     float const maxStartX   = maxRightX - groupWidth;
     float const startX =
@@ -1272,7 +1603,7 @@ float TimelinePanel::drawTransportGroup(
             VectorIcon::SkipStart,
             "playback.refactorEditor.timeline.skipToStart"_tr().c_str()
         ))
-        seekTo(ctx, 0);
+        seekSmartEdge(ctx, false);
     ImGui::SameLine(0.0f, 1.0f);
     if (widgets::vectorIconButton(
             "transport-prev",
@@ -1303,7 +1634,7 @@ float TimelinePanel::drawTransportGroup(
             VectorIcon::SkipEnd,
             "playback.refactorEditor.timeline.skipToEnd"_tr().c_str()
         ))
-        seekTo(ctx, state.totalTicks);
+        seekSmartEdge(ctx, true);
 
     ImVec2 const childPos = ImGui::GetWindowPos();
     float const  divX     = childPos.x + startX + unit * 5.0f + 4.0f + divGap;
@@ -1345,6 +1676,181 @@ float TimelinePanel::drawTransportGroup(
         )) {
         ctx.commands.toggleViewportMaximized();
     }
+
+    float const div2X =
+        childPos.x + startX + unit * 5.0f + 4.0f + divGap * 2.0f + 1.0f + speedWidth + chipGap + unit + divGap;
+    ImGui::GetWindowDrawList()
+        ->AddLine({div2X, childPos.y + divPad}, {div2X, childPos.y + height - divPad}, theme::kLine, 1.0f);
+
+    std::string inTooltip = "playback.refactorEditor.timeline.setInPoint"_tr() + " ("
+                          + input::KeyMap::displayString(input::EditorKeybind::MarkExportIn) + ")";
+    if (hasIn) {
+        inTooltip += "\n" + "playback.refactorEditor.timeline.currentInPoint"_tr(widgets::formatTick(exportIn));
+    }
+    inTooltip += "\n" + "playback.refactorEditor.timeline.ioButtonHint"_tr();
+
+    std::string outTooltip = "playback.refactorEditor.timeline.setOutPoint"_tr() + " ("
+                           + input::KeyMap::displayString(input::EditorKeybind::MarkExportOut) + ")";
+    if (hasOut) {
+        outTooltip += "\n" + "playback.refactorEditor.timeline.currentOutPoint"_tr(widgets::formatTick(exportOut));
+    }
+    outTooltip += "\n" + "playback.refactorEditor.timeline.ioButtonHint"_tr();
+
+    ImGui::SameLine(0.0f, divGap * 2.0f + 1.0f);
+    {
+        auto*        ioDrawList = ImGui::GetWindowDrawList();
+        ImVec2 const pillOrigin = ImGui::GetCursorScreenPos();
+        ImVec2 const pillMax{pillOrigin.x + ioPillW, pillOrigin.y + unit};
+        float const  rounding = theme::kButtonRounding * scale;
+        float const  midX     = pillOrigin.x + ioBtnW;
+
+        // Shared recessed capsule matching the speed dropdown chip beside it.
+        ioDrawList->AddRectFilled(pillOrigin, pillMax, theme::kInputBg, rounding);
+
+        auto const drawIoHalf = [&](char const*  id,
+                                    ImVec2 const halfMin,
+                                    ImVec2 const halfMax,
+                                    ImDrawFlags  cornerFlags,
+                                    VectorIcon   icon,
+                                    bool         active,
+                                    char const*  tooltip) {
+            ImGui::SetCursorScreenPos(halfMin);
+            ImGui::BeginDisabled(total <= 0);
+            bool const clicked = ImGui::InvisibleButton(id, {halfMax.x - halfMin.x, halfMax.y - halfMin.y});
+            bool const hovered = total > 0 && ImGui::IsItemHovered();
+            bool const held    = total > 0 && ImGui::IsItemActive();
+            ImGui::EndDisabled();
+
+            if (active) {
+                ImU32 const fill = theme::withAlpha(theme::kWarning, held ? 0x62 : hovered ? 0x48 : 0x2c);
+                ioDrawList->AddRectFilled(halfMin, halfMax, fill, rounding, cornerFlags);
+            } else if (hovered || held) {
+                ioDrawList->AddRectFilled(
+                    halfMin,
+                    halfMax,
+                    held ? theme::kInputBgActive : theme::kInputBgHover,
+                    rounding,
+                    cornerFlags
+                );
+            }
+
+            ImU32 const iconColor = total <= 0 ? theme::kTextDim
+                                  : active     ? (hovered ? theme::kIconHighlight : theme::kWarning)
+                                               : (hovered ? theme::kIconHighlight : theme::kIconInactive);
+            widgets::drawVectorIcon(
+                ioDrawList,
+                {(halfMin.x + halfMax.x) * 0.5f, (halfMin.y + halfMax.y) * 0.5f},
+                unit,
+                iconColor,
+                icon
+            );
+            widgets::itemTooltip(tooltip);
+            return std::pair{clicked, hovered};
+        };
+
+        auto const [inClicked, inHovered] = drawIoHalf(
+            "transport-mark-in",
+            pillOrigin,
+            {midX, pillMax.y},
+            ImDrawFlags_RoundCornersLeft,
+            VectorIcon::MarkIn,
+            hasIn,
+            inTooltip.c_str()
+        );
+        if (inClicked) {
+            if (ImGui::GetIO().KeyShift) {
+                seekTo(
+                    ctx,
+                    state::editing::TimelineNavigation::resolveExportPointTick(total, exportIn, exportOut, false)
+                );
+            } else {
+                ctx.commands.markExportPoint(true);
+            }
+        }
+        if (total > 0 && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+            widgets::openAnchoredPopup("##transport-io-menu");
+
+        auto const [outClicked, outHovered] = drawIoHalf(
+            "transport-mark-out",
+            {midX + 1.0f, pillOrigin.y},
+            pillMax,
+            ImDrawFlags_RoundCornersRight,
+            VectorIcon::MarkOut,
+            hasOut,
+            outTooltip.c_str()
+        );
+        if (outClicked) {
+            if (ImGui::GetIO().KeyShift) {
+                seekTo(
+                    ctx,
+                    state::editing::TimelineNavigation::resolveExportPointTick(total, exportIn, exportOut, true)
+                );
+            } else {
+                ctx.commands.markExportPoint(false);
+            }
+        }
+        if (total > 0 && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+            widgets::openAnchoredPopup("##transport-io-menu");
+
+        // Outer pill border and crisp center separator.
+        ImU32 const outerBorder = (inHovered || outHovered)
+                                    ? theme::kButtonBorder
+                                    : (ranged ? theme::withAlpha(theme::kWarning, 0x70) : theme::kFineDivider);
+        ioDrawList->AddRect(pillOrigin, pillMax, outerBorder, rounding, 0, 1.0f);
+        ioDrawList->AddLine(
+            {midX + 0.5f, pillOrigin.y + 3.0f * scale},
+            {midX + 0.5f, pillMax.y - 3.0f * scale},
+            theme::kFineDivider,
+            1.0f
+        );
+    }
+
+    if (widgets::beginAnchoredPopup("##transport-io-menu")) {
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.timeline.setInPoint"_tr().c_str(),
+                input::KeyMap::displayString(input::EditorKeybind::MarkExportIn).c_str(),
+                false,
+                total > 0
+            )) {
+            ctx.commands.markExportPoint(true);
+        }
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.timeline.setOutPoint"_tr().c_str(),
+                input::KeyMap::displayString(input::EditorKeybind::MarkExportOut).c_str(),
+                false,
+                total > 0
+            )) {
+            ctx.commands.markExportPoint(false);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.timeline.jumpToInPoint"_tr().c_str(),
+                input::KeyMap::displayString(input::EditorKeybind::JumpExportIn).c_str(),
+                false,
+                total > 0
+            )) {
+            seekTo(ctx, state::editing::TimelineNavigation::resolveExportPointTick(total, exportIn, exportOut, false));
+        }
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.timeline.jumpToOutPoint"_tr().c_str(),
+                input::KeyMap::displayString(input::EditorKeybind::JumpExportOut).c_str(),
+                false,
+                total > 0
+            )) {
+            seekTo(ctx, state::editing::TimelineNavigation::resolveExportPointTick(total, exportIn, exportOut, true));
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.timeline.clearExportRange"_tr().c_str(),
+                input::KeyMap::displayString(input::EditorKeybind::ClearExportRange).c_str(),
+                false,
+                ranged
+            )) {
+            ctx.commands.clearExportRange();
+        }
+        widgets::endAnchoredPopup();
+    }
+
     return startX;
 }
 
@@ -1490,7 +1996,9 @@ void TimelinePanel::drawSceneTabs(PanelContext const& ctx, Layout const& layout,
 
     float const addSize  = std::max(18.0f * uiScale, height - 4.0f * uiScale);
     float const addPad   = metrics::gutter() * 0.5f;
-    float const maxTabsW = std::max(40.0f, width - addSize - addPad * 2.0f);
+    float const helpSize = addSize;
+    float const helpPad  = metrics::gutter() * 0.75f;
+    float const maxTabsW = std::max(40.0f, width - addSize - addPad * 2.0f - helpSize - helpPad * 2.0f);
     float const tabsW    = std::min(totalTabsW, maxTabsW);
 
     ImGui::SetCursorScreenPos({layout.fullMin.x, top});
@@ -1623,8 +2131,11 @@ void TimelinePanel::drawSceneTabs(PanelContext const& ctx, Layout const& layout,
     );
     widgets::itemTooltip("playback.refactorEditor.timeline.addScene"_tr().c_str());
 
-    float const addEndX = layout.fullMin.x + tabsW + addPad + addSize + addPad;
-    float const remainW = layout.fullMax.x - addEndX;
+    float const addEndX      = layout.fullMin.x + tabsW + addPad + addSize + addPad;
+    float const helpX        = layout.fullMax.x - helpPad - helpSize;
+    float const helpY        = top + (height - helpSize) * 0.5f;
+    float const summaryRight = helpX - 6.0f * uiScale;
+    float const remainW      = summaryRight - addEndX;
     if (remainW >= 140.0f * uiScale) {
         static std::vector<int> const emptyTransitions;
         auto const&                   transitions =
@@ -1671,10 +2182,9 @@ void TimelinePanel::drawSceneTabs(PanelContext const& ctx, Layout const& layout,
         float const   summaryFont = std::max(11.0f, std::round(metrics::font() * 0.86f));
         ImFont* const font        = ImGui::GetFont();
         ImVec2 const  summarySize = font->CalcTextSizeA(summaryFont, FLT_MAX, 0.0f, summaryText.c_str());
-        float const   textRight   = layout.fullMax.x - metrics::gutter();
-        float const   textX       = std::max(addEndX, textRight - summarySize.x);
+        float const   textX       = std::max(addEndX, summaryRight - summarySize.x);
         float const   textY       = std::floor((top + bottom - summarySize.y) * 0.5f + 0.5f);
-        ImVec4 const  clipRect{addEndX, top, textRight, bottom};
+        ImVec4 const  clipRect{addEndX, top, summaryRight, bottom};
         drawList->AddText(
             font,
             summaryFont,
@@ -1685,6 +2195,29 @@ void TimelinePanel::drawSceneTabs(PanelContext const& ctx, Layout const& layout,
             0.0f,
             &clipRect
         );
+    }
+
+    if (helpX >= addEndX) {
+        ImVec2 const helpPos{helpX, helpY};
+        ImGui::SetCursorScreenPos(helpPos);
+        ImGui::InvisibleButton("##timeline-help", {helpSize, helpSize});
+        bool const helpHovered = allowInput && ImGui::IsItemHovered();
+        if (helpHovered) {
+            drawList->AddRectFilled(
+                helpPos,
+                {helpPos.x + helpSize, helpPos.y + helpSize},
+                theme::withAlpha(theme::kButtonHover, 0xa0),
+                3.0f * uiScale
+            );
+        }
+        drawCompactIconAtCentre(
+            drawList,
+            ICON_HELP,
+            {helpPos.x + helpSize * 0.5f, helpPos.y + helpSize * 0.5f},
+            std::round(metrics::font() * 0.90f),
+            helpHovered ? theme::kIconHighlight : theme::kTextDim
+        );
+        widgets::itemTooltip("playback.refactorEditor.timeline.transportHelp"_tr().c_str());
     }
 }
 
@@ -1981,6 +2514,12 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     bool   openTimelapseMenu = false;
     ImVec2 timelapseMenuMin{};
     ImVec2 timelapseMenuMax{};
+    bool   openTimeOfDayMenu = false;
+    ImVec2 timeOfDayMenuMin{};
+    ImVec2 timeOfDayMenuMax{};
+    bool   openWeatherMenu = false;
+    ImVec2 weatherMenuMin{};
+    ImVec2 weatherMenuMax{};
     bool   openAudioMenu = false;
     ImVec2 audioMenuMin{};
     ImVec2 audioMenuMax{};
@@ -1994,14 +2533,20 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         bool const isSpeedRow     = row.kind == TrackRowKind::Speed;
         bool const isFreezeRow    = row.kind == TrackRowKind::Freeze;
         bool const isTimelapseRow = row.kind == TrackRowKind::Timelapse;
+        bool const isTimeOfDayRow = row.kind == TrackRowKind::TimeOfDay;
+        bool const isWeatherRow   = row.kind == TrackRowKind::Weather;
         bool const isAudioRow     = row.kind == TrackRowKind::Audio;
-        bool const isSpecialRow   = isSpeedRow || isFreezeRow || isTimelapseRow;
+        bool const isSpecialRow   = isSpeedRow || isFreezeRow || isTimelapseRow || isTimeOfDayRow || isWeatherRow;
         bool const selected =
             isSpeedRow ? (ctx.selection.isSpeedTrackSelected() || ctx.selection.selectedSpeedKeyframe().has_value())
             : isFreezeRow
                 ? (ctx.selection.isFreezeTrackSelected() || ctx.selection.selectedFreezeKeyframe().has_value())
             : isTimelapseRow
                 ? (ctx.selection.isTimelapseTrackSelected() || ctx.selection.selectedTimelapseKeyframe().has_value())
+            : isTimeOfDayRow
+                ? (ctx.selection.isTimeOfDayTrackSelected() || !ctx.selection.selectedTimeOfDayKeyframes().empty())
+            : isWeatherRow
+                ? (ctx.selection.isWeatherTrackSelected() || !ctx.selection.selectedWeatherKeyframes().empty())
             : isAudioRow ? ((selectedAudioTrackId && *selectedAudioTrackId == row.id)
                             || (selectedAudioClip && selectedAudioClip->trackId == row.id))
                          : (!row.cameraId.empty()
@@ -2031,6 +2576,8 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         ImU32 const baseSwatch = isSpeedRow     ? theme::kSpeedFast
                                : isFreezeRow    ? kFreezeAccent
                                : isTimelapseRow ? kTimelapseAccent
+                               : isTimeOfDayRow ? kTimeOfDayAccent
+                               : isWeatherRow   ? kWeatherAccent
                                : isAudioRow     ? kAudioAccent
                                                 : theme::trackColor(row.cameraIndex);
         ImU32 const swatch     = row.enabled ? baseSwatch : theme::kTrackDisabled;
@@ -2052,8 +2599,13 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 ? (row.enabled ? theme::kSpeedFast : theme::kTextDim)
                 : (isFreezeRow
                        ? (row.enabled ? kFreezeAccent : theme::kTextDim)
-                       : (isTimelapseRow ? (row.enabled ? kTimelapseAccent : theme::kTextDim)
-                                         : (isAudioRow ? (row.enabled ? kAudioAccent : theme::kTextDim) : textColor)));
+                       : (isTimelapseRow
+                              ? (row.enabled ? kTimelapseAccent : theme::kTextDim)
+                              : (isTimeOfDayRow
+                                     ? (row.enabled ? kTimeOfDayAccent : theme::kTextDim)
+                                     : (isWeatherRow ? (row.enabled ? kWeatherAccent : theme::kTextDim)
+                                                     : (isAudioRow ? (row.enabled ? kAudioAccent : theme::kTextDim)
+                                                                   : textColor)))));
         std::string const& label     = row.name;
         // Text centres on the fractional row, then the icon centres on the text's optical middle.
         float const rowCentre = (rowY + rowBottom) * 0.5f;
@@ -2061,9 +2613,14 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         float const iconBox   = metrics::iconGlyph();
         widgets::drawIconAtCentre(
             drawList,
-            isSpeedRow ? ICON_CHEVRONS_RIGHT
-                       : (isFreezeRow ? ICON_FREEZE
-                                      : (isTimelapseRow ? ICON_TIMELAPSE : (isAudioRow ? ICON_AUDIO : ICON_CAMERA))),
+            isSpeedRow
+                ? ICON_CHEVRONS_RIGHT
+                : (isFreezeRow ? ICON_FREEZE
+                               : (isTimelapseRow
+                                      ? ICON_TIMELAPSE
+                                      : (isTimeOfDayRow ? ICON_CLOCK
+                                                        : (isWeatherRow ? ICON_WEATHER
+                                                                        : (isAudioRow ? ICON_AUDIO : ICON_CAMERA))))),
             {labelX + iconBox * 0.5f, widgets::textInkCentre(textY, label.c_str())},
             iconColor
         );
@@ -2093,8 +2650,13 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
             isFreezeRow && project && !row.locked && !project->freezeTrack.keysByTick.contains(playheadTick);
         bool const canAddTimelapseKey =
             isTimelapseRow && project && !row.locked && !project->timelapseTrack.keysByTick.contains(playheadTick);
+        bool const canAddTimeOfDayKey =
+            isTimeOfDayRow && project && !row.locked && !project->timeOfDayTrack.keysByTick.contains(playheadTick);
+        bool const canAddWeatherKey =
+            isWeatherRow && project && !row.locked && !project->weatherTrack.keysByTick.contains(playheadTick);
         bool const canAddAudioClip = isAudioRow && project && !row.locked;
-        bool const canAddControl   = canAddSpeedKey || canAddFreezeKey || canAddTimelapseKey || canAddAudioClip;
+        bool const canAddControl   = canAddSpeedKey || canAddFreezeKey || canAddTimelapseKey || canAddTimeOfDayKey
+                                || canAddWeatherKey || canAddAudioClip;
         bool const addHovered =
             hasAddControl && allowInput && contains({addX, rowY}, {addX + controlWidth, rowBottom}, mouse);
         bool const muteHovered =
@@ -2105,6 +2667,8 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         if (addHovered) {
             widgets::hoverTooltip((isFreezeRow      ? "playback.refactorEditor.freeze.addKeyframeAtPlayhead"_tr()
                                    : isTimelapseRow ? "playback.refactorEditor.timelapse.addKeyframeAtPlayhead"_tr()
+                                   : isTimeOfDayRow ? "playback.refactorEditor.timeOfDay.addKeyframe"_tr()
+                                   : isWeatherRow   ? "playback.refactorEditor.weather.addKeyframeAtPlayhead"_tr()
                                    : isAudioRow     ? "playback.refactorEditor.audio.addAudioAtPlayhead"_tr()
                                                     : "playback.refactorEditor.speed.addKeyframeAtPlayhead"_tr())
                                       .c_str());
@@ -2135,6 +2699,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 addFreezeKeyframeAt(ctx, playheadTick);
             } else if (isTimelapseRow) {
                 addTimelapseKeyframeAt(ctx, playheadTick);
+            } else if (isTimeOfDayRow) {
+                addTimeOfDayKeyframeAt(ctx, playheadTick);
+            } else if (isWeatherRow) {
+                addWeatherKeyframeAt(ctx, playheadTick);
             } else if (isAudioRow) {
                 promptAndAddAudioClip(ctx, row.id, playheadTick);
             }
@@ -2155,6 +2723,14 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 ctx.submitAction(std::move(action));
             } else if (isTimelapseRow) {
                 EditorAction action{EditorActionType::SetTimelapseTrackEnabled};
+                action.value = !row.enabled;
+                ctx.submitAction(std::move(action));
+            } else if (isTimeOfDayRow) {
+                EditorAction action{EditorActionType::SetTimeOfDayTrackEnabled};
+                action.value = !row.enabled;
+                ctx.submitAction(std::move(action));
+            } else if (isWeatherRow) {
+                EditorAction action{EditorActionType::SetWeatherTrackEnabled};
                 action.value = !row.enabled;
                 ctx.submitAction(std::move(action));
             } else if (isAudioRow) {
@@ -2179,6 +2755,14 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 ctx.submitAction(std::move(action));
             } else if (isTimelapseRow) {
                 EditorAction action{EditorActionType::SetTimelapseTrackLocked};
+                action.value = !row.locked;
+                ctx.submitAction(std::move(action));
+            } else if (isTimeOfDayRow) {
+                EditorAction action{EditorActionType::SetTimeOfDayTrackLocked};
+                action.value = !row.locked;
+                ctx.submitAction(std::move(action));
+            } else if (isWeatherRow) {
+                EditorAction action{EditorActionType::SetWeatherTrackLocked};
                 action.value = !row.locked;
                 ctx.submitAction(std::move(action));
             } else if (isAudioRow) {
@@ -2266,6 +2850,26 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 timelapseMenuMin       = ImGui::GetItemRectMin();
                 timelapseMenuMax       = ImGui::GetItemRectMax();
                 openTimelapseMenu      = true;
+            }
+        } else if (isTimeOfDayRow) {
+            if (clicked && mouse.x < controlsLeft) {
+                ctx.selection.selectTimeOfDayTrack();
+            } else if (rowRightClicked && mouse.x < controlsLeft && mTrackDragCameraId.empty()) {
+                ctx.selection.selectTimeOfDayTrack();
+                mTimeOfDayLaneMenuTick = -1;
+                timeOfDayMenuMin       = ImGui::GetItemRectMin();
+                timeOfDayMenuMax       = ImGui::GetItemRectMax();
+                openTimeOfDayMenu      = true;
+            }
+        } else if (isWeatherRow) {
+            if (clicked && mouse.x < controlsLeft) {
+                ctx.selection.selectWeatherTrack();
+            } else if (rowRightClicked && mouse.x < controlsLeft && mTrackDragCameraId.empty()) {
+                ctx.selection.selectWeatherTrack();
+                mWeatherLaneMenuTick = -1;
+                weatherMenuMin       = ImGui::GetItemRectMin();
+                weatherMenuMax       = ImGui::GetItemRectMax();
+                openWeatherMenu      = true;
             }
         } else if (isAudioRow) {
             if (clicked && mouse.x < controlsLeft) {
@@ -2384,6 +2988,12 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     if (openTimelapseMenu) {
         widgets::openAnchoredPopup("##timeline-timelapse-menu", timelapseMenuMin, timelapseMenuMax);
     }
+    if (openTimeOfDayMenu) {
+        widgets::openAnchoredPopup("##timeline-time-of-day-menu", timeOfDayMenuMin, timeOfDayMenuMax);
+    }
+    if (openWeatherMenu) {
+        widgets::openAnchoredPopup("##weather-lane-menu", weatherMenuMin, weatherMenuMax);
+    }
     if (openAudioMenu) {
         widgets::openAnchoredPopup("##timeline-audio-menu", audioMenuMin, audioMenuMax);
     }
@@ -2501,9 +3111,11 @@ void TimelinePanel::drawExportRange(
         drawList->AddRectFilled({std::min(inner, tip), top}, {std::max(inner, tip), top + stem}, color);
         drawList->AddRectFilled({std::min(inner, tip), bottom - stem}, {std::max(inner, tip), bottom}, color);
         if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            mExportMarkerDrag  = dragMode;
-            mExportDragInTick  = inTick;
-            mExportDragOutTick = outTick;
+            mExportMarkerDrag            = dragMode;
+            mExportMarkerDragStartMouseX = mouse.x;
+            mExportMarkerDragMoved       = false;
+            mExportDragInTick            = inTick;
+            mExportDragOutTick           = outTick;
         }
         return hovered;
     };
@@ -2514,18 +3126,29 @@ void TimelinePanel::drawExportRange(
 
     if (mExportMarkerDrag == 0) return;
     if (!allowInput || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        int const finalIn  = mExportDragInTick;
-        int const finalOut = mExportDragOutTick;
-        mExportMarkerDrag  = 0;
-        mExportDragInTick  = -1;
-        mExportDragOutTick = -1;
-        if (finalIn <= 0 && finalOut >= total) {
-            ctx.commands.clearExportRange();
-        } else if (finalIn < finalOut && (finalIn != storedIn || finalOut != storedOut)) {
-            ctx.commands.setExportRange(finalIn, finalOut);
+        int const  mode        = mExportMarkerDrag;
+        bool const moved       = mExportMarkerDragMoved;
+        int const  finalIn     = mExportDragInTick;
+        int const  finalOut    = mExportDragOutTick;
+        mExportMarkerDrag      = 0;
+        mExportMarkerDragMoved = false;
+        mExportDragInTick      = -1;
+        mExportDragOutTick     = -1;
+        if (allowInput && !moved) {
+            seekTo(ctx, mode == 1 ? finalIn : finalOut);
+        } else if (moved) {
+            if (finalIn <= 0 && finalOut >= total) {
+                ctx.commands.clearExportRange();
+            } else if (finalIn < finalOut && (finalIn != storedIn || finalOut != storedOut)) {
+                ctx.commands.setExportRange(finalIn, finalOut);
+            }
         }
         return;
     }
+    if (!mExportMarkerDragMoved && std::abs(mouse.x - mExportMarkerDragStartMouseX) >= 3.0f) {
+        mExportMarkerDragMoved = true;
+    }
+    if (!mExportMarkerDragMoved) return;
     // Shift snaps to keyframes, markers and the playhead, matching the modifier used elsewhere on the timeline.
     int dragged = std::clamp(scale.tickAt(mouse.x), 0, total);
     if (ImGui::GetIO().KeyShift) {
@@ -2763,10 +3386,12 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
         bool const editable = !camera.locked;
         bool const occupied = camera.keysByTick.contains(tick);
         if (ImGui::MenuItem(
-                "playback.refactorEditor.timeline.addKeyframeHere"_tr().c_str(),
+                (occupied ? "playback.refactorEditor.timeline.overwriteKeyframeHere"_tr()
+                          : "playback.refactorEditor.timeline.addKeyframeHere"_tr())
+                    .c_str(),
                 nullptr,
                 false,
-                editable && !occupied
+                editable
             )) {
             EditorAction action{EditorActionType::AddCameraKeyframe};
             action.id   = camera.id;
@@ -3294,6 +3919,38 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                 ctx.commands.setExportRange(in, tick);
             }
         }
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.timeline.jumpToInPoint"_tr().c_str(),
+                input::KeyMap::displayString(input::EditorKeybind::JumpExportIn).c_str(),
+                false,
+                total > 0
+            )) {
+            seekTo(
+                ctx,
+                state::editing::TimelineNavigation::resolveExportPointTick(
+                    total,
+                    ctx.commands.exportStartTick(),
+                    ctx.commands.exportEndTick(),
+                    false
+                )
+            );
+        }
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.timeline.jumpToOutPoint"_tr().c_str(),
+                input::KeyMap::displayString(input::EditorKeybind::JumpExportOut).c_str(),
+                false,
+                total > 0
+            )) {
+            seekTo(
+                ctx,
+                state::editing::TimelineNavigation::resolveExportPointTick(
+                    total,
+                    ctx.commands.exportStartTick(),
+                    ctx.commands.exportEndTick(),
+                    true
+                )
+            );
+        }
         bool const ranged = ctx.commands.exportStartTick() > 0
                          || (ctx.commands.exportEndTick() >= 0 && ctx.commands.exportEndTick() < total);
         if (ImGui::MenuItem(
@@ -3450,6 +4107,20 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
         if (ImGui::MenuItem(timelapseItem.c_str(), nullptr, hasTimelapseTrack, !hasTimelapseTrack)) {
             ctx.submitAction({EditorActionType::AddTimelapseTrack});
             queueTimelapseTrackSelection();
+        }
+        bool const        hasTimeOfDayTrack = project && project->timeOfDayTrack.isVisible();
+        std::string const timeOfDayItem =
+            std::string(ICON_CLOCK) + "  " + "playback.refactorEditor.timeOfDay.addTrack"_tr();
+        if (ImGui::MenuItem(timeOfDayItem.c_str(), nullptr, hasTimeOfDayTrack, !hasTimeOfDayTrack)) {
+            ctx.submitAction({EditorActionType::AddTimeOfDayTrack});
+            queueTimeOfDayTrackSelection();
+        }
+        bool const        hasWeatherTrack = project && project->weatherTrack.isVisible();
+        std::string const weatherItem =
+            std::string(ICON_WEATHER) + "  " + "playback.refactorEditor.weather.addTrack"_tr();
+        if (ImGui::MenuItem(weatherItem.c_str(), nullptr, hasWeatherTrack, !hasWeatherTrack)) {
+            ctx.submitAction({EditorActionType::AddWeatherTrack});
+            queueWeatherTrackSelection();
         }
         std::string const audioItem =
             std::string(ICON_AUDIO) + "  " + "playback.refactorEditor.timeline.addAudioTrack"_tr();
@@ -3731,6 +4402,294 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                 )) {
                 ctx.submitAction({EditorActionType::RemoveTimelapseTrack});
                 if (ctx.selection.isTimelapseTrackSelected() || ctx.selection.selectedTimelapseKeyframe().has_value()) {
+                    ctx.selection.clear();
+                }
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-time-of-day-keyframe-menu")) {
+        auto const keyIt = project ? project->timeOfDayTrack.keysByTick.find(mTimeOfDayKeyframeMenuTick)
+                                   : std::map<int, state::editing::model::TimeOfDayKeyframe>::const_iterator{};
+        if (!project || keyIt == project->timeOfDayTrack.keysByTick.end()) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            bool const                             editable      = !project->timeOfDayTrack.locked;
+            std::vector<int> const                 selectedTicks = ctx.selection.selectedTimeOfDayKeyframes();
+            bool const                             group = mTimeOfDayKeyframeMenuGroup && selectedTicks.size() > 1;
+            std::optional<CameraInterpolationType> sharedInterp;
+            bool                                   mixedInterp = false;
+            if (group) {
+                for (int const tick : selectedTicks) {
+                    auto const it = project->timeOfDayTrack.keysByTick.find(tick);
+                    if (it == project->timeOfDayTrack.keysByTick.end()) continue;
+                    if (!sharedInterp) sharedInterp = it->second.interpolationType;
+                    else if (*sharedInterp != it->second.interpolationType) mixedInterp = true;
+                }
+            } else {
+                sharedInterp = keyIt->second.interpolationType;
+            }
+            auto const setTimeOfDayInterpolation = [&](char const* label, CameraInterpolationType type) {
+                bool const checked = !mixedInterp && sharedInterp && *sharedInterp == type;
+                if (ImGui::MenuItem(label, nullptr, checked, editable)) {
+                    if (group) {
+                        EditorAction action{EditorActionType::SetTimeOfDayKeyframesInterpolation};
+                        action.ticks = selectedTicks;
+                        action.kind  = static_cast<int>(type);
+                        ctx.submitAction(std::move(action));
+                    } else {
+                        EditorAction action{EditorActionType::SetTimeOfDayKeyframeInterpolation};
+                        action.tick = mTimeOfDayKeyframeMenuTick;
+                        action.kind = static_cast<int>(type);
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+            };
+            if (ImGui::BeginMenu("playback.refactorEditor.details.interpolation"_tr().c_str(), editable)) {
+                setTimeOfDayInterpolation(
+                    "playback.refactorEditor.details.interpolationType.smooth"_tr().c_str(),
+                    CameraInterpolationType::Smooth
+                );
+                setTimeOfDayInterpolation(
+                    "playback.refactorEditor.details.interpolationType.linear"_tr().c_str(),
+                    CameraInterpolationType::Linear
+                );
+                setTimeOfDayInterpolation(
+                    "playback.refactorEditor.details.interpolationType.hold"_tr().c_str(),
+                    CameraInterpolationType::Hold
+                );
+                setTimeOfDayInterpolation(
+                    "playback.refactorEditor.details.interpolationType.easeIn"_tr().c_str(),
+                    CameraInterpolationType::EaseIn
+                );
+                setTimeOfDayInterpolation(
+                    "playback.refactorEditor.details.interpolationType.easeOut"_tr().c_str(),
+                    CameraInterpolationType::EaseOut
+                );
+                setTimeOfDayInterpolation(
+                    "playback.refactorEditor.details.interpolationType.easeInOut"_tr().c_str(),
+                    CameraInterpolationType::EaseInOut
+                );
+                setTimeOfDayInterpolation(
+                    "playback.refactorEditor.details.interpolationType.hermite"_tr().c_str(),
+                    CameraInterpolationType::Hermite
+                );
+                setTimeOfDayInterpolation(
+                    "playback.refactorEditor.details.interpolationType.cubicBezier"_tr().c_str(),
+                    CameraInterpolationType::CubicBezier
+                );
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("playback.refactorEditor.timeline.seekHere"_tr().c_str())) {
+                seekTo(ctx, mTimeOfDayKeyframeMenuTick);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    group ? "playback.refactorEditor.details.deleteKeyframes"_tr(selectedTicks.size()).c_str()
+                          : "playback.refactorEditor.details.deleteKeyframe"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::DeleteSelection).c_str(),
+                    false,
+                    editable
+                )) {
+                if (group) {
+                    deleteSelection(ctx);
+                } else {
+                    EditorAction action{EditorActionType::RemoveTimeOfDayKeyframe};
+                    action.tick = mTimeOfDayKeyframeMenuTick;
+                    ctx.submitAction(std::move(action));
+                    ctx.selection.clear();
+                }
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##timeline-time-of-day-menu")) {
+        if (!project || !project->timeOfDayTrack.isVisible()) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            int const  playheadTick     = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+            bool const editable         = !project->timeOfDayTrack.locked;
+            bool const hasKeyAtPlayhead = project->timeOfDayTrack.keysByTick.contains(playheadTick);
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeOfDay.addKeyframe"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable && !hasKeyAtPlayhead
+                )) {
+                addTimeOfDayKeyframeAt(ctx, playheadTick);
+            }
+            if (mTimeOfDayLaneMenuTick >= 0 && mTimeOfDayLaneMenuTick != playheadTick) {
+                bool const hasKeyAtMenu = project->timeOfDayTrack.keysByTick.contains(mTimeOfDayLaneMenuTick);
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.addKeyframeHere"_tr().c_str(),
+                        nullptr,
+                        false,
+                        editable && !hasKeyAtMenu
+                    )) {
+                    addTimeOfDayKeyframeAt(ctx, mTimeOfDayLaneMenuTick);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem((project->timeOfDayTrack.enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
+                                                                 : "playback.refactorEditor.timeline.enableTrack"_tr())
+                                    .c_str())) {
+                EditorAction action{EditorActionType::SetTimeOfDayTrackEnabled};
+                action.value = !project->timeOfDayTrack.enabled;
+                ctx.submitAction(std::move(action));
+            }
+            if (ImGui::MenuItem((project->timeOfDayTrack.locked ? "playback.refactorEditor.timeline.unlockTrack"_tr()
+                                                                : "playback.refactorEditor.timeline.lockTrack"_tr())
+                                    .c_str())) {
+                EditorAction action{EditorActionType::SetTimeOfDayTrackLocked};
+                action.value = !project->timeOfDayTrack.locked;
+                ctx.submitAction(std::move(action));
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeOfDay.clearKeyframes"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable && !project->timeOfDayTrack.keysByTick.empty()
+                )) {
+                ctx.submitAction({EditorActionType::ClearTimeOfDayKeyframes});
+                if (!ctx.selection.selectedTimeOfDayKeyframes().empty()) {
+                    ctx.selection.selectTimeOfDayTrack();
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.timeOfDay.removeTrack"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable
+                )) {
+                ctx.submitAction({EditorActionType::RemoveTimeOfDayTrack});
+                if (ctx.selection.isTimeOfDayTrackSelected() || !ctx.selection.selectedTimeOfDayKeyframes().empty()) {
+                    ctx.selection.clear();
+                }
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##weather-keyframe-menu")) {
+        auto const keyIt = project ? project->weatherTrack.keysByTick.find(mWeatherKeyframeMenuTick)
+                                   : std::map<int, state::editing::model::WeatherKeyframe>::const_iterator{};
+        if (!project || keyIt == project->weatherTrack.keysByTick.end()) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            bool const             editable      = !project->weatherTrack.locked;
+            std::vector<int> const selectedTicks = ctx.selection.selectedWeatherKeyframes();
+            bool const             group         = mWeatherKeyframeMenuGroup && selectedTicks.size() > 1;
+            using Weather                        = state::editing::model::WeatherOverride;
+            std::optional<Weather> sharedMode;
+            bool                   mixedMode = false;
+            if (group) {
+                for (int const tick : selectedTicks) {
+                    auto const it = project->weatherTrack.keysByTick.find(tick);
+                    if (it == project->weatherTrack.keysByTick.end()) continue;
+                    if (!sharedMode) sharedMode = it->second.weather;
+                    else if (*sharedMode != it->second.weather) mixedMode = true;
+                }
+            } else {
+                sharedMode = keyIt->second.weather;
+            }
+            constexpr std::array<Weather, 6> kWeatherModes{
+                Weather::Recorded,
+                Weather::Clear,
+                Weather::Overcast,
+                Weather::Rain,
+                Weather::Snow,
+                Weather::Thunder,
+            };
+            for (Weather const mode : kWeatherModes) {
+                bool const        checked = !mixedMode && sharedMode && *sharedMode == mode;
+                std::string const label   = std::string(weatherModeIcon(mode)) + "  " + weatherModeLabel(mode);
+                if (ImGui::MenuItem(label.c_str(), nullptr, checked, editable)) {
+                    if (group) {
+                        EditorAction action{EditorActionType::SetWeatherKeyframesValue};
+                        action.ticks = selectedTicks;
+                        action.kind  = static_cast<int>(mode);
+                        ctx.submitAction(std::move(action));
+                    } else {
+                        EditorAction action{EditorActionType::SetWeatherKeyframeValue};
+                        action.tick = mWeatherKeyframeMenuTick;
+                        action.kind = static_cast<int>(mode);
+                        ctx.submitAction(std::move(action));
+                    }
+                }
+            }
+            ImGui::Separator();
+            if (!group && ImGui::MenuItem("playback.refactorEditor.timeline.seekHere"_tr().c_str())) {
+                seekTo(ctx, mWeatherKeyframeMenuTick);
+            }
+            if (ImGui::MenuItem(
+                    group ? "playback.refactorEditor.details.deleteKeyframes"_tr(selectedTicks.size()).c_str()
+                          : "playback.refactorEditor.details.deleteKeyframe"_tr().c_str(),
+                    input::KeyMap::displayString(input::EditorKeybind::DeleteSelection).c_str(),
+                    false,
+                    editable
+                )) {
+                if (group) {
+                    deleteSelection(ctx);
+                } else {
+                    EditorAction action{EditorActionType::RemoveWeatherKeyframe};
+                    action.tick = mWeatherKeyframeMenuTick;
+                    ctx.submitAction(std::move(action));
+                    ctx.selection.clear();
+                }
+            }
+        }
+        widgets::endAnchoredPopup();
+    }
+
+    if (widgets::beginAnchoredPopup("##weather-lane-menu")) {
+        if (!project || !project->weatherTrack.isVisible()) {
+            ImGui::CloseCurrentPopup();
+        } else {
+            int const  playheadTick     = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+            bool const editable         = !project->weatherTrack.locked;
+            bool const hasKeyAtPlayhead = project->weatherTrack.keysByTick.contains(playheadTick);
+            if (ImGui::MenuItem(
+                    "playback.refactorEditor.weather.addKeyframeAtPlayhead"_tr().c_str(),
+                    nullptr,
+                    false,
+                    editable && !hasKeyAtPlayhead
+                )) {
+                addWeatherKeyframeAt(ctx, playheadTick);
+            }
+            if (mWeatherLaneMenuTick >= 0 && mWeatherLaneMenuTick != playheadTick) {
+                bool const hasKeyAtMenu = project->weatherTrack.keysByTick.contains(mWeatherLaneMenuTick);
+                if (ImGui::MenuItem(
+                        "playback.refactorEditor.timeline.addKeyframeHere"_tr().c_str(),
+                        nullptr,
+                        false,
+                        editable && !hasKeyAtMenu
+                    )) {
+                    addWeatherKeyframeAt(ctx, mWeatherLaneMenuTick);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem((project->weatherTrack.enabled ? "playback.refactorEditor.timeline.disableTrack"_tr()
+                                                               : "playback.refactorEditor.timeline.enableTrack"_tr())
+                                    .c_str())) {
+                EditorAction action{EditorActionType::SetWeatherTrackEnabled};
+                action.value = !project->weatherTrack.enabled;
+                ctx.submitAction(std::move(action));
+            }
+            if (ImGui::MenuItem((project->weatherTrack.locked ? "playback.refactorEditor.timeline.unlockTrack"_tr()
+                                                              : "playback.refactorEditor.timeline.lockTrack"_tr())
+                                    .c_str())) {
+                EditorAction action{EditorActionType::SetWeatherTrackLocked};
+                action.value = !project->weatherTrack.locked;
+                ctx.submitAction(std::move(action));
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("playback.refactorEditor.weather.removeTrack"_tr().c_str(), nullptr, false, editable)) {
+                ctx.submitAction({EditorActionType::RemoveWeatherTrack});
+                if (ctx.selection.isWeatherTrackSelected() || !ctx.selection.selectedWeatherKeyframes().empty()) {
                     ctx.selection.clear();
                 }
             }
@@ -4069,6 +5028,16 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mDraggingTimelapseKeyframeOriginTick = -1;
         mDraggingTimelapseKeyframeTick       = -1;
         mDraggingTimelapseKeyframeMoved      = false;
+        mDraggingTimeOfDayKeyframeOriginTick = -1;
+        mDraggingTimeOfDayKeyframeTick       = -1;
+        mDraggingTimeOfDayKeyframeMoved      = false;
+        mTimeOfDayGroupDrag                  = false;
+        mTimeOfDayGroupDragDelta             = 0;
+        mDraggingWeatherKeyframeOriginTick   = -1;
+        mDraggingWeatherKeyframeTick         = -1;
+        mDraggingWeatherKeyframeMoved        = false;
+        mWeatherGroupDrag                    = false;
+        mWeatherGroupDragDelta               = 0;
         mDraggingAudioTrackId.clear();
         mDraggingAudioClipId.clear();
         mDraggingAudioOriginTick   = -1;
@@ -4082,7 +5051,11 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mGroupDragDelta            = 0;
         mBoxPending                = false;
         mBoxSelecting              = false;
+        mBoxClickTimeOfDay         = false;
+        mBoxClickWeather           = false;
         mPenPendingAdd             = false;
+        mPenPendingTimeOfDay       = false;
+        mPenPendingWeather         = false;
         mPenPendingTick            = -1;
         mMarkerDragId.clear();
         mMarkerDragMoved = false;
@@ -4106,6 +5079,16 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mDraggingTimelapseKeyframeOriginTick = -1;
         mDraggingTimelapseKeyframeTick       = -1;
         mDraggingTimelapseKeyframeMoved      = false;
+        mDraggingTimeOfDayKeyframeOriginTick = -1;
+        mDraggingTimeOfDayKeyframeTick       = -1;
+        mDraggingTimeOfDayKeyframeMoved      = false;
+        mTimeOfDayGroupDrag                  = false;
+        mTimeOfDayGroupDragDelta             = 0;
+        mDraggingWeatherKeyframeOriginTick   = -1;
+        mDraggingWeatherKeyframeTick         = -1;
+        mDraggingWeatherKeyframeMoved        = false;
+        mWeatherGroupDrag                    = false;
+        mWeatherGroupDragDelta               = 0;
         mDraggingAudioTrackId.clear();
         mDraggingAudioClipId.clear();
         mDraggingAudioOriginTick   = -1;
@@ -4115,7 +5098,11 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mGroupDragDelta            = 0;
         mBoxPending                = false;
         mBoxSelecting              = false;
+        mBoxClickTimeOfDay         = false;
+        mBoxClickWeather           = false;
         mPenPendingAdd             = false;
+        mPenPendingTimeOfDay       = false;
+        mPenPendingWeather         = false;
         mPenPendingTick            = -1;
         mBoxClickCameraId.clear();
         mTrackDragCameraId.clear();
@@ -4333,6 +5320,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             && centerY - reach <= boxMax.y;
     };
     std::vector<state::editing::model::SelectedKeyframe> boxHits;
+    std::vector<int>                                     timeOfDayBoxHits;
+    std::vector<int>                                     weatherBoxHits;
 
     auto const*  selectedClip  = ctx.selection.getAs<state::editing::model::SelectedClip>();
     float const  keyRadius     = metrics::keyframeRadius();
@@ -5194,6 +6183,673 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 ImU32 const outline   = lit ? theme::kKeyframeSelected : theme::kKeyframeOutline;
                 drawKeyframeDiamond(drawList, kx, bandCenterY, radius, fill, outline);
             }
+        } else if (row.kind == TrackRowKind::TimeOfDay) {
+            auto const& timeOfDayTrack = project->timeOfDayTrack;
+            bool const  trackEnabled   = timeOfDayTrack.enabled;
+            bool const  trackLocked    = timeOfDayTrack.locked;
+            float const plotTop        = blockTop + 1.0f * uiScale;
+            float const plotBottom     = blockBot - 1.0f * uiScale;
+            bool const  mouseInRow =
+                allowInput && contains({layout.canvasLeft, y}, {layout.fullMax.x, rowBottom}, mouse);
+
+            auto const drawnTickForTodKey = [&](int keyTick, bool selected) {
+                if (mTimeOfDayGroupDrag && selected) return keyTick + mTimeOfDayGroupDragDelta;
+                if (!mTimeOfDayGroupDrag && mDraggingTimeOfDayKeyframeOriginTick == keyTick) {
+                    return mDraggingTimeOfDayKeyframeTick;
+                }
+                return keyTick;
+            };
+
+            state::editing::model::TimeOfDayTrack const* activeTrack = &timeOfDayTrack;
+            state::editing::model::TimeOfDayTrack        dragPreviewTrack;
+            if (mTimeOfDayGroupDrag && mTimeOfDayGroupDragDelta != 0) {
+                dragPreviewTrack = timeOfDayTrack;
+                std::vector<std::pair<int, state::editing::model::TimeOfDayKeyframe>> movedKeys;
+                for (int const tick : ctx.selection.selectedTimeOfDayKeyframes()) {
+                    if (auto node = dragPreviewTrack.keysByTick.extract(tick); !node.empty()) {
+                        movedKeys.emplace_back(tick + mTimeOfDayGroupDragDelta, std::move(node.mapped()));
+                    }
+                }
+                for (auto& [tick, key] : movedKeys) {
+                    dragPreviewTrack.keysByTick.emplace(tick, std::move(key));
+                }
+                activeTrack = &dragPreviewTrack;
+            } else if (!mTimeOfDayGroupDrag && mDraggingTimeOfDayKeyframeOriginTick >= 0
+                       && mDraggingTimeOfDayKeyframeTick >= 0
+                       && mDraggingTimeOfDayKeyframeTick != mDraggingTimeOfDayKeyframeOriginTick) {
+                if (auto const it = timeOfDayTrack.keysByTick.find(mDraggingTimeOfDayKeyframeOriginTick);
+                    it != timeOfDayTrack.keysByTick.end()) {
+                    dragPreviewTrack = timeOfDayTrack;
+                    auto movedKey    = it->second;
+                    dragPreviewTrack.keysByTick.erase(mDraggingTimeOfDayKeyframeOriginTick);
+                    dragPreviewTrack.keysByTick.emplace(mDraggingTimeOfDayKeyframeTick, std::move(movedKey));
+                    activeTrack = &dragPreviewTrack;
+                }
+            }
+
+            state::editing::model::TimeOfDayTrack evalTrackStorage;
+            auto const*                           evalTrack = activeTrack;
+            if (!activeTrack->enabled && !activeTrack->keysByTick.empty()) {
+                evalTrackStorage         = *activeTrack;
+                evalTrackStorage.enabled = true;
+                evalTrack                = &evalTrackStorage;
+            }
+
+            double minTod = 0.0;
+            double maxTod = static_cast<double>(state::editing::model::DayCycleTicks);
+            for (auto const& [_, key] : activeTrack->keysByTick) {
+                maxTod = std::max(maxTod, static_cast<double>(key.timeOfDay));
+            }
+
+            struct TodCurveSample {
+                float  x;
+                double value;
+            };
+            std::vector<TodCurveSample> samples;
+            if (!activeTrack->keysByTick.empty() && state.totalTicks > 0) {
+                float const visX0 = std::max(layout.canvasLeft, scale.xAt(0.0f));
+                float const visX1 = std::min(layout.fullMax.x, scale.xAt(static_cast<float>(state.totalTicks)));
+                if (visX1 > visX0) {
+                    float const stepPx = std::max(2.0f, 3.0f * uiScale);
+                    samples.reserve(static_cast<size_t>((visX1 - visX0) / stepPx) + 2);
+                    auto const appendSample = [&](float sx) {
+                        double const tick = std::clamp(
+                            static_cast<double>(scale.tickAtExact(sx)),
+                            0.0,
+                            static_cast<double>(state.totalTicks)
+                        );
+                        if (auto const val = keyframe::evaluateTimeOfDayAt(*evalTrack, tick)) {
+                            maxTod = std::max(maxTod, *val);
+                            samples.push_back({sx, *val});
+                        }
+                    };
+                    for (float sx = visX0; sx < visX1; sx += stepPx) {
+                        appendSample(sx);
+                    }
+                    appendSample(visX1);
+                }
+            }
+
+            // 1) Horizontal midpoint guide (18:00 / 12000 ticks on a 0..24000 day cycle).
+            float const guideY   = timeOfDayToCurveY(12000.0, minTod, maxTod, plotTop, plotBottom);
+            ImU32 const guideCol = theme::withAlpha(theme::kTextDim, trackEnabled ? 0x60 : 0x38);
+            drawDashedHorizontalLine(
+                drawList,
+                layout.canvasLeft,
+                layout.fullMax.x,
+                guideY,
+                guideCol,
+                4.0f * uiScale,
+                4.0f * uiScale,
+                1.0f
+            );
+            {
+                float const   labelFontSize = std::max(8.5f, std::round(metrics::font() * 0.58f));
+                ImFont* const labelFont     = ImGui::GetFont();
+                char const*   midLabel      = "18:00";
+                ImVec2 const  midSize       = labelFont->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, midLabel);
+                float const   midX          = layout.fullMax.x - midSize.x - 5.0f * uiScale;
+                float const   midY = std::clamp(guideY - midSize.y - 1.0f * uiScale, plotTop, plotBottom - midSize.y);
+                drawList->AddText(
+                    labelFont,
+                    labelFontSize,
+                    {midX, midY},
+                    theme::withAlpha(theme::kTextDim, trackEnabled ? 0xb0 : 0x60),
+                    midLabel
+                );
+            }
+
+            // 2) Continuous interpolated time-of-day curve and translucent warm amber fill.
+            if (samples.size() >= 2) {
+                ImU32 const curveCol    = trackEnabled ? kTimeOfDayAccent : theme::kTrackDisabled;
+                ImU32 const fillCol     = theme::withAlpha(curveCol, trackEnabled ? 0x2c : 0x14);
+                float const strokeWidth = trackEnabled ? 1.8f : 1.25f;
+                for (size_t i = 1; i < samples.size(); ++i) {
+                    float const x0 = samples[i - 1].x;
+                    float const y0 = timeOfDayToCurveY(samples[i - 1].value, minTod, maxTod, plotTop, plotBottom);
+                    float const x1 = samples[i].x;
+                    float const y1 = timeOfDayToCurveY(samples[i].value, minTod, maxTod, plotTop, plotBottom);
+                    drawList->AddQuadFilled({x0, plotBottom}, {x0, y0}, {x1, y1}, {x1, plotBottom}, fillCol);
+                    drawList->AddLine({x0, y0}, {x1, y1}, curveCol, strokeWidth);
+                }
+            }
+
+            // 3) Hit-test time-of-day keyframes on this lane.
+            std::optional<int> hoveredTodKeyTick;
+            float              hoveredTodKeyX        = 0.0f;
+            float              hoveredTodKeyY        = (plotTop + plotBottom) * 0.5f;
+            float              hoveredTodKeyRadius   = keyRadius;
+            bool               hoveredTodKeySelected = false;
+            if (mouseInRow && mTool != TimelineTool::Razor) {
+                float bestDist = std::numeric_limits<float>::max();
+                for (auto const& [keyTick, key] : timeOfDayTrack.keysByTick) {
+                    bool const  selected  = ctx.selection.isTimeOfDayKeyframeSelected(keyTick);
+                    int const   drawnTick = drawnTickForTodKey(keyTick, selected);
+                    float const kx        = scale.xAt(static_cast<float>(drawnTick));
+                    if (kx < layout.canvasLeft - keyRadius || kx > layout.fullMax.x + keyRadius) continue;
+                    float const ky =
+                        timeOfDayToCurveY(static_cast<double>(key.timeOfDay), minTod, maxTod, plotTop, plotBottom);
+                    float const radius = selected ? keyRadius + 1.0f : keyRadius;
+                    float const dx     = std::abs(mouse.x - kx);
+                    float const dy     = std::abs(mouse.y - ky);
+                    if (dx <= radius + 4.0f && dy <= radius + 5.0f) {
+                        float const dist = std::hypot(dx, dy);
+                        if (dist < bestDist) {
+                            bestDist              = dist;
+                            hoveredTodKeyTick     = keyTick;
+                            hoveredTodKeyX        = kx;
+                            hoveredTodKeyY        = ky;
+                            hoveredTodKeyRadius   = radius;
+                            hoveredTodKeySelected = selected;
+                        }
+                    }
+                }
+            }
+
+            // 4) Keyframe hover tooltip and mouse interaction.
+            bool const overTodKey = hoveredTodKeyTick.has_value();
+            if (overTodKey) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mDraggingTimeOfDayKeyframeOriginTick < 0) {
+                    if (auto const keyIt = timeOfDayTrack.keysByTick.find(*hoveredTodKeyTick);
+                        keyIt != timeOfDayTrack.keysByTick.end()) {
+                        std::string const tip = formatTick(*hoveredTodKeyTick) + " ("
+                                              + std::to_string(*hoveredTodKeyTick) + "t) · "
+                                              + std::to_string(keyIt->second.timeOfDay) + " ("
+                                              + formatMinecraftClock(keyIt->second.timeOfDay) + ") · "
+                                              + interpolationTypeLabel(keyIt->second.interpolationType);
+                        widgets::hoverTooltip(tip.c_str());
+                    }
+                }
+                if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    clickConsumed              = true;
+                    int const keyTick          = *hoveredTodKeyTick;
+                    mTimeOfDayKeyframeMenuTick = keyTick;
+                    mTimeOfDayKeyframeMenuGroup =
+                        hoveredTodKeySelected && ctx.selection.selectedTimeOfDayKeyframes().size() > 1;
+                    if (!mTimeOfDayKeyframeMenuGroup) {
+                        ctx.selection.selectTimeOfDayKeyframe(keyTick);
+                    }
+                    widgets::openAnchoredPopup(
+                        "##timeline-time-of-day-keyframe-menu",
+                        {hoveredTodKeyX - hoveredTodKeyRadius, hoveredTodKeyY - hoveredTodKeyRadius},
+                        {hoveredTodKeyX + hoveredTodKeyRadius, hoveredTodKeyY + hoveredTodKeyRadius}
+                    );
+                } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed     = true;
+                    int const keyTick = *hoveredTodKeyTick;
+                    if (ImGui::GetIO().KeyCtrl && !trackLocked) {
+                        std::vector<int> ticks = ctx.selection.selectedTimeOfDayKeyframes();
+                        auto const       it    = std::ranges::find(ticks, keyTick);
+                        if (it != ticks.end()) ticks.erase(it);
+                        else ticks.push_back(keyTick);
+                        if (ticks.empty()) {
+                            ctx.selection.clear();
+                        } else if (ticks.size() == 1) {
+                            ctx.selection.selectTimeOfDayKeyframe(ticks.front());
+                        } else {
+                            ctx.selection.selectTimeOfDayKeyframes(std::move(ticks));
+                        }
+                    } else if (hoveredTodKeySelected && ctx.selection.selectedTimeOfDayKeyframes().size() > 1
+                               && !trackLocked) {
+                        mTimeOfDayGroupDrag                   = true;
+                        mTimeOfDayGroupDragDelta              = 0;
+                        mDraggingTimeOfDayKeyframeOriginTick  = keyTick;
+                        mDraggingTimeOfDayKeyframeStartMouseX = mouse.x;
+                        mDraggingTimeOfDayKeyframeTick        = keyTick;
+                        mDraggingTimeOfDayKeyframeMoved       = false;
+                    } else {
+                        ctx.selection.selectTimeOfDayKeyframe(keyTick);
+                        if (trackLocked) {
+                            submitSeek(ctx, keyTick);
+                        } else {
+                            mDraggingTimeOfDayKeyframeOriginTick  = keyTick;
+                            mDraggingTimeOfDayKeyframeStartMouseX = mouse.x;
+                            mDraggingTimeOfDayKeyframeTick        = keyTick;
+                            mDraggingTimeOfDayKeyframeMoved       = false;
+                        }
+                    }
+                }
+            }
+
+            // 5) Pen preview / Ctrl+Click / Alt+Drag box select / double-click / context menu / seek.
+            bool const penMode = mTool == TimelineTool::Pen;
+            bool const ctrlSelectPen =
+                mTool == TimelineTool::Select && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+            bool const altBoxSelect       = mTool == TimelineTool::Select && ImGui::GetIO().KeyAlt;
+            auto const startTodBoxPending = [&](bool penAdd, int penTick) {
+                mBoxPending          = true;
+                mBoxSelecting        = false;
+                mBoxAdditive         = ImGui::GetIO().KeyCtrl;
+                mBoxStart            = mouse;
+                mBoxClickTimeOfDay   = true;
+                mBoxClickWeather     = false;
+                mPenPendingAdd       = penAdd;
+                mPenPendingTimeOfDay = penAdd;
+                mPenPendingWeather   = false;
+                mPenPendingTick      = penTick;
+                mBoxClickCameraId.clear();
+            };
+
+            std::optional<int> penPreviewTick;
+            if (mouseInRow && !overTodKey && !trackLocked && (penMode || ctrlSelectPen)) {
+                int penTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                if (shiftSnap) {
+                    penTick = snapToEditPoints(ctx, penTick, scale.pixelsPerTick, true, true, {}, {});
+                } else if (mSnapEnabled) {
+                    penTick = snapTick(penTick);
+                }
+                penTick = std::clamp(penTick, 0, state.totalTicks);
+                if (!timeOfDayTrack.keysByTick.contains(penTick)) penPreviewTick = penTick;
+            }
+            if (penPreviewTick.has_value()) {
+                std::optional<double> previewVal;
+                if (!evalTrack->keysByTick.empty()) {
+                    previewVal = keyframe::evaluateTimeOfDayAt(*evalTrack, static_cast<double>(*penPreviewTick));
+                } else {
+                    previewVal = keyframe::resolveEffectiveTimeOfDay(*project, static_cast<double>(*penPreviewTick));
+                }
+                double const previewTod = previewVal ? *previewVal : 6000.0;
+                float const  penX       = scale.xAt(static_cast<float>(*penPreviewTick));
+                float const  penY       = timeOfDayToCurveY(previewTod, minTod, maxTod, plotTop, plotBottom);
+                drawKeyframeDiamond(
+                    drawList,
+                    penX,
+                    penY,
+                    keyRadius,
+                    theme::withAlpha(kTimeOfDayAccent, 0x88),
+                    theme::withAlpha(theme::kKeyframeOutline, 0xa0)
+                );
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed = true;
+                    if (penMode) {
+                        startTodBoxPending(true, *penPreviewTick);
+                    } else {
+                        addTimeOfDayKeyframeAt(ctx, *penPreviewTick);
+                    }
+                }
+            } else if (mouseInRow && !overTodKey && !clickConsumed) {
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    clickConsumed = true;
+                    int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                    if (mSnapEnabled) tick = snapTick(tick);
+                    mTimeOfDayLaneMenuTick = tick;
+                    float const anchorX    = scale.xAt(static_cast<float>(tick));
+                    ctx.selection.selectTimeOfDayTrack();
+                    widgets::openAnchoredPopup("##timeline-time-of-day-menu", {anchorX, blockTop}, {anchorX, blockBot});
+                } else if (!trackLocked && mTool == TimelineTool::Select
+                           && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    int addTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                    if (shiftSnap) {
+                        addTick = snapToEditPoints(ctx, addTick, scale.pixelsPerTick, true, true, {}, {});
+                    } else if (mSnapEnabled) {
+                        addTick = snapTick(addTick);
+                    }
+                    addTick = std::clamp(addTick, 0, state.totalTicks);
+                    if (!timeOfDayTrack.keysByTick.contains(addTick)) {
+                        clickConsumed = true;
+                        addTimeOfDayKeyframeAt(ctx, addTick);
+                    }
+                } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed = true;
+                    if (penMode || altBoxSelect || mTool == TimelineTool::Select) {
+                        startTodBoxPending(false, -1);
+                    } else {
+                        ctx.selection.selectTimeOfDayTrack();
+                        submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
+                    }
+                }
+            }
+
+            // 6) Draw time-of-day keyframe diamond nodes on top of the curve.
+            for (auto const& [keyTick, key] : timeOfDayTrack.keysByTick) {
+                bool const selected = ctx.selection.isTimeOfDayKeyframeSelected(keyTick);
+                bool const dragging = (mTimeOfDayGroupDrag && selected)
+                                   || (!mTimeOfDayGroupDrag && mDraggingTimeOfDayKeyframeOriginTick == keyTick);
+                int const   drawnTick = drawnTickForTodKey(keyTick, selected);
+                float const kx        = scale.xAt(static_cast<float>(drawnTick));
+                if (kx < layout.canvasLeft - keyRadius || kx > layout.fullMax.x + keyRadius) continue;
+                float const ky =
+                    timeOfDayToCurveY(static_cast<double>(key.timeOfDay), minTod, maxTod, plotTop, plotBottom);
+                bool const inBox = mBoxSelecting && !trackLocked && boxContains(kx, ky);
+                if (inBox) timeOfDayBoxHits.push_back(keyTick);
+                bool const  hovered = hoveredTodKeyTick && *hoveredTodKeyTick == keyTick;
+                bool const  lit     = selected || dragging || inBox;
+                float const radius  = lit ? keyRadius + 1.0f : (hovered ? keyRadius + 0.5f : keyRadius);
+                ImU32 const fill =
+                    lit ? theme::kKeyframeSelected : (trackEnabled ? kTimeOfDayKeyFill : theme::kKeyframeDisabled);
+                ImU32 const outline = lit ? theme::kIconHighlight : theme::kKeyframeOutline;
+                drawKeyframeDiamond(drawList, kx, ky, radius, fill, outline);
+            }
+        } else if (row.kind == TrackRowKind::Weather) {
+            auto const& weatherTrack = project->weatherTrack;
+            bool const  trackEnabled = weatherTrack.enabled;
+            bool const  trackLocked  = weatherTrack.locked;
+            float const bandTop      = blockTop + 3.0f * uiScale;
+            float const bandBot      = blockBot - 3.0f * uiScale;
+            float const bandCenterY  = (bandTop + bandBot) * 0.5f;
+            float const bandRounding = 3.0f * uiScale;
+            bool const  mouseInRow =
+                allowInput && contains({layout.canvasLeft, y}, {layout.fullMax.x, rowBottom}, mouse);
+
+            auto const drawnTickForWeatherKey = [&](int keyTick, bool selected) {
+                if (mWeatherGroupDrag && selected) return keyTick + mWeatherGroupDragDelta;
+                if (!mWeatherGroupDrag && mDraggingWeatherKeyframeOriginTick == keyTick) {
+                    return mDraggingWeatherKeyframeTick;
+                }
+                return keyTick;
+            };
+
+            state::editing::model::WeatherTrack const* activeTrack = &weatherTrack;
+            state::editing::model::WeatherTrack        dragPreviewTrack;
+            if (mWeatherGroupDrag && mWeatherGroupDragDelta != 0) {
+                dragPreviewTrack = weatherTrack;
+                std::vector<std::pair<int, state::editing::model::WeatherKeyframe>> movedKeys;
+                for (int const tick : ctx.selection.selectedWeatherKeyframes()) {
+                    if (auto node = dragPreviewTrack.keysByTick.extract(tick); !node.empty()) {
+                        movedKeys.emplace_back(tick + mWeatherGroupDragDelta, std::move(node.mapped()));
+                    }
+                }
+                for (auto& [tick, key] : movedKeys) {
+                    dragPreviewTrack.keysByTick.emplace(tick, std::move(key));
+                }
+                activeTrack = &dragPreviewTrack;
+            } else if (!mWeatherGroupDrag && mDraggingWeatherKeyframeOriginTick >= 0
+                       && mDraggingWeatherKeyframeTick >= 0
+                       && mDraggingWeatherKeyframeTick != mDraggingWeatherKeyframeOriginTick) {
+                if (auto const it = weatherTrack.keysByTick.find(mDraggingWeatherKeyframeOriginTick);
+                    it != weatherTrack.keysByTick.end()) {
+                    dragPreviewTrack = weatherTrack;
+                    auto movedKey    = it->second;
+                    dragPreviewTrack.keysByTick.erase(mDraggingWeatherKeyframeOriginTick);
+                    dragPreviewTrack.keysByTick.emplace(mDraggingWeatherKeyframeTick, std::move(movedKey));
+                    activeTrack = &dragPreviewTrack;
+                }
+            }
+
+            // 1) Subtle dashed horizontal baseline representing inherited scene/recorded weather before first keyframe.
+            drawDashedHorizontalLine(
+                drawList,
+                layout.canvasLeft,
+                layout.fullMax.x,
+                bandCenterY,
+                theme::withAlpha(theme::kTextDim, trackEnabled ? 0x48 : 0x28),
+                5.0f * uiScale,
+                4.0f * uiScale,
+                1.0f
+            );
+
+            // 2) Colored weather segment bands with mode icon and localized label.
+            float const   labelFontSize = std::max(8.5f, std::round(metrics::font() * 0.58f));
+            ImFont* const labelFont     = ImGui::GetFont();
+            float const   iconSize      = std::max(10.0f, std::round(metrics::font() * 0.72f));
+            for (auto it = activeTrack->keysByTick.begin(); it != activeTrack->keysByTick.end(); ++it) {
+                int const  startTick = it->first;
+                auto const next      = std::next(it);
+                int const  endTick =
+                    next != activeTrack->keysByTick.end() ? next->first : std::max(project->totalTicks, startTick);
+                float const rawX0 = scale.xAt(static_cast<float>(startTick));
+                float const rawX1 = scale.xAt(static_cast<float>(endTick));
+                float const x0    = std::max(layout.canvasLeft, rawX0);
+                float const x1    = std::min(layout.fullMax.x, rawX1);
+                if (x1 <= x0) continue;
+
+                ImU32 const modeCol  = trackEnabled ? weatherModeColor(it->second.weather) : theme::kTrackDisabled;
+                ImU32 const spanFill = theme::withAlpha(modeCol, trackEnabled ? 0x42 : 0x22);
+                ImU32 const spanEdge = theme::withAlpha(modeCol, trackEnabled ? 0xb8 : 0x68);
+                drawList->AddRectFilled({x0, bandTop}, {x1, bandBot}, spanFill, bandRounding);
+                drawList->AddRect({x0, bandTop}, {x1, bandBot}, spanEdge, bandRounding, 0, 1.0f);
+
+                float const contentLeft  = std::max(x0 + 5.0f * uiScale, rawX0 + keyRadius + 5.0f * uiScale);
+                float const contentRight = x1 - 4.0f * uiScale;
+                if (contentRight - contentLeft >= 36.0f * uiScale) {
+                    drawList->PushClipRect({contentLeft, bandTop}, {contentRight, bandBot}, true);
+                    ImU32 const iconCol = trackEnabled ? lerpColor(modeCol, theme::kText, 0.35f) : theme::kTextDim;
+                    drawCompactIconAtCentre(
+                        drawList,
+                        weatherModeIcon(it->second.weather),
+                        {contentLeft + iconSize * 0.5f, bandCenterY},
+                        iconSize,
+                        iconCol
+                    );
+                    float const textX = contentLeft + iconSize + 4.0f * uiScale;
+                    if (contentRight - textX >= 8.0f * uiScale) {
+                        std::string const modeText = weatherModeLabel(it->second.weather);
+                        std::string const elided =
+                            elideTextToWidth(labelFont, labelFontSize, modeText, contentRight - textX);
+                        if (!elided.empty()) {
+                            ImVec2 const textSize =
+                                labelFont->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, elided.c_str());
+                            float const ty = std::floor(bandCenterY - textSize.y * 0.5f + 0.5f);
+                            drawList->AddText(
+                                labelFont,
+                                labelFontSize,
+                                {textX, ty},
+                                trackEnabled ? theme::kText : theme::kTextDim,
+                                elided.c_str()
+                            );
+                        }
+                    }
+                    drawList->PopClipRect();
+                }
+            }
+
+            // 3) Hit-test weather keyframes on this lane.
+            std::optional<int> hoveredWeatherKeyTick;
+            float              hoveredWeatherKeyX        = 0.0f;
+            float              hoveredWeatherKeyRadius   = keyRadius;
+            bool               hoveredWeatherKeySelected = false;
+            if (mouseInRow && mTool != TimelineTool::Razor) {
+                float bestDist = std::numeric_limits<float>::max();
+                for (auto const& [keyTick, _] : weatherTrack.keysByTick) {
+                    bool const  selected  = ctx.selection.isWeatherKeyframeSelected(keyTick);
+                    int const   drawnTick = drawnTickForWeatherKey(keyTick, selected);
+                    float const kx        = scale.xAt(static_cast<float>(drawnTick));
+                    if (kx < layout.canvasLeft - keyRadius || kx > layout.fullMax.x + keyRadius) continue;
+                    float const radius = selected ? keyRadius + 1.0f : keyRadius;
+                    float const dx     = std::abs(mouse.x - kx);
+                    float const dy     = std::abs(mouse.y - bandCenterY);
+                    if (dx <= radius + 4.0f && dy <= radius + 5.0f) {
+                        float const dist = std::hypot(dx, dy);
+                        if (dist < bestDist) {
+                            bestDist                  = dist;
+                            hoveredWeatherKeyTick     = keyTick;
+                            hoveredWeatherKeyX        = kx;
+                            hoveredWeatherKeyRadius   = radius;
+                            hoveredWeatherKeySelected = selected;
+                        }
+                    }
+                }
+            }
+
+            // 4) Keyframe hover tooltip and mouse interaction.
+            bool const overWeatherKey = hoveredWeatherKeyTick.has_value();
+            if (overWeatherKey) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mDraggingWeatherKeyframeOriginTick < 0) {
+                    if (auto const keyIt = weatherTrack.keysByTick.find(*hoveredWeatherKeyTick);
+                        keyIt != weatherTrack.keysByTick.end()) {
+                        std::string const tip =
+                            formatTick(*hoveredWeatherKeyTick) + " · " + weatherModeLabel(keyIt->second.weather);
+                        widgets::hoverTooltip(tip.c_str());
+                    }
+                }
+                if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    clickConsumed            = true;
+                    int const keyTick        = *hoveredWeatherKeyTick;
+                    mWeatherKeyframeMenuTick = keyTick;
+                    mWeatherKeyframeMenuGroup =
+                        hoveredWeatherKeySelected && ctx.selection.selectedWeatherKeyframes().size() > 1;
+                    if (!mWeatherKeyframeMenuGroup) {
+                        ctx.selection.selectWeatherKeyframe(keyTick);
+                    }
+                    widgets::openAnchoredPopup(
+                        "##weather-keyframe-menu",
+                        {hoveredWeatherKeyX - hoveredWeatherKeyRadius, bandCenterY - hoveredWeatherKeyRadius},
+                        {hoveredWeatherKeyX + hoveredWeatherKeyRadius, bandCenterY + hoveredWeatherKeyRadius}
+                    );
+                } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed     = true;
+                    int const keyTick = *hoveredWeatherKeyTick;
+                    if (ImGui::GetIO().KeyShift && !trackLocked) {
+                        if (auto const anchor = ctx.selection.selectedWeatherKeyframe()) {
+                            int const        lo = std::min(*anchor, keyTick);
+                            int const        hi = std::max(*anchor, keyTick);
+                            std::vector<int> ticks;
+                            for (auto const& [t, _] : weatherTrack.keysByTick) {
+                                if (t >= lo && t <= hi) ticks.push_back(t);
+                            }
+                            if (ticks.size() <= 1) ctx.selection.selectWeatherKeyframe(keyTick);
+                            else ctx.selection.selectWeatherKeyframes(std::move(ticks));
+                        } else {
+                            ctx.selection.selectWeatherKeyframe(keyTick);
+                        }
+                    } else if (ImGui::GetIO().KeyCtrl && !trackLocked) {
+                        std::vector<int> ticks = ctx.selection.selectedWeatherKeyframes();
+                        auto const       it    = std::ranges::find(ticks, keyTick);
+                        if (it != ticks.end()) ticks.erase(it);
+                        else ticks.push_back(keyTick);
+                        if (ticks.empty()) {
+                            ctx.selection.clear();
+                        } else if (ticks.size() == 1) {
+                            ctx.selection.selectWeatherKeyframe(ticks.front());
+                        } else {
+                            ctx.selection.selectWeatherKeyframes(std::move(ticks));
+                        }
+                    } else if (hoveredWeatherKeySelected && ctx.selection.selectedWeatherKeyframes().size() > 1
+                               && !trackLocked) {
+                        mWeatherGroupDrag                   = true;
+                        mWeatherGroupDragDelta              = 0;
+                        mDraggingWeatherKeyframeOriginTick  = keyTick;
+                        mDraggingWeatherKeyframeStartMouseX = mouse.x;
+                        mDraggingWeatherKeyframeTick        = keyTick;
+                        mDraggingWeatherKeyframeMoved       = false;
+                    } else {
+                        ctx.selection.selectWeatherKeyframe(keyTick);
+                        if (trackLocked) {
+                            submitSeek(ctx, keyTick);
+                        } else {
+                            mDraggingWeatherKeyframeOriginTick  = keyTick;
+                            mDraggingWeatherKeyframeStartMouseX = mouse.x;
+                            mDraggingWeatherKeyframeTick        = keyTick;
+                            mDraggingWeatherKeyframeMoved       = false;
+                        }
+                    }
+                }
+            }
+
+            // 5) Pen preview / Ctrl+Click / Alt+Drag box select / double-click / context menu / seek.
+            bool const penMode = mTool == TimelineTool::Pen;
+            bool const ctrlSelectPen =
+                mTool == TimelineTool::Select && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+            bool const altBoxSelect           = mTool == TimelineTool::Select && ImGui::GetIO().KeyAlt;
+            auto const startWeatherBoxPending = [&](bool penAdd, int penTick) {
+                mBoxPending          = true;
+                mBoxSelecting        = false;
+                mBoxAdditive         = ImGui::GetIO().KeyCtrl;
+                mBoxStart            = mouse;
+                mBoxClickTimeOfDay   = false;
+                mBoxClickWeather     = true;
+                mPenPendingAdd       = penAdd;
+                mPenPendingTimeOfDay = false;
+                mPenPendingWeather   = penAdd;
+                mPenPendingTick      = penTick;
+                mBoxClickCameraId.clear();
+            };
+
+            std::optional<int> penPreviewTick;
+            if (mouseInRow && !overWeatherKey && !trackLocked && (penMode || ctrlSelectPen)) {
+                int penTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                if (shiftSnap) {
+                    penTick = snapToEditPoints(ctx, penTick, scale.pixelsPerTick, true, true, {}, {});
+                } else if (mSnapEnabled) {
+                    penTick = snapTick(penTick);
+                }
+                penTick = std::clamp(penTick, 0, state.totalTicks);
+                if (!weatherTrack.keysByTick.contains(penTick)) penPreviewTick = penTick;
+            }
+            if (penPreviewTick.has_value()) {
+                float const penX = scale.xAt(static_cast<float>(*penPreviewTick));
+                drawKeyframeDiamond(
+                    drawList,
+                    penX,
+                    bandCenterY,
+                    keyRadius,
+                    theme::withAlpha(kWeatherAccent, 0x88),
+                    theme::withAlpha(theme::kKeyframeOutline, 0xa0)
+                );
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed = true;
+                    if (penMode) {
+                        startWeatherBoxPending(true, *penPreviewTick);
+                    } else {
+                        addWeatherKeyframeAt(ctx, *penPreviewTick);
+                    }
+                }
+            } else if (mouseInRow && !overWeatherKey && !clickConsumed) {
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    clickConsumed = true;
+                    int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                    if (mSnapEnabled) tick = snapTick(tick);
+                    mWeatherLaneMenuTick = tick;
+                    float const anchorX  = scale.xAt(static_cast<float>(tick));
+                    ctx.selection.selectWeatherTrack();
+                    widgets::openAnchoredPopup("##weather-lane-menu", {anchorX, blockTop}, {anchorX, blockBot});
+                } else if (!trackLocked && mTool == TimelineTool::Select
+                           && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    int addTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
+                    if (shiftSnap) {
+                        addTick = snapToEditPoints(ctx, addTick, scale.pixelsPerTick, true, true, {}, {});
+                    } else if (mSnapEnabled) {
+                        addTick = snapTick(addTick);
+                    }
+                    addTick = std::clamp(addTick, 0, state.totalTicks);
+                    if (!weatherTrack.keysByTick.contains(addTick)) {
+                        clickConsumed = true;
+                        addWeatherKeyframeAt(ctx, addTick);
+                    }
+                } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    clickConsumed = true;
+                    if (penMode || altBoxSelect || mTool == TimelineTool::Select) {
+                        startWeatherBoxPending(false, -1);
+                    } else {
+                        ctx.selection.selectWeatherTrack();
+                        submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
+                    }
+                }
+            }
+
+            // 6) Draw weather keyframe diamond nodes on top of the spans.
+            for (auto const& [keyTick, key] : weatherTrack.keysByTick) {
+                bool const selected = ctx.selection.isWeatherKeyframeSelected(keyTick);
+                bool const dragging = (mWeatherGroupDrag && selected)
+                                   || (!mWeatherGroupDrag && mDraggingWeatherKeyframeOriginTick == keyTick);
+                int const   drawnTick = drawnTickForWeatherKey(keyTick, selected);
+                float const kx        = scale.xAt(static_cast<float>(drawnTick));
+                if (kx < layout.canvasLeft - keyRadius || kx > layout.fullMax.x + keyRadius) continue;
+                bool const inBox = mBoxSelecting && !trackLocked && boxContains(kx, bandCenterY);
+                if (inBox) weatherBoxHits.push_back(keyTick);
+                bool const  hovered = hoveredWeatherKeyTick && *hoveredWeatherKeyTick == keyTick;
+                bool const  lit     = selected || dragging || inBox;
+                float const radius  = lit ? keyRadius + 1.0f : (hovered ? keyRadius + 0.5f : keyRadius);
+                ImU32 const modeCol = weatherModeColor(key.weather);
+                ImU32 const fill    = lit ? theme::kSelected : (trackEnabled ? modeCol : theme::kKeyframeDisabled);
+                ImU32 const outline = lit ? theme::kIconHighlight : theme::kKeyframeOutline;
+                if (hovered) {
+                    ImU32 const glowCol = lit ? theme::kSelected : modeCol;
+                    drawKeyframeDiamond(
+                        drawList,
+                        kx,
+                        bandCenterY,
+                        radius + 2.5f * uiScale,
+                        theme::withAlpha(glowCol, 0x44),
+                        theme::withAlpha(glowCol, 0x90)
+                    );
+                }
+                drawKeyframeDiamond(drawList, kx, bandCenterY, radius, fill, outline);
+            }
         } else if (row.kind == TrackRowKind::Audio) {
             auto const* audioTrack = state::editing::ClipOps::findAudioTrack(*project, row.id);
             if (audioTrack) {
@@ -5476,13 +7132,17 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 return keyTick;
             };
             auto const startBoxPending = [&](std::string const& cameraId, bool penAdd, int penTick) {
-                mBoxPending       = true;
-                mBoxSelecting     = false;
-                mBoxAdditive      = ImGui::GetIO().KeyCtrl;
-                mBoxStart         = mouse;
-                mBoxClickCameraId = cameraId;
-                mPenPendingAdd    = penAdd;
-                mPenPendingTick   = penTick;
+                mBoxPending          = true;
+                mBoxSelecting        = false;
+                mBoxAdditive         = ImGui::GetIO().KeyCtrl;
+                mBoxStart            = mouse;
+                mBoxClickCameraId    = cameraId;
+                mBoxClickTimeOfDay   = false;
+                mBoxClickWeather     = false;
+                mPenPendingAdd       = penAdd;
+                mPenPendingTimeOfDay = false;
+                mPenPendingWeather   = false;
+                mPenPendingTick      = penTick;
             };
 
             // Priority 1: existing keyframe hit-testing (checked first so keyframes always win over clips).
@@ -5575,8 +7235,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 } else if (mSnapEnabled) {
                     penTick = snapTick(penTick);
                 }
-                penTick = std::clamp(penTick, 0, state.totalTicks);
-                if (!camera.keysByTick.contains(penTick)) penPreviewTick = penTick;
+                penTick        = std::clamp(penTick, 0, state.totalTicks);
+                penPreviewTick = penTick;
             }
 
             // 1) Uncovered gaps across [0, state.totalTicks].
@@ -6508,6 +8168,295 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 mDraggingTimelapseKeyframeMoved      = false;
             }
         }
+    } else if (allowInput && mTimeOfDayGroupDrag) {
+        auto const& keys  = project->timeOfDayTrack.keysByTick;
+        auto const  ticks = ctx.selection.selectedTimeOfDayKeyframes();
+        if (project->timeOfDayTrack.locked || ticks.empty() || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            mTimeOfDayGroupDrag                  = false;
+            mTimeOfDayGroupDragDelta             = 0;
+            mDraggingTimeOfDayKeyframeOriginTick = -1;
+            mDraggingTimeOfDayKeyframeTick       = -1;
+            mDraggingTimeOfDayKeyframeMoved      = false;
+        } else {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (std::abs(ImGui::GetMousePos().x - mDraggingTimeOfDayKeyframeStartMouseX) >= 2.0f * metrics::scale()) {
+                mDraggingTimeOfDayKeyframeMoved = true;
+            }
+            int delta = 0;
+            if (mDraggingTimeOfDayKeyframeMoved) {
+                int const raw    = tickFromMouse();
+                int const target = shiftSnap
+                                     ? snapToEditPoints(
+                                           ctx,
+                                           raw,
+                                           scale.pixelsPerTick,
+                                           true,
+                                           true,
+                                           {},
+                                           {},
+                                           {},
+                                           std::nullopt,
+                                           std::nullopt,
+                                           std::nullopt,
+                                           {},
+                                           [&](int tick) { return ctx.selection.isTimeOfDayKeyframeSelected(tick); }
+                                       )
+                                     : snapTick(raw);
+                delta            = target - mDraggingTimeOfDayKeyframeOriginTick;
+                int minTick      = std::numeric_limits<int>::max();
+                int maxTick      = std::numeric_limits<int>::min();
+                for (int const tick : ticks) {
+                    minTick = std::min(minTick, tick);
+                    maxTick = std::max(maxTick, tick);
+                }
+                delta               = std::clamp(delta, -minTick, state.totalTicks - maxTick);
+                bool const collides = std::ranges::any_of(ticks, [&](int tick) {
+                    int const moved = tick + delta;
+                    return keys.contains(moved) && !ctx.selection.isTimeOfDayKeyframeSelected(moved);
+                });
+                if (collides) delta = mTimeOfDayGroupDragDelta;
+            }
+            mTimeOfDayGroupDragDelta = delta;
+            float const markerX      = scale.xAt(static_cast<float>(mDraggingTimeOfDayKeyframeOriginTick + delta));
+            drawList->AddLine(
+                {markerX, layout.bodyTop},
+                {markerX, layout.bodyBottom},
+                theme::withAlpha(theme::kKeyframeSelected, 180),
+                1.0f
+            );
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (mDraggingTimeOfDayKeyframeMoved && delta != 0) {
+                    EditorAction action{EditorActionType::MoveTimeOfDayKeyframes};
+                    action.ticks         = ticks;
+                    action.secondaryTick = delta;
+                    ctx.submitAction(std::move(action));
+                    std::vector<int> moved;
+                    moved.reserve(ticks.size());
+                    for (int const tick : ticks) moved.push_back(tick + delta);
+                    queueTimeOfDayKeyframesSelection(std::move(moved));
+                } else if (!mDraggingTimeOfDayKeyframeMoved) {
+                    ctx.selection.selectTimeOfDayKeyframe(mDraggingTimeOfDayKeyframeOriginTick);
+                    submitSeek(ctx, mDraggingTimeOfDayKeyframeOriginTick);
+                }
+                mTimeOfDayGroupDrag                  = false;
+                mTimeOfDayGroupDragDelta             = 0;
+                mDraggingTimeOfDayKeyframeOriginTick = -1;
+                mDraggingTimeOfDayKeyframeTick       = -1;
+                mDraggingTimeOfDayKeyframeMoved      = false;
+            }
+        }
+    } else if (allowInput && mDraggingTimeOfDayKeyframeOriginTick >= 0) {
+        auto const& keys  = project->timeOfDayTrack.keysByTick;
+        auto const  keyIt = keys.find(mDraggingTimeOfDayKeyframeOriginTick);
+        if (keyIt == keys.end() || project->timeOfDayTrack.locked || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            mDraggingTimeOfDayKeyframeOriginTick = -1;
+            mDraggingTimeOfDayKeyframeTick       = -1;
+            mDraggingTimeOfDayKeyframeMoved      = false;
+        } else {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (std::abs(ImGui::GetMousePos().x - mDraggingTimeOfDayKeyframeStartMouseX) >= 2.0f * metrics::scale()) {
+                mDraggingTimeOfDayKeyframeMoved = true;
+            }
+            int minimum = 0;
+            int maximum = state.totalTicks;
+            if (keyIt != keys.begin()) minimum = std::min(state.totalTicks, std::prev(keyIt)->first + 1);
+            auto const next = std::next(keyIt);
+            if (next != keys.end()) maximum = std::max(0, next->first - 1);
+
+            int candidateTick = mDraggingTimeOfDayKeyframeOriginTick;
+            if (mDraggingTimeOfDayKeyframeMoved) {
+                int const raw    = tickFromMouse();
+                int const target = shiftSnap
+                                     ? snapToEditPoints(
+                                           ctx,
+                                           raw,
+                                           scale.pixelsPerTick,
+                                           true,
+                                           true,
+                                           {},
+                                           {},
+                                           {},
+                                           std::nullopt,
+                                           std::nullopt,
+                                           std::nullopt,
+                                           {},
+                                           [&](int tick) { return tick == mDraggingTimeOfDayKeyframeOriginTick; }
+                                       )
+                                     : snapTick(raw);
+                if (minimum <= maximum) {
+                    candidateTick = std::clamp(target, minimum, maximum);
+                }
+            }
+            mDraggingTimeOfDayKeyframeTick = candidateTick;
+            float const markerX            = scale.xAt(static_cast<float>(candidateTick));
+            drawList->AddLine(
+                {markerX, layout.bodyTop},
+                {markerX, layout.bodyBottom},
+                theme::withAlpha(theme::kKeyframeSelected, 180),
+                1.0f
+            );
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (mDraggingTimeOfDayKeyframeMoved) {
+                    if (candidateTick != mDraggingTimeOfDayKeyframeOriginTick) {
+                        EditorAction action{EditorActionType::MoveTimeOfDayKeyframe};
+                        action.tick          = mDraggingTimeOfDayKeyframeOriginTick;
+                        action.secondaryTick = candidateTick;
+                        ctx.submitAction(std::move(action));
+                        queueTimeOfDayKeyframeSelection(candidateTick);
+                    }
+                } else {
+                    submitSeek(ctx, mDraggingTimeOfDayKeyframeOriginTick);
+                }
+                mDraggingTimeOfDayKeyframeOriginTick = -1;
+                mDraggingTimeOfDayKeyframeTick       = -1;
+                mDraggingTimeOfDayKeyframeMoved      = false;
+            }
+        }
+    } else if (allowInput && mWeatherGroupDrag) {
+        auto const& keys  = project->weatherTrack.keysByTick;
+        auto const  ticks = ctx.selection.selectedWeatherKeyframes();
+        if (project->weatherTrack.locked || ticks.empty() || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            mWeatherGroupDrag                  = false;
+            mWeatherGroupDragDelta             = 0;
+            mDraggingWeatherKeyframeOriginTick = -1;
+            mDraggingWeatherKeyframeTick       = -1;
+            mDraggingWeatherKeyframeMoved      = false;
+        } else {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (std::abs(ImGui::GetMousePos().x - mDraggingWeatherKeyframeStartMouseX) >= 2.0f * metrics::scale()) {
+                mDraggingWeatherKeyframeMoved = true;
+            }
+            int delta = 0;
+            if (mDraggingWeatherKeyframeMoved) {
+                int const raw    = tickFromMouse();
+                int const target = shiftSnap
+                                     ? snapToEditPoints(
+                                           ctx,
+                                           raw,
+                                           scale.pixelsPerTick,
+                                           true,
+                                           true,
+                                           {},
+                                           {},
+                                           {},
+                                           std::nullopt,
+                                           std::nullopt,
+                                           std::nullopt,
+                                           {},
+                                           {},
+                                           [&](int tick) { return ctx.selection.isWeatherKeyframeSelected(tick); }
+                                       )
+                                     : snapTick(raw);
+                delta            = target - mDraggingWeatherKeyframeOriginTick;
+                int minTick      = std::numeric_limits<int>::max();
+                int maxTick      = std::numeric_limits<int>::min();
+                for (int const tick : ticks) {
+                    minTick = std::min(minTick, tick);
+                    maxTick = std::max(maxTick, tick);
+                }
+                delta               = std::clamp(delta, -minTick, state.totalTicks - maxTick);
+                bool const collides = std::ranges::any_of(ticks, [&](int tick) {
+                    int const moved = tick + delta;
+                    return keys.contains(moved) && !ctx.selection.isWeatherKeyframeSelected(moved);
+                });
+                if (collides) delta = mWeatherGroupDragDelta;
+            }
+            mWeatherGroupDragDelta = delta;
+            float const markerX    = scale.xAt(static_cast<float>(mDraggingWeatherKeyframeOriginTick + delta));
+            drawList->AddLine(
+                {markerX, layout.bodyTop},
+                {markerX, layout.bodyBottom},
+                theme::withAlpha(theme::kKeyframeSelected, 180),
+                1.0f
+            );
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (mDraggingWeatherKeyframeMoved && delta != 0) {
+                    EditorAction action{EditorActionType::MoveWeatherKeyframes};
+                    action.ticks         = ticks;
+                    action.secondaryTick = delta;
+                    ctx.submitAction(std::move(action));
+                    std::vector<int> moved;
+                    moved.reserve(ticks.size());
+                    for (int const tick : ticks) moved.push_back(tick + delta);
+                    queueWeatherKeyframesSelection(std::move(moved));
+                } else if (!mDraggingWeatherKeyframeMoved) {
+                    ctx.selection.selectWeatherKeyframe(mDraggingWeatherKeyframeOriginTick);
+                    submitSeek(ctx, mDraggingWeatherKeyframeOriginTick);
+                }
+                mWeatherGroupDrag                  = false;
+                mWeatherGroupDragDelta             = 0;
+                mDraggingWeatherKeyframeOriginTick = -1;
+                mDraggingWeatherKeyframeTick       = -1;
+                mDraggingWeatherKeyframeMoved      = false;
+            }
+        }
+    } else if (allowInput && mDraggingWeatherKeyframeOriginTick >= 0) {
+        auto const& keys  = project->weatherTrack.keysByTick;
+        auto const  keyIt = keys.find(mDraggingWeatherKeyframeOriginTick);
+        if (keyIt == keys.end() || project->weatherTrack.locked || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            mDraggingWeatherKeyframeOriginTick = -1;
+            mDraggingWeatherKeyframeTick       = -1;
+            mDraggingWeatherKeyframeMoved      = false;
+        } else {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (std::abs(ImGui::GetMousePos().x - mDraggingWeatherKeyframeStartMouseX) >= 2.0f * metrics::scale()) {
+                mDraggingWeatherKeyframeMoved = true;
+            }
+            int minimum = 0;
+            int maximum = state.totalTicks;
+            if (keyIt != keys.begin()) minimum = std::min(state.totalTicks, std::prev(keyIt)->first + 1);
+            auto const next = std::next(keyIt);
+            if (next != keys.end()) maximum = std::max(0, next->first - 1);
+
+            int candidateTick = mDraggingWeatherKeyframeOriginTick;
+            if (mDraggingWeatherKeyframeMoved) {
+                int const raw    = tickFromMouse();
+                int const target = shiftSnap ? snapToEditPoints(
+                                                   ctx,
+                                                   raw,
+                                                   scale.pixelsPerTick,
+                                                   true,
+                                                   true,
+                                                   {},
+                                                   {},
+                                                   {},
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   {},
+                                                   {},
+                                                   [&](int tick) { return tick == mDraggingWeatherKeyframeOriginTick; }
+                                               )
+                                             : snapTick(raw);
+                if (minimum <= maximum) {
+                    candidateTick = std::clamp(target, minimum, maximum);
+                }
+            }
+            mDraggingWeatherKeyframeTick = candidateTick;
+            float const markerX          = scale.xAt(static_cast<float>(candidateTick));
+            drawList->AddLine(
+                {markerX, layout.bodyTop},
+                {markerX, layout.bodyBottom},
+                theme::withAlpha(theme::kKeyframeSelected, 180),
+                1.0f
+            );
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (mDraggingWeatherKeyframeMoved) {
+                    if (candidateTick != mDraggingWeatherKeyframeOriginTick) {
+                        EditorAction action{EditorActionType::MoveWeatherKeyframe};
+                        action.tick          = mDraggingWeatherKeyframeOriginTick;
+                        action.secondaryTick = candidateTick;
+                        ctx.submitAction(std::move(action));
+                        queueWeatherKeyframeSelection(candidateTick);
+                    }
+                } else {
+                    submitSeek(ctx, mDraggingWeatherKeyframeOriginTick);
+                }
+                mDraggingWeatherKeyframeOriginTick = -1;
+                mDraggingWeatherKeyframeTick       = -1;
+                mDraggingWeatherKeyframeMoved      = false;
+            }
+        }
     } else if (allowInput && mClipDragMode != 0) {
         auto const hit = state::editing::ClipOps::findClipWithCamera(*project, mClipDragId);
         if (!hit || hit.camera->locked || hit.clip->locked || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
@@ -6683,12 +8632,16 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         && ImGui::GetMousePos().x >= layout.canvasLeft && ImGui::GetMousePos().x <= layout.fullMax.x
         && ImGui::GetMousePos().y >= layout.camerasTop && ImGui::GetMousePos().y < layout.bodyBottom) {
         if (mTool == TimelineTool::Select) {
-            mBoxPending     = true;
-            mBoxSelecting   = false;
-            mBoxAdditive    = ImGui::GetIO().KeyCtrl;
-            mBoxStart       = ImGui::GetMousePos();
-            mPenPendingAdd  = false;
-            mPenPendingTick = -1;
+            mBoxPending          = true;
+            mBoxSelecting        = false;
+            mBoxAdditive         = ImGui::GetIO().KeyCtrl;
+            mBoxStart            = ImGui::GetMousePos();
+            mBoxClickTimeOfDay   = false;
+            mBoxClickWeather     = false;
+            mPenPendingAdd       = false;
+            mPenPendingTimeOfDay = false;
+            mPenPendingWeather   = false;
+            mPenPendingTick      = -1;
             mBoxClickCameraId.clear();
         } else {
             submitSeek(ctx, std::clamp(scale.tickAt(ImGui::GetMousePos().x), 0, state.totalTicks));
@@ -6701,17 +8654,54 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         }
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             if (mBoxSelecting) {
+                auto const selectTimeOfDayHits = [&](std::vector<int> ticks) {
+                    if (ticks.empty()) return;
+                    if (ticks.size() == 1) ctx.selection.selectTimeOfDayKeyframe(ticks.front());
+                    else ctx.selection.selectTimeOfDayKeyframes(std::move(ticks));
+                };
+                auto const selectWeatherHits = [&](std::vector<int> ticks) {
+                    if (ticks.empty()) return;
+                    if (ticks.size() == 1) ctx.selection.selectWeatherKeyframe(ticks.front());
+                    else ctx.selection.selectWeatherKeyframes(std::move(ticks));
+                };
                 if (mBoxAdditive) {
-                    std::vector<state::editing::model::SelectedKeyframe> merged = ctx.selection.keyframes();
-                    for (auto const& hit : boxHits) {
-                        if (!ctx.selection.isKeyframeSelected(hit.trackId, hit.tick)) merged.push_back(hit);
+                    if (!weatherBoxHits.empty()
+                        && (mBoxClickWeather || (boxHits.empty() && timeOfDayBoxHits.empty()))) {
+                        std::vector<int> merged = ctx.selection.selectedWeatherKeyframes();
+                        for (int const hit : weatherBoxHits) {
+                            if (!ctx.selection.isWeatherKeyframeSelected(hit)) merged.push_back(hit);
+                        }
+                        selectWeatherHits(std::move(merged));
+                    } else if (!timeOfDayBoxHits.empty() && (mBoxClickTimeOfDay || boxHits.empty())) {
+                        std::vector<int> merged = ctx.selection.selectedTimeOfDayKeyframes();
+                        for (int const hit : timeOfDayBoxHits) {
+                            if (!ctx.selection.isTimeOfDayKeyframeSelected(hit)) merged.push_back(hit);
+                        }
+                        selectTimeOfDayHits(std::move(merged));
+                    } else if (!boxHits.empty() || !ctx.selection.keyframes().empty()) {
+                        std::vector<state::editing::model::SelectedKeyframe> merged = ctx.selection.keyframes();
+                        for (auto const& hit : boxHits) {
+                            if (!ctx.selection.isKeyframeSelected(hit.trackId, hit.tick)) merged.push_back(hit);
+                        }
+                        ctx.selection.setKeyframes(std::move(merged));
                     }
-                    ctx.selection.setKeyframes(std::move(merged));
+                } else if (mBoxClickWeather && !weatherBoxHits.empty()) {
+                    selectWeatherHits(std::move(weatherBoxHits));
+                } else if (mBoxClickTimeOfDay && !timeOfDayBoxHits.empty()) {
+                    selectTimeOfDayHits(std::move(timeOfDayBoxHits));
                 } else if (!boxHits.empty()) {
                     ctx.selection.setKeyframes(std::move(boxHits));
+                } else if (!timeOfDayBoxHits.empty()) {
+                    selectTimeOfDayHits(std::move(timeOfDayBoxHits));
+                } else if (!weatherBoxHits.empty()) {
+                    selectWeatherHits(std::move(weatherBoxHits));
                 } else {
                     ctx.selection.clear();
                 }
+            } else if (mPenPendingAdd && mPenPendingTimeOfDay && mPenPendingTick >= 0) {
+                addTimeOfDayKeyframeAt(ctx, mPenPendingTick);
+            } else if (mPenPendingAdd && mPenPendingWeather && mPenPendingTick >= 0) {
+                addWeatherKeyframeAt(ctx, mPenPendingTick);
             } else if (mPenPendingAdd && !mBoxClickCameraId.empty() && mPenPendingTick >= 0) {
                 EditorAction action{EditorActionType::AddCameraKeyframe};
                 action.id   = mBoxClickCameraId;
@@ -6722,6 +8712,12 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 });
             } else if (mBoxAdditive) {
                 // A Ctrl+click that never became a box leaves the selection alone.
+            } else if (mBoxClickWeather) {
+                ctx.selection.selectWeatherTrack();
+                submitSeek(ctx, std::clamp(scale.tickAt(mBoxStart.x), 0, state.totalTicks));
+            } else if (mBoxClickTimeOfDay) {
+                ctx.selection.selectTimeOfDayTrack();
+                submitSeek(ctx, std::clamp(scale.tickAt(mBoxStart.x), 0, state.totalTicks));
             } else if (!mBoxClickCameraId.empty()) {
                 ctx.selection.select(state::editing::model::SelectedCamera{mBoxClickCameraId});
                 if (ctx.commands.isAutoPreviewEnabled()) {
@@ -6733,10 +8729,14 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             } else {
                 submitSeek(ctx, std::clamp(scale.tickAt(mBoxStart.x), 0, state.totalTicks));
             }
-            mBoxPending     = false;
-            mBoxSelecting   = false;
-            mPenPendingAdd  = false;
-            mPenPendingTick = -1;
+            mBoxPending          = false;
+            mBoxSelecting        = false;
+            mBoxClickTimeOfDay   = false;
+            mBoxClickWeather     = false;
+            mPenPendingAdd       = false;
+            mPenPendingTimeOfDay = false;
+            mPenPendingWeather   = false;
+            mPenPendingTick      = -1;
             mBoxClickCameraId.clear();
         }
     }

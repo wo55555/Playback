@@ -361,6 +361,36 @@ void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, I
         drawList->PathStroke(color, 0, legStroke);
         break;
     }
+    case VectorIcon::MarkIn: {
+        // Bold left bracket opening right + inward playhead arrow, matching SkipStart/SkipEnd weight.
+        float const thick   = std::max(stroke, h * 0.28f);
+        float const cornerR = thick * 0.35f;
+        float const leftX   = centre.x - h * 0.90f;
+        float const spineR  = leftX + thick;
+        float const jawR    = centre.x - h * 0.16f;
+        float const topY    = centre.y - h * 0.94f;
+        float const botY    = centre.y + h * 0.94f;
+        drawList->AddRectFilled({leftX, topY}, {spineR, botY}, color, cornerR);
+        drawList->AddRectFilled({leftX, topY}, {jawR, topY + thick}, color, cornerR);
+        drawList->AddRectFilled({leftX, botY - thick}, {jawR, botY}, color, cornerR);
+        addTriangle(drawList, centre, h * 0.08f, h * 0.90f, h * 0.45f, true, color);
+        break;
+    }
+    case VectorIcon::MarkOut: {
+        // Inward playhead arrow + bold right bracket opening left, mirroring MarkIn.
+        float const thick   = std::max(stroke, h * 0.28f);
+        float const cornerR = thick * 0.35f;
+        float const rightX  = centre.x + h * 0.90f;
+        float const spineL  = rightX - thick;
+        float const jawL    = centre.x + h * 0.16f;
+        float const topY    = centre.y - h * 0.94f;
+        float const botY    = centre.y + h * 0.94f;
+        addTriangle(drawList, centre, -h * 0.90f, -h * 0.08f, h * 0.45f, false, color);
+        drawList->AddRectFilled({spineL, topY}, {rightX, botY}, color, cornerR);
+        drawList->AddRectFilled({jawL, topY}, {rightX, topY + thick}, color, cornerR);
+        drawList->AddRectFilled({jawL, botY - thick}, {rightX, botY}, color, cornerR);
+        break;
+    }
     }
 }
 

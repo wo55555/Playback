@@ -49,6 +49,26 @@ struct SelectedTimelapseKeyframe {
     int tick{};
 };
 
+struct SelectedTimeOfDayTrack {};
+
+struct SelectedTimeOfDayKeyframe {
+    int tick{};
+};
+
+struct SelectedTimeOfDayKeyframes {
+    std::vector<int> ticks;
+};
+
+struct SelectedWeatherTrack {};
+
+struct SelectedWeatherKeyframe {
+    int tick{};
+};
+
+struct SelectedWeatherKeyframes {
+    std::vector<int> ticks;
+};
+
 struct SelectedAudioTrack {
     std::string trackId;
 };
@@ -70,6 +90,12 @@ using Selection = std::variant<
     SelectedFreezeKeyframe,
     SelectedTimelapseTrack,
     SelectedTimelapseKeyframe,
+    SelectedTimeOfDayTrack,
+    SelectedTimeOfDayKeyframe,
+    SelectedTimeOfDayKeyframes,
+    SelectedWeatherTrack,
+    SelectedWeatherKeyframe,
+    SelectedWeatherKeyframes,
     SelectedAudioTrack,
     SelectedAudioClip>;
 
@@ -91,6 +117,20 @@ public:
     void                                   selectTimelapseKeyframe(int tick);
     [[nodiscard]] bool                     isTimelapseTrackSelected() const;
     [[nodiscard]] std::optional<int>       selectedTimelapseKeyframe() const;
+    void                                           selectTimeOfDayTrack();
+    void                                           selectTimeOfDayKeyframe(int tick);
+    void                                           selectTimeOfDayKeyframes(std::vector<int> ticks);
+    [[nodiscard]] bool                             isTimeOfDayTrackSelected() const;
+    [[nodiscard]] std::optional<int>               selectedTimeOfDayKeyframe() const;
+    [[nodiscard]] std::vector<int>                 selectedTimeOfDayKeyframes() const;
+    [[nodiscard]] bool                             isTimeOfDayKeyframeSelected(int tick) const;
+    void                                           selectWeatherTrack();
+    void                                           selectWeatherKeyframe(int tick);
+    void                                           selectWeatherKeyframes(std::vector<int> ticks);
+    [[nodiscard]] bool                             isWeatherTrackSelected() const;
+    [[nodiscard]] std::optional<int>               selectedWeatherKeyframe() const;
+    [[nodiscard]] std::vector<int>                 selectedWeatherKeyframes() const;
+    [[nodiscard]] bool                             isWeatherKeyframeSelected(int tick) const;
     void                                           selectAudioTrack(std::string trackId);
     void                                           selectAudioClip(std::string trackId, std::string clipId);
     [[nodiscard]] std::optional<std::string>       selectedAudioTrackId() const;

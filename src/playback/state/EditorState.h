@@ -60,6 +60,9 @@ struct EditorState {
     bool                                                         paused{};
     bool                                                         followingRecordedPlayer{};
     bool                                                         followThirdPerson{};
+    bool                                                         replayHasServerResourcePacks{};
+    bool                                                         loadedWithServerResourcePacksDisabled{};
+    bool                                                         disableServerResourcePacks{};
     std::string                                                  replaySubjectChoice;
     // The camera track under the playhead, if any.
     std::string                                                  activeCameraId;

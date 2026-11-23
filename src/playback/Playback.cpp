@@ -27,6 +27,7 @@
 #include "playback/visuals/ReplayHudHooks.h"
 #include "playback/visuals/ReplayHudVisibility.h"
 #include "playback/visuals/ReplaySubjectHideHooks.h"
+#include "playback/visuals/ReplayWorldEnvHooks.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -127,6 +128,9 @@ bool Playback::hook() {
     }
     screen::hookRecordControls(true);
     visuals::hookReplayHudVisibility(true);
+    if (!visuals::hookReplayWorldEnv(true)) {
+        getSelf().getLogger().warn("Unable to install replay world environment hooks");
+    }
 
     getEventListeners().emplace(
         ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientCommandRegisterEvent>([this](auto&&) {
@@ -235,6 +239,7 @@ bool Playback::unhook() {
     if (!editor::graphics::hookSeekFreeze(false)) {
         getSelf().getLogger().warn("Unable to remove the seek freeze hook during shutdown");
     }
+    visuals::hookReplayWorldEnv(false);
     visuals::hookReplayHudVisibility(false);
     screen::hookRecordControls(false);
     screen::hookMainMenu(false);
