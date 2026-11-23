@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The replay browser, editor overlay, export progress screen, and frame capture now remain visible without hanging when third-party overlays or capture tools (such as RTSS) hook, patch, or bypass DXGI swap-chain presentation and resizing.
+- Held weapons and attachables (such as bows, crossbows, and tridents) now stay attached to the player's hand across skin loads and mid-replay skin swaps, remain visible alongside the player's arm in first-person follow for persona skins, and continue updating on the recorded player while following someone else.
 
 ## [0.4.1-mc26.20] - 2026-11-22
 
