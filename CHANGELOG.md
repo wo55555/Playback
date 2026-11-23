@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The replay browser, editor overlay, export progress screen, and frame capture now remain visible without hanging when third-party overlays or capture tools (such as RTSS) hook, patch, or bypass DXGI swap-chain presentation and resizing.
 - Held weapons and attachables (such as bows, crossbows, and tridents) now stay attached to the player's hand across skin loads and mid-replay skin swaps, remain visible alongside the player's arm in first-person follow for persona skins, and continue updating on the recorded player while following someone else.
 - Player skins (including custom skins and other players' skins captured in snapshots) now stay intact during offline replay even when "Only Allow Trusted Skins" is enabled.
+- Players gliding with an elytra now tilt horizontally along their flight path with spread wings during replay and timeline seeks instead of remaining upright.
 
 ### Added
 
