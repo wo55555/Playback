@@ -35,6 +35,8 @@ enum class EditorKeybind : uint8_t {
     ToggleViewportMaximized,
     MarkExportIn,
     MarkExportOut,
+    JumpExportIn,
+    JumpExportOut,
     TogglePlayback,
     ToggleFollowPerspective,
     SelectAll,

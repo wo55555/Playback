@@ -7,8 +7,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <mmsystem.h>
 #include <windows.h>
+
+#include <mmsystem.h>
 
 #include <algorithm>
 #include <array>

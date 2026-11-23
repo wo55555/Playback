@@ -124,10 +124,15 @@ template <typename Dst, typename Src>
 void copySceneScopeFields(Dst& dst, Src const& src) {
     dst.cameras        = src.cameras;
     dst.markers        = src.markers;
-    dst.speedTrack     = src.speedTrack;
-    dst.freezeTrack    = src.freezeTrack;
-    dst.timelapseTrack = src.timelapseTrack;
-    dst.audioTracks    = src.audioTracks;
+    dst.speedTrack             = src.speedTrack;
+    dst.freezeTrack            = src.freezeTrack;
+    dst.timelapseTrack         = src.timelapseTrack;
+    dst.timeOfDayTrack         = src.timeOfDayTrack;
+    dst.weatherTrack           = src.weatherTrack;
+    dst.daytimeOverrideEnabled = src.daytimeOverrideEnabled;
+    dst.daytimeOverrideTicks   = src.daytimeOverrideTicks;
+    dst.weatherOverride        = src.weatherOverride;
+    dst.audioTracks            = src.audioTracks;
     dst.exportInTick   = src.exportInTick;
     dst.exportOutTick  = src.exportOutTick;
 }

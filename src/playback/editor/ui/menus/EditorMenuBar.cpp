@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -266,23 +267,34 @@ void trailingText(char const* text, float rightEdge) {
 }
 
 // Slim bar showing the chosen range against the whole replay, with the playhead marked.
-void rangePreview(int start, int end, int current, int total, float width) {
+// Returns the clicked/scrubbed tick when the user interacts with the bar.
+std::optional<int> rangePreview(int start, int end, int current, int total, float width) {
     float const  h     = 6.0f * metrics::scale();
     float const  w     = std::max(1.0f, width);
     float const  slotH = ImGui::GetFrameHeight();
     ImVec2 const slot  = ImGui::GetCursorScreenPos();
-    ImGui::Dummy({w, slotH});
+    ImGui::InvisibleButton("##export-range-bar", {w, slotH});
+    bool const hovered = ImGui::IsItemHovered();
+    bool const active  = ImGui::IsItemActive();
+    if (hovered && total > 0) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    widgets::itemTooltip("playback.refactorEditor.export.rangePreviewHint"_tr().c_str());
+
     // Occupies a frame-height slot so it lines up with the button sharing its row.
     ImVec2 const min{slot.x, slot.y + (slotH - h) * 0.5f};
     auto*        drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(min, {min.x + w, min.y + h}, theme::kInputBg, h * 0.5f);
-    if (total <= 0) return;
+    if (total <= 0) return std::nullopt;
     auto const at = [&](int tick) {
         return min.x + w * static_cast<float>(std::clamp(tick, 0, total)) / static_cast<float>(total);
     };
     if (end > start) drawList->AddRectFilled({at(start), min.y}, {at(end), min.y + h}, theme::kAccent, h * 0.5f);
     float const px = at(current);
     drawList->AddLine({px, min.y - 2.0f}, {px, min.y + h + 2.0f}, theme::kPlayhead, 2.0f);
+    if (active && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        float const t = std::clamp((ImGui::GetMousePos().x - min.x) / w, 0.0f, 1.0f);
+        return std::clamp(static_cast<int>(std::lround(t * static_cast<float>(total))), 0, total);
+    }
+    return std::nullopt;
 }
 
 void shortcutRow(std::string const& keys, std::string const& description) {
@@ -356,6 +368,8 @@ struct ShortcutGroup {
              {key(EditorKeybind::ResetTimelineZoom), "playback.refactorEditor.shortcuts.zoomReset"_tr()},
              {shortcutPair(EditorKeybind::MarkExportIn, EditorKeybind::MarkExportOut),
               "playback.refactorEditor.shortcuts.exportRange"_tr()},
+             {shortcutPair(EditorKeybind::JumpExportIn, EditorKeybind::JumpExportOut),
+              "playback.refactorEditor.shortcuts.jumpExportRange"_tr()},
              {key(EditorKeybind::ClearExportRange), "playback.refactorEditor.shortcuts.clearExportRange"_tr()},
          }},
         {"playback.refactorEditor.shortcuts.application"_tr(),
@@ -1267,12 +1281,16 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                 }
                 if (mExportRangeMode == static_cast<int>(exporting::ExportRangeMode::SequenceInOut)) {
                     std::string const usePlayhead = "playback.refactorEditor.export.usePlayhead"_tr();
+                    std::string const jumpToFrame = "playback.refactorEditor.export.jumpToFrame"_tr();
                     propertyLabel("playback.refactorEditor.export.startTick"_tr().c_str());
                     float const tickRowRight = ImGui::GetCursorScreenPos().x + valueWidth;
                     inputClampedInt("##export-start-tick", mExportStartTick, 0, maximumReplayTick, fieldWidth);
                     ImGui::SameLine();
                     if (frameIconButton("##export-start-current", ICON_CLOCK, usePlayhead.c_str()))
                         mExportStartTick = std::clamp(state.currentTick, 0, maximumReplayTick);
+                    ImGui::SameLine();
+                    if (frameIconButton("##export-start-jump", ICON_EYE, jumpToFrame.c_str()))
+                        ctx.commands.seekTo(mExportStartTick);
                     trailingText(widgets::formatTick(mExportStartTick).c_str(), tickRowRight);
 
                     propertyLabel("playback.refactorEditor.export.endTick"_tr().c_str());
@@ -1280,18 +1298,23 @@ void EditorMenuBar::drawExportDialog(PanelContext const& ctx) {
                     ImGui::SameLine();
                     if (frameIconButton("##export-end-current", ICON_CLOCK, usePlayhead.c_str()))
                         mExportEndTick = std::clamp(state.currentTick, 0, maximumReplayTick);
+                    ImGui::SameLine();
+                    if (frameIconButton("##export-end-jump", ICON_EYE, jumpToFrame.c_str()))
+                        ctx.commands.seekTo(mExportEndTick);
                     trailingText(widgets::formatTick(mExportEndTick).c_str(), tickRowRight);
 
                     // Range bar under the tick fields, with the reset-to-full-replay button at its end.
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(1);
-                    rangePreview(
-                        mExportStartTick,
-                        mExportEndTick,
-                        state.currentTick,
-                        maximumReplayTick,
-                        valueWidth - frameH - style.ItemSpacing.x
-                    );
+                    if (auto const seekTick = rangePreview(
+                            mExportStartTick,
+                            mExportEndTick,
+                            state.currentTick,
+                            maximumReplayTick,
+                            valueWidth - frameH - style.ItemSpacing.x
+                        )) {
+                        ctx.commands.seekTo(*seekTick);
+                    }
                     ImGui::SameLine();
                     if (frameIconButton(
                             "##export-full-range",

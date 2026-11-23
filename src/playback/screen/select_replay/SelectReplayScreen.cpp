@@ -1,5 +1,6 @@
 #include "SelectReplayScreen.h"
 
+#include "playback/Playback.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/components/MessageDialog.h"
@@ -268,12 +269,10 @@ float toolbarButtonWidth(char const* icon, std::string_view text, char const* tr
     );
 }
 
-bool beginAnchoredPopup(char const* popupId, ImVec2 buttonMinimum, ImVec2 buttonMaximum) {
-    constexpr float popupGap      = 4.0f;
-    constexpr float popupMinWidth = 200.0f;
-    ImVec2 const    display       = ImGui::GetIO().DisplaySize;
-    float const     popupWidth =
-        std::min(std::max(buttonMaximum.x - buttonMinimum.x, popupMinWidth), std::max(1.0f, display.x));
+bool beginAnchoredPopup(char const* popupId, ImVec2 buttonMinimum, ImVec2 buttonMaximum, float minWidth = 200.0f) {
+    constexpr float popupGap = 4.0f;
+    ImVec2 const    display  = ImGui::GetIO().DisplaySize;
+    float const popupWidth = std::min(std::max(buttonMaximum.x - buttonMinimum.x, minWidth), std::max(1.0f, display.x));
     // Kept on screen: a popup wider than the space right of its button shifts left, and one taller than the space
     // below it scrolls.
     float const x         = std::max(0.0f, std::min(buttonMinimum.x, display.x - popupWidth));
@@ -936,12 +935,29 @@ void SelectReplayScreen::drawNavigation() {
     ImVec2 const settingsButtonMaximum = ImGui::GetItemRectMax();
     if (settingsClicked) ImGui::OpenPopup("##settings");
     tooltip("playback.replayBrowser.navigation.settings"_tr().c_str());
-    if (beginAnchoredPopup("##settings", settingsButtonMinimum, settingsButtonMaximum)) {
+    std::string const disablePacksLabel     = "playback.replayBrowser.navigation.disableServerResourcePacks"_tr();
+    float const       settingsPopupMinWidth = std::max(
+        200.0f,
+        std::ceil(
+            textWidth(disablePacksLabel) + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x
+            + ImGui::GetStyle().WindowPadding.x * 2.0f + 8.0f
+        )
+    );
+    if (beginAnchoredPopup("##settings", settingsButtonMinimum, settingsButtonMaximum, settingsPopupMinWidth)) {
         ImGui::SetWindowFontScale(kFontScaleNavControl);
         std::string const refreshLabel = "playback.replayBrowser.navigation.refresh"_tr();
         if (popupIconMenuItem("##refresh-replay-list", ICON_REFRESH, refreshLabel)) {
             submit({playback::state::EditorActionType::RefreshReplayBrowser});
         }
+        ImGui::Separator();
+        bool disabled = Playback::getInstance().getConfig().replay.disableServerResourcePacks;
+        if (ImGui::Checkbox(disablePacksLabel.c_str(), &disabled)) {
+            Playback::getInstance().getConfig().replay.disableServerResourcePacks = disabled;
+            playback::state::EditorAction action{playback::state::EditorActionType::SetDisableServerResourcePacks};
+            action.value = disabled;
+            submit(std::move(action));
+        }
+        tooltip("playback.replayBrowser.navigation.disableServerResourcePacksHint"_tr().c_str());
         ImGui::EndPopup();
     }
     x += iconW + kNavigationLayout.viewGroupGap;
