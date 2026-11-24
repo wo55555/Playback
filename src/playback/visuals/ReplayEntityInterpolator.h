@@ -2,6 +2,8 @@
 
 #include "playback/visuals/ReplaySampleTime.h"
 
+#include "mc/deps/core/math/Vec3.h"
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -9,7 +11,6 @@
 
 class Actor;
 class StrictEntityContext;
-class Vec3;
 struct RenderPositionComponent;
 
 namespace playback::visuals {
@@ -49,6 +50,18 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
 void syncReplayEntityBoundingBox(Actor& actor, Vec3 const& position);
 
 void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, EntityRenderPose current);
+
+// Vehicle seat relation published at tick/render time so a riding passenger stays locked to its vehicle's
+// interpolated position and yaw during both rendering and camera sampling.
+struct ReplayRidingAttachment {
+    EntityRenderKey vehicleKey{};
+    Vec3            seatOffset{}; // passenger tick pos minus vehicle tick pos in world frame at vehicleTickYaw
+    float           vehicleTickYaw{0.0f};
+};
+
+void noteReplayEntityRidingAttachment(EntityRenderKey passengerKey, std::optional<ReplayRidingAttachment> attachment);
+
+void refreshReplayRidingAttachments(std::vector<EntityRenderTarget> const& targets);
 
 // The recorded local player's view at one rendered frame between two ticks; fraction is the partial tick.
 struct LocalViewSample {
