@@ -74,6 +74,8 @@
 #include "mc/util/VarIntDataOutput.h"
 #include "mc/world/ContainerID.h"
 #include "mc/world/actor/Actor.h"
+#include "mc/world/actor/ActorLink.h"
+#include "mc/world/actor/ActorLinkType.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/actor/player/PlayerInventory.h"
 #include "mc/world/actor/player/PlayerListEntry.h"
@@ -329,6 +331,7 @@ bool makeBlockNetworkIdsPortable(Packet& packet, BlockPalette const& palette) {
 
 bool packetMayReferenceRecordedPlayer(MinecraftPacketIds packetId) {
     switch (packetId) {
+    case MinecraftPacketIds::AddActor:
     case MinecraftPacketIds::AddPlayer:
     case MinecraftPacketIds::PlayerList:
     case MinecraftPacketIds::PlayerSkin:
@@ -362,6 +365,12 @@ bool referencesRecordedPlayer(
     auto const runtime = [&sourceRuntimeId](ActorRuntimeID const& id) { return id.rawID == sourceRuntimeId.rawID; };
     auto const unique  = [&sourceUniqueId](ActorUniqueID const& id) { return id.rawID == sourceUniqueId.rawID; };
     switch (packet.getId()) {
+    case MinecraftPacketIds::AddActor: {
+        auto const& addActor = static_cast<AddActorPacket const&>(packet);
+        return std::any_of(addActor.mLinks->begin(), addActor.mLinks->end(), [&unique](ActorLink const& link) {
+            return unique(link.A) || unique(link.B);
+        });
+    }
     case MinecraftPacketIds::AddPlayer: {
         auto const& addPlayer = static_cast<AddPlayerPacket const&>(packet);
         if (unique(addPlayer.mEntityId) || runtime(addPlayer.mRuntimeId) || *addPlayer.mUuid == sourceUuid) {
@@ -424,6 +433,15 @@ bool remapRecordedPlayerReferences(
     mce::UUID const& targetUuid
 ) {
     switch (packet.getId()) {
+    case MinecraftPacketIds::AddActor: {
+        auto& addActor = static_cast<AddActorPacket&>(packet);
+        bool  changed  = false;
+        for (auto& link : *addActor.mLinks) {
+            changed |= remapUniqueId(link.A, sourceUniqueId, targetUniqueId);
+            changed |= remapUniqueId(link.B, sourceUniqueId, targetUniqueId);
+        }
+        return changed;
+    }
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(packet);
         bool  changed   = addPlayer.mEntityId->rawID == sourceUniqueId.rawID
@@ -525,7 +543,10 @@ LiveActorTransform readLiveActorTransform(Actor const& actor) {
 
     auto const& entityContext = actor.getEntityContext();
     auto const  interpolator  = entityContext.tryGetComponent<MovementInterpolatorComponent>();
-    if (interpolator) {
+    // A vehicle's MovementInterpolatorComponent leads its passengers by up to 3 ticks; keep it locked to
+    // actor.getPosition()/getRotation() while carrying passengers so vehicle and rider stay synchronized.
+    bool const useInterpolator = interpolator && !actor.hasPassenger();
+    if (useInterpolator) {
         if (interpolator->mPositionSteps > 0) position = *interpolator->mPos;
         if (interpolator->mRotationSteps > 0) rotation = *interpolator->mRot;
     }
@@ -534,7 +555,7 @@ LiveActorTransform readLiveActorTransform(Actor const& actor) {
     if (auto const headRotation = entityContext.tryGetComponent<ActorHeadRotationComponent>()) {
         headYaw = headRotation->mYHeadRot;
     }
-    if (interpolator && interpolator->mHeadYawSteps > 0) headYaw = interpolator->mHeadYaw;
+    if (useInterpolator && interpolator->mHeadYawSteps > 0) headYaw = interpolator->mHeadYaw;
 
     float bodyYaw = rotation.y;
     if (auto const bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
@@ -694,31 +715,29 @@ PlaybackMeta metaFromJson(nlohmann::ordered_json const& json) {
 
 // The vanilla camera sits below the entity position while sneaking or swimming; the replayed actor has no such state.
 PlaybackCameraSample captureLocalCameraSample(LocalPlayer& player) {
-    Vec3 offset{0.0f, 0.0f, 0.0f};
+    auto const position = player.getPosition();
+    Vec3       offset{0.0f, 0.0f, 0.0f};
     if (player.getEntityContext().hasComponent<VanillaOffsetComponent>()) {
-        auto const camera   = VanillaOffsetSystem::getCameraPosition(player, 1.0f);
-        auto const position = player.getPosition();
-        offset              = {camera.x - position.x, camera.y - position.y, camera.z - position.z};
+        auto const camera = VanillaOffsetSystem::getCameraPosition(player, 1.0f);
+        offset            = {camera.x - position.x, camera.y - position.y, camera.z - position.z};
     }
+
+    auto const client        = ll::service::getClientInstance();
+    auto*      cameraActor   = client ? client->getCameraActor() : nullptr;
+    bool const foreignCamera = cameraActor && cameraActor != &player;
+
     PlaybackCameraSample sample{offset.x, offset.y, offset.z, latestRenderedFov()};
     // While sleeping the vanilla camera detaches from the entity, so its absolute pose is recorded instead.
-    if (player.isSleeping()) {
-        bool foreignCamera = false;
-        if (auto client = ll::service::getClientInstance()) {
-            auto* cameraActor = client->getCameraActor();
-            foreignCamera     = cameraActor && cameraActor != &player;
-        }
+    if (player.isSleeping() && !foreignCamera) {
         // The sleep camera system overrides every preset's pose, so a third-person sleep still carries the bed view;
         // only a /camera view is not the player's own.
-        if (!foreignCamera) {
-            if (auto const view = keyframe::captureClientCamera()) {
-                sample.hasView   = true;
-                sample.viewX     = view->x;
-                sample.viewY     = view->y;
-                sample.viewZ     = view->z;
-                sample.viewYaw   = view->yaw;
-                sample.viewPitch = view->pitch;
-            }
+        if (auto const view = keyframe::captureClientCamera()) {
+            sample.hasView   = true;
+            sample.viewX     = view->x;
+            sample.viewY     = view->y;
+            sample.viewZ     = view->z;
+            sample.viewYaw   = view->yaw;
+            sample.viewPitch = view->pitch;
         }
     }
     return sample;
@@ -2142,6 +2161,10 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
         }
 
         std::unordered_set<int64_t> serializedPlayers;
+        std::unordered_set<int64_t> serializedActorIds;
+        std::vector<Actor const*>   ridingActors;
+        serializedActorIds.insert(finalPlayer->getOrCreateUniqueID().rawID);
+        if (finalPlayer->isRiding()) ridingActors.push_back(finalPlayer);
         for (auto* actor : actors) {
             if (!actor || actor == finalPlayer || !actor->isAlive() || actor->getDimensionId() != dimension) continue;
             if (actor->isPlayer()) continue;
@@ -2149,14 +2172,50 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
             auto packet = actor->tryCreateAddActorPacket();
             if (!packet) continue;
             syncAddActorPacketTransform(*packet, *actor);
+            remapRecordedPlayerReferences(
+                *packet,
+                finalPlayer->getOrCreateUniqueID(),
+                finalPlayer->getRuntimeID(),
+                finalPlayer->getUuid(),
+                *mRecordedLocalPlayerId,
+                *mRecordedLocalPlayerRuntimeId,
+                *mRecordedLocalPlayerUuid
+            );
+            serializedActorIds.insert(actor->getOrCreateUniqueID().rawID);
+            if (actor->isRiding()) ridingActors.push_back(actor);
             appendEntityPacket(*packet);
             if (!appendActorState(*actor, actor->getRuntimeID())) return SnapshotCaptureResult::Failed;
         }
         for (auto* player : spawnPlayers) {
-            auto packet = createSnapshotAddPlayerPacket(*player);
-            serializedPlayers.insert(player->getOrCreateUniqueID().rawID);
+            auto       packet   = createSnapshotAddPlayerPacket(*player);
+            auto const playerId = player->getOrCreateUniqueID().rawID;
+            serializedPlayers.insert(playerId);
+            serializedActorIds.insert(playerId);
+            if (player->isRiding()) ridingActors.push_back(player);
             appendEntityPacket(*packet);
             if (!appendActorState(*player, player->getRuntimeID())) return SnapshotCaptureResult::Failed;
+        }
+        auto const localPlayerSourceId = finalPlayer->getOrCreateUniqueID();
+        for (auto const* rider : ridingActors) {
+            auto const* vehicle = rider->getVehicle();
+            if (!vehicle || !vehicle->isAlive() || vehicle->getDimensionId() != dimension) continue;
+            if (!serializedActorIds.contains(vehicle->getOrCreateUniqueID().rawID)) continue;
+
+            auto linkPacket = MinecraftPackets::createPacket(MinecraftPacketIds::SetActorLink);
+            if (!linkPacket) {
+                mSnapshotFailure = "Unable to create a snapshot actor link packet";
+                return SnapshotCaptureResult::Failed;
+            }
+            auto& link                   = *static_cast<SetActorLinkPacket&>(*linkPacket).mLink;
+            link.type                    = ActorLinkType::Riding;
+            link.A                       = vehicle->getOrCreateUniqueID();
+            link.B                       = rider->getOrCreateUniqueID();
+            link.mImmediate              = true;
+            link.mPassengerInitiated     = false;
+            link.mVehicleAngularVelocity = 0.0f;
+            remapUniqueId(link.A, localPlayerSourceId, *mRecordedLocalPlayerId);
+            remapUniqueId(link.B, localPlayerSourceId, *mRecordedLocalPlayerId);
+            appendEntityPacket(*linkPacket);
         }
         getLogger().debug(
             "replay snapshot players runtime={} listed={} serialized={} deadSkipped={} identity={}",
