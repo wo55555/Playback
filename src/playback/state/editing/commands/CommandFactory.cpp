@@ -209,6 +209,12 @@ CommandFactory::createResetClipsToFullRange(const std::string& cameraId, const s
 std::unique_ptr<model::IEditCommand> CommandFactory::createDeleteClip(const std::string& clipId) {
     return std::make_unique<DeleteClip>(clipId);
 }
+std::unique_ptr<model::IEditCommand> CommandFactory::createHealClipCuts(
+    std::vector<model::SelectedClipCut> cuts,
+    std::vector<model::KeyframeRef>     keyframesToDelete
+) {
+    return std::make_unique<HealClipCuts>(std::move(cuts), std::move(keyframesToDelete));
+}
 std::unique_ptr<model::IEditCommand> CommandFactory::createAddScene(const std::string& name) {
     return std::make_unique<AddScene>(name);
 }

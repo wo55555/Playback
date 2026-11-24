@@ -4,6 +4,7 @@
 #include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/CameraKeyframe.h"
 #include "playback/state/editing/models/MathTypes.h"
+#include "playback/state/editing/models/SelectionModel.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -40,6 +41,8 @@ enum class EditorActionType {
     UndoEditorEdit,
     RedoEditorEdit,
     AddFreeCamera,
+    // secondaryTick == 1 prefers the live preview subject (session.userReplaySubjectChoice()) over the previous
+    // keyframe's subject when creating a 1P/3P keyframe.
     AddCameraKeyframe,
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
@@ -95,6 +98,7 @@ enum class EditorActionType {
     SetAllClipsExportEnabled,
     ResetClipsToFullRange,
     DeleteClip,
+    HealClipCuts,
     AddScene,
     DuplicateScene,
     RenameScene,
@@ -242,8 +246,9 @@ struct EditorAction {
     std::optional<editing::model::CameraKeyframe> keyframe;
     std::optional<editing::model::CameraShake>    shake;
     // Batch keyframe edits (multi-select move / delete / interpolation / paste).
-    std::vector<editing::model::KeyframeRef> keyframeRefs;
-    std::vector<int>                         ticks;
+    std::vector<editing::model::KeyframeRef>            keyframeRefs;
+    std::vector<state::editing::model::SelectedClipCut> clipCuts;
+    std::vector<int>                                    ticks;
     size_t                                   historySteps{1};
 };
 

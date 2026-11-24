@@ -148,12 +148,50 @@ void ReplayEditor::setPreviewSilentWhilePaused(bool silent) {
     saveLayoutPreferences();
 }
 
+void ReplayEditor::setShortcutKeyframeLensMode(ShortcutKeyframeLensMode mode) {
+    mShortcutKeyframeLensMode = mode;
+    saveLayoutPreferences();
+}
+
+void ReplayEditor::showSelectionInspector() { mDetailsPanel.setPage(InspectorPage::Selection); }
+
+void ReplayEditor::focusCameraKeyframe(std::string const& cameraId, int tick) {
+    mTimelinePanel.queueCameraKeyframeSelection(cameraId, tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusSpeedKeyframe(int tick) {
+    mTimelinePanel.queueSpeedKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusFreezeKeyframe(int tick) {
+    mTimelinePanel.queueFreezeKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusTimelapseKeyframe(int tick) {
+    mTimelinePanel.queueTimelapseKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusTimeOfDayKeyframe(int tick) {
+    mTimelinePanel.queueTimeOfDayKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusWeatherKeyframe(int tick) {
+    mTimelinePanel.queueWeatherKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
 void ReplayEditor::loadLayoutPreferences() {
-    mDetailsWidthRatio   = 0.22f;
-    mTimelineHeightRatio = 0.24f;
-    mVideoAspectRatio    = 16.0f / 9.0f;
-    mCameraPathVisible   = true;
-    mUiScaleTier         = UiScaleTier::Auto;
+    mDetailsWidthRatio        = 0.22f;
+    mTimelineHeightRatio      = 0.24f;
+    mVideoAspectRatio         = 16.0f / 9.0f;
+    mCameraPathVisible        = true;
+    mUiScaleTier              = UiScaleTier::Auto;
+    mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::FreeCamera;
     mViewportPanel.setInfoOverlayVisible(true);
     mViewportPanel.setAutoPreviewEnabled(true);
     mTimelinePanel.setSnapEnabled(true);
@@ -177,6 +215,11 @@ void ReplayEditor::loadLayoutPreferences() {
             auto const uiScale = config.find("uiScale");
             if (uiScale != config.end() && uiScale->is_string()) {
                 mUiScaleTier = uiScaleTierFromName(uiScale->get<std::string>());
+            }
+            auto const shortcutKeyframeLens = config.find("shortcutKeyframeLens");
+            if (shortcutKeyframeLens != config.end() && shortcutKeyframeLens->is_string()
+                && shortcutKeyframeLens->get<std::string>() == "matchPreview") {
+                mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::MatchPreview;
             }
             mDetailsWidthRatio =
                 std::clamp(readFiniteFloat(config, "detailsWidthRatio", mDetailsWidthRatio), 0.15f, 0.50f);
@@ -263,6 +306,8 @@ void ReplayEditor::saveLayoutPreferences() const {
         {"autoPreview",                mViewportPanel.isAutoPreviewEnabled()                                },
         {"snap",                       mTimelinePanel.isSnapEnabled()                                       },
         {"uiScale",                    std::string(uiScaleTierName(mUiScaleTier))                           },
+        {"shortcutKeyframeLens",
+         mShortcutKeyframeLensMode == ShortcutKeyframeLensMode::MatchPreview ? "matchPreview" : "free"      },
         {"trackListWidthRatio",        mTimelinePanel.trackListWidthRatio()                                 },
         {"disableServerResourcePacks", Playback::getInstance().getConfig().replay.disableServerResourcePacks},
         {"hud",                        std::move(hud)                                                       },
@@ -564,6 +609,7 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     }
 
     auto const ctx = frameContext();
+    mTimelinePanel.applyPendingSelection(ctx);
     if (mModeManager.current() == EditorMode::Render) mRenderMode.draw(ctx);
     else mEditMode.draw(ctx);
 
@@ -714,6 +760,10 @@ void ReplayEditor::handleKeyboardShortcuts() {
     }
     if (input::KeyMap::pressed(EditorKeybind::SelectTool)) {
         setTimelineTool(TimelineTool::Select);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::BoxSelectTool)) {
+        setTimelineTool(TimelineTool::BoxSelect);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::RazorTool)) {

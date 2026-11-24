@@ -76,6 +76,7 @@ enum class VectorIcon {
     Maximize,
     Restore,
     SelectCursor,
+    BoxSelect,
     PenTool,
     SnapMagnet,
     MarkIn,

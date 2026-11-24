@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "playback/state/editing/models/EditorStateExt.h"
+#include "playback/state/editing/models/SelectionModel.h"
 
 #include <span>
 #include <string>
@@ -90,5 +91,8 @@ void syncTotalTicks(model::EditorStateExt& state, int previousTotalTicks, std::s
 [[nodiscard]] MutableClipWithCamera findClipWithCamera(model::EditorStateExt& state, std::string_view clipId) noexcept;
 [[nodiscard]] model::Clip const*    findClipById(model::EditorStateExt const& state, std::string_view clipId) noexcept;
 [[nodiscard]] model::Clip*          findClipById(model::EditorStateExt& state, std::string_view clipId) noexcept;
+
+[[nodiscard]] std::vector<model::SelectedClipCut>
+collectCameraClipCuts(model::CameraEntity const& camera, int totalTicks);
 
 } // namespace playback::state::editing::ClipOps
