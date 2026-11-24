@@ -346,6 +346,7 @@ struct ShortcutGroup {
              {key(EditorKeybind::SelectTool) + " / " + key(EditorKeybind::RazorTool) + " / "
                   + key(EditorKeybind::PenTool),
               "playback.refactorEditor.shortcuts.tools"_tr()},
+             {key(EditorKeybind::BoxSelectTool), "playback.refactorEditor.shortcuts.boxSelectTool"_tr()},
              {key(EditorKeybind::SplitClip), "playback.refactorEditor.shortcuts.splitClip"_tr()},
              {shortcutPair(EditorKeybind::TrimClipInToPlayhead, EditorKeybind::TrimClipOutToPlayhead),
               "playback.refactorEditor.shortcuts.trimClipEdges"_tr()},

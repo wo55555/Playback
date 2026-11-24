@@ -19,6 +19,17 @@ struct SelectedClip {
     std::string clipId;
 };
 
+struct SelectedClipCut {
+    std::string cameraId;
+    int         startTick{};
+    int endTick{}; // startTick == endTick: split seam between two adjacent clips; startTick < endTick: uncovered cut
+                   // gap
+
+    [[nodiscard]] bool isSeam() const { return startTick == endTick; }
+    [[nodiscard]] bool isGap() const { return startTick < endTick; }
+    bool               operator==(SelectedClipCut const&) const = default;
+};
+
 struct SelectedMarker {
     std::string markerId;
 };
@@ -81,6 +92,7 @@ struct SelectedAudioClip {
 using Selection = std::variant<
     SelectedKeyframe,
     SelectedClip,
+    SelectedClipCut,
     SelectedMarker,
     SelectedTransition,
     SelectedCamera,
@@ -142,13 +154,19 @@ public:
     // Drops the selection when the object it points at is gone, e.g. after reloading a project.
     void pruneInvalid(EditorStateExt const& state);
 
-    // Multi-keyframe selection. The primary selection stays a SelectedKeyframe (the most recently
-    // picked one) and the set always contains it; selecting anything else empties the set.
+    // Multi-keyframe & multi-cut selection. The primary selection stays a SelectedKeyframe or
+    // SelectedClipCut (preferring the most recently picked keyframe if any) and the sets always
+    // contain it; selecting anything else empties the sets.
     void                                               setKeyframes(std::vector<SelectedKeyframe> keys);
+    void                                               setClipCuts(std::vector<SelectedClipCut> cuts);
+    void setBoxSelection(std::vector<SelectedKeyframe> keys, std::vector<SelectedClipCut> cuts);
     void                                               toggleKeyframe(SelectedKeyframe key);
     [[nodiscard]] bool                                 isKeyframeSelected(std::string const& trackId, int tick) const;
+    [[nodiscard]] bool isClipCutSelected(std::string const& cameraId, int startTick, int endTick) const;
     [[nodiscard]] std::vector<SelectedKeyframe> const& keyframes() const { return mKeyframes; }
     [[nodiscard]] std::size_t                          keyframeCount() const { return mKeyframes.size(); }
+    [[nodiscard]] std::vector<SelectedClipCut> const&  clipCuts() const { return mClipCuts; }
+    [[nodiscard]] std::size_t                          clipCutCount() const { return mClipCuts.size(); }
 
     template <typename T>
     [[nodiscard]] const T* getAs() const {
@@ -159,6 +177,7 @@ public:
 private:
     std::optional<Selection>      mSelection;
     std::vector<SelectedKeyframe> mKeyframes;
+    std::vector<SelectedClipCut>  mClipCuts;
     std::string                   mLastSceneId;
 };
 

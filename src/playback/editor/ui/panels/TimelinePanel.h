@@ -54,6 +54,14 @@ public:
     [[nodiscard]] TimelineTool tool() const { return mTool; }
     void                       setTool(TimelineTool tool) { mTool = tool; }
 
+    void applyPendingSelection(PanelContext const& ctx);
+    void queueCameraKeyframeSelection(std::string cameraId, int tick);
+    void queueSpeedKeyframeSelection(int tick);
+    void queueFreezeKeyframeSelection(int tick);
+    void queueTimelapseKeyframeSelection(int tick);
+    void queueTimeOfDayKeyframeSelection(int tick);
+    void queueWeatherKeyframeSelection(int tick);
+
 private:
     struct Layout {
         ImVec2 fullMin{};
@@ -111,20 +119,14 @@ private:
     void queueKeyframeSelection(std::vector<state::editing::model::SelectedKeyframe> keys);
     void queueMarkerSelection(std::string markerId);
     void                      queueSpeedTrackSelection();
-    void                      queueSpeedKeyframeSelection(int tick);
     void                      queueFreezeTrackSelection();
-    void                      queueFreezeKeyframeSelection(int tick);
     void                      queueTimelapseTrackSelection();
-    void                      queueTimelapseKeyframeSelection(int tick);
     void                      queueTimeOfDayTrackSelection();
-    void                      queueTimeOfDayKeyframeSelection(int tick);
     void                      queueTimeOfDayKeyframesSelection(std::vector<int> ticks);
     void                      queueWeatherTrackSelection();
-    void                      queueWeatherKeyframeSelection(int tick);
     void                      queueWeatherKeyframesSelection(std::vector<int> ticks);
     void                      queueAudioTrackSelection(std::string trackId);
     void                      queueAudioClipSelection(std::string trackId, std::string clipId);
-    void applyPendingSelection(PanelContext const& ctx);
     [[nodiscard]] std::string markerAt(
         PanelContext const&  ctx,
         Layout const&        layout,
@@ -225,6 +227,8 @@ private:
     bool        mBoxAdditive{};
     ImVec2      mBoxStart{};
     std::string mBoxClickCameraId;
+    std::string mBoxClickClipId;
+    int         mBoxClickKeyTick{-1};
     bool        mBoxClickTimeOfDay{};
     bool        mBoxClickWeather{};
     bool        mPenPendingAdd{};

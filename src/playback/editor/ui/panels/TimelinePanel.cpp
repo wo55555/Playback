@@ -738,6 +738,7 @@ bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
         action.speedValue = sampled;
         ctx.submitAction(std::move(action));
         queueSpeedKeyframeSelection(tick);
+        ctx.commands.showSelectionInspector();
         return true;
     }
     if (project && (ctx.selection.isFreezeTrackSelected() || ctx.selection.selectedFreezeKeyframe().has_value())) {
@@ -777,11 +778,31 @@ bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
     std::string cameraId = resolveKeyframeTargetCamera(ctx);
     if (cameraId.empty()) return false;
 
+    int const tick = std::clamp(
+        mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick,
+        0,
+        std::max(0, ctx.state.totalTicks)
+    );
     EditorAction action{EditorActionType::AddCameraKeyframe};
     action.id   = cameraId;
-    action.tick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+    action.tick = tick;
+    if (ctx.commands.shortcutKeyframeLensMode() == ShortcutKeyframeLensMode::FreeCamera) {
+        action.value = true;
+        action.kind  = static_cast<int>(state::editing::model::CameraKeyframeMode::Interpolated);
+    } else if (ctx.state.followingRecordedPlayer) {
+        action.value = true;
+        action.kind  = static_cast<int>(
+            ctx.state.followThirdPerson ? state::editing::model::CameraKeyframeMode::ThirdPerson
+                                        : state::editing::model::CameraKeyframeMode::FirstPerson
+        );
+        action.secondaryTick = 1;
+    } else {
+        action.value = true;
+        action.kind  = static_cast<int>(state::editing::model::CameraKeyframeMode::Interpolated);
+    }
     ctx.submitAction(std::move(action));
-    ctx.selection.select(state::editing::model::SelectedCamera{std::move(cameraId)});
+    queueCameraKeyframeSelection(std::move(cameraId), tick);
+    ctx.commands.showSelectionInspector();
     return true;
 }
 
@@ -829,7 +850,13 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
     if (!project) return false;
 
     EditorAction action;
-    if (ctx.selection.keyframeCount() > 1) {
+    if (ctx.selection.clipCutCount() > 0) {
+        action.type     = EditorActionType::HealClipCuts;
+        action.clipCuts = ctx.selection.clipCuts();
+        if (ctx.selection.keyframeCount() > 0) {
+            action.keyframeRefs = selectedKeyframeRefs(ctx);
+        }
+    } else if (ctx.selection.keyframeCount() > 1) {
         action.type         = EditorActionType::DeleteCameraKeyframes;
         action.keyframeRefs = selectedKeyframeRefs(ctx);
     } else if (auto const* selectedMarker = ctx.selection.getAs<state::editing::model::SelectedMarker>()) {
@@ -996,6 +1023,7 @@ bool TimelinePanel::pasteKeyframes(PanelContext const& ctx, int anchorTick, std:
     action.keyframeRefs = std::move(refs);
     ctx.submitAction(std::move(action));
     queueKeyframeSelection(std::move(landed));
+    ctx.commands.showSelectionInspector();
     return true;
 }
 
@@ -1034,6 +1062,7 @@ bool TimelinePanel::addFreezeKeyframeAt(PanelContext const& ctx, int tick) {
     action.kind  = 0;
     ctx.submitAction(std::move(action));
     queueFreezeKeyframeSelection(tick);
+    ctx.commands.showSelectionInspector();
     return true;
 }
 
@@ -1048,6 +1077,7 @@ bool TimelinePanel::addTimelapseKeyframeAt(PanelContext const& ctx, int tick) {
     action.secondaryTick = suggested;
     ctx.submitAction(std::move(action));
     queueTimelapseKeyframeSelection(tick);
+    ctx.commands.showSelectionInspector();
     return true;
 }
 
@@ -1076,6 +1106,7 @@ bool TimelinePanel::addTimeOfDayKeyframeAt(PanelContext const& ctx, int tick) {
     action.kind          = static_cast<int>(state::editing::model::CameraInterpolationType::Linear);
     ctx.submitAction(std::move(action));
     queueTimeOfDayKeyframeSelection(tick);
+    ctx.commands.showSelectionInspector();
     return true;
 }
 
@@ -1105,6 +1136,7 @@ bool TimelinePanel::addWeatherKeyframeAt(PanelContext const& ctx, int tick) {
     action.kind = static_cast<int>(weather);
     ctx.submitAction(std::move(action));
     queueWeatherKeyframeSelection(tick);
+    ctx.commands.showSelectionInspector();
     return true;
 }
 
@@ -1285,6 +1317,12 @@ void TimelinePanel::queueKeyframeSelection(std::vector<state::editing::model::Se
     clearPendingSelection();
     mPendingKeySelection    = std::move(keys);
     mPendingSelectionFrames = kPendingSelectionFrames;
+}
+
+void TimelinePanel::queueCameraKeyframeSelection(std::string cameraId, int tick) {
+    queueKeyframeSelection({
+        {std::move(cameraId), tick}
+    });
 }
 
 void TimelinePanel::queueMarkerSelection(std::string markerId) {
@@ -1587,7 +1625,7 @@ float TimelinePanel::drawTransportGroup(
     bool const  hasOut     = total > 0 && exportOut >= 0 && exportOut < total && (exportIn < 0 || exportOut > exportIn);
     bool const  ranged     = hasIn || hasOut;
     float const speedWidth = widgets::dropdownChipWidth(speedLabel);
-    float const ioBtnW     = std::round(unit + 2.0f * scale);
+    float const ioBtnW     = std::round(unit + 4.0f * scale);
     float const ioPillW    = ioBtnW * 2.0f + 1.0f;
     float const groupWidth =
         unit * 5.0f + 4.0f + divGap * 2.0f + 1.0f + speedWidth + chipGap + unit + divGap * 2.0f + 1.0f + ioPillW;
@@ -1740,7 +1778,7 @@ float TimelinePanel::drawTransportGroup(
             widgets::drawVectorIcon(
                 ioDrawList,
                 {(halfMin.x + halfMax.x) * 0.5f, (halfMin.y + halfMax.y) * 0.5f},
-                unit,
+                unit * 0.92f,
                 iconColor,
                 icon
             );
@@ -2238,12 +2276,16 @@ void TimelinePanel::drawToolStrip(PanelContext const& ctx, Layout const& layout,
     // Top cell aligned with ruler/track-controls: compact active tool shortcut badge pill.
     {
         input::EditorKeybind const activeBind =
-            mTool == TimelineTool::Razor
-                ? input::EditorKeybind::RazorTool
-                : (mTool == TimelineTool::Pen ? input::EditorKeybind::PenTool : input::EditorKeybind::SelectTool);
+            mTool == TimelineTool::BoxSelect
+                ? input::EditorKeybind::BoxSelectTool
+                : (mTool == TimelineTool::Razor ? input::EditorKeybind::RazorTool
+                                                : (mTool == TimelineTool::Pen ? input::EditorKeybind::PenTool
+                                                                              : input::EditorKeybind::SelectTool));
         std::string keyText = input::KeyMap::displayString(activeBind);
         if (keyText.empty()) {
-            keyText = mTool == TimelineTool::Razor ? "C" : (mTool == TimelineTool::Pen ? "P" : "V");
+            keyText = mTool == TimelineTool::BoxSelect
+                        ? "B"
+                        : (mTool == TimelineTool::Razor ? "C" : (mTool == TimelineTool::Pen ? "P" : "V"));
         } else if (keyText.size() > 2) {
             keyText.resize(2);
         }
@@ -2275,7 +2317,7 @@ void TimelinePanel::drawToolStrip(PanelContext const& ctx, Layout const& layout,
     );
     auto*       stripDrawList = ImGui::GetWindowDrawList();
     float const availBodyH    = std::max(54.0f, layout.bodyBottom - layout.bodyTop - 8.0f * scale);
-    float const maxBtnForH    = std::max(18.0f, std::floor((availBodyH - 6.0f * scale) / 3.0f));
+    float const maxBtnForH    = std::max(18.0f, std::floor((availBodyH - 9.0f * scale) / 4.0f));
     float const btnSize =
         std::min({std::round(metrics::iconButton() * 0.92f), std::max(18.0f, stripW - 5.0f * scale), maxBtnForH});
     float const padX          = std::max(0.0f, (stripW - btnSize) * 0.5f);
@@ -2320,6 +2362,8 @@ void TimelinePanel::drawToolStrip(PanelContext const& ctx, Layout const& layout,
 
     std::string const selectTip = "playback.refactorEditor.timeline.toolSelect"_tr() + " ("
                                 + input::KeyMap::displayString(input::EditorKeybind::SelectTool) + ")";
+    std::string const boxSelectTip = "playback.refactorEditor.timeline.toolBoxSelect"_tr() + " ("
+                                   + input::KeyMap::displayString(input::EditorKeybind::BoxSelectTool) + ")";
     std::string const razorTip = "playback.refactorEditor.timeline.toolRazor"_tr() + " ("
                                + input::KeyMap::displayString(input::EditorKeybind::RazorTool) + ")";
     std::string const penTip = "playback.refactorEditor.timeline.toolPen"_tr() + " ("
@@ -2337,8 +2381,19 @@ void TimelinePanel::drawToolStrip(PanelContext const& ctx, Layout const& layout,
         mTool = TimelineTool::Select;
     }
     if (toolStripButton(
-            "timeline-tool-razor",
+            "timeline-tool-box-select",
             {padX, padTop + stepY},
+            mTool == TimelineTool::BoxSelect,
+            boxSelectTip.c_str(),
+            [&](ImVec2 const& centre, ImU32 col) {
+                widgets::drawVectorIcon(stripDrawList, centre, btnSize * 0.92f, col, widgets::VectorIcon::BoxSelect);
+            }
+        )) {
+        mTool = TimelineTool::BoxSelect;
+    }
+    if (toolStripButton(
+            "timeline-tool-razor",
+            {padX, padTop + stepY * 2.0f},
             mTool == TimelineTool::Razor,
             razorTip.c_str(),
             [&](ImVec2 const& centre, ImU32 col) {
@@ -2349,7 +2404,7 @@ void TimelinePanel::drawToolStrip(PanelContext const& ctx, Layout const& layout,
     }
     if (toolStripButton(
             "timeline-tool-pen",
-            {padX, padTop + stepY * 2.0f},
+            {padX, padTop + stepY * 3.0f},
             mTool == TimelineTool::Pen,
             penTip.c_str(),
             [&](ImVec2 const& centre, ImU32 col) {
@@ -2695,6 +2750,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 action.speedValue = sampled;
                 ctx.submitAction(std::move(action));
                 queueSpeedKeyframeSelection(playheadTick);
+                ctx.commands.showSelectionInspector();
             } else if (isFreezeRow) {
                 addFreezeKeyframeAt(ctx, playheadTick);
             } else if (isTimelapseRow) {
@@ -3397,7 +3453,8 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             action.id   = camera.id;
             action.tick = tick;
             ctx.submitAction(std::move(action));
-            ctx.selection.select(state::editing::model::SelectedKeyframe{camera.id, tick});
+            queueCameraKeyframeSelection(camera.id, tick);
+            ctx.commands.showSelectionInspector();
         }
         if (ImGui::MenuItem(
                 mKeyframeClipboard.size() > 1
@@ -4154,6 +4211,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                 action.speedValue = sampled;
                 ctx.submitAction(std::move(action));
                 queueSpeedKeyframeSelection(playheadTick);
+                ctx.commands.showSelectionInspector();
             }
             if (mSpeedLaneMenuTick >= 0 && mSpeedLaneMenuTick != playheadTick) {
                 bool const hasKeyAtMenu = project->speedTrack.keysByTick.contains(mSpeedLaneMenuTick);
@@ -4171,6 +4229,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     action.speedValue = sampled;
                     ctx.submitAction(std::move(action));
                     queueSpeedKeyframeSelection(mSpeedLaneMenuTick);
+                    ctx.commands.showSelectionInspector();
                 }
             }
             ImGui::Separator();
@@ -4868,10 +4927,12 @@ void TimelinePanel::drawRangeBar(PanelContext const& ctx, Layout const& layout, 
             float const hintAvail = zoomX - metrics::gutter() - stripLeft;
             if (hintAvail > 20.0f * uiScale) {
                 std::string const toolHint =
-                    mTool == TimelineTool::Razor
-                        ? "playback.refactorEditor.timeline.toolHintRazor"_tr()
-                        : (mTool == TimelineTool::Pen ? "playback.refactorEditor.timeline.toolHintPen"_tr()
-                                                      : "playback.refactorEditor.timeline.toolHintSelect"_tr());
+                    mTool == TimelineTool::BoxSelect
+                        ? "playback.refactorEditor.timeline.toolHintBoxSelect"_tr()
+                        : (mTool == TimelineTool::Razor
+                               ? "playback.refactorEditor.timeline.toolHintRazor"_tr()
+                               : (mTool == TimelineTool::Pen ? "playback.refactorEditor.timeline.toolHintPen"_tr()
+                                                             : "playback.refactorEditor.timeline.toolHintSelect"_tr()));
                 std::string const elided = elideTextToWidth(font, hintFontSize, toolHint, hintAvail);
                 ImVec4 const      hintClip{stripLeft, barTop, zoomX - metrics::gutter(), layout.fullMax.y};
                 drawList->AddText(
@@ -5057,6 +5118,9 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mPenPendingTimeOfDay       = false;
         mPenPendingWeather         = false;
         mPenPendingTick            = -1;
+        mBoxClickCameraId.clear();
+        mBoxClickClipId.clear();
+        mBoxClickKeyTick = -1;
         mMarkerDragId.clear();
         mMarkerDragMoved = false;
         mClipDragMode    = 0;
@@ -5105,6 +5169,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
         mPenPendingWeather         = false;
         mPenPendingTick            = -1;
         mBoxClickCameraId.clear();
+        mBoxClickClipId.clear();
+        mBoxClickKeyTick = -1;
         mTrackDragCameraId.clear();
         mClipDragMode = 0;
         mClipDragCameraId.clear();
@@ -5320,6 +5386,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             && centerY - reach <= boxMax.y;
     };
     std::vector<state::editing::model::SelectedKeyframe> boxHits;
+    std::vector<state::editing::model::SelectedClipCut>  cutBoxHits;
     std::vector<int>                                     timeOfDayBoxHits;
     std::vector<int>                                     weatherBoxHits;
 
@@ -5548,7 +5615,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             // 4) Speed keyframe hover tooltip and mouse interaction.
             bool const overSpeedKey = hoveredSpeedKeyTick.has_value();
             if (overSpeedKey) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mTool != TimelineTool::BoxSelect) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 if (mDraggingSpeedKeyframeOriginTick < 0) {
                     if (auto const keyIt = speedTrack.keysByTick.find(*hoveredSpeedKeyTick);
                         keyIt != speedTrack.keysByTick.end()) {
@@ -5569,7 +5636,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         {hoveredSpeedKeyX - hoveredSpeedKeyRadius, hoveredSpeedKeyY - hoveredSpeedKeyRadius},
                         {hoveredSpeedKeyX + hoveredSpeedKeyRadius, hoveredSpeedKeyY + hoveredSpeedKeyRadius}
                     );
-                } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                } else if (!clickConsumed && mTool != TimelineTool::BoxSelect
+                           && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed     = true;
                     int const keyTick = *hoveredSpeedKeyTick;
                     ctx.selection.selectSpeedKeyframe(keyTick);
@@ -5588,6 +5656,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             bool const penMode = mTool == TimelineTool::Pen;
             bool const ctrlSelectPen =
                 mTool == TimelineTool::Select && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+            bool const         altBoxSelect = mTool == TimelineTool::Select && ImGui::GetIO().KeyAlt;
             std::optional<int> penPreviewTick;
             if (mouseInRow && !overSpeedKey && !trackLocked && (penMode || ctrlSelectPen)) {
                 int penTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
@@ -5620,9 +5689,10 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     action.speedValue = static_cast<float>(previewSpeed);
                     ctx.submitAction(std::move(action));
                     queueSpeedKeyframeSelection(*penPreviewTick);
+                    ctx.commands.showSelectionInspector();
                 }
-            } else if (mouseInRow && !overSpeedKey && !clickConsumed) {
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            } else if (mouseInRow && (!overSpeedKey || mTool == TimelineTool::BoxSelect) && !clickConsumed) {
+                if (!overSpeedKey && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                     clickConsumed = true;
                     int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (mSnapEnabled) tick = snapTick(tick);
@@ -5630,7 +5700,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     float const anchorX = scale.xAt(static_cast<float>(tick));
                     ctx.selection.selectSpeedTrack();
                     widgets::openAnchoredPopup("##timeline-speed-menu", {anchorX, blockTop}, {anchorX, blockBot});
-                } else if (!trackLocked && mTool == TimelineTool::Select
+                } else if (!overSpeedKey && !trackLocked && mTool == TimelineTool::Select
                            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     int addTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (shiftSnap) {
@@ -5649,8 +5719,10 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         action.speedValue = sampled;
                         ctx.submitAction(std::move(action));
                         queueSpeedKeyframeSelection(addTick);
+                        ctx.commands.showSelectionInspector();
                     }
-                } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                } else if (mTool != TimelineTool::BoxSelect && !altBoxSelect
+                           && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed = true;
                     ctx.selection.selectSpeedTrack();
                     submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
@@ -5796,7 +5868,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             // 3) Freeze keyframe hover tooltip and mouse interaction.
             bool const overFreezeKey = hoveredFreezeKeyTick.has_value();
             if (overFreezeKey) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mTool != TimelineTool::BoxSelect) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 if (mDraggingFreezeKeyframeOriginTick < 0) {
                     if (auto const keyIt = freezeTrack.keysByTick.find(*hoveredFreezeKeyTick);
                         keyIt != freezeTrack.keysByTick.end()) {
@@ -5820,7 +5892,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         {hoveredFreezeKeyX - hoveredFreezeKeyRadius, bandCenterY - hoveredFreezeKeyRadius},
                         {hoveredFreezeKeyX + hoveredFreezeKeyRadius, bandCenterY + hoveredFreezeKeyRadius}
                     );
-                } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                } else if (!clickConsumed && mTool != TimelineTool::BoxSelect
+                           && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed     = true;
                     int const keyTick = *hoveredFreezeKeyTick;
                     ctx.selection.selectFreezeKeyframe(keyTick);
@@ -5839,6 +5912,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             bool const penMode = mTool == TimelineTool::Pen;
             bool const ctrlSelectPen =
                 mTool == TimelineTool::Select && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+            bool const         altBoxSelect = mTool == TimelineTool::Select && ImGui::GetIO().KeyAlt;
             std::optional<int> penPreviewTick;
             if (mouseInRow && !overFreezeKey && !trackLocked && (penMode || ctrlSelectPen)) {
                 int penTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
@@ -5866,8 +5940,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     clickConsumed = true;
                     addFreezeKeyframeAt(ctx, *penPreviewTick);
                 }
-            } else if (mouseInRow && !overFreezeKey && !clickConsumed) {
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            } else if (mouseInRow && (!overFreezeKey || mTool == TimelineTool::BoxSelect) && !clickConsumed) {
+                if (!overFreezeKey && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                     clickConsumed = true;
                     int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (mSnapEnabled) tick = snapTick(tick);
@@ -5875,7 +5949,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     float const anchorX = scale.xAt(static_cast<float>(tick));
                     ctx.selection.selectFreezeTrack();
                     widgets::openAnchoredPopup("##timeline-freeze-menu", {anchorX, blockTop}, {anchorX, blockBot});
-                } else if (!trackLocked && mTool == TimelineTool::Select
+                } else if (!overFreezeKey && !trackLocked && mTool == TimelineTool::Select
                            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     int addTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (shiftSnap) {
@@ -5888,7 +5962,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         clickConsumed = true;
                         addFreezeKeyframeAt(ctx, addTick);
                     }
-                } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                } else if (mTool != TimelineTool::BoxSelect && !altBoxSelect
+                           && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed = true;
                     ctx.selection.selectFreezeTrack();
                     submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
@@ -6060,7 +6135,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             // 3) Timelapse keyframe hover tooltip and mouse interaction.
             bool const overTimelapseKey = hoveredTimelapseKeyTick.has_value();
             if (overTimelapseKey) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mTool != TimelineTool::BoxSelect) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 if (mDraggingTimelapseKeyframeOriginTick < 0) {
                     if (auto const keyIt = timelapseTrack.keysByTick.find(*hoveredTimelapseKeyTick);
                         keyIt != timelapseTrack.keysByTick.end()) {
@@ -6088,7 +6163,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         {hoveredTimelapseKeyX - hoveredTimelapseKeyRadius, bandCenterY - hoveredTimelapseKeyRadius},
                         {hoveredTimelapseKeyX + hoveredTimelapseKeyRadius, bandCenterY + hoveredTimelapseKeyRadius}
                     );
-                } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                } else if (!clickConsumed && mTool != TimelineTool::BoxSelect
+                           && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed     = true;
                     int const keyTick = *hoveredTimelapseKeyTick;
                     ctx.selection.selectTimelapseKeyframe(keyTick);
@@ -6107,6 +6183,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             bool const penMode = mTool == TimelineTool::Pen;
             bool const ctrlSelectPen =
                 mTool == TimelineTool::Select && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+            bool const         altBoxSelect = mTool == TimelineTool::Select && ImGui::GetIO().KeyAlt;
             std::optional<int> penPreviewTick;
             if (mouseInRow && !overTimelapseKey && !trackLocked && (penMode || ctrlSelectPen)) {
                 int penTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
@@ -6133,8 +6210,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     clickConsumed = true;
                     addTimelapseKeyframeAt(ctx, *penPreviewTick);
                 }
-            } else if (mouseInRow && !overTimelapseKey && !clickConsumed) {
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            } else if (mouseInRow && (!overTimelapseKey || mTool == TimelineTool::BoxSelect) && !clickConsumed) {
+                if (!overTimelapseKey && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                     clickConsumed = true;
                     int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (mSnapEnabled) tick = snapTick(tick);
@@ -6142,7 +6219,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     float const anchorX    = scale.xAt(static_cast<float>(tick));
                     ctx.selection.selectTimelapseTrack();
                     widgets::openAnchoredPopup("##timeline-timelapse-menu", {anchorX, blockTop}, {anchorX, blockBot});
-                } else if (!trackLocked && mTool == TimelineTool::Select
+                } else if (!overTimelapseKey && !trackLocked && mTool == TimelineTool::Select
                            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     int addTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (shiftSnap) {
@@ -6155,7 +6232,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         clickConsumed = true;
                         addTimelapseKeyframeAt(ctx, addTick);
                     }
-                } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                } else if (mTool != TimelineTool::BoxSelect && !altBoxSelect
+                           && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed = true;
                     ctx.selection.selectTimelapseTrack();
                     submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
@@ -6349,7 +6427,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             // 4) Keyframe hover tooltip and mouse interaction.
             bool const overTodKey = hoveredTodKeyTick.has_value();
             if (overTodKey) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mTool != TimelineTool::BoxSelect) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 if (mDraggingTimeOfDayKeyframeOriginTick < 0) {
                     if (auto const keyIt = timeOfDayTrack.keysByTick.find(*hoveredTodKeyTick);
                         keyIt != timeOfDayTrack.keysByTick.end()) {
@@ -6375,7 +6453,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         {hoveredTodKeyX - hoveredTodKeyRadius, hoveredTodKeyY - hoveredTodKeyRadius},
                         {hoveredTodKeyX + hoveredTodKeyRadius, hoveredTodKeyY + hoveredTodKeyRadius}
                     );
-                } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                } else if (!clickConsumed && mTool != TimelineTool::BoxSelect
+                           && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed     = true;
                     int const keyTick = *hoveredTodKeyTick;
                     if (ImGui::GetIO().KeyCtrl && !trackLocked) {
@@ -6429,6 +6508,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 mPenPendingWeather   = false;
                 mPenPendingTick      = penTick;
                 mBoxClickCameraId.clear();
+                mBoxClickClipId.clear();
+                mBoxClickKeyTick = -1;
             };
 
             std::optional<int> penPreviewTick;
@@ -6469,8 +6550,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         addTimeOfDayKeyframeAt(ctx, *penPreviewTick);
                     }
                 }
-            } else if (mouseInRow && !overTodKey && !clickConsumed) {
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            } else if (mouseInRow && (!overTodKey || mTool == TimelineTool::BoxSelect) && !clickConsumed) {
+                if (!overTodKey && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                     clickConsumed = true;
                     int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (mSnapEnabled) tick = snapTick(tick);
@@ -6478,7 +6559,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     float const anchorX    = scale.xAt(static_cast<float>(tick));
                     ctx.selection.selectTimeOfDayTrack();
                     widgets::openAnchoredPopup("##timeline-time-of-day-menu", {anchorX, blockTop}, {anchorX, blockBot});
-                } else if (!trackLocked && mTool == TimelineTool::Select
+                } else if (!overTodKey && !trackLocked && mTool == TimelineTool::Select
                            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     int addTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (shiftSnap) {
@@ -6493,7 +6574,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     }
                 } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed = true;
-                    if (penMode || altBoxSelect || mTool == TimelineTool::Select) {
+                    if (penMode || altBoxSelect || mTool == TimelineTool::Select || mTool == TimelineTool::BoxSelect) {
                         startTodBoxPending(false, -1);
                     } else {
                         ctx.selection.selectTimeOfDayTrack();
@@ -6666,7 +6747,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             // 4) Keyframe hover tooltip and mouse interaction.
             bool const overWeatherKey = hoveredWeatherKeyTick.has_value();
             if (overWeatherKey) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mTool != TimelineTool::BoxSelect) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                 if (mDraggingWeatherKeyframeOriginTick < 0) {
                     if (auto const keyIt = weatherTrack.keysByTick.find(*hoveredWeatherKeyTick);
                         keyIt != weatherTrack.keysByTick.end()) {
@@ -6689,7 +6770,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         {hoveredWeatherKeyX - hoveredWeatherKeyRadius, bandCenterY - hoveredWeatherKeyRadius},
                         {hoveredWeatherKeyX + hoveredWeatherKeyRadius, bandCenterY + hoveredWeatherKeyRadius}
                     );
-                } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                } else if (!clickConsumed && mTool != TimelineTool::BoxSelect
+                           && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed     = true;
                     int const keyTick = *hoveredWeatherKeyTick;
                     if (ImGui::GetIO().KeyShift && !trackLocked) {
@@ -6788,8 +6870,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         addWeatherKeyframeAt(ctx, *penPreviewTick);
                     }
                 }
-            } else if (mouseInRow && !overWeatherKey && !clickConsumed) {
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            } else if (mouseInRow && (!overWeatherKey || mTool == TimelineTool::BoxSelect) && !clickConsumed) {
+                if (!overWeatherKey && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                     clickConsumed = true;
                     int tick      = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (mSnapEnabled) tick = snapTick(tick);
@@ -6797,7 +6879,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     float const anchorX  = scale.xAt(static_cast<float>(tick));
                     ctx.selection.selectWeatherTrack();
                     widgets::openAnchoredPopup("##weather-lane-menu", {anchorX, blockTop}, {anchorX, blockBot});
-                } else if (!trackLocked && mTool == TimelineTool::Select
+                } else if (!overWeatherKey && !trackLocked && mTool == TimelineTool::Select
                            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     int addTick = std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks);
                     if (shiftSnap) {
@@ -6812,7 +6894,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     }
                 } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed = true;
-                    if (penMode || altBoxSelect || mTool == TimelineTool::Select) {
+                    if (penMode || altBoxSelect || mTool == TimelineTool::Select || mTool == TimelineTool::BoxSelect) {
                         startWeatherBoxPending(false, -1);
                     } else {
                         ctx.selection.selectWeatherTrack();
@@ -7034,9 +7116,10 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     }
                 }
 
+                bool const altBoxSelect = mTool == TimelineTool::Select && ImGui::GetIO().KeyAlt;
                 if (hoveredAudioClip) {
                     if (mDraggingAudioClipId.empty()) {
-                        if (!trackLocked) ImGui::SetMouseCursor(theme::kCursorGrab);
+                        if (!trackLocked && mTool != TimelineTool::BoxSelect) ImGui::SetMouseCursor(theme::kCursorGrab);
                         std::string baseName = hoveredAudioClip->filePath;
                         if (auto const sep = baseName.find_last_of("/\\"); sep != std::string::npos) {
                             baseName = baseName.substr(sep + 1);
@@ -7087,7 +7170,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                             {hoveredAudioX0, blockTop},
                             {hoveredAudioX1, blockBot}
                         );
-                    } else if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    } else if (!clickConsumed && mTool != TimelineTool::BoxSelect && !altBoxSelect
+                               && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                         clickConsumed = true;
                         ctx.selection.selectAudioClip(audioTrack->id, hoveredAudioClip->id);
                         if (!trackLocked) {
@@ -7111,7 +7195,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         float const anchorX = scale.xAt(static_cast<float>(tick));
                         ctx.selection.selectAudioTrack(audioTrack->id);
                         widgets::openAnchoredPopup("##timeline-audio-menu", {anchorX, blockTop}, {anchorX, blockBot});
-                    } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    } else if (mTool != TimelineTool::BoxSelect && !altBoxSelect
+                               && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                         clickConsumed = true;
                         ctx.selection.selectAudioTrack(audioTrack->id);
                         submitSeek(ctx, std::clamp(scale.tickAt(mouse.x), 0, state.totalTicks));
@@ -7137,6 +7222,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 mBoxAdditive         = ImGui::GetIO().KeyCtrl;
                 mBoxStart            = mouse;
                 mBoxClickCameraId    = cameraId;
+                mBoxClickClipId.clear();
+                mBoxClickKeyTick     = -1;
                 mBoxClickTimeOfDay   = false;
                 mBoxClickWeather     = false;
                 mPenPendingAdd       = penAdd;
@@ -7170,7 +7257,9 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             }
             bool const overAnyKeyOnRow = hoveredKeyTick.has_value() && mTool != TimelineTool::Razor;
             if (hoveredKeyTick.has_value()) {
-                if (mTool != TimelineTool::Razor) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (mTool != TimelineTool::Razor && mTool != TimelineTool::BoxSelect) {
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                }
                 if (!clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                     clickConsumed         = true;
                     int const keyTick     = *hoveredKeyTick;
@@ -7187,7 +7276,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         {hoveredKeyX - hoveredKeyRadius, keyCenterY - hoveredKeyRadius},
                         {hoveredKeyX + hoveredKeyRadius, keyCenterY + hoveredKeyRadius}
                     );
-                } else if (!clickConsumed && mTool != TimelineTool::Razor
+                } else if (!clickConsumed && mTool != TimelineTool::Razor && mTool != TimelineTool::BoxSelect
                            && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     clickConsumed     = true;
                     int const keyTick = *hoveredKeyTick;
@@ -7444,6 +7533,67 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                                 theme::kTextDim,
                                 skippedLabel.c_str()
                             );
+                        }
+                    }
+                }
+            }
+
+            // 2b) Clip cut seams and gaps: hit-test during marquee box selection and highlight selected cuts.
+            if (state.totalTicks > 0) {
+                auto const cuts = state::editing::ClipOps::collectCameraClipCuts(camera, state.totalTicks);
+                for (auto const& cut : cuts) {
+                    bool inBox = false;
+                    if (mBoxSelecting && !camera.locked && blockBot >= boxMin.y && blockTop <= boxMax.y) {
+                        if (cut.isSeam()) {
+                            float const seamX = scale.xAt(static_cast<float>(cut.startTick));
+                            inBox = seamX + 4.0f * uiScale >= boxMin.x && seamX - 4.0f * uiScale <= boxMax.x;
+                        } else if (cut.isGap()) {
+                            float const gx0 = scale.xAt(static_cast<float>(cut.startTick));
+                            float const gx1 = scale.xAt(static_cast<float>(cut.endTick));
+                            inBox           = gx1 >= boxMin.x && gx0 <= boxMax.x;
+                        }
+                    }
+                    if (inBox) cutBoxHits.push_back(cut);
+                    if (inBox || ctx.selection.isClipCutSelected(camera.id, cut.startTick, cut.endTick)) {
+                        if (cut.isSeam()) {
+                            float const seamX = scale.xAt(static_cast<float>(cut.startTick));
+                            if (seamX >= layout.canvasLeft - 6.0f * uiScale
+                                && seamX <= layout.fullMax.x + 6.0f * uiScale) {
+                                drawList->AddLine(
+                                    {seamX, blockTop - 1.0f},
+                                    {seamX, blockBot + 1.0f},
+                                    theme::kSelected,
+                                    2.5f * uiScale
+                                );
+                                drawKeyframeDiamond(
+                                    drawList,
+                                    seamX,
+                                    (blockTop + blockBot) * 0.5f,
+                                    4.0f * uiScale,
+                                    theme::kSelected,
+                                    theme::kIconHighlight
+                                );
+                            }
+                        } else if (cut.isGap()) {
+                            float const gx0 = std::max(layout.canvasLeft, scale.xAt(static_cast<float>(cut.startTick)));
+                            float const gx1 = std::min(layout.fullMax.x, scale.xAt(static_cast<float>(cut.endTick)));
+                            if (gx1 > gx0) {
+                                float const gapRounding = 4.0f * uiScale;
+                                drawList->AddRectFilled(
+                                    {gx0, blockTop},
+                                    {gx1, blockBot},
+                                    theme::withAlpha(theme::kSelected, 0x38),
+                                    gapRounding
+                                );
+                                drawList->AddRect(
+                                    {gx0, blockTop},
+                                    {gx1, blockBot},
+                                    theme::kSelected,
+                                    gapRounding,
+                                    0,
+                                    1.75f
+                                );
+                            }
                         }
                     }
                 }
@@ -7722,9 +7872,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         action.id   = camera.id;
                         action.tick = *penPreviewTick;
                         ctx.submitAction(std::move(action));
-                        queueKeyframeSelection({
-                            {camera.id, *penPreviewTick}
-                        });
+                        queueCameraKeyframeSelection(camera.id, *penPreviewTick);
+                        ctx.commands.showSelectionInspector();
                     }
                 }
             } else if (mouseInRow && !overAnyKeyOnRow && penMode && !clickConsumed
@@ -7755,6 +7904,14 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 );
             }
 
+            // BoxSelect tool: left-drag anywhere on the camera row starts marquee selection.
+            if (mouseInRow && !clickConsumed && mTool == TimelineTool::BoxSelect
+                && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                clickConsumed = true;
+                startBoxPending(camera.id, false, -1);
+                if (hoveredKeyTick.has_value()) mBoxClickKeyTick = *hoveredKeyTick;
+            }
+
             // Priority 5 & 6: inline export eye, trim edges, and clip body in Select mode.
             if (hoveredClipPtr && mTool == TimelineTool::Select && !overAnyKeyOnRow && !penPreviewTick.has_value()
                 && !altBoxSelect) {
@@ -7768,7 +7925,14 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         ctx.submitAction(std::move(action));
                     }
                 } else {
-                    if (!camera.locked && !hoveredClipPtr->locked && mClipDragMode == 0) {
+                    bool const clipEditable = !camera.locked && !hoveredClipPtr->locked;
+                    bool       canSlideClip = false;
+                    if (clipEditable && !hoveredClipLeftEdge && !hoveredClipRightEdge) {
+                        auto const [minIn, maxOut] = clipBoundsOnCamera(camera, *hoveredClipPtr, state.totalTicks);
+                        canSlideClip               = hoveredClipPtr->inTick > minIn || hoveredClipPtr->outTick < maxOut;
+                    }
+                    if (clipEditable && mClipDragMode == 0
+                        && (hoveredClipLeftEdge || hoveredClipRightEdge || canSlideClip)) {
                         ImGui::SetMouseCursor(
                             (hoveredClipLeftEdge || hoveredClipRightEdge) ? ImGuiMouseCursor_ResizeEW
                                                                           : theme::kCursorGrab
@@ -7800,16 +7964,21 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                             previewAction.id = camera.id;
                             ctx.submitAction(std::move(previewAction));
                         }
-                        if (!camera.locked && !hoveredClipPtr->locked) {
-                            mClipDragMode        = hoveredClipLeftEdge ? 1 : (hoveredClipRightEdge ? 2 : 3);
-                            mClipDragCameraId    = camera.id;
-                            mClipDragId          = hoveredClipPtr->id;
-                            mClipDragStartMouseX = mouse.x;
-                            mClipDragOrigInTick  = hoveredClipPtr->inTick;
-                            mClipDragOrigOutTick = hoveredClipPtr->outTick;
-                            mClipDragInTick      = hoveredClipPtr->inTick;
-                            mClipDragOutTick     = hoveredClipPtr->outTick;
-                            mClipDragMoved       = false;
+                        if (clipEditable) {
+                            if (hoveredClipLeftEdge || hoveredClipRightEdge || canSlideClip) {
+                                mClipDragMode        = hoveredClipLeftEdge ? 1 : (hoveredClipRightEdge ? 2 : 3);
+                                mClipDragCameraId    = camera.id;
+                                mClipDragId          = hoveredClipPtr->id;
+                                mClipDragStartMouseX = mouse.x;
+                                mClipDragOrigInTick  = hoveredClipPtr->inTick;
+                                mClipDragOrigOutTick = hoveredClipPtr->outTick;
+                                mClipDragInTick      = hoveredClipPtr->inTick;
+                                mClipDragOutTick     = hoveredClipPtr->outTick;
+                                mClipDragMoved       = false;
+                            } else {
+                                startBoxPending(camera.id, false, -1);
+                                mBoxClickClipId = hoveredClipPtr->id;
+                            }
                         } else {
                             submitSeek(
                                 ctx,
@@ -8631,7 +8800,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
     if (allowInput && !clickConsumed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
         && ImGui::GetMousePos().x >= layout.canvasLeft && ImGui::GetMousePos().x <= layout.fullMax.x
         && ImGui::GetMousePos().y >= layout.camerasTop && ImGui::GetMousePos().y < layout.bodyBottom) {
-        if (mTool == TimelineTool::Select) {
+        if (mTool == TimelineTool::Select || mTool == TimelineTool::BoxSelect) {
             mBoxPending          = true;
             mBoxSelecting        = false;
             mBoxAdditive         = ImGui::GetIO().KeyCtrl;
@@ -8643,6 +8812,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             mPenPendingWeather   = false;
             mPenPendingTick      = -1;
             mBoxClickCameraId.clear();
+            mBoxClickClipId.clear();
+            mBoxClickKeyTick = -1;
         } else {
             submitSeek(ctx, std::clamp(scale.tickAt(ImGui::GetMousePos().x), 0, state.totalTicks));
         }
@@ -8666,31 +8837,43 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 };
                 if (mBoxAdditive) {
                     if (!weatherBoxHits.empty()
-                        && (mBoxClickWeather || (boxHits.empty() && timeOfDayBoxHits.empty()))) {
+                        && (mBoxClickWeather || (boxHits.empty() && cutBoxHits.empty() && timeOfDayBoxHits.empty()))) {
                         std::vector<int> merged = ctx.selection.selectedWeatherKeyframes();
                         for (int const hit : weatherBoxHits) {
                             if (!ctx.selection.isWeatherKeyframeSelected(hit)) merged.push_back(hit);
                         }
                         selectWeatherHits(std::move(merged));
-                    } else if (!timeOfDayBoxHits.empty() && (mBoxClickTimeOfDay || boxHits.empty())) {
+                    } else if (!timeOfDayBoxHits.empty()
+                               && (mBoxClickTimeOfDay || (boxHits.empty() && cutBoxHits.empty()))) {
                         std::vector<int> merged = ctx.selection.selectedTimeOfDayKeyframes();
                         for (int const hit : timeOfDayBoxHits) {
                             if (!ctx.selection.isTimeOfDayKeyframeSelected(hit)) merged.push_back(hit);
                         }
                         selectTimeOfDayHits(std::move(merged));
-                    } else if (!boxHits.empty() || !ctx.selection.keyframes().empty()) {
-                        std::vector<state::editing::model::SelectedKeyframe> merged = ctx.selection.keyframes();
+                    } else if (!boxHits.empty() || !cutBoxHits.empty() || !ctx.selection.keyframes().empty()
+                               || !ctx.selection.clipCuts().empty()) {
+                        std::vector<state::editing::model::SelectedKeyframe> mergedKeys = ctx.selection.keyframes();
                         for (auto const& hit : boxHits) {
-                            if (!ctx.selection.isKeyframeSelected(hit.trackId, hit.tick)) merged.push_back(hit);
+                            if (!ctx.selection.isKeyframeSelected(hit.trackId, hit.tick)) mergedKeys.push_back(hit);
                         }
-                        ctx.selection.setKeyframes(std::move(merged));
+                        std::vector<state::editing::model::SelectedClipCut> mergedCuts = ctx.selection.clipCuts();
+                        for (auto const& hit : cutBoxHits) {
+                            if (!ctx.selection.isClipCutSelected(hit.cameraId, hit.startTick, hit.endTick)) {
+                                mergedCuts.push_back(hit);
+                            }
+                        }
+                        ctx.selection.setBoxSelection(std::move(mergedKeys), std::move(mergedCuts));
+                        if (!boxHits.empty() || !cutBoxHits.empty()) {
+                            ctx.commands.showSelectionInspector();
+                        }
                     }
                 } else if (mBoxClickWeather && !weatherBoxHits.empty()) {
                     selectWeatherHits(std::move(weatherBoxHits));
                 } else if (mBoxClickTimeOfDay && !timeOfDayBoxHits.empty()) {
                     selectTimeOfDayHits(std::move(timeOfDayBoxHits));
-                } else if (!boxHits.empty()) {
-                    ctx.selection.setKeyframes(std::move(boxHits));
+                } else if (!boxHits.empty() || !cutBoxHits.empty()) {
+                    ctx.selection.setBoxSelection(std::move(boxHits), std::move(cutBoxHits));
+                    ctx.commands.showSelectionInspector();
                 } else if (!timeOfDayBoxHits.empty()) {
                     selectTimeOfDayHits(std::move(timeOfDayBoxHits));
                 } else if (!weatherBoxHits.empty()) {
@@ -8707,9 +8890,10 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 action.id   = mBoxClickCameraId;
                 action.tick = mPenPendingTick;
                 ctx.submitAction(std::move(action));
-                queueKeyframeSelection({
-                    {mBoxClickCameraId, mPenPendingTick}
-                });
+                queueCameraKeyframeSelection(mBoxClickCameraId, mPenPendingTick);
+                ctx.commands.showSelectionInspector();
+            } else if (!mBoxClickClipId.empty()) {
+                submitSeek(ctx, std::clamp(scale.tickAt(mBoxStart.x), 0, state.totalTicks));
             } else if (mBoxAdditive) {
                 // A Ctrl+click that never became a box leaves the selection alone.
             } else if (mBoxClickWeather) {
@@ -8718,6 +8902,55 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             } else if (mBoxClickTimeOfDay) {
                 ctx.selection.selectTimeOfDayTrack();
                 submitSeek(ctx, std::clamp(scale.tickAt(mBoxStart.x), 0, state.totalTicks));
+            } else if (mTool == TimelineTool::BoxSelect && !mBoxClickCameraId.empty()) {
+                bool handled = false;
+                if (mBoxClickKeyTick >= 0) {
+                    ctx.selection.select(state::editing::model::SelectedKeyframe{mBoxClickCameraId, mBoxClickKeyTick});
+                    ctx.commands.showSelectionInspector();
+                    handled = true;
+                } else if (state.totalTicks > 0) {
+                    auto const camIt = std::ranges::find(
+                        project->cameras,
+                        mBoxClickCameraId,
+                        &state::editing::model::CameraEntity::id
+                    );
+                    if (camIt != project->cameras.end() && !camIt->locked) {
+                        auto const  cuts = state::editing::ClipOps::collectCameraClipCuts(*camIt, state.totalTicks);
+                        float const seamThreshold = 6.0f * uiScale;
+                        float       bestSeamDist  = std::numeric_limits<float>::max();
+                        std::optional<state::editing::model::SelectedClipCut> hitCut;
+                        for (auto const& cut : cuts) {
+                            if (cut.isSeam()) {
+                                float const seamX = scale.xAt(static_cast<float>(cut.startTick));
+                                float const dist  = std::abs(mBoxStart.x - seamX);
+                                if (dist <= seamThreshold && dist < bestSeamDist) {
+                                    bestSeamDist = dist;
+                                    hitCut       = cut;
+                                }
+                            }
+                        }
+                        if (!hitCut) {
+                            for (auto const& cut : cuts) {
+                                if (cut.isGap()) {
+                                    float const gx0 = scale.xAt(static_cast<float>(cut.startTick));
+                                    float const gx1 = scale.xAt(static_cast<float>(cut.endTick));
+                                    if (mBoxStart.x >= gx0 && mBoxStart.x <= gx1) {
+                                        hitCut = cut;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (hitCut) {
+                            ctx.selection.setClipCuts({*hitCut});
+                            ctx.commands.showSelectionInspector();
+                            handled = true;
+                        }
+                    }
+                }
+                if (!handled) {
+                    submitSeek(ctx, std::clamp(scale.tickAt(mBoxStart.x), 0, state.totalTicks));
+                }
             } else if (!mBoxClickCameraId.empty()) {
                 ctx.selection.select(state::editing::model::SelectedCamera{mBoxClickCameraId});
                 if (ctx.commands.isAutoPreviewEnabled()) {
@@ -8738,6 +8971,8 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             mPenPendingWeather   = false;
             mPenPendingTick      = -1;
             mBoxClickCameraId.clear();
+            mBoxClickClipId.clear();
+            mBoxClickKeyTick = -1;
         }
     }
 
