@@ -158,4 +158,13 @@ public:
     [[nodiscard]] std::optional<CameraTimelineEvaluation>
     sampleCameraById(std::string_view cameraId, visuals::ReplaySampleTime const& time) const;
 };
+
+// Resolves the viewport's active camera track ID. Follow mode owns the viewport when active (matching
+// CameraRenderHooks), so no camera track is active even if a track covers `currentTick`.
+[[nodiscard]] inline std::string
+resolveActiveCameraId(bool followingRecordedPlayer, CameraTimelineEvaluator const* timeline, int64_t currentTick) {
+    if (followingRecordedPlayer || !timeline) return {};
+    if (auto const shot = timeline->shotAt(currentTick)) return shot.camera->id;
+    return {};
+}
 } // namespace playback::keyframe
