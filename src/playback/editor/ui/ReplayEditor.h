@@ -101,6 +101,8 @@ public:
         return mShortcutKeyframeLensMode;
     }
     void setShortcutKeyframeLensMode(ShortcutKeyframeLensMode mode) override;
+    void adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance) override;
+    void resetThirdPersonOrbit() override;
     void showSelectionInspector() override;
     void focusCameraKeyframe(std::string const& cameraId, int tick) override;
     void focusSpeedKeyframe(int tick) override;
@@ -113,6 +115,7 @@ public:
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
     [[nodiscard]] Rect        viewportOverlayRect() const { return mViewportPanel.overlayRect(); }
+    [[nodiscard]] bool        thirdPersonOrbitModeActive() const { return mThirdPersonOrbitModeActive; }
 
 private:
     ReplayEditor() = default;
@@ -149,7 +152,8 @@ private:
     float                    mTimelineHeightRatio{0.24f};
     float                    mVideoAspectRatio{16.0f / 9.0f};
     UiScaleTier              mUiScaleTier{UiScaleTier::Auto};
-    ShortcutKeyframeLensMode mShortcutKeyframeLensMode{ShortcutKeyframeLensMode::FreeCamera};
+    ShortcutKeyframeLensMode mShortcutKeyframeLensMode{ShortcutKeyframeLensMode::MatchPreview};
+    bool                     mThirdPersonOrbitModeActive{false};
 
     struct TimelineViewPreferences {
         float zoomScale{1.0f};

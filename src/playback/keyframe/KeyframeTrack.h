@@ -14,7 +14,7 @@ public:
     using KeyMap     = std::map<int, state::editing::model::CameraKeyframe>;
     using KeyMapIter = KeyMap::const_iterator;
 
-    explicit KeyframeTrack(KeyMap const& keyframes);
+    explicit KeyframeTrack(KeyMap const& keyframes, bool wrapAngles = true);
 
     [[nodiscard]] bool empty() const noexcept;
 
@@ -28,6 +28,7 @@ private:
     [[nodiscard]] CameraKeyframeChange hermiteChange(KeyMapIter left, long double tick) const;
 
     KeyMap mKeyframes;
+    bool   mWrapAngles{true};
 };
 
 } // namespace playback::keyframe

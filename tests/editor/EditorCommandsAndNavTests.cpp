@@ -1,10 +1,13 @@
+#include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/ClientCameraCapture.h"
+#include "playback/keyframe/KeyframeTrack.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/TimelineNavigation.h"
 #include "playback/state/editing/commands/CameraCommands.h"
 #include "playback/state/editing/commands/ClipCommands.h"
 #include "playback/state/editing/models/SelectionModel.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -592,6 +595,219 @@ void testHealClipCuts() {
     }
 }
 
+void testKeyframeTrackOrbitAngleWrapping() {
+    using playback::keyframe::KeyframeTrack;
+    auto approx = [](float actual, float expected, float eps = 1e-2f) { return std::abs(actual - expected) <= eps; };
+    auto makeOrbitKey =
+        [](CameraInterpolationType interp, Vec3 offset, float distance, float yaw, float pitch, float roll = 0.0f) {
+            CameraKeyframe k;
+            k.interpolationType   = interp;
+            k.position            = offset;
+            k.thirdPersonDistance = distance;
+            k.yaw                 = yaw;
+            k.pitch               = pitch;
+            k.roll                = roll;
+            return k;
+        };
+
+    // 1) Linear: wrapAngles=false preserves multi-turn yaw (0->360, 0->270) & raw pitch while roll wraps shortest-arc.
+    {
+        KeyframeTrack::KeyMap keys360{
+            {0,  makeOrbitKey(CameraInterpolationType::Linear, {0.0f, 1.0f, -2.0f}, 2.0f, 0.0f,   -20.0f, 170.0f) },
+            {20, makeOrbitKey(CameraInterpolationType::Linear, {4.0f, 3.0f, 2.0f},  8.0f, 360.0f, 40.0f,  -170.0f)},
+        };
+        KeyframeTrack rawTrack360(keys360, false);
+        auto const    mid360 = rawTrack360.createChange(10.0L);
+        CHECK(mid360.has_value());
+        CHECK(approx(mid360->position.x, 2.0f));
+        CHECK(approx(mid360->position.y, 2.0f));
+        CHECK(approx(mid360->position.z, 0.0f));
+        CHECK(approx(mid360->distance(), 5.0f));
+        CHECK(approx(mid360->yaw, 180.0f));
+        CHECK(approx(mid360->pitch, 10.0f));
+        CHECK(approx(std::abs(mid360->roll), 180.0f));
+
+        KeyframeTrack wrappedTrack360(keys360, true);
+        auto const    wrappedMid360 = wrappedTrack360.createChange(10.0L);
+        CHECK(wrappedMid360.has_value());
+        CHECK(approx(wrappedMid360->yaw, 0.0f));
+
+        KeyframeTrack::KeyMap keys270{
+            {0,  makeOrbitKey(CameraInterpolationType::Linear, {0.0f, 0.0f, 0.0f}, 2.0f, 0.0f,   0.0f) },
+            {20, makeOrbitKey(CameraInterpolationType::Linear, {2.0f, 4.0f, 6.0f}, 6.0f, 270.0f, 30.0f)},
+        };
+        KeyframeTrack rawTrack270(keys270, false);
+        auto const    mid270 = rawTrack270.createChange(10.0L);
+        CHECK(mid270.has_value());
+        CHECK(approx(mid270->yaw, 135.0f));
+        CHECK(approx(mid270->pitch, 15.0f));
+        CHECK(approx(mid270->distance(), 4.0f));
+
+        KeyframeTrack wrappedTrack270(keys270, true);
+        auto const    wrappedMid270 = wrappedTrack270.createChange(10.0L);
+        CHECK(wrappedMid270.has_value());
+        CHECK(approx(wrappedMid270->yaw, -45.0f));
+
+        // Free camera shortest-arc across +/-180 seam: 170 -> -170 hits +/-180.
+        KeyframeTrack::KeyMap seamKeys{
+            {0,  makeOrbitKey(CameraInterpolationType::Linear, {}, 0.0f, 170.0f,  0.0f)},
+            {20, makeOrbitKey(CameraInterpolationType::Linear, {}, 0.0f, -170.0f, 0.0f)},
+        };
+        KeyframeTrack seamWrapped(seamKeys, true);
+        auto const    seamMid = seamWrapped.createChange(10.0L);
+        CHECK(seamMid.has_value());
+        CHECK(approx(std::abs(seamMid->yaw), 180.0f));
+    }
+
+    // 2) Smooth (Catmull-Rom): multi-turn yaw & pitch interpolate continuously without wrapping; roll stays
+    // shortest-arc.
+    {
+        KeyframeTrack::KeyMap smoothKeys{
+            {0,  makeOrbitKey(CameraInterpolationType::Smooth, {0.0f, 0.0f, 0.0f}, 2.0f, 0.0f,   -30.0f, 170.0f) },
+            {20, makeOrbitKey(CameraInterpolationType::Smooth, {2.0f, 1.0f, 0.0f}, 4.0f, 180.0f, -10.0f, -170.0f)},
+            {40, makeOrbitKey(CameraInterpolationType::Smooth, {4.0f, 2.0f, 0.0f}, 6.0f, 360.0f, 10.0f,  170.0f) },
+            {60, makeOrbitKey(CameraInterpolationType::Smooth, {6.0f, 3.0f, 0.0f}, 8.0f, 540.0f, 30.0f,  -170.0f)},
+        };
+        KeyframeTrack rawSmooth(smoothKeys, false);
+        auto const    mid = rawSmooth.createChange(30.0L);
+        CHECK(mid.has_value());
+        CHECK(approx(mid->position.x, 3.0f));
+        CHECK(approx(mid->position.y, 1.5f));
+        CHECK(approx(mid->distance(), 5.0f));
+        CHECK(approx(mid->yaw, 270.0f));
+        CHECK(approx(mid->pitch, 0.0f));
+        CHECK(approx(std::abs(mid->roll), 180.0f));
+
+        KeyframeTrack::KeyMap seamKeys{
+            {0,  makeOrbitKey(CameraInterpolationType::Smooth, {}, 0.0f, 170.0f,  0.0f)},
+            {20, makeOrbitKey(CameraInterpolationType::Smooth, {}, 0.0f, -170.0f, 0.0f)},
+        };
+        KeyframeTrack wrappedSmooth(seamKeys, true);
+        auto const    seamMid = wrappedSmooth.createChange(10.0L);
+        CHECK(seamMid.has_value());
+        CHECK(approx(std::abs(seamMid->yaw), 180.0f));
+    }
+
+    // 3) Hermite: multi-turn yaw & pitch pass through polynomial without wrapping; roll stays shortest-arc.
+    {
+        KeyframeTrack::KeyMap hermiteKeys{
+            {0,  makeOrbitKey(CameraInterpolationType::Hermite, {0.0f, 0.0f, 0.0f}, 2.0f, 0.0f,   -20.0f, 170.0f) },
+            {20, makeOrbitKey(CameraInterpolationType::Hermite, {2.0f, 2.0f, 0.0f}, 5.0f, 270.0f, 0.0f,   -170.0f)},
+            {40, makeOrbitKey(CameraInterpolationType::Hermite, {4.0f, 4.0f, 0.0f}, 8.0f, 540.0f, 20.0f,  170.0f) },
+        };
+        KeyframeTrack rawHermite(hermiteKeys, false);
+        auto const    q1 = rawHermite.createChange(10.0L);
+        auto const    q3 = rawHermite.createChange(30.0L);
+        CHECK(q1.has_value());
+        CHECK(q3.has_value());
+        CHECK(approx(q1->position.x, 1.0f));
+        CHECK(approx(q1->distance(), 3.5f));
+        CHECK(approx(q1->yaw, 135.0f));
+        CHECK(approx(q1->pitch, -10.0f));
+        CHECK(std::abs(q1->roll) > 170.0f);
+        CHECK(approx(q3->position.x, 3.0f));
+        CHECK(approx(q3->distance(), 6.5f));
+        CHECK(approx(q3->yaw, 405.0f));
+        CHECK(approx(q3->pitch, 10.0f));
+
+        KeyframeTrack::KeyMap seamKeys{
+            {0,  makeOrbitKey(CameraInterpolationType::Hermite, {}, 0.0f, 170.0f,  0.0f)},
+            {20, makeOrbitKey(CameraInterpolationType::Hermite, {}, 0.0f, -170.0f, 0.0f)},
+        };
+        KeyframeTrack wrappedHermite(seamKeys, true);
+        auto const    seamMid = wrappedHermite.createChange(10.0L);
+        CHECK(seamMid.has_value());
+        CHECK(approx(std::abs(seamMid->yaw), 180.0f));
+    }
+
+    // 4) CubicBezier: multi-turn yaw, pitch, distance, and offset interpolate smoothly without wrapping.
+    {
+        KeyframeTrack::KeyMap bezierKeys{
+            {0,  makeOrbitKey(CameraInterpolationType::CubicBezier, {0.0f, 1.0f, 2.0f}, 3.0f, 0.0f,   -10.0f, 170.0f) },
+            {20, makeOrbitKey(CameraInterpolationType::CubicBezier, {4.0f, 5.0f, 6.0f}, 9.0f, 360.0f, 30.0f,  -170.0f)},
+        };
+        KeyframeTrack rawBezier(bezierKeys, false);
+        auto const    q1  = rawBezier.createChange(5.0L);
+        auto const    mid = rawBezier.createChange(10.0L);
+        CHECK(q1.has_value());
+        CHECK(mid.has_value());
+        CHECK(q1->yaw > 0.0f && q1->yaw < 180.0f);
+        CHECK(approx(mid->position.x, 2.0f));
+        CHECK(approx(mid->position.y, 3.0f));
+        CHECK(approx(mid->position.z, 4.0f));
+        CHECK(approx(mid->distance(), 6.0f));
+        CHECK(approx(mid->yaw, 180.0f));
+        CHECK(approx(mid->pitch, 10.0f));
+        CHECK(approx(std::abs(mid->roll), 180.0f));
+    }
+}
+
+void testSetCameraKeyframeThirdPersonSettingsMultiTurnAndClamping() {
+    EditorStateExt state = makeTestState(200);
+    CameraKeyframe tpKey;
+    tpKey.mode              = CameraKeyframeMode::ThirdPerson;
+    tpKey.thirdPersonCustom = true;
+    state.cameras[0].keysByTick.emplace(40, tpKey);
+
+    CameraKeyframe settings;
+    settings.thirdPersonCustom         = true;
+    settings.thirdPersonDistance       = -5.0f;
+    settings.thirdPersonYaw            = 720.0f;
+    settings.thirdPersonPitch          = 120.0f;
+    settings.thirdPersonRoll           = 25.0f;
+    settings.thirdPersonFov            = 210.0f;
+    settings.thirdPersonOffset         = {1.5f, -0.5f, 2.0f};
+    settings.thirdPersonFollowRotation = true;
+    settings.thirdPersonCollideBlocks  = false;
+
+    SetCameraKeyframeThirdPersonSettings cmd1("cam_1", 40, settings);
+    cmd1.execute(state);
+    CHECK(cmd1.didChange());
+    auto const& k1 = state.cameras[0].keysByTick.at(40);
+    CHECK(k1.thirdPersonYaw == 720.0f);
+    CHECK(k1.thirdPersonPitch == 89.9f);
+    CHECK(k1.thirdPersonDistance == 0.0f);
+    CHECK(k1.thirdPersonFov == 179.0f);
+
+    settings.thirdPersonYaw   = -270.0f;
+    settings.thirdPersonPitch = -120.0f;
+    settings.thirdPersonFov   = 0.1f;
+    SetCameraKeyframeThirdPersonSettings cmd2("cam_1", 40, settings);
+    cmd2.execute(state);
+    CHECK(cmd2.didChange());
+    auto const& k2 = state.cameras[0].keysByTick.at(40);
+    CHECK(k2.thirdPersonYaw == -270.0f);
+    CHECK(k2.thirdPersonPitch == -89.9f);
+    CHECK(k2.thirdPersonFov == 1.0f);
+}
+
+void testFollowModeSuppressesActiveCameraId() {
+    EditorStateExt project  = makeTestState(200);
+    project.cameras[0].id   = "camera_1";
+    project.cameras[0].name = "Camera 1";
+    project.cameras[0].clips.push_back(makeClip("clip_1", 0, 200));
+
+    CameraKeyframe tpKey;
+    tpKey.mode              = CameraKeyframeMode::ThirdPerson;
+    tpKey.thirdPersonCustom = true;
+    project.cameras[0].keysByTick.emplace(0, tpKey);
+
+    playback::keyframe::CameraTimelineEvaluator evaluator(project, std::string("camera_1"));
+    CHECK(evaluator.shotAt(0).camera != nullptr);
+    CHECK(evaluator.shotAt(0).camera->id == "camera_1");
+    CHECK(evaluator.shotAt(40).camera != nullptr);
+    CHECK(evaluator.shotAt(40).camera->id == "camera_1");
+
+    // Follow mode owns the viewport: activeCameraId stays empty even when a camera track covers the playhead.
+    CHECK(playback::keyframe::resolveActiveCameraId(true, &evaluator, 0).empty());
+    CHECK(playback::keyframe::resolveActiveCameraId(true, &evaluator, 40).empty());
+
+    // Exiting follow mode lets the covering camera track own activeCameraId again.
+    CHECK(playback::keyframe::resolveActiveCameraId(false, &evaluator, 0) == "camera_1");
+    CHECK(playback::keyframe::resolveActiveCameraId(false, &evaluator, 40) == "camera_1");
+    CHECK(playback::keyframe::resolveActiveCameraId(false, nullptr, 0).empty());
+}
+
 } // namespace
 
 void runTimeOfDayTests();
@@ -605,6 +821,9 @@ int main() {
     testCollectCameraClipCuts();
     testSelectionModelClipCutsAndBoxSelection();
     testHealClipCuts();
+    testKeyframeTrackOrbitAngleWrapping();
+    testSetCameraKeyframeThirdPersonSettingsMultiTurnAndClamping();
+    testFollowModeSuppressesActiveCameraId();
     runTimeOfDayTests();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " test(s) failed\n";
