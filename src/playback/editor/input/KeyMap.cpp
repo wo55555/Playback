@@ -57,6 +57,7 @@ constexpr KeyBinding kBindings[] = {
     {EditorKeybind::PreviousMarker,          "playback.editor.jumpPrevMarker",    VK_OEM_4,     false, false, false},
     {EditorKeybind::NextMarker,              "playback.editor.jumpNextMarker",    VK_OEM_6,     false, false, false},
     {EditorKeybind::SelectTool,              "playback.editor.selectTool",        'V',          false, false, false},
+    {EditorKeybind::BoxSelectTool,           "playback.editor.boxSelectTool",     'B',          false, false, false},
     {EditorKeybind::RazorTool,               "playback.editor.razorTool",         'C',          false, false, false},
     {EditorKeybind::PenTool,                 "playback.editor.penTool",           'P',          false, false, false},
     {EditorKeybind::SplitClip,               "playback.editor.splitClip",         'K',          true,  false, false},

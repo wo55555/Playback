@@ -458,6 +458,135 @@ void DeleteClip::execute(model::EditorStateExt& state) {
 void        DeleteClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
 std::string DeleteClip::label() const { return "playback.refactorEditor.history.deleteClip"; }
 
+HealClipCuts::HealClipCuts(std::vector<model::SelectedClipCut> cuts, std::vector<model::KeyframeRef> keyframesToDelete)
+: mCuts(std::move(cuts)),
+  mKeyframesToDelete(std::move(keyframesToDelete)) {}
+
+void HealClipCuts::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    mDeletedKeyframes = false;
+    mHealedCuts       = false;
+
+    ClipOps::syncActiveSceneFromWorking(state);
+    auto snapshot = state;
+
+    if (state.totalTicks > 0 && !mCuts.empty()) {
+        for (auto& cam : state.cameras) {
+            if (cam.locked) continue;
+
+            std::vector<model::SelectedClipCut> gaps;
+            std::vector<model::SelectedClipCut> seams;
+            for (auto const& cut : mCuts) {
+                if (cut.cameraId != cam.id) continue;
+                if (cut.isGap()) gaps.push_back(cut);
+                else if (cut.isSeam()) seams.push_back(cut);
+            }
+            if (gaps.empty() && seams.empty()) continue;
+
+            auto sortCameraClips = [](std::vector<model::Clip>& clips) {
+                std::ranges::stable_sort(clips, [](model::Clip const& a, model::Clip const& b) {
+                    return a.inTick != b.inTick ? a.inTick < b.inTick : a.outTick < b.outTick;
+                });
+            };
+            sortCameraClips(cam.clips);
+
+            std::ranges::sort(gaps, [](model::SelectedClipCut const& a, model::SelectedClipCut const& b) {
+                return a.startTick != b.startTick ? a.startTick < b.startTick : a.endTick < b.endTick;
+            });
+            for (auto const& gap : gaps) {
+                int const gIn  = std::clamp(gap.startTick, 0, state.totalTicks);
+                int const gOut = std::clamp(gap.endTick, 0, state.totalTicks);
+                if (gOut <= gIn) continue;
+
+                bool const overlaps = std::ranges::any_of(cam.clips, [&](model::Clip const& c) {
+                    return c.inTick < gOut && c.outTick > gIn;
+                });
+                if (overlaps) continue;
+
+                std::optional<size_t> leftIdx;
+                std::optional<size_t> rightIdx;
+                for (size_t i = 0; i < cam.clips.size(); ++i) {
+                    if (cam.clips[i].inTick >= cam.clips[i].outTick) continue;
+                    if (cam.clips[i].outTick == gIn) leftIdx = i;
+                    if (cam.clips[i].inTick == gOut) rightIdx = i;
+                }
+
+                bool const leftUnlocked  = leftIdx && !cam.clips[*leftIdx].locked;
+                bool const rightUnlocked = rightIdx && !cam.clips[*rightIdx].locked;
+
+                if (leftUnlocked && rightUnlocked && *leftIdx != *rightIdx) {
+                    auto&       left   = cam.clips[*leftIdx];
+                    auto const& right  = cam.clips[*rightIdx];
+                    left.outTick       = right.outTick;
+                    left.exportEnabled = left.exportEnabled || right.exportEnabled;
+                    cam.clips.erase(cam.clips.begin() + static_cast<std::ptrdiff_t>(*rightIdx));
+                    mHealedCuts = true;
+                } else if (leftUnlocked) {
+                    cam.clips[*leftIdx].outTick = gOut;
+                    mHealedCuts                 = true;
+                } else if (rightUnlocked) {
+                    cam.clips[*rightIdx].inTick = gIn;
+                    mHealedCuts                 = true;
+                } else {
+                    model::Clip clip;
+                    clip.id            = ClipOps::nextClipId(state);
+                    clip.name          = ClipOps::defaultClipName(state);
+                    clip.inTick        = gIn;
+                    clip.outTick       = gOut;
+                    clip.exportEnabled = true;
+                    cam.clips.push_back(std::move(clip));
+                    sortCameraClips(cam.clips);
+                    mHealedCuts = true;
+                }
+            }
+
+            std::ranges::sort(seams, [](model::SelectedClipCut const& a, model::SelectedClipCut const& b) {
+                return a.startTick < b.startTick;
+            });
+            for (auto const& seam : seams) {
+                int const             sTick = seam.startTick;
+                std::optional<size_t> leftIdx;
+                std::optional<size_t> rightIdx;
+                for (size_t i = 0; i < cam.clips.size(); ++i) {
+                    if (cam.clips[i].inTick >= cam.clips[i].outTick) continue;
+                    if (cam.clips[i].outTick == sTick) leftIdx = i;
+                    if (cam.clips[i].inTick == sTick) rightIdx = i;
+                }
+                if (leftIdx && rightIdx && *leftIdx != *rightIdx && !cam.clips[*leftIdx].locked
+                    && !cam.clips[*rightIdx].locked) {
+                    auto&       left   = cam.clips[*leftIdx];
+                    auto const& right  = cam.clips[*rightIdx];
+                    left.outTick       = right.outTick;
+                    left.exportEnabled = left.exportEnabled || right.exportEnabled;
+                    cam.clips.erase(cam.clips.begin() + static_cast<std::ptrdiff_t>(*rightIdx));
+                    mHealedCuts = true;
+                }
+            }
+        }
+    }
+
+    for (auto const& ref : mKeyframesToDelete) {
+        auto const camIdx = findCameraIndex(state, ref.cameraId);
+        if (!camIdx) continue;
+        auto& cam = state.cameras[*camIdx];
+        if (cam.locked) continue;
+        if (cam.keysByTick.erase(ref.tick) > 0) mDeletedKeyframes = true;
+    }
+
+    if (mHealedCuts || mDeletedKeyframes) {
+        mBefore = std::move(snapshot);
+        ClipOps::syncActiveSceneFromWorking(state);
+    }
+}
+
+void HealClipCuts::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+
+std::string HealClipCuts::label() const {
+    if (mHealedCuts && mDeletedKeyframes) return "playback.refactorEditor.history.deleteKeyframesAndRestoreClips";
+    if (mHealedCuts) return "playback.refactorEditor.history.restoreClips";
+    return "playback.refactorEditor.history.deleteKeyframes";
+}
+
 AddScene::AddScene(std::string name) : mName(std::move(name)) {}
 
 void AddScene::execute(model::EditorStateExt& state) {
