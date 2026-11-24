@@ -8,6 +8,7 @@ namespace playback::editor::graphics {
 
 void setReplayMouseInputActive(bool active);
 void setReplayUIActive(bool active);
+void setReplayThirdPersonOrbitMode(bool enabled);
 
 void beginReplayMouseFrame(float displayWidth, float displayHeight, bool blockGameMouseInput);
 void setReplayGameViewport(float left, float top, float right, float bottom);
