@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Undoing or redoing edits made in another scene now switches back to that scene and clears stale timeline selections, and dragging a clip's speed slider now records a single history entry on release instead of pushing one per frame.
 - Dropped item entities no longer disappear during high-speed timelapse playback or seeking.
 - Replays recorded in worlds with the daylight cycle disabled now keep their recorded sun and moon time stationary during preview and export instead of advancing automatically.
+- Dropped items and non-player entities captured in snapshots or spawned mid-recording now appear at their current positions and orientations instead of resetting to where they originally spawned.
 
 ## [0.4.1-mc26.40] - 2026-11-22
 
