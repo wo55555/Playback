@@ -750,7 +750,7 @@ void SetCameraKeyframeThirdPersonSettings::execute(model::EditorStateExt& state)
     bool const  custom         = mSettings.thirdPersonCustom;
     float const distance       = std::max(0.0f, sanitizeFinite(mSettings.thirdPersonDistance, target.thirdPersonDistance));
     float const yaw            = sanitizeFinite(mSettings.thirdPersonYaw, target.thirdPersonYaw);
-    float const pitch          = sanitizeFinite(mSettings.thirdPersonPitch, target.thirdPersonPitch);
+    float const pitch = std::clamp(sanitizeFinite(mSettings.thirdPersonPitch, target.thirdPersonPitch), -89.9f, 89.9f);
     float const roll           = sanitizeFinite(mSettings.thirdPersonRoll, target.thirdPersonRoll);
     float const fov            = std::clamp(sanitizeFinite(mSettings.thirdPersonFov, target.thirdPersonFov), 1.0f, 179.0f);
     model::Vec3 offset{

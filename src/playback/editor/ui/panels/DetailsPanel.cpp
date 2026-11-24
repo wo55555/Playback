@@ -921,6 +921,33 @@ void DetailsPanel::resetAudioDrafts() {
     mAudioClipVolumeDragValue = 1.0f;
 }
 
+void DetailsPanel::resetSelectionDrafts() {
+    mMarkerLabelId.clear();
+    mMarkerLabelBuffer.fill('\0');
+    mMarkerLabelEditing = false;
+    mBezierDragCameraId.clear();
+    mBezierDragTick   = -1;
+    mBezierDragHandle = 0;
+    mLookAtOffsetDragCameraId.clear();
+    mLookAtOffsetDragTick  = -1;
+    mLookAtOffsetDragging  = false;
+    mLookAtOffsetDragValue = 0.0f;
+    mSpeedKeyDragging      = false;
+    mSpeedKeyDragTick      = -1;
+    mSpeedBezierDragHandle = 0;
+    mSpeedBezierDragTick   = -1;
+    mFreezeDelayDragging   = false;
+    mFreezeDelayDragTick   = -1;
+    mTimelapseTextTick.reset();
+    mTimelapseTextBuffer.fill('\0');
+    mTimelapseTextEditing      = false;
+    mTimeOfDayKeyDragging      = false;
+    mTimeOfDayKeyDragTick      = -1;
+    mTimeOfDayBezierDragHandle = 0;
+    mTimeOfDayBezierDragTick   = -1;
+    resetAudioDrafts();
+}
+
 void DetailsPanel::draw(PanelContext const& ctx) {
     ImVec2 const origin = ImGui::GetCursorScreenPos();
     ImVec2 const avail  = ImGui::GetContentRegionAvail();
@@ -943,39 +970,32 @@ void DetailsPanel::draw(PanelContext const& ctx) {
         {std::max(1.0f, avail.x - railW), avail.y},
         ImGuiChildFlags_AlwaysUseWindowPadding
     );
+    std::string selectionKey;
+    if (mPage == InspectorPage::Selection) {
+        if (!ctx.selection.hasSelection()) {
+            selectionKey = "none";
+        } else {
+            for (std::string const& id : ctx.selection.selectedIds()) {
+                if (!selectionKey.empty()) selectionKey.push_back('|');
+                selectionKey += id;
+            }
+            selectionKey += "#k" + std::to_string(ctx.selection.keyframeCount());
+            selectionKey += "#c" + std::to_string(ctx.selection.clipCutCount());
+        }
+    }
+    if (mPage != mLastDrawnPage || (mPage == InspectorPage::Selection && selectionKey != mLastSelectionKey)) {
+        ImGui::SetScrollY(0.0f);
+        mLastDrawnPage    = mPage;
+        mLastSelectionKey = std::move(selectionKey);
+    }
+
     if (!ctx.state.project) {
-        mSpeedKeyDragging      = false;
-        mSpeedKeyDragTick      = -1;
-        mSpeedBezierDragHandle = 0;
-        mSpeedBezierDragTick   = -1;
-        mFreezeDelayDragging   = false;
-        mFreezeDelayDragTick   = -1;
-        mTimelapseTextTick.reset();
-        mTimelapseTextBuffer.fill('\0');
-        mTimelapseTextEditing = false;
-        mTimeOfDayKeyDragging      = false;
-        mTimeOfDayKeyDragTick      = -1;
-        mTimeOfDayBezierDragHandle = 0;
-        mTimeOfDayBezierDragTick   = -1;
-        mDaytimeOverrideDragging   = false;
-        resetAudioDrafts();
+        resetSelectionDrafts();
+        mDaytimeOverrideDragging = false;
         widgets::noActiveProjectPlaceholder();
     } else {
         if (mPage != InspectorPage::Selection) {
-            mSpeedKeyDragging      = false;
-            mSpeedKeyDragTick      = -1;
-            mSpeedBezierDragHandle = 0;
-            mSpeedBezierDragTick   = -1;
-            mFreezeDelayDragging   = false;
-            mFreezeDelayDragTick   = -1;
-            mTimelapseTextTick.reset();
-            mTimelapseTextBuffer.fill('\0');
-            mTimelapseTextEditing      = false;
-            mTimeOfDayKeyDragging      = false;
-            mTimeOfDayKeyDragTick      = -1;
-            mTimeOfDayBezierDragHandle = 0;
-            mTimeOfDayBezierDragTick   = -1;
-            resetAudioDrafts();
+            resetSelectionDrafts();
         }
         if (mPage != InspectorPage::Preview) {
             mDaytimeOverrideDragging = false;
@@ -1986,17 +2006,35 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
     auto const  project   = ctx.state.project;
     auto const& selection = ctx.selection;
     auto const  submit    = [&ctx](EditorAction action) { ctx.submitAction(std::move(action)); };
+    auto const  clearKeyframeDrags = [&] {
+        mBezierDragHandle = 0;
+        mBezierDragCameraId.clear();
+        mBezierDragTick       = -1;
+        mLookAtOffsetDragging = false;
+        mLookAtOffsetDragCameraId.clear();
+        mLookAtOffsetDragTick = -1;
+    };
 
     if (auto const* selected = selection.getAs<state::editing::model::SelectedKeyframe>()) {
         auto const* camera = findById(project->cameras, selected->trackId);
         if (!camera) {
+            clearKeyframeDrags();
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
             return true;
         }
         auto const key = camera->keysByTick.find(selected->tick);
         if (key == camera->keysByTick.end()) {
+            clearKeyframeDrags();
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.keyframeMissing"_tr().c_str());
             return true;
+        }
+        if (mLookAtOffsetDragging
+            && (camera->locked || key->second.mode != state::editing::model::CameraKeyframeMode::Interpolated
+                || !key->second.lookAtEnabled || mLookAtOffsetDragCameraId != camera->id
+                || mLookAtOffsetDragTick != key->first)) {
+            mLookAtOffsetDragging = false;
+            mLookAtOffsetDragCameraId.clear();
+            mLookAtOffsetDragTick = -1;
         }
         if (property::beginSection("playback.refactorEditor.details.cameraKeyframe"_tr().c_str())) {
             property::textRow("playback.refactorEditor.details.camera"_tr().c_str(), camera->name.c_str());
@@ -2058,11 +2096,15 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                 ImGui::SetNextItemWidth(-1.0f);
                 ImGui::InputInt("##tick", &tick, 0, 0);
                 if (ImGui::IsItemDeactivatedAfterEdit()) {
-                    EditorAction action{EditorActionType::MoveCameraKeyframe};
-                    action.id            = camera->id;
-                    action.tick          = originalTick;
-                    action.secondaryTick = tick;
-                    submit(std::move(action));
+                    tick = std::clamp(tick, 0, std::max(0, project->totalTicks));
+                    if (tick != originalTick && !camera->keysByTick.contains(tick)) {
+                        EditorAction action{EditorActionType::MoveCameraKeyframe};
+                        action.id            = camera->id;
+                        action.tick          = originalTick;
+                        action.secondaryTick = tick;
+                        submit(std::move(action));
+                        ctx.commands.focusCameraKeyframe(camera->id, tick);
+                    }
                 }
                 ImGui::EndTable();
             }
@@ -2171,24 +2213,39 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
                         ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
                         ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
 
-                        float offsetY = key->second.lookAtOffsetY;
+                        float offsetY = (mLookAtOffsetDragging && mLookAtOffsetDragCameraId == camera->id
+                                         && mLookAtOffsetDragTick == originalTick)
+                                          ? mLookAtOffsetDragValue
+                                          : key->second.lookAtOffsetY;
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
                         ImGui::AlignTextToFramePadding();
                         ImGui::TextDisabled("%s", "playback.refactorEditor.details.lookAtOffsetY"_tr().c_str());
                         ImGui::TableNextColumn();
                         ImGui::SetNextItemWidth(-1.0f);
-                        bool const offsetChanged =
-                            ImGui::InputFloat("##keyframe-lookat-offsety", &offsetY, 0.1f, 0.5f, "%.2f");
-                        if ((ImGui::IsItemDeactivatedAfterEdit() || (offsetChanged && !ImGui::IsItemActive()))
-                            && std::isfinite(offsetY) && std::abs(offsetY - key->second.lookAtOffsetY) > 1e-5f) {
-                            EditorAction action{EditorActionType::SetKeyframeLookAt};
-                            action.id          = camera->id;
-                            action.tick        = originalTick;
-                            action.value       = true;
-                            action.secondaryId = key->second.lookAtTarget;
-                            action.speed       = offsetY;
-                            submit(std::move(action));
+                        ImGui::DragFloat("##keyframe-lookat-offsety", &offsetY, 0.05f, -32.0f, 32.0f, "%.2f");
+                        if (ImGui::IsItemActive()) {
+                            mLookAtOffsetDragging     = true;
+                            mLookAtOffsetDragCameraId = camera->id;
+                            mLookAtOffsetDragTick     = originalTick;
+                            mLookAtOffsetDragValue = std::isfinite(offsetY) ? std::clamp(offsetY, -32.0f, 32.0f) : 0.0f;
+                        }
+                        if (ImGui::IsItemDeactivatedAfterEdit() && std::isfinite(offsetY)) {
+                            float const clamped = std::clamp(offsetY, -32.0f, 32.0f);
+                            if (std::abs(clamped - key->second.lookAtOffsetY) > 1e-5f) {
+                                EditorAction action{EditorActionType::SetKeyframeLookAt};
+                                action.id          = camera->id;
+                                action.tick        = originalTick;
+                                action.value       = true;
+                                action.secondaryId = key->second.lookAtTarget;
+                                action.speed       = clamped;
+                                submit(std::move(action));
+                            }
+                        }
+                        if (!ImGui::IsItemActive()) {
+                            mLookAtOffsetDragging = false;
+                            mLookAtOffsetDragCameraId.clear();
+                            mLookAtOffsetDragTick = -1;
                         }
                         ImGui::EndTable();
                     }
@@ -2399,6 +2456,7 @@ bool DetailsPanel::drawKeyframe(PanelContext const& ctx) {
         }
         return true;
     }
+    clearKeyframeDrags();
     return false;
 }
 
@@ -2409,6 +2467,8 @@ bool DetailsPanel::drawMarker(PanelContext const& ctx) {
     if (auto const* selected = selection.getAs<state::editing::model::SelectedMarker>()) {
         auto const* marker = findById(project->markers, selected->markerId);
         if (!marker) {
+            mMarkerLabelId.clear();
+            mMarkerLabelEditing = false;
             ImGui::TextDisabled("%s", "playback.refactorEditor.details.markerMissing"_tr().c_str());
             return true;
         }
@@ -2447,7 +2507,12 @@ bool DetailsPanel::drawMarker(PanelContext const& ctx) {
                         action.id   = marker->id;
                         action.name = std::move(label);
                         ctx.submitAction(std::move(action));
+                    } else {
+                        mMarkerLabelBuffer = {};
+                        marker->label.copy(mMarkerLabelBuffer.data(), mMarkerLabelBuffer.size() - 1);
                     }
+                } else if (ImGui::IsItemDeactivated()) {
+                    mMarkerLabelEditing = false;
                 }
 
                 int tick = marker->tick;
@@ -2498,6 +2563,8 @@ bool DetailsPanel::drawMarker(PanelContext const& ctx) {
         }
         return true;
     }
+    mMarkerLabelId.clear();
+    mMarkerLabelEditing = false;
     return false;
 }
 
@@ -3169,6 +3236,8 @@ bool DetailsPanel::drawTimelapseKeyframe(PanelContext const& ctx) {
                 } else {
                     syncTextBuffer(originalTick, key->second.outputTicks);
                 }
+            } else if (ImGui::IsItemDeactivated()) {
+                mTimelapseTextEditing = false;
             }
 
             int outputTicks = key->second.outputTicks;
@@ -4167,6 +4236,8 @@ bool DetailsPanel::drawAudioTrack(PanelContext const& ctx) {
                     mAudioTrackNameBuffer = {};
                     track->name.copy(mAudioTrackNameBuffer.data(), mAudioTrackNameBuffer.size() - 1);
                 }
+            } else if (ImGui::IsItemDeactivated()) {
+                mAudioTrackNameEditing = false;
             }
             ImGui::EndDisabled();
 
@@ -4368,6 +4439,8 @@ bool DetailsPanel::drawAudioClip(PanelContext const& ctx) {
                         mAudioClipPathBuffer = {};
                         clip->filePath.copy(mAudioClipPathBuffer.data(), mAudioClipPathBuffer.size() - 1);
                     }
+                } else if (ImGui::IsItemDeactivated()) {
+                    mAudioClipPathEditing = false;
                 }
                 ImGui::SameLine(0.0f, gap);
                 if (ImGui::Button((browseLabel + "##audio-clip-browse").c_str(), {browseW, 0.0f})) {
@@ -4960,12 +5033,12 @@ void DetailsPanel::drawSettingsPage(PanelContext const& ctx) {
         ShortcutKeyframeLensMode const current = ctx.commands.shortcutKeyframeLensMode();
         std::array const               options{
             LensOption{
-                       ShortcutKeyframeLensMode::FreeCamera,
-                       "playback.refactorEditor.inspector.shortcutKeyframeLensFree"_tr()
-            },
-            LensOption{
                        ShortcutKeyframeLensMode::MatchPreview,
                        "playback.refactorEditor.inspector.shortcutKeyframeLensMatchPreview"_tr()
+            },
+            LensOption{
+                       ShortcutKeyframeLensMode::FreeCamera,
+                       "playback.refactorEditor.inspector.shortcutKeyframeLensFree"_tr()
             },
         };
         float const gap    = 4.0f * scale;
