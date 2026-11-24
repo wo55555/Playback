@@ -532,6 +532,63 @@ bool remapRecordedPlayerReferences(
     }
 }
 
+struct LiveActorTransform {
+    Vec3  position;
+    Vec2  rotation;
+    float headYaw;
+    float bodyYaw;
+};
+
+LiveActorTransform readLiveActorTransform(Actor const& actor) {
+    auto position = actor.getPosition();
+    auto rotation = actor.getRotation();
+
+    auto const& entityContext = actor.getEntityContext();
+    auto const  interpolator  = entityContext.tryGetComponent<MovementInterpolatorComponent>();
+    if (interpolator) {
+        if (interpolator->mPositionSteps > 0) position = *interpolator->mPos;
+        if (interpolator->mRotationSteps > 0) rotation = *interpolator->mRot;
+    }
+
+    float headYaw = rotation.y;
+    if (auto const headRotation = entityContext.tryGetComponent<ActorHeadRotationComponent>()) {
+        headYaw = headRotation->mYHeadRot;
+    }
+    if (interpolator && interpolator->mHeadYawSteps > 0) headYaw = interpolator->mHeadYaw;
+
+    float bodyYaw = rotation.y;
+    if (auto const bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
+        bodyYaw = bodyRotation->mYBodyRot;
+    }
+
+    return {position, rotation, headYaw, bodyYaw};
+}
+
+// Client actors never refresh SpatialActorNetworkData after spawn, so tryCreateAddActorPacket() returns stale
+// transforms in later snapshots unless synced with live actor state.
+void syncAddActorPacketTransform(Packet& packet, Actor const& actor) {
+    switch (packet.getId()) {
+    case MinecraftPacketIds::AddItemActor: {
+        auto const transform = readLiveActorTransform(actor);
+        auto&      addItem   = static_cast<AddItemActorPacket&>(packet);
+        addItem.mPos         = transform.position;
+        addItem.mVelocity    = actor.getPosDelta();
+        return;
+    }
+    case MinecraftPacketIds::AddActor: {
+        auto const transform    = readLiveActorTransform(actor);
+        auto&      addActor     = static_cast<AddActorPacket&>(packet);
+        addActor.mPos           = transform.position;
+        addActor.mRot           = transform.rotation;
+        addActor.mYHeadRotation = transform.headYaw;
+        addActor.mYBodyRotation = transform.bodyYaw;
+        return;
+    }
+    default:
+        return;
+    }
+}
+
 std::string sanitizeFileName(std::string name) {
     for (auto& ch : name) {
         auto byte = static_cast<unsigned char>(ch);
@@ -2108,6 +2165,7 @@ Recorder::SnapshotCaptureResult Recorder::finishSnapshotColumns(SnapshotColumnsJ
 
             auto packet = actor->tryCreateAddActorPacket();
             if (!packet) continue;
+            syncAddActorPacketTransform(*packet, *actor);
             appendEntityPacket(*packet);
             if (!appendActorState(*actor, actor->getRuntimeID())) return SnapshotCaptureResult::Failed;
         }
@@ -2627,29 +2685,17 @@ bool Recorder::writeEntityMovements() {
     current.reserve(actors.size() + 1);
 
     auto const recordActor = [&](Actor const* actor) {
-        auto position = actor->getPosition();
-        auto rotation = actor->getRotation();
-
-        auto const& entityContext = actor->getEntityContext();
-        auto const  interpolator  = entityContext.tryGetComponent<MovementInterpolatorComponent>();
-        if (interpolator) {
-            if (interpolator->mPositionSteps > 0) position = *interpolator->mPos;
-            if (interpolator->mRotationSteps > 0) rotation = *interpolator->mRot;
-        }
-
-        float headYaw = rotation.y;
-        if (auto const headRotation = entityContext.tryGetComponent<ActorHeadRotationComponent>()) {
-            headYaw = headRotation->mYHeadRot;
-        }
-        if (interpolator && interpolator->mHeadYawSteps > 0) headYaw = interpolator->mHeadYaw;
-
-        float bodyYaw = rotation.y;
-        if (auto const bodyRotation = entityContext.tryGetComponent<MobBodyRotationComponent>()) {
-            bodyYaw = bodyRotation->mYBodyRot;
-        }
-
+        auto const          transform = readLiveActorTransform(*actor);
         EntityMovementState state;
-        state.values   = {position.x, position.y, position.z, rotation.x, rotation.y, headYaw, bodyYaw};
+        state.values = {
+            transform.position.x,
+            transform.position.y,
+            transform.position.z,
+            transform.rotation.x,
+            transform.rotation.y,
+            transform.headYaw,
+            transform.bodyYaw,
+        };
         state.onGround = actor->isOnGround();
 
         if (actor == localPlayer && !mRecordedLocalPlayerId) {
@@ -3055,6 +3101,7 @@ void Recorder::recordSpawnedActor(ActorRuntimeID runtimeId, Packet const& fallba
         );
         recordGamePacket(fallbackPacket);
     } else {
+        syncAddActorPacketTransform(*spawnPacket, *actor);
         recordGamePacket(*spawnPacket);
     }
 
