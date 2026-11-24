@@ -1,20 +1,25 @@
 ﻿#include "SelectionModel.h"
 
 #include "EditorStateExt.h"
+#include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
+#include <unordered_map>
 
 namespace playback::state::editing::model {
 
 void SelectionModel::select(Selection sel) {
     mSelection = std::move(sel);
     mKeyframes.clear();
+    mClipCuts.clear();
     if (auto const* key = std::get_if<SelectedKeyframe>(&*mSelection)) mKeyframes.push_back(*key);
+    else if (auto const* cut = std::get_if<SelectedClipCut>(&*mSelection)) mClipCuts.push_back(*cut);
 }
 
 void SelectionModel::clear() {
     mSelection.reset();
     mKeyframes.clear();
+    mClipCuts.clear();
 }
 
 void SelectionModel::selectSpeedTrack() { select(SelectedSpeedTrack{}); }
@@ -144,13 +149,39 @@ std::optional<SelectedAudioClip> SelectionModel::selectedAudioClip() const {
     return std::nullopt;
 }
 
-void SelectionModel::setKeyframes(std::vector<SelectedKeyframe> keys) {
-    if (keys.empty()) {
+void SelectionModel::setKeyframes(std::vector<SelectedKeyframe> keys) { setBoxSelection(std::move(keys), {}); }
+
+void SelectionModel::setClipCuts(std::vector<SelectedClipCut> cuts) { setBoxSelection({}, std::move(cuts)); }
+
+void SelectionModel::setBoxSelection(std::vector<SelectedKeyframe> keys, std::vector<SelectedClipCut> cuts) {
+    std::vector<SelectedKeyframe> dedupKeys;
+    dedupKeys.reserve(keys.size());
+    for (auto& key : keys) {
+        bool const duplicate = std::ranges::any_of(dedupKeys, [&](auto const& existing) {
+            return existing.trackId == key.trackId && existing.tick == key.tick;
+        });
+        if (!duplicate) dedupKeys.push_back(std::move(key));
+    }
+
+    std::vector<SelectedClipCut> dedupCuts;
+    dedupCuts.reserve(cuts.size());
+    for (auto& cut : cuts) {
+        bool const duplicate = std::ranges::any_of(dedupCuts, [&](auto const& existing) {
+            return existing.cameraId == cut.cameraId && existing.startTick == cut.startTick
+                && existing.endTick == cut.endTick;
+        });
+        if (!duplicate) dedupCuts.push_back(std::move(cut));
+    }
+
+    if (dedupKeys.empty() && dedupCuts.empty()) {
         clear();
         return;
     }
-    mSelection = keys.back();
-    mKeyframes = std::move(keys);
+
+    mKeyframes = std::move(dedupKeys);
+    mClipCuts  = std::move(dedupCuts);
+    if (!mKeyframes.empty()) mSelection = mKeyframes.back();
+    else mSelection = mClipCuts.back();
 }
 
 void SelectionModel::toggleKeyframe(SelectedKeyframe key) {
@@ -164,7 +195,8 @@ void SelectionModel::toggleKeyframe(SelectedKeyframe key) {
     }
     mKeyframes.erase(it);
     if (mKeyframes.empty()) {
-        mSelection.reset();
+        if (!mClipCuts.empty()) mSelection = mClipCuts.back();
+        else mSelection.reset();
         return;
     }
     mSelection = mKeyframes.back();
@@ -176,7 +208,15 @@ bool SelectionModel::isKeyframeSelected(std::string const& trackId, int tick) co
     });
 }
 
-bool SelectionModel::hasSelection() const { return mSelection.has_value(); }
+bool SelectionModel::isClipCutSelected(std::string const& cameraId, int startTick, int endTick) const {
+    return std::ranges::any_of(mClipCuts, [&](auto const& entry) {
+        return entry.cameraId == cameraId && entry.startTick == startTick && entry.endTick == endTick;
+    });
+}
+
+bool SelectionModel::hasSelection() const {
+    return mSelection.has_value() || !mKeyframes.empty() || !mClipCuts.empty();
+}
 
 const Selection* SelectionModel::getSelection() const {
     if (!mSelection.has_value()) return nullptr;
@@ -193,6 +233,8 @@ std::vector<std::string> SelectionModel::selectedIds() const {
                 return {sel.trackId, std::to_string(sel.tick)};
             } else if constexpr (std::is_same_v<T, SelectedClip>) {
                 return {sel.clipId};
+            } else if constexpr (std::is_same_v<T, SelectedClipCut>) {
+                return {sel.cameraId, std::to_string(sel.startTick), std::to_string(sel.endTick)};
             } else if constexpr (std::is_same_v<T, SelectedMarker>) {
                 return {sel.markerId};
             } else if constexpr (std::is_same_v<T, SelectedTransition>) {
@@ -250,25 +292,44 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
     }
     if (mLastSceneId.empty()) mLastSceneId = state.activeSceneId;
 
-    if (!mSelection.has_value()) return;
+    if (!hasSelection()) return;
 
     auto const camera = [&state](std::string const& id) {
         return std::ranges::any_of(state.cameras, [&id](auto const& entry) { return entry.id == id; });
     };
 
-    if (!mKeyframes.empty()) {
+    if (!mKeyframes.empty() || !mClipCuts.empty()) {
         std::erase_if(mKeyframes, [&state](SelectedKeyframe const& key) {
             auto const it = std::ranges::find(state.cameras, key.trackId, &CameraEntity::id);
             return it == state.cameras.end() || !it->keysByTick.contains(key.tick);
         });
-        if (mKeyframes.empty()) {
+
+        std::unordered_map<std::string, std::vector<SelectedClipCut>> cutsByCam;
+        std::erase_if(mClipCuts, [&](SelectedClipCut const& cut) {
+            auto const it = std::ranges::find(state.cameras, cut.cameraId, &CameraEntity::id);
+            if (it == state.cameras.end()) return true;
+            auto [cacheIt, inserted] = cutsByCam.try_emplace(cut.cameraId);
+            if (inserted) cacheIt->second = ClipOps::collectCameraClipCuts(*it, state.totalTicks);
+            return std::ranges::find(cacheIt->second, cut) == cacheIt->second.end();
+        });
+
+        if (mKeyframes.empty() && mClipCuts.empty()) {
             mSelection.reset();
             return;
         }
-        // Keep the primary pointing at a surviving member of the set.
-        if (auto const* primary = std::get_if<SelectedKeyframe>(&*mSelection);
-            primary && !isKeyframeSelected(primary->trackId, primary->tick)) {
-            mSelection = mKeyframes.back();
+
+        // Keep the primary pointing at a surviving member of the selected sets.
+        bool primaryValid = false;
+        if (mSelection.has_value()) {
+            if (auto const* primaryKey = std::get_if<SelectedKeyframe>(&*mSelection)) {
+                primaryValid = isKeyframeSelected(primaryKey->trackId, primaryKey->tick);
+            } else if (auto const* primaryCut = std::get_if<SelectedClipCut>(&*mSelection)) {
+                primaryValid = isClipCutSelected(primaryCut->cameraId, primaryCut->startTick, primaryCut->endTick);
+            }
+        }
+        if (!primaryValid) {
+            if (!mKeyframes.empty()) mSelection = mKeyframes.back();
+            else mSelection = mClipCuts.back();
         }
         return;
     }
@@ -289,6 +350,11 @@ void SelectionModel::pruneInvalid(EditorStateExt const& state) {
                 return std::ranges::any_of(state.cameras, [&](auto const& cam) {
                     return std::ranges::any_of(cam.clips, [&](auto const& clip) { return clip.id == sel.clipId; });
                 });
+            } else if constexpr (std::is_same_v<T, SelectedClipCut>) {
+                auto const it = std::ranges::find(state.cameras, sel.cameraId, &CameraEntity::id);
+                if (it == state.cameras.end()) return false;
+                auto const activeCuts = ClipOps::collectCameraClipCuts(*it, state.totalTicks);
+                return std::ranges::find(activeCuts, sel) != activeCuts.end();
             } else if constexpr (std::is_same_v<T, SelectedTransition>) {
                 return std::ranges::any_of(state.transitions, [&](auto const& transition) {
                     return transition.id == sel.transitionId;

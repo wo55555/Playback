@@ -373,7 +373,11 @@ void EditorController::applyEditorAction(EditorAction const& action) {
             if (existingKey) key = *existingKey;
             else if (auto captured = captureCameraKeyframe()) key = *captured;
             key.mode = *requestedMode;
-            if (key.subject.empty()) key.subject = resolvePersonSubject();
+            if (action.secondaryTick == 1) {
+                key.subject = session.userReplaySubjectChoice();
+            } else if (key.subject.empty()) {
+                key.subject = resolvePersonSubject();
+            }
             mCommandStack.push(
                 CommandFactory::createAddCameraKeyframe(action.id, action.tick, std::move(key)),
                 mProject
@@ -764,6 +768,9 @@ void EditorController::applyEditorAction(EditorAction const& action) {
         break;
     case EditorActionType::DeleteClip:
         mCommandStack.push(CommandFactory::createDeleteClip(action.id), mProject);
+        break;
+    case EditorActionType::HealClipCuts:
+        mCommandStack.push(CommandFactory::createHealClipCuts(action.clipCuts, action.keyframeRefs), mProject);
         break;
     case EditorActionType::AddScene:
         mCommandStack.push(CommandFactory::createAddScene(action.name), mProject);

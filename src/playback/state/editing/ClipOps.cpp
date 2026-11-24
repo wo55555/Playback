@@ -536,4 +536,45 @@ model::Clip* findClipById(model::EditorStateExt& state, std::string_view clipId)
     return findClipWithCamera(state, clipId).clip;
 }
 
+std::vector<model::SelectedClipCut> collectCameraClipCuts(model::CameraEntity const& camera, int totalTicks) {
+    if (totalTicks <= 0) return {};
+
+    struct Interval {
+        int inTick{};
+        int outTick{};
+    };
+    std::vector<Interval> intervals;
+    intervals.reserve(camera.clips.size());
+    for (auto const& clip : camera.clips) {
+        int const cIn  = std::clamp(clip.inTick, 0, totalTicks);
+        int const cOut = std::clamp(clip.outTick, 0, totalTicks);
+        if (cIn < cOut) intervals.push_back({cIn, cOut});
+    }
+    if (intervals.empty()) {
+        return {
+            model::SelectedClipCut{camera.id, 0, totalTicks}
+        };
+    }
+
+    std::ranges::sort(intervals, [](Interval const& a, Interval const& b) {
+        return a.inTick != b.inTick ? a.inTick < b.inTick : a.outTick < b.outTick;
+    });
+
+    std::vector<model::SelectedClipCut> cuts;
+    int                                 cursor = 0;
+    for (auto const& iv : intervals) {
+        if (iv.inTick > cursor) {
+            cuts.push_back({camera.id, cursor, iv.inTick});
+        } else if (iv.inTick == cursor && cursor > 0) {
+            model::SelectedClipCut seam{camera.id, cursor, cursor};
+            if (cuts.empty() || cuts.back() != seam) cuts.push_back(std::move(seam));
+        }
+        cursor = std::max(cursor, iv.outTick);
+    }
+    if (cursor < totalTicks) {
+        cuts.push_back({camera.id, cursor, totalTicks});
+    }
+    return cuts;
+}
+
 } // namespace playback::state::editing::ClipOps
