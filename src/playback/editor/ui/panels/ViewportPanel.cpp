@@ -5,6 +5,7 @@
 #include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
+#include "playback/exporting/ExportTypes.h"
 #include "playback/state/editing/TimelineNavigation.h"
 
 #include "imgui.h"
@@ -255,7 +256,30 @@ void ViewportPanel::draw(PanelContext const& ctx, bool maximized) {
     // The floating transport overlaps this hit box; without this it would keep the hover id.
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##viewport-video", videoSize);
-    // Left click hands the mouse to the game; right click picks whatever entity is under the cursor.
+    bool const thirdPersonOrbitActive = ctx.state.editorVisible && ctx.state.followingRecordedPlayer
+                                     && ctx.state.followThirdPerson
+                                     && !exporting::isExportActive(ctx.state.exportStatus.state);
+    if (thirdPersonOrbitActive) {
+        if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            ImVec2 const delta = ImGui::GetIO().MouseDelta;
+            if (delta.x != 0.0f || delta.y != 0.0f) {
+                constexpr float kOrbitDegreesPerPixel = 0.35f;
+                ctx.commands
+                    .adjustThirdPersonOrbit(delta.x * kOrbitDegreesPerPixel, delta.y * kOrbitDegreesPerPixel, 0.0f);
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            float const wheel = ImGui::GetIO().MouseWheel;
+            if (wheel != 0.0f) {
+                ctx.commands.adjustThirdPersonOrbit(0.0f, 0.0f, -wheel * 0.5f);
+            }
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                ctx.commands.resetThirdPersonOrbit();
+            }
+        }
+    }
+    // Left click hands the mouse to the game (or orbits in 3P follow mode); right click picks whatever entity is under
+    // the cursor.
     if (ctx.state.replayVisible && mGameTexture && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
         mPickedEntity = pickEntityAt(ctx, ImGui::GetMousePos());
         ImGui::OpenPopup("##viewport-entity-menu");
@@ -286,9 +310,9 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     bool        openPlayerPicker = false;
     ImVec2      playerAnchorMin{};
     ImVec2      playerAnchorMax{};
-    // The track that owns the playhead names the view, as on the timeline; follow and free camera fill the gaps.
+    // Follow mode owns the viewport when active; otherwise the track at the playhead (or selected/free camera) does.
     state::editing::model::CameraEntity const* activeCamera = nullptr;
-    if (project && !state.activeCameraId.empty()) {
+    if (!following && project && !state.activeCameraId.empty()) {
         auto const camera =
             std::ranges::find(project->cameras, state.activeCameraId, &state::editing::model::CameraEntity::id);
         if (camera != project->cameras.end()) activeCamera = &*camera;
@@ -357,6 +381,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
                 std::string const label   = camera.name + "##cam-" + camera.id;
                 if (ImGui::MenuItem(label.c_str(), nullptr, current)) {
                     ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
+                    ctx.commands.showSelectionInspector();
                     EditorAction action{EditorActionType::SetPreviewCamera};
                     action.id = camera.id;
                     ctx.submitAction(std::move(action));

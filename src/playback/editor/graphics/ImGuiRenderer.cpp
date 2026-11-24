@@ -70,7 +70,10 @@ private:
 class MouseInputAttempt {
 public:
     ~MouseInputAttempt() {
-        if (!mCommitted) setReplayMouseInputActive(false);
+        if (!mCommitted) {
+            setReplayMouseInputActive(false);
+            setReplayThirdPersonOrbitMode(false);
+        }
     }
     void commit() { mCommitted = true; }
 
@@ -833,11 +836,13 @@ struct ImGuiRenderer::Impl {
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
         if (state.browser.visible) {
+            setReplayThirdPersonOrbitMode(false);
             replayBrowser.draw(state.browser, submit);
         } else if (state.editorVisible || exportFrame) {
             replayEditor.setGameTexture(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(d3d11GameSrv.Get())));
             replayEditor.draw(state, submit);
-            if (exporting::isExportActive(state.exportStatus.state)) {
+            bool const exportActive = exporting::isExportActive(state.exportStatus.state);
+            if (exportActive) {
                 setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
                 setReplayGameViewportExclusion(0.0f, 0.0f, 0.0f, 0.0f);
             } else {
@@ -846,6 +851,9 @@ struct ImGuiRenderer::Impl {
                 auto overlay = replayEditor.viewportOverlayRect();
                 setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
+            setReplayThirdPersonOrbitMode(exportActive ? false : replayEditor.thirdPersonOrbitModeActive());
+        } else {
+            setReplayThirdPersonOrbitMode(false);
         }
         playback::screen::drawRecordDialogs();
         endReplayMouseFrame(getSwapChainWindow(sc));
@@ -1115,6 +1123,7 @@ struct ImGuiRenderer::Impl {
         std::string            frameTapMessage = "D3D12 frame capture backend was released"
     ) {
         setReplayMouseInputActive(false);
+        setReplayThirdPersonOrbitMode(false);
         if (device && SUCCEEDED(device->GetDeviceRemovedReason())) {
             if (unfenced) {
                 UINT64 const fv = lastFenceValue + 1;
@@ -1326,7 +1335,10 @@ ImGuiRenderer::~ImGuiRenderer() = default;
 void ImGuiRenderer::setContext(EditorContext* context) {
     std::scoped_lock lock(mImpl->mutex);
     mImpl->editorContext = context;
-    if (!context) setReplayMouseInputActive(false);
+    if (!context) {
+        setReplayMouseInputActive(false);
+        setReplayThirdPersonOrbitMode(false);
+    }
 }
 
 void ImGuiRenderer::requestReplayThumbnailCapture() {
@@ -1552,6 +1564,7 @@ bool ImGuiRenderer::renderInternal(
     if (!uiActive && !captureActive && !forceExportOverlay) {
         if (allowUi) {
             setReplayMouseInputActive(false);
+            setReplayThirdPersonOrbitMode(false);
             // A submitted one-shot capture needs no render pass, but the backend must outlive its collection.
             auto const tap = p.frameTap.status({});
             bool const tapBusy =
@@ -1566,7 +1579,10 @@ bool ImGuiRenderer::renderInternal(
     auto now = std::chrono::steady_clock::now();
     if (allowUi && p.initialized && swapChain == p.swapChain) p.lastPresent = now;
     if (!uiActive) {
-        if (allowUi) setReplayMouseInputActive(false);
+        if (allowUi) {
+            setReplayMouseInputActive(false);
+            setReplayThirdPersonOrbitMode(false);
+        }
         if (!captureActive && !forceExportOverlay) return false;
     }
 
@@ -1687,6 +1703,7 @@ bool ImGuiRenderer::renderInternal(
         auto& replayBrowser = playback::screen::select_replay::SelectReplayScreen::getInstance();
         auto& replayEditor  = ui::ReplayEditor::getInstance();
         if (state.browser.visible) {
+            setReplayThirdPersonOrbitMode(false);
             replayBrowser.draw(state.browser, submit);
         } else if (state.editorVisible || exportOverlay) {
             // During export only captured frames refresh the copy, so show the latest one instead of this slot.
@@ -1696,7 +1713,8 @@ bool ImGuiRenderer::renderInternal(
                 textureIndex ? static_cast<ImTextureID>(p.frames[*textureIndex].gameSrvGpu.ptr) : ImTextureID{}
             );
             replayEditor.draw(state, submit);
-            if (exporting::isExportActive(state.exportStatus.state)) {
+            bool const exportActive = exporting::isExportActive(state.exportStatus.state);
+            if (exportActive) {
                 setReplayGameViewport(0.0f, 0.0f, 0.0f, 0.0f);
                 setReplayGameViewportExclusion(0.0f, 0.0f, 0.0f, 0.0f);
             } else {
@@ -1705,6 +1723,9 @@ bool ImGuiRenderer::renderInternal(
                 auto overlay = replayEditor.viewportOverlayRect();
                 setReplayGameViewportExclusion(overlay.min.x, overlay.min.y, overlay.max.x, overlay.max.y);
             }
+            setReplayThirdPersonOrbitMode(exportActive ? false : replayEditor.thirdPersonOrbitModeActive());
+        } else {
+            setReplayThirdPersonOrbitMode(false);
         }
         playback::screen::drawRecordDialogs();
         endReplayMouseFrame(getSwapChainWindow(swapChain));

@@ -86,6 +86,7 @@ void ReplayEditor::shutdown() {
     mLastHistoryEventSeq = 0;
     mExitHoldSeconds     = 0.0f;
     mExitHoldBlocked = false;
+    mThirdPersonOrbitModeActive = false;
 }
 
 void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
@@ -153,6 +154,16 @@ void ReplayEditor::setShortcutKeyframeLensMode(ShortcutKeyframeLensMode mode) {
     saveLayoutPreferences();
 }
 
+void ReplayEditor::adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance) {
+    playback::state::EditorAction action{playback::state::EditorActionType::AdjustThirdPersonOrbit};
+    action.orbitDeltaYaw      = deltaYaw;
+    action.orbitDeltaPitch    = deltaPitch;
+    action.orbitDeltaDistance = deltaDistance;
+    submitAction(std::move(action));
+}
+
+void ReplayEditor::resetThirdPersonOrbit() { submitAction({playback::state::EditorActionType::ResetThirdPersonOrbit}); }
+
 void ReplayEditor::showSelectionInspector() { mDetailsPanel.setPage(InspectorPage::Selection); }
 
 void ReplayEditor::focusCameraKeyframe(std::string const& cameraId, int tick) {
@@ -191,7 +202,7 @@ void ReplayEditor::loadLayoutPreferences() {
     mVideoAspectRatio         = 16.0f / 9.0f;
     mCameraPathVisible        = true;
     mUiScaleTier              = UiScaleTier::Auto;
-    mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::FreeCamera;
+    mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::MatchPreview;
     mViewportPanel.setInfoOverlayVisible(true);
     mViewportPanel.setAutoPreviewEnabled(true);
     mTimelinePanel.setSnapEnabled(true);
@@ -216,10 +227,18 @@ void ReplayEditor::loadLayoutPreferences() {
             if (uiScale != config.end() && uiScale->is_string()) {
                 mUiScaleTier = uiScaleTierFromName(uiScale->get<std::string>());
             }
-            auto const shortcutKeyframeLens = config.find("shortcutKeyframeLens");
-            if (shortcutKeyframeLens != config.end() && shortcutKeyframeLens->is_string()
-                && shortcutKeyframeLens->get<std::string>() == "matchPreview") {
-                mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::MatchPreview;
+            auto const shortcutKeyframeLens        = config.find("shortcutKeyframeLens");
+            auto const shortcutKeyframeLensVersion = config.find("shortcutKeyframeLensVersion");
+            int const  lensVersion =
+                shortcutKeyframeLensVersion != config.end() && shortcutKeyframeLensVersion->is_number_integer()
+                     ? shortcutKeyframeLensVersion->get<int>()
+                     : 1;
+            if (shortcutKeyframeLens != config.end() && shortcutKeyframeLens->is_string()) {
+                if (shortcutKeyframeLens->get<std::string>() == "free" && lensVersion >= 2) {
+                    mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::FreeCamera;
+                } else if (shortcutKeyframeLens->get<std::string>() == "matchPreview") {
+                    mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::MatchPreview;
+                }
             }
             mDetailsWidthRatio =
                 std::clamp(readFiniteFloat(config, "detailsWidthRatio", mDetailsWidthRatio), 0.15f, 0.50f);
@@ -298,21 +317,22 @@ void ReplayEditor::saveLayoutPreferences() const {
     };
 
     nlohmann::ordered_json const config{
-        {"detailsWidthRatio",          mDetailsWidthRatio                                                   },
-        {"timelineHeightRatio",        mTimelineHeightRatio                                                 },
-        {"videoAspectRatio",           mVideoAspectRatio                                                    },
-        {"showCameraPath",             mCameraPathVisible                                                   },
-        {"infoOverlay",                mViewportPanel.isInfoOverlayVisible()                                },
-        {"autoPreview",                mViewportPanel.isAutoPreviewEnabled()                                },
-        {"snap",                       mTimelinePanel.isSnapEnabled()                                       },
-        {"uiScale",                    std::string(uiScaleTierName(mUiScaleTier))                           },
+        {"detailsWidthRatio",           mDetailsWidthRatio                                                   },
+        {"timelineHeightRatio",         mTimelineHeightRatio                                                 },
+        {"videoAspectRatio",            mVideoAspectRatio                                                    },
+        {"showCameraPath",              mCameraPathVisible                                                   },
+        {"infoOverlay",                 mViewportPanel.isInfoOverlayVisible()                                },
+        {"autoPreview",                 mViewportPanel.isAutoPreviewEnabled()                                },
+        {"snap",                        mTimelinePanel.isSnapEnabled()                                       },
+        {"uiScale",                     std::string(uiScaleTierName(mUiScaleTier))                           },
         {"shortcutKeyframeLens",
-         mShortcutKeyframeLensMode == ShortcutKeyframeLensMode::MatchPreview ? "matchPreview" : "free"      },
-        {"trackListWidthRatio",        mTimelinePanel.trackListWidthRatio()                                 },
-        {"disableServerResourcePacks", Playback::getInstance().getConfig().replay.disableServerResourcePacks},
-        {"hud",                        std::move(hud)                                                       },
-        {"previewAudio",               std::move(previewAudio)                                              },
-        {"timelineViews",              std::move(timelineViews)                                             }
+         mShortcutKeyframeLensMode == ShortcutKeyframeLensMode::MatchPreview ? "matchPreview" : "free"       },
+        {"shortcutKeyframeLensVersion", 2                                                                    },
+        {"trackListWidthRatio",         mTimelinePanel.trackListWidthRatio()                                 },
+        {"disableServerResourcePacks",  Playback::getInstance().getConfig().replay.disableServerResourcePacks},
+        {"hud",                         std::move(hud)                                                       },
+        {"previewAudio",                std::move(previewAudio)                                              },
+        {"timelineViews",               std::move(timelineViews)                                             }
     };
     std::ofstream output(kLayoutPreferencesPath, std::ios::trunc);
     if (output) {
@@ -553,6 +573,7 @@ bool ReplayEditor::selectCameraByIndex(std::size_t index) {
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
     if (!state.editorVisible && !exportActive) {
+        mThirdPersonOrbitModeActive = false;
         mToast.clear();
         if (!mActiveReplayPath.empty()) {
             mTimelineViewPreferences.insert_or_assign(
@@ -568,6 +589,8 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     syncTimelineViewPreferences(replayPath);
     mFrameState = &state;
     mSubmit     = &submit;
+    mThirdPersonOrbitModeActive =
+        state.editorVisible && state.followingRecordedPlayer && state.followThirdPerson && !exportActive;
     // A reloaded or edited project can drop the selected object; without this the inspector shows "missing".
     if (state.project) mSelection.pruneInvalid(*state.project);
 

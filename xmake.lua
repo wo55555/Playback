@@ -205,6 +205,12 @@ target("editor-unit-tests")
     add_files(
         "tests/editor/EditorCommandsAndNavTests.cpp",
         "tests/editor/TimeOfDayTests.cpp",
+        "src/playback/keyframe/CameraKeyframeChange.cpp",
+        "src/playback/keyframe/CameraKeyframeHandler.cpp",
+        "src/playback/keyframe/CameraTimelineEvaluator.cpp",
+        "src/playback/keyframe/KeyframeTrack.cpp",
+        "src/playback/keyframe/SpeedTimelineEvaluator.cpp",
+        "src/playback/keyframe/TimelapseTimelineEvaluator.cpp",
         "src/playback/keyframe/TimeOfDayTimelineEvaluator.cpp",
         "src/playback/keyframe/WeatherTimelineEvaluator.cpp",
         "src/playback/state/editing/commands/CameraCommands.cpp",

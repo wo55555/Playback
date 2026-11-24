@@ -33,9 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Unified playback speed control into the on-demand Speed track (replacing per-clip speed controls on camera clips and updating the camera keyframe option to Ignore Speed Track), and updated the export inspector to show the actual output duration and frame count after applying the speed curve.
 - Consolidated audio controls into the audio layer by removing the redundant mute toggle from camera clips, and separated game audio capture and external audio track mixing into independent export audio settings.
-- Changed the `K` keyframe shortcut to insert Free Camera keyframes by default, with a Shortcut Keyframe Lens option on the Settings page to match the active preview perspective (`1P`, `3P`, or Free) instead.
-- Adding a keyframe now automatically selects it and switches the right inspector to the Selection page.
-- Simplified the transport bar's Export In and Out buttons to clean `[` and `]` bracket icons with balanced padding.
+- Changed the `K` keyframe shortcut to match the active preview perspective (`1P`, `3P`, or Free) by default, supporting interactive third-person orbiting (drag to orbit, scroll to zoom, middle-click to reset) with smooth spherical interpolation around the focused entity, while keeping a Shortcut Keyframe Lens option on the Settings page to always insert Free Camera keyframes.
+- Adding a keyframe or selecting timeline tracks and cameras now automatically switches the right inspector to the Selection page, resetting scroll position and stale edit drafts when the selection changes.
+- Replaced the transport bar's joined Export In and Out capsule with separate `[` and `]` bracket buttons with rounded borders and balanced spacing.
 
 ### Fixed
 

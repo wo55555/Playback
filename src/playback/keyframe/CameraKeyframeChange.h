@@ -14,6 +14,7 @@ struct CameraKeyframeChange {
     float                       roll{};
     float                       fov{70.0f};
     float                       mDistance{0.0f};
+    bool                        mWrapAngles{true};
 
     void apply(CameraKeyframeHandler& handler) const;
 

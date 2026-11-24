@@ -85,6 +85,8 @@ public:
 
     [[nodiscard]] virtual ShortcutKeyframeLensMode shortcutKeyframeLensMode() const                           = 0;
     virtual void                                   setShortcutKeyframeLensMode(ShortcutKeyframeLensMode mode) = 0;
+    virtual void adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance)                = 0;
+    virtual void resetThirdPersonOrbit()                                                                      = 0;
     virtual void                                   showSelectionInspector()                                   = 0;
     virtual void                                   focusCameraKeyframe(std::string const& cameraId, int tick) = 0;
     virtual void                                   focusSpeedKeyframe(int tick)                               = 0;
