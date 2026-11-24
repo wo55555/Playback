@@ -343,6 +343,18 @@ void syncReplayRenderTransform(Actor& actor, Vec3 const& position, Vec2 const& r
     if (auto renderRot = context.tryGetComponent<RenderRotationComponent>()) renderRot->mRot = rotation;
 }
 
+std::vector<visuals::EntityRenderTarget> collectEntityRenderTargets(
+    Level&                                                             level,
+    std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> const& renderKeys
+) {
+    std::vector<visuals::EntityRenderTarget> targets;
+    targets.reserve(renderKeys.size());
+    for (auto const& [id, key] : renderKeys) {
+        targets.push_back({key, level.fetchEntity(id, false)});
+    }
+    return targets;
+}
+
 bool equalsIgnoreCase(std::string_view left, std::string_view right) noexcept {
     if (left.size() != right.size()) return false;
     for (size_t index = 0; index < left.size(); ++index) {
@@ -596,18 +608,29 @@ void applyReplayEntityMovement(
         position.y - previousPosition.y,
         position.z - previousPosition.z,
     };
-    if (auto walk = actor.mBuiltInComponents->mWalkAnimationComponent.get()) {
-        HardcodedAnimationSystem::computeMovementThisTick(state, *walk);
-    }
-    // The native system needs a move request the replayed player never has; query.walk_distance drives the hand bob.
-    if (actor.isPlayer()) {
-        float const horizontal = std::hypot(state.mPosDelta->x, state.mPosDelta->z);
-        if (auto distance = actor.getEntityContext().tryGetComponent<WalkDistComponent>()) {
-            distance->mPrevious  = distance->mCurrent;
-            distance->mCurrent  += horizontal * WalkDistancePerBlock;
+    if (actor.isRiding()) {
+        if (actor.isPlayer()) {
+            if (auto distance = actor.getEntityContext().tryGetComponent<WalkDistComponent>()) {
+                distance->mPrevious = distance->mCurrent;
+            }
+            updateReplayHandBob(actor, 0.0f);
+            gReplayHandBobTick[actor.getOrCreateUniqueID().rawID] = tick;
         }
-        updateReplayHandBob(actor, horizontal);
-        gReplayHandBobTick[actor.getOrCreateUniqueID().rawID] = tick;
+    } else {
+        if (auto walk = actor.mBuiltInComponents->mWalkAnimationComponent.get()) {
+            HardcodedAnimationSystem::computeMovementThisTick(state, *walk);
+        }
+        // The native system needs a move request the replayed player never has; query.walk_distance drives the hand
+        // bob.
+        if (actor.isPlayer()) {
+            float const horizontal = std::hypot(state.mPosDelta->x, state.mPosDelta->z);
+            if (auto distance = actor.getEntityContext().tryGetComponent<WalkDistComponent>()) {
+                distance->mPrevious  = distance->mCurrent;
+                distance->mCurrent  += horizontal * WalkDistancePerBlock;
+            }
+            updateReplayHandBob(actor, horizontal);
+            gReplayHandBobTick[actor.getOrCreateUniqueID().rawID] = tick;
+        }
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
@@ -622,6 +645,68 @@ void applyReplayEntityMovement(
     interpolator->mPositionSteps = 0;
     interpolator->mRotationSteps = 0;
     interpolator->mHeadYawSteps  = 0;
+}
+
+void applyReplayRidingMovement(
+    Actor&      actor,
+    Vec3 const& position,
+    Vec2 const& rotation,
+    float       headYaw,
+    float       bodyYaw,
+    bool        onGround,
+    bool        snapMovement,
+    int         tick
+) {
+    actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
+    actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    pinReplayEntityHeadRotation(actor, headYaw, bodyYaw);
+
+    auto& entityContext = actor.getEntityContext();
+    if (auto renderRotation = entityContext.tryGetComponent<RenderRotationComponent>()) {
+        renderRotation->mRot = rotation;
+    }
+
+    if (onGround) {
+        if (!entityContext.hasComponent<OnGroundFlagComponent>()) {
+            entityContext.getRegistry().emplace<OnGroundFlagComponent>(entityContext.mEntity);
+        }
+    } else {
+        entityContext.removeComponent<OnGroundFlagComponent>();
+    }
+
+    if (auto interpolator = entityContext.tryGetComponent<MovementInterpolatorComponent>()) {
+        *interpolator->mRot          = rotation;
+        interpolator->mHeadYaw       = headYaw;
+        interpolator->mRotationSteps = 0;
+        interpolator->mHeadYawSteps  = 0;
+    }
+
+    if (actor.isPlayer()) {
+        updateReplayHandBob(actor, 0.0f);
+        gReplayHandBobTick[actor.getOrCreateUniqueID().rawID] = tick;
+        if (auto distance = entityContext.tryGetComponent<WalkDistComponent>()) {
+            distance->mPrevious = distance->mCurrent;
+        }
+    }
+
+    if (snapMovement) {
+        Actor* vehicle        = actor.getVehicle();
+        bool   farFromVehicle = false;
+        if (vehicle) {
+            Vec3 const delta = actor.getPosition() - vehicle->getPosition();
+            farFromVehicle   = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z > 16.0f;
+        }
+        if (!vehicle || farFromVehicle) {
+            auto& state     = *actor.mBuiltInComponents->mStateVectorComponent;
+            state.mPos      = position;
+            state.mPosPrev  = position;
+            state.mPosDelta = Vec3{};
+            if (auto renderPosition = entityContext.tryGetComponent<RenderPositionComponent>()) {
+                renderPosition->mValue = position;
+            }
+            visuals::syncReplayEntityBoundingBox(actor, position);
+        }
+    }
 }
 
 std::string createReplayLevelId() {
@@ -2280,9 +2365,11 @@ bool ReplaySession::updateSubjectFollow() {
     return true;
 }
 
-std::optional<keyframe::CameraRenderState> ReplaySession::sampleSubjectFollowState() {
+std::optional<keyframe::CameraRenderState>
+ReplaySession::sampleSubjectFollowState(std::optional<visuals::ReplaySampleTime> sampleTimeOverride) const {
     // The entity pose trails the camera by one tick; the camera time covers tick 0.
-    auto time = getEntityRenderSampleTime();
+    auto time = sampleTimeOverride;
+    if (!time) time = getEntityRenderSampleTime();
     if (!time) time = getCameraRenderSampleTime();
     if (!time) return std::nullopt;
     auto const pose = visuals::sampleReplaySubjectPose(*time);
@@ -2309,7 +2396,8 @@ std::optional<keyframe::CameraRenderState> ReplaySession::sampleSubjectFollowSta
 }
 
 // Server corrections land during the client update, after the previous frame's pin; pin again right before drawing.
-std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRender() {
+std::optional<keyframe::CameraRenderState>
+ReplaySession::pinFollowObserverForRender(std::optional<visuals::ReplaySampleTime> sampleTimeOverride) {
     if (!isFollowViewActive() || !mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler
         || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || mPendingReplayDimension) {
         mFollowHeldPose.reset();
@@ -2318,7 +2406,7 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
     // The tick stops while chunks or a snapshot stream in, but frames keep coming: keep the last pose.
     if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return mFollowHeldPose;
 
-    auto state = sampleSubjectFollowState();
+    auto state = sampleSubjectFollowState(sampleTimeOverride);
     if (!state) return mFollowHeldPose;
     cancelNativeMovementInterpolation(
         *mReplayPlayer,
@@ -2783,11 +2871,7 @@ std::unique_ptr<visuals::ScopedReplayEntityPose>
 ReplaySession::createReplayEntityRenderScope(visuals::ReplaySampleTime const& sample) {
     if (!sample.isValid() || !mActive || !mReplayWorldJoined || !mWorldReady || !refreshReplayPlayer()) return {};
 
-    std::vector<visuals::EntityRenderTarget> targets;
-    targets.reserve(mEntityRenderKeys.size());
-    for (auto const& [id, key] : mEntityRenderKeys) {
-        targets.push_back({key, mReplayPlayer->getLevel().fetchEntity(id, false)});
-    }
+    auto const targets = collectEntityRenderTargets(mReplayPlayer->getLevel(), mEntityRenderKeys);
     return visuals::createReplayEntityRenderScope(targets, sample);
 }
 
@@ -2975,6 +3059,7 @@ void ReplaySession::settleAfterSeek() {
         }
     }
     visuals::commitReplayEntityPoses(mCurrentTick);
+    visuals::refreshReplayRidingAttachments(collectEntityRenderTargets(level, mEntityRenderKeys));
 }
 
 void ReplaySession::beginSeek(int targetTick) {
@@ -5499,6 +5584,11 @@ void ReplaySession::handleNextTick() {
         });
     }
     visuals::commitReplayEntityPoses(static_cast<int64_t>(mCurrentTick) + 1);
+    if (mReplayPlayer) {
+        visuals::refreshReplayRidingAttachments(
+            collectEntityRenderTargets(mReplayPlayer->getLevel(), mEntityRenderKeys)
+        );
+    }
     mCurrentTick += 1;
     integration::pushReplayClock(mCurrentTick, false);
     if (mReplayTime && mRecordedDoDaylightCycle) {
@@ -6146,10 +6236,9 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 continue;
             }
 
-            auto const previousPose  = replayRenderPose(*actor);
-            auto const renderKey     = replayEntityRenderKey(actor->getLevel(), id);
-            auto&      entityContext = actor->getEntityContext();
-            auto const currentPose   = visuals::EntityRenderPose{
+            auto const previousPose = replayRenderPose(*actor);
+            auto const renderKey    = replayEntityRenderKey(actor->getLevel(), id);
+            auto const currentPose  = visuals::EntityRenderPose{
                 replayRenderPosition(position),
                 rotation.x,
                 rotation.y,
@@ -6163,19 +6252,16 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             }
 
             if (actor->isRiding()) {
-                actor->mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
-                actor->mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
-                pinReplayEntityHeadRotation(*actor, headYaw, bodyYaw);
-
-                if (onGround) {
-                    if (!entityContext.hasComponent<OnGroundFlagComponent>()) {
-                        entityContext.getRegistry().emplace<OnGroundFlagComponent>(entityContext.mEntity);
-                    }
-                } else {
-                    entityContext.removeComponent<OnGroundFlagComponent>();
-                }
-                if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
-                else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw, mCurrentTick);
+                applyReplayRidingMovement(
+                    *actor,
+                    position,
+                    rotation,
+                    headYaw,
+                    bodyYaw,
+                    onGround,
+                    snapMovement,
+                    mCurrentTick
+                );
                 continue;
             }
 
@@ -6235,11 +6321,12 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         std::optional<visuals::EntityRenderKey> renderKey;
         std::shared_ptr<Packet>                 packet;
         Actor*                                  actor{};
+        bool                                    onGround = false;
         if (isPlayer) {
-            auto const pitch    = data.getFloat().value();
-            auto const yaw      = data.getFloat().value();
-            auto const headYaw  = data.getFloat().value();
-            auto const onGround = data.getBool().value();
+            auto const pitch   = data.getFloat().value();
+            auto const yaw     = data.getFloat().value();
+            auto const headYaw = data.getFloat().value();
+            onGround           = data.getBool().value();
 
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
             actor = mReplayPlayer->getLevel().fetchEntity(id, false);
@@ -6260,24 +6347,27 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 yaw,
             };
 
-            packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
-            if (!packet) {
-                mReplayFailed = true;
-                return;
+            if (!actor->isRiding()) {
+                packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
+                if (!packet) {
+                    mReplayFailed = true;
+                    return;
+                }
+                auto& move          = static_cast<MovePlayerPacket&>(*packet);
+                move.mPlayerID      = actor->getRuntimeID();
+                move.mPos           = targetPosition;
+                move.mRot           = rotation;
+                move.mYHeadRot      = headYaw;
+                move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
+                move.mOnGround      = onGround;
             }
-            auto& move          = static_cast<MovePlayerPacket&>(*packet);
-            move.mPlayerID      = actor->getRuntimeID();
-            move.mPos           = targetPosition;
-            move.mRot           = rotation;
-            move.mYHeadRot      = headYaw;
-            move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
-            move.mOnGround      = onGround;
         } else {
             auto const header   = data.getByte().value();
             auto const rotX     = data.getByte().value();
             auto const rotY     = data.getByte().value();
             auto const headRotY = data.getByte().value();
             auto const bodyRotY = data.getByte().value();
+            onGround            = (header & 1) != 0;
 
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
             actor = mReplayPlayer->getLevel().fetchEntity(id, false);
@@ -6294,19 +6384,39 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 decodeRotationByte(bodyRotY),
             };
 
-            packet = MinecraftPackets::createPacket(MinecraftPacketIds::MoveAbsoluteActor);
-            if (!packet) {
-                mReplayFailed = true;
-                return;
+            if (!actor->isRiding()) {
+                packet = MinecraftPackets::createPacket(MinecraftPacketIds::MoveAbsoluteActor);
+                if (!packet) {
+                    mReplayFailed = true;
+                    return;
+                }
+                auto& move         = *static_cast<MoveActorAbsolutePacket&>(*packet).mMoveData;
+                move.mRuntimeId    = actor->getRuntimeID();
+                move.mHeader->mRaw = static_cast<uchar>(header | 2);
+                move.mPos          = targetPosition;
+                move.mRotX         = static_cast<schar>(rotX);
+                move.mRotY         = static_cast<schar>(rotY);
+                move.mRotYHead     = static_cast<schar>(headRotY);
+                move.mRotYBody     = static_cast<schar>(bodyRotY);
             }
-            auto& move         = *static_cast<MoveActorAbsolutePacket&>(*packet).mMoveData;
-            move.mRuntimeId    = actor->getRuntimeID();
-            move.mHeader->mRaw = static_cast<uchar>(header | 2);
-            move.mPos          = targetPosition;
-            move.mRotX         = static_cast<schar>(rotX);
-            move.mRotY         = static_cast<schar>(rotY);
-            move.mRotYHead     = static_cast<schar>(headRotY);
-            move.mRotYBody     = static_cast<schar>(bodyRotY);
+        }
+
+        if (actor && actor->isRiding()) {
+            if (renderKey) {
+                mEntityRenderKeys.insert_or_assign(id, *renderKey);
+                visuals::queueReplayEntityPose(*renderKey, previousPose, currentPose);
+            }
+            applyReplayRidingMovement(
+                *actor,
+                targetPosition,
+                Vec2{currentPose.pitch, currentPose.yaw},
+                currentPose.headYaw,
+                currentPose.bodyYaw,
+                onGround,
+                snapMovement,
+                mCurrentTick
+            );
+            continue;
         }
 
         if (!dispatchMovementPacket(packet)) return;

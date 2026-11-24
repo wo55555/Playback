@@ -665,19 +665,18 @@ LL_TYPE_INSTANCE_HOOK(
     integration::pushReplayPartial(replay.previewPartialTick());
     // The native hand animation reads the frame alpha, so a paused frame must not feed it the cycling value.
     if (replay.isPaused()) partialTick = replay.previewPartialTick();
-    gFollowCamera = replay.pinFollowObserverForRender();
+    // Person camera tracks render through the follow view, which hides the subject itself.
+    setPreviewSubjectHidden(false);
+    auto entityTime = replay.getEntityRenderSampleTime();
+    // Tick 0 has no entity sample yet, but the followed player must already be hidden and its hands drawn.
+    if (!entityTime && replay.isFollowViewActive()) entityTime = replay.getCameraRenderSampleTime();
+    if (entityTime && replay.isFollowViewActive()) (void)visuals::sampleReplaySubjectViewWeight(*entityTime);
+    auto pose     = entityTime ? replay.createReplayEntityRenderScope(*entityTime) : nullptr;
+    gFollowCamera = replay.pinFollowObserverForRender(entityTime);
     if (gFollowCamera) (void)applyFollowCameraEcs(*gFollowCamera);
     struct FollowCameraReset {
         ~FollowCameraReset() { gFollowCamera.reset(); }
     } followCameraReset;
-    // Person camera tracks render through the follow view, which hides the subject itself.
-    setPreviewSubjectHidden(false);
-    auto pose = [&]() -> std::unique_ptr<visuals::ScopedReplayEntityPose> {
-        auto time = replay.getEntityRenderSampleTime();
-        // Tick 0 has no entity sample yet, but the followed player must already be hidden and its hands drawn.
-        if (!time && replay.isFollowViewActive()) time = replay.getCameraRenderSampleTime();
-        return time ? replay.createReplayEntityRenderScope(*time) : nullptr;
-    }();
 
     auto const context = makePreviewRenderContext();
     if (!context) {

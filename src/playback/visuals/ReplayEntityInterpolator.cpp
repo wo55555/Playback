@@ -14,6 +14,7 @@
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/provider/SynchedActorDataAccess.h"
 #include "mc/world/effect/EffectDuration.h"
 #include "mc/world/effect/MobEffect.h"
 #include "mc/world/effect/MobEffectInstance.h"
@@ -80,9 +81,11 @@ struct LocalViewHistory {
     std::vector<LocalViewSample> samples; // sorted by fraction, all inside (0, 1)
 };
 
-using EntityPoseMap = std::unordered_map<EntityRenderKey, EntityPoseHistory, EntityRenderKeyHash>;
+using EntityPoseMap       = std::unordered_map<EntityRenderKey, EntityPoseHistory, EntityRenderKeyHash>;
+using RidingAttachmentMap = std::unordered_map<EntityRenderKey, ReplayRidingAttachment, EntityRenderKeyHash>;
 
 std::atomic<std::shared_ptr<EntityPoseMap const>>                           gEntityPoses;
+std::atomic<std::shared_ptr<RidingAttachmentMap const>>                     gRidingAttachments;
 std::atomic<std::shared_ptr<CameraOffsetHistory const>>                     gCameraOffset;
 std::mutex                                                                  gPendingMutex;
 std::unordered_map<EntityRenderKey, PendingEntityPose, EntityRenderKeyHash> gPending;
@@ -151,6 +154,107 @@ bool finite(EntityRenderPose const& value) noexcept {
         && std::isfinite(value.headYaw) && std::isfinite(value.bodyYaw);
 }
 
+bool finite(Vec3 const& value) noexcept {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+bool finite(ReplayRidingAttachment const& value) noexcept {
+    return finite(value.seatOffset) && std::isfinite(value.vehicleTickYaw);
+}
+
+bool sameAttachment(ReplayRidingAttachment const& left, ReplayRidingAttachment const& right) noexcept {
+    return left.vehicleKey == right.vehicleKey && left.seatOffset.x == right.seatOffset.x
+        && left.seatOffset.y == right.seatOffset.y && left.seatOffset.z == right.seatOffset.z
+        && left.vehicleTickYaw == right.vehicleTickYaw;
+}
+
+// Minecraft yaw increases clockwise around +Y (forward is (-sin(yaw), cos(yaw))), so rotating (x, z) by deltaYaw
+// gives (x*cos - z*sin, x*sin + z*cos).
+Vec3 rotateHorizontalOffset(Vec3 const& offset, float deltaYawDegrees) noexcept {
+    if (!std::isfinite(deltaYawDegrees) || std::abs(deltaYawDegrees) < 1e-5f) return offset;
+    constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+    float const     rad       = deltaYawDegrees * kDegToRad;
+    float const     c         = std::cos(rad);
+    float const     s         = std::sin(rad);
+    return Vec3{offset.x * c - offset.z * s, offset.y, offset.x * s + offset.z * c};
+}
+
+struct RidingAttachmentUpdate {
+    EntityRenderKey                       key{};
+    std::optional<ReplayRidingAttachment> attachment;
+};
+
+void syncRidingAttachments(std::vector<RidingAttachmentUpdate> const& updates) {
+    if (updates.empty()) return;
+    auto const current = gRidingAttachments.load(std::memory_order_acquire);
+    bool       changed = false;
+    for (auto const& update : updates) {
+        if (!update.attachment) {
+            if (current && current->contains(update.key)) {
+                changed = true;
+                break;
+            }
+        } else {
+            if (!current) {
+                changed = true;
+                break;
+            }
+            auto const it = current->find(update.key);
+            if (it == current->end() || !sameAttachment(it->second, *update.attachment)) {
+                changed = true;
+                break;
+            }
+        }
+    }
+    if (!changed) return;
+
+    std::scoped_lock lock(gPendingMutex);
+    auto const       latest = gRidingAttachments.load(std::memory_order_acquire);
+    auto next = latest ? std::make_shared<RidingAttachmentMap>(*latest) : std::make_shared<RidingAttachmentMap>();
+    for (auto const& update : updates) {
+        if (update.attachment && finite(*update.attachment)) {
+            next->insert_or_assign(update.key, *update.attachment);
+        } else {
+            next->erase(update.key);
+        }
+    }
+    gRidingAttachments.store(std::move(next), std::memory_order_release);
+}
+
+std::optional<ReplayRidingAttachment>
+resolveActorRidingAttachment(Actor const& actor, std::unordered_map<Actor const*, EntityRenderKey> const& actorKeys) {
+    if (!actor.isRiding()) return std::nullopt;
+    Actor const* vehicle = actor.getVehicle();
+    if (!vehicle) return std::nullopt;
+    auto const keyIt = actorKeys.find(vehicle);
+    if (keyIt == actorKeys.end()) return std::nullopt;
+
+    Vec3 const seatOffset = SynchedActorDataAccess::getSeatOffset(actor.getEntityContext());
+    if (finite(seatOffset) && (seatOffset.x != 0.0f || seatOffset.y != 0.0f || seatOffset.z != 0.0f)) {
+        return ReplayRidingAttachment{keyIt->second, seatOffset, 0.0f};
+    }
+
+    auto const* stateVector        = actor.mBuiltInComponents->mStateVectorComponent.get();
+    auto const* vehicleStateVector = vehicle->mBuiltInComponents->mStateVectorComponent.get();
+    auto const* vehicleRotation    = vehicle->mBuiltInComponents->mActorRotationComponent.get();
+    if (!stateVector || !vehicleStateVector || !vehicleRotation) return std::nullopt;
+
+    Vec3 const origPos        = stateVector->mPos.get();
+    Vec3 const vehicleOrigPos = vehicleStateVector->mPos.get();
+    Vec3 const rel{
+        origPos.x - vehicleOrigPos.x,
+        origPos.y - vehicleOrigPos.y,
+        origPos.z - vehicleOrigPos.z,
+    };
+    ReplayRidingAttachment const attachment{
+        keyIt->second,
+        rel,
+        static_cast<float>(vehicleRotation->mRot.get().y),
+    };
+    if (!finite(attachment)) return std::nullopt;
+    return attachment;
+}
+
 float interpolateAngle(float previous, float current, float amount) noexcept {
     return previous + std::remainder(current - previous, 360.0f) * amount;
 }
@@ -211,6 +315,44 @@ void applyLocalView(
     float const local = (amount - previousFraction) / (1.0f - previousFraction);
     pose.pitch        = interpolateAngle(previousPitch, to.pitch, local);
     pose.yaw          = interpolateAngle(previousYaw, to.yaw, local);
+}
+
+std::optional<EntityRenderPosition> resolveRidingPosition(
+    EntityRenderKey            key,
+    EntityPoseMap const&       poses,
+    RidingAttachmentMap const& attachments,
+    ReplaySampleTime const&    sample
+) noexcept {
+    ReplayRidingAttachment const* chain[16]{};
+    size_t                        depth  = 0;
+    EntityRenderKey               cursor = key;
+    while (depth < 16) {
+        auto const it = attachments.find(cursor);
+        if (it == attachments.end()) break;
+        chain[depth++] = &it->second;
+        cursor         = it->second.vehicleKey;
+        if (cursor == key) return std::nullopt;
+    }
+    if (depth == 0) return std::nullopt;
+
+    auto const rootHistory = poses.find(cursor);
+    if (rootHistory == poses.end()) return std::nullopt;
+    auto                 rootPose = samplePose(rootHistory->second, sample);
+    EntityRenderPosition pos      = rootPose.position;
+    float                yaw      = rootPose.yaw;
+
+    for (size_t i = depth; i > 0; --i) {
+        auto const* att      = chain[i - 1];
+        float const deltaYaw = std::remainder(yaw - att->vehicleTickYaw, 360.0f);
+        Vec3 const  rotated  = rotateHorizontalOffset(att->seatOffset, deltaYaw);
+        pos                  = EntityRenderPosition{pos.x + rotated.x, pos.y + rotated.y, pos.z + rotated.z};
+        if (i > 1) {
+            auto const nextHistory = poses.find(chain[i - 2]->vehicleKey);
+            if (nextHistory == poses.end()) return std::nullopt;
+            yaw = samplePose(nextHistory->second, sample).yaw;
+        }
+    }
+    return pos;
 }
 
 CameraOffsetSample sampleCameraOffset(CameraOffsetHistory const& history, ReplaySampleTime const& sample) noexcept {
@@ -438,9 +580,17 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
             );
         }
         auto const subject = hiddenMask != 0 ? subjectKey() : std::nullopt;
+        std::unordered_map<Actor const*, EntityRenderKey> actorKeys;
+        actorKeys.reserve(targets.size());
+        std::vector<EntityRenderTarget const*> nonRidingTargets;
+        std::vector<EntityRenderTarget const*> ridingTargets;
+        nonRidingTargets.reserve(targets.size());
+        ridingTargets.reserve(targets.size());
+
         for (auto const& target : targets) {
             // A despawned or unloaded entity must not cost the rest of the frame its interpolation.
             if (!target.actor) continue;
+            actorKeys.emplace(target.actor, target.key);
 
             if (subject && target.key == *subject && !state->hidden) {
                 state->hidden = ScopedReplayEntityPose::State::HiddenActor{
@@ -453,116 +603,202 @@ createReplayEntityRenderScope(std::vector<EntityRenderTarget> const& targets, Re
                 publishSubjectNausea(*target.actor, sample.value());
             }
 
-            if (!poses) continue;
-            auto const history = poses->find(target.key);
-            if (history == poses->end()) continue;
+            if (target.actor->isRiding()) ridingTargets.push_back(&target);
+            else nonRidingTargets.push_back(&target);
+        }
 
-            auto& context              = target.actor->getEntityContext();
-            auto* renderPosition       = context.tryGetComponent<RenderPositionComponent>().as_ptr();
-            auto* renderRotation       = context.tryGetComponent<RenderRotationComponent>().as_ptr();
-            auto* movementInterpolator = context.tryGetComponent<MovementInterpolatorComponent>().as_ptr();
-            auto* stateVector          = target.actor->mBuiltInComponents->mStateVectorComponent.get();
-            auto* aabbShape            = target.actor->mBuiltInComponents->mAABBShapeComponent.get();
-            auto* actorRotation        = target.actor->mBuiltInComponents->mActorRotationComponent.get();
-            auto* headRotation         = context.tryGetComponent<ActorHeadRotationComponent>().as_ptr();
-            auto* bodyRotation         = context.tryGetComponent<MobBodyRotationComponent>().as_ptr();
-            if (!stateVector || !renderPosition || !actorRotation) continue;
+        if (poses) {
+            struct VehicleDelta {
+                Vec3  origStatePos{};
+                Vec3  newExportPos{};
+                float origYaw{0.0f};
+                float newYaw{0.0f};
+            };
 
-            // A passenger is positioned by its vehicle, so only its rotation may be interpolated.
-            bool const positioned = !target.actor->isRiding();
-            auto       sampled    = samplePose(history->second, sample);
-            applyLocalView(sampled, localView.get(), target.key, history->second, sample);
-            state->actors.emplace_back(
-                ScopedReplayEntityPose::State::ActorState{
-                    stateVector,
-                    stateVector->mPos.get(),
-                    stateVector->mPosPrev.get(),
-                    stateVector->mPosDelta.get(),
-                    aabbShape,
-                    aabbShape ? aabbShape->mAABB.get() : AABB{},
-                    renderPosition,
-                    renderPosition->mValue.get(),
-                    Vec3{sampled.position.x, sampled.position.y, sampled.position.z},
-                    movementInterpolator,
-                    movementInterpolator ? movementInterpolator->mPos.get() : Vec3{},
-                    movementInterpolator ? movementInterpolator->mRot.get() : Vec2{},
-                    movementInterpolator ? movementInterpolator->mHeadYaw : 0.0f,
-                    movementInterpolator ? movementInterpolator->mPositionSteps : 0,
-                    movementInterpolator ? movementInterpolator->mRotationSteps : 0,
-                    movementInterpolator ? movementInterpolator->mHeadYawSteps : 0,
-                    renderRotation,
-                    renderRotation ? renderRotation->mRot.get() : Vec2{},
-                    actorRotation,
-                    actorRotation->mRot.get(),
-                    actorRotation->mRotPrev.get(),
-                    headRotation,
-                    headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
-                    headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
-                    bodyRotation,
-                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
-                    bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
-            }
-            );
+            std::unordered_map<Actor const*, VehicleDelta> vehicleDeltas;
+            vehicleDeltas.reserve(targets.size());
+            std::vector<RidingAttachmentUpdate> attachmentUpdates;
+            attachmentUpdates.reserve(targets.size());
 
-            auto& applied = state->actors.back();
-            if (positioned) {
-                applied.stateVector->mPos     = applied.exportPosition;
-                applied.stateVector->mPosPrev = applied.stateVector->mPos;
-                // The hidden subject keeps its per-tick movement for first-person hand bob; a gliding entity needs its
-                // flight velocity for body banking, gliding speed damping, and elytra wing spread.
-                bool const isSubject = state->hidden && state->hidden->actor == target.actor;
-                if (isSubject) {
-                    applied.stateVector->mPosDelta = applied.statePositionDelta;
-                } else if (target.actor->getStatusFlag(ActorFlags::Gliding)) {
-                    Vec3 glideDelta = applied.statePositionDelta;
-                    if (history->second.currentTick > history->second.previousTick) {
-                        float const invTicks =
-                            1.0f / static_cast<float>(history->second.currentTick - history->second.previousTick);
-                        Vec3 const sampledDelta{
-                            (history->second.current.position.x - history->second.previous.position.x) * invTicks,
-                            (history->second.current.position.y - history->second.previous.position.y) * invTicks,
-                            (history->second.current.position.z - history->second.previous.position.z) * invTicks,
-                        };
-                        if (std::isfinite(sampledDelta.x) && std::isfinite(sampledDelta.y)
-                            && std::isfinite(sampledDelta.z)
-                            && (sampledDelta.x != 0.0f || sampledDelta.y != 0.0f || sampledDelta.z != 0.0f)) {
-                            glideDelta = sampledDelta;
-                        }
+            auto const applyTarget = [&](EntityRenderTarget const& target, std::optional<Vec3> const& lockedPos) {
+                auto const history = poses->find(target.key);
+                if (history == poses->end()) return false;
+
+                auto& context              = target.actor->getEntityContext();
+                auto* renderPosition       = context.tryGetComponent<RenderPositionComponent>().as_ptr();
+                auto* renderRotation       = context.tryGetComponent<RenderRotationComponent>().as_ptr();
+                auto* movementInterpolator = context.tryGetComponent<MovementInterpolatorComponent>().as_ptr();
+                auto* stateVector          = target.actor->mBuiltInComponents->mStateVectorComponent.get();
+                auto* aabbShape            = target.actor->mBuiltInComponents->mAABBShapeComponent.get();
+                auto* actorRotation        = target.actor->mBuiltInComponents->mActorRotationComponent.get();
+                auto* headRotation         = context.tryGetComponent<ActorHeadRotationComponent>().as_ptr();
+                auto* bodyRotation         = context.tryGetComponent<MobBodyRotationComponent>().as_ptr();
+                if (!stateVector || !renderPosition || !actorRotation) return false;
+
+                auto sampled = samplePose(history->second, sample);
+                applyLocalView(sampled, localView.get(), target.key, history->second, sample);
+
+                Vec3 const  origStatePos = stateVector->mPos.get();
+                float const origYaw      = static_cast<float>(actorRotation->mRot.get().y);
+                bool const  positioned   = !target.actor->isRiding() || lockedPos.has_value();
+                Vec3 const  exportPos =
+                    lockedPos ? *lockedPos : Vec3{sampled.position.x, sampled.position.y, sampled.position.z};
+
+                state->actors.emplace_back(
+                    ScopedReplayEntityPose::State::ActorState{
+                        stateVector,
+                        origStatePos,
+                        stateVector->mPosPrev.get(),
+                        stateVector->mPosDelta.get(),
+                        aabbShape,
+                        aabbShape ? aabbShape->mAABB.get() : AABB{},
+                        renderPosition,
+                        renderPosition->mValue.get(),
+                        exportPos,
+                        movementInterpolator,
+                        movementInterpolator ? movementInterpolator->mPos.get() : Vec3{},
+                        movementInterpolator ? movementInterpolator->mRot.get() : Vec2{},
+                        movementInterpolator ? movementInterpolator->mHeadYaw : 0.0f,
+                        movementInterpolator ? movementInterpolator->mPositionSteps : 0,
+                        movementInterpolator ? movementInterpolator->mRotationSteps : 0,
+                        movementInterpolator ? movementInterpolator->mHeadYawSteps : 0,
+                        renderRotation,
+                        renderRotation ? renderRotation->mRot.get() : Vec2{},
+                        actorRotation,
+                        actorRotation->mRot.get(),
+                        actorRotation->mRotPrev.get(),
+                        headRotation,
+                        headRotation ? static_cast<float>(headRotation->mYHeadRot) : 0.0f,
+                        headRotation ? static_cast<float>(headRotation->mYHeadRotO) : 0.0f,
+                        bodyRotation,
+                        bodyRotation ? static_cast<float>(bodyRotation->mYBodyRot) : 0.0f,
+                        bodyRotation ? static_cast<float>(bodyRotation->mYBodyRotO) : 0.0f,
                     }
-                    applied.stateVector->mPosDelta = glideDelta;
-                } else {
-                    applied.stateVector->mPosDelta = Vec3{};
+                );
+
+                auto& applied = state->actors.back();
+                if (positioned) {
+                    applied.stateVector->mPos     = applied.exportPosition;
+                    applied.stateVector->mPosPrev = applied.stateVector->mPos;
+                    // The hidden subject keeps its per-tick movement for first-person hand bob; a gliding entity
+                    // needs its flight velocity for body banking, gliding speed damping, and elytra wing spread.
+                    bool const isSubject = state->hidden && state->hidden->actor == target.actor;
+                    if (isSubject) {
+                        applied.stateVector->mPosDelta = applied.statePositionDelta;
+                    } else if (target.actor->getStatusFlag(ActorFlags::Gliding)) {
+                        Vec3 glideDelta = applied.statePositionDelta;
+                        if (history->second.currentTick > history->second.previousTick) {
+                            float const invTicks =
+                                1.0f / static_cast<float>(history->second.currentTick - history->second.previousTick);
+                            Vec3 const sampledDelta{
+                                (history->second.current.position.x - history->second.previous.position.x) * invTicks,
+                                (history->second.current.position.y - history->second.previous.position.y) * invTicks,
+                                (history->second.current.position.z - history->second.previous.position.z) * invTicks,
+                            };
+                            if (std::isfinite(sampledDelta.x) && std::isfinite(sampledDelta.y)
+                                && std::isfinite(sampledDelta.z)
+                                && (sampledDelta.x != 0.0f || sampledDelta.y != 0.0f || sampledDelta.z != 0.0f)) {
+                                glideDelta = sampledDelta;
+                            }
+                        }
+                        applied.stateVector->mPosDelta = glideDelta;
+                    } else {
+                        applied.stateVector->mPosDelta = Vec3{};
+                    }
+                    applied.renderPosition->mValue = applied.exportPosition;
+                    vehicleDeltas.emplace(
+                        target.actor,
+                        VehicleDelta{origStatePos, applied.exportPosition, origYaw, sampled.yaw}
+                    );
                 }
-                applied.renderPosition->mValue = applied.exportPosition;
+                if (applied.movementInterpolator) {
+                    if (positioned) *applied.movementInterpolator->mPos = applied.exportPosition;
+                    *applied.movementInterpolator->mRot          = Vec2{sampled.pitch, sampled.yaw};
+                    applied.movementInterpolator->mHeadYaw       = sampled.headYaw;
+                    applied.movementInterpolator->mPositionSteps = 0;
+                    applied.movementInterpolator->mRotationSteps = 0;
+                    applied.movementInterpolator->mHeadYawSteps  = 0;
+                }
+                // Replay positions are written straight into the state, so the bounding box the game moves along with
+                // them stays wherever the entity was spawned or last teleported. The fire overlay, culling and the
+                // viewport's entity picking read it, so it follows the drawn pose and restores when the scope ends.
+                if (applied.aabbShape) {
+                    Vec3 const position = positioned ? applied.exportPosition : Vec3{stateVector->mPos};
+                    syncReplayEntityBoundingBox(*target.actor, position);
+                }
+                if (applied.renderRotation) {
+                    applied.renderRotation->mRot = Vec2{sampled.pitch, sampled.yaw};
+                }
+                applied.actorRotation->mRot     = Vec2{sampled.pitch, sampled.yaw};
+                applied.actorRotation->mRotPrev = Vec2{sampled.pitch, sampled.yaw};
+                if (applied.headRotation) {
+                    applied.headRotation->mYHeadRot  = sampled.headYaw;
+                    applied.headRotation->mYHeadRotO = sampled.headYaw;
+                }
+                if (applied.bodyRotation) {
+                    applied.bodyRotation->mYBodyRot  = sampled.bodyYaw;
+                    applied.bodyRotation->mYBodyRotO = sampled.bodyYaw;
+                }
+                return true;
+            };
+
+            std::unordered_map<EntityRenderKey, std::optional<ReplayRidingAttachment>, EntityRenderKeyHash>
+                resolvedAttachments;
+            resolvedAttachments.reserve(ridingTargets.size());
+            for (auto const* target : ridingTargets) {
+                resolvedAttachments.emplace(target->key, resolveActorRidingAttachment(*target->actor, actorKeys));
             }
-            if (applied.movementInterpolator) {
-                if (positioned) *applied.movementInterpolator->mPos = applied.exportPosition;
-                *applied.movementInterpolator->mRot          = Vec2{sampled.pitch, sampled.yaw};
-                applied.movementInterpolator->mHeadYaw       = sampled.headYaw;
-                applied.movementInterpolator->mPositionSteps = 0;
-                applied.movementInterpolator->mRotationSteps = 0;
-                applied.movementInterpolator->mHeadYawSteps  = 0;
+
+            // Pass 1: position all non-riding actors (including vehicles) and record their tick->frame deltas.
+            for (auto const* target : nonRidingTargets) {
+                attachmentUpdates.push_back({target->key, std::nullopt});
+                (void)applyTarget(*target, std::nullopt);
             }
-            // Replay positions are written straight into the state, so the bounding box the game moves along with
-            // them stays wherever the entity was spawned or last teleported. The fire overlay, culling and the
-            // viewport's entity picking read it, so it follows the drawn pose and restores when the scope ends.
-            if (applied.aabbShape) {
-                Vec3 const position = positioned ? applied.exportPosition : Vec3{stateVector->mPos};
-                syncReplayEntityBoundingBox(*target.actor, position);
+
+            // Pass 2: lock riding passengers to their vehicle's interpolated position and yaw delta.
+            std::vector<EntityRenderTarget const*> pendingRiding = std::move(ridingTargets);
+            while (!pendingRiding.empty()) {
+                std::vector<EntityRenderTarget const*> remaining;
+                bool                                   progressed = false;
+                for (auto const* target : pendingRiding) {
+                    Actor const* vehicle = target->actor->getVehicle();
+                    auto const   it      = vehicle ? vehicleDeltas.find(vehicle) : vehicleDeltas.end();
+                    if (it == vehicleDeltas.end()) {
+                        remaining.push_back(target);
+                        continue;
+                    }
+                    progressed              = true;
+                    auto const attachmentIt = resolvedAttachments.find(target->key);
+                    auto const attachment =
+                        attachmentIt != resolvedAttachments.end() ? attachmentIt->second : std::nullopt;
+                    if (!attachment) {
+                        attachmentUpdates.push_back({target->key, std::nullopt});
+                        (void)applyTarget(*target, std::nullopt);
+                        continue;
+                    }
+                    float const deltaYaw = std::remainder(it->second.newYaw - attachment->vehicleTickYaw, 360.0f);
+                    Vec3 const  rotated  = rotateHorizontalOffset(attachment->seatOffset, deltaYaw);
+                    Vec3 const  lockedPos{
+                        it->second.newExportPos.x + rotated.x,
+                        it->second.newExportPos.y + rotated.y,
+                        it->second.newExportPos.z + rotated.z,
+                    };
+                    if (applyTarget(*target, lockedPos)) {
+                        attachmentUpdates.push_back({target->key, attachment});
+                    } else {
+                        attachmentUpdates.push_back({target->key, std::nullopt});
+                    }
+                }
+                if (!progressed) {
+                    for (auto const* target : remaining) {
+                        attachmentUpdates.push_back({target->key, std::nullopt});
+                        (void)applyTarget(*target, std::nullopt);
+                    }
+                    break;
+                }
+                pendingRiding = std::move(remaining);
             }
-            if (applied.renderRotation) {
-                applied.renderRotation->mRot = Vec2{sampled.pitch, sampled.yaw};
-            }
-            applied.actorRotation->mRot     = Vec2{sampled.pitch, sampled.yaw};
-            applied.actorRotation->mRotPrev = Vec2{sampled.pitch, sampled.yaw};
-            if (applied.headRotation) {
-                applied.headRotation->mYHeadRot  = sampled.headYaw;
-                applied.headRotation->mYHeadRotO = sampled.headYaw;
-            }
-            if (applied.bodyRotation) {
-                applied.bodyRotation->mYBodyRot  = sampled.bodyYaw;
-                applied.bodyRotation->mYBodyRotO = sampled.bodyYaw;
-            }
+            syncRidingAttachments(attachmentUpdates);
         }
 
         if (!state->hidden) gNauseaStamp.store(0, std::memory_order_release);
@@ -602,6 +838,32 @@ void queueReplayEntityPose(EntityRenderKey key, EntityRenderPose previous, Entit
     std::scoped_lock lock(gPendingMutex);
     auto [entry, inserted] = gPending.try_emplace(key, PendingEntityPose{previous, current});
     if (!inserted) entry->second.current = current;
+}
+
+void noteReplayEntityRidingAttachment(EntityRenderKey passengerKey, std::optional<ReplayRidingAttachment> attachment) {
+    if (attachment && !finite(*attachment)) attachment.reset();
+    syncRidingAttachments({
+        {passengerKey, attachment}
+    });
+}
+
+void refreshReplayRidingAttachments(std::vector<EntityRenderTarget> const& targets) {
+    if (targets.empty()) return;
+
+    std::unordered_map<Actor const*, EntityRenderKey> actorKeys;
+    actorKeys.reserve(targets.size());
+    for (auto const& target : targets) {
+        if (target.actor) actorKeys.emplace(target.actor, target.key);
+    }
+    if (actorKeys.empty()) return;
+
+    std::vector<RidingAttachmentUpdate> updates;
+    updates.reserve(actorKeys.size());
+    for (auto const& target : targets) {
+        if (!target.actor) continue;
+        updates.push_back({target.key, resolveActorRidingAttachment(*target.actor, actorKeys)});
+    }
+    syncRidingAttachments(updates);
 }
 
 void queueReplaySubjectCameraOffset(EntityRenderPosition offset, float fov, std::optional<EntityRenderPose> view) {
@@ -675,6 +937,18 @@ void removeReplayEntityPose(EntityRenderKey key) {
     if (auto const view = gLocalView.load(std::memory_order_acquire); view && view->key == key) {
         gLocalView.store({}, std::memory_order_release);
     }
+    if (auto const attachments = gRidingAttachments.load(std::memory_order_acquire)) {
+        bool const hasKey = attachments->contains(key) || std::ranges::any_of(*attachments, [&](auto const& entry) {
+                                return entry.second.vehicleKey == key;
+                            });
+        if (hasKey) {
+            auto nextAttachments = std::make_shared<RidingAttachmentMap>(*attachments);
+            std::erase_if(*nextAttachments, [&](auto const& entry) {
+                return entry.first == key || entry.second.vehicleKey == key;
+            });
+            gRidingAttachments.store(std::move(nextAttachments), std::memory_order_release);
+        }
+    }
     auto const current = gEntityPoses.load(std::memory_order_acquire);
     if (!current || !current->contains(key)) return;
     auto next = std::make_shared<EntityPoseMap>(*current);
@@ -689,6 +963,7 @@ void clearReplayEntityPoses() {
     gCameraOffset.store({}, std::memory_order_release);
     gPendingLocalView.reset();
     gLocalView.store({}, std::memory_order_release);
+    gRidingAttachments.store({}, std::memory_order_release);
     gEntityPoses.store({}, std::memory_order_release);
 }
 
@@ -808,7 +1083,8 @@ std::optional<EntityRenderPose> sampleReplayEntityPose(
     float                   postureOffsetY
 ) {
     std::optional<EntityRenderPose> found;
-    if (auto const poses = gEntityPoses.load(std::memory_order_acquire)) {
+    auto const                      poses = gEntityPoses.load(std::memory_order_acquire);
+    if (poses) {
         if (auto const entry = poses->find(key); entry != poses->end()) {
             found = samplePose(entry->second, sample);
             applyLocalView(*found, gLocalView.load(std::memory_order_acquire).get(), key, entry->second, sample);
@@ -821,6 +1097,17 @@ std::optional<EntityRenderPose> sampleReplayEntityPose(
     }
     if (!found) return std::nullopt;
     auto pose = *found;
+
+    bool attachedToVehicle = false;
+    if (poses) {
+        if (auto const attachments = gRidingAttachments.load(std::memory_order_acquire)) {
+            if (auto const attachedPos = resolveRidingPosition(key, *poses, *attachments, sample)) {
+                pose.position     = *attachedPos;
+                attachedToVehicle = true;
+            }
+        }
+    }
+
     // Any other entity records its feet and turns its head independently of its body.
     if (!isPlayer) {
         pose.position.y += std::isfinite(eyeHeight) ? std::max(0.0f, eyeHeight) : 0.0f;
@@ -830,13 +1117,17 @@ std::optional<EntityRenderPose> sampleReplayEntityPose(
     // Recorded player positions are already standing eye height. The recorder uses its recorded camera offset.
     // Another player has no such track, so sneak and swim add the offset measured on the local player.
     if (!isRecorder) {
-        pose.position.y += std::isfinite(postureOffsetY) ? postureOffsetY : 0.0f;
+        if (!attachedToVehicle) {
+            pose.position.y += std::isfinite(postureOffsetY) ? postureOffsetY : 0.0f;
+        }
         return pose;
     }
     if (auto const camera = sampleSubjectCamera(sample)) {
-        pose.position.x += camera->offset.x;
-        pose.position.y += camera->offset.y;
-        pose.position.z += camera->offset.z;
+        if (!attachedToVehicle) {
+            pose.position.x += camera->offset.x;
+            pose.position.y += camera->offset.y;
+            pose.position.z += camera->offset.z;
+        }
         if (camera->view && camera->viewWeight > 0.0f) {
             // The recorded game camera replaces the actor pose (sleeping), faded in and out at its edges.
             float const w = std::clamp(camera->viewWeight, 0.0f, 1.0f);
