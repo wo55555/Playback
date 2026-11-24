@@ -88,6 +88,8 @@ private:
 
     void                      submitSeek(PanelContext const& ctx, int tick);
     [[nodiscard]] std::string resolveKeyframeTargetCamera(PanelContext const& ctx) const;
+    [[nodiscard]] bool        canAddKeyframeAtPlayhead(PanelContext const& ctx) const;
+    [[nodiscard]] bool        canDeleteSelection(PanelContext const& ctx) const;
     // Single-camera clips go to `targetCameraId` when given; multi-camera clips return to their own tracks.
     bool pasteKeyframes(PanelContext const& ctx, int anchorTick, std::string const& targetCameraId);
     // Shift-drag snapping onto keyframes, markers, the playhead, in/out and segment edges within a few pixels.
@@ -149,7 +151,14 @@ private:
 
     void drawRangeBar(PanelContext const& ctx, Layout const& layout, bool allowInput);
     float drawTimecodeReadout(PanelContext const& ctx, float height, int displayTick);
-    float drawTransportGroup(PanelContext const& ctx, float height, float width, float minStartX, float maxRightX);
+    float drawTransportGroup(
+        PanelContext const& ctx,
+        float               height,
+        float               width,
+        float               minStartX,
+        float               maxRightX,
+        float               fallbackRightX
+    );
 
     TrackTreeModel mTrackTree;
     Animator       mAnimator;
