@@ -547,7 +547,8 @@ private:
     [[nodiscard]] bool updateSubjectFollow();
 
     // Where the observer must sit to see through the recorded player's eyes right now.
-    [[nodiscard]] std::optional<keyframe::CameraRenderState> sampleSubjectFollowState();
+    [[nodiscard]] std::optional<keyframe::CameraRenderState>
+    sampleSubjectFollowState(std::optional<visuals::ReplaySampleTime> sampleTimeOverride = std::nullopt) const;
 
     // Align the server authority with the client so a paused replay isn't pulled back.
     void syncObserverServerPosition(::Vec3 const& feetPosition, ::Vec2 const& rotation);
@@ -664,7 +665,8 @@ public:
 
     // Chunk streaming, snapshot applies and seeks hold the last pose instead of exposing the stale observer.
     // While following, re-pins the observer just before the frame is drawn; returns the pose the camera must use.
-    [[nodiscard]] std::optional<keyframe::CameraRenderState> pinFollowObserverForRender();
+    [[nodiscard]] std::optional<keyframe::CameraRenderState>
+    pinFollowObserverForRender(std::optional<visuals::ReplaySampleTime> sampleTimeOverride = std::nullopt);
 
     // Moves the observer onto the recorded player once, as soon as the replay world and the player's pose are ready.
     void requestTeleportToRecordedPlayer() noexcept { mTeleportToSubjectPending = true; }
