@@ -47,6 +47,7 @@ enum class EditorKeybind : uint8_t {
     PreviousMarker,
     NextMarker,
     SelectTool,
+    BoxSelectTool,
     RazorTool,
     PenTool,
     SplitClip,

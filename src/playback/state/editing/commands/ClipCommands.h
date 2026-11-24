@@ -2,9 +2,11 @@
 
 #include "playback/state/editing/models/EditorStateExt.h"
 #include "playback/state/editing/models/IEditCommand.h"
+#include "playback/state/editing/models/SelectionModel.h"
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace playback::state::editing::command {
 
@@ -135,6 +137,25 @@ public:
 private:
     std::string                          mClipId;
     std::optional<model::EditorStateExt> mBefore;
+};
+
+class HealClipCuts final : public model::IEditCommand {
+public:
+    explicit HealClipCuts(
+        std::vector<model::SelectedClipCut> cuts,
+        std::vector<model::KeyframeRef>     keyframesToDelete = {}
+    );
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::SelectedClipCut>  mCuts;
+    std::vector<model::KeyframeRef>      mKeyframesToDelete;
+    std::optional<model::EditorStateExt> mBefore;
+    bool                                 mDeletedKeyframes{false};
+    bool                                 mHealedCuts{false};
 };
 
 class AddScene final : public model::IEditCommand {

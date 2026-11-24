@@ -321,6 +321,47 @@ void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, I
         drawList->AddQuadFilled(notch, innerRight, tailRight, tailLeft, color);
         break;
     }
+    case VectorIcon::BoxSelect: {
+        // Dashed marquee selection box with subtle interior fill, L-shaped corners, and centered side dashes.
+        float const r         = h * 0.84f;
+        float const minX      = centre.x - r;
+        float const maxX      = centre.x + r;
+        float const minY      = centre.y - r;
+        float const maxY      = centre.y + r;
+        float const leg       = r * 0.48f;
+        float const dashHalf  = r * 0.15f;
+        ImU32 const fillAlpha = std::min<ImU32>(0x24u, ((color >> IM_COL32_A_SHIFT) & 0xffu) / 5u);
+        drawList->AddRectFilled({minX, minY}, {maxX, maxY}, theme::withAlpha(color, static_cast<int>(fillAlpha)));
+        ImVec2 const tl[]{
+            {minX,       minY + leg},
+            {minX,       minY      },
+            {minX + leg, minY      }
+        };
+        ImVec2 const tr[]{
+            {maxX - leg, minY      },
+            {maxX,       minY      },
+            {maxX,       minY + leg}
+        };
+        ImVec2 const br[]{
+            {maxX,       maxY - leg},
+            {maxX,       maxY      },
+            {maxX - leg, maxY      }
+        };
+        ImVec2 const bl[]{
+            {minX + leg, maxY      },
+            {minX,       maxY      },
+            {minX,       maxY - leg}
+        };
+        drawList->AddPolyline(tl, 3, color, ImDrawFlags_None, stroke);
+        drawList->AddPolyline(tr, 3, color, ImDrawFlags_None, stroke);
+        drawList->AddPolyline(br, 3, color, ImDrawFlags_None, stroke);
+        drawList->AddPolyline(bl, 3, color, ImDrawFlags_None, stroke);
+        drawList->AddLine({centre.x - dashHalf, minY}, {centre.x + dashHalf, minY}, color, stroke);
+        drawList->AddLine({centre.x - dashHalf, maxY}, {centre.x + dashHalf, maxY}, color, stroke);
+        drawList->AddLine({minX, centre.y - dashHalf}, {minX, centre.y + dashHalf}, color, stroke);
+        drawList->AddLine({maxX, centre.y - dashHalf}, {maxX, centre.y + dashHalf}, color, stroke);
+        break;
+    }
     case VectorIcon::PenTool: {
         // Upright fountain-pen nib with collar bar, shouldered outline, center slit, and breather hole.
         drawList->AddRectFilled(
@@ -362,33 +403,29 @@ void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, I
         break;
     }
     case VectorIcon::MarkIn: {
-        // Bold left bracket opening right + inward playhead arrow, matching SkipStart/SkipEnd weight.
-        float const thick   = std::max(stroke, h * 0.28f);
+        // Clean left bracket '[' centred on `centre` with balanced padding.
+        float const thick   = std::max(stroke * 1.15f, h * 0.22f);
         float const cornerR = thick * 0.35f;
-        float const leftX   = centre.x - h * 0.90f;
-        float const spineR  = leftX + thick;
-        float const jawR    = centre.x - h * 0.16f;
-        float const topY    = centre.y - h * 0.94f;
-        float const botY    = centre.y + h * 0.94f;
-        drawList->AddRectFilled({leftX, topY}, {spineR, botY}, color, cornerR);
-        drawList->AddRectFilled({leftX, topY}, {jawR, topY + thick}, color, cornerR);
-        drawList->AddRectFilled({leftX, botY - thick}, {jawR, botY}, color, cornerR);
-        addTriangle(drawList, centre, h * 0.08f, h * 0.90f, h * 0.45f, true, color);
+        float const leftX   = centre.x - h * 0.27f;
+        float const rightX  = centre.x + h * 0.27f;
+        float const topY    = centre.y - h * 0.72f;
+        float const botY    = centre.y + h * 0.72f;
+        drawList->AddRectFilled({leftX, topY}, {leftX + thick, botY}, color, cornerR);
+        drawList->AddRectFilled({leftX, topY}, {rightX, topY + thick}, color, cornerR);
+        drawList->AddRectFilled({leftX, botY - thick}, {rightX, botY}, color, cornerR);
         break;
     }
     case VectorIcon::MarkOut: {
-        // Inward playhead arrow + bold right bracket opening left, mirroring MarkIn.
-        float const thick   = std::max(stroke, h * 0.28f);
+        // Clean right bracket ']' mirroring MarkIn.
+        float const thick   = std::max(stroke * 1.15f, h * 0.22f);
         float const cornerR = thick * 0.35f;
-        float const rightX  = centre.x + h * 0.90f;
-        float const spineL  = rightX - thick;
-        float const jawL    = centre.x + h * 0.16f;
-        float const topY    = centre.y - h * 0.94f;
-        float const botY    = centre.y + h * 0.94f;
-        addTriangle(drawList, centre, -h * 0.90f, -h * 0.08f, h * 0.45f, false, color);
-        drawList->AddRectFilled({spineL, topY}, {rightX, botY}, color, cornerR);
-        drawList->AddRectFilled({jawL, topY}, {rightX, topY + thick}, color, cornerR);
-        drawList->AddRectFilled({jawL, botY - thick}, {rightX, botY}, color, cornerR);
+        float const leftX   = centre.x - h * 0.27f;
+        float const rightX  = centre.x + h * 0.27f;
+        float const topY    = centre.y - h * 0.72f;
+        float const botY    = centre.y + h * 0.72f;
+        drawList->AddRectFilled({rightX - thick, topY}, {rightX, botY}, color, cornerR);
+        drawList->AddRectFilled({leftX, topY}, {rightX, topY + thick}, color, cornerR);
+        drawList->AddRectFilled({leftX, botY - thick}, {rightX, botY}, color, cornerR);
         break;
     }
     }

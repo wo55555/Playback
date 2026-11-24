@@ -2,6 +2,7 @@
 
 #include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/IEditCommand.h"
+#include "playback/state/editing/models/SelectionModel.h"
 #include "playback/state/editing/models/Track.h"
 
 #include <memory>
@@ -98,6 +99,10 @@ public:
     static std::unique_ptr<model::IEditCommand>
     createResetClipsToFullRange(const std::string& cameraId = {}, const std::string& defaultClipName = {});
     static std::unique_ptr<model::IEditCommand> createDeleteClip(const std::string& clipId);
+    static std::unique_ptr<model::IEditCommand> createHealClipCuts(
+        std::vector<model::SelectedClipCut> cuts,
+        std::vector<model::KeyframeRef>     keyframesToDelete = {}
+    );
 
     static std::unique_ptr<model::IEditCommand> createAddScene(const std::string& name = {});
     static std::unique_ptr<model::IEditCommand>

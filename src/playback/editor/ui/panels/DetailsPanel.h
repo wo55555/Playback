@@ -28,6 +28,7 @@ private:
 
     // Each returns true when it owns the current selection and has drawn it.
     bool drawClip(PanelContext const& ctx);
+    bool drawClipCuts(PanelContext const& ctx);
     bool drawCamera(PanelContext const& ctx);
     bool drawKeyframes(PanelContext const& ctx);
     bool drawKeyframe(PanelContext const& ctx);
