@@ -25,6 +25,7 @@ private:
     void drawSettingsPage(PanelContext const& ctx);
     void drawOptiPistonSection();
     void resetAudioDrafts();
+    void resetSelectionDrafts();
 
     // Each returns true when it owns the current selection and has drawn it.
     bool drawClip(PanelContext const& ctx);
@@ -56,6 +57,8 @@ private:
     );
 
     InspectorPage        mPage{InspectorPage::Selection};
+    InspectorPage        mLastDrawnPage{InspectorPage::Selection};
+    std::string          mLastSelectionKey;
     std::optional<float> mPistonDurationDraft;
     // Local label buffer so typing is not overwritten by project state each frame.
     std::string                 mMarkerLabelId;
@@ -66,6 +69,10 @@ private:
     int                         mBezierDragHandle{};
     state::editing::model::Vec2 mBezierDraftCtrl1{0.42f, 0.0f};
     state::editing::model::Vec2 mBezierDraftCtrl2{0.58f, 1.0f};
+    std::string                 mLookAtOffsetDragCameraId;
+    int                         mLookAtOffsetDragTick{-1};
+    bool                        mLookAtOffsetDragging{false};
+    float                       mLookAtOffsetDragValue{0.0f};
     int                         mSpeedBezierDragTick{-1};
     int                         mSpeedBezierDragHandle{};
     state::editing::model::Vec2 mSpeedBezierDraftCtrl1{0.42f, 0.0f};

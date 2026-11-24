@@ -57,6 +57,7 @@ std::atomic_bool        gInstalled{};
 std::atomic_bool        gReplayUiActive{};
 std::atomic_bool        gInputActive{};
 std::atomic_bool        gBlockGameMouseInput{};
+std::atomic<bool>       gThirdPersonOrbitMode{false};
 std::atomic_bool        gPopupOpen{};
 std::atomic_bool        gFocusKnown{};
 std::atomic_bool        gReportedFocused{};
@@ -511,7 +512,8 @@ void handleMouseInput(ll::event::MouseInputEvent& event) {
             if (!down) gCaptureRequested.store(false, std::memory_order_release);
         }
 
-        if (button == ImGuiMouseButton_Left && down && inGame && !popup) {
+        if (button == ImGuiMouseButton_Left && down && inGame && !popup
+            && !gThirdPersonOrbitMode.load(std::memory_order_acquire)) {
             gCaptureRequestX.store(x, std::memory_order_relaxed);
             gCaptureRequestY.store(y, std::memory_order_relaxed);
             gCaptureRequested.store(true, std::memory_order_release);
@@ -561,6 +563,7 @@ void clearQueuedEvents() {
 void resetOwnershipRequests() {
     gPopupOpen.store(false, std::memory_order_release);
     gBlockGameMouseInput.store(false, std::memory_order_release);
+    gThirdPersonOrbitMode.store(false, std::memory_order_release);
     gCaptureRequested.store(false, std::memory_order_release);
     gReleaseRequested.store(false, std::memory_order_release);
     gLeftMouseDown.store(false, std::memory_order_release);
@@ -646,6 +649,13 @@ void setReplayUIActive(bool active) {
     if (!active) {
         setReplayMouseInputActive(false);
         input::setUiVisible(false);
+    }
+}
+
+void setReplayThirdPersonOrbitMode(bool enabled) {
+    if (gThirdPersonOrbitMode.exchange(enabled, std::memory_order_acq_rel) != enabled && enabled) {
+        gCaptureRequested.store(false, std::memory_order_release);
+        gReleaseRequested.store(true, std::memory_order_release);
     }
 }
 
@@ -798,6 +808,7 @@ void updateReplayMouseOwnership(ClientInstance& client) {
     bool const shouldCapture =
         owner == MouseOwner::UiReleased && focused && gLeftMouseDown.load(std::memory_order_acquire)
         && gCaptureRequested.exchange(false, std::memory_order_acq_rel)
+        && !gThirdPersonOrbitMode.load(std::memory_order_acquire)
         && !gBlockGameMouseInput.load(std::memory_order_acquire) && !gPopupOpen.load(std::memory_order_acquire)
         && isGameViewportPoint(
             gCaptureRequestX.load(std::memory_order_relaxed),
@@ -819,6 +830,7 @@ void updateReplayMouseOwnership(ClientInstance& client) {
     bool const shouldRelease = owner == MouseOwner::GameCaptured
                             && (gReleaseRequested.exchange(false, std::memory_order_acq_rel)
                                 || !gLeftMouseDown.load(std::memory_order_acquire) || !focused
+                                || gThirdPersonOrbitMode.load(std::memory_order_acquire)
                                 || gBlockGameMouseInput.load(std::memory_order_acquire)
                                 || gPopupOpen.load(std::memory_order_acquire) || !client.getMouseGrabbed());
     if (!shouldRelease) return;

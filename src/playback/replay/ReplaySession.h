@@ -250,6 +250,16 @@ private:
     std::optional<keyframe::CameraRenderState>  mPendingObserverPark;
     std::optional<keyframe::CameraRenderState>  mFollowHeldPose;
     bool                                        mFollowExitParkPending{false};
+
+    struct ThirdPersonOrbitState {
+        bool                        initialized{false};
+        float                       yaw{0.0f};      // unwrapped world yaw in degrees
+        float                       pitch{15.0f};   // clamped [-89.0f, 89.0f]
+        float                       distance{4.0f}; // clamped [1.0f, 32.0f]
+        state::editing::model::Vec3 offset{0.0f, 0.0f, 0.0f};
+    };
+    mutable std::mutex                          mThirdPersonOrbitMutex;
+    ThirdPersonOrbitState                       mThirdPersonOrbit;
     std::atomic<uint64_t>                       mSeekFinishCount{0};
     uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
@@ -684,18 +694,31 @@ public:
         return mFollowThirdPerson.load(std::memory_order_acquire);
     }
 
-    // The follow view actually shown: a person camera track, or the user's follow when no track is active.
+    // The follow view actually shown: the user's explicit follow mode, or a person camera track when not following.
     [[nodiscard]] bool isFollowViewActive() const noexcept {
-        auto const mode = mPreviewShotMode.load(std::memory_order_acquire);
-        return mode == PreviewShotMode::Person
-            || (mode == PreviewShotMode::None && mFollowRecordedPlayer.load(std::memory_order_acquire));
+        if (mFollowRecordedPlayer.load(std::memory_order_acquire)) return true;
+        return mPreviewShotMode.load(std::memory_order_acquire) == PreviewShotMode::Person;
     }
 
     [[nodiscard]] bool isFollowViewThirdPerson() const noexcept {
+        if (mFollowRecordedPlayer.load(std::memory_order_acquire)) {
+            return mFollowThirdPerson.load(std::memory_order_acquire);
+        }
         return mPreviewShotMode.load(std::memory_order_acquire) == PreviewShotMode::Person
-                 ? mShotThirdPerson.load(std::memory_order_acquire)
-                 : mFollowThirdPerson.load(std::memory_order_acquire);
+            && mShotThirdPerson.load(std::memory_order_acquire);
     }
+
+    struct ThirdPersonOrbitSnapshot {
+        float                       yaw{0.0f};
+        float                       pitch{15.0f};
+        float                       distance{4.0f};
+        state::editing::model::Vec3 offset{0.0f, 0.0f, 0.0f};
+        float                       fov{70.0f};
+    };
+
+    void resetThirdPersonOrbit();
+    void adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance);
+    [[nodiscard]] ThirdPersonOrbitSnapshot thirdPersonOrbitSnapshot() const;
 
     // Pins `subject` (empty is the recorder) as the replay subject for a person camera track; nullopt hands the
     // subject back to the user's choice.

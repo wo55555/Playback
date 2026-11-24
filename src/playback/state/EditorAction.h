@@ -38,11 +38,13 @@ enum class EditorActionType {
     SetFollowRecordedPlayer,
     SetReplaySubjectChoice,
     SetFollowThirdPerson,
+    AdjustThirdPersonOrbit,
+    ResetThirdPersonOrbit,
     UndoEditorEdit,
     RedoEditorEdit,
     AddFreeCamera,
-    // secondaryTick == 1 prefers the live preview subject (session.userReplaySubjectChoice()) over the previous
-    // keyframe's subject when creating a 1P/3P keyframe.
+    // Uses action.keyframe if set; else value == true forces non-Interpolated CameraKeyframeMode(kind);
+    // otherwise matches active 1P/3P follow preview, custom 3P from free cam, or captures a Free Camera key.
     AddCameraKeyframe,
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
@@ -233,6 +235,9 @@ struct EditorAction {
     double                                   trimStartSeconds{0.0};
     double                                   durationSeconds{0.0};
     float                                    volume{1.0f};
+    float                                    orbitDeltaYaw{0.0f};
+    float                                    orbitDeltaPitch{0.0f};
+    float                                    orbitDeltaDistance{0.0f};
     int                                      kind{};
     bool                                     value{};
     bool                                     muted{false};

@@ -5,6 +5,7 @@
 #include "playback/editor/input/EditorInput.h"
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/io/ReplayResourcePacks.h"
+#include "playback/keyframe/CameraFollowMath.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
 #include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/packet/PacketLifecycle.h"
@@ -1422,7 +1423,14 @@ void ReplaySession::applyFollowView() {
 
 void ReplaySession::setFollowRecordedPlayer(bool follow) {
     if (mFollowRecordedPlayer.exchange(follow, std::memory_order_acq_rel) == follow) return;
-    if (!follow) mFollowThirdPerson.store(false, std::memory_order_release);
+    if (!follow) {
+        mFollowThirdPerson.store(false, std::memory_order_release);
+    } else {
+        resetThirdPersonOrbit();
+        mPreviewShotMode.store(PreviewShotMode::None, std::memory_order_release);
+        mShotThirdPerson.store(false, std::memory_order_release);
+        setShotSubject(std::nullopt);
+    }
     applyFollowView();
     getLogger().debug("Observer {} the recorded player", follow ? "follows" : "stopped following");
 }
@@ -1430,8 +1438,80 @@ void ReplaySession::setFollowRecordedPlayer(bool follow) {
 void ReplaySession::setFollowThirdPerson(bool thirdPerson) {
     if (thirdPerson && !isFollowingRecordedPlayer()) thirdPerson = false;
     if (mFollowThirdPerson.exchange(thirdPerson, std::memory_order_acq_rel) == thirdPerson) return;
+    if (thirdPerson) resetThirdPersonOrbit();
     applyFollowView();
     getLogger().debug("Follow view switched to {} person", thirdPerson ? "third" : "first");
+}
+
+void ReplaySession::resetThirdPersonOrbit() {
+    std::lock_guard lock(mThirdPersonOrbitMutex);
+    mThirdPersonOrbit.initialized = false;
+    mThirdPersonOrbit.yaw         = 0.0f;
+    mThirdPersonOrbit.pitch       = 15.0f;
+    mThirdPersonOrbit.distance    = 4.0f;
+    mThirdPersonOrbit.offset      = {0.0f, 0.0f, 0.0f};
+}
+
+void ReplaySession::adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance) {
+    if (!std::isfinite(deltaYaw)) deltaYaw = 0.0f;
+    if (!std::isfinite(deltaPitch)) deltaPitch = 0.0f;
+    if (!std::isfinite(deltaDistance)) deltaDistance = 0.0f;
+
+    bool needsSample = false;
+    {
+        std::lock_guard lock(mThirdPersonOrbitMutex);
+        needsSample = !mThirdPersonOrbit.initialized;
+    }
+    auto const sampled = needsSample ? sampleSubjectFollowState() : std::nullopt;
+
+    std::lock_guard lock(mThirdPersonOrbitMutex);
+    if (!mThirdPersonOrbit.initialized) {
+        if (sampled) {
+            mThirdPersonOrbit.yaw   = sampled->yaw;
+            mThirdPersonOrbit.pitch = std::clamp(sampled->pitch, -89.0f, 89.0f);
+        }
+        mThirdPersonOrbit.distance    = 4.0f;
+        mThirdPersonOrbit.offset      = {0.0f, 0.0f, 0.0f};
+        mThirdPersonOrbit.initialized = true;
+    }
+    mThirdPersonOrbit.yaw   += deltaYaw;
+    mThirdPersonOrbit.pitch  = std::clamp(mThirdPersonOrbit.pitch + deltaPitch, -89.0f, 89.0f);
+    if (deltaDistance != 0.0f) {
+        float const scaledDelta    = deltaDistance * std::clamp(mThirdPersonOrbit.distance * 0.25f, 0.35f, 3.0f);
+        mThirdPersonOrbit.distance = std::clamp(mThirdPersonOrbit.distance + scaledDelta, 1.0f, 32.0f);
+    }
+}
+
+ReplaySession::ThirdPersonOrbitSnapshot ReplaySession::thirdPersonOrbitSnapshot() const {
+    auto const  sampled = sampleSubjectFollowState();
+    float const fov     = sampled && sampled->fov > 0.0f ? sampled->fov : 70.0f;
+
+    std::lock_guard lock(mThirdPersonOrbitMutex);
+    if (mThirdPersonOrbit.initialized) {
+        return {
+            mThirdPersonOrbit.yaw,
+            mThirdPersonOrbit.pitch,
+            mThirdPersonOrbit.distance,
+            mThirdPersonOrbit.offset,
+            fov,
+        };
+    }
+    if (sampled) {
+        return {
+            sampled->yaw,
+            std::clamp(sampled->pitch, -89.0f, 89.0f),
+            4.0f,
+            {0.0f, 0.0f, 0.0f},
+            fov,
+        };
+    }
+    return {
+        0.0f,
+        15.0f,
+        4.0f,
+        {0.0f, 0.0f, 0.0f},
+        fov
+    };
 }
 
 void ReplaySession::setShotSubject(std::optional<std::string> subject) {
@@ -1452,16 +1532,16 @@ void ReplaySession::clearPreviewShot() {
     applyFollowView();
 }
 
-// The highest camera track under the playhead owns the view. A keyframe track suspends the
-// user's follow; a person track follows its subject; with no track the user's follow comes back.
+// The user's explicit follow mode owns the view when active; otherwise the highest camera track under the playhead
+// owns it (a keyframe track uses evaluator preview, a person track follows its subject).
 void ReplaySession::updatePreviewShot() {
     if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return;
     using state::editing::model::CameraKeyframeMode;
     auto                       mode = PreviewShotMode::None;
     std::optional<std::string> subject;
     bool                       third = false;
-    // Player input owns the camera while captured, as it does over a paused keyframe track.
-    if (!editor::input::isGameInputCaptured()) {
+    // Captured player input and explicit follow mode own the camera over any track under the playhead.
+    if (!editor::input::isGameInputCaptured() && !isFollowingRecordedPlayer()) {
         if (auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
             auto const time = getCameraRenderSampleTime();
             auto const shot = timeline->shotAt(time ? time->floorTick() : getCurrentTick());
@@ -1810,6 +1890,7 @@ void ReplaySession::setReplaySubjectChoice(std::string uuid) {
     if (changed) {
         mReplaySubjectEntityMissingTicks    = 0;
         mReplaySubjectEntityMissingLastTick = -1;
+        resetThirdPersonOrbit();
         getLogger().debug("replay subject choice={}", replaySubjectChoice());
     }
     rebindReplaySubject();
@@ -2414,10 +2495,44 @@ ReplaySession::pinFollowObserverForRender(std::optional<visuals::ReplaySampleTim
         Vec2{state->pitch, state->yaw},
         state->yaw
     );
-    // The observer stays on the eyes so chunks and the server copy follow; only the drawn camera moves back.
+    // The observer stays on the eyes so chunks and the server copy follow; only the drawn camera orbits around it.
     // The sample above refreshed the sleep weight, so a subject in bed already reads as first person here.
     if (isFollowViewThirdPerson() && visuals::isReplaySubjectThirdPerson()) {
-        state = thirdPersonFollowPose(*mReplayPlayer, *state);
+        if (isFollowingRecordedPlayer()) {
+            ThirdPersonOrbitState orbit;
+            {
+                std::lock_guard lock(mThirdPersonOrbitMutex);
+                if (!mThirdPersonOrbit.initialized) {
+                    mThirdPersonOrbit.yaw         = state->yaw;
+                    mThirdPersonOrbit.pitch       = std::clamp(state->pitch, -89.0f, 89.0f);
+                    mThirdPersonOrbit.distance    = 4.0f;
+                    mThirdPersonOrbit.offset      = {0.0f, 0.0f, 0.0f};
+                    mThirdPersonOrbit.initialized = true;
+                }
+                orbit = mThirdPersonOrbit;
+            }
+            float const fov       = state->fov > 0.0f ? state->fov : 70.0f;
+            auto const  orbitPose = keyframe::computeCustomThirdPersonPose(
+                *state,
+                orbit.offset,
+                orbit.distance,
+                orbit.yaw,
+                orbit.pitch,
+                0.0f,
+                fov,
+                false
+            );
+            auto const clipped =
+                clipCameraRay(orbitPose.anchor, {orbitPose.camera.x, orbitPose.camera.y, orbitPose.camera.z});
+            state->x     = clipped.x;
+            state->y     = clipped.y;
+            state->z     = clipped.z;
+            state->yaw   = orbitPose.camera.yaw;
+            state->pitch = orbitPose.camera.pitch;
+            state->fov   = orbitPose.camera.fov;
+        } else {
+            state = thirdPersonFollowPose(*mReplayPlayer, *state);
+        }
     }
     mFollowHeldPose = state;
     return state;
