@@ -5,6 +5,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace playback::editor::ui {
 
@@ -104,9 +105,10 @@ private:
     std::string                 mAudioClipPathId;
     std::array<char, 512>       mAudioClipPathBuffer{};
     bool                        mAudioClipPathEditing{false};
-    std::string                 mAudioClipVolumeDragId;
-    bool                        mAudioClipVolumeDragging{false};
-    float                       mAudioClipVolumeDragValue{1.0f};
+    std::string                                                         mAudioClipVolumeDragId;
+    bool                                                                mAudioClipVolumeDragging{false};
+    float                                                               mAudioClipVolumeDragValue{1.0f};
+    std::unordered_map<std::string, state::editing::model::CameraShake> mCameraShakeDrafts;
 };
 
 } // namespace playback::editor::ui

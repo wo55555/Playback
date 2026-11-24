@@ -196,6 +196,13 @@ std::string trimWhitespace(std::string value) {
     return value.substr(first, value.find_last_not_of(" \t") - first + 1);
 }
 
+bool canResetCameraTrackClips(state::editing::model::CameraEntity const& camera, int totalTicks) {
+    bool const isFullRangeDefault = camera.clips.size() == 1 && camera.clips[0].inTick == 0
+                                 && camera.clips[0].outTick == totalTicks && camera.clips[0].exportEnabled;
+    return !camera.locked && totalTicks > 0 && !isFullRangeDefault
+        && std::ranges::none_of(camera.clips, &state::editing::model::Clip::locked);
+}
+
 std::optional<std::string> findSplittableClip(
     state::editing::model::EditorStateExt const& project,
     state::editing::model::SelectionModel const& selection,
@@ -824,6 +831,33 @@ std::string TimelinePanel::resolveKeyframeTargetCamera(PanelContext const& ctx) 
     return {};
 }
 
+bool TimelinePanel::canAddKeyframeAtPlayhead(PanelContext const& ctx) const {
+    if (exporting::isExportActive(ctx.state.exportStatus.state)) return false;
+    auto const project = ctx.state.project;
+    if (!project) return false;
+    int const tick = std::clamp(
+        mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick,
+        0,
+        std::max(0, ctx.state.totalTicks)
+    );
+    if (ctx.selection.isSpeedTrackSelected() || ctx.selection.selectedSpeedKeyframe().has_value()) {
+        return !project->speedTrack.locked && !project->speedTrack.keysByTick.contains(tick);
+    }
+    if (ctx.selection.isFreezeTrackSelected() || ctx.selection.selectedFreezeKeyframe().has_value()) {
+        return !project->freezeTrack.locked && !project->freezeTrack.keysByTick.contains(tick);
+    }
+    if (ctx.selection.isTimelapseTrackSelected() || ctx.selection.selectedTimelapseKeyframe().has_value()) {
+        return !project->timelapseTrack.locked && !project->timelapseTrack.keysByTick.contains(tick);
+    }
+    if (ctx.selection.isTimeOfDayTrackSelected() || !ctx.selection.selectedTimeOfDayKeyframes().empty()) {
+        return !project->timeOfDayTrack.locked && !project->timeOfDayTrack.keysByTick.contains(tick);
+    }
+    if (ctx.selection.isWeatherTrackSelected() || !ctx.selection.selectedWeatherKeyframes().empty()) {
+        return !project->weatherTrack.locked && !project->weatherTrack.keysByTick.contains(tick);
+    }
+    return !resolveKeyframeTargetCamera(ctx).empty();
+}
+
 namespace {
 
 std::vector<state::editing::model::KeyframeRef> selectedKeyframeRefs(PanelContext const& ctx) {
@@ -834,6 +868,123 @@ std::vector<state::editing::model::KeyframeRef> selectedKeyframeRefs(PanelContex
 }
 
 } // namespace
+
+bool TimelinePanel::canDeleteSelection(PanelContext const& ctx) const {
+    if (exporting::isExportActive(ctx.state.exportStatus.state) || !ctx.selection.hasSelection()) return false;
+    auto const project = ctx.state.project;
+    if (!project) return false;
+
+    auto const hasDeletableCameraKeyframe = [&]() {
+        for (auto const& key : ctx.selection.keyframes()) {
+            auto const cam = std::ranges::find(project->cameras, key.trackId, &state::editing::model::CameraEntity::id);
+            if (cam == project->cameras.end() || cam->locked) continue;
+            if (cam->keysByTick.contains(key.tick)) return true;
+        }
+        return false;
+    };
+
+    auto const hasHealableClipCut = [&]() {
+        if (project->totalTicks <= 0) return false;
+        for (auto const& cut : ctx.selection.clipCuts()) {
+            auto const cam =
+                std::ranges::find(project->cameras, cut.cameraId, &state::editing::model::CameraEntity::id);
+            if (cam == project->cameras.end() || cam->locked) continue;
+            if (cut.isGap()) {
+                int const gIn  = std::clamp(cut.startTick, 0, project->totalTicks);
+                int const gOut = std::clamp(cut.endTick, 0, project->totalTicks);
+                if (gOut <= gIn) continue;
+                bool const overlaps =
+                    std::ranges::any_of(cam->clips, [&](auto const& c) { return c.inTick < gOut && c.outTick > gIn; });
+                if (!overlaps) return true;
+            } else if (cut.isSeam()) {
+                std::optional<size_t> leftIdx;
+                std::optional<size_t> rightIdx;
+                for (size_t i = 0; i < cam->clips.size(); ++i) {
+                    auto const& c = cam->clips[i];
+                    if (c.inTick >= c.outTick) continue;
+                    if (c.outTick == cut.startTick) leftIdx = i;
+                    if (c.inTick == cut.startTick) rightIdx = i;
+                }
+                if (leftIdx && rightIdx && *leftIdx != *rightIdx && !cam->clips[*leftIdx].locked
+                    && !cam->clips[*rightIdx].locked) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    if (ctx.selection.clipCutCount() > 0) {
+        return hasHealableClipCut() || (ctx.selection.keyframeCount() > 0 && hasDeletableCameraKeyframe());
+    }
+    if (ctx.selection.keyframeCount() > 1) {
+        return hasDeletableCameraKeyframe();
+    }
+    if (auto const* selectedMarker = ctx.selection.getAs<state::editing::model::SelectedMarker>()) {
+        return std::ranges::any_of(project->markers, [&](auto const& marker) {
+            return marker.id == selectedMarker->markerId;
+        });
+    }
+    if (auto const* selectedClip = ctx.selection.getAs<state::editing::model::SelectedClip>()) {
+        auto const hit = state::editing::ClipOps::findClipWithCamera(*project, selectedClip->clipId);
+        return hit && !hit.camera->locked && !hit.clip->locked;
+    }
+    if (auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>()) {
+        if (project->cameras.size() <= 1) return false;
+        auto const cam =
+            std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
+        return cam != project->cameras.end() && !cam->locked;
+    }
+    if (auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>()) {
+        auto const cam =
+            std::ranges::find(project->cameras, selectedKeyframe->trackId, &state::editing::model::CameraEntity::id);
+        int const tick = std::clamp(selectedKeyframe->tick, 0, std::max(0, ctx.state.totalTicks));
+        return cam != project->cameras.end() && !cam->locked && cam->keysByTick.contains(tick);
+    }
+    if (ctx.selection.isSpeedTrackSelected()) {
+        return project->speedTrack.isVisible() && !project->speedTrack.locked;
+    }
+    if (auto const speedTick = ctx.selection.selectedSpeedKeyframe()) {
+        return !project->speedTrack.locked && project->speedTrack.keysByTick.contains(*speedTick);
+    }
+    if (ctx.selection.isFreezeTrackSelected()) {
+        return project->freezeTrack.isVisible() && !project->freezeTrack.locked;
+    }
+    if (auto const freezeTick = ctx.selection.selectedFreezeKeyframe()) {
+        return !project->freezeTrack.locked && project->freezeTrack.keysByTick.contains(*freezeTick);
+    }
+    if (ctx.selection.isTimelapseTrackSelected()) {
+        return project->timelapseTrack.isVisible() && !project->timelapseTrack.locked;
+    }
+    if (auto const timelapseTick = ctx.selection.selectedTimelapseKeyframe()) {
+        return !project->timelapseTrack.locked && project->timelapseTrack.keysByTick.contains(*timelapseTick);
+    }
+    if (ctx.selection.isTimeOfDayTrackSelected()) {
+        return project->timeOfDayTrack.isVisible() && !project->timeOfDayTrack.locked;
+    }
+    if (auto const todTicks = ctx.selection.selectedTimeOfDayKeyframes(); !todTicks.empty()) {
+        return !project->timeOfDayTrack.locked && std::ranges::any_of(todTicks, [&](int tick) {
+            return project->timeOfDayTrack.keysByTick.contains(tick);
+        });
+    }
+    if (ctx.selection.isWeatherTrackSelected()) {
+        return project->weatherTrack.isVisible() && !project->weatherTrack.locked;
+    }
+    if (auto const weatherTicks = ctx.selection.selectedWeatherKeyframes(); !weatherTicks.empty()) {
+        return !project->weatherTrack.locked && std::ranges::any_of(weatherTicks, [&](int tick) {
+            return project->weatherTrack.keysByTick.contains(tick);
+        });
+    }
+    if (auto const audioClip = ctx.selection.selectedAudioClip()) {
+        auto const* track = state::editing::ClipOps::findAudioTrack(*project, audioClip->trackId);
+        return track && !track->locked && state::editing::ClipOps::findAudioClip(*track, audioClip->clipId) != nullptr;
+    }
+    if (auto const audioTrackId = ctx.selection.selectedAudioTrackId()) {
+        auto const* track = state::editing::ClipOps::findAudioTrack(*project, *audioTrackId);
+        return track && !track->locked;
+    }
+    return false;
+}
 
 bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
     auto const project = ctx.state.project;
@@ -859,9 +1010,15 @@ bool TimelinePanel::deleteSelection(PanelContext const& ctx) {
         action.id   = selectedClip->clipId;
     } else if (auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
                selectedCamera && project->cameras.size() > 1) {
+        auto const cam =
+            std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
+        if (cam == project->cameras.end() || cam->locked) return false;
         action.type = EditorActionType::DeleteCamera;
         action.id   = selectedCamera->cameraId;
     } else if (auto const* selectedKeyframe = ctx.selection.getAs<state::editing::model::SelectedKeyframe>()) {
+        auto const cam =
+            std::ranges::find(project->cameras, selectedKeyframe->trackId, &state::editing::model::CameraEntity::id);
+        if (cam == project->cameras.end() || cam->locked) return false;
         action.type = EditorActionType::DeleteCameraKeyframe;
         action.id   = selectedKeyframe->trackId;
         action.tick = selectedKeyframe->tick;
@@ -1597,7 +1754,8 @@ float TimelinePanel::drawTransportGroup(
     float               height,
     float               width,
     float               minStartX,
-    float               maxRightX
+    float               maxRightX,
+    float               fallbackRightX
 ) {
     auto const& state   = ctx.state;
     float const scale   = metrics::scale();
@@ -1608,36 +1766,45 @@ float TimelinePanel::drawTransportGroup(
     char        speedLabel[24]{};
     std::snprintf(speedLabel, sizeof(speedLabel), "%.2fx", state.playbackSpeed);
 
-    int const   total      = std::max(0, state.totalTicks);
-    int const   exportIn   = ctx.commands.exportStartTick();
-    int const   exportOut  = ctx.commands.exportEndTick();
-    bool const  hasIn      = total > 0 && exportIn > 0 && (exportOut < 0 || exportIn < exportOut);
+    int const   total          = std::max(0, state.totalTicks);
+    int const   currentTick    = std::clamp(mPendingSeekTick >= 0 ? mPendingSeekTick : state.currentTick, 0, total);
+    bool const  canStepBack    = total > 0 && currentTick > 0;
+    bool const  canStepForward = total > 0 && currentTick < total;
+    int const   exportIn       = ctx.commands.exportStartTick();
+    int const   exportOut      = ctx.commands.exportEndTick();
+    bool const  hasIn          = total > 0 && exportIn > 0 && (exportOut < 0 || exportIn < exportOut);
     bool const  hasOut     = total > 0 && exportOut >= 0 && exportOut < total && (exportIn < 0 || exportOut > exportIn);
     bool const  ranged     = hasIn || hasOut;
     float const speedWidth = widgets::dropdownChipWidth(speedLabel);
-    float const ioBtnW     = std::round(unit * 0.82f);
-    float const ioGap      = std::round(5.0f * scale);
+    float const ioBtnW         = std::round(unit * 0.78f);
+    float const ioGap          = std::max(2.0f, std::round(2.0f * scale));
     float const ioGroupW   = ioBtnW * 2.0f + ioGap;
     float const groupWidth =
         unit * 5.0f + 4.0f + divGap * 2.0f + 1.0f + speedWidth + chipGap + unit + divGap * 2.0f + 1.0f + ioGroupW;
-    float const idealStartX = (width - groupWidth) * 0.5f;
-    float const maxStartX   = maxRightX - groupWidth;
-    float const startX =
-        maxStartX >= minStartX ? std::clamp(idealStartX, minStartX, maxStartX) : std::max(minStartX, idealStartX);
+    float const idealStartX       = (width - groupWidth) * 0.5f;
+    float const maxStartX         = maxRightX - groupWidth;
+    float const fallbackMaxStartX = fallbackRightX - groupWidth;
+    float const startX            = maxStartX >= minStartX ? std::clamp(idealStartX, minStartX, maxStartX)
+                                  : fallbackMaxStartX >= minStartX ? std::clamp(idealStartX, minStartX, fallbackMaxStartX)
+                                                                   : minStartX;
 
     ImGui::SetCursorPos({startX, rowY});
     using widgets::VectorIcon;
     if (widgets::vectorIconButton(
             "transport-start",
             VectorIcon::SkipStart,
-            "playback.refactorEditor.timeline.skipToStart"_tr().c_str()
+            "playback.refactorEditor.timeline.skipToStart"_tr().c_str(),
+            false,
+            canStepBack
         ))
         seekSmartEdge(ctx, false);
     ImGui::SameLine(0.0f, 1.0f);
     if (widgets::vectorIconButton(
             "transport-prev",
             VectorIcon::StepBack,
-            "playback.refactorEditor.timeline.previousTick"_tr().c_str()
+            "playback.refactorEditor.timeline.previousTick"_tr().c_str(),
+            false,
+            canStepBack
         ))
         seekRelative(ctx, -1);
     ImGui::SameLine(0.0f, 1.0f);
@@ -1646,7 +1813,9 @@ float TimelinePanel::drawTransportGroup(
             state.paused ? VectorIcon::Play : VectorIcon::Pause,
             (state.paused ? "playback.refactorEditor.timeline.play"_tr()
                           : "playback.refactorEditor.timeline.pause"_tr())
-                .c_str()
+                .c_str(),
+            false,
+            total > 0
         )) {
         ctx.submitAction({EditorActionType::TogglePause});
     }
@@ -1654,14 +1823,18 @@ float TimelinePanel::drawTransportGroup(
     if (widgets::vectorIconButton(
             "transport-next",
             VectorIcon::StepForward,
-            "playback.refactorEditor.timeline.nextTick"_tr().c_str()
+            "playback.refactorEditor.timeline.nextTick"_tr().c_str(),
+            false,
+            canStepForward
         ))
         seekRelative(ctx, 1);
     ImGui::SameLine(0.0f, 1.0f);
     if (widgets::vectorIconButton(
             "transport-end",
             VectorIcon::SkipEnd,
-            "playback.refactorEditor.timeline.skipToEnd"_tr().c_str()
+            "playback.refactorEditor.timeline.skipToEnd"_tr().c_str(),
+            false,
+            canStepForward
         ))
         seekSmartEdge(ctx, true);
 
@@ -1731,11 +1904,7 @@ float TimelinePanel::drawTransportGroup(
         ImVec2 const ioOrigin   = ImGui::GetCursorScreenPos();
         float const  rounding   = theme::kButtonRounding * scale;
 
-        auto const drawIoButton = [&](char const*  id,
-                                      ImVec2 const btnOrigin,
-                                      VectorIcon   icon,
-                                      bool         active,
-                                      char const*  tooltip) {
+        auto const drawIoButton = [&](char const* id, ImVec2 const btnOrigin, VectorIcon icon, char const* tooltip) {
             ImVec2 const btnMax{btnOrigin.x + ioBtnW, btnOrigin.y + unit};
             ImGui::SetCursorScreenPos(btnOrigin);
             ImGui::BeginDisabled(total <= 0);
@@ -1744,23 +1913,15 @@ float TimelinePanel::drawTransportGroup(
             bool const held    = total > 0 && ImGui::IsItemActive();
             ImGui::EndDisabled();
 
-            if (active) {
-                ioDrawList->AddRectFilled(btnOrigin, btnMax, theme::kInputBg, rounding, ImDrawFlags_RoundCornersAll);
-                ImU32 const fill = theme::withAlpha(theme::kWarning, held ? 0x62 : hovered ? 0x48 : 0x2c);
+            if (held || hovered) {
+                ImU32 const fill = held ? theme::kButtonActive : theme::withAlpha(theme::kButtonHover, 0xb0);
                 ioDrawList->AddRectFilled(btnOrigin, btnMax, fill, rounding, ImDrawFlags_RoundCornersAll);
-            } else {
-                ImU32 const fill = held ? theme::kInputBgActive : hovered ? theme::kInputBgHover : theme::kInputBg;
-                ioDrawList->AddRectFilled(btnOrigin, btnMax, fill, rounding, ImDrawFlags_RoundCornersAll);
+                ioDrawList
+                    ->AddRect(btnOrigin, btnMax, theme::kButtonBorder, rounding, ImDrawFlags_RoundCornersAll, 1.0f);
             }
 
-            ImU32 const borderColor = hovered ? theme::kButtonBorder
-                                    : active  ? theme::withAlpha(theme::kWarning, 0x80)
-                                              : theme::kFineDivider;
-            ioDrawList->AddRect(btnOrigin, btnMax, borderColor, rounding, ImDrawFlags_RoundCornersAll, 1.0f);
-
-            ImU32 const iconColor = total <= 0 ? theme::kTextDim
-                                  : active     ? (hovered ? theme::kIconHighlight : theme::kWarning)
-                                               : (hovered ? theme::kIconHighlight : theme::kIconInactive);
+            ImU32 const iconColor =
+                total <= 0 ? theme::kTextDim : (hovered ? theme::kIconHighlight : theme::kIconInactive);
             widgets::drawVectorIcon(
                 ioDrawList,
                 {btnOrigin.x + ioBtnW * 0.5f, btnOrigin.y + unit * 0.5f},
@@ -1772,7 +1933,7 @@ float TimelinePanel::drawTransportGroup(
             return clicked;
         };
 
-        if (drawIoButton("transport-mark-in", ioOrigin, VectorIcon::MarkIn, hasIn, inTooltip.c_str())) {
+        if (drawIoButton("transport-mark-in", ioOrigin, VectorIcon::MarkIn, inTooltip.c_str())) {
             if (ImGui::GetIO().KeyShift) {
                 seekTo(
                     ctx,
@@ -1789,7 +1950,6 @@ float TimelinePanel::drawTransportGroup(
                 "transport-mark-out",
                 {ioOrigin.x + ioBtnW + ioGap, ioOrigin.y},
                 VectorIcon::MarkOut,
-                hasOut,
                 outTooltip.c_str()
             )) {
             if (ImGui::GetIO().KeyShift) {
@@ -1865,22 +2025,30 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
     ImGui::SetCursorScreenPos(layout.fullMin);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::BeginChild("##TimelineTitle", {width, height}, false, ImGuiWindowFlags_NoScrollbar);
-    bool const  exportActive = exporting::isExportActive(ctx.state.exportStatus.state);
-    float const timeRight    = drawTimecodeReadout(ctx, height, displayTick);
-    float const unit         = metrics::iconButton();
-    float const rowY         = std::max(0.0f, (height - unit) * 0.5f);
-    float const divGap       = metrics::gutter();
-    float const zoomResetX   = std::max(0.0f, width - unit - metrics::gutter());
-    float const rightDivX    = zoomResetX - divGap - 1.0f;
-    float const clusterGap   = 2.0f;
-    float const clusterW     = unit * 4.0f + clusterGap * 3.0f;
-    float const clusterX     = rightDivX - divGap - clusterW;
-    float const midDivX      = clusterX - divGap - 1.0f;
-    float const historyW     = unit * 2.0f + clusterGap;
-    float const historyX     = midDivX - divGap - historyW;
-    float const leftDivX     = historyX - divGap - 1.0f;
+    bool const  exportActive  = exporting::isExportActive(ctx.state.exportStatus.state);
+    float const timeRight     = drawTimecodeReadout(ctx, height, displayTick);
+    float const unit          = metrics::iconButton();
+    float const rowY          = std::max(0.0f, (height - unit) * 0.5f);
+    float const divGap        = metrics::gutter();
+    float const clusterGap    = 2.0f;
+    float const rightClusterW = unit * 2.0f + clusterGap;
+    float const rightClusterX = std::max(0.0f, width - rightClusterW - metrics::gutter());
+    float const rightDivX     = rightClusterX - divGap - 1.0f;
+    float const clusterW      = unit * 4.0f + clusterGap * 3.0f;
+    float const clusterX      = rightDivX - divGap - clusterW;
+    float const midDivX       = clusterX - divGap - 1.0f;
+    float const historyW      = unit * 2.0f + clusterGap;
+    float const historyX      = midDivX - divGap - historyW;
+    float const leftDivX      = historyX - divGap - 1.0f;
 
-    drawTransportGroup(ctx, height, width, timeRight + metrics::gutter() * 2.0f, leftDivX - metrics::gutter());
+    drawTransportGroup(
+        ctx,
+        height,
+        width,
+        timeRight + metrics::gutter() * 2.0f,
+        leftDivX - metrics::gutter(),
+        rightClusterX - metrics::gutter()
+    );
     float const transportRight = ImGui::GetItemRectMax().x - layout.fullMin.x;
     auto*       childDrawList  = ImGui::GetWindowDrawList();
     float const divPad         = 6.0f * scale;
@@ -1920,12 +2088,23 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
             1.0f
         );
 
+        int const playheadTick = std::clamp(
+            mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick,
+            0,
+            std::max(0, ctx.state.totalTicks)
+        );
+        auto const markerExistsAt = [&](int tick) {
+            return ctx.state.project && std::ranges::any_of(ctx.state.project->markers, [tick](auto const& marker) {
+                       return marker.tick == tick;
+                   });
+        };
+
         ImGui::SetCursorPos({clusterX, rowY});
         if (iconButton(
                 "timeline-split-clip",
                 ICON_SPLIT,
                 "playback.refactorEditor.timeline.splitClip"_tr().c_str(),
-                canSplitClipAtPlayhead(ctx)
+                !exportActive && canSplitClipAtPlayhead(ctx)
             )) {
             (void)splitClipAtPlayhead(ctx);
         }
@@ -1933,7 +2112,8 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
         if (iconButton(
                 "timeline-add-keyframe",
                 ICON_ADD_KEYFRAME,
-                "playback.refactorEditor.timeline.addKeyframe"_tr().c_str()
+                "playback.refactorEditor.timeline.addKeyframe"_tr().c_str(),
+                canAddKeyframeAtPlayhead(ctx)
             )) {
             (void)addKeyframeAtPlayhead(ctx);
         }
@@ -1941,7 +2121,8 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
         if (iconButton(
                 "timeline-add-marker",
                 ICON_ADD_MARKER,
-                "playback.refactorEditor.timeline.addMarker"_tr().c_str()
+                "playback.refactorEditor.timeline.addMarker"_tr().c_str(),
+                !exportActive && ctx.state.project != nullptr && !markerExistsAt(playheadTick)
             )) {
             (void)addMarkerAtPlayhead(ctx);
         }
@@ -1950,7 +2131,7 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
                 "timeline-delete",
                 ICON_TRASH,
                 "playback.refactorEditor.timeline.deleteSelection"_tr().c_str(),
-                ctx.selection.hasSelection()
+                canDeleteSelection(ctx)
             )) {
             (void)deleteSelection(ctx);
         }
@@ -1962,9 +2143,23 @@ void TimelinePanel::drawTitleRow(PanelContext const& ctx, Layout const& layout, 
         );
     }
 
-    // Zooming lives on the range bar handles now; only the reset-to-fit affordance stays here.
-    ImGui::SetCursorPos({zoomResetX, rowY});
-    if (iconButton("timeline-zoom-reset", ICON_RESET, "playback.refactorEditor.timeline.zoomReset"_tr().c_str()))
+    // Zooming lives on the range bar handles now; only snap and reset-to-fit stay in the right utility pair.
+    ImGui::SetCursorPos({rightClusterX, rowY});
+    if (widgets::vectorIconButton(
+            "timeline-snap",
+            widgets::VectorIcon::SnapMagnet,
+            "playback.refactorEditor.timeline.snapTooltip"_tr().c_str(),
+            mSnapEnabled
+        )) {
+        ctx.commands.setSnapEnabled(!mSnapEnabled);
+    }
+    ImGui::SameLine(0.0f, clusterGap);
+    if (iconButton(
+            "timeline-zoom-reset",
+            ICON_RESET,
+            "playback.refactorEditor.timeline.zoomReset"_tr().c_str(),
+            mZoomScale > kMinZoomScale + 0.001f || mScrollX > 0.5f
+        ))
         resetZoom();
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -2107,13 +2302,16 @@ void TimelinePanel::drawSceneTabs(PanelContext const& ctx, Layout const& layout,
         widgets::openAnchoredPopup("##timeline-scene-menu", menuMin, menuMax);
     }
 
+    bool const   canAddScene = allowInput && !exporting::isExportActive(ctx.state.exportStatus.state);
     ImVec2 const addPos{layout.fullMin.x + tabsW + addPad, top + std::max(0.0f, (height - addSize) * 0.5f)};
     ImGui::SetCursorScreenPos(addPos);
-    if (ImGui::InvisibleButton("timeline-add-scene", {addSize, addSize})) {
+    ImGui::BeginDisabled(!canAddScene);
+    if (ImGui::InvisibleButton("timeline-add-scene", {addSize, addSize}) && canAddScene) {
         ctx.submitAction({EditorActionType::AddScene});
     }
-    bool const addHovered = allowInput && ImGui::IsItemHovered();
-    bool const addHeld    = allowInput && ImGui::IsItemActive();
+    bool const addHovered = canAddScene && ImGui::IsItemHovered();
+    bool const addHeld    = canAddScene && ImGui::IsItemActive();
+    ImGui::EndDisabled();
     if (addHovered || addHeld) {
         drawList->AddRectFilled(
             addPos,
@@ -2127,7 +2325,7 @@ void TimelinePanel::drawSceneTabs(PanelContext const& ctx, Layout const& layout,
         ICON_ADD,
         {addPos.x + addSize * 0.5f, addPos.y + addSize * 0.5f},
         std::round(metrics::font() * 0.92f),
-        addHovered ? theme::kIconHighlight : theme::kIconInactive
+        !canAddScene ? theme::kTextDim : (addHovered ? theme::kIconHighlight : theme::kIconInactive)
     );
     widgets::itemTooltip("playback.refactorEditor.timeline.addScene"_tr().c_str());
 
@@ -2397,13 +2595,33 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         false,
         ImGuiWindowFlags_NoScrollbar
     );
-    auto*       ctrlDrawList = ImGui::GetWindowDrawList();
+    auto*       ctrlDrawList     = ImGui::GetWindowDrawList();
     float const btnSize          = std::min(layout.headerHeight - 5.0f * scale, std::round(20.0f * scale));
     float const btnY             = std::max(0.0f, (layout.headerHeight - btnSize) * 0.5f);
+    float const padX             = metrics::gutter() * 0.5f;
+    float const gap              = metrics::gutter() * 0.5f;
     bool        openAddTrackMenu = false;
     ImVec2      addMenuMin{};
     ImVec2      addMenuMax{};
-    ImGui::SetCursorPos({metrics::gutter() * 0.5f, btnY});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {5.0f * scale, 1.5f * scale});
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f * scale);
+    // The input is frame-height, not button-height; centre it on the same line as the add button.
+    ImGui::SetCursorPos({padX, std::max(0.0f, (layout.headerHeight - ImGui::GetFrameHeight()) * 0.5f)});
+    char search[128]{};
+    std::snprintf(search, sizeof(search), "%s", mTrackSearch.c_str());
+    float const searchW = std::max(32.0f, ImGui::GetContentRegionAvail().x - btnSize - gap - padX);
+    ImGui::SetNextItemWidth(searchW);
+    if (ImGui::InputTextWithHint(
+            "##timeline-search",
+            "playback.refactorEditor.timeline.searchTracks"_tr().c_str(),
+            search,
+            sizeof(search)
+        )) {
+        mTrackSearch = search;
+    }
+    ImGui::PopStyleVar(2);
+    ImGui::SameLine(0.0f, gap);
+    ImGui::SetCursorPosY(btnY);
     {
         ImVec2 const addOrigin = ImGui::GetCursorScreenPos();
         if (ImGui::InvisibleButton("timeline-add", {btnSize, btnSize}) && allowInput) {
@@ -2430,65 +2648,6 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
         );
         widgets::itemTooltip("playback.refactorEditor.timeline.addTrack"_tr().c_str());
     }
-    ImGui::SameLine(0.0f, 3.0f * scale);
-    {
-        ImVec2 const snapOrigin = ImGui::GetCursorScreenPos();
-        if (ImGui::InvisibleButton("timeline-snap", {btnSize, btnSize}) && allowInput) {
-            ctx.commands.setSnapEnabled(!mSnapEnabled);
-        }
-        bool const hovered = allowInput && ImGui::IsItemHovered();
-        bool const held    = allowInput && ImGui::IsItemActive();
-        if (mSnapEnabled) {
-            ctrlDrawList->AddRectFilled(
-                snapOrigin,
-                {snapOrigin.x + btnSize, snapOrigin.y + btnSize},
-                theme::withAlpha(theme::kAccent, held ? 0x58 : 0x38),
-                3.5f * scale
-            );
-            ctrlDrawList->AddRect(
-                snapOrigin,
-                {snapOrigin.x + btnSize, snapOrigin.y + btnSize},
-                theme::withAlpha(theme::kAccent, 0xb8),
-                3.5f * scale,
-                0,
-                1.0f
-            );
-        } else if (hovered || held) {
-            ctrlDrawList->AddRectFilled(
-                snapOrigin,
-                {snapOrigin.x + btnSize, snapOrigin.y + btnSize},
-                held ? theme::kButtonActive : theme::kButtonHover,
-                3.5f * scale
-            );
-        }
-        ImU32 const snapIconCol = mSnapEnabled ? (hovered ? theme::kIconHighlight : theme::kAccent)
-                                               : (hovered ? theme::kIconActive : theme::kIconInactive);
-        widgets::drawVectorIcon(
-            ctrlDrawList,
-            {snapOrigin.x + btnSize * 0.5f, snapOrigin.y + btnSize * 0.5f},
-            btnSize * 0.96f,
-            snapIconCol,
-            widgets::VectorIcon::SnapMagnet
-        );
-        widgets::itemTooltip("playback.refactorEditor.timeline.snapTooltip"_tr().c_str());
-    }
-    ImGui::SameLine(0.0f, metrics::gutter() * 0.5f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {5.0f * scale, 1.5f * scale});
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f * scale);
-    // The input is frame-height, not button-height; centre it on the same line as the buttons.
-    ImGui::SetCursorPosY(std::max(0.0f, (layout.headerHeight - ImGui::GetFrameHeight()) * 0.5f));
-    char search[128]{};
-    std::snprintf(search, sizeof(search), "%s", mTrackSearch.c_str());
-    ImGui::SetNextItemWidth(std::max(32.0f, ImGui::GetContentRegionAvail().x - metrics::gutter() * 0.5f));
-    if (ImGui::InputTextWithHint(
-            "##timeline-search",
-            "playback.refactorEditor.timeline.searchTracks"_tr().c_str(),
-            search,
-            sizeof(search)
-        )) {
-        mTrackSearch = search;
-    }
-    ImGui::PopStyleVar(2);
     ImGui::EndChild();
     ImGui::PopStyleVar();
     if (openAddTrackMenu) {
@@ -3483,8 +3642,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
             }
             if (ImGui::MenuItem("playback.refactorEditor.timeline.seekHere"_tr().c_str())) seekTo(ctx, mLaneMenuTick);
             ImGui::Separator();
-            bool const canReset =
-                editable && total > 0 && std::ranges::none_of(camera->clips, &state::editing::model::Clip::locked);
+            bool const canReset = canResetCameraTrackClips(*camera, total);
             if (ImGui::MenuItem(
                     "playback.refactorEditor.timeline.resetTrackClips"_tr().c_str(),
                     nullptr,
@@ -3633,9 +3791,7 @@ void TimelinePanel::drawContextMenus(PanelContext const& ctx) {
                     action.value = false;
                     ctx.submitAction(std::move(action));
                 }
-                bool const canResetTrackClips =
-                    editable && ctx.state.totalTicks > 0
-                    && std::ranges::none_of(camera->clips, &state::editing::model::Clip::locked);
+                bool const canResetTrackClips = canResetCameraTrackClips(*camera, ctx.state.totalTicks);
                 if (ImGui::MenuItem(
                         "playback.refactorEditor.timeline.resetTrackClips"_tr().c_str(),
                         nullptr,
@@ -7614,7 +7770,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             // 3) 50% centered keyframe baseline & interpolation spans strictly clipped inside clips.
             {
                 bool const  rowHoveredForKeyAdd = mouseInRow && !camera.locked && (penMode || ImGui::GetIO().KeyCtrl);
-                ImU32 const baselineColor       = IM_COL32(255, 255, 255, rowHoveredForKeyAdd ? 0x6e : 0x2a);
+                ImU32 const baselineColor       = IM_COL32(255, 255, 255, rowHoveredForKeyAdd ? 0x64 : 0x28);
                 for (auto const& clip : camera.clips) {
                     bool const  draggingThis = mClipDragMode != 0 && mClipDragId == clip.id;
                     float const x0           = std::max(
@@ -7626,7 +7782,16 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         scale.xAt(static_cast<float>(draggingThis ? mClipDragOutTick : clip.outTick))
                     );
                     if (x1 - x0 > 10.0f) {
-                        drawList->AddLine({x0 + 5.0f, keyCenterY}, {x1 - 5.0f, keyCenterY}, baselineColor, 1.0f);
+                        drawDashedHorizontalLine(
+                            drawList,
+                            x0 + 5.0f,
+                            x1 - 5.0f,
+                            keyCenterY,
+                            baselineColor,
+                            4.0f * uiScale,
+                            4.0f * uiScale,
+                            1.0f
+                        );
                     }
                 }
 
@@ -7670,8 +7835,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     float const rawSpanX0 = scale.xAt(static_cast<float>(t0));
                     float const rawSpanX1 = scale.xAt(static_cast<float>(spanEnd));
                     ImU32 const spanLineColor =
-                        theme::withAlpha(spanColor, !camera.enabled ? 0x48 : (heldSpan ? 0x7c : 0xe0));
-                    float const lineThick = heldSpan ? 1.25f : 2.0f;
+                        theme::withAlpha(spanColor, !camera.enabled ? 0x48 : (heldSpan ? 0x98 : 0xe4));
 
                     for (auto const& clip : camera.clips) {
                         bool const  draggingThis = mClipDragMode != 0 && mClipDragId == clip.id;
@@ -7683,7 +7847,20 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         float const segX1 = std::min({layout.fullMax.x, rawSpanX1, clipX1 - 4.0f});
                         if (segX1 <= segX0) continue;
 
-                        drawList->AddLine({segX0, keyCenterY}, {segX1, keyCenterY}, spanLineColor, lineThick);
+                        if (heldSpan) {
+                            drawDashedHorizontalLine(
+                                drawList,
+                                segX0,
+                                segX1,
+                                keyCenterY,
+                                spanLineColor,
+                                4.0f * uiScale,
+                                4.0f * uiScale,
+                                1.25f
+                            );
+                        } else {
+                            drawList->AddLine({segX0, keyCenterY}, {segX1, keyCenterY}, spanLineColor, 1.75f);
+                        }
                     }
                 }
             }
