@@ -1,6 +1,9 @@
 #include "playback/keyframe/ClientCameraCapture.h"
+#include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/TimelineNavigation.h"
 #include "playback/state/editing/commands/CameraCommands.h"
+#include "playback/state/editing/commands/ClipCommands.h"
+#include "playback/state/editing/models/SelectionModel.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -247,6 +250,348 @@ void testSetKeyframesModeBatchSortingAndSubject() {
     CHECK(state.cameras[0].keysByTick.at(50).mode == CameraKeyframeMode::Interpolated);
 }
 
+Clip makeClip(std::string id, int inTick, int outTick, bool exportEnabled = true, bool locked = false) {
+    Clip clip;
+    clip.id            = std::move(id);
+    clip.name          = clip.id;
+    clip.inTick        = inTick;
+    clip.outTick       = outTick;
+    clip.exportEnabled = exportEnabled;
+    clip.locked        = locked;
+    return clip;
+}
+
+void testCollectCameraClipCuts() {
+    CameraEntity cam;
+    cam.id = "cam_1";
+
+    // Non-positive totalTicks -> empty.
+    CHECK(ClipOps::collectCameraClipCuts(cam, 0).empty());
+
+    // 0 clips -> full gap [0, totalTicks].
+    {
+        auto const cuts = ClipOps::collectCameraClipCuts(cam, 200);
+        CHECK(cuts.size() == 1);
+        CHECK((cuts[0] == SelectedClipCut{"cam_1", 0, 200}));
+        CHECK(cuts[0].isGap());
+        CHECK(!cuts[0].isSeam());
+    }
+
+    // Full range clip -> zero cuts.
+    cam.clips = {makeClip("clip_1", 0, 200)};
+    CHECK(ClipOps::collectCameraClipCuts(cam, 200).empty());
+
+    // 1 split -> 1 seam.
+    cam.clips = {makeClip("clip_1", 0, 80), makeClip("clip_2", 80, 200)};
+    {
+        auto const cuts = ClipOps::collectCameraClipCuts(cam, 200);
+        CHECK(cuts.size() == 1);
+        CHECK((cuts[0] == SelectedClipCut{"cam_1", 80, 80}));
+        CHECK(cuts[0].isSeam());
+        CHECK(!cuts[0].isGap());
+    }
+
+    // 2 splits -> 2 seams.
+    cam.clips = {makeClip("clip_1", 0, 60), makeClip("clip_2", 60, 140), makeClip("clip_3", 140, 200)};
+    {
+        auto const cuts = ClipOps::collectCameraClipCuts(cam, 200);
+        CHECK(cuts.size() == 2);
+        CHECK((cuts[0] == SelectedClipCut{"cam_1", 60, 60}));
+        CHECK((cuts[1] == SelectedClipCut{"cam_1", 140, 140}));
+    }
+
+    // Deleted middle clip -> 1 gap.
+    cam.clips = {makeClip("clip_1", 0, 60), makeClip("clip_3", 140, 200)};
+    {
+        auto const cuts = ClipOps::collectCameraClipCuts(cam, 200);
+        CHECK(cuts.size() == 1);
+        CHECK((cuts[0] == SelectedClipCut{"cam_1", 60, 140}));
+        CHECK(cuts[0].isGap());
+    }
+
+    // Trimmed start/end -> 2 gaps.
+    cam.clips = {makeClip("clip_1", 25, 175)};
+    {
+        auto const cuts = ClipOps::collectCameraClipCuts(cam, 200);
+        CHECK(cuts.size() == 2);
+        CHECK((cuts[0] == SelectedClipCut{"cam_1", 0, 25}));
+        CHECK((cuts[1] == SelectedClipCut{"cam_1", 175, 200}));
+    }
+}
+
+void testSelectionModelClipCutsAndBoxSelection() {
+    EditorStateExt state = makeTestState(200);
+    state.activeSceneId  = "scene_1";
+    state.cameras[0].keysByTick.emplace(20, CameraKeyframe{});
+    state.cameras[0].keysByTick.emplace(120, CameraKeyframe{});
+    state.cameras[0].clips = {
+        makeClip("clip_1", 0, 60),
+        makeClip("clip_2", 60, 130),
+        makeClip("clip_3", 160, 200),
+    };
+
+    SelectionModel sel;
+
+    // Single SelectedClipCut selection + selectedIds.
+    sel.select(SelectedClipCut{"cam_1", 60, 60});
+    CHECK(sel.hasSelection());
+    CHECK(sel.clipCutCount() == 1);
+    CHECK(sel.isClipCutSelected("cam_1", 60, 60));
+    CHECK((sel.selectedIds() == std::vector<std::string>{"cam_1", "60", "60"}));
+
+    // setClipCuts deduplicates and clears keyframes.
+    sel.setClipCuts({
+        {"cam_1", 60,  60 },
+        {"cam_1", 130, 160},
+        {"cam_1", 60,  60 }
+    });
+    CHECK(sel.keyframeCount() == 0);
+    CHECK(sel.clipCutCount() == 2);
+    CHECK(sel.getAs<SelectedClipCut>() != nullptr);
+    CHECK((*sel.getAs<SelectedClipCut>() == SelectedClipCut{"cam_1", 130, 160}));
+
+    // setBoxSelection stores both keyframes and cuts, deduplicating both, preferring last keyframe as primary.
+    sel.setBoxSelection(
+        {
+            {"cam_1", 20 },
+            {"cam_1", 120},
+            {"cam_1", 20 }
+    },
+        {{"cam_1", 60, 60}, {"cam_1", 130, 160}, {"cam_1", 130, 160}}
+    );
+    CHECK(sel.keyframeCount() == 2);
+    CHECK(sel.clipCutCount() == 2);
+    CHECK(sel.isKeyframeSelected("cam_1", 20));
+    CHECK(sel.isKeyframeSelected("cam_1", 120));
+    CHECK(sel.isClipCutSelected("cam_1", 60, 60));
+    CHECK(sel.isClipCutSelected("cam_1", 130, 160));
+    CHECK(sel.getAs<SelectedKeyframe>() != nullptr);
+    CHECK(sel.getAs<SelectedKeyframe>()->tick == 120);
+
+    // Toggling off all keyframes falls back primary selection to mClipCuts.back().
+    sel.toggleKeyframe({"cam_1", 20});
+    sel.toggleKeyframe({"cam_1", 120});
+    CHECK(sel.keyframeCount() == 0);
+    CHECK(sel.clipCutCount() == 2);
+    CHECK(sel.hasSelection());
+    CHECK(sel.getAs<SelectedClipCut>() != nullptr);
+    CHECK((*sel.getAs<SelectedClipCut>() == SelectedClipCut{"cam_1", 130, 160}));
+
+    // Mixed pruneInvalid: remove one keyframe and invalidate one seam while keeping one keyframe and one gap.
+    sel.setBoxSelection(
+        {
+            {"cam_1", 20 },
+            {"cam_1", 120}
+    },
+        {{"cam_1", 60, 60}, {"cam_1", 130, 160}}
+    );
+    state.cameras[0].keysByTick.erase(120);
+    state.cameras[0].clips = {
+        makeClip("clip_1", 0, 130),
+        makeClip("clip_3", 160, 200),
+    };
+    sel.pruneInvalid(state);
+    CHECK(sel.keyframeCount() == 1);
+    CHECK(sel.isKeyframeSelected("cam_1", 20));
+    CHECK(sel.clipCutCount() == 1);
+    CHECK(sel.isClipCutSelected("cam_1", 130, 160));
+    CHECK(!sel.isClipCutSelected("cam_1", 60, 60));
+    CHECK(sel.getAs<SelectedKeyframe>() != nullptr);
+    CHECK(sel.getAs<SelectedKeyframe>()->tick == 20);
+
+    // Invalidating all remaining selections clears selection.
+    state.cameras[0].keysByTick.erase(20);
+    state.cameras[0].clips = {makeClip("clip_1", 0, 200)};
+    sel.pruneInvalid(state);
+    CHECK(!sel.hasSelection());
+    CHECK(sel.keyframeCount() == 0);
+    CHECK(sel.clipCutCount() == 0);
+
+    // Empty box selection clears.
+    sel.setClipCuts({
+        {"cam_1", 0, 200}
+    });
+    sel.setBoxSelection({}, {});
+    CHECK(!sel.hasSelection());
+}
+
+void testHealClipCuts() {
+    // 1) Single seam restores full replay and ORs exportEnabled.
+    {
+        EditorStateExt state   = makeTestState(200);
+        state.cameras[0].clips = {makeClip("c1", 0, 80, false), makeClip("c2", 80, 200, true)};
+        HealClipCuts cmd({
+            {"cam_1", 80, 80}
+        });
+        cmd.execute(state);
+        CHECK(cmd.didChange());
+        CHECK(cmd.label() == "playback.refactorEditor.history.restoreClips");
+        CHECK(state.cameras[0].clips.size() == 1);
+        CHECK(state.cameras[0].clips[0].inTick == 0);
+        CHECK(state.cameras[0].clips[0].outTick == 200);
+        CHECK(state.cameras[0].clips[0].exportEnabled);
+        CHECK(ClipOps::collectCameraClipCuts(state.cameras[0], 200).empty());
+
+        cmd.undo(state);
+        CHECK(state.cameras[0].clips.size() == 2);
+        CHECK(!state.cameras[0].clips[0].exportEnabled);
+    }
+
+    // 2) Partial 1-of-2 seams and both seams.
+    {
+        EditorStateExt state   = makeTestState(200);
+        state.cameras[0].clips = {
+            makeClip("c1", 0, 60),
+            makeClip("c2", 60, 140),
+            makeClip("c3", 140, 200),
+        };
+        HealClipCuts partialCmd({
+            {"cam_1", 60, 60}
+        });
+        partialCmd.execute(state);
+        CHECK(partialCmd.didChange());
+        CHECK(state.cameras[0].clips.size() == 2);
+        CHECK(state.cameras[0].clips[0].inTick == 0);
+        CHECK(state.cameras[0].clips[0].outTick == 140);
+        CHECK(state.cameras[0].clips[1].inTick == 140);
+        CHECK(state.cameras[0].clips[1].outTick == 200);
+
+        partialCmd.undo(state);
+        CHECK(state.cameras[0].clips.size() == 3);
+
+        HealClipCuts bothCmd({
+            {"cam_1", 140, 140},
+            {"cam_1", 60,  60 }
+        });
+        bothCmd.execute(state);
+        CHECK(bothCmd.didChange());
+        CHECK(state.cameras[0].clips.size() == 1);
+        CHECK(state.cameras[0].clips[0].inTick == 0);
+        CHECK(state.cameras[0].clips[0].outTick == 200);
+    }
+
+    // 3) Deleted-clip gap bridges to full replay.
+    {
+        EditorStateExt state   = makeTestState(200);
+        state.cameras[0].clips = {makeClip("c1", 0, 60), makeClip("c3", 140, 200)};
+        HealClipCuts cmd({
+            {"cam_1", 60, 140}
+        });
+        cmd.execute(state);
+        CHECK(cmd.didChange());
+        CHECK(state.cameras[0].clips.size() == 1);
+        CHECK(state.cameras[0].clips[0].inTick == 0);
+        CHECK(state.cameras[0].clips[0].outTick == 200);
+    }
+
+    // 4) Trimmed edges (start + end gaps) restore full replay.
+    {
+        EditorStateExt state   = makeTestState(200);
+        state.cameras[0].clips = {makeClip("c1", 30, 170)};
+        HealClipCuts cmd({
+            {"cam_1", 170, 200},
+            {"cam_1", 0,   30 }
+        });
+        cmd.execute(state);
+        CHECK(cmd.didChange());
+        CHECK(state.cameras[0].clips.size() == 1);
+        CHECK(state.cameras[0].clips[0].inTick == 0);
+        CHECK(state.cameras[0].clips[0].outTick == 200);
+    }
+
+    // 5) Empty clips restore full replay.
+    {
+        EditorStateExt state = makeTestState(200);
+        HealClipCuts   cmd({
+            {"cam_1", 0, 200}
+        });
+        cmd.execute(state);
+        CHECK(cmd.didChange());
+        CHECK(state.cameras[0].clips.size() == 1);
+        CHECK(state.cameras[0].clips[0].inTick == 0);
+        CHECK(state.cameras[0].clips[0].outTick == 200);
+        CHECK(state.cameras[0].clips[0].exportEnabled);
+        cmd.undo(state);
+        CHECK(state.cameras[0].clips.empty());
+    }
+
+    // 6) Combined keyframes + cuts deleted & healed in one command + undo restores both.
+    {
+        EditorStateExt state = makeTestState(200);
+        state.cameras[0].keysByTick.emplace(40, CameraKeyframe{});
+        state.cameras[0].keysByTick.emplace(100, CameraKeyframe{});
+        state.cameras[0].clips = {makeClip("c1", 0, 80), makeClip("c2", 80, 200)};
+
+        HealClipCuts cmd(
+            {
+                {"cam_1", 80, 80}
+        },
+            {{"cam_1", 40, std::nullopt}}
+        );
+        cmd.execute(state);
+        CHECK(cmd.didChange());
+        CHECK(cmd.label() == "playback.refactorEditor.history.deleteKeyframesAndRestoreClips");
+        CHECK(state.cameras[0].clips.size() == 1);
+        CHECK(state.cameras[0].clips[0].outTick == 200);
+        CHECK(!state.cameras[0].keysByTick.contains(40));
+        CHECK(state.cameras[0].keysByTick.contains(100));
+
+        cmd.undo(state);
+        CHECK(state.cameras[0].clips.size() == 2);
+        CHECK(state.cameras[0].keysByTick.contains(40));
+        CHECK(state.cameras[0].keysByTick.contains(100));
+    }
+
+    // 7) Keyframes-only label.
+    {
+        EditorStateExt state = makeTestState(200);
+        state.cameras[0].keysByTick.emplace(50, CameraKeyframe{});
+        HealClipCuts cmd({}, {{"cam_1", 50, std::nullopt}});
+        cmd.execute(state);
+        CHECK(cmd.didChange());
+        CHECK(cmd.label() == "playback.refactorEditor.history.deleteKeyframes");
+        CHECK(state.cameras[0].keysByTick.empty());
+    }
+
+    // 8) Locked camera & locked clip respected.
+    {
+        EditorStateExt state    = makeTestState(200);
+        state.cameras[0].locked = true;
+        state.cameras[0].keysByTick.emplace(50, CameraKeyframe{});
+        state.cameras[0].clips = {makeClip("c1", 0, 80), makeClip("c2", 80, 200)};
+
+        CameraEntity cam2;
+        cam2.id    = "cam_2";
+        cam2.clips = {makeClip("c2_1", 0, 80, true, true), makeClip("c2_2", 80, 200)};
+        state.cameras.push_back(cam2);
+
+        CameraEntity cam3;
+        cam3.id    = "cam_3";
+        cam3.clips = {makeClip("c3_1", 0, 60, true, true), makeClip("c3_2", 140, 200)};
+        state.cameras.push_back(cam3);
+
+        HealClipCuts cmd(
+            {
+                {"cam_1", 80, 80 },
+                {"cam_2", 80, 80 },
+                {"cam_3", 60, 140}
+        },
+            {{"cam_1", 50, std::nullopt}}
+        );
+        cmd.execute(state);
+        // cam_1 locked -> untouched; cam_2 seam touches locked c2_1 -> untouched; cam_3 gap extends unlocked c3_2 left!
+        CHECK(cmd.didChange());
+        CHECK(state.cameras[0].clips.size() == 2);
+        CHECK(state.cameras[0].keysByTick.contains(50));
+        CHECK(state.cameras[1].clips.size() == 2);
+        CHECK(state.cameras[2].clips.size() == 2);
+        CHECK(state.cameras[2].clips[0].inTick == 0);
+        CHECK(state.cameras[2].clips[0].outTick == 60);
+        CHECK(state.cameras[2].clips[1].inTick == 60);
+        CHECK(state.cameras[2].clips[1].outTick == 200);
+    }
+}
+
 } // namespace
 
 void runTimeOfDayTests();
@@ -257,6 +602,9 @@ int main() {
     testAddKeyframeOverwriteAndUndo();
     testSetKeyframeModeAutoFillSubject();
     testSetKeyframesModeBatchSortingAndSubject();
+    testCollectCameraClipCuts();
+    testSelectionModelClipCutsAndBoxSelection();
+    testHealClipCuts();
     runTimeOfDayTests();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " test(s) failed\n";

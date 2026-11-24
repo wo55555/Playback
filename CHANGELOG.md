@@ -20,11 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved timeline start/end frame navigation with two-stage `Home` / `End` jumping (stopping at export In/Out points before jumping to the start or end), `Shift+I` / `Shift+O` shortcuts, `Up` / `Down` adjacent edit-point stepping, an interactive Export In/Out capsule control in the transport bar, clickable ruler brackets with context menus, Export page and dialog quick-jump buttons, and a track-side navigation help icon.
 - Added a live-target searchable subject picker directly in the camera keyframe inspector for first-person, third-person, and Look at entity (`Aim`) keyframes.
 - Added an option to disable server resource packs when opening replays (available in both the Replay Browser settings menu and the editor Settings page, persisted across sessions) together with a Reload at Current Tick action to reopen the active replay in place.
+- Added a Box Select tool (`B`, also triggered via `Alt+drag` or dragging across full or fixed clips in Select mode) to marquee-select keyframes and clip cuts across tracks, with `Delete` removing selected keyframes, healing split seams, and restoring cut gaps in a single undoable step.
 
 ### Changed
 
 - Unified playback speed control into the on-demand Speed track (replacing per-clip speed controls on camera clips and updating the camera keyframe option to Ignore Speed Track), and updated the export inspector to show the actual output duration and frame count after applying the speed curve.
 - Consolidated audio controls into the audio layer by removing the redundant mute toggle from camera clips, and separated game audio capture and external audio track mixing into independent export audio settings.
+- Changed the `K` keyframe shortcut to insert Free Camera keyframes by default, with a Shortcut Keyframe Lens option on the Settings page to match the active preview perspective (`1P`, `3P`, or Free) instead.
+- Adding a keyframe now automatically selects it and switches the right inspector to the Selection page.
+- Simplified the transport bar's Export In and Out buttons to clean `[` and `]` bracket icons with balanced padding.
 
 ### Fixed
 

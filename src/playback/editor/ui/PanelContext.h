@@ -14,7 +14,9 @@
 
 namespace playback::editor::ui {
 
-enum class TimelineTool { Select, Razor, Pen };
+enum class TimelineTool { Select, BoxSelect, Razor, Pen };
+
+enum class ShortcutKeyframeLensMode { FreeCamera, MatchPreview };
 
 using SubmitAction = std::function<void(playback::state::EditorAction)>;
 
@@ -80,6 +82,16 @@ public:
     virtual void               setPreviewAudioVolume(float volume, bool commit) = 0;
     [[nodiscard]] virtual bool isPreviewSilentWhilePaused() const               = 0;
     virtual void               setPreviewSilentWhilePaused(bool silent)         = 0;
+
+    [[nodiscard]] virtual ShortcutKeyframeLensMode shortcutKeyframeLensMode() const                           = 0;
+    virtual void                                   setShortcutKeyframeLensMode(ShortcutKeyframeLensMode mode) = 0;
+    virtual void                                   showSelectionInspector()                                   = 0;
+    virtual void                                   focusCameraKeyframe(std::string const& cameraId, int tick) = 0;
+    virtual void                                   focusSpeedKeyframe(int tick)                               = 0;
+    virtual void                                   focusFreezeKeyframe(int tick)                              = 0;
+    virtual void                                   focusTimelapseKeyframe(int tick)                           = 0;
+    virtual void                                   focusTimeOfDayKeyframe(int tick)                           = 0;
+    virtual void                                   focusWeatherKeyframe(int tick)                             = 0;
 };
 
 // Everything a panel needs for one frame, so panels stay callable without the editor singleton.

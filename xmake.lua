@@ -192,6 +192,7 @@ target("editor-unit-tests")
         "src/playback/keyframe/TimeOfDayTimelineEvaluator.cpp",
         "src/playback/keyframe/WeatherTimelineEvaluator.cpp",
         "src/playback/state/editing/commands/CameraCommands.cpp",
+        "src/playback/state/editing/commands/ClipCommands.cpp",
         "src/playback/state/editing/commands/TimeOfDayCommands.cpp",
         "src/playback/state/editing/commands/WeatherCommands.cpp",
         "src/playback/state/editing/CameraBindingOps.cpp",

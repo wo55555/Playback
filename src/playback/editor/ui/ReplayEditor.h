@@ -97,6 +97,18 @@ public:
     [[nodiscard]] bool  isPreviewSilentWhilePaused() const override;
     void                setPreviewSilentWhilePaused(bool silent) override;
 
+    [[nodiscard]] ShortcutKeyframeLensMode shortcutKeyframeLensMode() const override {
+        return mShortcutKeyframeLensMode;
+    }
+    void setShortcutKeyframeLensMode(ShortcutKeyframeLensMode mode) override;
+    void showSelectionInspector() override;
+    void focusCameraKeyframe(std::string const& cameraId, int tick) override;
+    void focusSpeedKeyframe(int tick) override;
+    void focusFreezeKeyframe(int tick) override;
+    void focusTimelapseKeyframe(int tick) override;
+    void focusTimeOfDayKeyframe(int tick) override;
+    void focusWeatherKeyframe(int tick) override;
+
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
@@ -133,10 +145,11 @@ private:
     bool  mExitHoldBlocked{false};
     float mExitHoldSeconds{};
 
-    float       mDetailsWidthRatio{0.22f};
-    float       mTimelineHeightRatio{0.24f};
-    float       mVideoAspectRatio{16.0f / 9.0f};
-    UiScaleTier mUiScaleTier{UiScaleTier::Auto};
+    float                    mDetailsWidthRatio{0.22f};
+    float                    mTimelineHeightRatio{0.24f};
+    float                    mVideoAspectRatio{16.0f / 9.0f};
+    UiScaleTier              mUiScaleTier{UiScaleTier::Auto};
+    ShortcutKeyframeLensMode mShortcutKeyframeLensMode{ShortcutKeyframeLensMode::FreeCamera};
 
     struct TimelineViewPreferences {
         float zoomScale{1.0f};
