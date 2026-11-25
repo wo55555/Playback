@@ -29,6 +29,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <limits>
+#include <numbers>
 #include <ranges>
 
 namespace playback::editor::ui {
@@ -7524,6 +7525,7 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
             }
 
             // 2) Uniform single-piece rounded clip pills.
+            float const                        seamGap              = 0.75f;
             state::editing::model::Clip const* hoveredClipPtr       = nullptr;
             float                              hoveredClipX0        = 0.0f;
             float                              hoveredClipX1        = 0.0f;
@@ -7534,6 +7536,13 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                 float const   rounding = 5.0f * uiScale;
                 float const   eyeBox   = cornerH + 2.0f * uiScale;
                 ImFont* const font     = ImGui::GetFont();
+                auto const    clipDrawnRange = [&](state::editing::model::Clip const& c) {
+                    bool const cDragging = mClipDragMode != 0 && mClipDragId == c.id;
+                    return std::pair<int, int>{
+                        cDragging ? mClipDragInTick : c.inTick,
+                        cDragging ? mClipDragOutTick : c.outTick,
+                    };
+                };
                 for (auto const& clip : camera.clips) {
                     bool const  draggingThis = mClipDragMode != 0 && mClipDragId == clip.id;
                     int const   drawnIn      = draggingThis ? mClipDragInTick : clip.inTick;
@@ -7543,6 +7552,21 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     float const x0           = std::max(layout.canvasLeft, rawX0);
                     float const x1           = std::min(layout.fullMax.x, rawX1);
                     if (x1 <= x0) continue;
+
+                    bool hasLeftSeam  = false;
+                    bool hasRightSeam = false;
+                    for (auto const& other : camera.clips) {
+                        if (other.id == clip.id) continue;
+                        auto const [otherIn, otherOut] = clipDrawnRange(other);
+                        if (otherIn >= otherOut) continue;
+                        if (otherOut == drawnIn) hasLeftSeam = true;
+                        if (otherIn == drawnOut) hasRightSeam = true;
+                    }
+                    // Inset touching clip ends by half of a 1.5px dark groove so adjacent 1px borders never double-up.
+                    float const drawX0 =
+                        (hasLeftSeam && rawX0 >= layout.canvasLeft && (x1 - x0) > 6.0f * uiScale) ? (x0 + seamGap) : x0;
+                    float const drawX1 =
+                        (hasRightSeam && rawX1 <= layout.fullMax.x && (x1 - x0) > 6.0f * uiScale) ? (x1 - seamGap) : x1;
 
                     bool const clipSelected = selectedClip && selectedClip->clipId == clip.id;
                     bool const overClip =
@@ -7575,28 +7599,32 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                     bool const  activeClip = camera.enabled && clip.exportEnabled;
                     ImU32 const swatch     = activeClip ? trackColor : theme::kTrackDisabled;
                     int const   fillAlpha  = activeClip ? (clipSelected ? 0x82 : 0x64) : (clipSelected ? 0x64 : 0x46);
-                    drawList
-                        ->AddRectFilled({x0, blockTop}, {x1, blockBot}, theme::withAlpha(swatch, fillAlpha), rounding);
-                    if (exportOff && x1 - x0 > 4.0f && blockBot - blockTop > 4.0f) {
+                    drawList->AddRectFilled(
+                        {drawX0, blockTop},
+                        {drawX1, blockBot},
+                        theme::withAlpha(swatch, fillAlpha),
+                        rounding
+                    );
+                    if (exportOff && drawX1 - drawX0 > 4.0f && blockBot - blockTop > 4.0f) {
                         drawDiagonalHatch(
                             drawList,
-                            {x0 + 2.0f, blockTop + 2.0f},
-                            {x1 - 2.0f, blockBot - 2.0f},
+                            {drawX0 + 2.0f, blockTop + 2.0f},
+                            {drawX1 - 2.0f, blockBot - 2.0f},
                             theme::withAlpha(theme::kTextDim, 0x30),
                             7.0f * uiScale
                         );
                     }
-                    if (activeClip && x1 - x0 > rounding + 4.0f) {
+                    if (activeClip && drawX1 - drawX0 > rounding + 4.0f) {
                         drawList->AddLine(
-                            {x0 + rounding * 0.5f, blockTop + 1.0f},
-                            {x1 - rounding * 0.5f, blockTop + 1.0f},
+                            {drawX0 + rounding * 0.5f, blockTop + 1.0f},
+                            {drawX1 - rounding * 0.5f, blockTop + 1.0f},
                             IM_COL32(255, 255, 255, 0x1c),
                             1.0f
                         );
                     }
                     drawList->AddRect(
-                        {x0, blockTop},
-                        {x1, blockBot},
+                        {drawX0, blockTop},
+                        {drawX1, blockBot},
                         clipSelected ? theme::kSelected : theme::withAlpha(swatch, exportOff ? 0x68 : 0xc0),
                         rounding,
                         0,
@@ -7722,46 +7750,78 @@ void TimelinePanel::draw(PanelContext const& ctx, bool allowInput) {
                         }
                     }
                     if (inBox) cutBoxHits.push_back(cut);
-                    if (inBox || ctx.selection.isClipCutSelected(camera.id, cut.startTick, cut.endTick)) {
-                        if (cut.isSeam()) {
-                            float const seamX = scale.xAt(static_cast<float>(cut.startTick));
-                            if (seamX >= layout.canvasLeft - 6.0f * uiScale
-                                && seamX <= layout.fullMax.x + 6.0f * uiScale) {
-                                drawList->AddLine(
-                                    {seamX, blockTop - 1.0f},
-                                    {seamX, blockBot + 1.0f},
-                                    theme::kSelected,
-                                    2.5f * uiScale
-                                );
-                                drawKeyframeDiamond(
-                                    drawList,
-                                    seamX,
-                                    (blockTop + blockBot) * 0.5f,
-                                    4.0f * uiScale,
-                                    theme::kSelected,
-                                    theme::kIconHighlight
-                                );
+                    bool const selected =
+                        inBox || ctx.selection.isClipCutSelected(camera.id, cut.startTick, cut.endTick);
+                    if (cut.isSeam()) {
+                        float const seamX       = scale.xAt(static_cast<float>(cut.startTick));
+                        bool const  seamHovered = !selected && !camera.locked && mouseInRow && !overAnyKeyOnRow
+                                              && (mTool == TimelineTool::BoxSelect || altBoxSelect)
+                                              && std::abs(mouse.x - seamX) <= 6.0f * uiScale;
+                        if ((selected || seamHovered) && blockBot > blockTop) {
+                            float leftW  = 0.0f;
+                            float rightW = 0.0f;
+                            for (auto const& clip : camera.clips) {
+                                bool const draggingThis = mClipDragMode != 0 && mClipDragId == clip.id;
+                                int const  cIn          = draggingThis ? mClipDragInTick : clip.inTick;
+                                int const  cOut         = draggingThis ? mClipDragOutTick : clip.outTick;
+                                if (cIn >= cOut) continue;
+                                if (cOut == cut.startTick) {
+                                    float const lx0 = std::max(layout.canvasLeft, scale.xAt(static_cast<float>(cIn)));
+                                    float const lx1 = std::min(layout.fullMax.x, seamX);
+                                    leftW           = std::max(leftW, lx1 - lx0);
+                                } else if (cIn == cut.startTick) {
+                                    float const rx0 = std::max(layout.canvasLeft, seamX);
+                                    float const rx1 = std::min(layout.fullMax.x, scale.xAt(static_cast<float>(cOut)));
+                                    rightW          = std::max(rightW, rx1 - rx0);
+                                }
                             }
-                        } else if (cut.isGap()) {
-                            float const gx0 = std::max(layout.canvasLeft, scale.xAt(static_cast<float>(cut.startTick)));
-                            float const gx1 = std::min(layout.fullMax.x, scale.xAt(static_cast<float>(cut.endTick)));
-                            if (gx1 > gx0) {
-                                float const gapRounding = 4.0f * uiScale;
-                                drawList->AddRectFilled(
-                                    {gx0, blockTop},
-                                    {gx1, blockBot},
-                                    theme::withAlpha(theme::kSelected, 0x38),
-                                    gapRounding
-                                );
-                                drawList->AddRect(
-                                    {gx0, blockTop},
-                                    {gx1, blockBot},
-                                    theme::kSelected,
-                                    gapRounding,
-                                    0,
-                                    1.75f
-                                );
+                            constexpr float kPi        = std::numbers::pi_v<float>;
+                            constexpr float kArcSpan   = 0.42f * kPi;
+                            float const     r          = std::min(5.0f * uiScale, (blockBot - blockTop) * 0.5f);
+                            float const     stroke     = (selected ? 1.75f : 1.35f) * uiScale;
+                            float const     halfStroke = stroke * 0.5f;
+                            float const     arcR       = std::max(1.0f, r - halfStroke);
+                            ImU32 const     strokeCol =
+                                selected ? theme::kSelected : theme::withAlpha(theme::kSelected, 0x88);
+                            float const leftEdgeX  = seamX - (leftW > 6.0f * uiScale ? seamGap : 0.0f);
+                            float const rightEdgeX = seamX + (rightW > 6.0f * uiScale ? seamGap : 0.0f);
+                            float const cyTop      = blockTop + r;
+                            float const cyBot      = blockBot - r;
+
+                            if (rightEdgeX + r + 3.0f * uiScale >= layout.canvasLeft
+                                && leftEdgeX - r - 3.0f * uiScale <= layout.fullMax.x) {
+                                drawList
+                                    ->PushClipRect({layout.canvasLeft, blockTop}, {layout.fullMax.x, blockBot}, true);
+                                if (leftW >= 2.0f * uiScale) {
+                                    float const cxL = leftEdgeX - r;
+                                    drawList->PathClear();
+                                    drawList->PathArcTo({cxL, cyTop}, arcR, -kArcSpan, 0.0f, 8);
+                                    drawList->PathArcTo({cxL, cyBot}, arcR, 0.0f, kArcSpan, 8);
+                                    drawList->PathStroke(strokeCol, 0, stroke);
+                                }
+                                if (rightW >= 2.0f * uiScale) {
+                                    float const cxR = rightEdgeX + r;
+                                    drawList->PathClear();
+                                    drawList->PathArcTo({cxR, cyBot}, arcR, kPi - kArcSpan, kPi, 8);
+                                    drawList->PathArcTo({cxR, cyTop}, arcR, kPi, kPi + kArcSpan, 8);
+                                    drawList->PathStroke(strokeCol, 0, stroke);
+                                }
+                                drawList->PopClipRect();
                             }
+                        }
+                    } else if (selected && cut.isGap()) {
+                        float const gx0 = std::max(layout.canvasLeft, scale.xAt(static_cast<float>(cut.startTick)));
+                        float const gx1 = std::min(layout.fullMax.x, scale.xAt(static_cast<float>(cut.endTick)));
+                        if (gx1 > gx0) {
+                            float const gapRounding = 4.0f * uiScale;
+                            drawList->AddRectFilled(
+                                {gx0, blockTop},
+                                {gx1, blockBot},
+                                theme::withAlpha(theme::kSelected, 0x38),
+                                gapRounding
+                            );
+                            drawList
+                                ->AddRect({gx0, blockTop}, {gx1, blockBot}, theme::kSelected, gapRounding, 0, 1.75f);
                         }
                     }
                 }
