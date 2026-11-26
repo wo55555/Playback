@@ -120,6 +120,14 @@ findCoveringClip(model::CameraEntity const& camera, int tick, int totalTicks, bo
     return nullptr;
 }
 
+model::CameraEntity const* findCameraById(model::EditorStateExt const& state, std::string_view cameraId) noexcept {
+    if (cameraId.empty()) return nullptr;
+    for (auto const& camera : state.cameras) {
+        if (camera.id == cameraId) return &camera;
+    }
+    return nullptr;
+}
+
 template <typename Dst, typename Src>
 void copySceneScopeFields(Dst& dst, Src const& src) {
     dst.cameras        = src.cameras;
@@ -575,6 +583,70 @@ std::vector<model::SelectedClipCut> collectCameraClipCuts(model::CameraEntity co
         cuts.push_back({camera.id, cursor, totalTicks});
     }
     return cuts;
+}
+
+model::CameraEntity const*
+selectedCamera(model::EditorStateExt const& state, model::SelectionModel const& selection) noexcept {
+    if (auto const* selected = selection.getAs<model::SelectedCamera>()) {
+        return findCameraById(state, selected->cameraId);
+    }
+    if (auto const* selected = selection.getAs<model::SelectedClip>()) {
+        return findClipWithCamera(state, selected->clipId).camera;
+    }
+    if (auto const* selected = selection.getAs<model::SelectedKeyframe>()) {
+        return findCameraById(state, selected->trackId);
+    }
+    if (auto const* selected = selection.getAs<model::SelectedClipCut>()) {
+        return findCameraById(state, selected->cameraId);
+    }
+    return nullptr;
+}
+
+std::string resolveKeyframeTargetCamera(model::EditorStateExt const& state, model::SelectionModel const& selection) {
+    if (auto const* camera = selectedCamera(state, selection)) {
+        return camera->locked ? std::string{} : camera->id;
+    }
+    for (auto const& camera : state.cameras) {
+        if (camera.enabled && !camera.locked) return camera.id;
+    }
+    for (auto const& camera : state.cameras) {
+        if (!camera.locked) return camera.id;
+    }
+    return {};
+}
+
+ClipWithCamera resolveExportToggleClip(
+    model::EditorStateExt const& state,
+    model::SelectionModel const& selection,
+    int                          tick,
+    int                          totalTicks,
+    std::span<int const>         dimensionTransitions
+) noexcept {
+    if (auto const* selectedClip = selection.getAs<model::SelectedClip>()) {
+        return findClipWithCamera(state, selectedClip->clipId);
+    }
+    if (auto const* camera = selectedCamera(state, selection)) {
+        if (auto const* clip = findCoveringClip(*camera, tick, totalTicks, false)) {
+            return {camera, clip};
+        }
+        return {};
+    }
+    if (auto const active = activeClipAt(state, tick, false, dimensionTransitions); active && !active.camera->locked) {
+        return active;
+    }
+    for (auto const& camera : state.cameras) {
+        if (camera.locked) continue;
+        if (auto const* clip = findCoveringClip(camera, tick, totalTicks, false)) {
+            return {&camera, clip};
+        }
+    }
+    for (auto const& camera : state.cameras) {
+        if (!camera.locked) continue;
+        if (auto const* clip = findCoveringClip(camera, tick, totalTicks, false)) {
+            return {&camera, clip};
+        }
+    }
+    return {};
 }
 
 } // namespace playback::state::editing::ClipOps

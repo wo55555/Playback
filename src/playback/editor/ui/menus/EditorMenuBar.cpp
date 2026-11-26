@@ -7,6 +7,7 @@
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportPlanCompiler.h"
+#include "playback/keyframe/CameraTimelineEvaluator.h"
 #include "playback/keyframe/TimelapseTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 #include "playback/utils/ShellUtils.h"
@@ -644,24 +645,18 @@ void EditorMenuBar::drawMenus(PanelContext const& ctx) {
                 (void)ctx.commands.trimClipAtPlayhead(false);
             }
             {
-                auto const* selectedClip = ctx.selection.getAs<state::editing::model::SelectedClip>();
                 state::editing::ClipOps::ClipWithCamera hit{};
-                if (state.project && selectedClip) {
-                    hit = state::editing::ClipOps::findClipWithCamera(*state.project, selectedClip->clipId);
-                } else if (state.project) {
-                    int const tick       = state.currentTick;
-                    int const totalTicks = state.totalTicks;
-                    for (auto const& camera : state.project->cameras) {
-                        for (auto const& candidate : camera.clips) {
-                            if (candidate.inTick <= tick
-                                && (tick < candidate.outTick
-                                    || (tick == totalTicks && candidate.outTick == totalTicks))) {
-                                hit = {&camera, &candidate};
-                                break;
-                            }
-                        }
-                        if (hit) break;
-                    }
+                if (state.project) {
+                    static std::vector<int> const emptyTransitions;
+                    auto const&                   transitions =
+                        state.cameraTimeline ? state.cameraTimeline->dimensionTransitionTicks() : emptyTransitions;
+                    hit = state::editing::ClipOps::resolveExportToggleClip(
+                        *state.project,
+                        ctx.selection,
+                        state.currentTick,
+                        state.totalTicks,
+                        transitions
+                    );
                 }
                 bool const canToggle = hit && !hit.camera->locked;
                 if (ImGui::MenuItem(
