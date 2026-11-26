@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2-mc26.20] - 2026-11-27
+
 ### Added
 
 - Expanded the replay editor's undo and redo history to 256 steps, with the Edit menu displaying the next action name and a History submenu to jump across up to 20 recent undo or redo steps at once.
@@ -403,7 +405,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.1-mc26.20...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.2-mc26.20...HEAD
+[0.4.2-mc26.20]: https://github.com/wo55555/Playback/compare/v0.4.1-mc26.20...v0.4.2-mc26.20
 [0.4.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.4.0-mc26.20...v0.4.1-mc26.20
 [0.4.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.20...v0.4.0-mc26.20
 [0.3.3-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.20...v0.3.3-mc26.20
