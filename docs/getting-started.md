@@ -8,11 +8,11 @@ Playback is a client-only LeviLamina mod for Windows x64. Choose the release tha
 
 | Minecraft / LeviLamina | Playback release                                                                    |
 | ---------------------- | ----------------------------------------------------------------------------------- |
-| `26.10.*`              | [`v0.4.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.10) |
-| `26.20.*`              | [`v0.4.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.20) |
-| `26.40.*`              | [`v0.4.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.40) |
-| `26.51.*`              | [`v0.4.1-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.50) |
-| `26.60.*`              | [`v0.4.1-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.60) |
+| `26.10.*`              | [`v0.4.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.10) |
+| `26.20.*`              | [`v0.4.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.20) |
+| `26.40.*`              | [`v0.4.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.40) |
+| `26.51.*`              | [`v0.4.2-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.50) |
+| `26.60.*`              | [`v0.4.2-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.60) |
 
 All five release lines above are prereleases; install only the version that matches your instance. The `mc26.50` release targets Minecraft 26.51. The `mc26.60` build requires exactly Minecraft `1.26.60.5`. The 26.40 dependency range is `>=26.40.5 <26.50.0`.
 
@@ -23,7 +23,7 @@ All five release lines above are prereleases; install only the version that matc
 > Use standard/Fancy graphics for routine use. Ray tracing and Vibrant Visuals have received targeted export tests, but remain experimental. Some exports still show grid/dither patterns, and occasional native dimension-loading warnings remain under investigation.
 
 > [!CAUTION]
-> `v0.4.1` is a prerelease on every release line. Replays recorded before `v0.4.0` are not supported and must be recorded again; older archives may not be detected as incompatible. The camera switch track was removed, and its data in earlier editor projects is dropped. Back up recordings and projects before upgrading; no migration is provided.
+> `v0.4.2` is a prerelease on every release line. Replays recorded before `v0.4.0` are not supported and must be recorded again; older archives may not be detected as incompatible. The camera switch track was removed, and its data in earlier editor projects is dropped. Back up recordings and projects before upgrading; no migration is provided.
 
 ## Install with LeviLauncher and Lip
 
@@ -67,19 +67,19 @@ Run the matching command from the root directory of the target LeviLamina instan
 
 ```powershell
 # Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.4.1-mc26.10#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
-lip install github.com/wo55555/Playback@0.4.1-mc26.20#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.20#client
 
 # Minecraft / LeviLamina 26.40
-lip install github.com/wo55555/Playback@0.4.1-mc26.40#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.40#client
 
 # Minecraft / LeviLamina 26.51
-lip install github.com/wo55555/Playback@0.4.1-mc26.50#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.50#client
 
 # Minecraft 1.26.60.5 / LeviLamina 26.60
-lip install github.com/wo55555/Playback@0.4.1-mc26.60#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.60#client
 ```
 
 > [!NOTE]
