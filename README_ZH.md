@@ -5,7 +5,7 @@
   <p>面向 Windows LeviLamina 的开源 Minecraft 基岩版回放录制与电影相机编辑模组，并提供实验性视频导出。</p>
 
   <p>
-    <img src="https://img.shields.io/badge/release-v0.4.1-4c8bf5?style=flat-square" alt="Playback v0.4.1">
+    <img src="https://img.shields.io/badge/release-v0.4.2-4c8bf5?style=flat-square" alt="Playback v0.4.2">
     <img src="https://img.shields.io/badge/Minecraft%20Bedrock-Windows%20x64-62b47a?style=flat-square" alt="Windows x64 Minecraft 基岩版">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 许可证"></a>
   </p>
@@ -95,9 +95,9 @@ Playback 将客户端可见的 Minecraft 基岩版游戏过程录制为便携回
 
 ## 本版更新
 
-`v0.4.1` 为 MC 26.10、MC 26.20、MC 26.40、MC 26.51 和 MC 26.60 带来多场景工作区和基于相机轨片段的编辑流程。每个场景拥有独立的相机轨道、标记和导出范围，片段支持分割、裁切、调整轨道优先级、静音以及 `0.05x` 至 `32x` 的单片段倍速，并可选择让相机运动保持 1x 速度。原有的第一／第三人称轨道改为按关键帧设置镜头模式，新增自定义第三人称环绕插值（`3P+`）、自由相机插值关键帧的实体注视（`Aim`）、三次贝塞尔曲线与全新润色的属性检查器。
+`v0.4.2` 为 MC 26.10、MC 26.20、MC 26.40、MC 26.51 和 MC 26.60 的时间线编辑器带来按需添加的变速、冻结、延时摄影、多音轨外部音频、昼夜时间与天气轨道，以及按场景设置的“世界环境”覆写。变速控制由相机片段统一迁至变速轨道（`0.01x` 至 `32x`）并支持三次贝塞尔曲线；冻结与延时摄影轨道可控制世界暂停与区间映射，外部音频轨道支持导入 WAV 与 FFmpeg 解码音频并在预览和导出中混音；撤销／重做扩展至 256 步，新增历史记录子菜单与 `.pbproj.old` 备份恢复。
 
-视频导出新增延时摄影模式，并支持按当前场景、单片段、合并片段以及多场景批量导出。本版本同时修复了重复切换维度、交易与界面预览跳转、带自定义组件的自定义方块、实体碰撞箱与火焰位置、编辑器预览滚转角、观察者飞行变慢以及输入锁定导致的自由相机卡顿等问题。使用实验性渲染路径前请先阅读下方限制。
+本版本还新增框选工具（`B`）、两段式 `Home`/`End` 与 `Up`/`Down` 编辑点跳转、传输栏交互式导出入/出点胶囊控件、实时可搜索跟随目标选择器、重新设计的属性检查器与工具栏，以及打开回放时禁用服务器资源包的选项。同时修复了第三方 DXGI 覆盖或采集工具（如 RTSS）挂钩时的界面可见性、手持武器与玩家皮肤（含开启“仅允许受信任的皮肤”时）、鞘翅滑翔姿态、关闭昼夜循环世界的日月静止、快照实体位置、载具骑乘同步以及选中相机轨道的目标判定等问题。使用实验性渲染路径前请先阅读下方限制。
 
 > [!CAUTION]
 > Playback 仍为预发布版本，可能进行不兼容的格式或配置更新。早于 `v0.4.0` 的录像不再支持，必须重新录制；程序可能无法识别旧归档的不兼容性。相机切换轨道已移除，旧编辑器工程中的切换轨道数据会被丢弃。升级前请备份录像和工程，不提供迁移功能。
@@ -109,15 +109,15 @@ Playback 将客户端可见的 Minecraft 基岩版游戏过程录制为便携回
 
 ## 兼容性
 
-Playback 为 `0.4.1` 维护五条独立预发布线。请仅安装与 Minecraft 和 LeviLamina 运行时匹配的版本；发行标签后缀不一定与游戏版本相同。
+Playback 为 `0.4.2` 维护五条独立预发布线。请仅安装与 Minecraft 和 LeviLamina 运行时匹配的版本；发行标签后缀不一定与游戏版本相同。
 
 | Minecraft / LeviLamina | Playback 版本                                                                       | 状态   |
 | ---------------------- | ----------------------------------------------------------------------------------- | ------ |
-| `26.10.*`              | [`v0.4.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.10) | 预发布 |
-| `26.20.*`              | [`v0.4.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.20) | 预发布 |
-| `26.40.*`              | [`v0.4.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.40) | 预发布 |
-| `26.51.*`              | [`v0.4.1-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.50) | 预发布 |
-| `26.60.*`              | [`v0.4.1-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.60) | 预发布 |
+| `26.10.*`              | [`v0.4.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.10) | 预发布 |
+| `26.20.*`              | [`v0.4.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.20) | 预发布 |
+| `26.40.*`              | [`v0.4.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.40) | 预发布 |
+| `26.51.*`              | [`v0.4.2-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.50) | 预发布 |
+| `26.60.*`              | [`v0.4.2-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.60) | 预发布 |
 
 所有发行线均面向 Windows x64 平台的 Minecraft 基岩版，并以纯客户端模组形式发布。`mc26.50` 发行线对应 Minecraft 26.51；`mc26.60` 构建严格要求 Minecraft `1.26.60.5`，不支持其它 26.60 游戏构建。26.40 的依赖范围为 `>=26.40.5 <26.50.0`。
 
@@ -166,7 +166,7 @@ Playback 是面向 Windows x64 LeviLamina 客户端的 Minecraft 基岩版回放
 
 ### 应该安装哪个 Playback 版本？
 
-请按[兼容性](#兼容性)表选择。特别注意，Minecraft 26.51 对应 `v0.4.1-mc26.50`，而 `v0.4.1-mc26.60` 仅支持 Minecraft `1.26.60.5`。不要混装不同发行线。
+请按[兼容性](#兼容性)表选择。特别注意，Minecraft 26.51 对应 `v0.4.2-mc26.50`，而 `v0.4.2-mc26.60` 仅支持 Minecraft `1.26.60.5`。不要混装不同发行线。
 
 ## 开发状态与计划
 

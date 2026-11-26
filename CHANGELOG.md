@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2-mc26.10] - 2026-11-27
+
 ### Added
 
 - Expanded the replay editor's undo and redo history to 256 steps, with the Edit menu displaying the next action name and a History submenu to jump across up to 20 recent undo or redo steps at once.
@@ -32,12 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Undoing back to the saved state now clears the unsaved indicator in the status bar instead of leaving the project marked as dirty.
-- Undoing or redoing edits made in another scene now switches back to that scene and clears stale timeline selections, and dragging a clip's speed slider now records a single history entry on release instead of pushing one per frame.
 - The replay browser, editor overlay, export progress screen, and frame capture now remain visible without hanging when third-party overlays or capture tools (such as RTSS) hook, patch, or bypass DXGI swap-chain presentation and resizing.
 - Held weapons and attachables (such as bows, crossbows, and tridents) now stay attached to the player's hand across skin loads and mid-replay skin swaps, remain visible alongside the player's arm in first-person follow for persona skins, and continue updating on the recorded player while following someone else.
 - Player skins (including custom skins and other players' skins captured in snapshots) now stay intact during offline replay even when "Only Allow Trusted Skins" is enabled.
 - Players gliding with an elytra now tilt horizontally along their flight path with spread wings during replay and timeline seeks instead of remaining upright.
+- Undoing back to the saved state now clears the unsaved indicator in the status bar instead of leaving the project marked as dirty.
+- Undoing or redoing edits made in another scene now switches back to that scene and clears stale timeline selections, and dragging a clip's speed slider now records a single history entry on release instead of pushing one per frame.
 - Dropped item entities no longer disappear during high-speed timelapse playback or seeking.
 - Replays recorded in worlds with the daylight cycle disabled now keep their recorded sun and moon time stationary during preview and export instead of advancing automatically.
 - Dropped items and non-player entities captured in snapshots or spawned mid-recording now appear at their current positions and orientations instead of resetting to where they originally spawned.
@@ -403,7 +405,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.1-mc26.10...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.2-mc26.10...HEAD
+[0.4.2-mc26.10]: https://github.com/wo55555/Playback/compare/v0.4.1-mc26.10...v0.4.2-mc26.10
 [0.4.1-mc26.10]: https://github.com/wo55555/Playback/compare/v0.4.0-mc26.10...v0.4.1-mc26.10
 [0.4.0-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.10...v0.4.0-mc26.10
 [0.3.3-mc26.10]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.10...v0.3.3-mc26.10
