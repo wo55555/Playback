@@ -808,6 +808,211 @@ void testFollowModeSuppressesActiveCameraId() {
     CHECK(playback::keyframe::resolveActiveCameraId(false, nullptr, 0).empty());
 }
 
+EditorStateExt makeMultiCameraState(int totalTicks = 200) {
+    EditorStateExt state = makeTestState(totalTicks);
+    state.cameras[0].clips.push_back(makeClip("clip_1", 0, totalTicks));
+
+    CameraEntity cam2;
+    cam2.id   = "cam_2";
+    cam2.name = "Camera 2";
+    cam2.clips.push_back(makeClip("clip_2a", 0, 80, false));
+    cam2.clips.push_back(makeClip("clip_2b", 120, totalTicks, true));
+    state.cameras.push_back(std::move(cam2));
+
+    CameraEntity cam3;
+    cam3.id   = "cam_3";
+    cam3.name = "Camera 3";
+    cam3.clips.push_back(makeClip("clip_3", 0, totalTicks));
+    state.cameras.push_back(std::move(cam3));
+
+    return state;
+}
+
+void testClipOpsSelectedCamera() {
+    EditorStateExt state = makeMultiCameraState(200);
+    SelectionModel sel;
+
+    // Empty selection -> nullptr.
+    CHECK(ClipOps::selectedCamera(state, sel) == nullptr);
+
+    // Camera-owned selection types resolve to the owning camera.
+    sel.select(SelectedCamera{"cam_2"});
+    CHECK(ClipOps::selectedCamera(state, sel) == &state.cameras[1]);
+
+    sel.select(SelectedClip{"clip_2b"});
+    CHECK(ClipOps::selectedCamera(state, sel) == &state.cameras[1]);
+
+    sel.select(SelectedKeyframe{"cam_3", 40});
+    CHECK(ClipOps::selectedCamera(state, sel) == &state.cameras[2]);
+
+    sel.setKeyframes({
+        {"cam_1", 10},
+        {"cam_2", 30}
+    });
+    CHECK(ClipOps::selectedCamera(state, sel) == &state.cameras[1]);
+
+    sel.select(SelectedClipCut{"cam_2", 80, 80});
+    CHECK(ClipOps::selectedCamera(state, sel) == &state.cameras[1]);
+
+    sel.select(SelectedClipCut{"cam_2", 80, 120});
+    CHECK(ClipOps::selectedCamera(state, sel) == &state.cameras[1]);
+
+    // Non-camera selections -> nullptr.
+    sel.select(SelectedMarker{"marker_1"});
+    CHECK(ClipOps::selectedCamera(state, sel) == nullptr);
+
+    sel.selectSpeedTrack();
+    CHECK(ClipOps::selectedCamera(state, sel) == nullptr);
+
+    sel.selectAudioTrack("audio_1");
+    CHECK(ClipOps::selectedCamera(state, sel) == nullptr);
+
+    // Stale / missing IDs -> nullptr.
+    sel.select(SelectedCamera{"missing"});
+    CHECK(ClipOps::selectedCamera(state, sel) == nullptr);
+
+    sel.select(SelectedClip{"missing_clip"});
+    CHECK(ClipOps::selectedCamera(state, sel) == nullptr);
+
+    sel.select(SelectedKeyframe{"missing", 10});
+    CHECK(ClipOps::selectedCamera(state, sel) == nullptr);
+
+    sel.select(SelectedClipCut{"missing", 10, 20});
+    CHECK(ClipOps::selectedCamera(state, sel) == nullptr);
+}
+
+void testClipOpsResolveKeyframeTargetCamera() {
+    EditorStateExt state = makeMultiCameraState(200);
+    SelectionModel sel;
+
+    // Explicit camera-owned selections target cam_2 instead of falling back to cam_1.
+    sel.select(SelectedClip{"clip_2a"});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_2");
+
+    sel.select(SelectedCamera{"cam_2"});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_2");
+
+    sel.select(SelectedKeyframe{"cam_2", 50});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_2");
+
+    sel.select(SelectedClipCut{"cam_2", 80, 120});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_2");
+
+    // Disabled but unlocked cam_2 remains targetable when explicitly selected.
+    state.cameras[1].enabled = false;
+    sel.select(SelectedClip{"clip_2a"});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_2");
+    sel.select(SelectedCamera{"cam_2"});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_2");
+    state.cameras[1].enabled = true;
+
+    // Locked cam_2 returns "" without silently falling back to cam_1.
+    state.cameras[1].locked = true;
+    sel.select(SelectedCamera{"cam_2"});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel).empty());
+    sel.select(SelectedClip{"clip_2a"});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel).empty());
+    sel.select(SelectedKeyframe{"cam_2", 50});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel).empty());
+    sel.select(SelectedClipCut{"cam_2", 80, 120});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel).empty());
+    state.cameras[1].locked = false;
+
+    // Empty or non-camera selection falls back to first enabled unlocked, then first unlocked, else "".
+    sel.clear();
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_1");
+
+    sel.select(SelectedMarker{"marker_1"});
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_1");
+
+    state.cameras[0].locked = true;
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_2");
+
+    state.cameras[1].enabled = false;
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_3");
+
+    state.cameras[2].enabled = false;
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel) == "cam_2");
+
+    state.cameras[1].locked = true;
+    state.cameras[2].locked = true;
+    CHECK(ClipOps::resolveKeyframeTargetCamera(state, sel).empty());
+}
+
+void testClipOpsResolveExportToggleClip() {
+    EditorStateExt state = makeMultiCameraState(200);
+    SelectionModel sel;
+
+    // SelectedClip returns that clip directly, even when its camera is locked.
+    state.cameras[1].locked = true;
+    sel.select(SelectedClip{"clip_2a"});
+    {
+        auto const hit = ClipOps::resolveExportToggleClip(state, sel, 150, 200);
+        CHECK(static_cast<bool>(hit));
+        CHECK(hit.camera == &state.cameras[1]);
+        CHECK(hit.clip == &state.cameras[1].clips[0]);
+    }
+    state.cameras[1].locked = false;
+
+    // SelectedCamera / SelectedKeyframe / SelectedClipCut on cam_2 only match cam_2 clips at tick (no spillover).
+    sel.select(SelectedCamera{"cam_2"});
+    {
+        auto const hit = ClipOps::resolveExportToggleClip(state, sel, 40, 200);
+        CHECK(static_cast<bool>(hit));
+        CHECK(hit.camera == &state.cameras[1]);
+        CHECK(hit.clip->id == "clip_2a");
+        CHECK(!ClipOps::resolveExportToggleClip(state, sel, 100, 200));
+    }
+
+    sel.select(SelectedKeyframe{"cam_2", 20});
+    {
+        auto const hit = ClipOps::resolveExportToggleClip(state, sel, 150, 200);
+        CHECK(static_cast<bool>(hit));
+        CHECK(hit.camera == &state.cameras[1]);
+        CHECK(hit.clip->id == "clip_2b");
+        CHECK(!ClipOps::resolveExportToggleClip(state, sel, 100, 200));
+    }
+
+    sel.select(SelectedClipCut{"cam_2", 80, 120});
+    {
+        auto const hit = ClipOps::resolveExportToggleClip(state, sel, 150, 200);
+        CHECK(static_cast<bool>(hit));
+        CHECK(hit.camera == &state.cameras[1]);
+        CHECK(hit.clip->id == "clip_2b");
+        CHECK(!ClipOps::resolveExportToggleClip(state, sel, 100, 200));
+    }
+
+    // Empty selection: prefers unlocked activeClipAt, else first unlocked covering clip, else locked covering clip.
+    sel.clear();
+    state.cameras[1].keysByTick.emplace(0, CameraKeyframe{});
+    {
+        // cam_2 has an active keyframe at tick 40 so activeClipAt picks cam_2 over cam_1.
+        auto const hit = ClipOps::resolveExportToggleClip(state, sel, 40, 200);
+        CHECK(static_cast<bool>(hit));
+        CHECK(hit.camera == &state.cameras[1]);
+        CHECK(hit.clip->id == "clip_2a");
+    }
+
+    // Locking cam_2 makes activeClipAt's hit locked, so fallback chooses first unlocked covering clip (cam_1).
+    state.cameras[1].locked = true;
+    {
+        auto const hit = ClipOps::resolveExportToggleClip(state, sel, 40, 200);
+        CHECK(static_cast<bool>(hit));
+        CHECK(hit.camera == &state.cameras[0]);
+        CHECK(hit.clip->id == "clip_1");
+    }
+
+    // When all covering cameras are locked, returns the first locked covering clip for menu checkmark accuracy.
+    state.cameras[0].locked = true;
+    state.cameras[2].locked = true;
+    {
+        auto const hit = ClipOps::resolveExportToggleClip(state, sel, 40, 200);
+        CHECK(static_cast<bool>(hit));
+        CHECK(hit.camera == &state.cameras[0]);
+        CHECK(hit.clip->id == "clip_1");
+    }
+}
+
 } // namespace
 
 void runTimeOfDayTests();
@@ -824,6 +1029,9 @@ int main() {
     testKeyframeTrackOrbitAngleWrapping();
     testSetCameraKeyframeThirdPersonSettingsMultiTurnAndClamping();
     testFollowModeSuppressesActiveCameraId();
+    testClipOpsSelectedCamera();
+    testClipOpsResolveKeyframeTargetCamera();
+    testClipOpsResolveExportToggleClip();
     runTimeOfDayTests();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " test(s) failed\n";
