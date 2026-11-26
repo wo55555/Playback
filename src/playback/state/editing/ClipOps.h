@@ -95,4 +95,18 @@ void syncTotalTicks(model::EditorStateExt& state, int previousTotalTicks, std::s
 [[nodiscard]] std::vector<model::SelectedClipCut>
 collectCameraClipCuts(model::CameraEntity const& camera, int totalTicks);
 
+[[nodiscard]] model::CameraEntity const*
+selectedCamera(model::EditorStateExt const& state, model::SelectionModel const& selection) noexcept;
+
+[[nodiscard]] std::string
+resolveKeyframeTargetCamera(model::EditorStateExt const& state, model::SelectionModel const& selection);
+
+[[nodiscard]] ClipWithCamera resolveExportToggleClip(
+    model::EditorStateExt const& state,
+    model::SelectionModel const& selection,
+    int                          tick,
+    int                          totalTicks,
+    std::span<int const>         dimensionTransitions = {}
+) noexcept;
+
 } // namespace playback::state::editing::ClipOps

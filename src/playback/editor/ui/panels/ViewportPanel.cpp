@@ -6,6 +6,7 @@
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
 #include "playback/exporting/ExportTypes.h"
+#include "playback/state/editing/ClipOps.h"
 #include "playback/state/editing/TimelineNavigation.h"
 
 #include "imgui.h"
@@ -305,7 +306,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     ImGui::BeginChild("##ViewportToolbar", {width, height}, false, ImGuiWindowFlags_NoScrollbar);
     ImGui::SetCursorPos({metrics::gutter(), (height - metrics::iconButton()) * 0.5f});
 
-    auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
+    auto const* selectedCamera   = project ? state::editing::ClipOps::selectedCamera(*project, ctx.selection) : nullptr;
     bool const  following        = state.followingRecordedPlayer;
     bool        openPlayerPicker = false;
     ImVec2      playerAnchorMin{};
@@ -343,15 +344,11 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         cameraLabel        = state.followThirdPerson ? "playback.refactorEditor.viewport.followSubjectThird"_tr(subject)
                                                      : "playback.refactorEditor.viewport.followSubject"_tr(subject);
         cameraIcon         = state.followThirdPerson ? ICON_USER : ICON_EYE;
-    } else if (project && selectedCamera) {
-        auto const camera =
-            std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
-        if (camera != project->cameras.end()) {
-            cameraLabel = camera->name;
-            if (!camera->keysByTick.empty()) {
-                auto const upper = camera->keysByTick.upper_bound(state.currentTick);
-                if (upper != camera->keysByTick.begin()) cameraIcon = modeIcon(std::prev(upper)->second.mode);
-            }
+    } else if (selectedCamera) {
+        cameraLabel = selectedCamera->name;
+        if (!selectedCamera->keysByTick.empty()) {
+            auto const upper = selectedCamera->keysByTick.upper_bound(state.currentTick);
+            if (upper != selectedCamera->keysByTick.begin()) cameraIcon = modeIcon(std::prev(upper)->second.mode);
         }
     }
     if (widgets::dropdownChip(
@@ -377,7 +374,7 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         if (project && !project->cameras.empty()) ImGui::Separator();
         if (project) {
             for (auto const& camera : project->cameras) {
-                bool const        current = !following && selectedCamera && selectedCamera->cameraId == camera.id;
+                bool const        current = !following && selectedCamera && selectedCamera->id == camera.id;
                 std::string const label   = camera.name + "##cam-" + camera.id;
                 if (ImGui::MenuItem(label.c_str(), nullptr, current)) {
                     ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
@@ -529,10 +526,10 @@ void ViewportPanel::drawInfoOverlay(PanelContext const& ctx, ImVec2 const& video
     auto const& timeline = ctx.state.cameraTimeline;
     if (!timeline) return;
 
-    auto const*                     selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
+    auto const* selectedCamera =
+        ctx.state.project ? state::editing::ClipOps::selectedCamera(*ctx.state.project, ctx.selection) : nullptr;
     visuals::ReplaySampleTime const time{std::max(0, ctx.state.currentTick), 1};
-    auto const                      sample =
-        selectedCamera ? timeline->sampleCameraById(selectedCamera->cameraId, time) : timeline->sample(time);
+    auto const sample = selectedCamera ? timeline->sampleCameraById(selectedCamera->id, time) : timeline->sample(time);
     if (!sample) return;
 
     auto const& pose = sample->state;
