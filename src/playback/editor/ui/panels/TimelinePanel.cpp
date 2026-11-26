@@ -222,17 +222,9 @@ std::optional<std::string> findSplittableClip(
         return std::nullopt;
     }
 
-    std::string selectedCameraId;
-    if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
-        selectedCameraId = selectedCamera->cameraId;
-    } else if (auto const* selectedKeyframe = selection.getAs<state::editing::model::SelectedKeyframe>()) {
-        selectedCameraId = selectedKeyframe->trackId;
-    }
-    if (!selectedCameraId.empty()) {
-        auto const camIt =
-            std::ranges::find(project.cameras, selectedCameraId, &state::editing::model::CameraEntity::id);
-        if (camIt != project.cameras.end() && !camIt->locked) {
-            for (auto const& clip : camIt->clips) {
+    if (auto const* selectedCamera = state::editing::ClipOps::selectedCamera(project, selection)) {
+        if (!selectedCamera->locked) {
+            for (auto const& clip : selectedCamera->clips) {
                 if (!clip.locked && clip.inTick < tick && tick < clip.outTick) {
                     return clip.id;
                 }
@@ -311,25 +303,17 @@ std::optional<ClipTrimTarget> findTrimmableClip(
         return tryMakeTrimTarget(*hit.camera, *hit.clip, playhead, totalTicks, trimIn);
     }
 
-    std::string selectedCameraId;
-    if (auto const* selectedCamera = selection.getAs<state::editing::model::SelectedCamera>()) {
-        selectedCameraId = selectedCamera->cameraId;
-    } else if (auto const* selectedKeyframe = selection.getAs<state::editing::model::SelectedKeyframe>()) {
-        selectedCameraId = selectedKeyframe->trackId;
-    }
-    if (!selectedCameraId.empty()) {
-        auto const camIt =
-            std::ranges::find(project.cameras, selectedCameraId, &state::editing::model::CameraEntity::id);
-        if (camIt == project.cameras.end() || camIt->locked) return std::nullopt;
-        for (auto const& clip : camIt->clips) {
+    if (auto const* selectedCamera = state::editing::ClipOps::selectedCamera(project, selection)) {
+        if (selectedCamera->locked) return std::nullopt;
+        for (auto const& clip : selectedCamera->clips) {
             if (!clip.locked && clip.inTick < playhead && playhead < clip.outTick) {
-                return tryMakeTrimTarget(*camIt, clip, playhead, totalTicks, trimIn);
+                return tryMakeTrimTarget(*selectedCamera, clip, playhead, totalTicks, trimIn);
             }
         }
         // In a gap on the selected camera: trimIn extends the next clip left, trimOut extends the previous clip right.
-        for (auto const& clip : camIt->clips) {
+        for (auto const& clip : selectedCamera->clips) {
             if (clip.locked) continue;
-            auto const [minIn, maxOut] = clipBoundsOnCamera(*camIt, clip, totalTicks);
+            auto const [minIn, maxOut] = clipBoundsOnCamera(*selectedCamera, clip, totalTicks);
             if (trimIn && minIn <= playhead && playhead < clip.inTick) {
                 return ClipTrimTarget{clip.id, playhead, clip.outTick};
             }
@@ -806,30 +790,8 @@ bool TimelinePanel::addKeyframeAtPlayhead(PanelContext const& ctx) {
 
 // Resolves a target track so the shortcut works without a prior selection.
 std::string TimelinePanel::resolveKeyframeTargetCamera(PanelContext const& ctx) const {
-    auto const project = ctx.state.project;
-    if (!project) return {};
-
-    auto const isUsable = [&](std::string const& id) {
-        return std::ranges::any_of(project->cameras, [&](auto const& camera) {
-            return camera.id == id && !camera.locked;
-        });
-    };
-
-    if (auto const* selected = ctx.selection.getAs<state::editing::model::SelectedCamera>();
-        selected && isUsable(selected->cameraId)) {
-        return selected->cameraId;
-    }
-    if (auto const* selected = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
-        selected && isUsable(selected->trackId)) {
-        return selected->trackId;
-    }
-    for (auto const& camera : project->cameras) {
-        if (camera.enabled && !camera.locked) return camera.id;
-    }
-    for (auto const& camera : project->cameras) {
-        if (!camera.locked) return camera.id;
-    }
-    return {};
+    if (!ctx.state.project) return {};
+    return state::editing::ClipOps::resolveKeyframeTargetCamera(*ctx.state.project, ctx.selection);
 }
 
 bool TimelinePanel::canAddKeyframeAtPlayhead(PanelContext const& ctx) const {
@@ -1143,8 +1105,10 @@ bool TimelinePanel::copySelection(PanelContext const& ctx) {
 }
 
 bool TimelinePanel::pasteAtPlayhead(PanelContext const& ctx) {
-    int const tick = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
-    return pasteKeyframes(ctx, tick, resolveKeyframeTargetCamera(ctx));
+    int const         tick   = mPendingSeekTick >= 0 ? mPendingSeekTick : ctx.state.currentTick;
+    std::string const target = resolveKeyframeTargetCamera(ctx);
+    if (target.empty()) return false;
+    return pasteKeyframes(ctx, tick, target);
 }
 
 bool TimelinePanel::pasteKeyframes(PanelContext const& ctx, int anchorTick, std::string const& targetCameraId) {
@@ -2667,18 +2631,10 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
     drawList->PushClipRect({listLeft, layout.camerasTop}, {listLeft + listW, layout.bodyBottom}, true);
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) mTrackDragCancelled = false;
 
-    auto const* selectedCamera       = ctx.selection.getAs<state::editing::model::SelectedCamera>();
-    auto const* selectedKeyframe     = ctx.selection.getAs<state::editing::model::SelectedKeyframe>();
-    auto const  selectedAudioTrackId = ctx.selection.selectedAudioTrackId();
-    auto const  selectedAudioClip    = ctx.selection.selectedAudioClip();
-    std::string selectedClipCameraId;
-    if (project) {
-        if (auto const* selectedClip = ctx.selection.getAs<state::editing::model::SelectedClip>()) {
-            if (auto const hit = state::editing::ClipOps::findClipWithCamera(*project, selectedClip->clipId)) {
-                selectedClipCameraId = hit.camera->id;
-            }
-        }
-    }
+    auto const* selectedCameraRow =
+        project ? state::editing::ClipOps::selectedCamera(*project, ctx.selection) : nullptr;
+    auto const selectedAudioTrackId = ctx.selection.selectedAudioTrackId();
+    auto const selectedAudioClip    = ctx.selection.selectedAudioClip();
     bool   openTrackMenu = false;
     ImVec2 trackMenuMin{};
     ImVec2 trackMenuMax{};
@@ -2726,10 +2682,7 @@ void TimelinePanel::drawTrackHeaders(PanelContext const& ctx, Layout const& layo
                 ? (ctx.selection.isWeatherTrackSelected() || !ctx.selection.selectedWeatherKeyframes().empty())
             : isAudioRow ? ((selectedAudioTrackId && *selectedAudioTrackId == row.id)
                             || (selectedAudioClip && selectedAudioClip->trackId == row.id))
-                         : (!row.cameraId.empty()
-                            && ((selectedCamera && selectedCamera->cameraId == row.cameraId)
-                                || (selectedKeyframe && selectedKeyframe->trackId == row.cameraId)
-                                || (!selectedClipCameraId.empty() && selectedClipCameraId == row.cameraId)));
+                         : (!row.cameraId.empty() && selectedCameraRow && selectedCameraRow->id == row.cameraId);
 
         ImGui::SetCursorScreenPos({listLeft, rowY});
         ImGui::InvisibleButton(("##track-row-" + row.id).c_str(), {listW, row.height});
