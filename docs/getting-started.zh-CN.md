@@ -8,11 +8,11 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 | Minecraft / LeviLamina | Playback 版本                                                                       |
 | ---------------------- | ----------------------------------------------------------------------------------- |
-| `26.10.*`              | [`v0.4.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.10) |
-| `26.20.*`              | [`v0.4.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.20) |
-| `26.40.*`              | [`v0.4.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.40) |
-| `26.51.*`              | [`v0.4.1-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.50) |
-| `26.60.*`              | [`v0.4.1-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.60) |
+| `26.10.*`              | [`v0.4.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.10) |
+| `26.20.*`              | [`v0.4.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.20) |
+| `26.40.*`              | [`v0.4.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.40) |
+| `26.51.*`              | [`v0.4.2-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.50) |
+| `26.60.*`              | [`v0.4.2-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.60) |
 
 上表五条发行线均为预发布版本，请仅安装与当前实例匹配的版本。`mc26.50` 对应 Minecraft 26.51；`mc26.60` 构建严格要求 Minecraft `1.26.60.5`。26.40 的依赖范围为 `>=26.40.5 <26.50.0`。
 
@@ -23,7 +23,7 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 > 日常使用建议选择原版标准／精美画质。光线追踪和灵动视效（Vibrant Visuals）已进行针对性的导出测试，但仍属实验性路径。部分导出的规则网格／抖动图案，以及偶发的原生维度加载警告仍在调查中。
 
 > [!CAUTION]
-> `v0.4.1` 在各发行线上仍是预发布版本。早于 `v0.4.0` 的录像不再支持，必须重新录制；程序可能无法识别旧归档的不兼容性。相机切换轨道已移除，旧编辑器工程中的切换轨道数据会被丢弃。升级前请备份录像和工程，不提供迁移功能。
+> `v0.4.2` 在各发行线上仍是预发布版本。早于 `v0.4.0` 的录像不再支持，必须重新录制；程序可能无法识别旧归档的不兼容性。相机切换轨道已移除，旧编辑器工程中的切换轨道数据会被丢弃。升级前请备份录像和工程，不提供迁移功能。
 
 ## 使用 LeviLauncher 和 Lip 安装
 
@@ -67,19 +67,19 @@ Playback 是面向 Windows x64 的 LeviLamina 纯客户端模组。安装时必�
 
 ```powershell
 # Minecraft / LeviLamina 26.10
-lip install github.com/wo55555/Playback@0.4.1-mc26.10#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.10#client
 
 # Minecraft / LeviLamina 26.20
-lip install github.com/wo55555/Playback@0.4.1-mc26.20#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.20#client
 
 # Minecraft / LeviLamina 26.40
-lip install github.com/wo55555/Playback@0.4.1-mc26.40#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.40#client
 
 # Minecraft / LeviLamina 26.51
-lip install github.com/wo55555/Playback@0.4.1-mc26.50#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.50#client
 
 # Minecraft 1.26.60.5 / LeviLamina 26.60
-lip install github.com/wo55555/Playback@0.4.1-mc26.60#client
+lip install github.com/wo55555/Playback@0.4.2-mc26.60#client
 ```
 
 > [!NOTE]
