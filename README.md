@@ -5,7 +5,7 @@
   <p>An open-source Minecraft Bedrock replay recorder and cinematic camera editor for LeviLamina on Windows, with experimental video export.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/release-v0.4.1-4c8bf5?style=flat-square" alt="Playback v0.4.1">
+    <img src="https://img.shields.io/badge/release-v0.4.2-4c8bf5?style=flat-square" alt="Playback v0.4.2">
     <img src="https://img.shields.io/badge/Minecraft%20Bedrock-Windows%20x64-62b47a?style=flat-square" alt="Minecraft Bedrock for Windows x64">
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 license"></a>
   </p>
@@ -95,9 +95,9 @@ See the [installation and usage guide](docs/getting-started.md) for screenshots,
 
 ## Latest Changes
 
-`v0.4.1` brings multi-scene workspaces and clip-based camera-track editing to MC 26.10, MC 26.20, MC 26.40, MC 26.51, and MC 26.60. Each scene holds its own camera tracks, markers, and export range, and clips support splitting, trimming, reordering track priority, muting, and per-clip playback speeds from `0.05x` to `32x` with an option to keep camera motion at 1x. First- and third-person tracks are replaced by per-keyframe lens modes, adding custom third-person orbit interpolation (`3P+`), entity look-at (`Aim`) for interpolated free-camera keyframes, cubic bezier curves, and a refined property inspector.
+`v0.4.2` expands the timeline editor across MC 26.10, MC 26.20, MC 26.40, MC 26.51, and MC 26.60 with on-demand Speed, Freeze, Timelapse, multi-track Audio, Time of Day, and Weather tracks, alongside per-scene World Environment overrides. Speed control moves from camera clips to the Speed track (`0.01x` to `32x`) with cubic Bezier curves, while Freeze and Timelapse tracks control world pauses and interval mapping, external audio tracks mix WAV and FFmpeg-decoded audio into preview and export, and undo/redo expands to 256 steps with a History submenu and `.pbproj.old` backup recovery.
 
-Video export adds Timelapse mode along with scene-based, single-clip, merged-clip, and batch scene exports. This release also fixes repeated dimension transitions, trade and screen preview seeks, custom blocks with custom components, entity bounding boxes and fire placement, editor preview camera roll, observer flight slowdown, and input-locked free-camera stalls. See the limitations below before using experimental renderer paths.
+This release also adds Box Select (`B`), two-stage `Home`/`End` and `Up`/`Down` edit-point navigation, an interactive Export In/Out transport control, a live searchable subject picker, a redesigned inspector and toolbar, and a toggle to disable server resource packs on replay load. Fixes resolve overlay visibility with third-party DXGI hooks such as RTSS, held weapons and player skins (including under "Only Allow Trusted Skins"), elytra gliding posture, stationary daylight-cycle worlds, snapshot entity positions, vehicle riding sync, and selected camera track targeting. See the limitations below before using experimental renderer paths.
 
 > [!CAUTION]
 > Playback releases are still prereleases and may make incompatible format or configuration changes. Replays recorded before `v0.4.0` are not supported and must be recorded again; older archives may not be detected as incompatible. The camera switch track was removed, and its data in earlier editor projects is dropped. Back up existing recordings and projects before upgrading; no migration is provided.
@@ -109,15 +109,15 @@ See the full [changelog](CHANGELOG.md) for release history and detailed changes.
 
 ## Compatibility
 
-Playback maintains five separate `0.4.1` prerelease lines. Install only the release that matches your Minecraft and LeviLamina runtime; the release suffix is not always the game version.
+Playback maintains five separate `0.4.2` prerelease lines. Install only the release that matches your Minecraft and LeviLamina runtime; the release suffix is not always the game version.
 
 | Minecraft / LeviLamina | Playback release                                                                    | Status     |
 | ---------------------- | ----------------------------------------------------------------------------------- | ---------- |
-| `26.10.*`              | [`v0.4.1-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.10) | Prerelease |
-| `26.20.*`              | [`v0.4.1-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.20) | Prerelease |
-| `26.40.*`              | [`v0.4.1-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.40) | Prerelease |
-| `26.51.*`              | [`v0.4.1-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.50) | Prerelease |
-| `26.60.*`              | [`v0.4.1-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.1-mc26.60) | Prerelease |
+| `26.10.*`              | [`v0.4.2-mc26.10`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.10) | Prerelease |
+| `26.20.*`              | [`v0.4.2-mc26.20`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.20) | Prerelease |
+| `26.40.*`              | [`v0.4.2-mc26.40`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.40) | Prerelease |
+| `26.51.*`              | [`v0.4.2-mc26.50`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.50) | Prerelease |
+| `26.60.*`              | [`v0.4.2-mc26.60`](https://github.com/wo55555/Playback/releases/tag/v0.4.2-mc26.60) | Prerelease |
 
 All release lines target Minecraft Bedrock for Windows x64 and are distributed as client-only mods. The `mc26.50` line targets Minecraft 26.51. The `mc26.60` build requires exactly Minecraft `1.26.60.5`; other 26.60 game builds are not supported. The 26.40 dependency range is `>=26.40.5 <26.50.0`.
 
@@ -166,7 +166,7 @@ No. Every recorded dimension change splits the camera timeline, including transi
 
 ### Which Playback build should I install?
 
-Use the matching entry in [Compatibility](#compatibility). In particular, Minecraft 26.51 uses `v0.4.1-mc26.50`, and `v0.4.1-mc26.60` supports only Minecraft `1.26.60.5`. Do not mix release lines.
+Use the matching entry in [Compatibility](#compatibility). In particular, Minecraft 26.51 uses `v0.4.2-mc26.50`, and `v0.4.2-mc26.60` supports only Minecraft `1.26.60.5`. Do not mix release lines.
 
 ## Development Status and Roadmap
 
