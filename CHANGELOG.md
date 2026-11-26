@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replays recorded in worlds with the daylight cycle disabled now keep their recorded sun and moon time stationary during preview and export instead of advancing automatically.
 - Dropped items and non-player entities captured in snapshots or spawned mid-recording now appear at their current positions and orientations instead of resetting to where they originally spawned.
 - Players and entities riding boats, minecarts, horses, and other vehicles now stay synchronized with their vehicle across mid-recording snapshots, playback, and first-person or third-person follow cameras without jittering or drifting.
+- Adding or pasting keyframes, splitting or trimming clips, toggling clip export inclusion, and showing the selected camera in the viewport now consistently target the selected non-topmost camera track when clicking a clip, keyframe, or cut seam on that track, and no longer silently fall back to another camera track when the selected camera track is locked.
 
 ## [0.4.1-mc26.10] - 2026-11-22
 

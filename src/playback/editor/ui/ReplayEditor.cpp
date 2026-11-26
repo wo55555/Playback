@@ -501,58 +501,20 @@ bool ReplayEditor::trimClipAtPlayhead(bool trimIn) { return mTimelinePanel.trimC
 bool ReplayEditor::toggleSelectedClipExport() {
     auto const project = state().project;
     if (!project) return false;
-    int const tick       = state().currentTick;
-    int const totalTicks = state().totalTicks;
-
-    state::editing::model::Clip const* clip = nullptr;
-    if (auto const* selectedClip = mSelection.getAs<state::editing::model::SelectedClip>()) {
-        if (auto const hit = state::editing::ClipOps::findClipWithCamera(*project, selectedClip->clipId);
-            hit && !hit.camera->locked) {
-            clip = hit.clip;
-        }
-    } else {
-        std::string selectedCameraId;
-        if (auto const* selectedCamera = mSelection.getAs<state::editing::model::SelectedCamera>()) {
-            selectedCameraId = selectedCamera->cameraId;
-        } else if (auto const* selectedKeyframe = mSelection.getAs<state::editing::model::SelectedKeyframe>()) {
-            selectedCameraId = selectedKeyframe->trackId;
-        }
-        if (!selectedCameraId.empty()) {
-            auto const camIt =
-                std::ranges::find(project->cameras, selectedCameraId, &state::editing::model::CameraEntity::id);
-            if (camIt != project->cameras.end() && !camIt->locked) {
-                for (auto const& candidate : camIt->clips) {
-                    if (state::editing::ClipOps::clipCoversTick(candidate, tick, totalTicks)) {
-                        clip = &candidate;
-                        break;
-                    }
-                }
-            }
-        } else {
-            static std::vector<int> const emptyTransitions;
-            auto const&                   transitions =
-                state().cameraTimeline ? state().cameraTimeline->dimensionTransitionTicks() : emptyTransitions;
-            if (auto const active = state::editing::ClipOps::activeClipAt(*project, tick, false, transitions);
-                active && !active.camera->locked) {
-                clip = active.clip;
-            } else {
-                for (auto const& camera : project->cameras) {
-                    if (camera.locked) continue;
-                    for (auto const& candidate : camera.clips) {
-                        if (state::editing::ClipOps::clipCoversTick(candidate, tick, totalTicks)) {
-                            clip = &candidate;
-                            break;
-                        }
-                    }
-                    if (clip) break;
-                }
-            }
-        }
-    }
-    if (!clip) return false;
+    static std::vector<int> const emptyTransitions;
+    auto const&                   transitions =
+        state().cameraTimeline ? state().cameraTimeline->dimensionTransitionTicks() : emptyTransitions;
+    auto const hit = state::editing::ClipOps::resolveExportToggleClip(
+        *project,
+        mSelection,
+        state().currentTick,
+        state().totalTicks,
+        transitions
+    );
+    if (!hit || hit.camera->locked) return false;
     playback::state::EditorAction action{playback::state::EditorActionType::SetClipExportEnabled};
-    action.id    = clip->id;
-    action.value = !clip->exportEnabled;
+    action.id    = hit.clip->id;
+    action.value = !hit.clip->exportEnabled;
     submitAction(std::move(action));
     return true;
 }
