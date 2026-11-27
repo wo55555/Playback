@@ -7,13 +7,16 @@
 #include "playback/state/editing/models/SelectionModel.h"
 #include "playback/visuals/ReplayHudVisibility.h"
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <utility>
 
 namespace playback::editor::ui {
 
-enum class TimelineTool { Select, Razor, Pen };
+enum class TimelineTool { Select, BoxSelect, Razor, Pen };
+
+enum class ShortcutKeyframeLensMode { FreeCamera, MatchPreview };
 
 using SubmitAction = std::function<void(playback::state::EditorAction)>;
 
@@ -24,6 +27,8 @@ public:
 
     virtual void               seekTo(int tick)            = 0;
     virtual void               seekRelative(int tickDelta) = 0;
+    virtual void                       undo(std::size_t steps = 1)        = 0;
+    virtual void                       redo(std::size_t steps = 1)        = 0;
     virtual void               toggleViewportMaximized()   = 0;
     [[nodiscard]] virtual bool isViewportMaximized() const = 0;
     virtual void               toggleCameraPath()          = 0;
@@ -77,6 +82,18 @@ public:
     virtual void               setPreviewAudioVolume(float volume, bool commit) = 0;
     [[nodiscard]] virtual bool isPreviewSilentWhilePaused() const               = 0;
     virtual void               setPreviewSilentWhilePaused(bool silent)         = 0;
+
+    [[nodiscard]] virtual ShortcutKeyframeLensMode shortcutKeyframeLensMode() const                           = 0;
+    virtual void                                   setShortcutKeyframeLensMode(ShortcutKeyframeLensMode mode) = 0;
+    virtual void adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance)                = 0;
+    virtual void resetThirdPersonOrbit()                                                                      = 0;
+    virtual void                                   showSelectionInspector()                                   = 0;
+    virtual void                                   focusCameraKeyframe(std::string const& cameraId, int tick) = 0;
+    virtual void                                   focusSpeedKeyframe(int tick)                               = 0;
+    virtual void                                   focusFreezeKeyframe(int tick)                              = 0;
+    virtual void                                   focusTimelapseKeyframe(int tick)                           = 0;
+    virtual void                                   focusTimeOfDayKeyframe(int tick)                           = 0;
+    virtual void                                   focusWeatherKeyframe(int tick)                             = 0;
 };
 
 // Everything a panel needs for one frame, so panels stay callable without the editor singleton.

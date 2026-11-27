@@ -5,9 +5,12 @@
 #include "playback/editor/input/EditorInput.h"
 #include "playback/integration/OptiPistonBridge.h"
 #include "playback/io/ReplayResourcePacks.h"
+#include "playback/keyframe/CameraFollowMath.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
+#include "playback/keyframe/FreezeTimelineEvaluator.h"
 #include "playback/packet/PacketLifecycle.h"
 #include "playback/runtime/ClientTickHooks.h"
+#include "playback/visuals/ReplayAttachableHooks.h"
 #include "playback/visuals/ReplayContainerKeepOpenHook.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
 #include "playback/visuals/ReplayFirstPersonHandHooks.h"
@@ -29,6 +32,7 @@
 #include "mc/client/particlesystem/particle/ParticleSystemEngine.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/game/LevelRenderer.h"
+#include "mc/client/renderer/game/LevelRendererPlayer.h"
 #include "mc/deps/core/file/Path.h"
 #include "mc/deps/core/file/PathView.h"
 #include "mc/deps/core/resource/ResourceLocation.h"
@@ -38,18 +42,22 @@
 #include "mc/deps/ecs/strict/StrictEntityContext.h"
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/IntTag.h"
+#include "mc/deps/shared_types/legacy/LevelEvent.h"
 #include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/deps/vanilla_components/OnGroundFlagComponent.h"
 #include "mc/deps/vanilla_components/PlayerBobComponent.h"
 #include "mc/entity/components/ActorHeadRotationComponent.h"
 #include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/entity/components/DynamicRenderOffsetComponent.h"
+#include "mc/entity/components/FallFlyTicksComponent.h"
 #include "mc/entity/components/ItemInUseComponent.h"
 #include "mc/entity/components/ItemInUseTicksDuringMovementComponent.h"
 #include "mc/entity/components/LocalPlayerDimensionWaitComponent.h"
 #include "mc/entity/components/MobBodyRotationComponent.h"
 #include "mc/entity/components/MovementInterpolatorComponent.h"
 #include "mc/entity/components/MovementWasCorrectedComponent.h"
+#include "mc/entity/components/RenderPositionComponent.h"
+#include "mc/entity/components/RenderRotationComponent.h"
 #include "mc/entity/components/WalkDistComponent.h"
 #include "mc/entity/systems/HardcodedAnimationSystem.h"
 #include "mc/network/IPacketHandlerDispatcher.h"
@@ -67,11 +75,13 @@
 #include "mc/network/packet/ContainerOpenPacket.h"
 #include "mc/network/packet/ContainerSetDataPacket.h"
 #include "mc/network/packet/DimensionDataPacket.h"
+#include "mc/network/packet/GameRulesChangedPacket.h"
 #include "mc/network/packet/InventoryContentPacket.h"
 #include "mc/network/packet/InventorySlotPacket.h"
 #include "mc/network/packet/ItemData.h"
 #include "mc/network/packet/ItemRegistryPacket.h"
 #include "mc/network/packet/LevelChunkPacket.h"
+#include "mc/network/packet/LevelEventPacket.h"
 #include "mc/network/packet/MobEquipmentPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/MovePlayerPacket.h"
@@ -115,6 +125,7 @@
 #include "mc/world/actor/player/PlayerListEntry.h"
 #include "mc/world/actor/player/SerializedSkinImpl.h"
 #include "mc/world/actor/player/SerializedSkinRef.h"
+#include "mc/world/actor/player/TrustedSkinFlag.h"
 #include "mc/world/attribute/Attribute.h"
 #include "mc/world/attribute/AttributeData.h"
 #include "mc/world/attribute/AttributeInstance.h"
@@ -130,9 +141,11 @@
 #include "mc/world/item/registry/ItemRegistryRef.h"
 #include "mc/world/level/BlockPalette.h"
 #include "mc/world/level/BlockSource.h"
+#include "mc/world/level/DaylightCycle.h"
 #include "mc/world/level/DimensionManager.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/level/LevelSettings.h"
+#include "mc/world/level/Weather.h"
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/block/BlockRenderLayer.h"
 #include "mc/world/level/block/BlockType.h"
@@ -155,6 +168,9 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/dimension/DimensionArguments.h"
 #include "mc/world/level/saveddata/maps/MapItemSavedData.h"
+#include "mc/world/level/storage/GameRule.h"
+#include "mc/world/level/storage/GameRuleId.h"
+#include "mc/world/level/storage/GameRules.h"
 #include "mc/world/level/storage/ILevelListCache.h"
 #include "mc/world/level/storage/LevelData.h"
 #include "mc/world/phys/HitResult.h"
@@ -170,6 +186,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -312,6 +329,54 @@ visuals::EntityRenderPose replayRenderPose(Actor const& actor) {
     return {replayRenderPosition(actor.getPosition()), rotation.x, rotation.y, headYaw, bodyYaw};
 }
 
+void syncReplayRenderTransform(Actor& actor, Vec3 const& position, Vec2 const& rotation) {
+    auto& context = actor.getEntityContext();
+    if (auto renderPos = context.tryGetComponent<RenderPositionComponent>()) renderPos->mValue = position;
+    if (auto renderRot = context.tryGetComponent<RenderRotationComponent>()) renderRot->mRot = rotation;
+}
+
+std::vector<visuals::EntityRenderTarget> collectEntityRenderTargets(
+    Level&                                                             level,
+    std::unordered_map<ActorUniqueID, visuals::EntityRenderKey> const& renderKeys
+) {
+    std::vector<visuals::EntityRenderTarget> targets;
+    targets.reserve(renderKeys.size());
+    for (auto const& [id, key] : renderKeys) {
+        targets.push_back({key, level.fetchEntity(id, false)});
+    }
+    return targets;
+}
+
+bool equalsIgnoreCase(std::string_view left, std::string_view right) noexcept {
+    if (left.size() != right.size()) return false;
+    for (size_t index = 0; index < left.size(); ++index) {
+        if (std::tolower(static_cast<unsigned char>(left[index]))
+            != std::tolower(static_cast<unsigned char>(right[index]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void lockReplayWorldRules(GameRules& gameRules) {
+    gameRules.setRule(
+        GameRuleId{static_cast<int>(GameRules::GameRulesIndex::DoDaylightCycle)},
+        false,
+        false,
+        nullptr,
+        nullptr,
+        nullptr
+    );
+    gameRules.setRule(
+        GameRuleId{static_cast<int>(GameRules::GameRulesIndex::DoWeatherCycle)},
+        false,
+        false,
+        nullptr,
+        nullptr,
+        nullptr
+    );
+}
+
 void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 const& rotation, float headYaw) {
     // Pin the pose directly so the vanilla movement system cannot re-apply the previous one.
     actor.mBuiltInComponents->mStateVectorComponent->mPos       = position;
@@ -319,6 +384,7 @@ void cancelNativeMovementInterpolation(Actor& actor, Vec3 const& position, Vec2 
     actor.mBuiltInComponents->mStateVectorComponent->mPosDelta  = Vec3{};
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    syncReplayRenderTransform(actor, position, rotation);
     visuals::syncReplayEntityBoundingBox(actor, position);
 
     auto& context = actor.getEntityContext();
@@ -441,6 +507,16 @@ void keepRecordedAttributes(FollowedHudMirror& mirror, UpdateAttributesPacket co
 // Bedrock's WalkDistComponent advances by exactly the horizontal distance moved (measured live, ratio 1.000).
 constexpr float WalkDistancePerBlock = 1.0f;
 
+bool hasUsableReplaySkin(SerializedSkinRef const& skin) {
+    if (!skin.mSkinImpl) return false;
+    auto const& image = *skin.mSkinImpl->mObject.mSkinImage;
+    if (image.mWidth == 0 || image.mHeight == 0 || image.mWidth > 4096 || image.mHeight > 4096) {
+        return false;
+    }
+    auto const expectedBytes = static_cast<size_t>(image.mWidth) * static_cast<size_t>(image.mHeight) * 4u;
+    return image.mImageBytes.size() == expectedBytes;
+}
+
 // Items flagged to tick during movement (trident) are skipped by the normal use-duration system, and a replayed
 // player has no move request to drive the movement one.
 void tickReplayItemUse(Actor& actor) {
@@ -477,6 +553,26 @@ void updateReplayHandBob(Actor& actor, float horizontalSpeed) {
     bob->mBob         += (target - bob->mBob) * 0.08f;
 }
 
+// GlideInputSystem only ticks players with a local/server input request, leaving RemotePlayer::FallFlyTicksComponent
+// stuck at 0 so getDamageOrGlidingXYRotation keeps the gliding body nearly upright.
+constexpr int FullGlideFallFlyTicks = 10;
+
+void updateReplayGlidingTicks(Player& player, bool snapToFull) {
+    auto& context = player.getEntityContext();
+    auto  fallFly = context.tryGetComponent<FallFlyTicksComponent>();
+    if (!fallFly) {
+        context.getRegistry().emplace<FallFlyTicksComponent>(context.mEntity);
+        fallFly = context.tryGetComponent<FallFlyTicksComponent>();
+        if (!fallFly) return;
+    }
+    int& ticks = fallFly->mValue;
+    if (player.getStatusFlag(ActorFlags::Gliding)) {
+        ticks = snapToFull ? std::max(ticks, FullGlideFallFlyTicks) : (ticks + 1);
+    } else {
+        ticks = 0;
+    }
+}
+
 void applyReplayEntityMovement(
     Actor&                           actor,
     Vec3 const&                      position,
@@ -498,21 +594,33 @@ void applyReplayEntityMovement(
         position.y - previousPosition.y,
         position.z - previousPosition.z,
     };
-    if (auto walk = actor.mBuiltInComponents->mWalkAnimationComponent.get()) {
-        HardcodedAnimationSystem::computeMovementThisTick(state, *walk);
-    }
-    // The native system needs a move request the replayed player never has; query.walk_distance drives the hand bob.
-    if (actor.isPlayer()) {
-        float const horizontal = std::hypot(state.mPosDelta->x, state.mPosDelta->z);
-        if (auto distance = actor.getEntityContext().tryGetComponent<WalkDistComponent>()) {
-            distance->mPrevious  = distance->mCurrent;
-            distance->mCurrent  += horizontal * WalkDistancePerBlock;
+    if (actor.isRiding()) {
+        if (actor.isPlayer()) {
+            if (auto distance = actor.getEntityContext().tryGetComponent<WalkDistComponent>()) {
+                distance->mPrevious = distance->mCurrent;
+            }
+            updateReplayHandBob(actor, 0.0f);
+            gReplayHandBobTick[actor.getOrCreateUniqueID().rawID] = tick;
         }
-        updateReplayHandBob(actor, horizontal);
-        gReplayHandBobTick[actor.getOrCreateUniqueID().rawID] = tick;
+    } else {
+        if (auto walk = actor.mBuiltInComponents->mWalkAnimationComponent.get()) {
+            HardcodedAnimationSystem::computeMovementThisTick(state, *walk);
+        }
+        // The native system needs a move request the replayed player never has; query.walk_distance drives the hand
+        // bob.
+        if (actor.isPlayer()) {
+            float const horizontal = std::hypot(state.mPosDelta->x, state.mPosDelta->z);
+            if (auto distance = actor.getEntityContext().tryGetComponent<WalkDistComponent>()) {
+                distance->mPrevious  = distance->mCurrent;
+                distance->mCurrent  += horizontal * WalkDistancePerBlock;
+            }
+            updateReplayHandBob(actor, horizontal);
+            gReplayHandBobTick[actor.getOrCreateUniqueID().rawID] = tick;
+        }
     }
     actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
     actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    syncReplayRenderTransform(actor, position, rotation);
     visuals::syncReplayEntityBoundingBox(actor, position);
 
     auto const interpolator = actor.getEntityContext().tryGetComponent<MovementInterpolatorComponent>();
@@ -523,6 +631,68 @@ void applyReplayEntityMovement(
     interpolator->mPositionSteps = 0;
     interpolator->mRotationSteps = 0;
     interpolator->mHeadYawSteps  = 0;
+}
+
+void applyReplayRidingMovement(
+    Actor&      actor,
+    Vec3 const& position,
+    Vec2 const& rotation,
+    float       headYaw,
+    float       bodyYaw,
+    bool        onGround,
+    bool        snapMovement,
+    int         tick
+) {
+    actor.mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
+    actor.mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
+    pinReplayEntityHeadRotation(actor, headYaw, bodyYaw);
+
+    auto& entityContext = actor.getEntityContext();
+    if (auto renderRotation = entityContext.tryGetComponent<RenderRotationComponent>()) {
+        renderRotation->mRot = rotation;
+    }
+
+    if (onGround) {
+        if (!entityContext.hasComponent<OnGroundFlagComponent>()) {
+            entityContext.getRegistry().emplace<OnGroundFlagComponent>(entityContext.mEntity);
+        }
+    } else {
+        entityContext.removeComponent<OnGroundFlagComponent>();
+    }
+
+    if (auto interpolator = entityContext.tryGetComponent<MovementInterpolatorComponent>()) {
+        *interpolator->mRot          = rotation;
+        interpolator->mHeadYaw       = headYaw;
+        interpolator->mRotationSteps = 0;
+        interpolator->mHeadYawSteps  = 0;
+    }
+
+    if (actor.isPlayer()) {
+        updateReplayHandBob(actor, 0.0f);
+        gReplayHandBobTick[actor.getOrCreateUniqueID().rawID] = tick;
+        if (auto distance = entityContext.tryGetComponent<WalkDistComponent>()) {
+            distance->mPrevious = distance->mCurrent;
+        }
+    }
+
+    if (snapMovement) {
+        Actor* vehicle        = actor.getVehicle();
+        bool   farFromVehicle = false;
+        if (vehicle) {
+            Vec3 const delta = actor.getPosition() - vehicle->getPosition();
+            farFromVehicle   = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z > 16.0f;
+        }
+        if (!vehicle || farFromVehicle) {
+            auto& state     = *actor.mBuiltInComponents->mStateVectorComponent;
+            state.mPos      = position;
+            state.mPosPrev  = position;
+            state.mPosDelta = Vec3{};
+            if (auto renderPosition = entityContext.tryGetComponent<RenderPositionComponent>()) {
+                renderPosition->mValue = position;
+            }
+            visuals::syncReplayEntityBoundingBox(actor, position);
+        }
+    }
 }
 
 std::string createReplayLevelId() {
@@ -777,16 +947,6 @@ bool divertRecordedHudPacket(Packet& packet, FollowedHudMirror& mirror) {
         ++mirror.diverted;
         return true;
     }
-    case MinecraftPacketIds::PlayerEquipment: {
-        auto& equipment = static_cast<MobEquipmentPacket&>(packet);
-        if (equipment.mRuntimeId->rawID != record::RecordedPlayerRuntimeIdValue) return false;
-        if (equipment.mContainerId != ContainerID::Inventory || !level) return true;
-        int const slot = std::clamp(static_cast<int>(equipment.mSlot), 0, 8);
-        mirror.savedHotbar[static_cast<size_t>(slot)] = toItem(*equipment.mItem);
-        mirror.savedSelected                          = std::clamp(static_cast<int>(equipment.mSelectedSlot), 0, 8);
-        ++mirror.diverted;
-        return true;
-    }
     default:
         return false;
     }
@@ -828,6 +988,7 @@ bool ReplaySession::start(std::filesystem::path filePath) {
     mLastScreenSkipAction.clear();
     // Installed once per replay (inert until the subject is hidden) so toggling follow never hooks anything.
     visuals::hookReplaySubjectHide(true, visuals::SubjectHideReason::Session);
+    visuals::hookReplayAttachables(true, visuals::SubjectHideReason::Session);
     visuals::hookReplayFirstPersonHands(true, visuals::SubjectHideReason::Session);
     visuals::installReplayHudHooks();
 
@@ -845,6 +1006,29 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         prepareRecordedItemRegistry(configurationPackets);
         auto const& context = mSnapshotContexts.front();
 
+        mRecordedDoDaylightCycle = true;
+        mRecordedDoWeatherCycle  = true;
+        mRecordedRainLevel       = 0.0f;
+        mRecordedLightningLevel  = 0.0f;
+        if (mReplayStartGame) {
+            auto const&         recordedSettings = *mReplayStartGame->mSettings;
+            DaylightCycle const recordedCycle    = recordedSettings.mDaylightCycle;
+            if (recordedCycle == DaylightCycle::AlwaysDay || recordedCycle == DaylightCycle::LockTime) {
+                mRecordedDoDaylightCycle = false;
+            } else {
+                mRecordedDoDaylightCycle = recordedSettings.mGameRules->getBool(
+                    GameRuleId{static_cast<int>(GameRules::GameRulesIndex::DoDaylightCycle)},
+                    true
+                );
+            }
+            mRecordedDoWeatherCycle = recordedSettings.mGameRules->getBool(
+                GameRuleId{static_cast<int>(GameRules::GameRulesIndex::DoWeatherCycle)},
+                true
+            );
+            mRecordedRainLevel      = recordedSettings.mRainLevel;
+            mRecordedLightningLevel = recordedSettings.mLightningLevel;
+        }
+
         LevelSettings settings;
         settings.mGameType                  = GameType::Spectator;
         settings.mForceGameType             = true;
@@ -854,6 +1038,8 @@ bool ReplaySession::start(std::filesystem::path filePath) {
         settings.mLANBroadcastIntent        = false;
         settings.mDisablePlayerInteractions = true;
         settings.mDefaultSpawn              = BlockPos(Vec3{context.x, context.y, context.z});
+        settings.mDaylightCycle             = DaylightCycle::LockTime;
+        lockReplayWorldRules(*settings.mGameRules);
         if (mReplayStartGame) settings.mSeed = mReplayStartGame->mSettings->mSeed;
 
         mReplayLevelId            = createReplayLevelId();
@@ -947,6 +1133,12 @@ void ReplaySession::clearReplayData() {
     mSnapshotGamePacketPhase = SnapshotGamePacketPhase::StreamingChunks;
     mIsProcessingSnapshot    = false;
     mCurrentTick             = 0;
+    mPreviewPlayheadTick     = 0;
+    mResumeAfterFreezeSeek   = false;
+    {
+        std::scoped_lock lock(mPreviewFreezeMutex);
+        mPreviewFreezeTrack = {};
+    }
     mReaderIndex             = 0;
     mSeekTargetTick          = -1;
     mExportSeekRequested     = false;
@@ -969,6 +1161,18 @@ void ReplaySession::clearReplayData() {
     mLastObserverServerSyncChunk.reset();
     mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
     mReplayTime.reset();
+    mRecordedDoDaylightCycle = true;
+    mRecordedDoWeatherCycle  = true;
+    mRecordedRainLevel       = 0.0f;
+    mRecordedLightningLevel  = 0.0f;
+    mTimeOfDayOverride.reset();
+    mWeatherOverride           = visuals::ReplayWeatherMode::Recorded;
+    mLastAppliedWeatherMode    = visuals::ReplayWeatherMode::Recorded;
+    mWeatherRendererNeedsPrime = false;
+    mLastPrimedWeatherPos.reset();
+    mReplayHasServerResourcePacks          = false;
+    mLoadedWithServerResourcePacksDisabled = false;
+    visuals::setReplayWorldEnvActive(false);
     mPendingReplayDimension.reset();
     mPendingSnapshotApply.reset();
     if (mDimensionTransitionRequest) {
@@ -1052,6 +1256,20 @@ void ReplaySession::finishWorldCleanup() {
     mCleanupWaitTicks  = 0;
     mReplayLevelId.clear();
     mOrphanReplayWorldsScanned = false;
+    visuals::setReplayWorldEnvActive(false);
+}
+
+bool ReplaySession::requestReloadCurrentReplay(int restoreTick) {
+    if (!mActive || mReplayFilePath.empty()) return false;
+    mPendingReloadReplayPath       = mReplayFilePath;
+    mPendingRestoreTickAfterReload = std::clamp(restoreTick, 0, getTotalTicks());
+    getLogger().debug(
+        "Requesting in-place reload of replay {} (restoreTick={})",
+        mPendingReloadReplayPath,
+        *mPendingRestoreTickAfterReload
+    );
+    stop();
+    return true;
 }
 
 void ReplaySession::stop() {
@@ -1190,7 +1408,14 @@ void ReplaySession::applyFollowView() {
 
 void ReplaySession::setFollowRecordedPlayer(bool follow) {
     if (mFollowRecordedPlayer.exchange(follow, std::memory_order_acq_rel) == follow) return;
-    if (!follow) mFollowThirdPerson.store(false, std::memory_order_release);
+    if (!follow) {
+        mFollowThirdPerson.store(false, std::memory_order_release);
+    } else {
+        resetThirdPersonOrbit();
+        mPreviewShotMode.store(PreviewShotMode::None, std::memory_order_release);
+        mShotThirdPerson.store(false, std::memory_order_release);
+        setShotSubject(std::nullopt);
+    }
     applyFollowView();
     getLogger().debug("Observer {} the recorded player", follow ? "follows" : "stopped following");
 }
@@ -1198,8 +1423,80 @@ void ReplaySession::setFollowRecordedPlayer(bool follow) {
 void ReplaySession::setFollowThirdPerson(bool thirdPerson) {
     if (thirdPerson && !isFollowingRecordedPlayer()) thirdPerson = false;
     if (mFollowThirdPerson.exchange(thirdPerson, std::memory_order_acq_rel) == thirdPerson) return;
+    if (thirdPerson) resetThirdPersonOrbit();
     applyFollowView();
     getLogger().debug("Follow view switched to {} person", thirdPerson ? "third" : "first");
+}
+
+void ReplaySession::resetThirdPersonOrbit() {
+    std::lock_guard lock(mThirdPersonOrbitMutex);
+    mThirdPersonOrbit.initialized = false;
+    mThirdPersonOrbit.yaw         = 0.0f;
+    mThirdPersonOrbit.pitch       = 15.0f;
+    mThirdPersonOrbit.distance    = 4.0f;
+    mThirdPersonOrbit.offset      = {0.0f, 0.0f, 0.0f};
+}
+
+void ReplaySession::adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance) {
+    if (!std::isfinite(deltaYaw)) deltaYaw = 0.0f;
+    if (!std::isfinite(deltaPitch)) deltaPitch = 0.0f;
+    if (!std::isfinite(deltaDistance)) deltaDistance = 0.0f;
+
+    bool needsSample = false;
+    {
+        std::lock_guard lock(mThirdPersonOrbitMutex);
+        needsSample = !mThirdPersonOrbit.initialized;
+    }
+    auto const sampled = needsSample ? sampleSubjectFollowState() : std::nullopt;
+
+    std::lock_guard lock(mThirdPersonOrbitMutex);
+    if (!mThirdPersonOrbit.initialized) {
+        if (sampled) {
+            mThirdPersonOrbit.yaw   = sampled->yaw;
+            mThirdPersonOrbit.pitch = std::clamp(sampled->pitch, -89.0f, 89.0f);
+        }
+        mThirdPersonOrbit.distance    = 4.0f;
+        mThirdPersonOrbit.offset      = {0.0f, 0.0f, 0.0f};
+        mThirdPersonOrbit.initialized = true;
+    }
+    mThirdPersonOrbit.yaw   += deltaYaw;
+    mThirdPersonOrbit.pitch  = std::clamp(mThirdPersonOrbit.pitch + deltaPitch, -89.0f, 89.0f);
+    if (deltaDistance != 0.0f) {
+        float const scaledDelta    = deltaDistance * std::clamp(mThirdPersonOrbit.distance * 0.25f, 0.35f, 3.0f);
+        mThirdPersonOrbit.distance = std::clamp(mThirdPersonOrbit.distance + scaledDelta, 1.0f, 32.0f);
+    }
+}
+
+ReplaySession::ThirdPersonOrbitSnapshot ReplaySession::thirdPersonOrbitSnapshot() const {
+    auto const  sampled = sampleSubjectFollowState();
+    float const fov     = sampled && sampled->fov > 0.0f ? sampled->fov : 70.0f;
+
+    std::lock_guard lock(mThirdPersonOrbitMutex);
+    if (mThirdPersonOrbit.initialized) {
+        return {
+            mThirdPersonOrbit.yaw,
+            mThirdPersonOrbit.pitch,
+            mThirdPersonOrbit.distance,
+            mThirdPersonOrbit.offset,
+            fov,
+        };
+    }
+    if (sampled) {
+        return {
+            sampled->yaw,
+            std::clamp(sampled->pitch, -89.0f, 89.0f),
+            4.0f,
+            {0.0f, 0.0f, 0.0f},
+            fov,
+        };
+    }
+    return {
+        0.0f,
+        15.0f,
+        4.0f,
+        {0.0f, 0.0f, 0.0f},
+        fov
+    };
 }
 
 void ReplaySession::setShotSubject(std::optional<std::string> subject) {
@@ -1220,16 +1517,16 @@ void ReplaySession::clearPreviewShot() {
     applyFollowView();
 }
 
-// The highest camera track under the playhead owns the view. A keyframe track suspends the
-// user's follow; a person track follows its subject; with no track the user's follow comes back.
+// The user's explicit follow mode owns the view when active; otherwise the highest camera track under the playhead
+// owns it (a keyframe track uses evaluator preview, a person track follows its subject).
 void ReplaySession::updatePreviewShot() {
     if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return;
     using state::editing::model::CameraKeyframeMode;
     auto                       mode = PreviewShotMode::None;
     std::optional<std::string> subject;
     bool                       third = false;
-    // Player input owns the camera while captured, as it does over a paused keyframe track.
-    if (!editor::input::isGameInputCaptured()) {
+    // Captured player input and explicit follow mode own the camera over any track under the playhead.
+    if (!editor::input::isGameInputCaptured() && !isFollowingRecordedPlayer()) {
         if (auto const timeline = keyframe::currentCameraTimeline(keyframe::CameraTimelineSource::Preview)) {
             auto const time = getCameraRenderSampleTime();
             auto const shot = timeline->shotAt(time ? time->floorTick() : getCurrentTick());
@@ -1578,6 +1875,7 @@ void ReplaySession::setReplaySubjectChoice(std::string uuid) {
     if (changed) {
         mReplaySubjectEntityMissingTicks    = 0;
         mReplaySubjectEntityMissingLastTick = -1;
+        resetThirdPersonOrbit();
         getLogger().debug("replay subject choice={}", replaySubjectChoice());
     }
     rebindReplaySubject();
@@ -1749,6 +2047,7 @@ void ReplaySession::applyObserverSkin(SerializedSkinRef const& skin) {
         if (current.mSkinImpl) mObserverOriginalSkin = std::make_unique<SerializedSkinRef>(current);
     }
     mReplayPlayer->updateSkin(skin, static_cast<int>(mReplayPlayer->getClientSubId()));
+    mReplayPlayer->mFirstPersonAnimationComponent.reset();
     mObserverSkinApplied = true;
 }
 
@@ -1758,6 +2057,7 @@ void ReplaySession::restoreObserverSkin() {
         return;
     }
     mReplayPlayer->updateSkin(*mObserverOriginalSkin, static_cast<int>(mReplayPlayer->getClientSubId()));
+    mReplayPlayer->mFirstPersonAnimationComponent.reset();
     mObserverSkinApplied = false;
     getLogger().debug("replay observer skin restored");
 }
@@ -2031,18 +2331,21 @@ void ReplaySession::rebindReplaySubject() {
     }
     bool applied = false;
     if (actor->isPlayer()) {
-        auto&       subject = static_cast<Player&>(*actor);
-        auto const& entries = subject.getLevel().getPlayerList();
-        auto const  entry   = entries.find(subject.getUuid());
-        if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
-            applyObserverSkin(*entry->second.mSkin);
-            getLogger().debug("replay observer skin applied name={} uuid={}", name, uuid);
-            applied = true;
-        } else if (subject.getSkin().mSkinImpl) {
-            // The player list can lag the actor. The actor skin is what third person already draws.
+        auto& subject = static_cast<Player&>(*actor);
+        if (subject.getSkin().mSkinImpl) {
+            // Prefer the live actor skin over the player list entry: ClientSkinSystem rebuilds persona skins with a
+            // session-local id and registers the renderer under the actor's rebuilt skin, not the recorded list entry.
             applyObserverSkin(subject.getSkin());
             getLogger().debug("replay observer skin applied from actor name={} uuid={}", name, uuid);
             applied = true;
+        } else {
+            auto const& entries = subject.getLevel().getPlayerList();
+            auto const  entry   = entries.find(subject.getUuid());
+            if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
+                applyObserverSkin(*entry->second.mSkin);
+                getLogger().debug("replay observer skin applied name={} uuid={}", name, uuid);
+                applied = true;
+            }
         }
     }
     if (!applied) restoreObserverSkin();
@@ -2124,9 +2427,11 @@ bool ReplaySession::updateSubjectFollow() {
     return true;
 }
 
-std::optional<keyframe::CameraRenderState> ReplaySession::sampleSubjectFollowState() {
+std::optional<keyframe::CameraRenderState>
+ReplaySession::sampleSubjectFollowState(std::optional<visuals::ReplaySampleTime> sampleTimeOverride) const {
     // The entity pose trails the camera by one tick; the camera time covers tick 0.
-    auto time = getEntityRenderSampleTime();
+    auto time = sampleTimeOverride;
+    if (!time) time = getEntityRenderSampleTime();
     if (!time) time = getCameraRenderSampleTime();
     if (!time) return std::nullopt;
     auto const pose = visuals::sampleReplaySubjectPose(*time);
@@ -2153,7 +2458,8 @@ std::optional<keyframe::CameraRenderState> ReplaySession::sampleSubjectFollowSta
 }
 
 // Server corrections land during the client update, after the previous frame's pin; pin again right before drawing.
-std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRender() {
+std::optional<keyframe::CameraRenderState>
+ReplaySession::pinFollowObserverForRender(std::optional<visuals::ReplaySampleTime> sampleTimeOverride) {
     if (!isFollowViewActive() || !mReplayPlayer || !mReplayWorldJoined || !mNetworkHandler
         || mExportTimelinePhase != ReplayExportTimelinePhase::Inactive || mPendingReplayDimension) {
         mFollowHeldPose.reset();
@@ -2162,7 +2468,7 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
     // The tick stops while chunks or a snapshot stream in, but frames keep coming: keep the last pose.
     if (!isReplayWorldReady() || mPendingSnapshotApply || isSeekPending()) return mFollowHeldPose;
 
-    auto state = sampleSubjectFollowState();
+    auto state = sampleSubjectFollowState(sampleTimeOverride);
     if (!state) return mFollowHeldPose;
     cancelNativeMovementInterpolation(
         *mReplayPlayer,
@@ -2170,19 +2476,157 @@ std::optional<keyframe::CameraRenderState> ReplaySession::pinFollowObserverForRe
         Vec2{state->pitch, state->yaw},
         state->yaw
     );
-    // The observer stays on the eyes so chunks and the server copy follow; only the drawn camera moves back.
+    // The observer stays on the eyes so chunks and the server copy follow; only the drawn camera orbits around it.
     // The sample above refreshed the sleep weight, so a subject in bed already reads as first person here.
     if (isFollowViewThirdPerson() && visuals::isReplaySubjectThirdPerson()) {
-        state = thirdPersonFollowPose(*mReplayPlayer, *state);
+        if (isFollowingRecordedPlayer()) {
+            ThirdPersonOrbitState orbit;
+            {
+                std::lock_guard lock(mThirdPersonOrbitMutex);
+                if (!mThirdPersonOrbit.initialized) {
+                    mThirdPersonOrbit.yaw         = state->yaw;
+                    mThirdPersonOrbit.pitch       = std::clamp(state->pitch, -89.0f, 89.0f);
+                    mThirdPersonOrbit.distance    = 4.0f;
+                    mThirdPersonOrbit.offset      = {0.0f, 0.0f, 0.0f};
+                    mThirdPersonOrbit.initialized = true;
+                }
+                orbit = mThirdPersonOrbit;
+            }
+            float const fov       = state->fov > 0.0f ? state->fov : 70.0f;
+            auto const  orbitPose = keyframe::computeCustomThirdPersonPose(
+                *state,
+                orbit.offset,
+                orbit.distance,
+                orbit.yaw,
+                orbit.pitch,
+                0.0f,
+                fov,
+                false
+            );
+            auto const clipped =
+                clipCameraRay(orbitPose.anchor, {orbitPose.camera.x, orbitPose.camera.y, orbitPose.camera.z});
+            state->x     = clipped.x;
+            state->y     = clipped.y;
+            state->z     = clipped.z;
+            state->yaw   = orbitPose.camera.yaw;
+            state->pitch = orbitPose.camera.pitch;
+            state->fov   = orbitPose.camera.fov;
+        } else {
+            state = thirdPersonFollowPose(*mReplayPlayer, *state);
+        }
     }
     mFollowHeldPose = state;
     return state;
 }
 
-void ReplaySession::enforceReplayWorldTime() {
-    if (!mActive || !mReplayTime || !mReplayPlayer) return;
-    auto& level = mReplayPlayer->getLevel();
-    if (level.getTime() != *mReplayTime) level.setTime(*mReplayTime);
+void ReplaySession::setTimeOfDayOverride(std::optional<double> ticks) noexcept {
+    mTimeOfDayOverride = ticks;
+    visuals::setReplayWorldTimeOverride(mTimeOfDayOverride);
+    enforceReplayWorldTime();
+}
+
+void ReplaySession::setWeatherOverride(visuals::ReplayWeatherMode mode) noexcept {
+    if (mWeatherOverride != mode) {
+        mWeatherOverride           = mode;
+        mWeatherRendererNeedsPrime = mode == visuals::ReplayWeatherMode::Rain
+                                  || mode == visuals::ReplayWeatherMode::Snow
+                                  || mode == visuals::ReplayWeatherMode::Thunder;
+        if (!mWeatherRendererNeedsPrime) mLastPrimedWeatherPos.reset();
+    }
+    visuals::setReplayWeatherOverride(mWeatherOverride);
+    enforceReplayWorldTime();
+}
+
+void ReplaySession::enforceReplayWorldTime(std::optional<float> partialTickOverride) {
+    if (!mActive) return;
+
+    int const recordedWhole = mReplayTime.value_or(0);
+    int const effectiveInt  = mTimeOfDayOverride ? static_cast<int>(std::floor(*mTimeOfDayOverride)) : recordedWhole;
+
+    if (mReplayPlayer && (mReplayTime || mTimeOfDayOverride)) {
+        auto& level = mReplayPlayer->getLevel();
+        if (level.getTime() != effectiveInt) level.setTime(effectiveInt);
+    }
+
+    float partial = 0.0f;
+    if (partialTickOverride.has_value()) {
+        partial = *partialTickOverride;
+    } else if (!mIsPaused && mSeekTargetTick < 0 && mRecordedDoDaylightCycle) {
+        if (auto const sample = getEntityRenderSampleTime()) partial = sample->partialTick();
+    }
+
+    visuals::setReplayWorldTimeState(recordedWhole, mRecordedDoDaylightCycle, partial);
+    visuals::setReplayWorldTimeOverride(mTimeOfDayOverride);
+    visuals::setReplayWeatherOverride(mWeatherOverride);
+
+    if (mReplayPlayer) {
+        auto& dimension = mReplayPlayer->getDimension();
+        if (dimension.mHasWeather && dimension.mWeather.get() != nullptr) {
+            float targetRain      = mRecordedRainLevel;
+            float targetLightning = mRecordedLightningLevel;
+            switch (mWeatherOverride) {
+            case visuals::ReplayWeatherMode::Clear:
+                targetRain      = 0.0f;
+                targetLightning = 0.0f;
+                break;
+            case visuals::ReplayWeatherMode::Overcast:
+            case visuals::ReplayWeatherMode::Rain:
+            case visuals::ReplayWeatherMode::Snow:
+                targetRain      = 1.0f;
+                targetLightning = 0.0f;
+                break;
+            case visuals::ReplayWeatherMode::Thunder:
+                targetRain      = 1.0f;
+                targetLightning = 1.0f;
+                break;
+            case visuals::ReplayWeatherMode::Recorded:
+                break;
+            }
+            bool const modeChanged        = (mWeatherOverride != mLastAppliedWeatherMode);
+            mLastAppliedWeatherMode       = mWeatherOverride;
+            auto& weather                 = dimension.getWeather();
+            weather.mRainLevel            = targetRain;
+            weather.mOldRainLevel         = targetRain;
+            weather.mTargetRainLevel      = targetRain;
+            weather.mLightningLevel       = targetLightning;
+            weather.mOldLightningLevel    = targetLightning;
+            weather.mTargetLightningLevel = targetLightning;
+            if (mWeatherOverride == visuals::ReplayWeatherMode::Clear) {
+                weather.mFogLevel = 0.0f;
+            } else if (mWeatherOverride != visuals::ReplayWeatherMode::Recorded) {
+                weather.mFogLevel = 1.0f;
+            } else if (modeChanged) {
+                weather.mFogLevel = mRecordedRainLevel;
+            }
+        }
+    }
+}
+
+void ReplaySession::primePausedWeatherRenderer() {
+    if (!mActive || !mWorldReady || mPendingReplayDimension) return;
+    bool const needsPrecipitation = mWeatherOverride == visuals::ReplayWeatherMode::Rain
+                                 || mWeatherOverride == visuals::ReplayWeatherMode::Snow
+                                 || mWeatherOverride == visuals::ReplayWeatherMode::Thunder;
+    if (!needsPrecipitation) {
+        mWeatherRendererNeedsPrime = false;
+        mLastPrimedWeatherPos.reset();
+        return;
+    }
+    auto client = ll::service::getClientInstance();
+    if (!client) return;
+    auto* renderer = client->getLevelRenderer();
+    if (!renderer) return;
+    auto* playerRenderer = renderer->mLevelRendererPlayer.get();
+    if (!playerRenderer) return;
+    auto const& rawCamPos = playerRenderer->mWorldSpaceCamera->mPosition.get();
+    Vec3 const  camPos{rawCamPos.x, rawCamPos.y, rawCamPos.z};
+    bool const  forcePrime = mWeatherRendererNeedsPrime || !mLastPrimedWeatherPos;
+    bool const  movedFar   = mIsPaused && mLastPrimedWeatherPos && camPos.distanceToSqr(*mLastPrimedWeatherPos) > 64.0f;
+    if (!forcePrime && !movedFar) return;
+    playerRenderer->tickRain();
+    if (forcePrime) playerRenderer->tickRain();
+    mWeatherRendererNeedsPrime = false;
+    mLastPrimedWeatherPos      = camPos;
 }
 
 void ReplaySession::teleportReplayPlayer(Vec3 const& feetPosition, Vec2 const& rotation) {
@@ -2343,7 +2787,7 @@ void ReplaySession::syncSeekObserver() {
         }
         return;
     }
-    syncPreviewObserverForTick(mSeekTargetTick, true);
+    syncPreviewObserverForTick(mPreviewPlayheadTick, true);
 }
 
 void ReplaySession::markReplayTickAdvanced() noexcept {
@@ -2375,12 +2819,33 @@ float ReplaySession::previewPartialTick() const noexcept {
     return std::clamp(elapsed * speed / SecondsPerTick, 0.0f, 1.0f);
 }
 
+void ReplaySession::setPreviewFreezeTrack(state::editing::model::FreezeTrack const& track) {
+    std::scoped_lock lock(mPreviewFreezeMutex);
+    mPreviewFreezeTrack = track;
+}
+
+state::editing::model::FreezeTrack ReplaySession::previewFreezeTrackCopy() const {
+    std::scoped_lock lock(mPreviewFreezeMutex);
+    return mPreviewFreezeTrack;
+}
+
+int ReplaySession::previewWorldTargetTick(int playheadTick) const {
+    int const clampedPlayhead = std::clamp(playheadTick, 0, getTotalTicks());
+    if (mExportTimelinePhase != ReplayExportTimelinePhase::Inactive) return clampedPlayhead;
+    auto const track = previewFreezeTrackCopy();
+    if (!keyframe::hasActiveFreezeTrack(track)) return clampedPlayhead;
+    auto const eval = keyframe::evaluateFreezeAt(track, static_cast<long double>(clampedPlayhead));
+    if (!eval.frozen) return clampedPlayhead;
+    auto const worldTick = static_cast<int64_t>(std::floor(eval.clientTick));
+    return static_cast<int>(std::clamp<int64_t>(worldTick, 0, getTotalTicks()));
+}
+
 // Native render alpha uses a different clock and can move replay sampling backwards.
 std::optional<visuals::ReplaySampleTime> ReplaySession::getCameraRenderSampleTime() const noexcept {
     if (!mActive || !mReplayWorldJoined) return std::nullopt;
 
-    auto const appliedTick = std::max(0, mCurrentTick);
-    return visuals::ReplaySampleTime::fromPreview(appliedTick, previewPartialTick());
+    auto const playheadTick = std::max(0, mPreviewPlayheadTick);
+    return visuals::ReplaySampleTime::fromPreview(playheadTick, previewPartialTick());
 }
 
 // Pose history spans [appliedTick - 1, appliedTick], so entity sampling trails the camera by one tick.
@@ -2389,7 +2854,23 @@ std::optional<visuals::ReplaySampleTime> ReplaySession::getEntityRenderSampleTim
 
     auto const appliedTick = std::max(0, mCurrentTick);
     if (appliedTick == 0) return std::nullopt;
-    return visuals::ReplaySampleTime::fromPreview(appliedTick - 1, previewPartialTick());
+    auto const partial = previewPartialTick();
+    if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+        auto const track = previewFreezeTrackCopy();
+        if (keyframe::hasActiveFreezeTrack(track)) {
+            long double const playhead =
+                static_cast<long double>(std::max(0, mPreviewPlayheadTick)) + static_cast<long double>(partial);
+            auto const eval = keyframe::evaluateFreezeAt(track, playhead);
+            if (eval.frozen) {
+                long double const entityTime = eval.clientTick - 1.0L;
+                if (entityTime < 0.0L) return std::nullopt;
+                auto const whole = static_cast<int64_t>(std::floor(entityTime));
+                auto const frac  = static_cast<float>(entityTime - static_cast<long double>(whole));
+                return visuals::ReplaySampleTime::fromPreview(whole, frac);
+            }
+        }
+    }
+    return visuals::ReplaySampleTime::fromPreview(appliedTick - 1, partial);
 }
 
 bool ReplaySession::beginExportTimeline(int startTick) {
@@ -2404,6 +2885,8 @@ bool ReplaySession::beginExportTimeline(int startTick) {
     startTick                 = std::clamp(startTick, 0, getTotalTicks());
     mIsPaused                 = true;
     mPlaybackTickAccumulator  = 0.0f;
+    mResumeAfterFreezeSeek    = false;
+    mPreviewPlayheadTick      = startTick;
 
     mRequestedSeekTick.store(startTick, std::memory_order_release);
     mSeekTargetTick            = -1;
@@ -2484,11 +2967,7 @@ std::unique_ptr<visuals::ScopedReplayEntityPose>
 ReplaySession::createReplayEntityRenderScope(visuals::ReplaySampleTime const& sample) {
     if (!sample.isValid() || !mActive || !mReplayWorldJoined || !mWorldReady || !refreshReplayPlayer()) return {};
 
-    std::vector<visuals::EntityRenderTarget> targets;
-    targets.reserve(mEntityRenderKeys.size());
-    for (auto const& [id, key] : mEntityRenderKeys) {
-        targets.push_back({key, mReplayPlayer->getLevel().fetchEntity(id, false)});
-    }
+    auto const targets = collectEntityRenderTargets(mReplayPlayer->getLevel(), mEntityRenderKeys);
     return visuals::createReplayEntityRenderScope(targets, sample);
 }
 
@@ -2566,6 +3045,8 @@ void ReplaySession::endExportTimeline() {
     mExportForceSnapshotOnSeek = false;
     mExportTimelinePhase       = ReplayExportTimelinePhase::Inactive;
     mExportCameraViewpoint.reset();
+    mResumeAfterFreezeSeek = false;
+    mPreviewPlayheadTick   = mCurrentTick;
     if (wasActive) {
         mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
         mObserverServerPositionDirty = false;
@@ -2582,11 +3063,11 @@ int ReplaySession::getTotalTicks() const { return std::max(0, mMeta.totalTicks);
 
 float ReplaySession::effectivePlaybackSpeed() const noexcept {
     float const base = mPlaybackSpeed > 0.0f ? mPlaybackSpeed : 1.0f;
-    return std::clamp(base * mClipSpeedScale, 0.05f, 32.0f);
+    return std::clamp(base * mClipSpeedScale, 0.01f, 32.0f);
 }
 
 void ReplaySession::setClipSpeedScale(float scale) noexcept {
-    mClipSpeedScale = std::isfinite(scale) ? std::clamp(scale, 0.05f, 32.0f) : 1.0f;
+    mClipSpeedScale = std::isfinite(scale) ? std::clamp(scale, 0.01f, 32.0f) : 1.0f;
 }
 
 void ReplaySession::adjustPlaybackSpeed(int direction) {
@@ -2637,7 +3118,20 @@ void ReplaySession::finishSeek() {
     refreshReplayEntityList();
     // Catch-up ticks bypassed the preview clock, so restart it at the tick the seek landed on.
     markReplayTickAdvanced();
-    if (mIsPaused) mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
+    bool const resumeAfterSeek = std::exchange(mResumeAfterFreezeSeek, false);
+    if (resumeAfterSeek && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+        mIsPaused               = false;
+        mObserverPreviewInRange = false;
+        mPausedPreviewPose.reset();
+        mObserverServerSyncEpoch.fetch_add(1, std::memory_order_acq_rel);
+        mObserverServerPositionDirty = false;
+        mLastObserverServerSyncChunk.reset();
+        if (mReplayPlayer && mReplayWorldJoined) {
+            syncObserverServerPosition(mReplayPlayer->getPosition(), mReplayPlayer->getRotation());
+        }
+    } else if (mIsPaused) {
+        mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
+    }
     syncScreenPreviewAfterSeek();
 }
 
@@ -2654,7 +3148,14 @@ void ReplaySession::settleAfterSeek() {
         if (!actor || actor == mReplayPlayer) continue;
         auto const rotation = actor->getRotation();
         cancelNativeMovementInterpolation(*actor, actor->getPosition(), rotation, rotation.y);
+        if (auto const renderKey = replayEntityRenderKey(level, id)) {
+            auto const pose = replayRenderPose(*actor);
+            mEntityRenderKeys.insert_or_assign(id, *renderKey);
+            visuals::queueReplayEntityPose(*renderKey, pose, pose);
+        }
     }
+    visuals::commitReplayEntityPoses(mCurrentTick);
+    visuals::refreshReplayRidingAttachments(collectEntityRenderTargets(level, mEntityRenderKeys));
 }
 
 void ReplaySession::beginSeek(int targetTick) {
@@ -2767,7 +3268,8 @@ void ReplaySession::tick() {
         } levelFreeze{*this};
         // First-person keeps the observer camera offset stable.
         forceFirstPersonCamera();
-        if (mReplayTime && mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
+        enforceReplayWorldTime();
+        primePausedWeatherRenderer();
         updateScreenPreview();
         syncFollowedPlayerHud();
 
@@ -2819,7 +3321,8 @@ void ReplaySession::tick() {
             && (mScreenPreview || hasPoppableReplayScreenOpen() || mScreenCloseWaitTicks > 0)) {
             bool keepOpenForSameScreenFastForward = false;
             if (!mReaders.empty()) {
-                int const clampedSeek    = std::clamp(pendingRequestedSeek, 0, getTotalTicks());
+                int const clampedSeek    = mExportSeekRequested ? std::clamp(pendingRequestedSeek, 0, getTotalTicks())
+                                                                : previewWorldTargetTick(pendingRequestedSeek);
                 size_t    selectedReader = mReaders.size() - 1;
                 int       chunkStart     = 0;
                 size_t    chunkIndex     = 0;
@@ -2869,7 +3372,13 @@ void ReplaySession::tick() {
 
         int const requestedSeek = mRequestedSeekTick.exchange(-1, std::memory_order_acq_rel);
         if (requestedSeek >= 0) {
-            beginSeek(requestedSeek);
+            mResumeAfterFreezeSeek = false;
+            if (!mExportSeekRequested && mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+                mPreviewPlayheadTick = std::clamp(requestedSeek, 0, getTotalTicks());
+                beginSeek(previewWorldTargetTick(mPreviewPlayheadTick));
+            } else {
+                beginSeek(requestedSeek);
+            }
             if (mPendingSnapshotApply || mPendingReplayDimension) return;
         }
         if (mPendingSnapshotApply || mPendingReplayDimension) return;
@@ -2985,6 +3494,15 @@ void ReplaySession::tick() {
         }
 
         bool const exportActive = mExportTimelinePhase != ReplayExportTimelinePhase::Inactive;
+        if (!exportActive) {
+            int const desiredWorldTick = previewWorldTargetTick(mPreviewPlayheadTick);
+            if (mCurrentTick != desiredWorldTick && !mChunkInjectionPending && !mPendingSnapshotApply
+                && !mPendingReplayDimension && !hasPendingReplayReaderBoundary()) {
+                mResumeAfterFreezeSeek = !mIsPaused;
+                beginSeek(desiredWorldTick);
+                return;
+            }
+        }
         if (mIsPaused) {
             levelFreeze.freeze = !exportActive;
             holdItemUseBetweenTicks();
@@ -2994,18 +3512,70 @@ void ReplaySession::tick() {
         mPlaybackTickAccumulator  += speed;
         int const ticksToAdvance  = static_cast<int>(mPlaybackTickAccumulator);
         mPlaybackTickAccumulator -= static_cast<float>(ticksToAdvance);
-        if (ticksToAdvance == 0) holdItemUseBetweenTicks();
-        for (int tick = 0; tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply
-                           && !mPendingReplayDimension && !hasPendingReplayReaderBoundary();
-             ++tick) {
-            int const before = mCurrentTick;
-            syncPreviewObserverForTick(before + 1);
-            if (!advanceReplayTick(true)) break;
-            if (mCurrentTick != before) markReplayTickAdvanced();
+        auto const freezeTrack      = previewFreezeTrackCopy();
+        bool const hasFreeze        = !exportActive && keyframe::hasActiveFreezeTrack(freezeTrack);
+        if (!hasFreeze) {
+            if (ticksToAdvance == 0) holdItemUseBetweenTicks();
+            for (int tick = 0; tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply
+                               && !mPendingReplayDimension && !hasPendingReplayReaderBoundary();
+                 ++tick) {
+                int const before = mCurrentTick;
+                syncPreviewObserverForTick(before + 1);
+                if (!advanceReplayTick(true)) break;
+                if (mCurrentTick != before) {
+                    mPreviewPlayheadTick = mCurrentTick;
+                    markReplayTickAdvanced();
+                }
+            }
+            // The next client tick runs before its replay tick, so freeze it only when that replay tick will not
+            // advance.
+            bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
+            levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + speed < 1.0f;
+        } else {
+            bool      worldAdvanced = false;
+            int const totalTicks    = getTotalTicks();
+            for (int tick = 0; tick < ticksToAdvance && !mChunkInjectionPending && !mPendingSnapshotApply
+                               && !mPendingReplayDimension && !hasPendingReplayReaderBoundary();
+                 ++tick) {
+                if (mPreviewPlayheadTick >= totalTicks
+                    && previewWorldTargetTick(mPreviewPlayheadTick) == mCurrentTick) {
+                    mIsPaused                = true;
+                    mPlaybackTickAccumulator = 0.0f;
+                    mFrozenPreviewPartial.store(0.0f, std::memory_order_release);
+                    getLogger().debug("Replay finished and paused at tick {}", mPreviewPlayheadTick);
+                    break;
+                }
+                int const nextPlayhead  = mPreviewPlayheadTick + 1;
+                int const nextWorldTick = previewWorldTargetTick(nextPlayhead);
+                syncPreviewObserverForTick(nextPlayhead);
+                if (nextWorldTick == mCurrentTick) {
+                    mPreviewPlayheadTick = nextPlayhead;
+                    markReplayTickAdvanced();
+                    continue;
+                }
+                if (nextWorldTick == mCurrentTick + 1) {
+                    int const before = mCurrentTick;
+                    if (!advanceReplayTick(true)) break;
+                    if (mCurrentTick != before) {
+                        mPreviewPlayheadTick = nextPlayhead;
+                        markReplayTickAdvanced();
+                        worldAdvanced = true;
+                    }
+                    continue;
+                }
+                mPreviewPlayheadTick   = nextPlayhead;
+                mResumeAfterFreezeSeek = true;
+                beginSeek(nextWorldTick);
+                if (mPendingSnapshotApply || mPendingReplayDimension) return;
+                break;
+            }
+            if (!worldAdvanced) holdItemUseBetweenTicks();
+            auto const freezeNow =
+                keyframe::evaluateFreezeAt(freezeTrack, static_cast<long double>(mPreviewPlayheadTick));
+            bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
+            levelFreeze.freeze =
+                settled && (freezeNow.worldFrozen || (!worldAdvanced && mPlaybackTickAccumulator + speed < 1.0f));
         }
-        // The next client tick runs before its replay tick, so freeze it only when that replay tick will not advance.
-        bool const settled = !mChunkInjectionPending && !mPendingSnapshotApply && !mPendingReplayDimension;
-        levelFreeze.freeze = settled && !exportActive && mPlaybackTickAccumulator + speed < 1.0f;
     } catch (std::exception const& e) {
         getLogger().error("Replay session failed: {}", e.what());
         stop();
@@ -3129,6 +3699,8 @@ bool ReplaySession::init(std::filesystem::path filePath) {
 
     mReplayFilePath          = std::move(filePath);
     mCurrentTick             = 0;
+    mPreviewPlayheadTick       = 0;
+    mResumeAfterFreezeSeek     = false;
     mReaderIndex             = 0;
     mSeekTargetTick          = -1;
     mExportSeekRequested     = false;
@@ -3212,7 +3784,9 @@ bool ReplaySession::init(std::filesystem::path filePath) {
 bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGamePacket> const& packets) {
     mReplayResourcePacksInfo.store(nullptr, std::memory_order_release);
     mReplayResourcePackStack.store(nullptr, std::memory_order_release);
-    mReplayCachedResourcePacksLoaded = false;
+    mReplayCachedResourcePacksLoaded       = false;
+    mReplayHasServerResourcePacks          = false;
+    mLoadedWithServerResourcePacksDisabled = false;
 
     auto client = ll::service::getClientInstance();
     if (!client) return false;
@@ -3236,14 +3810,34 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
         return packet;
     };
 
-    auto&       repository      = client->getResourcePackRepository();
     auto const* serializedInfo  = findPacket(MinecraftPacketIds::ResourcePacksInfo);
     auto const* serializedStack = findPacket(MinecraftPacketIds::ResourcePackStack);
 
     std::shared_ptr<ResourcePacksInfoPacket> info;
     if (serializedInfo) {
-        info      = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
-        auto keys = info->mData->collectKeys();
+        info = std::static_pointer_cast<ResourcePacksInfoPacket>(decodePacket(*serializedInfo));
+        if (!info->mData->mResourcePacks->empty()) mReplayHasServerResourcePacks = true;
+    }
+
+    std::shared_ptr<ResourcePackStackPacket> stack;
+    if (serializedStack) {
+        stack = std::static_pointer_cast<ResourcePackStackPacket>(decodePacket(*serializedStack));
+        if (!stack->mTexturePackIdsAndVersions->empty()) mReplayHasServerResourcePacks = true;
+    }
+
+    bool const disabled                    = Playback::getInstance().getConfig().replay.disableServerResourcePacks;
+    mLoadedWithServerResourcePacksDisabled = disabled;
+    if (disabled) {
+        getLogger().debug(
+            "Skipping recorded server resource packs (disabled by config, replayHasPacks={})",
+            mReplayHasServerResourcePacks
+        );
+        return true;
+    }
+
+    auto& repository = client->getResourcePackRepository();
+    if (info) {
+        auto keys                        = info->mData->collectKeys();
         mReplayCachedResourcePacksLoaded = true;
         repository.addCachedResourcePacks(&keys);
         // Packs embedded in the replay take over from the local download cache; old replays keep using the cache.
@@ -3254,10 +3848,7 @@ bool ReplaySession::prepareReplayResourcePacks(std::vector<PlaybackSerializedGam
         }
     }
 
-    if (!serializedStack) return true;
-
-    auto stack = std::static_pointer_cast<ResourcePackStackPacket>(decodePacket(*serializedStack));
-    if (!info) return true;
+    if (!stack || !info) return true;
     mReplayResourcePacksInfo.store(std::move(info), std::memory_order_release);
     mReplayResourcePackStack.store(std::move(stack), std::memory_order_release);
     return true;
@@ -5059,14 +5650,25 @@ void ReplaySession::handleNextTick() {
             updateReplayHandBob(*actor, 0.0f);
             bobTick = mCurrentTick;
         }
+        level.forEachPlayer([&](Player& player) {
+            if (&player == mReplayPlayer) return true;
+            if (!mRecordedEntityIds.contains(player.getOrCreateUniqueID())) return true;
+            updateReplayGlidingTicks(player, false);
+            return true;
+        });
     }
     visuals::commitReplayEntityPoses(static_cast<int64_t>(mCurrentTick) + 1);
+    if (mReplayPlayer) {
+        visuals::refreshReplayRidingAttachments(
+            collectEntityRenderTargets(mReplayPlayer->getLevel(), mEntityRenderKeys)
+        );
+    }
     mCurrentTick += 1;
     integration::pushReplayClock(mCurrentTick, false);
-    if (mReplayTime) {
+    if (mReplayTime && mRecordedDoDaylightCycle) {
         ++*mReplayTime;
-        if (mReplayPlayer) mReplayPlayer->getLevel().setTime(*mReplayTime);
     }
+    enforceReplayWorldTime();
     updateReplaySubjectPosture(false);
 }
 
@@ -5708,10 +6310,9 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 continue;
             }
 
-            auto const previousPose  = replayRenderPose(*actor);
-            auto const renderKey     = replayEntityRenderKey(actor->getLevel(), id);
-            auto&      entityContext = actor->getEntityContext();
-            auto const currentPose   = visuals::EntityRenderPose{
+            auto const previousPose = replayRenderPose(*actor);
+            auto const renderKey    = replayEntityRenderKey(actor->getLevel(), id);
+            auto const currentPose  = visuals::EntityRenderPose{
                 replayRenderPosition(position),
                 rotation.x,
                 rotation.y,
@@ -5725,19 +6326,16 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
             }
 
             if (actor->isRiding()) {
-                actor->mBuiltInComponents->mActorRotationComponent->mRot     = rotation;
-                actor->mBuiltInComponents->mActorRotationComponent->mRotPrev = rotation;
-                pinReplayEntityHeadRotation(*actor, headYaw, bodyYaw);
-
-                if (onGround) {
-                    if (!entityContext.hasComponent<OnGroundFlagComponent>()) {
-                        entityContext.getRegistry().emplace<OnGroundFlagComponent>(entityContext.mEntity);
-                    }
-                } else {
-                    entityContext.removeComponent<OnGroundFlagComponent>();
-                }
-                if (snapMovement) cancelNativeMovementInterpolation(*actor, position, rotation, headYaw);
-                else applyReplayEntityMovement(*actor, position, previousPose, rotation, headYaw, mCurrentTick);
+                applyReplayRidingMovement(
+                    *actor,
+                    position,
+                    rotation,
+                    headYaw,
+                    bodyYaw,
+                    onGround,
+                    snapMovement,
+                    mCurrentTick
+                );
                 continue;
             }
 
@@ -5797,11 +6395,12 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
         std::optional<visuals::EntityRenderKey> renderKey;
         std::shared_ptr<Packet>                 packet;
         Actor*                                  actor{};
+        bool                                    onGround = false;
         if (isPlayer) {
-            auto const pitch    = data.getFloat().value();
-            auto const yaw      = data.getFloat().value();
-            auto const headYaw  = data.getFloat().value();
-            auto const onGround = data.getBool().value();
+            auto const pitch   = data.getFloat().value();
+            auto const yaw     = data.getFloat().value();
+            auto const headYaw = data.getFloat().value();
+            onGround           = data.getBool().value();
 
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
             actor = mReplayPlayer->getLevel().fetchEntity(id, false);
@@ -5822,24 +6421,27 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 yaw,
             };
 
-            packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
-            if (!packet) {
-                mReplayFailed = true;
-                return;
+            if (!actor->isRiding()) {
+                packet = MinecraftPackets::createPacket(MinecraftPacketIds::MovePlayer);
+                if (!packet) {
+                    mReplayFailed = true;
+                    return;
+                }
+                auto& move          = static_cast<MovePlayerPacket&>(*packet);
+                move.mPlayerID      = actor->getRuntimeID();
+                move.mPos           = targetPosition;
+                move.mRot           = rotation;
+                move.mYHeadRot      = headYaw;
+                move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
+                move.mOnGround      = onGround;
             }
-            auto& move          = static_cast<MovePlayerPacket&>(*packet);
-            move.mPlayerID      = actor->getRuntimeID();
-            move.mPos           = targetPosition;
-            move.mRot           = rotation;
-            move.mYHeadRot      = headYaw;
-            move.mResetPosition = PlayerPositionModeComponent::PositionMode::Teleport;
-            move.mOnGround      = onGround;
         } else {
             auto const header   = data.getByte().value();
             auto const rotX     = data.getByte().value();
             auto const rotY     = data.getByte().value();
             auto const headRotY = data.getByte().value();
             auto const bodyRotY = data.getByte().value();
+            onGround            = (header & 1) != 0;
 
             if (!mRecordedEntityIds.contains(id) || !mReplayPlayer) continue;
             actor = mReplayPlayer->getLevel().fetchEntity(id, false);
@@ -5856,19 +6458,39 @@ void ReplaySession::handleMoveEntities(PlaybackBuffer& data) {
                 decodeRotationByte(bodyRotY),
             };
 
-            packet = MinecraftPackets::createPacket(MinecraftPacketIds::MoveAbsoluteActor);
-            if (!packet) {
-                mReplayFailed = true;
-                return;
+            if (!actor->isRiding()) {
+                packet = MinecraftPackets::createPacket(MinecraftPacketIds::MoveAbsoluteActor);
+                if (!packet) {
+                    mReplayFailed = true;
+                    return;
+                }
+                auto& move         = *static_cast<MoveActorAbsolutePacket&>(*packet).mMoveData;
+                move.mRuntimeId    = actor->getRuntimeID();
+                move.mHeader->mRaw = static_cast<uchar>(header | 2);
+                move.mPos          = targetPosition;
+                move.mRotX         = static_cast<schar>(rotX);
+                move.mRotY         = static_cast<schar>(rotY);
+                move.mRotYHead     = static_cast<schar>(headRotY);
+                move.mRotYBody     = static_cast<schar>(bodyRotY);
             }
-            auto& move         = *static_cast<MoveActorAbsolutePacket&>(*packet).mMoveData;
-            move.mRuntimeId    = actor->getRuntimeID();
-            move.mHeader->mRaw = static_cast<uchar>(header | 2);
-            move.mPos          = targetPosition;
-            move.mRotX         = static_cast<schar>(rotX);
-            move.mRotY         = static_cast<schar>(rotY);
-            move.mRotYHead     = static_cast<schar>(headRotY);
-            move.mRotYBody     = static_cast<schar>(bodyRotY);
+        }
+
+        if (actor && actor->isRiding()) {
+            if (renderKey) {
+                mEntityRenderKeys.insert_or_assign(id, *renderKey);
+                visuals::queueReplayEntityPose(*renderKey, previousPose, currentPose);
+            }
+            applyReplayRidingMovement(
+                *actor,
+                targetPosition,
+                Vec2{currentPose.pitch, currentPose.yaw},
+                currentPose.headYaw,
+                currentPose.bodyYaw,
+                onGround,
+                snapMovement,
+                mCurrentTick
+            );
+            continue;
         }
 
         if (!dispatchMovementPacket(packet)) return;
@@ -6226,6 +6848,62 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         mReplayTime = static_cast<SetTimePacket const&>(*packet).mTime;
     }
 
+    if (packetId == MinecraftPacketIds::GameRulesChanged) {
+        auto&       rulesPacket          = static_cast<GameRulesChangedPacket&>(*packet);
+        auto const& rules                = rulesPacket.mRuleData->getRules();
+        bool        hasTimeOrWeatherRule = false;
+        for (auto const& rule : rules) {
+            if (equalsIgnoreCase(rule.getName(), "dodaylightcycle")) {
+                if (rule.getType() == GameRule::Type::Bool) mRecordedDoDaylightCycle = rule.getBool();
+                hasTimeOrWeatherRule = true;
+            } else if (equalsIgnoreCase(rule.getName(), "doweathercycle")) {
+                if (rule.getType() == GameRule::Type::Bool) mRecordedDoWeatherCycle = rule.getBool();
+                hasTimeOrWeatherRule = true;
+            }
+        }
+        if (hasTimeOrWeatherRule) {
+            std::vector<GameRule> filtered;
+            filtered.reserve(rules.size());
+            for (auto const& rule : rules) {
+                if (equalsIgnoreCase(rule.getName(), "dodaylightcycle")
+                    || equalsIgnoreCase(rule.getName(), "doweathercycle")) {
+                    continue;
+                }
+                filtered.push_back(rule);
+            }
+            enforceReplayWorldTime();
+            if (filtered.empty()) return true;
+            rulesPacket.mRuleData->setRules(std::move(filtered));
+        }
+    }
+
+    bool weatherEventChanged = false;
+    if (packetId == MinecraftPacketIds::LevelEvent) {
+        auto const eventId = static_cast<SharedTypes::Legacy::LevelEvent>(
+            static_cast<int>(static_cast<LevelEventPacket const&>(*packet).mEventId)
+        );
+        switch (eventId) {
+        case SharedTypes::Legacy::LevelEvent::StartRaining:
+            mRecordedRainLevel  = 1.0f;
+            weatherEventChanged = true;
+            break;
+        case SharedTypes::Legacy::LevelEvent::StopRaining:
+            mRecordedRainLevel  = 0.0f;
+            weatherEventChanged = true;
+            break;
+        case SharedTypes::Legacy::LevelEvent::StartThunderstorm:
+            mRecordedLightningLevel = 1.0f;
+            weatherEventChanged     = true;
+            break;
+        case SharedTypes::Legacy::LevelEvent::StopThunderstorm:
+            mRecordedLightningLevel = 0.0f;
+            weatherEventChanged     = true;
+            break;
+        default:
+            break;
+        }
+    }
+
     if (packetId == MinecraftPacketIds::PlayerList) {
         auto& playerList = static_cast<PlayerListPacket&>(*packet);
         auto& entries    = *playerList.mEntries;
@@ -6236,17 +6914,19 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 bool const recorder = mRecordedLocalPlayerId && entry.mId->rawID == mRecordedLocalPlayerId->rawID;
                 noteReplayIdentity(std::move(uuid), *entry.mName, ActorUniqueID{entry.mId->rawID}, recorder);
             }
-            // Servers may withhold a player's skin; give that entry the default skin instead of dropping the player.
+            // Servers may withhold a player's skin or leave a default-constructed empty skin; substitute the default
+            // skin instead of dropping the player, and mark valid recorded skins trusted inside the offline replay.
             for (auto& entry : entries) {
-                if (!entry.mSkin->mSkinImpl) {
+                if (!hasUsableReplaySkin(*entry.mSkin)) {
                     getLogger().debug(
-                        "Replay player-list entry '{}' has no skin data; using the default skin",
+                        "Replay player-list entry '{}' has no usable skin data; using the default skin",
                         *entry.mName
                     );
                     *entry.mSkin = SerializedSkinRef::createTrustedDefaultSerializedSkin();
                     if (!entry.mSkin->mSkinImpl) continue;
                 }
                 entry.mSkin->mSkinImpl->mObject.mIsPrimaryUser = false;
+                entry.mSkin->mSkinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
             }
         } else if (playerList.mAction == PlayerListPacketType::Remove) {
             // Leaving the tab list means the player left the server; the view goes back to the recorder. A player
@@ -6271,12 +6951,13 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     if (packetId == MinecraftPacketIds::PlayerSkin) {
         // Same rule as the player list: a recorded skin must never be treated as the viewer's own.
-        auto& skinImpl = static_cast<PlayerSkinPacket&>(*packet).mSkin->mSkinImpl;
-        if (!skinImpl) {
-            getLogger().debug("Skipping a replay player skin packet without skin data");
+        auto& skin = *static_cast<PlayerSkinPacket&>(*packet).mSkin;
+        if (!hasUsableReplaySkin(skin)) {
+            getLogger().debug("Skipping a replay player skin packet without usable skin data");
             return true;
         }
-        skinImpl->mObject.mIsPrimaryUser = false;
+        skin.mSkinImpl->mObject.mIsPrimaryUser = false;
+        skin.mSkinImpl->mObject.mIsTrustedSkin = TrustedSkinFlag::True;
     }
 
     if (packetId == MinecraftPacketIds::ChangeDimension) {
@@ -6318,6 +6999,28 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
     case MinecraftPacketIds::AddPlayer: {
         auto& addPlayer = static_cast<AddPlayerPacket&>(*packet);
         entityPosition  = *addPlayer.mPos;
+        entityId        = *addPlayer.mEntityId;
+        runtimeId       = *addPlayer.mRuntimeId;
+        if (mReplayPlayer && *addPlayer.mUuid == mce::UUID{}) {
+            // Older snapshots built from AddPlayerPacketPayload left other players' UUIDs all-zero; recover them from
+            // the player list so the spawned RemotePlayer resolves its recorded skin.
+            auto const& entries = mReplayPlayer->getLevel().getPlayerList();
+            mce::UUID   byName{};
+            for (auto const& [uuid, listed] : entries) {
+                if (uuid == mce::UUID{}) continue;
+                if (listed.mId->rawID == entityId.rawID) {
+                    addPlayer.mUuid = uuid;
+                    byName          = mce::UUID{};
+                    break;
+                }
+                if (byName == mce::UUID{} && !addPlayer.mName->empty() && *listed.mName == *addPlayer.mName) {
+                    byName = uuid;
+                }
+            }
+            if (*addPlayer.mUuid == mce::UUID{} && byName != mce::UUID{}) {
+                addPlayer.mUuid = byName;
+            }
+        }
         if (recordedLocalPlayer && mReplayPlayer && *addPlayer.mName == "__playback_" + addPlayer.mUuid->asString()) {
             // Older snapshots kept the original name in the player list under the synthetic UUID.
             auto const& entries = mReplayPlayer->getLevel().getPlayerList();
@@ -6338,8 +7041,6 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
                 addPlayer.mPlayerGameType = GameType::Adventure;
             }
         }
-        entityId  = *addPlayer.mEntityId;
-        runtimeId = *addPlayer.mRuntimeId;
         break;
     }
     default:
@@ -6430,6 +7131,10 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     packet->mHandler->handle(mNetworkHandler->mServerGuid.get(), *mNetworkHandler, packet);
 
+    if (packetId == MinecraftPacketIds::SetTime || weatherEventChanged) {
+        enforceReplayWorldTime();
+    }
+
     if (mReplayPlayer) {
         std::string const subject = [&]() -> std::string {
             std::string const choice = replaySubjectChoice();
@@ -6443,7 +7148,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         }();
         if (!subject.empty() && packetId == MinecraftPacketIds::PlayerSkin) {
             auto const& skinPacket = static_cast<PlayerSkinPacket const&>(*packet);
-            if (skinPacket.mUUID->asString() == subject && skinPacket.mSkin->mSkinImpl) {
+            if (skinPacket.mUUID->asString() == subject && hasUsableReplaySkin(*skinPacket.mSkin)) {
                 applyObserverSkin(*skinPacket.mSkin);
                 getLogger().debug("replay observer skin refreshed uuid={}", subject);
             }
@@ -6451,7 +7156,7 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
             auto const& playerList = static_cast<PlayerListPacket const&>(*packet);
             if (playerList.mAction == PlayerListPacketType::Add) {
                 for (auto const& entry : *playerList.mEntries) {
-                    if (entry.mUUID->asString() != subject || !entry.mSkin->mSkinImpl) continue;
+                    if (entry.mUUID->asString() != subject || !hasUsableReplaySkin(*entry.mSkin)) continue;
                     applyObserverSkin(*entry.mSkin);
                     getLogger().debug("replay observer skin refreshed uuid={}", subject);
                     break;
@@ -6481,6 +7186,26 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
 
     if (addsEntity) mRecordedEntityIds.emplace(entityId);
 
+    if ((packetId == MinecraftPacketIds::AddActor || packetId == MinecraftPacketIds::AddItemActor
+         || packetId == MinecraftPacketIds::AddPainting)
+        && mReplayPlayer) {
+        auto& level = mReplayPlayer->getLevel();
+        if (auto* actor = level.fetchEntity(entityId, false)) {
+            auto const position = actor->getPosition();
+            auto const rotation = actor->getRotation();
+            if (mSeekTargetTick >= 0 && mSnapMovementDuringSeek) {
+                cancelNativeMovementInterpolation(*actor, position, rotation, rotation.y);
+            } else {
+                syncReplayRenderTransform(*actor, position, rotation);
+            }
+            if (auto const renderKey = replayEntityRenderKey(level, entityId)) {
+                auto const pose = replayRenderPose(*actor);
+                mEntityRenderKeys.insert_or_assign(entityId, *renderKey);
+                visuals::queueReplayEntityPose(*renderKey, pose, pose);
+            }
+        }
+    }
+
     if (packetId == MinecraftPacketIds::AddPlayer && mReplayPlayer) {
         auto const& addPlayer = static_cast<AddPlayerPacket const&>(*packet);
         if (recordedLocalPlayer) mRecordedLocalPlayerId = entityId;
@@ -6491,13 +7216,17 @@ bool ReplaySession::applyGamePacket(MinecraftPacketIds packetId, std::string_vie
         auto& level = mReplayPlayer->getLevel();
         if (auto* actor = level.fetchEntity(entityId, false)) {
             if (actor->isPlayer()) {
+                auto&       player  = static_cast<Player&>(*actor);
                 auto const& entries = level.getPlayerList();
                 auto const  entry   = entries.find(*addPlayer.mUuid);
-                if (entry != entries.end() && entry->second.mSkin->mSkinImpl) {
-                    auto& player = static_cast<Player&>(*actor);
+                if (entry != entries.end() && hasUsableReplaySkin(*entry->second.mSkin)) {
                     player.updateSkin(*entry->second.mSkin, static_cast<int>(player.getClientSubId()));
+                    player.mFirstPersonAnimationComponent.reset();
                     getLogger()
                         .debug("replay skin applied name={} uuid={}", *addPlayer.mName, addPlayer.mUuid->asString());
+                }
+                if (player.getStatusFlag(ActorFlags::Gliding)) {
+                    updateReplayGlidingTicks(player, true);
                 }
             }
             if (auto const renderKey = replayEntityRenderKey(level, entityId)) {
@@ -6937,6 +7666,7 @@ void ReplaySession::onLevelJoined(Player& player) {
             player.getLevel().getLevelId(),
             mReplayLevelId
         );
+        mPendingRestoreTickAfterReload.reset();
         stop();
         return;
     }
@@ -6945,6 +7675,18 @@ void ReplaySession::onLevelJoined(Player& player) {
     mReplayPlayer      = &player;
     if (!refreshReplayPlayer()) {
         getLogger().error("Replay player is unavailable immediately after joining the replay world");
+    }
+
+    auto& level = player.getLevel();
+    lockReplayWorldRules(level.getGameRules());
+    level.getLevelData().setDaylightCycle(DaylightCycle::LockTime);
+    visuals::setReplayWorldEnvActive(true);
+    enforceReplayWorldTime();
+
+    if (mPendingRestoreTickAfterReload) {
+        int const restoreTick = *mPendingRestoreTickAfterReload;
+        mPendingRestoreTickAfterReload.reset();
+        requestSeek(restoreTick);
     }
 }
 
@@ -6958,6 +7700,7 @@ void ReplaySession::onLevelStartJoin() {
 }
 
 void ReplaySession::onLevelExit() {
+    visuals::setReplayWorldEnvActive(false);
     if (mReplayLevelId.empty()) return;
     if (mCleanupState == CleanupState::None) {
         if (!mActive || !mReplayWorldJoined) return;
@@ -6974,6 +7717,8 @@ void ReplaySession::onLevelExit() {
 }
 
 void ReplaySession::onLevelJoinCancelled() {
+    visuals::setReplayWorldEnvActive(false);
+    mPendingRestoreTickAfterReload.reset();
     if (mReplayLevelId.empty() || mReplayWorldJoined) return;
     if (mCleanupState == CleanupState::None) {
         if (!mActive) return;
@@ -6999,7 +7744,19 @@ void ReplaySession::tryFinalizeWorldCleanup() {
     auto  basePathBuffer = cache.getBasePath();
     auto  worldsPath     = std::filesystem::path(basePathBuffer.get());
 
+    auto tryStartPendingReload = [this] {
+        if (mPendingReloadReplayPath.empty() || mActive || !mReplayLevelId.empty() || mScreenModel.expired()) {
+            return false;
+        }
+        auto reloadPath = std::exchange(mPendingReloadReplayPath, {});
+        if (!start(std::move(reloadPath))) {
+            mPendingRestoreTickAfterReload.reset();
+        }
+        return true;
+    };
+
     if (mCleanupState == CleanupState::None) {
+        if (tryStartPendingReload()) return;
         if (mActive || !mReplayLevelId.empty() || mOrphanReplayWorldsScanned) return;
 
         std::error_code ec;
@@ -7065,6 +7822,7 @@ void ReplaySession::tryFinalizeWorldCleanup() {
     if (!levelIsCached && !worldFilesExist) {
         getLogger().debug("Removed replay world {}", mReplayLevelId);
         finishWorldCleanup();
+        (void)tryStartPendingReload();
         return;
     }
 

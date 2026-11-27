@@ -5,8 +5,13 @@
 #include "playback/editor/graphics/CameraRenderHooks.h"
 #include "playback/editor/graphics/ImGuiRenderer.h"
 #include "playback/keyframe/CameraTimelineRegistry.h"
+#include "playback/keyframe/FreezeTimelineEvaluator.h"
+#include "playback/keyframe/TimeOfDayTimelineEvaluator.h"
+#include "playback/keyframe/TimelapseTimelineEvaluator.h"
+#include "playback/keyframe/WeatherTimelineEvaluator.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/visuals/ReplaySampleTime.h"
+#include "playback/visuals/ReplayWorldEnvHooks.h"
 
 #include <algorithm>
 #include <limits>
@@ -30,6 +35,17 @@ constexpr float WarmupStepTicks = 1.0f;
 bool ticketsEqual(visuals::FrameTicket const& left, visuals::FrameTicket const& right) {
     return left.frameIndex == right.frameIndex && left.ptsNumerator == right.ptsNumerator
         && left.ptsDenominator == right.ptsDenominator;
+}
+
+// True when the world is frozen or client time still trails replay time during slowdown easing.
+[[nodiscard]] bool isClientTimeLagged(ExportFramePlan const& frame) noexcept {
+    if (frame.worldFrozen) return true;
+    if (frame.replayTickDenominator <= 0 || frame.clientTickDenominator <= 0) return false;
+    long double const replayTick =
+        static_cast<long double>(frame.replayTickNumerator) / static_cast<long double>(frame.replayTickDenominator);
+    long double const clientTick =
+        static_cast<long double>(frame.clientTickNumerator) / static_cast<long double>(frame.clientTickDenominator);
+    return clientTick + 1e-6L < replayTick;
 }
 
 } // namespace
@@ -90,7 +106,21 @@ bool OfflineRenderBoundary::open(
             "Export camera timeline has no sample at the start tick; using the observer viewpoint"
         );
     }
-    if (!mReplay.beginExportTimeline(static_cast<int>(startTick))) {
+    bool const keyframeTimelapse = keyframe::hasActiveTimelapseTrack(project);
+    if (!mReplay.beginExportTimeline(static_cast<int>([&]() -> int64_t {
+            if ((!settings.timelapse || keyframeTimelapse) && keyframe::hasActiveFreezeTrack(project)) {
+                auto const freezeEval =
+                    keyframe::evaluateFreezeAt(project.freezeTrack, static_cast<long double>(startTick));
+                if (freezeEval.frozen) {
+                    auto const cNum = static_cast<int64_t>(std::llround(freezeEval.clientTick * 1'000'000.0L));
+                    if (auto const cTime =
+                            visuals::ReplaySampleTime::fromRational(std::max<int64_t>(0, cNum), 1'000'000)) {
+                        return std::clamp<int64_t>(cTime->requiredAppliedTick(), 0, maximumIntTick);
+                    }
+                }
+            }
+            return startTick;
+        }()))) {
         mReplay.endExportTimeline();
         editor::graphics::gImGuiRenderer.closeExportCapture();
         mExecutor.close();
@@ -100,8 +130,14 @@ bool OfflineRenderBoundary::open(
 
     mTimelineInitialized           = false;
     mInitializationTickObserved    = false;
-    mTimelapse                     = settings.timelapse;
+    mTimelapse                     = settings.timelapse || keyframeTimelapse;
     mPendingCutHandled             = false;
+    mExportTimeOfDayTrack          = project.timeOfDayTrack;
+    mExportWeatherTrack            = project.weatherTrack;
+    mExportDaytimeOverrideEnabled  = project.daytimeOverrideEnabled;
+    mExportDaytimeOverrideTicks    = state::editing::model::clampTimeOfDayTicks(project.daytimeOverrideTicks);
+    mExportWeatherOverride         = project.weatherOverride;
+    applyExportWorldEnv(static_cast<double>(startTick), 0.0f);
     mCaptureArmed                  = false;
     mWarmupFrames                  = settings.warmupFrames;
     mWarmupFramesRemaining         = mWarmupFrames;
@@ -177,6 +213,11 @@ void OfflineRenderBoundary::close() {
     mInitializationTickObserved    = false;
     mTimelapse                     = false;
     mPendingCutHandled             = false;
+    mExportTimeOfDayTrack          = {};
+    mExportWeatherTrack            = {};
+    mExportDaytimeOverrideEnabled  = false;
+    mExportDaytimeOverrideTicks    = 6000;
+    mExportWeatherOverride         = state::editing::model::WeatherOverride::Recorded;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Closed;
     mError                         = OfflineRenderBoundaryError::None;
@@ -210,6 +251,11 @@ void OfflineRenderBoundary::cancel() {
     mInitializationTickObserved    = false;
     mTimelapse                     = false;
     mPendingCutHandled             = false;
+    mExportTimeOfDayTrack          = {};
+    mExportWeatherTrack            = {};
+    mExportDaytimeOverrideEnabled  = false;
+    mExportDaytimeOverrideTicks    = 6000;
+    mExportWeatherOverride         = state::editing::model::WeatherOverride::Recorded;
     mCaptureArmed                  = false;
     mState                         = OfflineRenderBoundaryState::Cancelled;
     mError                         = OfflineRenderBoundaryError::None;
@@ -287,10 +333,12 @@ OfflineRenderStepResult OfflineRenderBoundary::advance(ExportFramePlan const& fr
 
     if (mTimelineInitialized && !mPendingCutHandled) {
         mPendingCutHandled  = true;
-        int const  nextTick = targetTick(*mPendingFrame);
-        int const  applied  = mReplay.getAppliedReplayTick();
-        bool const hardCut  = mPendingFrame->hardCut;
-        bool const needSeek = hardCut || nextTick < applied || (mTimelapse && nextTick - applied > 1);
+        int const  nextTick     = targetTick(*mPendingFrame);
+        int const  applied      = mReplay.getAppliedReplayTick();
+        bool const hardCut      = mPendingFrame->hardCut;
+        bool const unfreezeJump = mLastSubmittedFrame && isClientTimeLagged(*mLastSubmittedFrame)
+                               && !isClientTimeLagged(*mPendingFrame) && nextTick - applied > 1;
+        bool const needSeek = hardCut || nextTick < applied || (mTimelapse && nextTick - applied > 1) || unfreezeJump;
         if (needSeek) {
             if (!mReplay.beginExportCutSeek(nextTick, hardCut || nextTick < applied)) {
                 fault(
@@ -703,7 +751,7 @@ OfflineRenderBoundaryStatus OfflineRenderBoundary::status() {
 }
 
 int OfflineRenderBoundary::targetTick(ExportFramePlan const& frame) const {
-    auto const sample = visuals::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
+    auto const sample = visuals::ReplaySampleTime::fromRational(frame.clientTickNumerator, frame.clientTickDenominator);
     if (!sample) return 0;
     auto const clamped = std::clamp<int64_t>(sample->requiredAppliedTick(), 0, mMaximumReplayTick);
     return clamped > std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : static_cast<int>(clamped);
@@ -712,27 +760,40 @@ int OfflineRenderBoundary::targetTick(ExportFramePlan const& frame) const {
 std::optional<OfflineRenderClockSample> OfflineRenderBoundary::clockSample(ExportFramePlan const& frame) const {
     auto const replayTime =
         visuals::ReplaySampleTime::fromRational(frame.replayTickNumerator, frame.replayTickDenominator);
-    if (!replayTime) return std::nullopt;
+    auto const clientTime =
+        visuals::ReplaySampleTime::fromRational(frame.clientTickNumerator, frame.clientTickDenominator);
+    if (!replayTime || !clientTime) return std::nullopt;
 
-    long double const current = replayTime->value();
+    long double const current = clientTime->value();
     if (current < 0.0L || current > static_cast<long double>(mMaximumReplayTick)) return std::nullopt;
 
+    bool unfreezeJump = false;
+    if (mLastSubmittedFrame && isClientTimeLagged(*mLastSubmittedFrame) && !isClientTimeLagged(frame)) {
+        if (auto const lastClientTime = visuals::ReplaySampleTime::fromRational(
+                mLastSubmittedFrame->clientTickNumerator,
+                mLastSubmittedFrame->clientTickDenominator
+            )) {
+            unfreezeJump = clientTime->requiredAppliedTick() - lastClientTime->requiredAppliedTick() > 1;
+        }
+    }
+
     long double delta             = 0.0L;
-    int64_t     previousWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
-    if (mLastSubmittedFrame && !frame.hardCut) {
+    int64_t     previousWholeTick = frame.clientTickNumerator / frame.clientTickDenominator;
+    if (mLastSubmittedFrame && !frame.hardCut && !unfreezeJump) {
         delta = current
-              - static_cast<long double>(mLastSubmittedFrame->replayTickNumerator)
-                    / static_cast<long double>(mLastSubmittedFrame->replayTickDenominator);
-        previousWholeTick = mLastSubmittedFrame->replayTickNumerator / mLastSubmittedFrame->replayTickDenominator;
+              - static_cast<long double>(mLastSubmittedFrame->clientTickNumerator)
+                    / static_cast<long double>(mLastSubmittedFrame->clientTickDenominator);
+        previousWholeTick = mLastSubmittedFrame->clientTickNumerator / mLastSubmittedFrame->clientTickDenominator;
     }
     if (delta < 0.0L || delta > static_cast<long double>(std::numeric_limits<float>::max())) return std::nullopt;
 
-    int64_t const currentWholeTick = frame.replayTickNumerator / frame.replayTickDenominator;
+    int64_t const currentWholeTick = frame.clientTickNumerator / frame.clientTickDenominator;
     int64_t const wholeTicks       = currentWholeTick - previousWholeTick;
     if (wholeTicks < 0 || wholeTicks > std::numeric_limits<int>::max()) return std::nullopt;
 
     return OfflineRenderClockSample{
         *replayTime,
+        *clientTime,
         static_cast<float>(delta),
         static_cast<int>(wholeTicks),
         frame.ticket.frameIndex,
@@ -745,6 +806,7 @@ void OfflineRenderBoundary::prepareExportObserver(ExportFramePlan const& frame) 
     if (mTimelineInitialized && mReplay.getAppliedReplayTick() >= nextTick) return;
     auto const sample = clockSample(frame);
     if (!sample) return;
+    applyExportWorldEnv(static_cast<double>(sample->replayTime.value()), sample->clientTime.partialTick());
     // Move the observer to the upcoming tick's camera before prepareExportTick runs that tick's packets
     // (e.g. OptiPiston checks the local player position when BlockActorDataPacket arrives).
     auto const probeTime =
@@ -890,6 +952,7 @@ bool OfflineRenderBoundary::publishStep(ExportFramePlan const& frame, OfflineRen
         fault(OfflineRenderBoundaryError::InvalidFrame, "The offline render clock sample is invalid");
         return false;
     }
+    applyExportWorldEnv(static_cast<double>(sample->replayTime.value()), sample->clientTime.partialTick());
     sample->kind = kind;
     if (kind == OfflineRenderClockKind::Warmup) {
         // The scene holds still while the renderers' time runs.
@@ -977,9 +1040,26 @@ void OfflineRenderBoundary::fault(OfflineRenderBoundaryError error, std::string 
     mTickGateSuspendedForDimension = false;
     mTimelapse                     = false;
     mPendingCutHandled             = false;
+    mExportTimeOfDayTrack          = {};
+    mExportWeatherTrack            = {};
+    mExportDaytimeOverrideEnabled  = false;
+    mExportDaytimeOverrideTicks    = 6000;
+    mExportWeatherOverride         = state::editing::model::WeatherOverride::Recorded;
     mState                         = OfflineRenderBoundaryState::Faulted;
     mError                         = error;
     mMessage                       = std::move(message);
+}
+
+void OfflineRenderBoundary::applyExportWorldEnv(double replayTick, std::optional<float> partialTick) {
+    auto timeOverride = keyframe::evaluateTimeOfDayAt(mExportTimeOfDayTrack, replayTick);
+    if (!timeOverride && mExportDaytimeOverrideEnabled) {
+        timeOverride = static_cast<double>(state::editing::model::clampTimeOfDayTicks(mExportDaytimeOverrideTicks));
+    }
+    mReplay.setTimeOfDayOverride(timeOverride);
+    auto const weatherOverride =
+        keyframe::evaluateWeatherAt(mExportWeatherTrack, replayTick).value_or(mExportWeatherOverride);
+    mReplay.setWeatherOverride(static_cast<visuals::ReplayWeatherMode>(static_cast<uint8_t>(weatherOverride)));
+    mReplay.enforceReplayWorldTime(partialTick);
 }
 
 } // namespace playback::exporting

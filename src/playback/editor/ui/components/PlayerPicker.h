@@ -32,7 +32,8 @@ bool drawPlayerPicker(
     std::span<state::ReplayEntityView const> entities,
     std::string_view                         current,
     bool                                     following,
-    PlayerPickerResult&                      result
+    PlayerPickerResult&                      result,
+    bool                                     mixed = false
 );
 
 // The same search and list drawn inline at the available width, for the inspector. Returns true on a pick.

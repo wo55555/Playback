@@ -37,6 +37,30 @@ bool clipNameExists(model::EditorStateExt const& state, std::string_view name) n
     return false;
 }
 
+bool audioTrackIdExists(model::EditorStateExt const& state, std::string_view id) noexcept {
+    if (std::ranges::any_of(state.audioTracks, [&](auto const& t) { return t.id == id; })) return true;
+    for (auto const& scene : state.scenes) {
+        if (std::ranges::any_of(scene.audioTracks, [&](auto const& t) { return t.id == id; })) return true;
+    }
+    return false;
+}
+
+bool audioTrackNameExists(model::EditorStateExt const& state, std::string_view name) noexcept {
+    return std::ranges::any_of(state.audioTracks, [&](auto const& t) { return t.name == name; });
+}
+
+bool audioClipIdExists(model::EditorStateExt const& state, std::string_view id) noexcept {
+    for (auto const& track : state.audioTracks) {
+        if (std::ranges::any_of(track.clips, [&](auto const& c) { return c.id == id; })) return true;
+    }
+    for (auto const& scene : state.scenes) {
+        for (auto const& track : scene.audioTracks) {
+            if (std::ranges::any_of(track.clips, [&](auto const& c) { return c.id == id; })) return true;
+        }
+    }
+    return false;
+}
+
 void clampExportRange(int& exportInTick, int& exportOutTick, int totalTicks) noexcept {
     if (exportInTick >= 0) exportInTick = std::clamp(exportInTick, 0, totalTicks);
     if (exportOutTick >= 0) exportOutTick = std::clamp(exportOutTick, 0, totalTicks);
@@ -67,7 +91,6 @@ void syncCamerasForTotalTicks(
                 }
                 clip.inTick        = 0;
                 clip.outTick       = totalTicks;
-                clip.speed         = 1.0f;
                 clip.exportEnabled = true;
                 camera.clips.push_back(std::move(clip));
             } else if (camera.clips.size() == 1 && camera.clips[0].inTick == 0 && camera.clips[0].outTick <= 1) {
@@ -95,6 +118,31 @@ findCoveringClip(model::CameraEntity const& camera, int tick, int totalTicks, bo
         }
     }
     return nullptr;
+}
+
+model::CameraEntity const* findCameraById(model::EditorStateExt const& state, std::string_view cameraId) noexcept {
+    if (cameraId.empty()) return nullptr;
+    for (auto const& camera : state.cameras) {
+        if (camera.id == cameraId) return &camera;
+    }
+    return nullptr;
+}
+
+template <typename Dst, typename Src>
+void copySceneScopeFields(Dst& dst, Src const& src) {
+    dst.cameras        = src.cameras;
+    dst.markers        = src.markers;
+    dst.speedTrack             = src.speedTrack;
+    dst.freezeTrack            = src.freezeTrack;
+    dst.timelapseTrack         = src.timelapseTrack;
+    dst.timeOfDayTrack         = src.timeOfDayTrack;
+    dst.weatherTrack           = src.weatherTrack;
+    dst.daytimeOverrideEnabled = src.daytimeOverrideEnabled;
+    dst.daytimeOverrideTicks   = src.daytimeOverrideTicks;
+    dst.weatherOverride        = src.weatherOverride;
+    dst.audioTracks            = src.audioTracks;
+    dst.exportInTick   = src.exportInTick;
+    dst.exportOutTick  = src.exportOutTick;
 }
 
 } // namespace
@@ -137,6 +185,62 @@ std::string nextSceneId(model::EditorStateExt const& state) {
     }
 }
 
+std::string nextAudioTrackId(model::EditorStateExt const& state) {
+    for (size_t next = 1;; ++next) {
+        auto id = "audio_" + std::to_string(next);
+        if (!audioTrackIdExists(state, id)) return id;
+    }
+}
+
+std::string defaultAudioTrackName(model::EditorStateExt const& state) {
+    for (size_t next = 1;; ++next) {
+        auto candidate = "playback.refactorEditor.audio.defaultTrackName"_tr(next);
+        if (candidate == "playback.refactorEditor.audio.defaultTrackName" || candidate.empty()) {
+            candidate = "Audio " + std::to_string(next);
+        }
+        if (!audioTrackNameExists(state, candidate)) return candidate;
+    }
+}
+
+std::string nextAudioClipId(model::EditorStateExt const& state) {
+    for (size_t next = 1;; ++next) {
+        auto id = "aclip_" + std::to_string(next);
+        if (!audioClipIdExists(state, id)) return id;
+    }
+}
+
+model::AudioTrack const* findAudioTrack(model::EditorStateExt const& state, std::string_view trackId) noexcept {
+    if (trackId.empty()) return nullptr;
+    for (auto const& track : state.audioTracks) {
+        if (track.id == trackId) return &track;
+    }
+    return nullptr;
+}
+
+model::AudioTrack* findAudioTrack(model::EditorStateExt& state, std::string_view trackId) noexcept {
+    if (trackId.empty()) return nullptr;
+    for (auto& track : state.audioTracks) {
+        if (track.id == trackId) return &track;
+    }
+    return nullptr;
+}
+
+model::AudioClip const* findAudioClip(model::AudioTrack const& track, std::string_view clipId) noexcept {
+    if (clipId.empty()) return nullptr;
+    for (auto const& clip : track.clips) {
+        if (clip.id == clipId) return &clip;
+    }
+    return nullptr;
+}
+
+model::AudioClip* findAudioClip(model::AudioTrack& track, std::string_view clipId) noexcept {
+    if (clipId.empty()) return nullptr;
+    for (auto& clip : track.clips) {
+        if (clip.id == clipId) return &clip;
+    }
+    return nullptr;
+}
+
 model::Scene const* findScene(model::EditorStateExt const& state, std::string_view sceneId) noexcept {
     if (sceneId.empty()) return nullptr;
     for (auto const& scene : state.scenes) {
@@ -167,20 +271,14 @@ void syncActiveSceneFromWorking(model::EditorStateExt& state) {
     auto* scene = activeScene(state);
     if (!scene) return;
     if (state.activeSceneId != scene->id) state.activeSceneId = scene->id;
-    scene->cameras       = state.cameras;
-    scene->markers       = state.markers;
-    scene->exportInTick  = state.exportInTick;
-    scene->exportOutTick = state.exportOutTick;
+    copySceneScopeFields(*scene, state);
 }
 
 void loadWorkingFromActiveScene(model::EditorStateExt& state) {
     auto const* scene = activeScene(state);
     if (!scene) return;
     if (state.activeSceneId != scene->id) state.activeSceneId = scene->id;
-    state.cameras       = scene->cameras;
-    state.markers       = scene->markers;
-    state.exportInTick  = scene->exportInTick;
-    state.exportOutTick = scene->exportOutTick;
+    copySceneScopeFields(state, *scene);
 }
 
 model::EditorStateExt buildProjectForScene(model::EditorStateExt const& state, model::Scene const& scene) {
@@ -200,15 +298,9 @@ model::EditorStateExt buildProjectForScene(model::EditorStateExt const& state, m
     bool const  isActive = active ? (&scene == active || (!scene.id.empty() && scene.id == active->id))
                                   : (!scene.id.empty() && scene.id == state.activeSceneId);
     if (isActive) {
-        result.cameras       = state.cameras;
-        result.markers       = state.markers;
-        result.exportInTick  = state.exportInTick;
-        result.exportOutTick = state.exportOutTick;
+        copySceneScopeFields(result, state);
     } else {
-        result.cameras       = scene.cameras;
-        result.markers       = scene.markers;
-        result.exportInTick  = scene.exportInTick;
-        result.exportOutTick = scene.exportOutTick;
+        copySceneScopeFields(result, scene);
     }
     return result;
 }
@@ -221,10 +313,7 @@ void ensureDefaultScene(model::EditorStateExt& state, std::string defaultSceneNa
         scene.id            = "scene_1";
         scene.name          = defaultSceneName.empty() ? "playback.refactorEditor.defaults.scene"_tr(size_t{1})
                                                        : std::move(defaultSceneName);
-        scene.cameras       = state.cameras;
-        scene.markers       = state.markers;
-        scene.exportInTick  = state.exportInTick;
-        scene.exportOutTick = state.exportOutTick;
+        copySceneScopeFields(scene, state);
 
         state.scenes.push_back(std::move(scene));
         state.activeSceneId = "scene_1";
@@ -243,7 +332,6 @@ void ensureDefaultScene(model::EditorStateExt& state, std::string defaultSceneNa
                 }
                 clip.inTick        = 0;
                 clip.outTick       = state.totalTicks;
-                clip.speed         = 1.0f;
                 clip.exportEnabled = true;
                 cam.clips.push_back(std::move(clip));
             }
@@ -265,7 +353,6 @@ void ensureDefaultScene(model::EditorStateExt& state, std::string defaultSceneNa
                 clip.name          = defaultClipName(state);
                 clip.inTick        = 0;
                 clip.outTick       = state.totalTicks;
-                clip.speed         = 1.0f;
                 clip.exportEnabled = true;
                 scene.cameras.front().clips.push_back(std::move(clip));
             }
@@ -345,20 +432,6 @@ ClipWithCamera activeClipAt(
     return {};
 }
 
-float activeClipSpeedAt(model::EditorStateExt const& state, int tick) noexcept {
-    if (auto const hit = activeClipAt(state, tick, false)) {
-        return model::clampClipSpeed(hit.clip->speed);
-    }
-    return 1.0f;
-}
-
-bool isClipMutedAt(model::EditorStateExt const& state, int tick) noexcept {
-    if (auto const hit = activeClipAt(state, tick, false)) {
-        return hit.clip->muted;
-    }
-    return false;
-}
-
 std::vector<CompositedClipSlice> collectCompositedSlices(
     model::EditorStateExt const& state,
     bool                         onlyExportEnabled,
@@ -397,17 +470,7 @@ std::vector<CompositedClipSlice> collectCompositedSlices(
         if (!slices.empty() && slices.back().outTick == b0 && slices.back().clip == hit.clip) {
             slices.back().outTick = b1;
         } else {
-            slices.push_back(
-                CompositedClipSlice{
-                    b0,
-                    b1,
-                    hit.camera,
-                    hit.clip,
-                    model::clampClipSpeed(hit.clip->speed),
-                    hit.clip->muted,
-                    hit.clip->exportEnabled
-                }
-            );
+            slices.push_back(CompositedClipSlice{b0, b1, hit.camera, hit.clip, hit.clip->exportEnabled});
         }
     }
     return slices;
@@ -479,6 +542,111 @@ model::Clip const* findClipById(model::EditorStateExt const& state, std::string_
 
 model::Clip* findClipById(model::EditorStateExt& state, std::string_view clipId) noexcept {
     return findClipWithCamera(state, clipId).clip;
+}
+
+std::vector<model::SelectedClipCut> collectCameraClipCuts(model::CameraEntity const& camera, int totalTicks) {
+    if (totalTicks <= 0) return {};
+
+    struct Interval {
+        int inTick{};
+        int outTick{};
+    };
+    std::vector<Interval> intervals;
+    intervals.reserve(camera.clips.size());
+    for (auto const& clip : camera.clips) {
+        int const cIn  = std::clamp(clip.inTick, 0, totalTicks);
+        int const cOut = std::clamp(clip.outTick, 0, totalTicks);
+        if (cIn < cOut) intervals.push_back({cIn, cOut});
+    }
+    if (intervals.empty()) {
+        return {
+            model::SelectedClipCut{camera.id, 0, totalTicks}
+        };
+    }
+
+    std::ranges::sort(intervals, [](Interval const& a, Interval const& b) {
+        return a.inTick != b.inTick ? a.inTick < b.inTick : a.outTick < b.outTick;
+    });
+
+    std::vector<model::SelectedClipCut> cuts;
+    int                                 cursor = 0;
+    for (auto const& iv : intervals) {
+        if (iv.inTick > cursor) {
+            cuts.push_back({camera.id, cursor, iv.inTick});
+        } else if (iv.inTick == cursor && cursor > 0) {
+            model::SelectedClipCut seam{camera.id, cursor, cursor};
+            if (cuts.empty() || cuts.back() != seam) cuts.push_back(std::move(seam));
+        }
+        cursor = std::max(cursor, iv.outTick);
+    }
+    if (cursor < totalTicks) {
+        cuts.push_back({camera.id, cursor, totalTicks});
+    }
+    return cuts;
+}
+
+model::CameraEntity const*
+selectedCamera(model::EditorStateExt const& state, model::SelectionModel const& selection) noexcept {
+    if (auto const* selected = selection.getAs<model::SelectedCamera>()) {
+        return findCameraById(state, selected->cameraId);
+    }
+    if (auto const* selected = selection.getAs<model::SelectedClip>()) {
+        return findClipWithCamera(state, selected->clipId).camera;
+    }
+    if (auto const* selected = selection.getAs<model::SelectedKeyframe>()) {
+        return findCameraById(state, selected->trackId);
+    }
+    if (auto const* selected = selection.getAs<model::SelectedClipCut>()) {
+        return findCameraById(state, selected->cameraId);
+    }
+    return nullptr;
+}
+
+std::string resolveKeyframeTargetCamera(model::EditorStateExt const& state, model::SelectionModel const& selection) {
+    if (auto const* camera = selectedCamera(state, selection)) {
+        return camera->locked ? std::string{} : camera->id;
+    }
+    for (auto const& camera : state.cameras) {
+        if (camera.enabled && !camera.locked) return camera.id;
+    }
+    for (auto const& camera : state.cameras) {
+        if (!camera.locked) return camera.id;
+    }
+    return {};
+}
+
+ClipWithCamera resolveExportToggleClip(
+    model::EditorStateExt const& state,
+    model::SelectionModel const& selection,
+    int                          tick,
+    int                          totalTicks,
+    std::span<int const>         dimensionTransitions
+) noexcept {
+    if (auto const* selectedClip = selection.getAs<model::SelectedClip>()) {
+        return findClipWithCamera(state, selectedClip->clipId);
+    }
+    if (auto const* camera = selectedCamera(state, selection)) {
+        if (auto const* clip = findCoveringClip(*camera, tick, totalTicks, false)) {
+            return {camera, clip};
+        }
+        return {};
+    }
+    if (auto const active = activeClipAt(state, tick, false, dimensionTransitions); active && !active.camera->locked) {
+        return active;
+    }
+    for (auto const& camera : state.cameras) {
+        if (camera.locked) continue;
+        if (auto const* clip = findCoveringClip(camera, tick, totalTicks, false)) {
+            return {&camera, clip};
+        }
+    }
+    for (auto const& camera : state.cameras) {
+        if (!camera.locked) continue;
+        if (auto const* clip = findCoveringClip(camera, tick, totalTicks, false)) {
+            return {&camera, clip};
+        }
+    }
+    return {};
 }
 
 } // namespace playback::state::editing::ClipOps

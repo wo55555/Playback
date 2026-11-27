@@ -17,6 +17,7 @@ struct PacketLifecycleEntry {
 // Unlisted packet IDs are ordinary timeline packets. The table only describes lifecycle exceptions.
 constexpr auto PacketLifecycleTable = std::to_array<PacketLifecycleEntry>({
     {MinecraftPacketIds::MoveAbsoluteActor,                       {PacketLifecycle::Ignore}                        },
+    {MinecraftPacketIds::MoveDeltaActor,                          {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::MovePlayer,                              {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::NetworkChunkPublisherUpdate,             {PacketLifecycle::Ignore}                        },
     {MinecraftPacketIds::ChunkRadiusUpdated,                      {PacketLifecycle::Ignore}                        },

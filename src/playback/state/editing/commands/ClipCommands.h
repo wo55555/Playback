@@ -2,15 +2,17 @@
 
 #include "playback/state/editing/models/EditorStateExt.h"
 #include "playback/state/editing/models/IEditCommand.h"
+#include "playback/state/editing/models/SelectionModel.h"
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace playback::state::editing::command {
 
 class AddClip final : public model::IEditCommand {
 public:
-    AddClip(std::string cameraId, int inTick, int outTick, std::string name, float speed = 1.0f);
+    AddClip(std::string cameraId, int inTick, int outTick, std::string name);
     void                      execute(model::EditorStateExt& state) override;
     void                      undo(model::EditorStateExt& state) override;
     [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
@@ -21,7 +23,6 @@ private:
     int                                  mInTick;
     int                                  mOutTick;
     std::string                          mName;
-    float                                mSpeed;
     std::optional<model::EditorStateExt> mBefore;
 };
 
@@ -55,20 +56,6 @@ private:
     std::optional<model::EditorStateExt> mBefore;
 };
 
-class SetClipSpeed final : public model::IEditCommand {
-public:
-    SetClipSpeed(std::string clipId, float speed);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mClipId;
-    float                                mSpeed;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
 class RenameClip final : public model::IEditCommand {
 public:
     RenameClip(std::string clipId, std::string name);
@@ -80,20 +67,6 @@ public:
 private:
     std::string                          mClipId;
     std::string                          mName;
-    std::optional<model::EditorStateExt> mBefore;
-};
-
-class SetClipMuted final : public model::IEditCommand {
-public:
-    SetClipMuted(std::string clipId, bool muted);
-    void                      execute(model::EditorStateExt& state) override;
-    void                      undo(model::EditorStateExt& state) override;
-    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
-    [[nodiscard]] std::string label() const override;
-
-private:
-    std::string                          mClipId;
-    bool                                 mMuted;
     std::optional<model::EditorStateExt> mBefore;
 };
 
@@ -164,6 +137,25 @@ public:
 private:
     std::string                          mClipId;
     std::optional<model::EditorStateExt> mBefore;
+};
+
+class HealClipCuts final : public model::IEditCommand {
+public:
+    explicit HealClipCuts(
+        std::vector<model::SelectedClipCut> cuts,
+        std::vector<model::KeyframeRef>     keyframesToDelete = {}
+    );
+    void                      execute(model::EditorStateExt& state) override;
+    void                      undo(model::EditorStateExt& state) override;
+    [[nodiscard]] bool        didChange() const override { return mBefore.has_value(); }
+    [[nodiscard]] std::string label() const override;
+
+private:
+    std::vector<model::SelectedClipCut>  mCuts;
+    std::vector<model::KeyframeRef>      mKeyframesToDelete;
+    std::optional<model::EditorStateExt> mBefore;
+    bool                                 mDeletedKeyframes{false};
+    bool                                 mHealedCuts{false};
 };
 
 class AddScene final : public model::IEditCommand {

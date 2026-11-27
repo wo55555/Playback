@@ -4,6 +4,8 @@
 #include "CameraKeyframeHandler.h"
 #include "InterpolationHelpers.h"
 #include "KeyframeTrack.h"
+#include "SpeedTimelineEvaluator.h"
+#include "TimelapseTimelineEvaluator.h"
 #include "playback/state/editing/ClipOps.h"
 
 #include <algorithm>
@@ -74,46 +76,48 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
     );
     buildSpeedSpans();
 
-    auto buildTrackSegment = [this](size_t segmentIndex, KeyframeTrack::KeyMap const& segmentKeys) {
-        int const                    firstTick = segmentKeys.begin()->first;
-        int const                    lastTick  = segmentKeys.rbegin()->first;
-        std::vector<SegmentInterval> intervals;
-        bool                         hasUnscaledIntervals = false;
+    auto buildTrackSegment =
+        [this](size_t segmentIndex, KeyframeTrack::KeyMap const& segmentKeys, bool wrapAngles = true) {
+            int const                    firstTick = segmentKeys.begin()->first;
+            int const                    lastTick  = segmentKeys.rbegin()->first;
+            std::vector<SegmentInterval> intervals;
+            bool                         hasUnscaledIntervals = false;
 
-        if (segmentKeys.size() >= 2) {
-            intervals.reserve(segmentKeys.size() - 1);
-            long double rCursor = static_cast<long double>(firstTick);
-            for (auto it = segmentKeys.begin(), next = std::next(it); next != segmentKeys.end(); it = next, ++next) {
-                int const         tk     = it->first;
-                int const         tkNext = next->first;
-                long double const span   = static_cast<long double>(tkNext - tk);
-                if (it->second.ignoreClipSpeed) {
-                    hasUnscaledIntervals     = true;
-                    long double const uStart = unscaledTicksAt(rCursor);
-                    long double const uEnd   = uStart + span;
-                    long double const rEnd   = replayTickForUnscaled(uEnd);
-                    intervals.push_back(SegmentInterval{rCursor, rEnd, uStart, tk, tkNext, true});
-                    rCursor = rEnd;
-                } else {
-                    long double const rStart = rCursor;
-                    long double const rEnd   = (rCursor == static_cast<long double>(tk))
-                                                 ? static_cast<long double>(tkNext)
-                                                 : (rStart + span);
-                    intervals.push_back(SegmentInterval{rStart, rEnd, 0.0L, tk, tkNext, false});
-                    rCursor = rEnd;
+            if (segmentKeys.size() >= 2) {
+                intervals.reserve(segmentKeys.size() - 1);
+                long double rCursor = static_cast<long double>(firstTick);
+                for (auto it = segmentKeys.begin(), next = std::next(it); next != segmentKeys.end();
+                     it = next, ++next) {
+                    int const         tk     = it->first;
+                    int const         tkNext = next->first;
+                    long double const span   = static_cast<long double>(tkNext - tk);
+                    if (it->second.ignoreClipSpeed) {
+                        hasUnscaledIntervals     = true;
+                        long double const uStart = unscaledTicksAt(rCursor);
+                        long double const uEnd   = uStart + span;
+                        long double const rEnd   = replayTickForUnscaled(uEnd);
+                        intervals.push_back(SegmentInterval{rCursor, rEnd, uStart, tk, tkNext, true});
+                        rCursor = rEnd;
+                    } else {
+                        long double const rStart = rCursor;
+                        long double const rEnd   = (rCursor == static_cast<long double>(tk))
+                                                     ? static_cast<long double>(tkNext)
+                                                     : (rStart + span);
+                        intervals.push_back(SegmentInterval{rStart, rEnd, 0.0L, tk, tkNext, false});
+                        rCursor = rEnd;
+                    }
                 }
             }
-        }
 
-        return CameraTrackSegment{
-            segmentIndex,
-            firstTick,
-            lastTick,
-            KeyframeTrack{segmentKeys},
-            std::move(intervals),
-            hasUnscaledIntervals,
+            return CameraTrackSegment{
+                segmentIndex,
+                firstTick,
+                lastTick,
+                KeyframeTrack{segmentKeys, wrapAngles},
+                std::move(intervals),
+                hasUnscaledIntervals,
+            };
         };
-    };
 
     for (auto& camera : mProject.cameras) {
         if (camera.keysByTick.empty()) continue;
@@ -137,7 +141,7 @@ CameraTimelineEvaluator::CameraTimelineEvaluator(
             if (custom3pKeys.empty()) return;
             custom3pSegments.emplace_back(
                 CustomThirdPersonTrackSegment{
-                    buildTrackSegment(custom3pDimSegment, custom3pKeys),
+                    buildTrackSegment(custom3pDimSegment, custom3pKeys, false),
                     custom3pSubject,
                     custom3pFollowRot,
                     custom3pCollideBlocks,
@@ -209,51 +213,31 @@ void CameraTimelineEvaluator::buildSpeedSpans() {
     mSpeedSpans.clear();
     mSpeedSpanEndU = 0.0L;
 
-    auto const slices = state::editing::ClipOps::collectCompositedSlices(mProject, false, mDimensionTransitionTicks);
+    if (!hasActiveSpeedCurve(mProject) && !hasActiveTimelapseTrack(mProject)) return;
 
     int horizonTick = std::max(0, mProject.totalTicks);
     for (auto const& camera : mProject.cameras) {
         if (!camera.keysByTick.empty()) {
             horizonTick = std::max(horizonTick, camera.keysByTick.rbegin()->first);
         }
-    }
-    for (auto const& slice : slices) {
-        if (slice.inTick < slice.outTick) horizonTick = std::max(horizonTick, slice.outTick);
+        for (auto const& clip : camera.clips) {
+            if (clip.inTick < clip.outTick) horizonTick = std::max(horizonTick, clip.outTick);
+        }
     }
     if (horizonTick <= 0) return;
 
-    std::vector<int> boundaries{0, horizonTick};
-    for (auto const& slice : slices) {
-        int const start = std::clamp(slice.inTick, 0, horizonTick);
-        int const end   = std::clamp(slice.outTick, 0, horizonTick);
-        if (start < end) {
-            boundaries.push_back(start);
-            boundaries.push_back(end);
-        }
-    }
-    std::sort(boundaries.begin(), boundaries.end());
-    boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
-
     long double cumU = 0.0L;
-    for (size_t i = 0; i + 1 < boundaries.size(); ++i) {
-        int const bStart = boundaries[i];
-        int const bEnd   = boundaries[i + 1];
-        if (bStart >= bEnd) continue;
-
-        long double speed = 1.0L;
-        for (auto const& slice : slices) {
-            if (slice.inTick < slice.outTick && slice.inTick <= bStart && bEnd <= slice.outTick) {
-                speed = static_cast<long double>(state::editing::model::clampClipSpeed(slice.speed));
-                break;
-            }
-        }
+    for (int bStart = 0; bStart < horizonTick; ++bStart) {
+        int const         bEnd  = bStart + 1;
+        long double const mid   = static_cast<long double>(bStart) + 0.5L;
+        long double const speed = static_cast<long double>(effectiveSpeedAt(mProject, mid));
 
         if (!mSpeedSpans.empty() && mSpeedSpans.back().endTick == bStart && mSpeedSpans.back().speed == speed) {
             mSpeedSpans.back().endTick = bEnd;
         } else {
             mSpeedSpans.push_back(SpeedSpan{bStart, bEnd, speed, cumU});
         }
-        cumU += static_cast<long double>(bEnd - bStart) / speed;
+        cumU += 1.0L / speed;
     }
     mSpeedSpanEndU = cumU;
 }

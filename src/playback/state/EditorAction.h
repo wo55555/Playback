@@ -4,7 +4,9 @@
 #include "playback/state/editing/models/CameraEntity.h"
 #include "playback/state/editing/models/CameraKeyframe.h"
 #include "playback/state/editing/models/MathTypes.h"
+#include "playback/state/editing/models/SelectionModel.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -36,9 +38,13 @@ enum class EditorActionType {
     SetFollowRecordedPlayer,
     SetReplaySubjectChoice,
     SetFollowThirdPerson,
+    AdjustThirdPersonOrbit,
+    ResetThirdPersonOrbit,
     UndoEditorEdit,
     RedoEditorEdit,
     AddFreeCamera,
+    // Uses action.keyframe if set; else value == true forces non-Interpolated CameraKeyframeMode(kind);
+    // otherwise matches active 1P/3P follow preview, custom 3P from free cam, or captures a Free Camera key.
     AddCameraKeyframe,
     MoveCameraKeyframe,
     DeleteCameraKeyframe,
@@ -88,14 +94,13 @@ enum class EditorActionType {
     AddClip,
     SplitClip,
     MoveAndTrimClip,
-    SetClipSpeed,
     RenameClip,
-    SetClipMuted,
     SetClipLocked,
     SetClipExportEnabled,
     SetAllClipsExportEnabled,
     ResetClipsToFullRange,
     DeleteClip,
+    HealClipCuts,
     AddScene,
     DuplicateScene,
     RenameScene,
@@ -103,6 +108,111 @@ enum class EditorActionType {
     DeleteScene,
     SwitchScene,
     SetSceneExportRange,
+    AddSpeedTrack,
+    RemoveSpeedTrack,
+    AddSpeedKeyframe,
+    MoveSpeedKeyframe,
+    DeleteSpeedKeyframe,
+    SetSpeedKeyframeValue,
+    SetSpeedKeyframeInterpolation,
+    SetSpeedKeyframeBezierControls,
+    SetSpeedTrackEnabled,
+    SetSpeedTrackLocked,
+    ClearSpeedKeyframes,
+    AddFreezeTrack,
+    RemoveFreezeTrack,
+    AddFreezeKeyframe,
+    MoveFreezeKeyframe,
+    DeleteFreezeKeyframe,
+    SetFreezeKeyframe,
+    SetFreezeTrackEnabled,
+    SetFreezeTrackLocked,
+    ClearFreezeKeyframes,
+    AddTimelapseTrack,
+    RemoveTimelapseTrack,
+    // tick + secondaryTick (outputTicks).
+    AddTimelapseKeyframe,
+    MoveTimelapseKeyframe,
+    DeleteTimelapseKeyframe,
+    // tick + secondaryTick (outputTicks).
+    SetTimelapseKeyframeOutputTicks,
+    SetTimelapseTrackEnabled,
+    SetTimelapseTrackLocked,
+    ClearTimelapseKeyframes,
+    AddTimeOfDayTrack,
+    RemoveTimeOfDayTrack,
+    // tick + secondaryTick (timeOfDay) + kind (CameraInterpolationType).
+    AddTimeOfDayKeyframe,
+    // tick (fromTick) + secondaryTick (toTick).
+    MoveTimeOfDayKeyframe,
+    // ticks + secondaryTick (tickDelta).
+    MoveTimeOfDayKeyframes,
+    // tick.
+    RemoveTimeOfDayKeyframe,
+    // ticks.
+    RemoveTimeOfDayKeyframes,
+    // tick + secondaryTick (timeOfDay).
+    SetTimeOfDayKeyframeValue,
+    // tick + kind (CameraInterpolationType).
+    SetTimeOfDayKeyframeInterpolation,
+    // ticks + kind (CameraInterpolationType).
+    SetTimeOfDayKeyframesInterpolation,
+    // tick + bezierCtrl1 + bezierCtrl2.
+    SetTimeOfDayKeyframeBezier,
+    // value (enabled).
+    SetTimeOfDayTrackEnabled,
+    // value (locked).
+    SetTimeOfDayTrackLocked,
+    ClearTimeOfDayKeyframes,
+    // value (enabled) + tick (daytimeTicks).
+    SetDaytimeOverride,
+    // kind (static_cast<int>(WeatherOverride)).
+    SetWeatherOverride,
+    AddWeatherTrack,
+    RemoveWeatherTrack,
+    // value (enabled).
+    SetWeatherTrackEnabled,
+    // value (locked).
+    SetWeatherTrackLocked,
+    // tick + kind (static_cast<int>(WeatherOverride)).
+    AddWeatherKeyframe,
+    // tick.
+    RemoveWeatherKeyframe,
+    // ticks.
+    RemoveWeatherKeyframes,
+    // tick (fromTick) + secondaryTick (toTick).
+    MoveWeatherKeyframe,
+    // ticks + secondaryTick (tickDelta).
+    MoveWeatherKeyframes,
+    // tick + kind (static_cast<int>(WeatherOverride)).
+    SetWeatherKeyframeValue,
+    // ticks + kind (static_cast<int>(WeatherOverride)).
+    SetWeatherKeyframesValue,
+    // value (disabled).
+    SetDisableServerResourcePacks,
+    ReloadReplayAtCurrentTick,
+    // name (optional track name).
+    AddAudioTrack,
+    // id (trackId).
+    RemoveAudioTrack,
+    // id (trackId) + name.
+    RenameAudioTrack,
+    // id (trackId) + value (enabled).
+    SetAudioTrackEnabled,
+    // id (trackId) + value (muted).
+    SetAudioTrackMuted,
+    // id (trackId) + value (locked).
+    SetAudioTrackLocked,
+    // id (trackId) + volume.
+    SetAudioTrackVolume,
+    // id (trackId) + path (filePath) + tick (startTick) + name (optional clip name).
+    AddAudioClip,
+    // id (trackId) + secondaryId (clipId).
+    RemoveAudioClip,
+    // id (trackId) + secondaryId (clipId) + tick (startTick).
+    MoveAudioClip,
+    // id (trackId) + secondaryId (clipId) + path (filePath) + trimStartSeconds + durationSeconds + volume + muted.
+    SetAudioClipProps,
 };
 
 struct QueuedExportJob {
@@ -121,8 +231,16 @@ struct EditorAction {
     std::string                              id;
     std::string                              secondaryId;
     float                                    speed{};
+    float                                    speedValue{1.0f};
+    double                                   trimStartSeconds{0.0};
+    double                                   durationSeconds{0.0};
+    float                                    volume{1.0f};
+    float                                    orbitDeltaYaw{0.0f};
+    float                                    orbitDeltaPitch{0.0f};
+    float                                    orbitDeltaDistance{0.0f};
     int                                      kind{};
     bool                                     value{};
+    bool                                     muted{false};
     state::editing::model::Vec3              position{};
     state::editing::model::Vec2              bezierCtrl1{};
     state::editing::model::Vec2              bezierCtrl2{};
@@ -133,7 +251,10 @@ struct EditorAction {
     std::optional<editing::model::CameraKeyframe> keyframe;
     std::optional<editing::model::CameraShake>    shake;
     // Batch keyframe edits (multi-select move / delete / interpolation / paste).
-    std::vector<editing::model::KeyframeRef> keyframeRefs;
+    std::vector<editing::model::KeyframeRef>            keyframeRefs;
+    std::vector<state::editing::model::SelectedClipCut> clipCuts;
+    std::vector<int>                                    ticks;
+    size_t                                   historySteps{1};
 };
 
 } // namespace playback::state

@@ -3,7 +3,9 @@
 #include "playback/keyframe/CameraRenderState.h"
 #include "playback/record/Recorder.h"
 #include "playback/state/editing/models/MathTypes.h"
+#include "playback/state/editing/models/Track.h"
 #include "playback/visuals/ReplayEntityInterpolator.h"
+#include "playback/visuals/ReplayWorldEnvHooks.h"
 
 #include "mc/deps/core/math/Vec2.h"
 #include "mc/deps/core/math/Vec3.h"
@@ -228,6 +230,10 @@ private:
     float                                mPlaybackTickAccumulator{};
     std::atomic<SteadyTimePoint>         mTickAdvancedAt{};
     std::atomic<float>                   mFrozenPreviewPartial{-1.0f};
+    mutable std::mutex                   mPreviewFreezeMutex;
+    state::editing::model::FreezeTrack   mPreviewFreezeTrack;
+    int                                  mPreviewPlayheadTick{0};
+    bool                                 mResumeAfterFreezeSeek{false};
 
     bool                                        mObserverPreviewInRange{false};
     std::optional<keyframe::CameraRenderState>  mPausedPreviewPose;
@@ -244,6 +250,16 @@ private:
     std::optional<keyframe::CameraRenderState>  mPendingObserverPark;
     std::optional<keyframe::CameraRenderState>  mFollowHeldPose;
     bool                                        mFollowExitParkPending{false};
+
+    struct ThirdPersonOrbitState {
+        bool                        initialized{false};
+        float                       yaw{0.0f};      // unwrapped world yaw in degrees
+        float                       pitch{15.0f};   // clamped [-89.0f, 89.0f]
+        float                       distance{4.0f}; // clamped [1.0f, 32.0f]
+        state::editing::model::Vec3 offset{0.0f, 0.0f, 0.0f};
+    };
+    mutable std::mutex                          mThirdPersonOrbitMutex;
+    ThirdPersonOrbitState                       mThirdPersonOrbit;
     std::atomic<uint64_t>                       mSeekFinishCount{0};
     uint64_t                                    mObserverPreviewGeneration{};
     ::Vec3                                      mLastObserverPreviewFeet{};
@@ -253,6 +269,15 @@ private:
     std::atomic<uint64_t>                       mObserverServerSyncEpoch{0};
     std::atomic<uint64_t>                       mObserverServerSyncSequence{0};
     std::optional<int>                          mReplayTime;
+    bool                                        mRecordedDoDaylightCycle{true};
+    bool                                        mRecordedDoWeatherCycle{true};
+    float                                       mRecordedRainLevel{0.0f};
+    float                                       mRecordedLightningLevel{0.0f};
+    std::optional<double>                       mTimeOfDayOverride;
+    visuals::ReplayWeatherMode                  mWeatherOverride{visuals::ReplayWeatherMode::Recorded};
+    visuals::ReplayWeatherMode                  mLastAppliedWeatherMode{visuals::ReplayWeatherMode::Recorded};
+    bool                                        mWeatherRendererNeedsPrime{false};
+    std::optional<::Vec3>                       mLastPrimedWeatherPos;
     std::optional<DimensionType>                mPendingReplayDimension;
     std::optional<PendingSnapshotApply>         mPendingSnapshotApply;
     std::shared_ptr<DimensionTransitionRequest> mDimensionTransitionRequest;
@@ -380,6 +405,10 @@ private:
     std::atomic<std::shared_ptr<ResourcePackStackPacket const>> mReplayResourcePackStack;
     bool                                                        mReplayCachedResourcePacksLoaded{};
     std::optional<std::filesystem::path>                        mMountedReplayPacks;
+    bool                                                        mReplayHasServerResourcePacks{false};
+    bool                                                        mLoadedWithServerResourcePacksDisabled{false};
+    std::filesystem::path                                       mPendingReloadReplayPath;
+    std::optional<int>                                          mPendingRestoreTickAfterReload;
 
     std::shared_ptr<StartGamePacket const> mReplayStartGame;
     // applyRecordedBlockRegistry runs from two hooks that can fire concurrently while the replay world loads.
@@ -527,7 +556,8 @@ private:
     [[nodiscard]] bool updateSubjectFollow();
 
     // Where the observer must sit to see through the recorded player's eyes right now.
-    [[nodiscard]] std::optional<keyframe::CameraRenderState> sampleSubjectFollowState();
+    [[nodiscard]] std::optional<keyframe::CameraRenderState>
+    sampleSubjectFollowState(std::optional<visuals::ReplaySampleTime> sampleTimeOverride = std::nullopt) const;
 
     // Align the server authority with the client so a paused replay isn't pulled back.
     void syncObserverServerPosition(::Vec3 const& feetPosition, ::Vec2 const& rotation);
@@ -537,6 +567,9 @@ private:
     void clearReplayData();
 
     void finishWorldCleanup();
+
+    [[nodiscard]] state::editing::model::FreezeTrack previewFreezeTrackCopy() const;
+    [[nodiscard]] int                                previewWorldTargetTick(int playheadTick) const;
 
     void beginSeek(int targetTick);
 
@@ -551,6 +584,7 @@ private:
     [[nodiscard]] bool advanceReplayTick(bool stopAtEnd);
 
     void syncLevelSimPause(bool freeze);
+    void primePausedWeatherRenderer();
 
     void holdItemUseBetweenTicks();
 
@@ -617,7 +651,20 @@ public:
     [[nodiscard]] Player* getReplayPlayer() const noexcept { return mReplayPlayer; }
 
     // Something outside the replay rewrites the level clock between render passes; export pins it before each pass.
-    void enforceReplayWorldTime();
+    void enforceReplayWorldTime(std::optional<float> partialTickOverride = std::nullopt);
+
+    void                                     setTimeOfDayOverride(std::optional<double> ticks) noexcept;
+    void                                     setWeatherOverride(visuals::ReplayWeatherMode mode) noexcept;
+    [[nodiscard]] visuals::ReplayWeatherMode weatherOverride() const noexcept { return mWeatherOverride; }
+    [[nodiscard]] bool isRecordedDaylightCycleEnabled() const noexcept { return mRecordedDoDaylightCycle; }
+
+    [[nodiscard]] bool replayHasServerResourcePacks() const noexcept { return mReplayHasServerResourcePacks; }
+    [[nodiscard]] bool loadedWithServerResourcePacksDisabled() const noexcept {
+        return mLoadedWithServerResourcePacksDisabled;
+    }
+    [[nodiscard]] std::filesystem::path const& getReplayFilePath() const noexcept { return mReplayFilePath; }
+    [[nodiscard]] bool hasPendingReload() const noexcept { return !mPendingReloadReplayPath.empty(); }
+    bool               requestReloadCurrentReplay(int restoreTick);
 
     void teleportReplayPlayer(::Vec3 const& feetPosition, ::Vec2 const& rotation);
 
@@ -627,7 +674,8 @@ public:
 
     // Chunk streaming, snapshot applies and seeks hold the last pose instead of exposing the stale observer.
     // While following, re-pins the observer just before the frame is drawn; returns the pose the camera must use.
-    [[nodiscard]] std::optional<keyframe::CameraRenderState> pinFollowObserverForRender();
+    [[nodiscard]] std::optional<keyframe::CameraRenderState>
+    pinFollowObserverForRender(std::optional<visuals::ReplaySampleTime> sampleTimeOverride = std::nullopt);
 
     // Moves the observer onto the recorded player once, as soon as the replay world and the player's pose are ready.
     void requestTeleportToRecordedPlayer() noexcept { mTeleportToSubjectPending = true; }
@@ -646,18 +694,31 @@ public:
         return mFollowThirdPerson.load(std::memory_order_acquire);
     }
 
-    // The follow view actually shown: a person camera track, or the user's follow when no track is active.
+    // The follow view actually shown: the user's explicit follow mode, or a person camera track when not following.
     [[nodiscard]] bool isFollowViewActive() const noexcept {
-        auto const mode = mPreviewShotMode.load(std::memory_order_acquire);
-        return mode == PreviewShotMode::Person
-            || (mode == PreviewShotMode::None && mFollowRecordedPlayer.load(std::memory_order_acquire));
+        if (mFollowRecordedPlayer.load(std::memory_order_acquire)) return true;
+        return mPreviewShotMode.load(std::memory_order_acquire) == PreviewShotMode::Person;
     }
 
     [[nodiscard]] bool isFollowViewThirdPerson() const noexcept {
+        if (mFollowRecordedPlayer.load(std::memory_order_acquire)) {
+            return mFollowThirdPerson.load(std::memory_order_acquire);
+        }
         return mPreviewShotMode.load(std::memory_order_acquire) == PreviewShotMode::Person
-                 ? mShotThirdPerson.load(std::memory_order_acquire)
-                 : mFollowThirdPerson.load(std::memory_order_acquire);
+            && mShotThirdPerson.load(std::memory_order_acquire);
     }
+
+    struct ThirdPersonOrbitSnapshot {
+        float                       yaw{0.0f};
+        float                       pitch{15.0f};
+        float                       distance{4.0f};
+        state::editing::model::Vec3 offset{0.0f, 0.0f, 0.0f};
+        float                       fov{70.0f};
+    };
+
+    void resetThirdPersonOrbit();
+    void adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance);
+    [[nodiscard]] ThirdPersonOrbitSnapshot thirdPersonOrbitSnapshot() const;
 
     // Pins `subject` (empty is the recorder) as the replay subject for a person camera track; nullopt hands the
     // subject back to the user's choice.
@@ -726,11 +787,16 @@ public:
     [[nodiscard]] int getCurrentTick() const {
         int const requestedTick = mRequestedSeekTick.load(std::memory_order_acquire);
         if (requestedTick >= 0) return requestedTick;
+        if (mExportTimelinePhase == ReplayExportTimelinePhase::Inactive) {
+            return mPreviewPlayheadTick;
+        }
         return mSeekTargetTick >= 0 ? mSeekTargetTick : mCurrentTick;
     }
 
     // Unlike getCurrentTick(), this is never replaced by a pending seek target.
     [[nodiscard]] int getAppliedReplayTick() const { return mCurrentTick; }
+
+    void setPreviewFreezeTrack(state::editing::model::FreezeTrack const& track);
 
     [[nodiscard]] bool isDimensionTransitionPending() const { return mPendingReplayDimension.has_value(); }
     [[nodiscard]] bool isWaitingForScreenClose() const noexcept {

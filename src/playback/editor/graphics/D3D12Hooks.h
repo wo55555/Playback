@@ -40,17 +40,4 @@ ComPtr<ID3D12CommandQueue> getSwapChainQueue(IDXGISwapChain* swapChain);
 
 void unbindSwapChainQueue(IDXGISwapChain* swapChain);
 
-ComPtr<ID3D12CommandQueue> getResizePresentQueue(UINT bufferCount, IUnknown* const* presentQueues);
-
-[[nodiscard]] bool resolveHookTargets(
-    void*& outPresent,
-    void*& outPresent1,
-    void*& outResizeBuffers,
-    void*& outResizeBuffers1,
-    void*& outCreateSwapChain,
-    void*& outCreateSwapChainForHwnd,
-    void*& outCreateSwapChainForCoreWindow,
-    void*& outCreateSwapChainForComposition
-);
-
 } // namespace playback::editor::graphics

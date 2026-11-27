@@ -13,10 +13,13 @@
 #include "panels/StatusPanel.h"
 #include "panels/TimelinePanel.h"
 #include "panels/ViewportPanel.h"
+#include "playback/editor/ui/components/EditorToast.h"
 #include "playback/editor/ui/components/Splitter.h"
 #include "playback/editor/ui/menus/EditorMenuBar.h"
 #include "playback/editor/ui/modes/ModeManager.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <string>
@@ -30,6 +33,7 @@ public:
 
     void initialize();
     void shutdown();
+    void saveLayoutPreferences() const;
 
     void draw(playback::state::EditorState const& state, SubmitAction const& submit);
 
@@ -43,6 +47,8 @@ public:
 
     void               seekTo(int tick) override;
     void               seekRelative(int tickDelta) override;
+    void                       undo(std::size_t steps = 1) override;
+    void                       redo(std::size_t steps = 1) override;
     void               toggleViewportMaximized() override { mViewportMaximized = !mViewportMaximized; }
     [[nodiscard]] bool isViewportMaximized() const override { return mViewportMaximized; }
     void               toggleCameraPath() override;
@@ -91,10 +97,25 @@ public:
     [[nodiscard]] bool  isPreviewSilentWhilePaused() const override;
     void                setPreviewSilentWhilePaused(bool silent) override;
 
+    [[nodiscard]] ShortcutKeyframeLensMode shortcutKeyframeLensMode() const override {
+        return mShortcutKeyframeLensMode;
+    }
+    void setShortcutKeyframeLensMode(ShortcutKeyframeLensMode mode) override;
+    void adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance) override;
+    void resetThirdPersonOrbit() override;
+    void showSelectionInspector() override;
+    void focusCameraKeyframe(std::string const& cameraId, int tick) override;
+    void focusSpeedKeyframe(int tick) override;
+    void focusFreezeKeyframe(int tick) override;
+    void focusTimelapseKeyframe(int tick) override;
+    void focusTimeOfDayKeyframe(int tick) override;
+    void focusWeatherKeyframe(int tick) override;
+
     void                      setGameTexture(ImTextureID texture) { mViewportPanel.setGameTexture(texture); }
     [[nodiscard]] ImTextureID gameTexture() const { return mViewportPanel.gameTexture(); }
     [[nodiscard]] Rect        viewportVideoRect() const { return mViewportPanel.videoRect(); }
     [[nodiscard]] Rect        viewportOverlayRect() const { return mViewportPanel.overlayRect(); }
+    [[nodiscard]] bool        thirdPersonOrbitModeActive() const { return mThirdPersonOrbitModeActive; }
 
 private:
     ReplayEditor() = default;
@@ -120,15 +141,19 @@ private:
     SubmitAction const*                   mSubmit{};
     state::editing::model::SelectionModel mSelection;
     exporting::ExportState                mLastExportState{exporting::ExportState::Idle};
+    EditorToast                           mToast;
+    std::uint64_t                         mLastHistoryEventSeq{0};
 
     bool  mFollowExitTapArmed{false};
     bool  mExitHoldBlocked{false};
     float mExitHoldSeconds{};
 
-    float       mDetailsWidthRatio{0.22f};
-    float       mTimelineHeightRatio{0.24f};
-    float       mVideoAspectRatio{16.0f / 9.0f};
-    UiScaleTier mUiScaleTier{UiScaleTier::Auto};
+    float                    mDetailsWidthRatio{0.22f};
+    float                    mTimelineHeightRatio{0.24f};
+    float                    mVideoAspectRatio{16.0f / 9.0f};
+    UiScaleTier              mUiScaleTier{UiScaleTier::Auto};
+    ShortcutKeyframeLensMode mShortcutKeyframeLensMode{ShortcutKeyframeLensMode::MatchPreview};
+    bool                     mThirdPersonOrbitModeActive{false};
 
     struct TimelineViewPreferences {
         float zoomScale{1.0f};
@@ -139,7 +164,6 @@ private:
     std::string                                    mActiveReplayPath;
 
     void loadLayoutPreferences();
-    void saveLayoutPreferences() const;
     void syncTimelineViewPreferences(std::string_view replayPath);
     void updateExitHold(bool escapeConsumedByUi);
 

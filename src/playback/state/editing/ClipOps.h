@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "playback/state/editing/models/EditorStateExt.h"
+#include "playback/state/editing/models/SelectionModel.h"
 
 #include <span>
 #include <string>
@@ -28,8 +29,6 @@ struct CompositedClipSlice {
     int                        outTick{};
     model::CameraEntity const* camera{};
     model::Clip const*         clip{};
-    float                      speed{1.0f};
-    bool                       muted{false};
     bool                       exportEnabled{true};
 };
 
@@ -44,6 +43,15 @@ struct CompositedClipSlice {
 [[nodiscard]] std::string nextClipId(model::EditorStateExt const& state);
 [[nodiscard]] std::string defaultClipName(model::EditorStateExt const& state);
 [[nodiscard]] std::string nextSceneId(model::EditorStateExt const& state);
+[[nodiscard]] std::string nextAudioTrackId(model::EditorStateExt const& state);
+[[nodiscard]] std::string defaultAudioTrackName(model::EditorStateExt const& state);
+[[nodiscard]] std::string nextAudioClipId(model::EditorStateExt const& state);
+
+[[nodiscard]] model::AudioTrack const*
+                                 findAudioTrack(model::EditorStateExt const& state, std::string_view trackId) noexcept;
+[[nodiscard]] model::AudioTrack* findAudioTrack(model::EditorStateExt& state, std::string_view trackId) noexcept;
+[[nodiscard]] model::AudioClip const* findAudioClip(model::AudioTrack const& track, std::string_view clipId) noexcept;
+[[nodiscard]] model::AudioClip*       findAudioClip(model::AudioTrack& track, std::string_view clipId) noexcept;
 
 [[nodiscard]] model::Scene const* findScene(model::EditorStateExt const& state, std::string_view sceneId) noexcept;
 [[nodiscard]] model::Scene*       findScene(model::EditorStateExt& state, std::string_view sceneId) noexcept;
@@ -70,9 +78,6 @@ void syncTotalTicks(model::EditorStateExt& state, int previousTotalTicks, std::s
     std::span<int const>         dimensionTransitions = {}
 ) noexcept;
 
-[[nodiscard]] float activeClipSpeedAt(model::EditorStateExt const& state, int tick) noexcept;
-[[nodiscard]] bool  isClipMutedAt(model::EditorStateExt const& state, int tick) noexcept;
-
 [[nodiscard]] std::vector<CompositedClipSlice> collectCompositedSlices(
     model::EditorStateExt const& state,
     bool                         onlyExportEnabled    = true,
@@ -86,5 +91,22 @@ void syncTotalTicks(model::EditorStateExt& state, int previousTotalTicks, std::s
 [[nodiscard]] MutableClipWithCamera findClipWithCamera(model::EditorStateExt& state, std::string_view clipId) noexcept;
 [[nodiscard]] model::Clip const*    findClipById(model::EditorStateExt const& state, std::string_view clipId) noexcept;
 [[nodiscard]] model::Clip*          findClipById(model::EditorStateExt& state, std::string_view clipId) noexcept;
+
+[[nodiscard]] std::vector<model::SelectedClipCut>
+collectCameraClipCuts(model::CameraEntity const& camera, int totalTicks);
+
+[[nodiscard]] model::CameraEntity const*
+selectedCamera(model::EditorStateExt const& state, model::SelectionModel const& selection) noexcept;
+
+[[nodiscard]] std::string
+resolveKeyframeTargetCamera(model::EditorStateExt const& state, model::SelectionModel const& selection);
+
+[[nodiscard]] ClipWithCamera resolveExportToggleClip(
+    model::EditorStateExt const& state,
+    model::SelectionModel const& selection,
+    int                          tick,
+    int                          totalTicks,
+    std::span<int const>         dimensionTransitions = {}
+) noexcept;
 
 } // namespace playback::state::editing::ClipOps

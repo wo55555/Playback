@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2-mc26.20] - 2026-11-27
+
+### Added
+
+- Expanded the replay editor's undo and redo history to 256 steps, with the Edit menu displaying the next action name and a History submenu to jump across up to 20 recent undo or redo steps at once.
+- Added undo and redo buttons with action tooltips to the timeline toolbar, a bottom viewport toast showing each undo or redo step, and key-repeat support when holding the undo or redo shortcuts.
+- Saving an editor project now keeps a `.pbproj.old` backup of the previous file and automatically recovers from it if the primary project file fails to load.
+- Added an on-demand Speed track from the timeline `+` menu for continuous speed ramps (`0.01x` to `32x`) with a logarithmic curve and shaded acceleration/deceleration regions, supporting eight interpolation modes with draggable cubic Bezier handles, real-time speed-ramped preview, integrated export frame timing, and full undo/redo and project persistence.
+- Added an on-demand Freeze track that can be added and removed from the timeline `+` menu to freeze and unfreeze world time with a configurable 0–10 tick slowdown easing curve, keeping camera motion active while pausing world and entity animations in both live preview and offline export, automatically muting audio while frozen and seamlessly resuming after unfreezing, with full undo/redo and project persistence.
+- Added an on-demand Timelapse track that can be added and removed from the timeline `+` menu to map replay intervals to target output timestamps via keyframes, automatically computing segment output duration and effective speed while highlighting single-keyframe or non-increasing invalid segments, with multi-format duration input and quick presets, real-time high-speed preview with audio muted during active segments, explicit priority overriding the Speed track and fixed-interval export timelapse, and full undo/redo and project persistence.
+- Added on-demand multi-track Audio tracks from the timeline `+` menu to import WAV and FFmpeg-decoded external audio files via a native file picker, rendering mirrored peak waveforms mapped to output duration across speed and timelapse edits, supporting trim start offset, duration trimming, volume, mute, drag editing, real-time synchronized playback, and mixing with game audio or exporting independently into video files and sidecar WAVs (remaining available even during fixed-interval timelapse exports), with full undo/redo and project persistence.
+- Added on-demand Time of Day and Weather tracks from the timeline `+` menu alongside per-scene World Environment overrides (fixed daytime override and five-mode weather override: Clear, Overcast, Rain, Snow, and Thunder) in the Preview page. The Time of Day track animates sky time across multiple day-night cycles with interpolation curves and cubic Bezier handles, while the Weather track switches discrete color-coded weather segments along the timeline; both take priority over per-scene overrides and apply consistently across biomes in paused preview, live playback, and offline export, with full undo/redo and project persistence.
+- Improved timeline start/end frame navigation with two-stage `Home` / `End` jumping (stopping at export In/Out points before jumping to the start or end), `Shift+I` / `Shift+O` shortcuts, `Up` / `Down` adjacent edit-point stepping, an interactive Export In/Out capsule control in the transport bar, clickable ruler brackets with context menus, Export page and dialog quick-jump buttons, and a track-side navigation help icon.
+- Added a live-target searchable subject picker directly in the camera keyframe inspector for first-person, third-person, and Look at entity (`Aim`) keyframes.
+- Added an option to disable server resource packs when opening replays (available in both the Replay Browser settings menu and the editor Settings page, persisted across sessions) together with a Reload at Current Tick action to reopen the active replay in place.
+- Added a Box Select tool (`B`, also triggered via `Alt+drag` or dragging across full or fixed clips in Select mode) to marquee-select keyframes and clip cuts across tracks, with `Delete` removing selected keyframes, healing split seams, and restoring cut gaps in a single undoable step.
+
+### Changed
+
+- Unified playback speed control into the on-demand Speed track (replacing per-clip speed controls on camera clips and updating the camera keyframe option to Ignore Speed Track), and updated the export inspector to show the actual output duration and frame count after applying the speed curve.
+- Consolidated audio controls into the audio layer by removing the redundant mute toggle from camera clips, and separated game audio capture and external audio track mixing into independent export audio settings.
+- Changed the `K` keyframe shortcut to match the active preview perspective (`1P`, `3P`, or Free) by default, supporting interactive third-person orbiting (drag to orbit, scroll to zoom, middle-click to reset) with smooth spherical interpolation around the focused entity, while keeping a Shortcut Keyframe Lens option on the Settings page to always insert Free Camera keyframes.
+- Redesigned the right inspector with modular cards, semantic action button tiers (read-only, create, overwrite, and bottom-isolated delete), inline header switches, Look-At override indicators, multi-keyframe scope badges, disabled states for no-op controls (untouched full-range clip reset, sole camera deletion, seek-here when already on the target tick, and locked or unhealable cut actions), concise "Cut Point" and "Delete Selected Cuts" wording, and a calm neutral Settings page, while automatically switching to the Selection page (resetting scroll position and stale edit drafts) when adding keyframes or selecting timeline tracks and cameras.
+- Unified the transport Export In and Out `[` and `]` buttons into a monochrome style matching adjacent transport controls with tighter spacing, placed the track search field ahead of the `+` button in the sidebar header and moved the Snap Magnet toggle beside Reset Zoom in the top transport utility cluster, disabled no-op transport and timeline actions (boundary seeks, unsplittable playhead positions, undeletable selections, 100% zoom reset, and untouched full-range clip resets), and updated camera tracks to render dashed baselines and static or held spans alongside solid animated interpolation spans, a crisp dark seam groove between adjacent clips, and a narrow rounded border-only cut-seam highlight.
+
+### Fixed
+
+- The replay browser, editor overlay, export progress screen, and frame capture now remain visible without hanging when third-party overlays or capture tools (such as RTSS) hook, patch, or bypass DXGI swap-chain presentation and resizing.
+- Held weapons and attachables (such as bows, crossbows, and tridents) now stay attached to the player's hand across skin loads and mid-replay skin swaps, remain visible alongside the player's arm in first-person follow for persona skins, and continue updating on the recorded player while following someone else.
+- Player skins (including custom skins and other players' skins captured in snapshots) now stay intact during offline replay even when "Only Allow Trusted Skins" is enabled.
+- Players gliding with an elytra now tilt horizontally along their flight path with spread wings during replay and timeline seeks instead of remaining upright.
+- Undoing back to the saved state now clears the unsaved indicator in the status bar instead of leaving the project marked as dirty.
+- Undoing or redoing edits made in another scene now switches back to that scene and clears stale timeline selections, and dragging a clip's speed slider now records a single history entry on release instead of pushing one per frame.
+- Dropped item entities no longer disappear during high-speed timelapse playback or seeking.
+- Replays recorded in worlds with the daylight cycle disabled now keep their recorded sun and moon time stationary during preview and export instead of advancing automatically.
+- Dropped items and non-player entities captured in snapshots or spawned mid-recording now appear at their current positions and orientations instead of resetting to where they originally spawned.
+- Players and entities riding boats, minecarts, horses, and other vehicles now stay synchronized with their vehicle across mid-recording snapshots, playback, and first-person or third-person follow cameras without jittering or drifting.
+- Adding or pasting keyframes, splitting or trimming clips, toggling clip export inclusion, and showing the selected camera in the viewport now consistently target the selected non-topmost camera track when clicking a clip, keyframe, or cut seam on that track, and no longer silently fall back to another camera track when the selected camera track is locked.
+
 ## [0.4.1-mc26.20] - 2026-11-22
 
 ### Added
@@ -366,7 +405,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **This is the first public test release. Replay files and behavior may change before `1.0.0`.**
   > **Playback currently targets Windows x64 and the LeviLamina `26.10.*` client runtime.**
 
-[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.1-mc26.20...HEAD
+[Unreleased]: https://github.com/wo55555/Playback/compare/v0.4.2-mc26.20...HEAD
+[0.4.2-mc26.20]: https://github.com/wo55555/Playback/compare/v0.4.1-mc26.20...v0.4.2-mc26.20
 [0.4.1-mc26.20]: https://github.com/wo55555/Playback/compare/v0.4.0-mc26.20...v0.4.1-mc26.20
 [0.4.0-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.3-mc26.20...v0.4.0-mc26.20
 [0.3.3-mc26.20]: https://github.com/wo55555/Playback/compare/v0.3.2-mc26.20...v0.3.3-mc26.20

@@ -14,12 +14,14 @@ using namespace detail;
 using CameraKeyframe = state::editing::model::CameraKeyframe;
 using Vec3           = state::editing::model::Vec3;
 
-KeyframeTrack::KeyframeTrack(KeyMap const& keyframes) : mKeyframes(keyframes.begin(), keyframes.end()) {}
+KeyframeTrack::KeyframeTrack(KeyMap const& keyframes, bool wrapAngles)
+: mKeyframes(keyframes.begin(), keyframes.end()),
+  mWrapAngles(wrapAngles) {}
 
 bool KeyframeTrack::empty() const noexcept { return mKeyframes.empty(); }
 
 CameraKeyframeChange KeyframeTrack::changeFromKeyframe(CameraKeyframe const& key) const {
-    return {key.position, key.yaw, key.pitch, key.roll, key.fov, key.thirdPersonDistance};
+    return {key.position, key.yaw, key.pitch, key.roll, key.fov, key.thirdPersonDistance, mWrapAngles};
 }
 
 CameraKeyframeChange KeyframeTrack::smoothChange(KeyMapIter left, float amount) const {
@@ -39,11 +41,15 @@ CameraKeyframeChange KeyframeTrack::smoothChange(KeyMapIter left, float amount) 
     float const time2     = static_cast<float>(right->first - before->first);
     float const time3     = static_cast<float>(after->first - before->first);
 
-    auto angle = [&](float p0, float p1, float p2, float p3) {
+    auto wrappedAngle = [&](float p0, float p1, float p2, float p3) {
         p0 = unwrapFrom(p1, p0);
         p2 = unwrapFrom(p1, p2);
         p3 = unwrapFrom(p2, p3);
         return wrapDegrees(centripetalCatmullRom(p0, p1, p2, p3, time1, time2, time3, amount));
+    };
+    auto rawOrWrappedAngle = [&](float p0, float p1, float p2, float p3) {
+        if (!mWrapAngles) return centripetalCatmullRom(p0, p1, p2, p3, time1, time2, time3, amount);
+        return wrappedAngle(p0, p1, p2, p3);
     };
 
     return {
@@ -57,9 +63,9 @@ CameraKeyframeChange KeyframeTrack::smoothChange(KeyMapIter left, float amount) 
             time3,
             amount
         ),
-        angle(beforeKey.yaw, leftKey.yaw, rightKey.yaw, afterKey.yaw),
-        angle(beforeKey.pitch, leftKey.pitch, rightKey.pitch, afterKey.pitch),
-        angle(beforeKey.roll, leftKey.roll, rightKey.roll, afterKey.roll),
+        rawOrWrappedAngle(beforeKey.yaw, leftKey.yaw, rightKey.yaw, afterKey.yaw),
+        rawOrWrappedAngle(beforeKey.pitch, leftKey.pitch, rightKey.pitch, afterKey.pitch),
+        wrappedAngle(beforeKey.roll, leftKey.roll, rightKey.roll, afterKey.roll),
         centripetalCatmullRom(beforeKey.fov, leftKey.fov, rightKey.fov, afterKey.fov, time1, time2, time3, amount),
         centripetalCatmullRom(
             beforeKey.thirdPersonDistance,
@@ -71,6 +77,7 @@ CameraKeyframeChange KeyframeTrack::smoothChange(KeyMapIter left, float amount) 
             time3,
             amount
         ),
+        mWrapAngles,
     };
 }
 
@@ -102,8 +109,8 @@ CameraKeyframeChange KeyframeTrack::hermiteChange(KeyMapIter left, long double t
         x.push_back(keyframe.position.x);
         y.push_back(keyframe.position.y);
         z.push_back(keyframe.position.z);
-        yaw.push_back(yaw.empty() ? keyframe.yaw : unwrapFrom(yaw.back(), keyframe.yaw));
-        pitch.push_back(pitch.empty() ? keyframe.pitch : unwrapFrom(pitch.back(), keyframe.pitch));
+        yaw.push_back((!mWrapAngles || yaw.empty()) ? keyframe.yaw : unwrapFrom(yaw.back(), keyframe.yaw));
+        pitch.push_back((!mWrapAngles || pitch.empty()) ? keyframe.pitch : unwrapFrom(pitch.back(), keyframe.pitch));
         roll.push_back(roll.empty() ? keyframe.roll : unwrapFrom(roll.back(), keyframe.roll));
         fov.push_back(keyframe.fov);
         distance.push_back(keyframe.thirdPersonDistance);
@@ -114,13 +121,16 @@ CameraKeyframeChange KeyframeTrack::hermiteChange(KeyMapIter left, long double t
         interpolatePolynomial(ticks, y, tick),
         interpolatePolynomial(ticks, z, tick),
     };
+    float const interpYaw   = interpolatePolynomial(ticks, yaw, tick);
+    float const interpPitch = interpolatePolynomial(ticks, pitch, tick);
     return {
         position,
-        wrapDegrees(interpolatePolynomial(ticks, yaw, tick)),
-        wrapDegrees(interpolatePolynomial(ticks, pitch, tick)),
+        mWrapAngles ? wrapDegrees(interpYaw) : interpYaw,
+        mWrapAngles ? wrapDegrees(interpPitch) : interpPitch,
         wrapDegrees(interpolatePolynomial(ticks, roll, tick)),
         interpolatePolynomial(ticks, fov, tick),
         interpolatePolynomial(ticks, distance, tick),
+        mWrapAngles,
     };
 }
 

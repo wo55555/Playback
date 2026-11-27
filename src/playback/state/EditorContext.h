@@ -3,6 +3,7 @@
 #include "playback/state/EditorAction.h"
 #include "playback/state/EditorState.h"
 
+#include <cstddef>
 #include <mutex>
 #include <vector>
 
@@ -15,6 +16,10 @@ public:
     void publish(EditorState state);
 
     void submit(EditorAction action);
+
+    void undo(size_t steps = 1);
+
+    void redo(size_t steps = 1);
 
     [[nodiscard]] std::vector<EditorAction> takeActions();
 

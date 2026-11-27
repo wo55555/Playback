@@ -60,7 +60,7 @@ void sortClips(std::vector<model::Clip>& clips) { std::ranges::stable_sort(clips
 
 bool isFullRangeDefault(model::CameraEntity const& camera, int totalTicks) noexcept {
     return camera.clips.size() == 1 && camera.clips[0].inTick == 0 && camera.clips[0].outTick == totalTicks
-        && std::abs(camera.clips[0].speed - 1.0f) < 1e-6f && !camera.clips[0].muted && camera.clips[0].exportEnabled;
+        && camera.clips[0].exportEnabled;
 }
 
 std::string defaultSceneName(model::EditorStateExt const& state) {
@@ -92,12 +92,11 @@ std::vector<TickGap> collectFreeGaps(std::vector<model::Clip> const& clips, int 
 
 } // namespace
 
-AddClip::AddClip(std::string cameraId, int inTick, int outTick, std::string name, float speed)
+AddClip::AddClip(std::string cameraId, int inTick, int outTick, std::string name)
 : mCameraId(std::move(cameraId)),
   mInTick(inTick),
   mOutTick(outTick),
-  mName(std::move(name)),
-  mSpeed(speed) {}
+  mName(std::move(name)) {}
 
 void AddClip::execute(model::EditorStateExt& state) {
     mBefore.reset();
@@ -142,7 +141,6 @@ void AddClip::execute(model::EditorStateExt& state) {
     clip.id            = newId;
     clip.inTick        = finalIn;
     clip.outTick       = finalOut;
-    clip.speed         = model::clampClipSpeed(mSpeed);
     clip.name          = newName;
     clip.exportEnabled = true;
 
@@ -153,7 +151,7 @@ void AddClip::execute(model::EditorStateExt& state) {
 }
 
 void        AddClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string AddClip::label() const { return "Add Clip"; }
+std::string AddClip::label() const { return "playback.refactorEditor.history.addClip"; }
 
 SplitClip::SplitClip(std::string clipId, int splitTick, std::string newClipName)
 : mClipId(std::move(clipId)),
@@ -198,10 +196,8 @@ void SplitClip::execute(model::EditorStateExt& state) {
     right.inTick        = mSplitTick;
     right.outTick       = leftRef.outTick;
     right.trackTick     = mSplitTick;
-    right.speed         = leftRef.speed;
     right.name          = newName;
     right.color         = leftRef.color;
-    right.muted         = leftRef.muted;
     right.locked        = false;
     right.exportEnabled = leftRef.exportEnabled;
 
@@ -211,7 +207,7 @@ void SplitClip::execute(model::EditorStateExt& state) {
 }
 
 void        SplitClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SplitClip::label() const { return "Split Clip"; }
+std::string SplitClip::label() const { return "playback.refactorEditor.history.splitClip"; }
 
 MoveAndTrimClip::MoveAndTrimClip(std::string clipId, int newInTick, int newOutTick)
 : mClipId(std::move(clipId)),
@@ -273,29 +269,7 @@ void MoveAndTrimClip::execute(model::EditorStateExt& state) {
 }
 
 void        MoveAndTrimClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string MoveAndTrimClip::label() const { return "Move or Trim Clip"; }
-
-SetClipSpeed::SetClipSpeed(std::string clipId, float speed) : mClipId(std::move(clipId)), mSpeed(speed) {}
-
-void SetClipSpeed::execute(model::EditorStateExt& state) {
-    mBefore.reset();
-    auto const loc = findClipLocation(state, mClipId);
-    if (!loc) return;
-    auto const& cam  = state.cameras[loc->cameraIdx];
-    auto const& clip = cam.clips[loc->clipIdx];
-    if (cam.locked || clip.locked) return;
-
-    float const clamped = model::clampClipSpeed(mSpeed);
-    if (std::abs(clip.speed - clamped) < 1e-6f) return;
-
-    ClipOps::syncActiveSceneFromWorking(state);
-    mBefore                                                 = state;
-    state.cameras[loc->cameraIdx].clips[loc->clipIdx].speed = clamped;
-    ClipOps::syncActiveSceneFromWorking(state);
-}
-
-void        SetClipSpeed::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipSpeed::label() const { return "Set Clip Speed"; }
+std::string MoveAndTrimClip::label() const { return "playback.refactorEditor.history.moveOrTrimClip"; }
 
 RenameClip::RenameClip(std::string clipId, std::string name) : mClipId(std::move(clipId)), mName(std::move(name)) {}
 
@@ -314,26 +288,7 @@ void RenameClip::execute(model::EditorStateExt& state) {
 }
 
 void        RenameClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string RenameClip::label() const { return "Rename Clip"; }
-
-SetClipMuted::SetClipMuted(std::string clipId, bool muted) : mClipId(std::move(clipId)), mMuted(muted) {}
-
-void SetClipMuted::execute(model::EditorStateExt& state) {
-    mBefore.reset();
-    auto const loc = findClipLocation(state, mClipId);
-    if (!loc) return;
-    auto const& cam  = state.cameras[loc->cameraIdx];
-    auto const& clip = cam.clips[loc->clipIdx];
-    if (cam.locked || clip.locked || clip.muted == mMuted) return;
-
-    ClipOps::syncActiveSceneFromWorking(state);
-    mBefore                                                 = state;
-    state.cameras[loc->cameraIdx].clips[loc->clipIdx].muted = mMuted;
-    ClipOps::syncActiveSceneFromWorking(state);
-}
-
-void        SetClipMuted::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipMuted::label() const { return "Set Clip Muted"; }
+std::string RenameClip::label() const { return "playback.refactorEditor.history.renameClip"; }
 
 SetClipLocked::SetClipLocked(std::string clipId, bool locked) : mClipId(std::move(clipId)), mLocked(locked) {}
 
@@ -352,7 +307,7 @@ void SetClipLocked::execute(model::EditorStateExt& state) {
 }
 
 void        SetClipLocked::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipLocked::label() const { return "Set Clip Locked"; }
+std::string SetClipLocked::label() const { return "playback.refactorEditor.history.setClipLocked"; }
 
 SetClipExportEnabled::SetClipExportEnabled(std::string clipId, bool exportEnabled)
 : mClipId(std::move(clipId)),
@@ -373,7 +328,7 @@ void SetClipExportEnabled::execute(model::EditorStateExt& state) {
 }
 
 void        SetClipExportEnabled::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetClipExportEnabled::label() const { return "Set Clip Export Enabled"; }
+std::string SetClipExportEnabled::label() const { return "playback.refactorEditor.history.setClipExportEnabled"; }
 
 SetAllClipsExportEnabled::SetAllClipsExportEnabled(bool exportEnabled, std::string cameraId)
 : mExportEnabled(exportEnabled),
@@ -417,7 +372,9 @@ void SetAllClipsExportEnabled::execute(model::EditorStateExt& state) {
 }
 
 void        SetAllClipsExportEnabled::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetAllClipsExportEnabled::label() const { return "Set All Clips Export Enabled"; }
+std::string SetAllClipsExportEnabled::label() const {
+    return "playback.refactorEditor.history.setAllClipsExportEnabled";
+}
 
 ResetClipsToFullRange::ResetClipsToFullRange(std::string cameraId, std::string defaultClipName)
 : mCameraId(std::move(cameraId)),
@@ -444,7 +401,6 @@ void ResetClipsToFullRange::execute(model::EditorStateExt& state) {
         clip.name          = mDefaultClipName.empty() ? ClipOps::defaultClipName(state) : mDefaultClipName;
         clip.inTick        = 0;
         clip.outTick       = state.totalTicks;
-        clip.speed         = 1.0f;
         clip.exportEnabled = true;
         state.cameras[*camIdx].clips.push_back(std::move(clip));
         ClipOps::syncActiveSceneFromWorking(state);
@@ -474,7 +430,6 @@ void ResetClipsToFullRange::execute(model::EditorStateExt& state) {
         clip.name          = (i == 0 && !mDefaultClipName.empty()) ? mDefaultClipName : ClipOps::defaultClipName(state);
         clip.inTick        = 0;
         clip.outTick       = state.totalTicks;
-        clip.speed         = 1.0f;
         clip.exportEnabled = true;
         state.cameras[i].clips.push_back(std::move(clip));
         ClipOps::syncActiveSceneFromWorking(state);
@@ -482,7 +437,7 @@ void ResetClipsToFullRange::execute(model::EditorStateExt& state) {
 }
 
 void        ResetClipsToFullRange::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string ResetClipsToFullRange::label() const { return "Reset Clips to Full Range"; }
+std::string ResetClipsToFullRange::label() const { return "playback.refactorEditor.history.resetClipsToFullRange"; }
 
 DeleteClip::DeleteClip(std::string clipId) : mClipId(std::move(clipId)) {}
 
@@ -501,7 +456,136 @@ void DeleteClip::execute(model::EditorStateExt& state) {
 }
 
 void        DeleteClip::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string DeleteClip::label() const { return "Delete Clip"; }
+std::string DeleteClip::label() const { return "playback.refactorEditor.history.deleteClip"; }
+
+HealClipCuts::HealClipCuts(std::vector<model::SelectedClipCut> cuts, std::vector<model::KeyframeRef> keyframesToDelete)
+: mCuts(std::move(cuts)),
+  mKeyframesToDelete(std::move(keyframesToDelete)) {}
+
+void HealClipCuts::execute(model::EditorStateExt& state) {
+    mBefore.reset();
+    mDeletedKeyframes = false;
+    mHealedCuts       = false;
+
+    ClipOps::syncActiveSceneFromWorking(state);
+    auto snapshot = state;
+
+    if (state.totalTicks > 0 && !mCuts.empty()) {
+        for (auto& cam : state.cameras) {
+            if (cam.locked) continue;
+
+            std::vector<model::SelectedClipCut> gaps;
+            std::vector<model::SelectedClipCut> seams;
+            for (auto const& cut : mCuts) {
+                if (cut.cameraId != cam.id) continue;
+                if (cut.isGap()) gaps.push_back(cut);
+                else if (cut.isSeam()) seams.push_back(cut);
+            }
+            if (gaps.empty() && seams.empty()) continue;
+
+            auto sortCameraClips = [](std::vector<model::Clip>& clips) {
+                std::ranges::stable_sort(clips, [](model::Clip const& a, model::Clip const& b) {
+                    return a.inTick != b.inTick ? a.inTick < b.inTick : a.outTick < b.outTick;
+                });
+            };
+            sortCameraClips(cam.clips);
+
+            std::ranges::sort(gaps, [](model::SelectedClipCut const& a, model::SelectedClipCut const& b) {
+                return a.startTick != b.startTick ? a.startTick < b.startTick : a.endTick < b.endTick;
+            });
+            for (auto const& gap : gaps) {
+                int const gIn  = std::clamp(gap.startTick, 0, state.totalTicks);
+                int const gOut = std::clamp(gap.endTick, 0, state.totalTicks);
+                if (gOut <= gIn) continue;
+
+                bool const overlaps = std::ranges::any_of(cam.clips, [&](model::Clip const& c) {
+                    return c.inTick < gOut && c.outTick > gIn;
+                });
+                if (overlaps) continue;
+
+                std::optional<size_t> leftIdx;
+                std::optional<size_t> rightIdx;
+                for (size_t i = 0; i < cam.clips.size(); ++i) {
+                    if (cam.clips[i].inTick >= cam.clips[i].outTick) continue;
+                    if (cam.clips[i].outTick == gIn) leftIdx = i;
+                    if (cam.clips[i].inTick == gOut) rightIdx = i;
+                }
+
+                bool const leftUnlocked  = leftIdx && !cam.clips[*leftIdx].locked;
+                bool const rightUnlocked = rightIdx && !cam.clips[*rightIdx].locked;
+
+                if (leftUnlocked && rightUnlocked && *leftIdx != *rightIdx) {
+                    auto&       left   = cam.clips[*leftIdx];
+                    auto const& right  = cam.clips[*rightIdx];
+                    left.outTick       = right.outTick;
+                    left.exportEnabled = left.exportEnabled || right.exportEnabled;
+                    cam.clips.erase(cam.clips.begin() + static_cast<std::ptrdiff_t>(*rightIdx));
+                    mHealedCuts = true;
+                } else if (leftUnlocked) {
+                    cam.clips[*leftIdx].outTick = gOut;
+                    mHealedCuts                 = true;
+                } else if (rightUnlocked) {
+                    cam.clips[*rightIdx].inTick = gIn;
+                    mHealedCuts                 = true;
+                } else {
+                    model::Clip clip;
+                    clip.id            = ClipOps::nextClipId(state);
+                    clip.name          = ClipOps::defaultClipName(state);
+                    clip.inTick        = gIn;
+                    clip.outTick       = gOut;
+                    clip.exportEnabled = true;
+                    cam.clips.push_back(std::move(clip));
+                    sortCameraClips(cam.clips);
+                    mHealedCuts = true;
+                }
+            }
+
+            std::ranges::sort(seams, [](model::SelectedClipCut const& a, model::SelectedClipCut const& b) {
+                return a.startTick < b.startTick;
+            });
+            for (auto const& seam : seams) {
+                int const             sTick = seam.startTick;
+                std::optional<size_t> leftIdx;
+                std::optional<size_t> rightIdx;
+                for (size_t i = 0; i < cam.clips.size(); ++i) {
+                    if (cam.clips[i].inTick >= cam.clips[i].outTick) continue;
+                    if (cam.clips[i].outTick == sTick) leftIdx = i;
+                    if (cam.clips[i].inTick == sTick) rightIdx = i;
+                }
+                if (leftIdx && rightIdx && *leftIdx != *rightIdx && !cam.clips[*leftIdx].locked
+                    && !cam.clips[*rightIdx].locked) {
+                    auto&       left   = cam.clips[*leftIdx];
+                    auto const& right  = cam.clips[*rightIdx];
+                    left.outTick       = right.outTick;
+                    left.exportEnabled = left.exportEnabled || right.exportEnabled;
+                    cam.clips.erase(cam.clips.begin() + static_cast<std::ptrdiff_t>(*rightIdx));
+                    mHealedCuts = true;
+                }
+            }
+        }
+    }
+
+    for (auto const& ref : mKeyframesToDelete) {
+        auto const camIdx = findCameraIndex(state, ref.cameraId);
+        if (!camIdx) continue;
+        auto& cam = state.cameras[*camIdx];
+        if (cam.locked) continue;
+        if (cam.keysByTick.erase(ref.tick) > 0) mDeletedKeyframes = true;
+    }
+
+    if (mHealedCuts || mDeletedKeyframes) {
+        mBefore = std::move(snapshot);
+        ClipOps::syncActiveSceneFromWorking(state);
+    }
+}
+
+void HealClipCuts::undo(model::EditorStateExt& state) { restore(mBefore, state); }
+
+std::string HealClipCuts::label() const {
+    if (mHealedCuts && mDeletedKeyframes) return "playback.refactorEditor.history.deleteKeyframesAndRestoreClips";
+    if (mHealedCuts) return "playback.refactorEditor.history.restoreClips";
+    return "playback.refactorEditor.history.deleteKeyframes";
+}
 
 AddScene::AddScene(std::string name) : mName(std::move(name)) {}
 
@@ -526,7 +610,6 @@ void AddScene::execute(model::EditorStateExt& state) {
         clip.name          = ClipOps::defaultClipName(state);
         clip.inTick        = 0;
         clip.outTick       = state.totalTicks;
-        clip.speed         = 1.0f;
         clip.exportEnabled = true;
         state.scenes.back().cameras.front().clips.push_back(std::move(clip));
     }
@@ -536,7 +619,7 @@ void AddScene::execute(model::EditorStateExt& state) {
 }
 
 void        AddScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string AddScene::label() const { return "Add Scene"; }
+std::string AddScene::label() const { return "playback.refactorEditor.history.addScene"; }
 
 DuplicateScene::DuplicateScene(std::string sceneId, std::string copyName)
 : mSceneId(std::move(sceneId)),
@@ -564,13 +647,19 @@ void DuplicateScene::execute(model::EditorStateExt& state) {
             clip.id = ClipOps::nextClipId(state);
         }
     }
+    for (auto& track : inserted->audioTracks) {
+        track.id = ClipOps::nextAudioTrackId(state);
+        for (auto& aclip : track.clips) {
+            aclip.id = ClipOps::nextAudioClipId(state);
+        }
+    }
     state.activeSceneId = inserted->id;
     ClipOps::loadWorkingFromActiveScene(state);
     ClipOps::syncActiveSceneFromWorking(state);
 }
 
 void        DuplicateScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string DuplicateScene::label() const { return "Duplicate Scene"; }
+std::string DuplicateScene::label() const { return "playback.refactorEditor.history.duplicateScene"; }
 
 RenameScene::RenameScene(std::string sceneId, std::string name)
 : mSceneId(std::move(sceneId)),
@@ -589,7 +678,7 @@ void RenameScene::execute(model::EditorStateExt& state) {
 }
 
 void        RenameScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string RenameScene::label() const { return "Rename Scene"; }
+std::string RenameScene::label() const { return "playback.refactorEditor.history.renameScene"; }
 
 MoveScene::MoveScene(std::string sceneId, int targetIndex) : mSceneId(std::move(sceneId)), mTargetIndex(targetIndex) {}
 
@@ -623,7 +712,7 @@ void MoveScene::execute(model::EditorStateExt& state) {
 }
 
 void        MoveScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string MoveScene::label() const { return "Move Scene"; }
+std::string MoveScene::label() const { return "playback.refactorEditor.history.moveScene"; }
 
 DeleteScene::DeleteScene(std::string sceneId) : mSceneId(std::move(sceneId)) {}
 
@@ -646,7 +735,7 @@ void DeleteScene::execute(model::EditorStateExt& state) {
 }
 
 void        DeleteScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string DeleteScene::label() const { return "Delete Scene"; }
+std::string DeleteScene::label() const { return "playback.refactorEditor.history.deleteScene"; }
 
 SwitchScene::SwitchScene(std::string sceneId) : mSceneId(std::move(sceneId)) {}
 
@@ -663,7 +752,7 @@ void SwitchScene::execute(model::EditorStateExt& state) {
 }
 
 void        SwitchScene::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SwitchScene::label() const { return "Switch Scene"; }
+std::string SwitchScene::label() const { return "playback.refactorEditor.history.switchScene"; }
 
 SetSceneExportRange::SetSceneExportRange(int inTick, int outTick) : mInTick(inTick), mOutTick(outTick) {}
 
@@ -693,6 +782,6 @@ void SetSceneExportRange::execute(model::EditorStateExt& state) {
 }
 
 void        SetSceneExportRange::undo(model::EditorStateExt& state) { restore(mBefore, state); }
-std::string SetSceneExportRange::label() const { return "Set Scene Export Range"; }
+std::string SetSceneExportRange::label() const { return "playback.refactorEditor.history.setSceneExportRange"; }
 
 } // namespace playback::state::editing::command

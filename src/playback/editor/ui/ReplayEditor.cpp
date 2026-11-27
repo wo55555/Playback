@@ -6,8 +6,10 @@
 #include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/editor/ui/ErrorDialog.h"
+#include "playback/editor/ui/components/HistoryLabel.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/state/editing/ClipOps.h"
+#include "playback/state/editing/TimelineNavigation.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -80,8 +82,11 @@ void ReplayEditor::shutdown() {
     mSubmit     = nullptr;
     mSelection.clear();
     mLastExportState = exporting::ExportState::Idle;
-    mExitHoldSeconds = 0.0f;
+    mToast.clear();
+    mLastHistoryEventSeq = 0;
+    mExitHoldSeconds     = 0.0f;
     mExitHoldBlocked = false;
+    mThirdPersonOrbitModeActive = false;
 }
 
 void ReplayEditor::setVideoAspectRatio(float aspectRatio) {
@@ -144,12 +149,60 @@ void ReplayEditor::setPreviewSilentWhilePaused(bool silent) {
     saveLayoutPreferences();
 }
 
+void ReplayEditor::setShortcutKeyframeLensMode(ShortcutKeyframeLensMode mode) {
+    mShortcutKeyframeLensMode = mode;
+    saveLayoutPreferences();
+}
+
+void ReplayEditor::adjustThirdPersonOrbit(float deltaYaw, float deltaPitch, float deltaDistance) {
+    playback::state::EditorAction action{playback::state::EditorActionType::AdjustThirdPersonOrbit};
+    action.orbitDeltaYaw      = deltaYaw;
+    action.orbitDeltaPitch    = deltaPitch;
+    action.orbitDeltaDistance = deltaDistance;
+    submitAction(std::move(action));
+}
+
+void ReplayEditor::resetThirdPersonOrbit() { submitAction({playback::state::EditorActionType::ResetThirdPersonOrbit}); }
+
+void ReplayEditor::showSelectionInspector() { mDetailsPanel.setPage(InspectorPage::Selection); }
+
+void ReplayEditor::focusCameraKeyframe(std::string const& cameraId, int tick) {
+    mTimelinePanel.queueCameraKeyframeSelection(cameraId, tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusSpeedKeyframe(int tick) {
+    mTimelinePanel.queueSpeedKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusFreezeKeyframe(int tick) {
+    mTimelinePanel.queueFreezeKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusTimelapseKeyframe(int tick) {
+    mTimelinePanel.queueTimelapseKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusTimeOfDayKeyframe(int tick) {
+    mTimelinePanel.queueTimeOfDayKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
+void ReplayEditor::focusWeatherKeyframe(int tick) {
+    mTimelinePanel.queueWeatherKeyframeSelection(tick);
+    mDetailsPanel.setPage(InspectorPage::Selection);
+}
+
 void ReplayEditor::loadLayoutPreferences() {
-    mDetailsWidthRatio   = 0.22f;
-    mTimelineHeightRatio = 0.24f;
-    mVideoAspectRatio    = 16.0f / 9.0f;
-    mCameraPathVisible   = true;
-    mUiScaleTier         = UiScaleTier::Auto;
+    mDetailsWidthRatio        = 0.22f;
+    mTimelineHeightRatio      = 0.24f;
+    mVideoAspectRatio         = 16.0f / 9.0f;
+    mCameraPathVisible        = true;
+    mUiScaleTier              = UiScaleTier::Auto;
+    mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::MatchPreview;
     mViewportPanel.setInfoOverlayVisible(true);
     mViewportPanel.setAutoPreviewEnabled(true);
     mTimelinePanel.setSnapEnabled(true);
@@ -174,6 +227,19 @@ void ReplayEditor::loadLayoutPreferences() {
             if (uiScale != config.end() && uiScale->is_string()) {
                 mUiScaleTier = uiScaleTierFromName(uiScale->get<std::string>());
             }
+            auto const shortcutKeyframeLens        = config.find("shortcutKeyframeLens");
+            auto const shortcutKeyframeLensVersion = config.find("shortcutKeyframeLensVersion");
+            int const  lensVersion =
+                shortcutKeyframeLensVersion != config.end() && shortcutKeyframeLensVersion->is_number_integer()
+                     ? shortcutKeyframeLensVersion->get<int>()
+                     : 1;
+            if (shortcutKeyframeLens != config.end() && shortcutKeyframeLens->is_string()) {
+                if (shortcutKeyframeLens->get<std::string>() == "free" && lensVersion >= 2) {
+                    mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::FreeCamera;
+                } else if (shortcutKeyframeLens->get<std::string>() == "matchPreview") {
+                    mShortcutKeyframeLensMode = ShortcutKeyframeLensMode::MatchPreview;
+                }
+            }
             mDetailsWidthRatio =
                 std::clamp(readFiniteFloat(config, "detailsWidthRatio", mDetailsWidthRatio), 0.15f, 0.50f);
             mTimelineHeightRatio =
@@ -182,6 +248,9 @@ void ReplayEditor::loadLayoutPreferences() {
             float const trackListWidthRatio =
                 readFiniteFloat(config, "trackListWidthRatio", mTimelinePanel.trackListWidthRatio());
             mTimelinePanel.setViewPreferences(trackListWidthRatio, 1.0f, 0.0f);
+            auto& replayConfig = Playback::getInstance().getConfig().replay;
+            replayConfig.disableServerResourcePacks =
+                readBool(config, "disableServerResourcePacks", replayConfig.disableServerResourcePacks);
 
             auto const hud = config.find("hud");
             if (hud != config.end() && hud->is_object()) {
@@ -248,18 +317,22 @@ void ReplayEditor::saveLayoutPreferences() const {
     };
 
     nlohmann::ordered_json const config{
-        {"detailsWidthRatio",   mDetailsWidthRatio                        },
-        {"timelineHeightRatio", mTimelineHeightRatio                      },
-        {"videoAspectRatio",    mVideoAspectRatio                         },
-        {"showCameraPath",      mCameraPathVisible                        },
-        {"infoOverlay",         mViewportPanel.isInfoOverlayVisible()     },
-        {"autoPreview",         mViewportPanel.isAutoPreviewEnabled()     },
-        {"snap",                mTimelinePanel.isSnapEnabled()            },
-        {"uiScale",             std::string(uiScaleTierName(mUiScaleTier))},
-        {"trackListWidthRatio", mTimelinePanel.trackListWidthRatio()      },
-        {"hud",                 std::move(hud)                            },
-        {"previewAudio",        std::move(previewAudio)                   },
-        {"timelineViews",       std::move(timelineViews)                  }
+        {"detailsWidthRatio",           mDetailsWidthRatio                                                   },
+        {"timelineHeightRatio",         mTimelineHeightRatio                                                 },
+        {"videoAspectRatio",            mVideoAspectRatio                                                    },
+        {"showCameraPath",              mCameraPathVisible                                                   },
+        {"infoOverlay",                 mViewportPanel.isInfoOverlayVisible()                                },
+        {"autoPreview",                 mViewportPanel.isAutoPreviewEnabled()                                },
+        {"snap",                        mTimelinePanel.isSnapEnabled()                                       },
+        {"uiScale",                     std::string(uiScaleTierName(mUiScaleTier))                           },
+        {"shortcutKeyframeLens",
+         mShortcutKeyframeLensMode == ShortcutKeyframeLensMode::MatchPreview ? "matchPreview" : "free"       },
+        {"shortcutKeyframeLensVersion", 2                                                                    },
+        {"trackListWidthRatio",         mTimelinePanel.trackListWidthRatio()                                 },
+        {"disableServerResourcePacks",  Playback::getInstance().getConfig().replay.disableServerResourcePacks},
+        {"hud",                         std::move(hud)                                                       },
+        {"previewAudio",                std::move(previewAudio)                                              },
+        {"timelineViews",               std::move(timelineViews)                                             }
     };
     std::ofstream output(kLayoutPreferencesPath, std::ios::trunc);
     if (output) {
@@ -391,6 +464,18 @@ void ReplayEditor::seekTo(int tick) { mTimelinePanel.seekTo(frameContext(), tick
 
 void ReplayEditor::seekRelative(int tickDelta) { mTimelinePanel.seekRelative(frameContext(), tickDelta); }
 
+void ReplayEditor::undo(std::size_t steps) {
+    playback::state::EditorAction action{playback::state::EditorActionType::UndoEditorEdit};
+    action.historySteps = std::max<std::size_t>(1, steps);
+    submitAction(std::move(action));
+}
+
+void ReplayEditor::redo(std::size_t steps) {
+    playback::state::EditorAction action{playback::state::EditorActionType::RedoEditorEdit};
+    action.historySteps = std::max<std::size_t>(1, steps);
+    submitAction(std::move(action));
+}
+
 bool ReplayEditor::deleteSelection() { return mTimelinePanel.deleteSelection(frameContext()); }
 
 bool ReplayEditor::addKeyframeAtPlayhead() { return mTimelinePanel.addKeyframeAtPlayhead(frameContext()); }
@@ -416,58 +501,20 @@ bool ReplayEditor::trimClipAtPlayhead(bool trimIn) { return mTimelinePanel.trimC
 bool ReplayEditor::toggleSelectedClipExport() {
     auto const project = state().project;
     if (!project) return false;
-    int const tick       = state().currentTick;
-    int const totalTicks = state().totalTicks;
-
-    state::editing::model::Clip const* clip = nullptr;
-    if (auto const* selectedClip = mSelection.getAs<state::editing::model::SelectedClip>()) {
-        if (auto const hit = state::editing::ClipOps::findClipWithCamera(*project, selectedClip->clipId);
-            hit && !hit.camera->locked) {
-            clip = hit.clip;
-        }
-    } else {
-        std::string selectedCameraId;
-        if (auto const* selectedCamera = mSelection.getAs<state::editing::model::SelectedCamera>()) {
-            selectedCameraId = selectedCamera->cameraId;
-        } else if (auto const* selectedKeyframe = mSelection.getAs<state::editing::model::SelectedKeyframe>()) {
-            selectedCameraId = selectedKeyframe->trackId;
-        }
-        if (!selectedCameraId.empty()) {
-            auto const camIt =
-                std::ranges::find(project->cameras, selectedCameraId, &state::editing::model::CameraEntity::id);
-            if (camIt != project->cameras.end() && !camIt->locked) {
-                for (auto const& candidate : camIt->clips) {
-                    if (state::editing::ClipOps::clipCoversTick(candidate, tick, totalTicks)) {
-                        clip = &candidate;
-                        break;
-                    }
-                }
-            }
-        } else {
-            static std::vector<int> const emptyTransitions;
-            auto const&                   transitions =
-                state().cameraTimeline ? state().cameraTimeline->dimensionTransitionTicks() : emptyTransitions;
-            if (auto const active = state::editing::ClipOps::activeClipAt(*project, tick, false, transitions);
-                active && !active.camera->locked) {
-                clip = active.clip;
-            } else {
-                for (auto const& camera : project->cameras) {
-                    if (camera.locked) continue;
-                    for (auto const& candidate : camera.clips) {
-                        if (state::editing::ClipOps::clipCoversTick(candidate, tick, totalTicks)) {
-                            clip = &candidate;
-                            break;
-                        }
-                    }
-                    if (clip) break;
-                }
-            }
-        }
-    }
-    if (!clip) return false;
+    static std::vector<int> const emptyTransitions;
+    auto const&                   transitions =
+        state().cameraTimeline ? state().cameraTimeline->dimensionTransitionTicks() : emptyTransitions;
+    auto const hit = state::editing::ClipOps::resolveExportToggleClip(
+        *project,
+        mSelection,
+        state().currentTick,
+        state().totalTicks,
+        transitions
+    );
+    if (!hit || hit.camera->locked) return false;
     playback::state::EditorAction action{playback::state::EditorActionType::SetClipExportEnabled};
-    action.id    = clip->id;
-    action.value = !clip->exportEnabled;
+    action.id    = hit.clip->id;
+    action.value = !hit.clip->exportEnabled;
     submitAction(std::move(action));
     return true;
 }
@@ -488,6 +535,8 @@ bool ReplayEditor::selectCameraByIndex(std::size_t index) {
 void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction const& submit) {
     bool const exportActive = exporting::isExportActive(state.exportStatus.state);
     if (!state.editorVisible && !exportActive) {
+        mThirdPersonOrbitModeActive = false;
+        mToast.clear();
         if (!mActiveReplayPath.empty()) {
             mTimelineViewPreferences.insert_or_assign(
                 mActiveReplayPath,
@@ -502,6 +551,8 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
     syncTimelineViewPreferences(replayPath);
     mFrameState = &state;
     mSubmit     = &submit;
+    mThirdPersonOrbitModeActive =
+        state.editorVisible && state.followingRecordedPlayer && state.followThirdPerson && !exportActive;
     // A reloaded or edited project can drop the selected object; without this the inspector shows "missing".
     if (state.project) mSelection.pruneInvalid(*state.project);
 
@@ -523,9 +574,46 @@ void ReplayEditor::draw(playback::state::EditorState const& state, SubmitAction 
                                  && (mViewportMaximized || ImGui::GetIO().WantTextInput
                                      || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId));
 
+    if (state.historyEvent.seq != mLastHistoryEventSeq) {
+        mLastHistoryEventSeq = state.historyEvent.seq;
+        if (state.historyEvent.kind != playback::state::EditorHistoryEventKind::None && !exportActive
+            && state.editorVisible) {
+            auto const  labelText = translateHistoryLabel(state.historyEvent.label);
+            std::string message;
+            if (state.historyEvent.kind == playback::state::EditorHistoryEventKind::Undo) {
+                message = state.historyEvent.steps > 1
+                            ? "playback.refactorEditor.toast.undoSteps"_tr(state.historyEvent.steps, labelText)
+                            : "playback.refactorEditor.toast.undo"_tr(labelText);
+            } else if (state.historyEvent.kind == playback::state::EditorHistoryEventKind::Redo) {
+                message = state.historyEvent.steps > 1
+                            ? "playback.refactorEditor.toast.redoSteps"_tr(state.historyEvent.steps, labelText)
+                            : "playback.refactorEditor.toast.redo"_tr(labelText);
+            }
+            if (!message.empty()) mToast.show(std::move(message));
+        }
+    }
+
     auto const ctx = frameContext();
+    mTimelinePanel.applyPendingSelection(ctx);
     if (mModeManager.current() == EditorMode::Render) mRenderMode.draw(ctx);
     else mEditMode.draw(ctx);
+
+    if (exportActive || !state.editorVisible) {
+        mToast.clear();
+    } else {
+        ImVec2     toastPos{};
+        ImVec2     toastSize{};
+        Rect const vpRect = mViewportPanel.videoRect();
+        if (vpRect.GetWidth() > 0.0f && vpRect.GetHeight() > 0.0f) {
+            toastPos           = vpRect.min;
+            toastSize          = {vpRect.GetWidth(), vpRect.GetHeight()};
+            Rect const overlay = mViewportPanel.overlayRect();
+            if (mViewportMaximized && overlay.GetHeight() > 0.0f && overlay.min.y > toastPos.y) {
+                toastSize.y = std::min(toastSize.y, overlay.min.y - toastPos.y);
+            }
+        }
+        mToast.draw(toastPos, toastSize, ImGui::GetIO().DeltaTime);
+    }
 
     ErrorDialog::getInstance().draw();
     updateExitHold(escapeConsumedByUi);
@@ -659,6 +747,10 @@ void ReplayEditor::handleKeyboardShortcuts() {
         setTimelineTool(TimelineTool::Select);
         return;
     }
+    if (input::KeyMap::pressed(EditorKeybind::BoxSelectTool)) {
+        setTimelineTool(TimelineTool::BoxSelect);
+        return;
+    }
     if (input::KeyMap::pressed(EditorKeybind::RazorTool)) {
         setTimelineTool(TimelineTool::Razor);
         return;
@@ -699,12 +791,12 @@ void ReplayEditor::handleKeyboardShortcuts() {
         submitAction({playback::state::EditorActionType::SaveProject});
         return;
     }
-    if (input::KeyMap::pressed(EditorKeybind::Undo)) {
-        submitAction({playback::state::EditorActionType::UndoEditorEdit});
+    if (input::KeyMap::pressed(EditorKeybind::Undo, true)) {
+        undo();
         return;
     }
-    if (input::KeyMap::pressed(EditorKeybind::Redo)) {
-        submitAction({playback::state::EditorActionType::RedoEditorEdit});
+    if (input::KeyMap::pressed(EditorKeybind::Redo, true)) {
+        redo();
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::ToggleViewportMaximized)) {
@@ -748,11 +840,11 @@ void ReplayEditor::handleKeyboardShortcuts() {
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::JumpStart)) {
-        seekTo(0);
+        mTimelinePanel.seekSmartEdge(frameContext(), false);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::JumpEnd)) {
-        seekTo(state().totalTicks);
+        mTimelinePanel.seekSmartEdge(frameContext(), true);
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::SeekTickLeft, true)) {
@@ -813,6 +905,28 @@ void ReplayEditor::handleKeyboardShortcuts() {
     }
     if (input::KeyMap::pressed(EditorKeybind::MarkExportOut)) {
         markExportPoint(false);
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::JumpExportIn)) {
+        seekTo(
+            state::editing::TimelineNavigation::resolveExportPointTick(
+                state().totalTicks,
+                exportStartTick(),
+                exportEndTick(),
+                false
+            )
+        );
+        return;
+    }
+    if (input::KeyMap::pressed(EditorKeybind::JumpExportOut)) {
+        seekTo(
+            state::editing::TimelineNavigation::resolveExportPointTick(
+                state().totalTicks,
+                exportStartTick(),
+                exportEndTick(),
+                true
+            )
+        );
         return;
     }
     if (input::KeyMap::pressed(EditorKeybind::DecreaseSpeed, true)) {

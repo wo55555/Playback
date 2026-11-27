@@ -14,6 +14,15 @@ struct Scene {
 
     std::vector<CameraEntity> cameras;
     std::vector<Marker>       markers;
+    SpeedTrack                speedTrack;
+    FreezeTrack               freezeTrack;
+    TimelapseTrack            timelapseTrack;
+    TimeOfDayTrack            timeOfDayTrack;
+    WeatherTrack              weatherTrack;
+    bool                      daytimeOverrideEnabled{false};
+    int                       daytimeOverrideTicks{6000};
+    WeatherOverride           weatherOverride{WeatherOverride::Recorded};
+    std::vector<AudioTrack>   audioTracks;
 
     int exportInTick{-1};
     int exportOutTick{-1};
@@ -34,6 +43,15 @@ struct EditorStateExt {
     // Live working copy of the active scene.
     std::vector<CameraEntity> cameras;
     std::vector<Marker>       markers;
+    SpeedTrack                speedTrack;
+    FreezeTrack               freezeTrack;
+    TimelapseTrack            timelapseTrack;
+    TimeOfDayTrack            timeOfDayTrack;
+    WeatherTrack              weatherTrack;
+    bool                      daytimeOverrideEnabled{false};
+    int                       daytimeOverrideTicks{6000};
+    WeatherOverride           weatherOverride{WeatherOverride::Recorded};
+    std::vector<AudioTrack>   audioTracks;
     int                       exportInTick{-1};
     int                       exportOutTick{-1};
 

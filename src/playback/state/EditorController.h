@@ -41,7 +41,7 @@ private:
     void               clearExportBatch();
     void               startExportBatch(std::vector<QueuedExportJob> jobs, bool hudVisible);
     void               advanceExportBatchIfNeeded();
-    [[nodiscard]] bool isProjectDirty() const { return mCommandStack.revision() != mSavedRevision; }
+    [[nodiscard]] bool isProjectDirty() const { return !mCommandStack.isAtSavedState(); }
     [[nodiscard]] std::optional<state::editing::model::CameraKeyframe> captureCameraKeyframe() const;
     void                                                               refreshBrowser();
     void runBrowserOperation(ReplayBrowserOperation operation, bool hudVisible, auto&& callback) {
@@ -71,7 +71,7 @@ private:
 
     std::filesystem::path                 mProjectFile;
     std::string                           mProjectError;
-    std::uint64_t                         mSavedRevision{};
+    EditorHistoryEvent                    mLastHistoryEvent;
     std::chrono::steady_clock::time_point mLastAutosave{};
     bool                                  mEditorVisibleLogged{};
     bool                                  mEditorReadyLatched{};

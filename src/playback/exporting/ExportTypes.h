@@ -100,6 +100,8 @@ struct ExportSettings {
     uint32_t         videoCrf{18};
     // Capture game audio during export: muxed into MP4, written as a sidecar .wav for PNG sequences.
     bool audio{true};
+    // Mix enabled external audio tracks; stays active even when fixed-interval timelapse disables game audio capture.
+    bool externalAudio{true};
     // Mono is an equal-weight fold of the stereo capture.
     bool audioStereo{true};
     // MP4 only; the sidecar of a PNG sequence stays an uncompressed WAV.
@@ -165,9 +167,12 @@ struct ExportStatus {
 struct ExportFramePlan {
     int64_t              replayTickNumerator{};
     int64_t              replayTickDenominator{1};
+    int64_t              clientTickNumerator{};
+    int64_t              clientTickDenominator{1};
     visuals::FrameTicket ticket;
     bool                 hardCut{false};
     bool                 muteAudio{false};
+    bool                 worldFrozen{false};
 };
 
 struct CompiledExportSegment {
@@ -191,6 +196,7 @@ struct CompiledExportPlan {
     int64_t                            replayTickStepNumerator{};
     int64_t                            replayTickDenominator{1};
     std::vector<CompiledExportSegment> segments;
+    std::vector<ExportFramePlan>       precomputedFrames;
 
     [[nodiscard]] std::optional<ExportFramePlan> frame(uint64_t frameIndex) const;
 };

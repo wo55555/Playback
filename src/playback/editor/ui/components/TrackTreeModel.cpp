@@ -3,6 +3,8 @@
 #include "playback/editor/ui/EditorTheme.h"
 #include "playback/state/editing/models/EditorStateExt.h"
 
+#include "ll/api/i18n/I18n.h"
+
 #include <algorithm>
 #include <cctype>
 #include <ranges>
@@ -10,6 +12,7 @@
 namespace playback::editor::ui {
 
 using namespace playback::state::editing::model;
+using namespace ll::i18n_literals;
 
 namespace {
 
@@ -38,7 +41,7 @@ void TrackTreeModel::setSearch(std::string_view query) { mSearch = query; }
 
 void TrackTreeModel::rebuild(const EditorStateExt& state) {
     mRows.clear();
-    mRows.reserve(state.cameras.size());
+    mRows.reserve(state.cameras.size() + state.audioTracks.size() + 4);
 
     float const rowHeight = metrics::cameraRow();
 
@@ -46,7 +49,109 @@ void TrackTreeModel::rebuild(const EditorStateExt& state) {
         const auto& camera = state.cameras[index];
         if (!cameraMatchesSearch(camera, mSearch)) continue;
         mRows.push_back(
-            {"camera:" + camera.id, camera.name, camera.id, index, rowHeight, camera.locked, camera.enabled}
+            {TrackRowKind::Camera,
+             "camera:" + camera.id,
+             camera.name,
+             camera.id,
+             index,
+             rowHeight,
+             camera.locked,
+             camera.enabled}
+        );
+    }
+
+    if (state.speedTrack.isVisible()) {
+        std::string speedName = "playback.refactorEditor.speed.trackName"_tr();
+        if (containsInsensitive(speedName, mSearch)) {
+            mRows.push_back(
+                {TrackRowKind::Speed,
+                 "speed",
+                 std::move(speedName),
+                 "__speed__",
+                 -1,
+                 rowHeight,
+                 state.speedTrack.locked,
+                 state.speedTrack.enabled}
+            );
+        }
+    }
+
+    if (state.freezeTrack.isVisible()) {
+        std::string freezeName = "playback.refactorEditor.freeze.trackName"_tr();
+        if (containsInsensitive(freezeName, mSearch)) {
+            mRows.push_back(
+                {TrackRowKind::Freeze,
+                 "freeze",
+                 std::move(freezeName),
+                 "__freeze__",
+                 -1,
+                 rowHeight,
+                 state.freezeTrack.locked,
+                 state.freezeTrack.enabled}
+            );
+        }
+    }
+
+    if (state.timelapseTrack.isVisible()) {
+        std::string timelapseName = "playback.refactorEditor.timelapse.trackName"_tr();
+        if (containsInsensitive(timelapseName, mSearch)) {
+            mRows.push_back(
+                {TrackRowKind::Timelapse,
+                 "timelapse",
+                 std::move(timelapseName),
+                 "__timelapse__",
+                 -1,
+                 rowHeight,
+                 state.timelapseTrack.locked,
+                 state.timelapseTrack.enabled}
+            );
+        }
+    }
+
+    if (state.timeOfDayTrack.isVisible()) {
+        std::string timeOfDayName = "playback.refactorEditor.timeOfDay.trackName"_tr();
+        if (containsInsensitive(timeOfDayName, mSearch)) {
+            mRows.push_back(
+                {TrackRowKind::TimeOfDay,
+                 "time_of_day",
+                 std::move(timeOfDayName),
+                 "__time_of_day__",
+                 -1,
+                 rowHeight,
+                 state.timeOfDayTrack.locked,
+                 state.timeOfDayTrack.enabled}
+            );
+        }
+    }
+
+    if (state.weatherTrack.isVisible()) {
+        std::string weatherName = "playback.refactorEditor.weather.trackName"_tr();
+        if (containsInsensitive(weatherName, mSearch)) {
+            mRows.push_back(
+                {TrackRowKind::Weather,
+                 "weather",
+                 std::move(weatherName),
+                 "__weather__",
+                 -1,
+                 rowHeight,
+                 state.weatherTrack.locked,
+                 state.weatherTrack.enabled}
+            );
+        }
+    }
+
+    for (auto const& audioTrack : state.audioTracks) {
+        if (!containsInsensitive(audioTrack.name, mSearch)) continue;
+        mRows.push_back(
+            {TrackRowKind::Audio,
+             audioTrack.id,
+             audioTrack.name,
+             "__audio__" + audioTrack.id,
+             -1,
+             rowHeight,
+             audioTrack.locked,
+             audioTrack.enabled,
+             audioTrack.muted}
         );
     }
 }

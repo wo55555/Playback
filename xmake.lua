@@ -110,7 +110,7 @@ target("playback")
     add_packages("openssl")
     add_packages("libzip")
     add_packages("imgui")
-    add_syslinks("d3d11", "d3d12", "dxgi", "dcomp", "d3dcompiler", "windowscodecs", "ole32", "comdlg32", "shell32", "gdi32")
+    add_syslinks("d3d11", "d3d12", "dxgi", "dcomp", "d3dcompiler", "windowscodecs", "ole32", "comdlg32", "shell32", "gdi32", "winmm")
     set_kind("shared")
     set_languages("c++20")
     if is_mode("debug") then
@@ -184,3 +184,41 @@ target("playback")
             cprint("${bright green}[Playback]: ${reset}Standalone UI resource pack generated to " .. mcpack)
         end
     end)
+
+target("editor-unit-tests")
+    set_default(false)
+    set_kind("binary")
+    set_languages("c++20")
+    add_cxflags("/utf-8")
+    add_includedirs("tests/stubs", "src")
+    on_load(function (target)
+        import("core.project.project")
+        local ll_pkg = project.required_package("levilamina")
+        if ll_pkg then
+            for _, dir in ipairs(ll_pkg:get("sysincludedirs") or {}) do
+                if dir:find("nlohmann_json", 1, true) then
+                    target:add("sysincludedirs", dir)
+                end
+            end
+        end
+    end)
+    add_files(
+        "tests/editor/EditorCommandsAndNavTests.cpp",
+        "tests/editor/TimeOfDayTests.cpp",
+        "src/playback/keyframe/CameraKeyframeChange.cpp",
+        "src/playback/keyframe/CameraKeyframeHandler.cpp",
+        "src/playback/keyframe/CameraTimelineEvaluator.cpp",
+        "src/playback/keyframe/KeyframeTrack.cpp",
+        "src/playback/keyframe/SpeedTimelineEvaluator.cpp",
+        "src/playback/keyframe/TimelapseTimelineEvaluator.cpp",
+        "src/playback/keyframe/TimeOfDayTimelineEvaluator.cpp",
+        "src/playback/keyframe/WeatherTimelineEvaluator.cpp",
+        "src/playback/state/editing/commands/CameraCommands.cpp",
+        "src/playback/state/editing/commands/ClipCommands.cpp",
+        "src/playback/state/editing/commands/TimeOfDayCommands.cpp",
+        "src/playback/state/editing/commands/WeatherCommands.cpp",
+        "src/playback/state/editing/CameraBindingOps.cpp",
+        "src/playback/state/editing/ClipOps.cpp",
+        "src/playback/state/editing/ProjectSerializer.cpp",
+        "src/playback/state/editing/models/SelectionModel.cpp"
+    )

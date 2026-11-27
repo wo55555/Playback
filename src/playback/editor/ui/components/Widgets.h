@@ -76,8 +76,11 @@ enum class VectorIcon {
     Maximize,
     Restore,
     SelectCursor,
+    BoxSelect,
     PenTool,
-    SnapMagnet
+    SnapMagnet,
+    MarkIn,
+    MarkOut
 };
 
 void drawVectorIcon(ImDrawList* drawList, ImVec2 const& centre, float boxSize, ImU32 color, VectorIcon icon);

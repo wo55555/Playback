@@ -77,6 +77,17 @@ namespace Playback::ReplayEditor::Icons {
 #define ICON_TRACK_ACTIVE "\ue345" // circle-dot
 #define ICON_TRACK_OFF    "\ue076" // circle
 
+// Track types
+#define ICON_FREEZE           "\ue165" // snowflake
+#define ICON_TIMELAPSE        "\ue1e0" // timer
+#define ICON_AUDIO            "\ue55b" // audio-waveform
+#define ICON_WEATHER          "\ue216" // cloud-sun
+#define ICON_WEATHER_CLEAR    "\ue178" // sun
+#define ICON_WEATHER_OVERCAST "\ue088" // cloud
+#define ICON_WEATHER_RAIN     "\ue08e" // cloud-rain
+#define ICON_WEATHER_SNOW     "\ue090" // cloud-snow
+#define ICON_WEATHER_THUNDER  "\ue08c" // cloud-lightning
+
 // Transitions
 #define ICON_TRANSITION "\ue417" // arrow-right-left
 

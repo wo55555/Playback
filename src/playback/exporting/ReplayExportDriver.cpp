@@ -6,6 +6,7 @@
 #include "playback/Playback.h"
 #include "playback/audio/ExportAudioCapture.h"
 #include "playback/audio/ExportAudioMuxer.h"
+#include "playback/audio/ExternalAudioMixer.h"
 #include "playback/exporting/IdleDetectionHooks.h"
 #include "playback/replay/ReplaySession.h"
 #include "playback/runtime/ClientTickHooks.h"
@@ -111,6 +112,7 @@ bool ReplayExportDriver::start(
         fail(ExportError::InvalidSettings, "The export plan was not retained by the coordinator");
         return false;
     }
+    mExportAudioTracks = project.audioTracks;
     if (mPlan->settings.audio) playback::audio::exportcap::exportBegin(mPlan->settings);
     visuals::setHudHiddenForExport(mPlan->settings.hideHud);
 
@@ -177,32 +179,73 @@ void ReplayExportDriver::tick() try {
             playback::audio::exportcap::finalizeSidecar();
             // capturing() is already false here: finish() runs exportEnd() before the Completed state is reached.
             // Gate the mux on the sidecar having real audio data instead, which survives exportEnd().
-            auto const sidecar = playback::audio::exportcap::sidecarPath();
-            std::error_code sidecarEc;
-            bool const    hasAudio =
-                mPlan && mPlan->settings.audio && !sidecar.empty()
-                && std::filesystem::file_size(sidecar, sidecarEc) > 44 && !sidecarEc;
-            if (hasAudio) {
-                if (mPlan->settings.format == ExportFormat::Mp4Video) {
-                    playback::audio::exportmux::muxIntoMp4(
-                        mPlan->outputPath,
-                        sidecar,
-                        mPlan->settings.audioCodec,
-                        mPlan->settings.audioBitrateKbps
-                    );
-                } else {
-                    getLogger().info("Export audio written to {}", sidecar);
+            if (mPlan) {
+                auto const      sidecar = playback::audio::exportcap::sidecarPath();
+                std::error_code sidecarEc;
+                bool const      hasGameAudio = mPlan->settings.audio && !sidecar.empty()
+                                       && std::filesystem::file_size(sidecar, sidecarEc) > 44 && !sidecarEc;
+                bool const hasExternalAudio = mPlan->settings.externalAudio
+                                           && playback::audio::external::hasPlayableExternalAudio(mExportAudioTracks);
+
+                std::filesystem::path finalAudioWav;
+                bool                  cleanupTempMixWav = false;
+                if (hasExternalAudio) {
+                    std::filesystem::path const mixedPath =
+                        (mPlan->settings.format == ExportFormat::Mp4Video)
+                            ? std::filesystem::path(mPlan->outputPath.native() + L".mix.wav")
+                            : (hasGameAudio ? sidecar : std::filesystem::path(mPlan->outputPath.native() + L".wav"));
+                    if (playback::audio::external::mixExternalAudioForExport(
+                            *mPlan,
+                            mExportAudioTracks,
+                            hasGameAudio ? sidecar : std::filesystem::path{},
+                            mixedPath
+                        )) {
+                        finalAudioWav     = mixedPath;
+                        cleanupTempMixWav = (mPlan->settings.format == ExportFormat::Mp4Video);
+                        if (hasGameAudio && mixedPath != sidecar) {
+                            std::error_code removeEc;
+                            std::filesystem::remove(sidecar, removeEc);
+                        }
+                    } else if (hasGameAudio) {
+                        finalAudioWav = sidecar;
+                    }
+                } else if (hasGameAudio) {
+                    finalAudioWav = sidecar;
+                }
+
+                if (!finalAudioWav.empty()) {
+                    if (mPlan->settings.format == ExportFormat::Mp4Video) {
+                        bool const muxed = playback::audio::exportmux::muxIntoMp4(
+                            mPlan->outputPath,
+                            finalAudioWav,
+                            mPlan->settings.audioCodec,
+                            mPlan->settings.audioBitrateKbps
+                        );
+                        if (muxed && hasGameAudio && finalAudioWav != sidecar) {
+                            std::error_code removeEc;
+                            std::filesystem::remove(sidecar, removeEc);
+                        }
+                        if (muxed && cleanupTempMixWav) {
+                            std::error_code removeEc;
+                            std::filesystem::remove(finalAudioWav, removeEc);
+                        }
+                    } else {
+                        getLogger().info("Export audio written to {}", finalAudioWav);
+                    }
                 }
             }
+            mExportAudioTracks.clear();
             restoreReplayState();
             setExportActivityActive(false);
             mPhase = Phase::Completed;
             getLogger().info("Video export completed: {} frames written to {}", mNextFrameIndex, mPlan->outputPath);
         } else if (coordinatorStatus.state == ExportState::Cancelled) {
+            mExportAudioTracks.clear();
             restoreReplayState();
             setExportActivityActive(false);
             mPhase = Phase::Cancelled;
         } else if (coordinatorStatus.state == ExportState::Faulted) {
+            mExportAudioTracks.clear();
             restoreReplayState();
             setExportActivityActive(false);
             mPhase = Phase::Faulted;
@@ -316,6 +359,7 @@ void ReplayExportDriver::reset() {
     mCoordinator.reset();
     setExportActivityActive(false);
     mPlan.reset();
+    mExportAudioTracks.clear();
     mReadyFrames.clear();
     mNextFrameIndex = 0;
     mPhase          = Phase::Idle;

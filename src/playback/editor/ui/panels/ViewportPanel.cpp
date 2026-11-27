@@ -1,9 +1,13 @@
 ﻿#include "ViewportPanel.h"
 
+#include "playback/editor/input/KeyMap.h"
 #include "playback/editor/ui/EditorTheme.h"
+#include "playback/editor/ui/components/PlayerPicker.h"
 #include "playback/editor/ui/components/Widgets.h"
 #include "playback/editor/ui/iconfont.h"
-#include "playback/editor/ui/components/PlayerPicker.h"
+#include "playback/exporting/ExportTypes.h"
+#include "playback/state/editing/ClipOps.h"
+#include "playback/state/editing/TimelineNavigation.h"
 
 #include "imgui.h"
 #include "ll/api/i18n/I18n.h"
@@ -15,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <limits>
 #include <utility>
 
@@ -252,7 +257,30 @@ void ViewportPanel::draw(PanelContext const& ctx, bool maximized) {
     // The floating transport overlaps this hit box; without this it would keep the hover id.
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##viewport-video", videoSize);
-    // Left click hands the mouse to the game; right click picks whatever entity is under the cursor.
+    bool const thirdPersonOrbitActive = ctx.state.editorVisible && ctx.state.followingRecordedPlayer
+                                     && ctx.state.followThirdPerson
+                                     && !exporting::isExportActive(ctx.state.exportStatus.state);
+    if (thirdPersonOrbitActive) {
+        if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            ImVec2 const delta = ImGui::GetIO().MouseDelta;
+            if (delta.x != 0.0f || delta.y != 0.0f) {
+                constexpr float kOrbitDegreesPerPixel = 0.35f;
+                ctx.commands
+                    .adjustThirdPersonOrbit(delta.x * kOrbitDegreesPerPixel, delta.y * kOrbitDegreesPerPixel, 0.0f);
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            float const wheel = ImGui::GetIO().MouseWheel;
+            if (wheel != 0.0f) {
+                ctx.commands.adjustThirdPersonOrbit(0.0f, 0.0f, -wheel * 0.5f);
+            }
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                ctx.commands.resetThirdPersonOrbit();
+            }
+        }
+    }
+    // Left click hands the mouse to the game (or orbits in 3P follow mode); right click picks whatever entity is under
+    // the cursor.
     if (ctx.state.replayVisible && mGameTexture && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
         mPickedEntity = pickEntityAt(ctx, ImGui::GetMousePos());
         ImGui::OpenPopup("##viewport-entity-menu");
@@ -278,37 +306,49 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
     ImGui::BeginChild("##ViewportToolbar", {width, height}, false, ImGuiWindowFlags_NoScrollbar);
     ImGui::SetCursorPos({metrics::gutter(), (height - metrics::iconButton()) * 0.5f});
 
-    auto const* selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
+    auto const* selectedCamera   = project ? state::editing::ClipOps::selectedCamera(*project, ctx.selection) : nullptr;
     bool const  following        = state.followingRecordedPlayer;
     bool        openPlayerPicker = false;
     ImVec2      playerAnchorMin{};
     ImVec2      playerAnchorMax{};
-    // The track that owns the playhead names the view, as on the timeline; follow and free camera fill the gaps.
+    // Follow mode owns the viewport when active; otherwise the track at the playhead (or selected/free camera) does.
     state::editing::model::CameraEntity const* activeCamera = nullptr;
-    if (project && !state.activeCameraId.empty()) {
+    if (!following && project && !state.activeCameraId.empty()) {
         auto const camera =
             std::ranges::find(project->cameras, state.activeCameraId, &state::editing::model::CameraEntity::id);
         if (camera != project->cameras.end()) activeCamera = &*camera;
     }
+    auto const modeIcon = [](state::editing::model::CameraKeyframeMode mode) -> char const* {
+        using Mode = state::editing::model::CameraKeyframeMode;
+        switch (mode) {
+        case Mode::FirstPerson:
+            return ICON_EYE;
+        case Mode::ThirdPerson:
+            return ICON_USER;
+        case Mode::Interpolated:
+        default:
+            return ICON_CAMERA;
+        }
+    };
     std::string cameraLabel = "playback.refactorEditor.viewport.freeCamera"_tr();
-    char const* cameraIcon  = nullptr;
+    char const* cameraIcon  = ICON_CAMERA;
     if (activeCamera) {
         cameraLabel = activeCamera->name;
         auto const activeMode =
             state.cameraTimeline
                 ? state.cameraTimeline->shotAt(state.currentTick).mode
                 : state::editing::model::CameraKeyframeMode::Interpolated;
-        cameraIcon = activeMode == state::editing::model::CameraKeyframeMode::Interpolated ? ICON_CAMERA : ICON_USER;
+        cameraIcon = modeIcon(activeMode);
     } else if (following) {
         auto const subject = playerSubjectLabel(state.replayPlayers, state.replayEntities, state.replaySubjectChoice);
         cameraLabel        = state.followThirdPerson ? "playback.refactorEditor.viewport.followSubjectThird"_tr(subject)
                                                      : "playback.refactorEditor.viewport.followSubject"_tr(subject);
-    } else if (project && selectedCamera) {
-        auto const camera =
-            std::ranges::find(project->cameras, selectedCamera->cameraId, &state::editing::model::CameraEntity::id);
-        if (camera != project->cameras.end()) {
-            cameraLabel = camera->name;
-            cameraIcon  = ICON_CAMERA;
+        cameraIcon         = state.followThirdPerson ? ICON_USER : ICON_EYE;
+    } else if (selectedCamera) {
+        cameraLabel = selectedCamera->name;
+        if (!selectedCamera->keysByTick.empty()) {
+            auto const upper = selectedCamera->keysByTick.upper_bound(state.currentTick);
+            if (upper != selectedCamera->keysByTick.begin()) cameraIcon = modeIcon(std::prev(upper)->second.mode);
         }
     }
     if (widgets::dropdownChip(
@@ -334,10 +374,11 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
         if (project && !project->cameras.empty()) ImGui::Separator();
         if (project) {
             for (auto const& camera : project->cameras) {
-                bool const        current = !following && selectedCamera && selectedCamera->cameraId == camera.id;
+                bool const        current = !following && selectedCamera && selectedCamera->id == camera.id;
                 std::string const label   = camera.name + "##cam-" + camera.id;
                 if (ImGui::MenuItem(label.c_str(), nullptr, current)) {
                     ctx.selection.select(state::editing::model::SelectedCamera{camera.id});
+                    ctx.commands.showSelectionInspector();
                     EditorAction action{EditorActionType::SetPreviewCamera};
                     action.id = camera.id;
                     ctx.submitAction(std::move(action));
@@ -354,13 +395,37 @@ void ViewportPanel::drawToolbar(PanelContext const& ctx) {
             ctx.submitAction({EditorActionType::TeleportToRecordedPlayer});
         }
         if (ImGui::MenuItem(
-                "playback.refactorEditor.viewport.firstPerson"_tr().c_str(),
+                "playback.refactorEditor.viewport.followTarget"_tr().c_str(),
                 nullptr,
                 following,
                 state.replayVisible
             )) {
             ImGui::CloseCurrentPopup();
             openPlayerPicker = true;
+        }
+        std::string const perspectiveShortcut =
+            input::KeyMap::displayString(input::EditorKeybind::ToggleFollowPerspective);
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.viewport.firstPerson"_tr().c_str(),
+                perspectiveShortcut.c_str(),
+                following && !state.followThirdPerson,
+                state.replayVisible
+            )) {
+            if (!following) submitFollow(ctx, state.replaySubjectChoice);
+            EditorAction action{EditorActionType::SetFollowThirdPerson};
+            action.value = false;
+            ctx.submitAction(std::move(action));
+        }
+        if (ImGui::MenuItem(
+                "playback.refactorEditor.viewport.thirdPerson"_tr().c_str(),
+                perspectiveShortcut.c_str(),
+                following && state.followThirdPerson,
+                state.replayVisible
+            )) {
+            if (!following) submitFollow(ctx, state.replaySubjectChoice);
+            EditorAction action{EditorActionType::SetFollowThirdPerson};
+            action.value = true;
+            ctx.submitAction(std::move(action));
         }
         // Quick access to nearby entities, prioritizing living mobs; players and full search live in the picker above.
         if (ImGui::BeginMenu(
@@ -461,10 +526,10 @@ void ViewportPanel::drawInfoOverlay(PanelContext const& ctx, ImVec2 const& video
     auto const& timeline = ctx.state.cameraTimeline;
     if (!timeline) return;
 
-    auto const*                     selectedCamera = ctx.selection.getAs<state::editing::model::SelectedCamera>();
+    auto const* selectedCamera =
+        ctx.state.project ? state::editing::ClipOps::selectedCamera(*ctx.state.project, ctx.selection) : nullptr;
     visuals::ReplaySampleTime const time{std::max(0, ctx.state.currentTick), 1};
-    auto const                      sample =
-        selectedCamera ? timeline->sampleCameraById(selectedCamera->cameraId, time) : timeline->sample(time);
+    auto const sample = selectedCamera ? timeline->sampleCameraById(selectedCamera->id, time) : timeline->sample(time);
     if (!sample) return;
 
     auto const& pose = sample->state;
@@ -543,8 +608,17 @@ void ViewportPanel::drawFloatingTransport(PanelContext const& ctx, ImVec2 const&
         return widgets::vectorIconButton(id, icon, tooltip.c_str());
     };
 
-    if (button("##fv-start", 0, VectorIcon::SkipStart, "playback.refactorEditor.timeline.skipToStart"_tr()))
-        ctx.commands.seekTo(0);
+    if (button("##fv-start", 0, VectorIcon::SkipStart, "playback.refactorEditor.timeline.skipToStart"_tr())) {
+        ctx.commands.seekTo(
+            state::editing::TimelineNavigation::resolveSmartEdgeTick(
+                state.currentTick,
+                state.totalTicks,
+                ctx.commands.exportStartTick(),
+                ctx.commands.exportEndTick(),
+                false
+            )
+        );
+    }
     if (button("##fv-back", 1, VectorIcon::StepBack, "playback.refactorEditor.timeline.previousTick"_tr()))
         ctx.commands.seekRelative(-1);
     if (button(
@@ -556,8 +630,17 @@ void ViewportPanel::drawFloatingTransport(PanelContext const& ctx, ImVec2 const&
         ctx.submitAction({EditorActionType::TogglePause});
     if (button("##fv-forward", 3, VectorIcon::StepForward, "playback.refactorEditor.timeline.nextTick"_tr()))
         ctx.commands.seekRelative(1);
-    if (button("##fv-end", 4, VectorIcon::SkipEnd, "playback.refactorEditor.timeline.skipToEnd"_tr()))
-        ctx.commands.seekTo(state.totalTicks);
+    if (button("##fv-end", 4, VectorIcon::SkipEnd, "playback.refactorEditor.timeline.skipToEnd"_tr())) {
+        ctx.commands.seekTo(
+            state::editing::TimelineNavigation::resolveSmartEdgeTick(
+                state.currentTick,
+                state.totalTicks,
+                ctx.commands.exportStartTick(),
+                ctx.commands.exportEndTick(),
+                true
+            )
+        );
+    }
     if (button("##fv-restore", 5, VectorIcon::Restore, "playback.refactorEditor.timeline.restore"_tr()))
         ctx.commands.toggleViewportMaximized();
 }
