@@ -20,9 +20,11 @@ struct Entry {
     uintptr_t    rva;
 };
 
-// Minecraft.Windows.exe 1.26.60.5.
+// Minecraft.Windows.exe 1.26.60.5. PeEditor and LeviLauncher only append trailing sections,
+// leaving TimeDateStamp, SizeOfCode, and .text/.rdata/.data RVAs unchanged.
 constexpr DWORD ImageTimeDateStamp = 0x6AD79EE4;
-constexpr DWORD ImageSize          = 0x13847000;
+constexpr DWORD ImageCodeSize      = 0x0EEC5A00;
+constexpr DWORD MinImageSize       = 0x1383B000;
 
 constexpr Entry Entries[] = {
     {GameFunction::HasFinishedLoading,                       0x6950D20},
@@ -75,21 +77,37 @@ constexpr bool entriesInOrder() {
 }
 static_assert(entriesInOrder());
 
-uintptr_t supportedImageBase() {
+struct SupportedImage {
+    uintptr_t base = 0;
+    DWORD     size = 0;
+};
+
+SupportedImage supportedImage() {
     auto const base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    auto const dos  = reinterpret_cast<IMAGE_DOS_HEADER const*>(base);
-    auto const nt   = reinterpret_cast<IMAGE_NT_HEADERS64 const*>(base + dos->e_lfanew);
-    if (nt->FileHeader.TimeDateStamp == ImageTimeDateStamp && nt->OptionalHeader.SizeOfImage == ImageSize) return base;
-    Playback::getInstance().getSelf().getLogger().error("This Playback build needs Minecraft 1.26.60.5");
-    return 0;
+    if (!base) return {};
+    auto const dos = reinterpret_cast<IMAGE_DOS_HEADER const*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return {};
+    auto const nt = reinterpret_cast<IMAGE_NT_HEADERS64 const*>(base + static_cast<uintptr_t>(dos->e_lfanew));
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return {};
+    if (nt->FileHeader.TimeDateStamp == ImageTimeDateStamp && nt->OptionalHeader.SizeOfCode == ImageCodeSize
+        && nt->OptionalHeader.SizeOfImage >= MinImageSize) {
+        return {base, nt->OptionalHeader.SizeOfImage};
+    }
+    Playback::getInstance().getSelf().getLogger().error(
+        "This Playback build needs Minecraft 1.26.60.5 (stamp={:#x}, code={:#x}, size={:#x})",
+        nt->FileHeader.TimeDateStamp,
+        nt->OptionalHeader.SizeOfCode,
+        nt->OptionalHeader.SizeOfImage
+    );
+    return {};
 }
 
 } // namespace
 
 uintptr_t gameAddress(GameFunction function) {
-    static uintptr_t const base  = supportedImageBase();
-    auto const             index = static_cast<size_t>(function);
-    return base && index < FunctionCount ? base + Entries[index].rva : 0;
+    static SupportedImage const image = supportedImage();
+    auto const                  index = static_cast<size_t>(function);
+    return image.base && index < FunctionCount && Entries[index].rva < image.size ? image.base + Entries[index].rva : 0;
 }
 
 } // namespace playback::runtime
